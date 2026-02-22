@@ -1,0 +1,178 @@
+{
+  "cases": [
+    {
+      "name": "input-compatible: candidate can widen",
+      "direction": "input",
+      "target": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "candidate": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "extra": { "type": "string" }
+        }
+      },
+      "compatible": true
+    },
+    {
+      "name": "output-incompatible: extra properties with additionalProperties=false",
+      "direction": "output",
+      "target": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" }
+        }
+      },
+      "candidate": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "extra": { "type": "string" }
+        }
+      },
+      "compatible": false
+    },
+    {
+      "name": "fail-closed: out-of-profile keyword",
+      "direction": "input",
+      "target": {
+        "type": "string",
+        "pattern": "^[a-z]+$"
+      },
+      "candidate": {
+        "type": "string"
+      },
+      "error": "outside_profile"
+    },
+    {
+      "name": "input-compatible: candidate can drop required fields",
+      "direction": "input",
+      "target": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      },
+      "candidate": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      },
+      "compatible": true
+    },
+    {
+      "name": "output-incompatible: candidate can drop required fields",
+      "direction": "output",
+      "target": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      },
+      "candidate": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      },
+      "compatible": false
+    },
+    {
+      "name": "input-compatible: required order normalization",
+      "direction": "input",
+      "target": {
+        "type": "object",
+        "required": ["b", "a"],
+        "properties": {
+          "a": { "type": "string" },
+          "b": { "type": "string" }
+        }
+      },
+      "candidate": {
+        "type": "object",
+        "required": ["a", "b"],
+        "properties": {
+          "a": { "type": "string" },
+          "b": { "type": "string" }
+        }
+      },
+      "compatible": true
+    },
+    {
+      "name": "input-compatible: anyOf ordering normalization",
+      "direction": "input",
+      "target": {
+        "anyOf": [
+          { "type": "string" },
+          { "type": "number" }
+        ]
+      },
+      "candidate": {
+        "anyOf": [
+          { "type": "number" },
+          { "type": "string" }
+        ]
+      },
+      "compatible": true
+    },
+    {
+      "name": "input-compatible: integer target, number candidate (integer ⊆ number)",
+      "direction": "input",
+      "target": { "type": "integer" },
+      "candidate": { "type": "number" },
+      "compatible": true
+    },
+    {
+      "name": "output-compatible: integer candidate, number target (integer ⊆ number)",
+      "direction": "output",
+      "target": { "type": "number" },
+      "candidate": { "type": "integer" },
+      "compatible": true
+    },
+    {
+      "name": "input-incompatible: number target, integer candidate",
+      "direction": "input",
+      "target": { "type": "number" },
+      "candidate": { "type": "integer" },
+      "compatible": false
+    },
+    {
+      "name": "output-incompatible: number candidate, integer target",
+      "direction": "output",
+      "target": { "type": "integer" },
+      "candidate": { "type": "number" },
+      "compatible": false
+    },
+    {
+      "name": "output-incompatible: AP schema target, AP absent candidate",
+      "direction": "output",
+      "target": {
+        "type": "object",
+        "properties": { "id": { "type": "string" } },
+        "additionalProperties": { "type": "string" }
+      },
+      "candidate": {
+        "type": "object",
+        "properties": { "id": { "type": "string" } }
+      },
+      "compatible": false
+    }
+  ]
+}
