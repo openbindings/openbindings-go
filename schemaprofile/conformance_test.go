@@ -30,7 +30,7 @@ type normalizationCase struct {
 	Error    string         `json:"error,omitempty"`
 }
 
-const conformanceDir = "../../../spec/conformance/"
+const conformanceDir = "../../spec/conformance/"
 
 func TestConformance_SchemaComparison(t *testing.T) {
 	data, err := os.ReadFile(conformanceDir + "schema-comparison.json")
