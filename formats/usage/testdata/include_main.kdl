@@ -1,0 +1,4 @@
+name "mycli"
+bin "mycli"
+include file="./include_shared.kdl"
+cmd "local" help="Local command"

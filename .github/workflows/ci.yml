@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Multi-module monorepo: each Go module is its own go.mod with its own
+  # go directive, so we run vet + test from each module's directory.
+  # The cross-module replace directives in each go.mod point at sibling
+  # paths within the repo, so a single checkout is enough.
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - .
+          - formats/openapi
+          - formats/asyncapi
+          - formats/graphql
+          - formats/grpc
+          - formats/connect
+          - formats/mcp
+          - formats/usage
+          - formats/operationgraph
+          - formats/workersrpc
+          - cmd/ob
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache: false
+      - name: vet ${{ matrix.module }}
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+      - name: test ${{ matrix.module }}
+        working-directory: ${{ matrix.module }}
+        run: go test -race -short ./...

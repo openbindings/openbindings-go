@@ -1,0 +1,3 @@
+cmd "shared" help="Shared command" {
+    flag "--verbose" help="Enable verbose output"
+}

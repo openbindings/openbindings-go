@@ -1,0 +1,6 @@
+github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 h1:El6M4kTTCOh6aBiKaUGG7oYTSPP8MxqL4YI3kZKwcP4=
+github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510/go.mod h1:pupxD2MaaD3pAXIBCelhxNneeOaAeabZDe5s4K6zSpQ=
+github.com/openbindings/openbindings-go v0.1.0 h1:gFRvMzeAUhDs+Hdn6aBNq5oRFV5GS71cuKMvD6oh+eo=
+github.com/openbindings/openbindings-go v0.1.0/go.mod h1:vFSygz6qy5HtYu9JIINYQkKErUO71SJYWAW3C7l+EOo=
+github.com/sblinch/kdl-go v0.0.0-20260120205643-17a91a33fe63 h1:I+QhbwYtFwT/rsT87iREkMcvdjQvbXb+0/y39l0Dvvs=
+github.com/sblinch/kdl-go v0.0.0-20260120205643-17a91a33fe63/go.mod h1:b3oNGuAKOQzhsCKmuLc/urEOPzgHj6fB8vl8bwTBh28=
