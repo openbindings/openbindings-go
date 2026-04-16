@@ -4,6 +4,8 @@ Go monorepo for the [OpenBindings](https://openbindings.com) Go ecosystem. Parse
 
 OpenBindings is an open standard: one interface, limitless bindings. An OBI (OpenBindings Interface) document describes what operations a service offers and how to reach them, independent of protocol. See the [spec](https://github.com/openbindings/spec) and [guides](https://github.com/openbindings/spec/tree/main/guides) for details.
 
+**Spec version:** implements OpenBindings 0.1. Exact range is exported as `openbindings.MinSupportedVersion` / `openbindings.MaxTestedVersion`; check programmatically via `openbindings.IsSupportedVersion(version)`.
+
 ## Layout
 
 This is a multi-module Go monorepo. Each subdirectory below is its own module:
