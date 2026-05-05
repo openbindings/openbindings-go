@@ -1,6 +1,6 @@
 # operation-graph-go
 
-Binding executor for the [`openbindings.operation-graph`](https://openbindings.com/spec) format. Executes operation graphs: directed graphs of typed nodes that orchestrate [OpenBindings](https://openbindings.com) operations.
+Binding invoker for the [`openbindings.operation-graph`](https://openbindings.com/spec) format. Executes operation graphs: directed graphs of typed nodes that orchestrate [OpenBindings](https://openbindings.com) operations.
 
 ## Install
 
@@ -10,7 +10,7 @@ go get github.com/openbindings/openbindings-go/formats/operationgraph
 
 ## Usage
 
-The operation graph executor plugs into an `OperationExecutor` from the [Go SDK](https://github.com/openbindings/openbindings-go). Because it invokes sub-operations, it needs a reference to the `OperationExecutor` itself:
+The operation graph invoker plugs into an `OperationInvoker` from the [Go SDK](https://github.com/openbindings/openbindings-go). Because it invokes sub-operations, it needs a reference to the `OperationInvoker` itself:
 
 ```go
 import (
@@ -19,21 +19,21 @@ import (
     operationgraph "github.com/openbindings/openbindings-go/formats/operationgraph"
 )
 
-// Create the OperationExecutor with protocol-level executors.
-opExec := openbindings.NewOperationExecutor(
-    openapi.NewExecutor(),
+// Create the OperationInvoker with protocol-level invokers.
+opExec := openbindings.NewOperationInvoker(
+    openapi.NewInvoker(),
 )
 
-// Create the operation graph executor and register it.
-graphExec := operationgraph.NewExecutor(opExec)
-opExec.AddBindingExecutor(graphExec)
+// Create the operation graph invoker and register it.
+graphExec := operationgraph.NewInvoker(opExec)
+opExec.AddBindingInvoker(graphExec)
 ```
 
-Once registered, operation graph bindings are executed automatically when you call `ExecuteOperation` on an OBI that uses them.
+Once registered, operation graph bindings are executed automatically when you call `Invoke` on an OBI that uses them.
 
 ## Node types
 
-The executor supports all node types defined in the operation graph spec:
+The invoker supports all node types defined in the operation graph spec:
 
 | Node | Purpose |
 |------|---------|

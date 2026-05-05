@@ -1,10 +1,10 @@
 # openapi-go
 
-OpenAPI 3.x binding executor and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
+OpenAPI 3.x binding invoker and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
 
-This package enables OpenBindings to execute operations against OpenAPI specs and synthesize OBI documents from them. It reads OpenAPI 3.x documents, constructs HTTP requests, applies credentials via security schemes, and returns results as a stream of events.
+This package enables OpenBindings to invoke operations against OpenAPI specs and synthesize OBI documents from them. It reads OpenAPI 3.x documents, constructs HTTP requests, applies credentials via security schemes, and returns results as a stream of events.
 
-See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how executors and creators fit into the OpenBindings architecture.
+See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how invokers and creators fit into the OpenBindings architecture.
 
 ## Install
 
@@ -16,7 +16,7 @@ Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the
 
 ## Usage
 
-### Register with OperationExecutor
+### Register with OperationInvoker
 
 ```go
 import (
@@ -24,19 +24,19 @@ import (
     openapi "github.com/openbindings/openbindings-go/formats/openapi"
 )
 
-exec := openbindings.NewOperationExecutor(openapi.NewExecutor())
+exec := openbindings.NewOperationInvoker(openapi.NewInvoker())
 ```
 
-The executor declares `openapi@^3.0.0` — it handles any OpenAPI 3.x spec.
+The invoker declares `openapi@^3.0.0` — it handles any OpenAPI 3.x spec.
 
-### Execute a binding
+### Invoke a binding
 
-Typically you don't call the executor directly — the `OperationExecutor` routes operations to it based on the OBI's source format. But direct use is straightforward:
+Typically you don't call the invoker directly — the `OperationInvoker` routes operations to it based on the OBI's source format. But direct use is straightforward:
 
 ```go
-executor := openapi.NewExecutor()
-ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-    Source: openbindings.ExecuteSource{
+invoker := openapi.NewInvoker()
+ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+    Source: openbindings.BindingInvocationSource{
         Format:   "openapi@3.1",
         Location: "https://api.example.com/openapi.json",
     },
@@ -106,7 +106,7 @@ When no security schemes are defined, falls back to bearer, then basic, then api
 
 ## How it works
 
-### Execution flow
+### Invocation flow
 
 1. Loads and caches the OpenAPI document (JSON or YAML, local or remote)
 2. Parses the ref as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)

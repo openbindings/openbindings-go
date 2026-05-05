@@ -7,7 +7,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestListBindableRefs_BasicRefs(t *testing.T) {
+func TestInspectSource_BasicRefs(t *testing.T) {
 	protoContent := `
 syntax = "proto3";
 package testpkg;
@@ -22,22 +22,22 @@ service TestService {
 `
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 2 {
-		t.Fatalf("expected 2 refs, got %d", len(result.Refs))
+	if len(result.Targets) != 2 {
+		t.Fatalf("expected 2 refs, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")
 	}
 }
 
-func TestListBindableRefs_RefFormat(t *testing.T) {
+func TestInspectSource_RefFormat(t *testing.T) {
 	protoContent := `
 syntax = "proto3";
 package testpkg;
@@ -52,7 +52,7 @@ service TestService {
 `
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {
@@ -63,7 +63,7 @@ service TestService {
 		"testpkg.TestService/GetItem":   false,
 		"testpkg.TestService/ListItems": false,
 	}
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if _, ok := wantRefs[ref.Ref]; ok {
 			wantRefs[ref.Ref] = true
 		}
@@ -75,7 +75,7 @@ service TestService {
 	}
 }
 
-func TestListBindableRefs_RefsMatchCreateInterface(t *testing.T) {
+func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
 	protoContent := `
 syntax = "proto3";
 package testpkg;
@@ -90,7 +90,7 @@ service TestService {
 `
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {
@@ -111,17 +111,17 @@ service TestService {
 		createRefs[b.Ref] = true
 	}
 
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if !createRefs[ref.Ref] {
-			t.Errorf("ListBindableRefs ref %q not in CreateInterface bindings", ref.Ref)
+			t.Errorf("InspectSource ref %q not in CreateInterface bindings", ref.Ref)
 		}
 	}
-	if len(result.Refs) != len(createRefs) {
-		t.Errorf("ref count mismatch: ListBindableRefs=%d, CreateInterface=%d", len(result.Refs), len(createRefs))
+	if len(result.Targets) != len(createRefs) {
+		t.Errorf("ref count mismatch: InspectSource=%d, CreateInterface=%d", len(result.Targets), len(createRefs))
 	}
 }
 
-func TestListBindableRefs_FiltersClientStreaming(t *testing.T) {
+func TestInspectSource_FiltersClientStreaming(t *testing.T) {
 	protoContent := `
 syntax = "proto3";
 package testpkg;
@@ -136,30 +136,30 @@ service TestService {
 `
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 1 {
-		t.Fatalf("expected 1 ref (client streaming filtered), got %d", len(result.Refs))
+	if len(result.Targets) != 1 {
+		t.Fatalf("expected 1 ref (client streaming filtered), got %d", len(result.Targets))
 	}
-	if result.Refs[0].Ref != "testpkg.TestService/GetItem" {
-		t.Errorf("ref = %q, want testpkg.TestService/GetItem", result.Refs[0].Ref)
+	if result.Targets[0].Ref != "testpkg.TestService/GetItem" {
+		t.Errorf("ref = %q, want testpkg.TestService/GetItem", result.Targets[0].Ref)
 	}
 }
 
-func TestListBindableRefs_EmptySource(t *testing.T) {
+func TestInspectSource_EmptySource(t *testing.T) {
 	creator := NewCreator()
-	_, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{})
+	_, err := creator.InspectSource(context.Background(), &openbindings.Source{})
 	if err == nil {
 		t.Error("expected error for empty source")
 	}
 }
 
-func TestListBindableRefs_Sorted(t *testing.T) {
+func TestInspectSource_Sorted(t *testing.T) {
 	protoContent := `
 syntax = "proto3";
 package testpkg;
@@ -175,23 +175,23 @@ service TestService {
 `
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 3 {
-		t.Fatalf("expected 3 refs, got %d", len(result.Refs))
+	if len(result.Targets) != 3 {
+		t.Fatalf("expected 3 refs, got %d", len(result.Targets))
 	}
-	if result.Refs[0].Ref != "testpkg.TestService/Alpha" {
-		t.Errorf("first ref = %q, want testpkg.TestService/Alpha", result.Refs[0].Ref)
+	if result.Targets[0].Ref != "testpkg.TestService/Alpha" {
+		t.Errorf("first ref = %q, want testpkg.TestService/Alpha", result.Targets[0].Ref)
 	}
-	if result.Refs[1].Ref != "testpkg.TestService/Mike" {
-		t.Errorf("second ref = %q, want testpkg.TestService/Mike", result.Refs[1].Ref)
+	if result.Targets[1].Ref != "testpkg.TestService/Mike" {
+		t.Errorf("second ref = %q, want testpkg.TestService/Mike", result.Targets[1].Ref)
 	}
-	if result.Refs[2].Ref != "testpkg.TestService/Zulu" {
-		t.Errorf("third ref = %q, want testpkg.TestService/Zulu", result.Refs[2].Ref)
+	if result.Targets[2].Ref != "testpkg.TestService/Zulu" {
+		t.Errorf("third ref = %q, want testpkg.TestService/Zulu", result.Targets[2].Ref)
 	}
 }

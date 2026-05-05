@@ -6,7 +6,7 @@ toolchain go1.24.1
 
 require (
 	github.com/getkin/kin-openapi v0.133.0
-	github.com/openbindings/openbindings-go v0.1.0
+	github.com/openbindings/openbindings-go v0.2.0
 )
 
 require (

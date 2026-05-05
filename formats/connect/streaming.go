@@ -102,7 +102,7 @@ func readConnectEnvelope(r io.Reader, maxPayload int64) (flags byte, payload []b
 	return flags, payload, nil
 }
 
-// executeConnectStreaming sends a server-streaming Connect RPC and returns a
+// invokeConnectStreaming sends a server-streaming Connect RPC and returns a
 // channel that yields one StreamEvent per data envelope received from the
 // server. The channel is closed when the end-stream envelope is processed,
 // when the underlying connection terminates, or when ctx is cancelled.
@@ -111,9 +111,9 @@ func readConnectEnvelope(r io.Reader, maxPayload int64) (flags byte, payload []b
 // https://connectrpc.com/docs/protocol#streaming-rpcs
 //
 // This function only supports server-streaming. Client-streaming and
-// bidirectional-streaming RPCs are excluded by the OBI execution model in
+// bidirectional-streaming RPCs are excluded by the OBI invocation model in
 // v0.1 (one input, stream of outputs).
-func executeConnectStreaming(ctx context.Context, client *http.Client, baseURL, svcName, methodName string, input any, headers map[string]string, mi *methodInfo, start time.Time) (<-chan openbindings.StreamEvent, error) {
+func invokeConnectStreaming(ctx context.Context, client *http.Client, baseURL, svcName, methodName string, input any, headers map[string]string, mi *methodInfo, start time.Time) (<-chan openbindings.StreamEvent, error) {
 	connectURL := strings.TrimRight(baseURL, "/") + "/" + svcName + "/" + methodName
 
 	// Marshal the single request message.
@@ -132,7 +132,9 @@ func executeConnectStreaming(ctx context.Context, client *http.Client, baseURL, 
 			if err := msg.UnmarshalJSONPB(&jsonpb.Unmarshaler{AllowUnknownFields: true}, jsonBytes); err != nil {
 				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
 			}
-			msgBytes, err = msg.MarshalJSONPB(&jsonpb.Marshaler{OrigName: true})
+			// Emit proto3 JSON canonical names (camelCase) so field names match
+			// what the creator writes into OBI schemas via field.GetJSONName().
+			msgBytes, err = msg.MarshalJSONPB(&jsonpb.Marshaler{})
 			if err != nil {
 				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
 			}
@@ -231,7 +233,7 @@ func executeConnectStreaming(ctx context.Context, client *http.Client, baseURL, 
 				if ctx.Err() != nil {
 					return
 				}
-				ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+				ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeStreamError,
 					Message: err.Error(),
 				}}
@@ -247,7 +249,7 @@ func executeConnectStreaming(ctx context.Context, client *http.Client, baseURL, 
 						} `json:"error,omitempty"`
 					}
 					if jerr := json.Unmarshal(payload, &endStream); jerr == nil && endStream.Error != nil {
-						ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+						ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 							Code:    openbindings.ErrCodeExecutionFailed,
 							Message: endStream.Error.Message,
 						}}
@@ -259,7 +261,7 @@ func executeConnectStreaming(ctx context.Context, client *http.Client, baseURL, 
 			var data any
 			if len(payload) > 0 {
 				if err := json.Unmarshal(payload, &data); err != nil {
-					ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+					ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 						Code:    openbindings.ErrCodeResponseError,
 						Message: fmt.Sprintf("decode envelope payload: %v", err),
 					}}

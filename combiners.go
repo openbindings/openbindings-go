@@ -8,22 +8,22 @@ import (
 	"github.com/openbindings/openbindings-go/formattoken"
 )
 
-// CombineExecutors returns a single BindingExecutor that routes to the
-// appropriate inner executor based on the source format token.
+// CombineInvokers returns a single BindingInvoker that routes to the
+// appropriate inner invoker based on the source format token.
 // Format token matching uses the same range-matching rules as the SDK.
 // First match wins; order matters.
-func CombineExecutors(executors ...BindingExecutor) BindingExecutor {
-	c := &combinedExecutor{}
-	for _, ex := range executors {
-		for _, fi := range ex.Formats() {
+func CombineInvokers(invokers ...BindingInvoker) BindingInvoker {
+	c := &combinedInvoker{}
+	for _, iv := range invokers {
+		for _, fi := range iv.Formats() {
 			vr, err := formattoken.ParseRange(fi.Token)
 			if err != nil {
 				continue
 			}
-			c.entries = append(c.entries, combinedExecEntry{
-				vr:   vr,
-				exec: ex,
-				info: fi,
+			c.entries = append(c.entries, combinedInvokerEntry{
+				vr:      vr,
+				invoker: iv,
+				info:    fi,
 			})
 			name := strings.ToLower(vr.Name)
 			c.byName = appendToMap(c.byName, name, len(c.entries)-1)
@@ -65,31 +65,31 @@ func appendToMap(m map[string][]int, key string, idx int) map[string][]int {
 }
 
 // ---------------------------------------------------------------------------
-// combinedExecutor
+// combinedInvoker
 // ---------------------------------------------------------------------------
 
-type combinedExecEntry struct {
-	vr   formattoken.VersionRange
-	exec BindingExecutor
-	info FormatInfo
+type combinedInvokerEntry struct {
+	vr      formattoken.VersionRange
+	invoker BindingInvoker
+	info    FormatInfo
 }
 
-type combinedExecutor struct {
-	entries []combinedExecEntry
+type combinedInvoker struct {
+	entries []combinedInvokerEntry
 	byName  map[string][]int // name -> indices into entries
 	formats []FormatInfo
 }
 
-func (c *combinedExecutor) add(ex BindingExecutor) {
-	for _, fi := range ex.Formats() {
+func (c *combinedInvoker) add(iv BindingInvoker) {
+	for _, fi := range iv.Formats() {
 		vr, err := formattoken.ParseRange(fi.Token)
 		if err != nil {
 			continue
 		}
-		c.entries = append(c.entries, combinedExecEntry{
-			vr:   vr,
-			exec: ex,
-			info: fi,
+		c.entries = append(c.entries, combinedInvokerEntry{
+			vr:      vr,
+			invoker: iv,
+			info:    fi,
 		})
 		name := strings.ToLower(vr.Name)
 		c.byName = appendToMap(c.byName, name, len(c.entries)-1)
@@ -97,34 +97,34 @@ func (c *combinedExecutor) add(ex BindingExecutor) {
 	}
 }
 
-func (c *combinedExecutor) Formats() []FormatInfo {
+func (c *combinedInvoker) Formats() []FormatInfo {
 	cp := make([]FormatInfo, len(c.formats))
 	copy(cp, c.formats)
 	return cp
 }
 
-func (c *combinedExecutor) ExecuteBinding(ctx context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
-	exec := c.findExecutor(in.Source.Format)
-	if exec == nil {
-		return nil, fmt.Errorf("%w: %s", ErrNoExecutor, in.Source.Format)
+func (c *combinedInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+	invoker := c.findInvoker(in.Source.Format)
+	if invoker == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNoInvoker, in.Source.Format)
 	}
-	return exec.ExecuteBinding(ctx, in)
+	return invoker.InvokeBinding(ctx, in)
 }
 
-func (c *combinedExecutor) findExecutor(sourceFormat string) BindingExecutor {
+func (c *combinedInvoker) findInvoker(sourceFormat string) BindingInvoker {
 	name := formatName(sourceFormat)
 	indices := c.byName[name]
 	for _, idx := range indices {
 		entry := &c.entries[idx]
 		if formattoken.Matches(entry.vr, sourceFormat) {
-			return entry.exec
+			return entry.invoker
 		}
 	}
 	// Name-only fallback: handles cases where the source format is a range
 	// token rather than an exact version.
 	for _, idx := range indices {
-		if c.entries[idx].exec != nil {
-			return c.entries[idx].exec
+		if c.entries[idx].invoker != nil {
+			return c.entries[idx].invoker
 		}
 	}
 	return nil
@@ -134,7 +134,7 @@ func (c *combinedExecutor) findExecutor(sourceFormat string) BindingExecutor {
 // combinedCreator
 // ---------------------------------------------------------------------------
 
-var _ RefLister = (*combinedCreator)(nil)
+var _ SourceInspector = (*combinedCreator)(nil)
 
 type combinedCreatorEntry struct {
 	vr      formattoken.VersionRange
@@ -165,9 +165,9 @@ func (c *combinedCreator) CreateInterface(ctx context.Context, in *CreateInput) 
 	return cr.CreateInterface(ctx, in)
 }
 
-// ListBindableRefs implements RefLister by routing to the first underlying
-// creator that matches the source format and implements RefLister.
-func (c *combinedCreator) ListBindableRefs(ctx context.Context, source *Source) (*ListRefsResult, error) {
+// InspectSource implements SourceInspector by routing to the first underlying
+// creator that matches the source format and implements SourceInspector.
+func (c *combinedCreator) InspectSource(ctx context.Context, source *Source) (*SourceInspection, error) {
 	if source == nil {
 		return nil, ErrNoSources
 	}
@@ -175,11 +175,11 @@ func (c *combinedCreator) ListBindableRefs(ctx context.Context, source *Source) 
 	if cr == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNoCreator, source.Format)
 	}
-	lister, ok := cr.(RefLister)
+	inspector, ok := cr.(SourceInspector)
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrRefListingUnsupported, source.Format)
+		return nil, fmt.Errorf("%w: %s", ErrSourceInspectionUnsupported, source.Format)
 	}
-	return lister.ListBindableRefs(ctx, source)
+	return inspector.InspectSource(ctx, source)
 }
 
 func (c *combinedCreator) findCreator(sourceFormat string) InterfaceCreator {

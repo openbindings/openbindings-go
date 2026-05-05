@@ -8,9 +8,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// ListBindableRefs returns all bindable refs (package.Service/Method) from a
+// InspectSource returns all bindable targets (package.Service/Method) from a
 // gRPC source. Supports both proto file parsing and live server reflection.
-func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Source) (*openbindings.ListRefsResult, error) {
+func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	var disc *discovery
 	var err error
 
@@ -30,7 +30,7 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 		}
 	}
 
-	var refs []openbindings.BindableRef
+	var targets []openbindings.BindableTarget
 
 	sort.Slice(disc.services, func(i, j int) bool {
 		return disc.services[i].GetFullyQualifiedName() < disc.services[j].GetFullyQualifiedName()
@@ -47,12 +47,17 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 			}
 			fqn := svc.GetFullyQualifiedName() + "/" + method.GetName()
 			desc := commentToDescription(method)
-			refs = append(refs, openbindings.BindableRef{
-				Ref:         fqn,
-				Description: desc,
-			})
+			targets = append(targets, bindableTarget(fqn, desc))
 		}
 	}
 
-	return &openbindings.ListRefsResult{Refs: refs, Exhaustive: true}, nil
+	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+}
+
+func bindableTarget(ref, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref}
+	if description != "" {
+		target.Operation = &openbindings.Operation{Description: description}
+	}
+	return target
 }

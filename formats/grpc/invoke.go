@@ -22,7 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func doGRPCCall(ctx context.Context, in *openbindings.BindingExecutionInput, conn *grpc.ClientConn, methodDesc *desc.MethodDescriptor) *openbindings.ExecuteOutput {
+func doGRPCCall(ctx context.Context, in *openbindings.BindingInvocationInput, conn *grpc.ClientConn, methodDesc *desc.MethodDescriptor) *openbindings.InvocationOutput {
 	start := time.Now()
 
 	reqMsg, err := buildRequest(methodDesc, in.Input)
@@ -43,12 +43,12 @@ func doGRPCCall(ctx context.Context, in *openbindings.BindingExecutionInput, con
 		return openbindings.FailedOutput(start, openbindings.ErrCodeResponseError, err.Error())
 	}
 
-	return &openbindings.ExecuteOutput{Output: output, Status: 200, DurationMs: time.Since(start).Milliseconds()}
+	return &openbindings.InvocationOutput{Output: output, Status: 200, DurationMs: time.Since(start).Milliseconds()}
 }
 
 // applyGRPCContext attaches binding context credentials and execution option
 // headers as gRPC outgoing metadata.
-func applyGRPCContext(ctx context.Context, bindCtx map[string]any, opts *openbindings.ExecutionOptions) context.Context {
+func applyGRPCContext(ctx context.Context, bindCtx map[string]any, opts *openbindings.InvocationOptions) context.Context {
 	md := metadata.MD{}
 
 	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
@@ -72,7 +72,7 @@ func applyGRPCContext(ctx context.Context, bindCtx map[string]any, opts *openbin
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
-func subscribe(ctx context.Context, in *openbindings.BindingExecutionInput, conn *grpc.ClientConn, refClient *grpcreflect.Client, methodDesc *desc.MethodDescriptor) (<-chan openbindings.StreamEvent, error) {
+func subscribe(ctx context.Context, in *openbindings.BindingInvocationInput, conn *grpc.ClientConn, refClient *grpcreflect.Client, methodDesc *desc.MethodDescriptor) (<-chan openbindings.StreamEvent, error) {
 	start := time.Now()
 
 	reqMsg, err := buildRequest(methodDesc, in.Input)
@@ -108,7 +108,7 @@ func subscribe(ctx context.Context, in *openbindings.BindingExecutionInput, conn
 				if err == io.EOF || ctx.Err() != nil {
 					return
 				}
-				ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+				ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeStreamError,
 					Message: err.Error(),
 				}}
@@ -117,7 +117,7 @@ func subscribe(ctx context.Context, in *openbindings.BindingExecutionInput, conn
 
 			output, err := responseToJSON(resp)
 			if err != nil {
-				ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+				ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeResponseError,
 					Message: err.Error(),
 				}}
@@ -166,7 +166,10 @@ func responseToJSON(resp proto.Message) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type %T (expected *dynamic.Message)", resp)
 	}
-	jsonBytes, err := dm.MarshalJSONPB(&jsonpb.Marshaler{OrigName: true})
+	// Emit proto3 JSON canonical names (camelCase) so response field names
+	// match what the creator writes into OBI schemas via field.GetJSONName().
+	// OrigName: true would emit snake_case and desync from the OBI contract.
+	jsonBytes, err := dm.MarshalJSONPB(&jsonpb.Marshaler{})
 	if err != nil {
 		return nil, fmt.Errorf("marshal response: %w", err)
 	}

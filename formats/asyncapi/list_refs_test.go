@@ -7,7 +7,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestListBindableRefs_BasicRefs(t *testing.T) {
+func TestInspectSource_BasicRefs(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test API", "version": "1.0.0"},
@@ -30,22 +30,22 @@ func TestListBindableRefs_BasicRefs(t *testing.T) {
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 2 {
-		t.Fatalf("expected 2 refs, got %d", len(result.Refs))
+	if len(result.Targets) != 2 {
+		t.Fatalf("expected 2 refs, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")
 	}
 }
 
-func TestListBindableRefs_RefFormat(t *testing.T) {
+func TestInspectSource_RefFormat(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
@@ -65,7 +65,7 @@ func TestListBindableRefs_RefFormat(t *testing.T) {
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -76,7 +76,7 @@ func TestListBindableRefs_RefFormat(t *testing.T) {
 		"#/operations/alpha": false,
 		"#/operations/beta":  false,
 	}
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if _, ok := wantRefs[ref.Ref]; ok {
 			wantRefs[ref.Ref] = true
 		}
@@ -88,7 +88,7 @@ func TestListBindableRefs_RefFormat(t *testing.T) {
 	}
 }
 
-func TestListBindableRefs_RefsMatchCreateInterface(t *testing.T) {
+func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
 	doc := &Document{
 		AsyncAPI: "3.0.0",
 		Channels: map[string]Channel{"ch": {Address: "/ch"}},
@@ -115,24 +115,24 @@ func TestListBindableRefs_RefsMatchCreateInterface(t *testing.T) {
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if !createRefs[ref.Ref] {
-			t.Errorf("ListBindableRefs ref %q not in CreateInterface bindings", ref.Ref)
+			t.Errorf("InspectSource ref %q not in CreateInterface bindings", ref.Ref)
 		}
 	}
-	if len(result.Refs) != len(createRefs) {
-		t.Errorf("ref count mismatch: ListBindableRefs=%d, CreateInterface=%d", len(result.Refs), len(createRefs))
+	if len(result.Targets) != len(createRefs) {
+		t.Errorf("ref count mismatch: InspectSource=%d, CreateInterface=%d", len(result.Targets), len(createRefs))
 	}
 }
 
-func TestListBindableRefs_Description(t *testing.T) {
+func TestInspectSource_Description(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
@@ -153,7 +153,7 @@ func TestListBindableRefs_Description(t *testing.T) {
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -161,8 +161,10 @@ func TestListBindableRefs_Description(t *testing.T) {
 	}
 
 	descByRef := map[string]string{}
-	for _, ref := range result.Refs {
-		descByRef[ref.Ref] = ref.Description
+	for _, ref := range result.Targets {
+		if ref.Operation != nil {
+			descByRef[ref.Ref] = ref.Operation.Description
+		}
 	}
 
 	if descByRef["#/operations/withDesc"] != "Full description" {
@@ -173,7 +175,7 @@ func TestListBindableRefs_Description(t *testing.T) {
 	}
 }
 
-func TestListBindableRefs_NoOperations(t *testing.T) {
+func TestInspectSource_NoOperations(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Empty", "version": "1.0.0"},
@@ -181,19 +183,19 @@ func TestListBindableRefs_NoOperations(t *testing.T) {
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 0 {
-		t.Errorf("expected 0 refs, got %d", len(result.Refs))
+	if len(result.Targets) != 0 {
+		t.Errorf("expected 0 refs, got %d", len(result.Targets))
 	}
 }
 
-func TestListBindableRefs_AlphabeticallySorted(t *testing.T) {
+func TestInspectSource_AlphabeticallySorted(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
@@ -206,30 +208,30 @@ func TestListBindableRefs_AlphabeticallySorted(t *testing.T) {
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 3 {
-		t.Fatalf("expected 3 refs, got %d", len(result.Refs))
+	if len(result.Targets) != 3 {
+		t.Fatalf("expected 3 refs, got %d", len(result.Targets))
 	}
-	if result.Refs[0].Ref != "#/operations/alpha" {
-		t.Errorf("first ref = %q, want #/operations/alpha", result.Refs[0].Ref)
+	if result.Targets[0].Ref != "#/operations/alpha" {
+		t.Errorf("first ref = %q, want #/operations/alpha", result.Targets[0].Ref)
 	}
-	if result.Refs[1].Ref != "#/operations/mike" {
-		t.Errorf("second ref = %q, want #/operations/mike", result.Refs[1].Ref)
+	if result.Targets[1].Ref != "#/operations/mike" {
+		t.Errorf("second ref = %q, want #/operations/mike", result.Targets[1].Ref)
 	}
-	if result.Refs[2].Ref != "#/operations/zeta" {
-		t.Errorf("third ref = %q, want #/operations/zeta", result.Refs[2].Ref)
+	if result.Targets[2].Ref != "#/operations/zeta" {
+		t.Errorf("third ref = %q, want #/operations/zeta", result.Targets[2].Ref)
 	}
 }
 
-func TestListBindableRefs_NilContent(t *testing.T) {
+func TestInspectSource_NilContent(t *testing.T) {
 	creator := NewCreator()
-	_, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{})
+	_, err := creator.InspectSource(context.Background(), &openbindings.Source{})
 	if err == nil {
 		t.Error("expected error for empty source")
 	}

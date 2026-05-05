@@ -30,12 +30,12 @@ func collectEvents(t *testing.T, ch <-chan openbindings.StreamEvent) []openbindi
 	}
 }
 
-// execGraph is a test helper that parses and executes a graph document.
-func execGraph(t *testing.T, graphJSON string, ref string, input any, opExec *openbindings.OperationExecutor) []openbindings.StreamEvent {
+// invokeGraph is a test helper that parses and invokes a graph document.
+func invokeGraph(t *testing.T, graphJSON string, ref string, input any, invoker *openbindings.OperationInvoker) []openbindings.StreamEvent {
 	t.Helper()
-	exec := NewExecutor(opExec)
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker.AddBindingInvoker(NewInvoker(invoker))
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: json.RawMessage(graphJSON),
 		},
@@ -43,14 +43,14 @@ func execGraph(t *testing.T, graphJSON string, ref string, input any, opExec *op
 		Input: input,
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 	return collectEvents(t, ch)
 }
 
 func TestSimplePassthrough(t *testing.T) {
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"pass": {
 				"nodes": {
@@ -60,7 +60,7 @@ func TestSimplePassthrough(t *testing.T) {
 				"edges": [{ "from": "in", "to": "out" }]
 			}
 		}
-	}`, "pass", map[string]any{"hello": "world"}, openbindings.NewOperationExecutor())
+	}`, "pass", map[string]any{"hello": "world"}, openbindings.NewOperationInvoker())
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -75,10 +75,10 @@ func TestSimplePassthrough(t *testing.T) {
 }
 
 func TestRefNotFound(t *testing.T) {
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {}
-	}`, "missing", nil, openbindings.NewOperationExecutor())
+	}`, "missing", nil, openbindings.NewOperationInvoker())
 
 	if len(events) != 1 || events[0].Error == nil {
 		t.Fatal("expected error event for missing ref")
@@ -91,8 +91,8 @@ func TestRefNotFound(t *testing.T) {
 func TestExitSuccess(t *testing.T) {
 	// Graph: in -> filter (passes) -> exit, in -> out
 	// The filter ensures only one path reaches exit.
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"early": {
 				"nodes": {
@@ -108,7 +108,7 @@ func TestExitSuccess(t *testing.T) {
 				]
 			}
 		}
-	}`, "early", map[string]any{"stop": true}, openbindings.NewOperationExecutor())
+	}`, "early", map[string]any{"stop": true}, openbindings.NewOperationInvoker())
 
 	// Exit emits the event as output and cancels. We may also get the normal output event
 	// depending on timing. At minimum, one event should have our data.
@@ -126,8 +126,8 @@ func TestExitSuccess(t *testing.T) {
 }
 
 func TestExitError(t *testing.T) {
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"fail": {
 				"nodes": {
@@ -143,7 +143,7 @@ func TestExitError(t *testing.T) {
 				]
 			}
 		}
-	}`, "fail", map[string]any{"fail": true}, openbindings.NewOperationExecutor())
+	}`, "fail", map[string]any{"fail": true}, openbindings.NewOperationInvoker())
 
 	hasErrorExit := false
 	for _, ev := range events {
@@ -157,8 +157,8 @@ func TestExitError(t *testing.T) {
 }
 
 func TestFilterSchemaPass(t *testing.T) {
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"f": {
 				"nodes": {
@@ -172,7 +172,7 @@ func TestFilterSchemaPass(t *testing.T) {
 				]
 			}
 		}
-	}`, "f", map[string]any{"name": "Alice"}, openbindings.NewOperationExecutor())
+	}`, "f", map[string]any{"name": "Alice"}, openbindings.NewOperationInvoker())
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event (filter pass), got %d", len(events))
@@ -180,8 +180,8 @@ func TestFilterSchemaPass(t *testing.T) {
 }
 
 func TestFilterSchemaDrop(t *testing.T) {
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"f": {
 				"nodes": {
@@ -195,7 +195,7 @@ func TestFilterSchemaDrop(t *testing.T) {
 				]
 			}
 		}
-	}`, "f", map[string]any{"age": 30}, openbindings.NewOperationExecutor())
+	}`, "f", map[string]any{"age": 30}, openbindings.NewOperationInvoker())
 
 	if len(events) != 0 {
 		t.Fatalf("expected 0 events (filter drop), got %d", len(events))
@@ -204,13 +204,13 @@ func TestFilterSchemaDrop(t *testing.T) {
 
 func TestOnErrorSilentDrop(t *testing.T) {
 	// Transform node with no evaluator should fail. Without onError, error is dropped.
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
 					"in": { "type": "input" },
-					"t": { "type": "transform", "transform": { "type": "jsonata", "expression": "x" } },
+					"t": { "type": "transform", "transform": "x" },
 					"out": { "type": "output" }
 				},
 				"edges": [
@@ -219,7 +219,7 @@ func TestOnErrorSilentDrop(t *testing.T) {
 				]
 			}
 		}
-	}`, "g", map[string]any{"x": 1}, openbindings.NewOperationExecutor())
+	}`, "g", map[string]any{"x": 1}, openbindings.NewOperationInvoker())
 
 	// No transform evaluator, so the transform fails. No onError, so error is dropped silently.
 	if len(events) != 0 {
@@ -229,13 +229,13 @@ func TestOnErrorSilentDrop(t *testing.T) {
 
 func TestOnErrorRouting(t *testing.T) {
 	// Transform node fails, onError routes to output.
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
 					"in": { "type": "input" },
-					"t": { "type": "transform", "transform": { "type": "jsonata", "expression": "x" }, "onError": "out" },
+					"t": { "type": "transform", "transform": "x", "onError": "out" },
 					"out": { "type": "output" }
 				},
 				"edges": [
@@ -244,7 +244,7 @@ func TestOnErrorRouting(t *testing.T) {
 				]
 			}
 		}
-	}`, "g", map[string]any{"x": 1}, openbindings.NewOperationExecutor())
+	}`, "g", map[string]any{"x": 1}, openbindings.NewOperationInvoker())
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 error event via onError, got %d", len(events))
@@ -409,20 +409,20 @@ func (m *mockTransformEvaluator) EvaluateWithBindings(expression string, data an
 }
 
 func TestTransformWithEvaluator(t *testing.T) {
-	opExec := openbindings.NewOperationExecutor()
-	opExec.TransformEvaluator = &mockTransformEvaluator{}
-	exec := NewExecutor(opExec)
+	invoker := openbindings.NewOperationInvoker()
+	invoker.TransformEvaluator = &mockTransformEvaluator{}
+	invoker.AddBindingInvoker(NewInvoker(invoker))
 
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format: FormatToken,
 			Content: json.RawMessage(`{
-				"openbindings.operation-graph": "0.1.0",
+				"openbindings.operation-graph": "0.2.0",
 				"graphs": {
 					"g": {
 						"nodes": {
 							"in": { "type": "input" },
-							"t": { "type": "transform", "transform": { "type": "jsonata", "expression": "name" } },
+							"t": { "type": "transform", "transform": "name" },
 							"out": { "type": "output" }
 						},
 						"edges": [
@@ -450,20 +450,20 @@ func TestTransformWithEvaluator(t *testing.T) {
 }
 
 func TestTransformWithBindings(t *testing.T) {
-	opExec := openbindings.NewOperationExecutor()
-	opExec.TransformEvaluator = &mockTransformEvaluator{}
-	exec := NewExecutor(opExec)
+	invoker := openbindings.NewOperationInvoker()
+	invoker.TransformEvaluator = &mockTransformEvaluator{}
+	invoker.AddBindingInvoker(NewInvoker(invoker))
 
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format: FormatToken,
 			Content: json.RawMessage(`{
-				"openbindings.operation-graph": "0.1.0",
+				"openbindings.operation-graph": "0.2.0",
 				"graphs": {
 					"g": {
 						"nodes": {
 							"in": { "type": "input" },
-							"t": { "type": "transform", "transform": { "type": "jsonata", "expression": "$input.original" } },
+							"t": { "type": "transform", "transform": "$input.original" },
 							"out": { "type": "output" }
 						},
 						"edges": [
@@ -492,8 +492,8 @@ func TestTransformWithBindings(t *testing.T) {
 
 func TestFilterSchemaTypeValidation(t *testing.T) {
 	// Tests that full JSON Schema validation works (not just required fields).
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"f": {
 				"nodes": {
@@ -507,7 +507,7 @@ func TestFilterSchemaTypeValidation(t *testing.T) {
 				]
 			}
 		}
-	}`, "f", map[string]any{"age": float64(25)}, openbindings.NewOperationExecutor())
+	}`, "f", map[string]any{"age": float64(25)}, openbindings.NewOperationInvoker())
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event (age >= 18 passes), got %d", len(events))
@@ -515,8 +515,8 @@ func TestFilterSchemaTypeValidation(t *testing.T) {
 }
 
 func TestFilterSchemaTypeValidationFail(t *testing.T) {
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"f": {
 				"nodes": {
@@ -530,7 +530,7 @@ func TestFilterSchemaTypeValidationFail(t *testing.T) {
 				]
 			}
 		}
-	}`, "f", map[string]any{"age": float64(12)}, openbindings.NewOperationExecutor())
+	}`, "f", map[string]any{"age": float64(12)}, openbindings.NewOperationInvoker())
 
 	if len(events) != 0 {
 		t.Fatalf("expected 0 events (age < 18 fails), got %d", len(events))
@@ -542,14 +542,14 @@ func rawJSON(s string) *json.RawMessage {
 	return &r
 }
 
-// execGraphWithTransform is a test helper that parses and executes with a transform evaluator.
-func execGraphWithTransform(t *testing.T, graphJSON string, ref string, input any, te openbindings.TransformEvaluator) []openbindings.StreamEvent {
+// invokeGraphWithTransform is a test helper that parses and invokes with a transform evaluator.
+func invokeGraphWithTransform(t *testing.T, graphJSON string, ref string, input any, te openbindings.TransformEvaluator) []openbindings.StreamEvent {
 	t.Helper()
-	opExec := openbindings.NewOperationExecutor()
-	opExec.TransformEvaluator = te
-	exec := NewExecutor(opExec)
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := openbindings.NewOperationInvoker()
+	invoker.TransformEvaluator = te
+	invoker.AddBindingInvoker(NewInvoker(invoker))
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: json.RawMessage(graphJSON),
 		},
@@ -557,7 +557,7 @@ func execGraphWithTransform(t *testing.T, graphJSON string, ref string, input an
 		Input: input,
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 	return collectEvents(t, ch)
 }
@@ -566,8 +566,8 @@ func execGraphWithTransform(t *testing.T, graphJSON string, ref string, input an
 
 func TestBufferDrain(t *testing.T) {
 	// input -> buffer -> output (no conditions, drains on completion)
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
@@ -581,7 +581,7 @@ func TestBufferDrain(t *testing.T) {
 				]
 			}
 		}
-	}`, "g", map[string]any{"hello": "world"}, openbindings.NewOperationExecutor())
+	}`, "g", map[string]any{"hello": "world"}, openbindings.NewOperationInvoker())
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event (buffered array), got %d", len(events))
@@ -598,13 +598,13 @@ func TestBufferDrain(t *testing.T) {
 func TestBufferLimit(t *testing.T) {
 	// input -> map (unpack 5 items) -> buffer(limit=2) -> output
 	// Should produce 3 batches: [1,2], [3,4], [5]
-	events := execGraphWithTransform(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraphWithTransform(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
 					"in": { "type": "input" },
-					"unpack": { "type": "map", "transform": { "type": "jsonata", "expression": "items" } },
+					"unpack": { "type": "map", "transform": "items" },
 					"buf": { "type": "buffer", "limit": 2 },
 					"out": { "type": "output" }
 				},
@@ -639,13 +639,13 @@ func TestBufferUntil(t *testing.T) {
 	// input -> map (unpack items) -> buffer(until: {required: ["stop"]}) -> output
 	// Items: [{v:1}, {v:2}, {stop:true}, {v:3}]
 	// Buffer should flush [v1, v2] when stop arrives (stop is dropped), then [v3] on completion.
-	events := execGraphWithTransform(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraphWithTransform(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
 					"in": { "type": "input" },
-					"unpack": { "type": "map", "transform": { "type": "jsonata", "expression": "items" } },
+					"unpack": { "type": "map", "transform": "items" },
 					"buf": { "type": "buffer", "until": { "required": ["stop"] } },
 					"out": { "type": "output" }
 				},
@@ -682,13 +682,13 @@ func TestBufferThrough(t *testing.T) {
 	// Same as until but with through (matching event IS included).
 	// Items: [{v:1}, {v:2}, {stop:true}, {v:3}]
 	// Buffer should flush [v1, v2, {stop:true}] when stop arrives, then [v3] on completion.
-	events := execGraphWithTransform(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraphWithTransform(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
 					"in": { "type": "input" },
-					"unpack": { "type": "map", "transform": { "type": "jsonata", "expression": "items" } },
+					"unpack": { "type": "map", "transform": "items" },
 					"buf": { "type": "buffer", "through": { "required": ["stop"] } },
 					"out": { "type": "output" }
 				},
@@ -724,8 +724,8 @@ func TestBufferThrough(t *testing.T) {
 func TestFilterToBufferCompletion(t *testing.T) {
 	// input -> filter -> buffer -> output
 	// Verifies completion propagates through filter to buffer.
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
@@ -741,7 +741,7 @@ func TestFilterToBufferCompletion(t *testing.T) {
 				]
 			}
 		}
-	}`, "g", map[string]any{"name": "Alice"}, openbindings.NewOperationExecutor())
+	}`, "g", map[string]any{"name": "Alice"}, openbindings.NewOperationInvoker())
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -763,8 +763,8 @@ func TestCombineBasic(t *testing.T) {
 	// (combineLatest semantics), so we get 2 events:
 	//   1. First source fires: { pathA: value, pathB: null } (or vice versa)
 	//   2. Second source fires: { pathA: value, pathB: value }
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
@@ -783,7 +783,7 @@ func TestCombineBasic(t *testing.T) {
 				]
 			}
 		}
-	}`, "g", map[string]any{"a": 1, "b": 2}, openbindings.NewOperationExecutor())
+	}`, "g", map[string]any{"a": 1, "b": 2}, openbindings.NewOperationInvoker())
 
 	if len(events) != 2 {
 		t.Fatalf("expected 2 events (combineLatest), got %d", len(events))
@@ -801,8 +801,8 @@ func TestCombineBasic(t *testing.T) {
 func TestCombineMissingSource(t *testing.T) {
 	// input fans out to two filters. Filter B drops the event (no "b" field).
 	// Combine should emit with pathB = null.
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
@@ -821,7 +821,7 @@ func TestCombineMissingSource(t *testing.T) {
 				]
 			}
 		}
-	}`, "g", map[string]any{"a": 1}, openbindings.NewOperationExecutor())
+	}`, "g", map[string]any{"a": 1}, openbindings.NewOperationInvoker())
 
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -842,13 +842,13 @@ func TestCombineMissingSource(t *testing.T) {
 
 func TestMapUnpack(t *testing.T) {
 	// input -> map (unpack items) -> output
-	events := execGraphWithTransform(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraphWithTransform(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
 					"in": { "type": "input" },
-					"unpack": { "type": "map", "transform": { "type": "jsonata", "expression": "items" } },
+					"unpack": { "type": "map", "transform": "items" },
 					"out": { "type": "output" }
 				},
 				"edges": [
@@ -870,13 +870,13 @@ func TestMapUnpack(t *testing.T) {
 func TestMapNotArray(t *testing.T) {
 	// input -> map (expression returns non-array) -> output
 	// With onError -> output, should get error event.
-	events := execGraphWithTransform(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraphWithTransform(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
 					"in": { "type": "input" },
-					"unpack": { "type": "map", "transform": { "type": "jsonata", "expression": "name" }, "onError": "out" },
+					"unpack": { "type": "map", "transform": "name", "onError": "out" },
 					"out": { "type": "output" }
 				},
 				"edges": [
@@ -904,13 +904,13 @@ func TestMapNotArray(t *testing.T) {
 func TestTransformToBufferCompletion(t *testing.T) {
 	// input -> transform -> buffer -> output
 	// Verifies completion propagates through transform to buffer.
-	events := execGraphWithTransform(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraphWithTransform(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
 					"in": { "type": "input" },
-					"t": { "type": "transform", "transform": { "type": "jsonata", "expression": "name" } },
+					"t": { "type": "transform", "transform": "name" },
 					"buf": { "type": "buffer" },
 					"out": { "type": "output" }
 				},
@@ -941,14 +941,14 @@ func TestMapBufferCombineIntegration(t *testing.T) {
 	// input fans out to two map->buffer paths, combine joins them.
 	// Path A unpacks "a" items, Path B unpacks "b" items.
 	// Each buffer flushes once. Combine emits on each (combineLatest): 2 events.
-	events := execGraphWithTransform(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraphWithTransform(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
 					"in": { "type": "input" },
-					"mapA": { "type": "map", "transform": { "type": "jsonata", "expression": "a" } },
-					"mapB": { "type": "map", "transform": { "type": "jsonata", "expression": "b" } },
+					"mapA": { "type": "map", "transform": "a" },
+					"mapB": { "type": "map", "transform": "b" },
 					"bufA": { "type": "buffer" },
 					"bufB": { "type": "buffer" },
 					"join": { "type": "combine" },
@@ -993,8 +993,8 @@ func TestMapBufferCombineIntegration(t *testing.T) {
 func TestBufferEmptyDrain(t *testing.T) {
 	// input -> filter (drops) -> buffer -> output
 	// Filter drops the event. Buffer gets no data and should flush empty (no output).
-	events := execGraph(t, `{
-		"openbindings.operation-graph": "0.1.0",
+	events := invokeGraph(t, `{
+		"openbindings.operation-graph": "0.2.0",
 		"graphs": {
 			"g": {
 				"nodes": {
@@ -1010,7 +1010,7 @@ func TestBufferEmptyDrain(t *testing.T) {
 				]
 			}
 		}
-	}`, "g", map[string]any{"hello": "world"}, openbindings.NewOperationExecutor())
+	}`, "g", map[string]any{"hello": "world"}, openbindings.NewOperationInvoker())
 
 	if len(events) != 0 {
 		t.Fatalf("expected 0 events (empty buffer), got %d", len(events))

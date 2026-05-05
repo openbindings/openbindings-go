@@ -202,6 +202,42 @@ func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 	var bs Source
 	outMap := mustRoundTripToMap(t, in, &bs)
 	assertPreservedExtensionAndUnknown(t, outMap)
+
+	if outMap["format"] != "openapi@3.1" {
+		t.Fatalf("expected format preserved, got %#v", outMap["format"])
+	}
+	if outMap["location"] != "./openapi.json" {
+		t.Fatalf("expected location preserved, got %#v", outMap["location"])
+	}
+}
+
+func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
+	s := Source{
+		Format:   "openapi@3.1",
+		Location: "./typed-location.json",
+		LosslessFields: LosslessFields{
+			Unknown: map[string]json.RawMessage{
+				"format":   json.RawMessage(`"grpc@1.0"`),
+				"location": json.RawMessage(`"./unknown-location.json"`),
+			},
+			Extensions: map[string]json.RawMessage{
+				"x-custom": json.RawMessage(`"kept"`),
+			},
+		},
+	}
+
+	out := mustMarshalJSON(t, s)
+	outMap := mustUnmarshalToMap(t, out)
+
+	if outMap["format"] != "openapi@3.1" {
+		t.Fatalf("expected typed format to win, got %#v", outMap["format"])
+	}
+	if outMap["location"] != "./typed-location.json" {
+		t.Fatalf("expected typed location to win, got %#v", outMap["location"])
+	}
+	if outMap["x-custom"] != "kept" {
+		t.Fatalf("expected extension preserved, got %#v", outMap["x-custom"])
+	}
 }
 
 func TestBindingEntry_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
@@ -216,6 +252,55 @@ func TestBindingEntry_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing
 	var be BindingEntry
 	outMap := mustRoundTripToMap(t, in, &be)
 	assertPreservedExtensionAndUnknown(t, outMap)
+
+	if outMap["operation"] != "logs.get" {
+		t.Fatalf("expected operation preserved, got %#v", outMap["operation"])
+	}
+	if outMap["source"] != "publicOpenapi" {
+		t.Fatalf("expected source preserved, got %#v", outMap["source"])
+	}
+	if outMap["ref"] != "#/paths/~1logs~1{id}/get" {
+		t.Fatalf("expected ref preserved, got %#v", outMap["ref"])
+	}
+}
+
+func TestBindingEntry_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
+	be := BindingEntry{
+		Operation:   "typed.op",
+		Source:      "typedSource",
+		Ref:         "#/typed/ref",
+		Description: "typed description",
+		LosslessFields: LosslessFields{
+			Unknown: map[string]json.RawMessage{
+				"operation":   json.RawMessage(`"unknown.op"`),
+				"source":      json.RawMessage(`"unknownSource"`),
+				"ref":         json.RawMessage(`"#/unknown/ref"`),
+				"description": json.RawMessage(`"unknown description"`),
+			},
+			Extensions: map[string]json.RawMessage{
+				"x-custom": json.RawMessage(`"kept"`),
+			},
+		},
+	}
+
+	out := mustMarshalJSON(t, be)
+	outMap := mustUnmarshalToMap(t, out)
+
+	if outMap["operation"] != "typed.op" {
+		t.Fatalf("expected typed operation to win, got %#v", outMap["operation"])
+	}
+	if outMap["source"] != "typedSource" {
+		t.Fatalf("expected typed source to win, got %#v", outMap["source"])
+	}
+	if outMap["ref"] != "#/typed/ref" {
+		t.Fatalf("expected typed ref to win, got %#v", outMap["ref"])
+	}
+	if outMap["description"] != "typed description" {
+		t.Fatalf("expected typed description to win, got %#v", outMap["description"])
+	}
+	if outMap["x-custom"] != "kept" {
+		t.Fatalf("expected extension preserved, got %#v", outMap["x-custom"])
+	}
 }
 
 func TestSatisfies_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
@@ -229,6 +314,42 @@ func TestSatisfies_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T)
 	var s Satisfies
 	outMap := mustRoundTripToMap(t, in, &s)
 	assertPreservedExtensionAndUnknown(t, outMap)
+
+	if outMap["role"] != "io.example@1.0" {
+		t.Fatalf("expected role preserved, got %#v", outMap["role"])
+	}
+	if outMap["operation"] != "op" {
+		t.Fatalf("expected operation preserved, got %#v", outMap["operation"])
+	}
+}
+
+func TestSatisfies_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
+	s := Satisfies{
+		Role:      "typed.role@2.0",
+		Operation: "typedOp",
+		LosslessFields: LosslessFields{
+			Unknown: map[string]json.RawMessage{
+				"role":      json.RawMessage(`"unknown.role@1.0"`),
+				"operation": json.RawMessage(`"unknownOp"`),
+			},
+			Extensions: map[string]json.RawMessage{
+				"x-custom": json.RawMessage(`"kept"`),
+			},
+		},
+	}
+
+	out := mustMarshalJSON(t, s)
+	outMap := mustUnmarshalToMap(t, out)
+
+	if outMap["role"] != "typed.role@2.0" {
+		t.Fatalf("expected typed role to win, got %#v", outMap["role"])
+	}
+	if outMap["operation"] != "typedOp" {
+		t.Fatalf("expected typed operation to win, got %#v", outMap["operation"])
+	}
+	if outMap["x-custom"] != "kept" {
+		t.Fatalf("expected extension preserved, got %#v", outMap["x-custom"])
+	}
 }
 
 func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingAndSatisfiesFields(t *testing.T) {
@@ -340,23 +461,25 @@ func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingAndSatisfies
 	}
 }
 
-func TestTransform_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
-	in := []byte(`{
-  "type": "jsonata",
-  "expression": "{ amount: total }",
-  "x-extensionField": "extensionFieldValue",
-  "unknownField": {"value": "unknownFieldValue"}
-}`)
+func TestTransform_StringRoundTrip(t *testing.T) {
+	// Per v0.2 spec §6.5, transforms are JSONata 2.0 expression strings.
+	// The previous object form ({type, expression, x-*, unknown}) is gone.
+	in := []byte(`"{ amount: total }"`)
 
 	var tr Transform
-	outMap := mustRoundTripToMap(t, in, &tr)
-	assertPreservedExtensionAndUnknown(t, outMap)
-
-	if tr.Type != "jsonata" {
-		t.Fatalf("expected type=jsonata, got %q", tr.Type)
+	if err := json.Unmarshal(in, &tr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
-	if tr.Expression != "{ amount: total }" {
-		t.Fatalf("expected expression preserved, got %q", tr.Expression)
+	if string(tr) != "{ amount: total }" {
+		t.Fatalf("expected expression preserved, got %q", string(tr))
+	}
+
+	out, err := json.Marshal(tr)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(out) != `"{ amount: total }"` {
+		t.Fatalf("expected JSON string round-trip, got %s", string(out))
 	}
 }
 
@@ -376,12 +499,74 @@ func TestOperationExample_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *tes
 	if ex.Description != "Example" {
 		t.Fatalf("expected description=Example, got %q", ex.Description)
 	}
+	if outMap["description"] != "Example" {
+		t.Fatalf("expected description preserved in output, got %#v", outMap["description"])
+	}
+	inputObj, ok := outMap["input"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected input preserved as object, got %#v", outMap["input"])
+	}
+	if inputObj["key"] != "value" {
+		t.Fatalf("expected input.key=value, got %#v", inputObj["key"])
+	}
+	outputObj, ok := outMap["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected output preserved as object, got %#v", outMap["output"])
+	}
+	if outputObj["result"] != true {
+		t.Fatalf("expected output.result=true, got %#v", outputObj["result"])
+	}
 }
 
-func TestTransformOrRef_RefPreservesExtensions(t *testing.T) {
+func TestOperationExample_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
+	ex := OperationExample{
+		Description: "typed description",
+		Input:       map[string]any{"typed": true},
+		Output:      map[string]any{"typed": true},
+		LosslessFields: LosslessFields{
+			Unknown: map[string]json.RawMessage{
+				"description": json.RawMessage(`"unknown description"`),
+				"input":       json.RawMessage(`{"unknown": true}`),
+				"output":      json.RawMessage(`{"unknown": true}`),
+			},
+			Extensions: map[string]json.RawMessage{
+				"x-custom": json.RawMessage(`"kept"`),
+			},
+		},
+	}
+
+	out := mustMarshalJSON(t, ex)
+	outMap := mustUnmarshalToMap(t, out)
+
+	if outMap["description"] != "typed description" {
+		t.Fatalf("expected typed description to win, got %#v", outMap["description"])
+	}
+	inputObj, ok := outMap["input"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected input to be object, got %#v", outMap["input"])
+	}
+	if inputObj["typed"] != true {
+		t.Fatalf("expected typed input to win, got %#v", inputObj)
+	}
+	if _, hasUnknown := inputObj["unknown"]; hasUnknown {
+		t.Fatal("expected unknown input field to be overridden")
+	}
+	outputObj, ok := outMap["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected output to be object, got %#v", outMap["output"])
+	}
+	if outputObj["typed"] != true {
+		t.Fatalf("expected typed output to win, got %#v", outputObj)
+	}
+	if outMap["x-custom"] != "kept" {
+		t.Fatalf("expected extension preserved, got %#v", outMap["x-custom"])
+	}
+}
+
+func TestTransformOrRef_RefIgnoresExtraFields(t *testing.T) {
 	in := []byte(`{
   "$ref": "#/transforms/myTransform",
-  "x-custom": "preserved"
+  "x-custom": "ignored"
 }`)
 
 	var tor TransformOrRef
@@ -395,11 +580,8 @@ func TestTransformOrRef_RefPreservesExtensions(t *testing.T) {
 	if tor.Ref != "#/transforms/myTransform" {
 		t.Fatalf("expected ref, got %q", tor.Ref)
 	}
-	if tor.RefExtensions == nil || len(tor.RefExtensions) != 1 {
-		t.Fatalf("expected 1 ref extension, got %#v", tor.RefExtensions)
-	}
 
-	// Round-trip
+	// Round-trip produces only $ref
 	out, err := json.Marshal(tor)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -411,16 +593,14 @@ func TestTransformOrRef_RefPreservesExtensions(t *testing.T) {
 	if outMap["$ref"] != "#/transforms/myTransform" {
 		t.Fatalf("expected $ref preserved, got %v", outMap["$ref"])
 	}
-	if outMap["x-custom"] != "preserved" {
-		t.Fatalf("expected x-custom preserved, got %v", outMap["x-custom"])
+	if _, hasExtra := outMap["x-custom"]; hasExtra {
+		t.Fatal("expected x-custom to be dropped per schema additionalProperties:false")
 	}
 }
 
 func TestTransformOrRef_InlineTransform(t *testing.T) {
-	in := []byte(`{
-  "type": "jsonata",
-  "expression": "{ charge_amount: amount }"
-}`)
+	// Per v0.2 spec §6.5, an inline transform is a bare JSONata expression string.
+	in := []byte(`"{ charge_amount: amount }"`)
 
 	var tor TransformOrRef
 	if err := json.Unmarshal(in, &tor); err != nil {
@@ -430,27 +610,17 @@ func TestTransformOrRef_InlineTransform(t *testing.T) {
 	if tor.IsRef() {
 		t.Fatal("expected inline transform, got ref")
 	}
-	if tor.Transform == nil {
-		t.Fatal("expected transform to be non-nil")
-	}
-	if tor.Transform.Type != "jsonata" {
-		t.Fatalf("expected type=jsonata, got %q", tor.Transform.Type)
-	}
-	if tor.Transform.Expression != "{ charge_amount: amount }" {
-		t.Fatalf("expected expression preserved, got %q", tor.Transform.Expression)
+	if tor.Inline != "{ charge_amount: amount }" {
+		t.Fatalf("expected expression preserved, got %q", tor.Inline)
 	}
 
-	// Round-trip
+	// Round-trip: inline transforms marshal back to JSON strings.
 	out, err := json.Marshal(tor)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var outMap map[string]any
-	if err := json.Unmarshal(out, &outMap); err != nil {
-		t.Fatalf("unmarshal output: %v", err)
-	}
-	if outMap["type"] != "jsonata" {
-		t.Fatalf("expected type=jsonata in output, got %v", outMap["type"])
+	if string(out) != `"{ charge_amount: amount }"` {
+		t.Fatalf("expected JSON string round-trip, got %s", string(out))
 	}
 }
 
@@ -470,8 +640,8 @@ func TestTransformOrRef_Reference(t *testing.T) {
 	if tor.Ref != "#/transforms/myTransform" {
 		t.Fatalf("expected ref=#/transforms/myTransform, got %q", tor.Ref)
 	}
-	if tor.Transform != nil {
-		t.Fatal("expected transform to be nil for ref")
+	if tor.Inline != "" {
+		t.Fatalf("expected Inline to be empty for ref, got %q", tor.Inline)
 	}
 
 	// Round-trip
@@ -496,10 +666,7 @@ func TestBindingEntry_WithTransforms(t *testing.T) {
   "operation": "processPayment",
   "source": "paymentApi",
   "ref": "POST /charges",
-  "inputTransform": {
-    "type": "jsonata",
-    "expression": "{ charge_amount: amount }"
-  },
+  "inputTransform": "{ charge_amount: amount }",
   "outputTransform": {
     "$ref": "#/transforms/fromApiOutput"
   }
@@ -516,8 +683,8 @@ func TestBindingEntry_WithTransforms(t *testing.T) {
 	if be.InputTransform.IsRef() {
 		t.Fatal("expected inputTransform to be inline")
 	}
-	if be.InputTransform.Transform.Type != "jsonata" {
-		t.Fatalf("expected inputTransform.type=jsonata, got %q", be.InputTransform.Transform.Type)
+	if be.InputTransform.Inline != "{ charge_amount: amount }" {
+		t.Fatalf("expected inputTransform inline expression, got %q", be.InputTransform.Inline)
 	}
 
 	if be.OutputTransform == nil {
@@ -540,12 +707,8 @@ func TestBindingEntry_WithTransforms(t *testing.T) {
 		t.Fatalf("unmarshal output: %v", err)
 	}
 
-	inputTr, ok := outMap["inputTransform"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected inputTransform object, got %#v", outMap["inputTransform"])
-	}
-	if inputTr["type"] != "jsonata" {
-		t.Fatalf("expected inputTransform.type=jsonata, got %v", inputTr["type"])
+	if s, ok := outMap["inputTransform"].(string); !ok || s != "{ charge_amount: amount }" {
+		t.Fatalf("expected inputTransform to round-trip as string, got %#v", outMap["inputTransform"])
 	}
 
 	outputTr, ok := outMap["outputTransform"].(map[string]any)
@@ -567,14 +730,8 @@ func TestInterface_WithTransforms(t *testing.T) {
     }
   },
   "transforms": {
-    "toStripeInput": {
-      "type": "jsonata",
-      "expression": "{ charge_amount: amount * 100 }"
-    },
-    "fromStripeOutput": {
-      "type": "jsonata",
-      "expression": "{ transactionId: id, status: status }"
-    }
+    "toStripeInput": "{ charge_amount: amount * 100 }",
+    "fromStripeOutput": "{ transactionId: id, status: status }"
   },
   "sources": {
     "stripe": {
@@ -606,11 +763,8 @@ func TestInterface_WithTransforms(t *testing.T) {
 	if !ok {
 		t.Fatal("expected toStripeInput transform")
 	}
-	if toStripe.Type != "jsonata" {
-		t.Fatalf("expected type=jsonata, got %q", toStripe.Type)
-	}
-	if toStripe.Expression != "{ charge_amount: amount * 100 }" {
-		t.Fatalf("expected expression preserved, got %q", toStripe.Expression)
+	if string(toStripe) != "{ charge_amount: amount * 100 }" {
+		t.Fatalf("expected expression preserved, got %q", string(toStripe))
 	}
 
 	// Verify binding with transforms
@@ -642,53 +796,45 @@ func TestInterface_WithTransforms(t *testing.T) {
 	if len(transforms) != 2 {
 		t.Fatalf("expected 2 transforms in output, got %d", len(transforms))
 	}
+	if s, ok := transforms["toStripeInput"].(string); !ok || s != "{ charge_amount: amount * 100 }" {
+		t.Fatalf("expected toStripeInput to be a string in output, got %#v", transforms["toStripeInput"])
+	}
 }
 
 func TestTransformOrRef_Resolve(t *testing.T) {
 	transforms := map[string]Transform{
-		"myTransform": {
-			Type:       "jsonata",
-			Expression: "{ foo: bar }",
-		},
+		"myTransform": "{ foo: bar }",
 	}
 
-	// Test resolving a ref
+	// Resolving a ref returns the named expression.
 	ref := TransformOrRef{Ref: "#/transforms/myTransform"}
-	resolved := ref.Resolve(transforms)
-	if resolved == nil {
+	expr, ok := ref.Resolve(transforms)
+	if !ok {
 		t.Fatal("expected ref to resolve")
 	}
-	if resolved.Type != "jsonata" {
-		t.Fatalf("expected type=jsonata, got %q", resolved.Type)
-	}
-	if resolved.Expression != "{ foo: bar }" {
-		t.Fatalf("expected expression preserved, got %q", resolved.Expression)
+	if expr != "{ foo: bar }" {
+		t.Fatalf("expected expression preserved, got %q", expr)
 	}
 
-	// Test resolving an inline transform
-	inline := TransformOrRef{
-		Transform: &Transform{
-			Type:       "jsonata",
-			Expression: "{ inline: true }",
-		},
-	}
-	resolvedInline := inline.Resolve(transforms)
-	if resolvedInline == nil {
+	// Resolving an inline TransformOrRef returns the inline expression.
+	inline := TransformOrRef{Inline: "{ inline: true }"}
+	inlineExpr, ok := inline.Resolve(transforms)
+	if !ok {
 		t.Fatal("expected inline to resolve")
 	}
-	if resolvedInline.Expression != "{ inline: true }" {
-		t.Fatalf("expected inline expression, got %q", resolvedInline.Expression)
+	if inlineExpr != "{ inline: true }" {
+		t.Fatalf("expected inline expression, got %q", inlineExpr)
 	}
 
-	// Test unresolvable ref
+	// Unresolvable ref returns ok=false.
 	badRef := TransformOrRef{Ref: "#/transforms/nonexistent"}
-	if badRef.Resolve(transforms) != nil {
-		t.Fatal("expected unresolvable ref to return nil")
+	if _, ok := badRef.Resolve(transforms); ok {
+		t.Fatal("expected unresolvable ref to return ok=false")
 	}
 
-	// Test malformed ref
+	// Malformed ref (wrong prefix) returns ok=false.
 	malformed := TransformOrRef{Ref: "notavalidref"}
-	if malformed.Resolve(transforms) != nil {
-		t.Fatal("expected malformed ref to return nil")
+	if _, ok := malformed.Resolve(transforms); ok {
+		t.Fatal("expected malformed ref to return ok=false")
 	}
 }

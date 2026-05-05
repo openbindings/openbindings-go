@@ -59,13 +59,13 @@ func drainOne(t *testing.T, ch <-chan openbindings.StreamEvent) openbindings.Str
 	return ev
 }
 
-func TestIntegration_ExecuteBinding_Success(t *testing.T) {
+func TestIntegration_InvokeBinding_Success(t *testing.T) {
 	srv := fakeConnectServer(t, http.StatusOK, `{"id":"abc","name":"hello"}`)
 	defer srv.Close()
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: srv.URL,
 			Content:  testProto,
@@ -74,7 +74,7 @@ func TestIntegration_ExecuteBinding_Success(t *testing.T) {
 		Input: map[string]any{"id": "abc"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := drainOne(t, ch)
@@ -93,13 +93,13 @@ func TestIntegration_ExecuteBinding_Success(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteBinding_HTTPError(t *testing.T) {
+func TestIntegration_InvokeBinding_HTTPError(t *testing.T) {
 	srv := fakeConnectServer(t, http.StatusInternalServerError, `{"code":"internal","message":"boom"}`)
 	defer srv.Close()
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: srv.URL,
 			Content:  testProto,
@@ -108,7 +108,7 @@ func TestIntegration_ExecuteBinding_HTTPError(t *testing.T) {
 		Input: map[string]any{"id": "abc"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := drainOne(t, ch)
@@ -120,13 +120,13 @@ func TestIntegration_ExecuteBinding_HTTPError(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteBinding_AuthRequired(t *testing.T) {
+func TestIntegration_InvokeBinding_AuthRequired(t *testing.T) {
 	srv := fakeConnectServer(t, http.StatusUnauthorized, `{"code":"unauthenticated","message":"need token"}`)
 	defer srv.Close()
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: srv.URL,
 			Content:  testProto,
@@ -135,7 +135,7 @@ func TestIntegration_ExecuteBinding_AuthRequired(t *testing.T) {
 		Input: map[string]any{"id": "abc"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := drainOne(t, ch)
@@ -147,7 +147,7 @@ func TestIntegration_ExecuteBinding_AuthRequired(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteBinding_BearerTokenSent(t *testing.T) {
+func TestIntegration_InvokeBinding_BearerTokenSent(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -157,9 +157,9 @@ func TestIntegration_ExecuteBinding_BearerTokenSent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: srv.URL,
 			Content:  testProto,
@@ -169,7 +169,7 @@ func TestIntegration_ExecuteBinding_BearerTokenSent(t *testing.T) {
 		Context: map[string]any{"bearerToken": "secret-123"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	_ = drainOne(t, ch)
@@ -178,10 +178,10 @@ func TestIntegration_ExecuteBinding_BearerTokenSent(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteBinding_InvalidRef(t *testing.T) {
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+func TestIntegration_InvokeBinding_InvalidRef(t *testing.T) {
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: "http://localhost:1",
 			Content:  testProto,
@@ -190,7 +190,7 @@ func TestIntegration_ExecuteBinding_InvalidRef(t *testing.T) {
 		Input: map[string]any{},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := drainOne(t, ch)
@@ -202,7 +202,7 @@ func TestIntegration_ExecuteBinding_InvalidRef(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteBinding_RequestBodyMatchesInput(t *testing.T) {
+func TestIntegration_InvokeBinding_RequestBodyMatchesInput(t *testing.T) {
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -213,9 +213,9 @@ func TestIntegration_ExecuteBinding_RequestBodyMatchesInput(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: srv.URL,
 			Content:  testProto,
@@ -224,7 +224,7 @@ func TestIntegration_ExecuteBinding_RequestBodyMatchesInput(t *testing.T) {
 		Input: map[string]any{"id": "xyz"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 	_ = drainOne(t, ch)
 
@@ -237,12 +237,12 @@ func TestIntegration_ExecuteBinding_RequestBodyMatchesInput(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteBinding_ConnectFailed(t *testing.T) {
-	exec := NewExecutor()
+func TestIntegration_InvokeBinding_ConnectFailed(t *testing.T) {
+	invoker := NewInvoker()
 	// Use an unreachable address. Skip if we can't bind a port to test against;
 	// localhost:1 is reserved and should refuse connections on most systems.
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: "http://127.0.0.1:1",
 			Content:  testProto,
@@ -251,7 +251,7 @@ func TestIntegration_ExecuteBinding_ConnectFailed(t *testing.T) {
 		Input: map[string]any{"id": "abc"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := drainOne(t, ch)
@@ -264,7 +264,7 @@ func TestIntegration_ExecuteBinding_ConnectFailed(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteBinding_RedirectLimit(t *testing.T) {
+func TestIntegration_InvokeBinding_RedirectLimit(t *testing.T) {
 	// Build a server that always redirects to itself, to verify the
 	// CheckRedirect cap kicks in instead of looping forever.
 	var srv *httptest.Server
@@ -273,9 +273,9 @@ func TestIntegration_ExecuteBinding_RedirectLimit(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: srv.URL,
 			Content:  testProto,
@@ -284,7 +284,7 @@ func TestIntegration_ExecuteBinding_RedirectLimit(t *testing.T) {
 		Input: map[string]any{"id": "abc"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := drainOne(t, ch)
@@ -296,7 +296,7 @@ func TestIntegration_ExecuteBinding_RedirectLimit(t *testing.T) {
 	}
 }
 
-// streamingProto declares a server-streaming method so the executor takes the
+// streamingProto declares a server-streaming method so the driver takes the
 // streaming dispatch path. The method returns multiple LogEntry messages.
 const streamingProto = `
 syntax = "proto3";
@@ -358,7 +358,7 @@ func fakeConnectStreamingServer(t *testing.T, dataMessages []string, endStreamEr
 	}))
 }
 
-func TestIntegration_ExecuteBinding_ServerStreaming_Success(t *testing.T) {
+func TestIntegration_InvokeBinding_ServerStreaming_Success(t *testing.T) {
 	srv := fakeConnectStreamingServer(t, []string{
 		`{"message":"line 1","timestamp":1}`,
 		`{"message":"line 2","timestamp":2}`,
@@ -366,9 +366,9 @@ func TestIntegration_ExecuteBinding_ServerStreaming_Success(t *testing.T) {
 	}, "")
 	defer srv.Close()
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: srv.URL,
 			Content:  streamingProto,
@@ -377,7 +377,7 @@ func TestIntegration_ExecuteBinding_ServerStreaming_Success(t *testing.T) {
 		Input: map[string]any{"source": "test"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	var events []openbindings.StreamEvent
@@ -403,13 +403,13 @@ func TestIntegration_ExecuteBinding_ServerStreaming_Success(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteBinding_ServerStreaming_EmptyStream(t *testing.T) {
+func TestIntegration_InvokeBinding_ServerStreaming_EmptyStream(t *testing.T) {
 	srv := fakeConnectStreamingServer(t, nil, "")
 	defer srv.Close()
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: srv.URL,
 			Content:  streamingProto,
@@ -418,7 +418,7 @@ func TestIntegration_ExecuteBinding_ServerStreaming_EmptyStream(t *testing.T) {
 		Input: map[string]any{"source": "test"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	var events []openbindings.StreamEvent
@@ -430,7 +430,7 @@ func TestIntegration_ExecuteBinding_ServerStreaming_EmptyStream(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteBinding_ServerStreaming_EndStreamError(t *testing.T) {
+func TestIntegration_InvokeBinding_ServerStreaming_EndStreamError(t *testing.T) {
 	// Server sends one data event then ends the stream with an error.
 	srv := fakeConnectStreamingServer(
 		t,
@@ -439,9 +439,9 @@ func TestIntegration_ExecuteBinding_ServerStreaming_EndStreamError(t *testing.T)
 	)
 	defer srv.Close()
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: srv.URL,
 			Content:  streamingProto,
@@ -450,7 +450,7 @@ func TestIntegration_ExecuteBinding_ServerStreaming_EndStreamError(t *testing.T)
 		Input: map[string]any{"source": "test"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	var events []openbindings.StreamEvent
@@ -513,7 +513,7 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 }
 
 // TestWriteCompressedEnvelopeRejected verifies that writeConnectEnvelope
-// refuses to emit a frame with the COMPRESSED flag set, since the executor
+// refuses to emit a frame with the COMPRESSED flag set, since the driver
 // does not support compression in v0.1.
 func TestWriteCompressedEnvelopeRejected(t *testing.T) {
 	var buf bytes.Buffer
@@ -545,14 +545,14 @@ func TestReadCompressedEnvelopeRejected(t *testing.T) {
 	}
 }
 
-// TestServerStreamingCompressedFrameRejected exercises the executor end-to-end
+// TestServerStreamingCompressedFrameRejected exercises the driver end-to-end
 // against a server that sends a compressed frame, verifying that the streaming
-// executor surfaces the rejection as a stream error event.
+// driver surfaces the rejection as a stream error event.
 func TestServerStreamingCompressedFrameRejected(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/connect+json")
 		w.WriteHeader(http.StatusOK)
-		// Manually write a compressed envelope. The executor must reject it.
+		// Manually write a compressed envelope. The driver must reject it.
 		header := []byte{connectFlagCompressed, 0, 0, 0, 7}
 		_, _ = w.Write(header)
 		_, _ = w.Write([]byte(`{"a":1}`))
@@ -561,9 +561,9 @@ func TestServerStreamingCompressedFrameRejected(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: srv.URL,
 			Content:  streamingProto,
@@ -572,7 +572,7 @@ func TestServerStreamingCompressedFrameRejected(t *testing.T) {
 		Input: map[string]any{"source": "test"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	var events []openbindings.StreamEvent

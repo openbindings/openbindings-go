@@ -57,7 +57,7 @@ func TestResolveServer_MetadataOverride(t *testing.T) {
 			"prod": {Host: "api.example.com", Protocol: "https"},
 		},
 	}
-	opts := &openbindings.ExecutionOptions{
+	opts := &openbindings.InvocationOptions{
 		Metadata: map[string]any{"baseURL": "http://localhost:8080"},
 	}
 	url, proto, err := resolveServer(doc, opts)

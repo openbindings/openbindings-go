@@ -9,7 +9,7 @@ const maxSelectionDepth = 3
 
 // queryFieldName is the conventional input schema property name for a
 // pre-built GraphQL query string. When the operation's input schema declares
-// this property with a const value, the executor uses it instead of building
+// this property with a const value, the driver uses it instead of building
 // a query from introspection.
 const queryFieldName = "_query"
 

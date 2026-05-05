@@ -8,9 +8,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestExecutor_Formats(t *testing.T) {
-	exec := NewExecutor()
-	formats := exec.Formats()
+func TestDriver_Formats(t *testing.T) {
+	invoker := NewInvoker()
+	formats := invoker.Formats()
 	if len(formats) != 1 {
 		t.Fatalf("expected exactly 1 format, got %d", len(formats))
 	}
@@ -22,20 +22,20 @@ func TestExecutor_Formats(t *testing.T) {
 	}
 }
 
-func TestExecutor_ExecuteBinding_AlwaysFails(t *testing.T) {
-	// Workers RPC dispatch is not possible from Go. The Go executor stub
+func TestDriver_InvokeBinding_AlwaysFails(t *testing.T) {
+	// Workers RPC dispatch is not possible from Go. The Go driver stub
 	// must yield a clear, actionable error event on the channel (not return
 	// a Go error) directing the caller to the TypeScript runtime.
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: "workers-rpc://test"},
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: "workers-rpc://test"},
 		Ref:    "someMethod",
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding must not return a Go error; got: %v", err)
+		t.Fatalf("InvokeBinding must not return a Go error; got: %v", err)
 	}
 	if ch == nil {
-		t.Fatal("ExecuteBinding must return a non-nil channel")
+		t.Fatal("InvokeBinding must return a non-nil channel")
 	}
 	ev, ok := <-ch
 	if !ok {
@@ -48,8 +48,8 @@ func TestExecutor_ExecuteBinding_AlwaysFails(t *testing.T) {
 		t.Errorf("error code = %q, want %q", ev.Error.Code, openbindings.ErrCodeSourceConfigError)
 	}
 	msg := ev.Error.Message
-	if !strings.Contains(msg, "Cloudflare Worker") || !strings.Contains(msg, "WorkersRpcExecutor") {
-		t.Errorf("error message should mention Cloudflare Worker and WorkersRpcExecutor, got: %s", msg)
+	if !strings.Contains(msg, "Cloudflare Worker") || !strings.Contains(msg, "WorkersRpcInvoker") {
+		t.Errorf("error message should mention Cloudflare Worker and WorkersRpcInvoker, got: %s", msg)
 	}
 	// Channel should be closed after the single error event.
 	if _, more := <-ch; more {

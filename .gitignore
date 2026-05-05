@@ -13,3 +13,7 @@
 
 # Tools
 .claude/
+
+# Local multi-module workspace (each submodule pins its own deps; go.work is for local dev only)
+go.work
+go.work.sum

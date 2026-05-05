@@ -1,12 +1,12 @@
 package openbindings
 
-// Standard error codes for binding executor results. These enable
-// protocol-agnostic error handling by the operation executor and
-// application code. Binding executors SHOULD use these codes in
-// ExecuteError.Code.
+// Standard error codes for binding invoker results. These enable
+// protocol-agnostic error handling by the operation invoker and
+// application code. Binding invokers SHOULD use these codes in
+// InvocationError.Code.
 //
 // These are SDK conventions, not spec requirements. Third-party
-// executors MAY use different codes.
+// invokers MAY use different codes.
 const (
 	// ErrCodeAuthRequired indicates authentication is needed
 	// (e.g., HTTP 401, gRPC Unauthenticated). Retryable with credentials.

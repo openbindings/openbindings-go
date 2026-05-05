@@ -55,9 +55,9 @@ cmd "echo" {
 }
 
 func TestIntegration_JSONOutput(t *testing.T) {
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: testSpec(),
 		},
@@ -76,7 +76,7 @@ func TestIntegration_JSONOutput(t *testing.T) {
 		t.Fatalf("unexpected error: %s: %s", events[0].Error.Code, events[0].Error.Message)
 	}
 
-	// JSON output should be parsed into a map (the executor parses stdout JSON).
+	// JSON output should be parsed into a map (the driver parses stdout JSON).
 	result, ok := events[0].Data.(map[string]any)
 	if !ok {
 		t.Fatalf("expected parsed JSON map, got %T: %v", events[0].Data, events[0].Data)
@@ -90,9 +90,9 @@ func TestIntegration_JSONOutput(t *testing.T) {
 }
 
 func TestIntegration_NonZeroExitCode(t *testing.T) {
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: testSpec(),
 		},
@@ -125,9 +125,9 @@ func TestIntegration_NonZeroExitCode(t *testing.T) {
 }
 
 func TestIntegration_MixedOutput(t *testing.T) {
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: testSpec(),
 		},
@@ -154,9 +154,9 @@ func TestIntegration_MixedOutput(t *testing.T) {
 }
 
 func TestIntegration_EchoCommand(t *testing.T) {
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: testSpec(),
 		},
@@ -296,9 +296,9 @@ func TestIntegration_RootCommand(t *testing.T) {
 flag "-v --verbose" help="Verbose output"
 arg "<words>..." help="Words to echo"
 `
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: rootSpec,
 		},
@@ -325,9 +325,9 @@ arg "<words>..." help="Words to echo"
 }
 
 func TestIntegration_InvalidRef(t *testing.T) {
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: testSpec(),
 		},

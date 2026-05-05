@@ -190,7 +190,7 @@ func TestIntegration_CreateInterface_FromReflection(t *testing.T) {
 		disc.services = append(disc.services, svcDesc)
 	}
 
-	iface, err := convertToInterface(disc, "bufconn")
+	iface, err := convertToInterface(disc, "bufconn", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,12 +293,12 @@ func TestIntegration_ExecuteUnary(t *testing.T) {
 	dialer, ts := setupTestServer(t)
 	conn := dialTestServer(t, dialer)
 
-	executor := NewExecutor()
-	defer executor.Close()
-	executor.conns.Store("bufconn", conn)
+	invoker := NewInvoker()
+	defer invoker.Close()
+	invoker.conns.Store("bufconn", conn)
 
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source:  openbindings.BindingExecutionSource{Format: FormatToken, Location: "bufconn"},
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source:  openbindings.BindingInvocationSource{Format: FormatToken, Location: "bufconn"},
 		Ref:     "testpkg.ItemService/GetItem",
 		Input:   map[string]any{"id": "42"},
 		Context: map[string]any{"bearerToken": "tok_secret"},
@@ -335,12 +335,12 @@ func TestIntegration_ExecuteStreaming(t *testing.T) {
 	dialer, ts := setupTestServer(t)
 	conn := dialTestServer(t, dialer)
 
-	executor := NewExecutor()
-	defer executor.Close()
-	executor.conns.Store("bufconn", conn)
+	invoker := NewInvoker()
+	defer invoker.Close()
+	invoker.conns.Store("bufconn", conn)
 
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source:  openbindings.BindingExecutionSource{Format: FormatToken, Location: "bufconn"},
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source:  openbindings.BindingInvocationSource{Format: FormatToken, Location: "bufconn"},
 		Ref:     "testpkg.ItemService/ListItems",
 		Context: map[string]any{"bearerToken": "stream_tok"},
 	})
@@ -378,16 +378,16 @@ func TestIntegration_StoredCredentials(t *testing.T) {
 	dialer, ts := setupTestServer(t)
 	conn := dialTestServer(t, dialer)
 
-	executor := NewExecutor()
-	defer executor.Close()
-	executor.conns.Store("bufconn", conn)
+	invoker := NewInvoker()
+	defer invoker.Close()
+	invoker.conns.Store("bufconn", conn)
 
 	store := openbindings.NewMemoryStore()
 	ctx := context.Background()
 	_ = store.Set(ctx, "bufconn", map[string]any{"bearerToken": "stored_token"})
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: "bufconn"},
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: "bufconn"},
 		Ref:    "testpkg.ItemService/GetItem",
 		Input:  map[string]any{"id": "1"},
 		Store:  store,
@@ -410,12 +410,12 @@ func TestIntegration_InvalidRef(t *testing.T) {
 	dialer, _ := setupTestServer(t)
 	conn := dialTestServer(t, dialer)
 
-	executor := NewExecutor()
-	defer executor.Close()
-	executor.conns.Store("bufconn", conn)
+	invoker := NewInvoker()
+	defer invoker.Close()
+	invoker.conns.Store("bufconn", conn)
 
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: "bufconn"},
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: "bufconn"},
 		Ref:    "not-a-valid-ref",
 	})
 	if err != nil {

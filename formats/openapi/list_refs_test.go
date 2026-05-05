@@ -7,7 +7,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestListBindableRefs_BasicRefs(t *testing.T) {
+func TestInspectSource_BasicRefs(t *testing.T) {
 	content := `{
   "openapi": "3.0.3",
   "info": {"title": "Test API", "version": "1.0.0"},
@@ -40,22 +40,22 @@ func TestListBindableRefs_BasicRefs(t *testing.T) {
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 4 {
-		t.Fatalf("expected 4 refs, got %d", len(result.Refs))
+	if len(result.Targets) != 4 {
+		t.Fatalf("expected 4 refs, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")
 	}
 }
 
-func TestListBindableRefs_JSONPointerFormat(t *testing.T) {
+func TestInspectSource_JSONPointerFormat(t *testing.T) {
 	content := `{
   "openapi": "3.0.3",
   "info": {"title": "Test", "version": "1.0.0"},
@@ -76,7 +76,7 @@ func TestListBindableRefs_JSONPointerFormat(t *testing.T) {
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -84,11 +84,11 @@ func TestListBindableRefs_JSONPointerFormat(t *testing.T) {
 	}
 
 	wantRefs := map[string]bool{
-		"#/paths/~1users/get":        false,
-		"#/paths/~1users~1{id}/put":  false,
+		"#/paths/~1users/get":       false,
+		"#/paths/~1users~1{id}/put": false,
 	}
 
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if _, ok := wantRefs[ref.Ref]; ok {
 			wantRefs[ref.Ref] = true
 		}
@@ -100,7 +100,7 @@ func TestListBindableRefs_JSONPointerFormat(t *testing.T) {
 	}
 }
 
-func TestListBindableRefs_DescriptionFromSummary(t *testing.T) {
+func TestInspectSource_DescriptionFromSummary(t *testing.T) {
 	content := `{
   "openapi": "3.0.3",
   "info": {"title": "Test", "version": "1.0.0"},
@@ -119,7 +119,7 @@ func TestListBindableRefs_DescriptionFromSummary(t *testing.T) {
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -127,8 +127,10 @@ func TestListBindableRefs_DescriptionFromSummary(t *testing.T) {
 	}
 
 	descByRef := map[string]string{}
-	for _, ref := range result.Refs {
-		descByRef[ref.Ref] = ref.Description
+	for _, ref := range result.Targets {
+		if ref.Operation != nil {
+			descByRef[ref.Ref] = ref.Operation.Description
+		}
 	}
 
 	// Summary is used when description is absent.
@@ -141,7 +143,7 @@ func TestListBindableRefs_DescriptionFromSummary(t *testing.T) {
 	}
 }
 
-func TestListBindableRefs_RefsMatchCreateInterface(t *testing.T) {
+func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
 	doc := minimalDoc()
 	iface := convertDocToInterface(doc, "")
 
@@ -151,7 +153,7 @@ func TestListBindableRefs_RefsMatchCreateInterface(t *testing.T) {
 		createRefs[b.Ref] = true
 	}
 
-	// ListBindableRefs should produce the same refs.
+	// InspectSource should produce the same refs.
 	content := `{
   "openapi": "3.0.3",
   "info": {"title": "Test API", "version": "2.0.0"},
@@ -172,48 +174,48 @@ func TestListBindableRefs_RefsMatchCreateInterface(t *testing.T) {
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if !createRefs[ref.Ref] {
-			t.Errorf("ListBindableRefs ref %q not found in CreateInterface bindings", ref.Ref)
+			t.Errorf("InspectSource ref %q not found in CreateInterface bindings", ref.Ref)
 		}
 	}
-	if len(result.Refs) != len(createRefs) {
-		t.Errorf("ref count mismatch: ListBindableRefs=%d, CreateInterface=%d", len(result.Refs), len(createRefs))
+	if len(result.Targets) != len(createRefs) {
+		t.Errorf("ref count mismatch: InspectSource=%d, CreateInterface=%d", len(result.Targets), len(createRefs))
 	}
 }
 
-func TestListBindableRefs_NoPaths(t *testing.T) {
+func TestInspectSource_NoPaths(t *testing.T) {
 	content := `{
   "openapi": "3.0.3",
   "info": {"title": "Empty", "version": "1.0.0"}
 }`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 0 {
-		t.Errorf("expected 0 refs, got %d", len(result.Refs))
+	if len(result.Targets) != 0 {
+		t.Errorf("expected 0 refs, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")
 	}
 }
 
-func TestListBindableRefs_NilContent(t *testing.T) {
+func TestInspectSource_NilContent(t *testing.T) {
 	creator := NewCreator()
-	_, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{})
+	_, err := creator.InspectSource(context.Background(), &openbindings.Source{})
 	if err == nil {
 		t.Error("expected error for empty source")
 	}

@@ -57,9 +57,9 @@ func resolveMethod(content any, svcName, methodName string) (*methodInfo, error)
 	return nil, fmt.Errorf("service %q not found in proto definition", svcName)
 }
 
-// executeConnect sends a Connect protocol request via HTTP POST.
+// invokeConnect sends a Connect protocol request via HTTP POST.
 // The URL format is: {baseURL}/{service}/{method}
-func executeConnect(ctx context.Context, client *http.Client, baseURL, svcName, methodName string, input any, headers map[string]string, mi *methodInfo, start time.Time) *openbindings.ExecuteOutput {
+func invokeConnect(ctx context.Context, client *http.Client, baseURL, svcName, methodName string, input any, headers map[string]string, mi *methodInfo, start time.Time) *openbindings.InvocationOutput {
 	// Build the Connect URL: POST /{service}/{method}
 	connectURL := strings.TrimRight(baseURL, "/") + "/" + svcName + "/" + methodName
 
@@ -80,7 +80,9 @@ func executeConnect(ctx context.Context, client *http.Client, baseURL, svcName, 
 			if err := msg.UnmarshalJSONPB(&jsonpb.Unmarshaler{AllowUnknownFields: true}, jsonBytes); err != nil {
 				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
 			}
-			body, err = msg.MarshalJSONPB(&jsonpb.Marshaler{OrigName: true})
+			// Emit proto3 JSON canonical names (camelCase) so field names match
+			// what the creator writes into OBI schemas via field.GetJSONName().
+			body, err = msg.MarshalJSONPB(&jsonpb.Marshaler{})
 			if err != nil {
 				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
 			}
@@ -152,11 +154,11 @@ func executeConnect(ctx context.Context, client *http.Client, baseURL, svcName, 
 		}
 	}
 
-	return &openbindings.ExecuteOutput{Output: output, Status: resp.StatusCode, DurationMs: duration}
+	return &openbindings.InvocationOutput{Output: output, Status: resp.StatusCode, DurationMs: duration}
 }
 
 // buildHTTPHeaders constructs HTTP headers from binding context and execution options.
-func buildHTTPHeaders(bindCtx map[string]any, opts *openbindings.ExecutionOptions) map[string]string {
+func buildHTTPHeaders(bindCtx map[string]any, opts *openbindings.InvocationOptions) map[string]string {
 	headers := map[string]string{}
 
 	if token := openbindings.ContextBearerToken(bindCtx); token != "" {

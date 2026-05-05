@@ -1,10 +1,10 @@
 # grpc-go
 
-gRPC binding executor and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
+gRPC binding invoker and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
 
-This package enables OpenBindings to execute operations against gRPC servers and synthesize OBI documents from them. It discovers services via gRPC server reflection, constructs dynamic protobuf requests, applies credentials as gRPC metadata, and returns results as a stream of events.
+This package enables OpenBindings to invoke operations against gRPC servers and synthesize OBI documents from them. It discovers services via gRPC server reflection, constructs dynamic protobuf requests, applies credentials as gRPC metadata, and returns results as a stream of events.
 
-See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how executors and creators fit into the OpenBindings architecture.
+See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how invokers and creators fit into the OpenBindings architecture.
 
 ## Install
 
@@ -16,7 +16,7 @@ Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the
 
 ## Usage
 
-### Register with OperationExecutor
+### Register with OperationInvoker
 
 ```go
 import (
@@ -24,21 +24,21 @@ import (
     grpcbinding "github.com/openbindings/openbindings-go/formats/grpc"
 )
 
-exec := openbindings.NewOperationExecutor(grpcbinding.NewExecutor())
+exec := openbindings.NewOperationInvoker(grpcbinding.NewInvoker())
 ```
 
-The executor declares `grpc` -- it handles gRPC servers via reflection and `.proto` files.
+The invoker declares `grpc` -- it handles gRPC servers via reflection and `.proto` files.
 
-### Execute a binding
+### Invoke a binding
 
-Typically you don't call the executor directly -- the `OperationExecutor` routes operations to it based on the OBI's source format. But direct use is straightforward:
+Typically you don't call the invoker directly -- the `OperationInvoker` routes operations to it based on the OBI's source format. But direct use is straightforward:
 
 ```go
-executor := grpcbinding.NewExecutor()
-defer executor.Close()
+invoker := grpcbinding.NewInvoker()
+defer invoker.Close()
 
-ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-    Source: openbindings.ExecuteSource{
+ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+    Source: openbindings.BindingInvocationSource{
         Format:   "grpc",
         Location: "api.example.com:443",
     },
@@ -87,7 +87,7 @@ The service name is the protobuf fully qualified name. The method name is the un
 ### Source expectations
 
 - **`location`**: The gRPC server address (`host:port`) or a path to a `.proto` file. TLS is auto-detected for port 443 or `https://` prefixes. When the location ends in `.proto`, the file is parsed directly instead of using server reflection.
-- **`content`**: Inline protobuf definition (string). When provided, parsed directly without connecting to a server for reflection. The server address in `location` is still used for execution.
+- **`content`**: Inline protobuf definition (string). When provided, parsed directly without connecting to a server for reflection. The server address in `location` is still used for invocation.
 
 ### Credential application
 
@@ -97,11 +97,11 @@ Credentials are applied as gRPC metadata (equivalent to HTTP/2 headers):
 - `apiKey`: `authorization: ApiKey <key>`
 - `basic`: `authorization: Basic <encoded>`
 
-Execution options headers are forwarded as additional metadata.
+Invocation options headers are forwarded as additional metadata.
 
 ### Connect (Buf) compatibility
 
-This executor can discover and execute against [Connect](https://connectrpc.com) servers that serve the gRPC protocol (the default). Connect handlers expose gRPC alongside the Connect protocol, and Connect's `grpcreflect` package is wire-compatible with Google's gRPC reflection API.
+This invoker can discover and execute against [Connect](https://connectrpc.com) servers that serve the gRPC protocol (the default). Connect handlers expose gRPC alongside the Connect protocol, and Connect's `grpcreflect` package is wire-compatible with Google's gRPC reflection API.
 
 The resulting OBI will have `format: "grpc"`, reflecting the gRPC access path. It does not capture the Connect protocol as a separate binding. If you need Connect-native access (HTTP/1.1, JSON payloads), that would require a dedicated `connect` format.
 
@@ -116,7 +116,7 @@ The resulting OBI will have `format: "grpc"`, reflecting the gRPC access path. I
 
 ## How it works
 
-### Execution flow
+### Invocation flow
 
 1. Resolves or reuses a cached gRPC client connection (TLS auto-detected for port 443 or `https://` prefixes)
 2. Parses the ref as `package.Service/Method`
@@ -125,7 +125,7 @@ The resulting OBI will have `format: "grpc"`, reflecting the gRPC access path. I
 5. Applies credentials from the context as gRPC metadata (bearer, basic, apiKey)
 6. Invokes the RPC and returns the result as a stream event
 
-For server-streaming RPCs, the executor returns a channel that yields events as they arrive. For unary RPCs, it returns a single-event channel.
+For server-streaming RPCs, the invoker returns a channel that yields events as they arrive. For unary RPCs, it returns a single-event channel.
 
 ### Credential application
 
@@ -135,7 +135,7 @@ Credentials are applied as gRPC metadata in priority order:
 - **basic**: Sets `authorization: Basic <encoded>` from `basic.username`/`basic.password` context fields
 - **apiKey**: Sets `authorization: ApiKey <key>` from `apiKey` context field
 
-Execution options headers are also forwarded as gRPC metadata.
+Invocation options headers are also forwarded as gRPC metadata.
 
 ### Interface creation
 

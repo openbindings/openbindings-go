@@ -56,15 +56,15 @@ func classifyHTTPError(ctx context.Context, err error) string {
 	return openbindings.ErrCodeExecutionFailed
 }
 
-// executeBindingWithDoc executes one OpenAPI binding. It returns either a
-// completed *ExecuteOutput (the unary case) OR a stream channel (for
+// invokeBindingWithDoc invokes one OpenAPI binding. It returns either a
+// completed *InvocationOutput (the unary case) OR a stream channel (for
 // `text/event-stream` responses). Exactly one of the two return values is
 // non-nil. The caller dispatches based on which is set.
 //
 // The dual return shape avoids forcing every unary code path through a
 // channel allocation while still allowing SSE responses to surface as a
 // natural multi-event stream.
-func executeBindingWithDoc(ctx context.Context, client *http.Client, input *openbindings.BindingExecutionInput, doc *openapi3.T) (*openbindings.ExecuteOutput, <-chan openbindings.StreamEvent) {
+func invokeBindingWithDoc(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *openapi3.T) (*openbindings.InvocationOutput, <-chan openbindings.StreamEvent) {
 	start := time.Now()
 
 	pathTemplate, method, err := parseRef(input.Ref)
@@ -92,7 +92,7 @@ func executeBindingWithDoc(ctx context.Context, client *http.Client, input *open
 	return doHTTPRequest(ctx, client, input, doc, op, pathItem, pathTemplate, method, baseURL, start)
 }
 
-func doHTTPRequest(ctx context.Context, client *http.Client, input *openbindings.BindingExecutionInput, doc *openapi3.T, op *openapi3.Operation, pathItem *openapi3.PathItem, pathTemplate, method, baseURL string, start time.Time) (*openbindings.ExecuteOutput, <-chan openbindings.StreamEvent) {
+func doHTTPRequest(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *openapi3.T, op *openapi3.Operation, pathItem *openapi3.PathItem, pathTemplate, method, baseURL string, start time.Time) (*openbindings.InvocationOutput, <-chan openbindings.StreamEvent) {
 	allParams := mergeParameters(pathItem.Parameters, op.Parameters)
 	inputMap, _ := openbindings.ToStringAnyMap(input.Input)
 	if inputMap == nil {
@@ -194,7 +194,7 @@ func doHTTPRequest(ctx context.Context, client *http.Client, input *openbindings
 		return errOutput, nil
 	}
 
-	return &openbindings.ExecuteOutput{
+	return &openbindings.InvocationOutput{
 		Output:     output,
 		Status:     resp.StatusCode,
 		DurationMs: duration,
@@ -227,7 +227,7 @@ func parseRef(ref string) (path string, method string, err error) {
 	return path, strings.ToLower(method), nil
 }
 
-func resolveBaseURL(doc *openapi3.T, opts *openbindings.ExecutionOptions) (string, error) {
+func resolveBaseURL(doc *openapi3.T, opts *openbindings.InvocationOptions) (string, error) {
 	if opts != nil && opts.Metadata != nil {
 		if base, ok := opts.Metadata["baseURL"].(string); ok && base != "" {
 			return strings.TrimRight(base, "/"), nil
@@ -246,7 +246,7 @@ func resolveBaseURL(doc *openapi3.T, opts *openbindings.ExecutionOptions) (strin
 
 // resolveBaseURLWithLocation resolves the base URL, falling back to the source
 // location's origin when the spec has a relative server URL (e.g. "/api/v3").
-func resolveBaseURLWithLocation(doc *openapi3.T, opts *openbindings.ExecutionOptions, sourceLocation string) (string, error) {
+func resolveBaseURLWithLocation(doc *openapi3.T, opts *openbindings.InvocationOptions, sourceLocation string) (string, error) {
 	base, err := resolveBaseURL(doc, opts)
 	if err != nil {
 		return "", err
@@ -393,7 +393,7 @@ func resolveBinaryFields(op *openapi3.Operation) map[string]bool {
 // applyHTTPContext applies opaque binding context (credentials via well-known
 // fields) and execution options (headers, cookies) to an HTTP request, using
 // OpenAPI securitySchemes for spec-driven credential placement.
-func applyHTTPContext(req *http.Request, doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, opts *openbindings.ExecutionOptions) {
+func applyHTTPContext(req *http.Request, doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, opts *openbindings.InvocationOptions) {
 	if len(bindCtx) > 0 {
 		if !applyCredentialsViaSecuritySchemes(req, doc, op, bindCtx) {
 			applyCredentialsFallback(req, bindCtx)

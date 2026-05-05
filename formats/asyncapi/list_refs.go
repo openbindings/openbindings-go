@@ -8,14 +8,14 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// ListBindableRefs returns all bindable refs (operation IDs) from an AsyncAPI document.
-func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Source) (*openbindings.ListRefsResult, error) {
+// InspectSource returns all bindable targets (operation IDs) from an AsyncAPI document.
+func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	doc, err := loadDocument(ctx, c.httpClient, source.Location, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load AsyncAPI document: %w", err)
 	}
 
-	var refs []openbindings.BindableRef
+	var targets []openbindings.BindableTarget
 
 	opIDs := make([]string, 0, len(doc.Operations))
 	for opID := range doc.Operations {
@@ -28,11 +28,16 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 		ref := "#/operations/" + opID
 		desc := operationDescription(asyncOp)
 
-		refs = append(refs, openbindings.BindableRef{
-			Ref:         ref,
-			Description: desc,
-		})
+		targets = append(targets, bindableTarget(ref, desc))
 	}
 
-	return &openbindings.ListRefsResult{Refs: refs, Exhaustive: true}, nil
+	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+}
+
+func bindableTarget(ref, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref}
+	if description != "" {
+		target.Operation = &openbindings.Operation{Description: description}
+	}
+	return target
 }

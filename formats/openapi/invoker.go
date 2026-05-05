@@ -2,7 +2,7 @@
 //
 // The package handles:
 //   - Converting OpenAPI 3.x documents to OpenBindings interfaces
-//   - Executing operations via HTTP requests
+//   - Invoking operations via HTTP requests
 //   - Describing context requirements via getContextSchema
 package openapi
 
@@ -30,9 +30,9 @@ const DefaultSourceName = "openapi"
 // (which is the caller's responsibility via context).
 const maxRedirects = 10
 
-// newDefaultHTTPClient constructs an HTTP client with the executor's default
+// newDefaultHTTPClient constructs an HTTP client with the driver's default
 // redirect policy and no overall timeout (the caller controls cancellation
-// via context). Each Executor gets its own client so multiple Executors can
+// via context). Each Driver gets its own client so multiple Drivers can
 // be configured independently and tests can substitute clients without
 // reaching into package-level globals.
 func newDefaultHTTPClient() *http.Client {
@@ -46,39 +46,39 @@ func newDefaultHTTPClient() *http.Client {
 	}
 }
 
-// Executor handles binding execution for OpenAPI 3.x sources.
+// Invoker handles binding invocation for OpenAPI 3.x sources.
 //
-// Each Executor owns an HTTP client (*http.Client is safe for concurrent use
-// by multiple goroutines, so all calls on a single Executor share one client)
+// Each Driver owns an HTTP client (*http.Client is safe for concurrent use
+// by multiple goroutines, so all calls on a single Driver share one client)
 // and a per-instance document cache keyed by source location. The cache is
-// scoped to the Executor instance to avoid cross-tenant contamination in
+// scoped to the Driver instance to avoid cross-tenant contamination in
 // multi-tenant servers.
-type Executor struct {
+type Invoker struct {
 	client   *http.Client
 	mu       sync.RWMutex
 	docCache map[string]*openapi3.T
 }
 
-// NewExecutor creates a new OpenAPI binding executor with a default HTTP
-// client. Use NewExecutorWithClient to inject a custom client (e.g., for
+// NewInvoker creates a new OpenAPI binding invoker with a default HTTP
+// client. Use NewInvokerWithClient to inject a custom client (e.g., for
 // tests, or to add a transport layer for tracing or auth).
-func NewExecutor() *Executor {
-	return &Executor{
+func NewInvoker() *Invoker {
+	return &Invoker{
 		client:   newDefaultHTTPClient(),
 		docCache: make(map[string]*openapi3.T),
 	}
 }
 
-// NewExecutorWithClient creates an Executor that uses the supplied
+// NewInvokerWithClient creates a Driver that uses the supplied
 // *http.Client for all outbound requests. The caller is responsible for
 // configuring redirect policy, transport, and any other client-level
 // behavior. No overall request timeout should be set on the client because
 // the caller controls cancellation via context.
-func NewExecutorWithClient(client *http.Client) *Executor {
+func NewInvokerWithClient(client *http.Client) *Invoker {
 	if client == nil {
 		client = newDefaultHTTPClient()
 	}
-	return &Executor{
+	return &Invoker{
 		client:   client,
 		docCache: make(map[string]*openapi3.T),
 	}
@@ -86,7 +86,7 @@ func NewExecutorWithClient(client *http.Client) *Executor {
 
 // cachedLoadDocument loads an OpenAPI doc, caching by location within a process.
 // When content is provided, the cache is bypassed and updated with the fresh parse.
-func (e *Executor) cachedLoadDocument(location string, content any) (*openapi3.T, error) {
+func (e *Invoker) cachedLoadDocument(location string, content any) (*openapi3.T, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
 		if doc, ok := e.docCache[location]; ok {
@@ -109,13 +109,13 @@ func (e *Executor) cachedLoadDocument(location string, content any) (*openapi3.T
 	return doc, nil
 }
 
-// Formats returns the binding format tokens this executor supports.
-func (e *Executor) Formats() []openbindings.FormatInfo {
+// Formats returns the binding format tokens this driver supports.
+func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "OpenAPI 3.x HTTP APIs"}}
 }
 
-// ExecuteBinding executes an HTTP request based on an OpenAPI binding.
-func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingExecutionInput) (<-chan openbindings.StreamEvent, error) {
+// InvokeBinding invokes an HTTP request based on an OpenAPI binding.
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
 	doc, err := e.cachedLoadDocument(in.Source.Location, in.Source.Content)
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeSourceLoadFailed, err.Error())), nil
@@ -144,7 +144,7 @@ func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingE
 		}
 	}
 
-	result, stream := executeBindingWithDoc(ctx, e.client, enriched, doc)
+	result, stream := invokeBindingWithDoc(ctx, e.client, enriched, doc)
 	if stream != nil {
 		// SSE response: hand the streaming channel directly to the caller.
 		// Auth retry is not attempted on streaming responses because the
@@ -181,7 +181,7 @@ func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingE
 				}
 			}
 
-			retryResult, retryStream := executeBindingWithDoc(ctx, e.client, enriched, doc)
+			retryResult, retryStream := invokeBindingWithDoc(ctx, e.client, enriched, doc)
 			if retryStream != nil {
 				return retryStream, nil
 			}

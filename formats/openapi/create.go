@@ -221,9 +221,8 @@ func convertSecurityScheme(s *openapi3.SecurityScheme) openbindings.SecurityMeth
 		}
 
 	case "oauth2":
-		m := openbindings.SecurityMethod{Type: "oauth2", Description: s.Description}
+		m := openbindings.SecurityMethod{Type: "oauth2", Description: s.Description, Extra: map[string]any{}}
 		if s.Flows != nil {
-			// Use the first non-nil flow.
 			var flow *openapi3.OAuthFlow
 			switch {
 			case s.Flows.AuthorizationCode != nil:
@@ -236,14 +235,14 @@ func convertSecurityScheme(s *openapi3.SecurityScheme) openbindings.SecurityMeth
 				flow = s.Flows.Password
 			}
 			if flow != nil {
-				m.AuthorizeURL = flow.AuthorizationURL
-				m.TokenURL = flow.TokenURL
+				m.Extra["authorizeUrl"] = flow.AuthorizationURL
+				m.Extra["tokenUrl"] = flow.TokenURL
 				var scopes []string
 				for scope := range flow.Scopes {
 					scopes = append(scopes, scope)
 				}
 				sort.Strings(scopes)
-				m.Scopes = scopes
+				m.Extra["scopes"] = scopes
 			}
 		}
 		return m
@@ -252,8 +251,10 @@ func convertSecurityScheme(s *openapi3.SecurityScheme) openbindings.SecurityMeth
 		return openbindings.SecurityMethod{
 			Type:        "apiKey",
 			Description: s.Description,
-			Name:        s.Name,
-			In:          s.In,
+			Extra: map[string]any{
+				"name": s.Name,
+				"in":   s.In,
+			},
 		}
 
 	case "openIdConnect":

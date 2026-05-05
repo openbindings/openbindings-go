@@ -177,16 +177,15 @@ func TestCreateInterface_OAuth2SecurityScheme(t *testing.T) {
 	if m.Description != "OAuth2 auth-code flow" {
 		t.Errorf("Description = %q, want %q", m.Description, "OAuth2 auth-code flow")
 	}
-	if m.AuthorizeURL != "https://auth.example.com/authorize" {
-		t.Errorf("AuthorizeURL = %q, want %q", m.AuthorizeURL, "https://auth.example.com/authorize")
+	if m.ExtraString("authorizeUrl") != "https://auth.example.com/authorize" {
+		t.Errorf("authorizeUrl = %q, want %q", m.ExtraString("authorizeUrl"), "https://auth.example.com/authorize")
 	}
-	if m.TokenURL != "https://auth.example.com/token" {
-		t.Errorf("TokenURL = %q, want %q", m.TokenURL, "https://auth.example.com/token")
+	if m.ExtraString("tokenUrl") != "https://auth.example.com/token" {
+		t.Errorf("tokenUrl = %q, want %q", m.ExtraString("tokenUrl"), "https://auth.example.com/token")
 	}
 
 	wantScopes := []string{"read", "write"}
-	got := make([]string, len(m.Scopes))
-	copy(got, m.Scopes)
+	got := m.ExtraStringSlice("scopes")
 	sort.Strings(got)
 	if len(got) != len(wantScopes) {
 		t.Fatalf("Scopes = %v, want %v", got, wantScopes)
@@ -212,11 +211,12 @@ func TestConvertSecurityScheme_OAuth2FallbackOrder(t *testing.T) {
 		},
 	}
 	m := convertSecurityScheme(scheme)
-	if m.TokenURL != "https://auth.example.com/token" {
-		t.Errorf("TokenURL = %q, want %q", m.TokenURL, "https://auth.example.com/token")
+	if m.ExtraString("tokenUrl") != "https://auth.example.com/token" {
+		t.Errorf("tokenUrl = %q, want %q", m.ExtraString("tokenUrl"), "https://auth.example.com/token")
 	}
-	if len(m.Scopes) != 1 || m.Scopes[0] != "admin" {
-		t.Errorf("Scopes = %v, want [admin]", m.Scopes)
+	scopes := m.ExtraStringSlice("scopes")
+	if len(scopes) != 1 || scopes[0] != "admin" {
+		t.Errorf("Scopes = %v, want [admin]", scopes)
 	}
 }
 
@@ -227,7 +227,7 @@ func TestConvertSecurityScheme_OAuth2NoFlows(t *testing.T) {
 	if m.Type != "oauth2" {
 		t.Errorf("Type = %q, want %q", m.Type, "oauth2")
 	}
-	if m.AuthorizeURL != "" {
-		t.Errorf("AuthorizeURL = %q, want empty", m.AuthorizeURL)
+	if m.ExtraString("authorizeUrl") != "" {
+		t.Errorf("authorizeUrl = %q, want empty", m.ExtraString("authorizeUrl"))
 	}
 }

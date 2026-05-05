@@ -73,7 +73,7 @@ func wsPoolKey(serverURL, address string) string {
 //
 // If multiple goroutines call acquire for the same key concurrently, only one
 // creates the connection while the others wait.
-func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any, opts *openbindings.ExecutionOptions) (*pooledWS, error) {
+func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any, opts *openbindings.InvocationOptions) (*pooledWS, error) {
 	key := wsPoolKey(serverURL, address)
 
 	for {
@@ -129,7 +129,7 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Do
 
 // createConn establishes a new WebSocket connection with auth headers applied
 // via applyHTTPContext on the upgrade request.
-func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *Document, asyncOp *Operation, bindCtx map[string]any, opts *openbindings.ExecutionOptions) (*pooledWS, error) {
+func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *Document, asyncOp *Operation, bindCtx map[string]any, opts *openbindings.InvocationOptions) (*pooledWS, error) {
 	wsURL := serverURL + "/" + trimLeadingSlash(address)
 
 	upgradeReq, err := http.NewRequestWithContext(ctx, "GET", wsURL, nil)
@@ -188,7 +188,7 @@ func (p *wsPool) evict(pw *pooledWS) {
 	pw.conn.Close(websocket.StatusNormalClosure, "idle timeout")
 }
 
-// closeAll closes all pooled WebSocket connections. Used by Executor.Close().
+// closeAll closes all pooled WebSocket connections. Used by Driver.Close().
 func (p *wsPool) closeAll() {
 	p.mu.Lock()
 	conns := make([]*pooledWS, 0, len(p.conns))
@@ -217,7 +217,7 @@ func (p *wsPool) closeAll() {
 // The entire send+reply cycle is serialized through the connection's opMu to
 // prevent concurrent read corruption. Multiple goroutines will queue on the
 // mutex while still sharing the same underlying connection.
-func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input *openbindings.BindingExecutionInput, doc *Document, asyncOp *Operation) (<-chan openbindings.StreamEvent, error) {
+func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.StreamEvent, error) {
 	pw, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, input.Context, input.Options)
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeConnectFailed, err.Error())), nil
@@ -257,7 +257,7 @@ func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input 
 			// Connection is broken. Evict it so the next caller gets a fresh one.
 			pool.evict(pw)
 			select {
-			case ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+			case ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeExecutionFailed,
 				Message: writeErr.Error(),
 			}}:
@@ -276,7 +276,7 @@ func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input 
 				return
 			}
 			select {
-			case ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+			case ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeStreamError,
 				Message: readErr.Error(),
 			}}:

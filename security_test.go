@@ -119,9 +119,11 @@ func TestResolveSecurity_OAuth2PKCE(t *testing.T) {
 	defer tokenServer.Close()
 
 	methods := []SecurityMethod{{
-		Type:         "oauth2",
-		AuthorizeURL: "https://auth.example.com/authorize",
-		TokenURL:     tokenServer.URL,
+		Type: "oauth2",
+		Extra: map[string]any{
+			"authorizeUrl": "https://auth.example.com/authorize",
+			"tokenUrl":     tokenServer.URL,
+		},
 	}}
 
 	callbacks := &PlatformCallbacks{
@@ -217,11 +219,13 @@ func TestResolveSecurity_PreferenceOrder(t *testing.T) {
 
 func TestSecurityMethod_JSONRoundTrip(t *testing.T) {
 	original := SecurityMethod{
-		Type:         "oauth2",
-		Description:  "OAuth2 flow",
-		AuthorizeURL: "https://auth.example.com/authorize",
-		TokenURL:     "https://auth.example.com/token",
-		Scopes:       []string{"read", "write"},
+		Type:        "oauth2",
+		Description: "OAuth2 flow",
+		Extra: map[string]any{
+			"authorizeUrl": "https://auth.example.com/authorize",
+			"tokenUrl":     "https://auth.example.com/token",
+			"scopes":       []any{"read", "write"},
+		},
 	}
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -239,32 +243,28 @@ func TestSecurityMethod_JSONRoundTrip(t *testing.T) {
 	if decoded.Description != original.Description {
 		t.Errorf("Description: got %q, want %q", decoded.Description, original.Description)
 	}
-	if decoded.AuthorizeURL != original.AuthorizeURL {
-		t.Errorf("AuthorizeURL: got %q, want %q", decoded.AuthorizeURL, original.AuthorizeURL)
+	if decoded.ExtraString("authorizeUrl") != "https://auth.example.com/authorize" {
+		t.Errorf("authorizeUrl: got %q", decoded.ExtraString("authorizeUrl"))
 	}
-	if decoded.TokenURL != original.TokenURL {
-		t.Errorf("TokenURL: got %q, want %q", decoded.TokenURL, original.TokenURL)
+	if decoded.ExtraString("tokenUrl") != "https://auth.example.com/token" {
+		t.Errorf("tokenUrl: got %q", decoded.ExtraString("tokenUrl"))
 	}
-	if len(decoded.Scopes) != len(original.Scopes) {
-		t.Fatalf("Scopes length: got %d, want %d", len(decoded.Scopes), len(original.Scopes))
-	}
-	for i, s := range decoded.Scopes {
-		if s != original.Scopes[i] {
-			t.Errorf("Scopes[%d]: got %q, want %q", i, s, original.Scopes[i])
-		}
+	scopes := decoded.ExtraStringSlice("scopes")
+	if len(scopes) != 2 || scopes[0] != "read" || scopes[1] != "write" {
+		t.Errorf("scopes: got %v", scopes)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Security pass-through via ExecuteOperation
+// Security pass-through via Invoke
 // ---------------------------------------------------------------------------
 
-func TestExecuteOperation_SecurityPassThrough(t *testing.T) {
+func TestInvoke_SecurityPassThrough(t *testing.T) {
 	var capturedSecurity []SecurityMethod
 
-	executor := &mockExecutor{
+	driver := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			capturedSecurity = in.Security
 			ch := make(chan StreamEvent, 1)
 			ch <- StreamEvent{Data: "ok"}
@@ -273,7 +273,7 @@ func TestExecuteOperation_SecurityPassThrough(t *testing.T) {
 		},
 	}
 
-	exec := NewOperationExecutor(executor)
+	invoker := NewOperationInvoker(driver)
 
 	iface := &Interface{
 		OpenBindings: "0.1.0",
@@ -289,12 +289,12 @@ func TestExecuteOperation_SecurityPassThrough(t *testing.T) {
 		Security: map[string][]SecurityMethod{
 			"default": {
 				{Type: "bearer", Description: "Bearer token"},
-				{Type: "apiKey", Description: "API key", Name: "X-API-Key", In: "header"},
+				{Type: "apiKey", Description: "API key", Extra: map[string]any{"name": "X-API-Key", "in": "header"}},
 			},
 		},
 	}
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "getUser",
 	})
@@ -313,11 +313,11 @@ func TestExecuteOperation_SecurityPassThrough(t *testing.T) {
 	if capturedSecurity[1].Type != "apiKey" {
 		t.Errorf("expected apiKey, got %q", capturedSecurity[1].Type)
 	}
-	if capturedSecurity[1].Name != "X-API-Key" {
-		t.Errorf("expected X-API-Key, got %q", capturedSecurity[1].Name)
+	if capturedSecurity[1].ExtraString("name") != "X-API-Key" {
+		t.Errorf("expected X-API-Key, got %q", capturedSecurity[1].ExtraString("name"))
 	}
-	if capturedSecurity[1].In != "header" {
-		t.Errorf("expected header, got %q", capturedSecurity[1].In)
+	if capturedSecurity[1].ExtraString("in") != "header" {
+		t.Errorf("expected header, got %q", capturedSecurity[1].ExtraString("in"))
 	}
 }
 

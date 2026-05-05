@@ -162,7 +162,7 @@ func streamSSEResponse(ctx context.Context, resp *http.Response, start time.Time
 				return
 			}
 			select {
-			case ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+			case ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeStreamError,
 				Message: err.Error(),
 			}}:

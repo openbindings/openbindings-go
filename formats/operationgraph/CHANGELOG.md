@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0
+
+### Changed
+
+- **Breaking:** Transforms are now plain JSONata expression strings instead of
+  `{"type": "jsonata", "expression": "..."}` objects, matching the
+  operation-graph format spec v0.2.0.
+- Removed `TransformDef` struct; `Node.Transform` is now `*string`.
+- Updated `FormatToken` to `openbindings.operation-graph@0.2.0`.
+
 ## 0.1.0
 
 Initial release.

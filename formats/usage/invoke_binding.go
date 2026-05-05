@@ -17,7 +17,7 @@ import (
 
 type specLoader func(ctx context.Context, location string, content any) (*Spec, error)
 
-func executeBindingCached(ctx context.Context, input *openbindings.BindingExecutionInput, loader specLoader) *openbindings.ExecuteOutput {
+func invokeBindingCached(ctx context.Context, input *openbindings.BindingInvocationInput, loader specLoader) *openbindings.InvocationOutput {
 	start := time.Now()
 
 	var binName string
@@ -71,9 +71,9 @@ func executeBindingCached(ctx context.Context, input *openbindings.BindingExecut
 	duration := time.Since(start).Milliseconds()
 
 	if ctx.Err() != nil {
-		return &openbindings.ExecuteOutput{
+		return &openbindings.InvocationOutput{
 			DurationMs: duration,
-			Error: &openbindings.ExecuteError{
+			Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeCancelled,
 				Message: "operation cancelled",
 			},
@@ -81,18 +81,18 @@ func executeBindingCached(ctx context.Context, input *openbindings.BindingExecut
 	}
 
 	if err != nil {
-		return &openbindings.ExecuteOutput{
+		return &openbindings.InvocationOutput{
 			Output:     output,
 			Status:     status,
 			DurationMs: duration,
-			Error: &openbindings.ExecuteError{
+			Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeExecutionFailed,
 				Message: err.Error(),
 			},
 		}
 	}
 
-	return &openbindings.ExecuteOutput{
+	return &openbindings.InvocationOutput{
 		Output:     output,
 		Status:     status,
 		DurationMs: duration,
@@ -100,7 +100,7 @@ func executeBindingCached(ctx context.Context, input *openbindings.BindingExecut
 }
 
 // metadataBinary extracts the "binary" hint from execution options metadata.
-func metadataBinary(opts *openbindings.ExecutionOptions) string {
+func metadataBinary(opts *openbindings.InvocationOptions) string {
 	if opts == nil || opts.Metadata == nil {
 		return ""
 	}
@@ -415,7 +415,7 @@ func formatFlagWithDef(name string, value any, flagDef Flag) ([]string, error) {
 	}
 }
 
-func runCLI(ctx context.Context, binName string, args []string, opts *openbindings.ExecutionOptions) (any, int, error) {
+func runCLI(ctx context.Context, binName string, args []string, opts *openbindings.InvocationOptions) (any, int, error) {
 	cmd := exec.CommandContext(ctx, binName, args...)
 
 	if opts != nil && len(opts.Environment) > 0 {

@@ -45,7 +45,7 @@ func setupMCPServer(t *testing.T) (*httptest.Server, *testState) {
 		}, nil, nil
 	})
 
-	// Register a tool that emits progress notifications during execution.
+	// Register a tool that emits progress notifications during invocation.
 	// The tool sends three progress events with progress=1/3, 2/3, 3/3 and
 	// then returns the final result.
 	type progressInput struct {
@@ -184,9 +184,9 @@ func TestIntegration_CreateInterface(t *testing.T) {
 func TestIntegration_ExecuteTool(t *testing.T) {
 	ts, state := setupMCPServer(t)
 
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source:  openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source:  openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:     "tools/echo",
 		Input:   map[string]any{"message": "hello world"},
 		Context: map[string]any{"bearerToken": "tok_secret"},
@@ -217,9 +217,9 @@ func TestIntegration_ExecuteTool(t *testing.T) {
 func TestIntegration_ExecuteResource(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:    "resources/app://status",
 	})
 	if err != nil {
@@ -244,9 +244,9 @@ func TestIntegration_ExecuteResource(t *testing.T) {
 func TestIntegration_ExecutePrompt(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:    "prompts/greet",
 		Input:  map[string]any{"name": "Alice"},
 	})
@@ -285,9 +285,9 @@ func TestIntegration_StoredCredentials(t *testing.T) {
 	key := normalizeEndpoint(ts.URL)
 	_ = store.Set(ctx, key, map[string]any{"bearerToken": "stored_tok"})
 
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:    "tools/echo",
 		Input:  map[string]any{"message": "test"},
 		Store:  store,
@@ -309,9 +309,9 @@ func TestIntegration_StoredCredentials(t *testing.T) {
 func TestIntegration_InvalidRef(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
-	executor := NewExecutor()
-	ch, err := executor.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	invoker := NewInvoker()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:    "bad-ref",
 	})
 	if err != nil {
@@ -354,7 +354,7 @@ func intToString(n int) string {
 	return string(digits)
 }
 
-// TestIntegration_ToolProgressNotifications verifies that the executor
+// TestIntegration_ToolProgressNotifications verifies that the driver
 // surfaces MCP `notifications/progress` events as intermediate stream events
 // during a long-running tool call, with the final tool result as the last
 // event.
@@ -368,10 +368,10 @@ func intToString(n int) string {
 func TestIntegration_ToolProgressNotifications(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
-	exec := NewExecutor()
-	defer exec.Close()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	defer invoker.Close()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: ts.URL,
 		},
@@ -379,7 +379,7 @@ func TestIntegration_ToolProgressNotifications(t *testing.T) {
 		Input: map[string]any{"steps": 3},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	events := drainStream(t, ch)
@@ -444,10 +444,10 @@ func TestIntegration_ToolProgressNotifications(t *testing.T) {
 func TestIntegration_ToolNoProgress_StaysSingleEvent(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
-	exec := NewExecutor()
-	defer exec.Close()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	invoker := NewInvoker()
+	defer invoker.Close()
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   FormatToken,
 			Location: ts.URL,
 		},
@@ -455,7 +455,7 @@ func TestIntegration_ToolNoProgress_StaysSingleEvent(t *testing.T) {
 		Input: map[string]any{"message": "hello"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	events := drainStream(t, ch)
@@ -472,8 +472,8 @@ func TestIntegration_ToolNoProgress_StaysSingleEvent(t *testing.T) {
 // one MCP `initialize` handshake instead of two.
 //
 // The test wraps the standard MCP server handler with a request counter that
-// increments on every `initialize` call. After two ExecuteBinding calls using
-// the same Executor, the counter must be 1.
+// increments on every `initialize` call. After two InvokeBinding calls using
+// the same Driver, the counter must be 1.
 func TestIntegration_SessionPooling(t *testing.T) {
 	server := gomcp.NewServer(&gomcp.Implementation{
 		Name:    "session-pool-test",
@@ -518,18 +518,18 @@ func TestIntegration_SessionPooling(t *testing.T) {
 	ts := httptest.NewServer(wrapped)
 	defer ts.Close()
 
-	exec := NewExecutor()
-	defer exec.Close()
+	invoker := NewInvoker()
+	defer invoker.Close()
 	ctx := context.Background()
 
 	// First call.
-	ch1, err := exec.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	ch1, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:    "tools/echo",
 		Input:  map[string]any{"message": "first"},
 	})
 	if err != nil {
-		t.Fatalf("first ExecuteBinding error: %v", err)
+		t.Fatalf("first InvokeBinding error: %v", err)
 	}
 	for ev := range ch1 {
 		if ev.Error != nil {
@@ -538,13 +538,13 @@ func TestIntegration_SessionPooling(t *testing.T) {
 	}
 
 	// Second call reuses the pooled session.
-	ch2, err := exec.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	ch2, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:    "tools/echo",
 		Input:  map[string]any{"message": "second"},
 	})
 	if err != nil {
-		t.Fatalf("second ExecuteBinding error: %v", err)
+		t.Fatalf("second InvokeBinding error: %v", err)
 	}
 	for ev := range ch2 {
 		if ev.Error != nil {
@@ -599,19 +599,19 @@ func TestIntegration_SessionPooling_DifferentHeaders(t *testing.T) {
 	ts := httptest.NewServer(wrapped)
 	defer ts.Close()
 
-	exec := NewExecutor()
-	defer exec.Close()
+	invoker := NewInvoker()
+	defer invoker.Close()
 	ctx := context.Background()
 
 	// First call with token A.
-	ch1, err := exec.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source:  openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	ch1, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source:  openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:     "tools/echo",
 		Input:   map[string]any{"message": "first"},
 		Context: map[string]any{"bearerToken": "token_A"},
 	})
 	if err != nil {
-		t.Fatalf("first ExecuteBinding error: %v", err)
+		t.Fatalf("first InvokeBinding error: %v", err)
 	}
 	for ev := range ch1 {
 		if ev.Error != nil {
@@ -620,14 +620,14 @@ func TestIntegration_SessionPooling_DifferentHeaders(t *testing.T) {
 	}
 
 	// Second call with token B gets a different session.
-	ch2, err := exec.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source:  openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	ch2, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source:  openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:     "tools/echo",
 		Input:   map[string]any{"message": "second"},
 		Context: map[string]any{"bearerToken": "token_B"},
 	})
 	if err != nil {
-		t.Fatalf("second ExecuteBinding error: %v", err)
+		t.Fatalf("second InvokeBinding error: %v", err)
 	}
 	for ev := range ch2 {
 		if ev.Error != nil {
@@ -684,18 +684,18 @@ func TestIntegration_SessionPooling_IdleTimeout(t *testing.T) {
 	defer ts.Close()
 
 	// Use a very short idle timeout so the test doesn't take long.
-	exec := NewExecutor(WithIdleTimeout(50 * time.Millisecond))
-	defer exec.Close()
+	invoker := NewInvoker(WithIdleTimeout(50 * time.Millisecond))
+	defer invoker.Close()
 	ctx := context.Background()
 
 	// First call.
-	ch1, err := exec.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	ch1, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:    "tools/echo",
 		Input:  map[string]any{"message": "first"},
 	})
 	if err != nil {
-		t.Fatalf("first ExecuteBinding error: %v", err)
+		t.Fatalf("first InvokeBinding error: %v", err)
 	}
 	for ev := range ch1 {
 		if ev.Error != nil {
@@ -707,13 +707,13 @@ func TestIntegration_SessionPooling_IdleTimeout(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Second call should need a new session.
-	ch2, err := exec.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+	ch2, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 		Ref:    "tools/echo",
 		Input:  map[string]any{"message": "second"},
 	})
 	if err != nil {
-		t.Fatalf("second ExecuteBinding error: %v", err)
+		t.Fatalf("second InvokeBinding error: %v", err)
 	}
 	for ev := range ch2 {
 		if ev.Error != nil {
@@ -768,8 +768,8 @@ func TestIntegration_SessionPooling_ConcurrentCalls(t *testing.T) {
 	ts := httptest.NewServer(wrapped)
 	defer ts.Close()
 
-	exec := NewExecutor()
-	defer exec.Close()
+	invoker := NewInvoker()
+	defer invoker.Close()
 	ctx := context.Background()
 
 	// Launch 5 concurrent tool calls.
@@ -781,13 +781,13 @@ func TestIntegration_SessionPooling_ConcurrentCalls(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			ch, err := exec.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-				Source: openbindings.BindingExecutionSource{Format: FormatToken, Location: ts.URL},
+			ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+				Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
 				Ref:    "tools/echo",
 				Input:  map[string]any{"message": fmt.Sprintf("hello-%d", idx)},
 			})
 			if err != nil {
-				errors <- fmt.Errorf("goroutine %d ExecuteBinding: %w", idx, err)
+				errors <- fmt.Errorf("goroutine %d InvokeBinding: %w", idx, err)
 				return
 			}
 			for ev := range ch {

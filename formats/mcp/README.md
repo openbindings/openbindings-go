@@ -1,10 +1,10 @@
 # mcp-go
 
-MCP (Model Context Protocol) binding executor and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
+MCP (Model Context Protocol) binding invoker and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
 
-This package enables OpenBindings to execute operations against MCP servers and synthesize OBI documents from them. It connects to MCP servers via the Streamable HTTP transport, discovers tools, resources, and prompts, and executes them through the MCP JSON-RPC protocol.
+This package enables OpenBindings to invoke operations against MCP servers and synthesize OBI documents from them. It connects to MCP servers via the Streamable HTTP transport, discovers tools, resources, and prompts, and executes them through the MCP JSON-RPC protocol.
 
-See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how executors and creators fit into the OpenBindings architecture.
+See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how invokers and creators fit into the OpenBindings architecture.
 
 ## Install
 
@@ -16,7 +16,7 @@ Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the
 
 ## Usage
 
-### Register with OperationExecutor
+### Register with OperationInvoker
 
 ```go
 import (
@@ -24,18 +24,18 @@ import (
     mcpbinding "github.com/openbindings/openbindings-go/formats/mcp"
 )
 
-exec := openbindings.NewOperationExecutor(mcpbinding.NewExecutor())
+exec := openbindings.NewOperationInvoker(mcpbinding.NewInvoker())
 ```
 
-The executor declares `mcp@2025-11-25` -- it handles MCP servers implementing the 2025-11-25 spec revision.
+The invoker declares `mcp@2025-11-25` -- it handles MCP servers implementing the 2025-11-25 spec revision.
 
-### Execute a binding
+### Invoke a binding
 
 ```go
-executor := mcpbinding.NewExecutor()
+invoker := mcpbinding.NewInvoker()
 
-ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-    Source: openbindings.ExecuteSource{
+ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+    Source: openbindings.BindingInvocationSource{
         Format:   "mcp@2025-11-25",
         Location: "https://mcp.example.com/sse",
     },
@@ -93,7 +93,7 @@ Credentials are applied as HTTP headers:
 - `bearerToken`: `Authorization: Bearer <token>`
 - `apiKey`: `Authorization: ApiKey <key>`
 
-Execution options headers and cookies are forwarded. No security metadata in MCP; auth retry handles 401 at runtime.
+Invocation options headers and cookies are forwarded. No security metadata in MCP; auth retry handles 401 at runtime.
 
 ### Entity type mapping
 
@@ -114,7 +114,7 @@ Execution options headers and cookies are forwarded. No security metadata in MCP
 
 ## How it works
 
-### Execution flow
+### Invocation flow
 
 1. Parses the ref to determine entity type: `tools/`, `resources/`, or `prompts/`
 2. Opens a new MCP session via Streamable HTTP transport (JSON-RPC over HTTP)
@@ -123,7 +123,7 @@ Execution options headers and cookies are forwarded. No security metadata in MCP
 5. Converts the MCP response to an OpenBindings stream event
 6. Closes the session
 
-Each execution creates a fresh MCP session. MCP sessions are stateful -- they begin with capability negotiation, support bidirectional notifications, and have a formal shutdown lifecycle. Reusing sessions across independent `ExecuteBinding` calls would conflate these session semantics, so each call gets its own session. Go's default HTTP transport pools the underlying TCP connections.
+Each invocation creates a fresh MCP session. MCP sessions are stateful -- they begin with capability negotiation, support bidirectional notifications, and have a formal shutdown lifecycle. Reusing sessions across independent `InvokeBinding` calls would conflate these session semantics, so each call gets its own session. Go's default HTTP transport pools the underlying TCP connections.
 
 ### Credential application
 
@@ -132,7 +132,7 @@ Credentials are applied as HTTP headers in priority order:
 - **bearer**: Sets `Authorization: Bearer <token>` from `bearerToken` context field
 - **apiKey**: Sets `Authorization: ApiKey <key>` from `apiKey` context field
 
-Execution options headers are also forwarded to the MCP transport.
+Invocation options headers are also forwarded to the MCP transport.
 
 ### Interface creation
 

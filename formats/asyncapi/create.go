@@ -231,13 +231,14 @@ func convertSecurityScheme(s SecurityScheme) openbindings.SecurityMethod {
 		return openbindings.SecurityMethod{
 			Type:        "apiKey",
 			Description: s.Description,
-			Name:        s.Name,
-			In:          s.In,
+			Extra: map[string]any{
+				"name": s.Name,
+				"in":   s.In,
+			},
 		}
 	case "oauth2":
-		method := openbindings.SecurityMethod{Type: "oauth2", Description: s.Description}
+		method := openbindings.SecurityMethod{Type: "oauth2", Description: s.Description, Extra: map[string]any{}}
 		if s.Flows != nil {
-			// Prefer authorizationCode, then implicit, clientCredentials, password.
 			var flow *OAuthFlow
 			if s.Flows.AuthorizationCode != nil {
 				flow = s.Flows.AuthorizationCode
@@ -249,15 +250,15 @@ func convertSecurityScheme(s SecurityScheme) openbindings.SecurityMethod {
 				flow = s.Flows.Password
 			}
 			if flow != nil {
-				method.AuthorizeURL = flow.AuthorizationURL
-				method.TokenURL = flow.TokenURL
+				method.Extra["authorizeUrl"] = flow.AuthorizationURL
+				method.Extra["tokenUrl"] = flow.TokenURL
 				if len(flow.Scopes) > 0 {
 					scopes := make([]string, 0, len(flow.Scopes))
 					for scope := range flow.Scopes {
 						scopes = append(scopes, scope)
 					}
 					sort.Strings(scopes)
-					method.Scopes = scopes
+					method.Extra["scopes"] = scopes
 				}
 			}
 		}

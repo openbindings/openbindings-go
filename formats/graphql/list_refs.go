@@ -9,9 +9,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// ListBindableRefs introspects a GraphQL endpoint and returns all bindable
+// InspectSource introspects a GraphQL endpoint and returns all bindable
 // refs (Query/Mutation/Subscription fields).
-func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Source) (*openbindings.ListRefsResult, error) {
+func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	endpoint := source.Location
 	if endpoint == "" {
 		return nil, fmt.Errorf("GraphQL source requires a location (endpoint URL)")
@@ -22,7 +22,7 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 		return nil, fmt.Errorf("GraphQL introspection: %w", err)
 	}
 
-	var refs []openbindings.BindableRef
+	var targets []openbindings.BindableTarget
 	tm := disc.schema.typeMap()
 
 	rootTypes := []struct {
@@ -53,12 +53,17 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 			if strings.HasPrefix(f.Name, "__") {
 				continue
 			}
-			refs = append(refs, openbindings.BindableRef{
-				Ref:         rt.label + "/" + f.Name,
-				Description: f.Description,
-			})
+			targets = append(targets, bindableTarget(rt.label+"/"+f.Name, f.Description))
 		}
 	}
 
-	return &openbindings.ListRefsResult{Refs: refs, Exhaustive: true}, nil
+	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+}
+
+func bindableTarget(ref, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref}
+	if description != "" {
+		target.Operation = &openbindings.Operation{Description: description}
+	}
+	return target
 }

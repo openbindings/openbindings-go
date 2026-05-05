@@ -69,9 +69,9 @@ func buildInterfaceFromSpec(spec *Spec, location, formatStr, obVersion string) (
 			bindings[opKey+"."+DefaultSourceName] = openbindings.BindingEntry{
 				Operation: opKey,
 				Source:    DefaultSourceName,
-				// Empty ref signals "root invocation" to the executor
-				// (see execute_binding.go: ref == "" branch). Setting
-				// it to opKey would make the executor try to resolve
+				// Empty ref signals "root invocation" to the driver
+				// (see invoke_binding.go: ref == "" branch). Setting
+				// it to opKey would make the driver try to resolve
 				// the binary name as a subcommand path and fail.
 				Ref: "",
 			}

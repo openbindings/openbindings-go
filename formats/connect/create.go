@@ -232,7 +232,7 @@ func scalarOrMessageSchema(field *desc.FieldDescriptor, visited map[string]bool)
 		return map[string]any{"type": "string"}
 
 	case descriptorpb.FieldDescriptorProto_TYPE_BYTES:
-		return map[string]any{"type": "string", "contentEncoding": "base64"}
+		return map[string]any{"type": "string"}
 
 	case descriptorpb.FieldDescriptorProto_TYPE_ENUM:
 		enumDesc := field.GetEnumType()

@@ -18,12 +18,12 @@ func ContentToBytes(content any) ([]byte, error) {
 	}
 }
 
-// FailedOutput builds an ExecuteOutput for a pre-request failure.
-func FailedOutput(start time.Time, code, message string) *ExecuteOutput {
-	return &ExecuteOutput{
+// FailedOutput builds an InvocationOutput for a pre-request failure.
+func FailedOutput(start time.Time, code, message string) *InvocationOutput {
+	return &InvocationOutput{
 		Status:     1,
 		DurationMs: time.Since(start).Milliseconds(),
-		Error: &ExecuteError{
+		Error: &InvocationError{
 			Code:    code,
 			Message: message,
 		},

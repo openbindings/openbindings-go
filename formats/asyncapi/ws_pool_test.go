@@ -46,13 +46,13 @@ func TestWSPool_MultipleSendsShareOneConnection(t *testing.T) {
 	pubOp.Reply = &OperationReply{}
 	doc.Operations["publish"] = pubOp
 
-	exec := NewExecutor()
-	defer exec.Close()
+	invoker := NewInvoker()
+	defer invoker.Close()
 
 	// Send 5 messages sequentially. All should share one connection.
 	for i := 0; i < 5; i++ {
-		ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-			Source: openbindings.BindingExecutionSource{
+		ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+			Source: openbindings.BindingInvocationSource{
 				Format:  FormatToken,
 				Content: doc,
 			},
@@ -61,7 +61,7 @@ func TestWSPool_MultipleSendsShareOneConnection(t *testing.T) {
 			Context: map[string]any{"bearerToken": "tok"},
 		})
 		if err != nil {
-			t.Fatalf("send %d: ExecuteBinding error: %v", i, err)
+			t.Fatalf("send %d: InvokeBinding error: %v", i, err)
 		}
 		events := drainStream(ch)
 		if len(events) != 1 {
@@ -107,8 +107,8 @@ func TestWSPool_ConcurrentSendsShareOneConnection(t *testing.T) {
 	pubOp.Reply = &OperationReply{}
 	doc.Operations["publish"] = pubOp
 
-	exec := NewExecutor()
-	defer exec.Close()
+	invoker := NewInvoker()
+	defer invoker.Close()
 
 	const concurrency = 10
 	var wg sync.WaitGroup
@@ -118,8 +118,8 @@ func TestWSPool_ConcurrentSendsShareOneConnection(t *testing.T) {
 		wg.Add(1)
 		go func(seq int) {
 			defer wg.Done()
-			ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-				Source: openbindings.BindingExecutionSource{
+			ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+				Source: openbindings.BindingInvocationSource{
 					Format:  FormatToken,
 					Content: doc,
 				},
@@ -183,15 +183,15 @@ func TestWSPool_IdleTimeoutEviction(t *testing.T) {
 	pubOp.Reply = &OperationReply{}
 	doc.Operations["publish"] = pubOp
 
-	exec := NewExecutor()
-	defer exec.Close()
+	invoker := NewInvoker()
+	defer invoker.Close()
 
 	// Use a very short idle timeout for testing.
-	exec.wsPool.idleTimeout = 50 * time.Millisecond
+	invoker.wsPool.idleTimeout = 50 * time.Millisecond
 
 	// First send: creates the connection.
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: doc,
 		},
@@ -215,16 +215,16 @@ func TestWSPool_IdleTimeoutEviction(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify the pool is empty.
-	exec.wsPool.mu.Lock()
-	poolSize := len(exec.wsPool.conns)
-	exec.wsPool.mu.Unlock()
+	invoker.wsPool.mu.Lock()
+	poolSize := len(invoker.wsPool.conns)
+	invoker.wsPool.mu.Unlock()
 	if poolSize != 0 {
 		t.Errorf("expected empty pool after idle timeout, got %d connections", poolSize)
 	}
 
 	// Second send: should create a new connection.
-	ch, err = exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err = invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: doc,
 		},
@@ -263,11 +263,11 @@ func TestWSPool_FireAndForgetSend(t *testing.T) {
 	doc := makeWSAsyncAPISpec(srv.URL, SecurityScheme{Type: "http", Scheme: "bearer"})
 	// No Reply on the publish operation -- fire-and-forget.
 
-	exec := NewExecutor()
-	defer exec.Close()
+	invoker := NewInvoker()
+	defer invoker.Close()
 
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: doc,
 		},
@@ -276,7 +276,7 @@ func TestWSPool_FireAndForgetSend(t *testing.T) {
 		Context: map[string]any{"bearerToken": "tok"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	// Channel should close immediately with zero events.
@@ -313,13 +313,13 @@ func TestWSPool_ReceiveStillUsesDedicatedConnection(t *testing.T) {
 
 	doc := makeWSAsyncAPISpec(srv.URL, SecurityScheme{Type: "http", Scheme: "bearer"})
 
-	exec := NewExecutor()
-	defer exec.Close()
+	invoker := NewInvoker()
+	defer invoker.Close()
 
 	// Two receive subscriptions should each open their own connection.
 	for i := 0; i < 2; i++ {
-		ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-			Source: openbindings.BindingExecutionSource{
+		ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+			Source: openbindings.BindingInvocationSource{
 				Format:  FormatToken,
 				Content: doc,
 			},
@@ -341,7 +341,7 @@ func TestWSPool_ReceiveStillUsesDedicatedConnection(t *testing.T) {
 	}
 }
 
-// TestWSPool_CloseClosesAllConnections verifies that Executor.Close() closes
+// TestWSPool_CloseClosesAllConnections verifies that Driver.Close() closes
 // all pooled WebSocket connections.
 func TestWSPool_CloseClosesAllConnections(t *testing.T) {
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
@@ -365,11 +365,11 @@ func TestWSPool_CloseClosesAllConnections(t *testing.T) {
 	pubOp.Reply = &OperationReply{}
 	doc.Operations["publish"] = pubOp
 
-	exec := NewExecutor()
+	invoker := NewInvoker()
 
 	// Send a message to create a pooled connection.
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: doc,
 		},
@@ -378,25 +378,25 @@ func TestWSPool_CloseClosesAllConnections(t *testing.T) {
 		Context: map[string]any{"bearerToken": "tok"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 	_ = drainStream(ch)
 
 	// Pool should have one connection.
-	exec.wsPool.mu.Lock()
-	poolSize := len(exec.wsPool.conns)
-	exec.wsPool.mu.Unlock()
+	invoker.wsPool.mu.Lock()
+	poolSize := len(invoker.wsPool.conns)
+	invoker.wsPool.mu.Unlock()
 	if poolSize != 1 {
 		t.Fatalf("expected 1 pooled connection, got %d", poolSize)
 	}
 
-	// Close the executor.
-	exec.Close()
+	// Close the invoker.
+	invoker.Close()
 
 	// Pool should be empty.
-	exec.wsPool.mu.Lock()
-	poolSize = len(exec.wsPool.conns)
-	exec.wsPool.mu.Unlock()
+	invoker.wsPool.mu.Lock()
+	poolSize = len(invoker.wsPool.conns)
+	invoker.wsPool.mu.Unlock()
 	if poolSize != 0 {
 		t.Errorf("expected 0 pooled connections after Close(), got %d", poolSize)
 	}

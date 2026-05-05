@@ -9,15 +9,15 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// ListBindableRefs returns all bindable refs (space-separated command paths)
+// InspectSource returns all bindable targets (space-separated command paths)
 // from a usage spec.
-func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Source) (*openbindings.ListRefsResult, error) {
+func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	spec, err := loadSpec(ctx, source.Location, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load usage spec: %w", err)
 	}
 
-	var refs []openbindings.BindableRef
+	var targets []openbindings.BindableTarget
 
 	meta := spec.Meta()
 
@@ -28,10 +28,7 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 			bin = meta.Name
 		}
 		if bin != "" {
-			refs = append(refs, openbindings.BindableRef{
-				Ref:         bin,
-				Description: meta.About,
-			})
+			targets = append(targets, bindableTarget(bin, meta.About))
 		}
 	}
 
@@ -43,12 +40,17 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 		if cmd.SubcommandRequired {
 			return
 		}
-		refs = append(refs, openbindings.BindableRef{
-			Ref:         strings.Join(path, " "),
-			Description: cmd.Help,
-		})
+		targets = append(targets, bindableTarget(strings.Join(path, " "), cmd.Help))
 	})
 
-	sort.Slice(refs, func(i, j int) bool { return refs[i].Ref < refs[j].Ref })
-	return &openbindings.ListRefsResult{Refs: refs, Exhaustive: true}, nil
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Ref < targets[j].Ref })
+	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+}
+
+func bindableTarget(ref, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref}
+	if description != "" {
+		target.Operation = &openbindings.Operation{Description: description}
+	}
+	return target
 }

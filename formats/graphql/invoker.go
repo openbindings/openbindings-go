@@ -3,7 +3,7 @@
 // The package handles:
 //   - Discovering GraphQL schemas via introspection
 //   - Converting GraphQL types to OpenBindings interfaces
-//   - Executing queries, mutations, and subscriptions
+//   - Invoking queries, mutations, and subscriptions
 package graphql
 
 import (
@@ -21,26 +21,26 @@ import (
 const FormatToken = "graphql"
 const DefaultSourceName = "graphql"
 
-// Executor handles binding execution for GraphQL sources.
-type Executor struct {
+// Invoker handles binding invocation for GraphQL sources.
+type Invoker struct {
 	mu       sync.RWMutex
 	schemas  map[string]*introspectionSchema // endpoint URL -> cached schema
 }
 
-// NewExecutor creates a new GraphQL binding executor.
-func NewExecutor() *Executor {
-	return &Executor{schemas: make(map[string]*introspectionSchema)}
+// NewInvoker creates a new GraphQL binding invoker.
+func NewInvoker() *Invoker {
+	return &Invoker{schemas: make(map[string]*introspectionSchema)}
 }
 
-// Formats returns the source formats supported by the GraphQL executor.
-func (e *Executor) Formats() []openbindings.FormatInfo {
+// Formats returns the source formats supported by the GraphQL driver.
+func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "GraphQL APIs"}}
 }
 
 // cachedIntrospect returns a cached introspection result or performs a fresh introspection.
 // The cache key is the normalized endpoint URL so that trailing slashes and other
 // trivial differences don't cause redundant introspection calls.
-func (e *Executor) cachedIntrospect(ctx context.Context, endpointURL string, headers map[string]string) (*introspectionSchema, error) {
+func (e *Invoker) cachedIntrospect(ctx context.Context, endpointURL string, headers map[string]string) (*introspectionSchema, error) {
 	key := normalizeEndpoint(endpointURL)
 	if key == "" {
 		key = endpointURL
@@ -65,10 +65,10 @@ func (e *Executor) cachedIntrospect(ctx context.Context, endpointURL string, hea
 	return schema, nil
 }
 
-// ExecuteBinding executes a GraphQL binding, returning a channel of stream events.
+// InvokeBinding invokes a GraphQL binding, returning a channel of stream events.
 // For subscriptions it yields events as they arrive; for queries and mutations it
 // returns a single event.
-func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingExecutionInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
 	enriched := e.enrichContext(ctx, in)
 	start := time.Now()
 
@@ -113,7 +113,7 @@ func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingE
 		return ch, nil
 	}
 
-	result := executeGraphQL(ctx, enriched.Source.Location, query, variables, fieldName, headers, start)
+	result := invokeGraphQL(ctx, enriched.Source.Location, query, variables, fieldName, headers, start)
 
 	// Auth retry: if the call returned auth_required and we have security
 	// methods and callbacks, resolve credentials and retry once.
@@ -140,15 +140,15 @@ func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingE
 			}
 
 			headers = buildHTTPHeaders(enriched.Context, enriched.Options)
-			result = executeGraphQL(ctx, enriched.Source.Location, query, variables, fieldName, headers, start)
+			result = invokeGraphQL(ctx, enriched.Source.Location, query, variables, fieldName, headers, start)
 		}
 	}
 
 	return openbindings.SingleEventChannel(result), nil
 }
 
-// enrichContext merges stored context with the incoming binding execution input.
-func (e *Executor) enrichContext(ctx context.Context, in *openbindings.BindingExecutionInput) *openbindings.BindingExecutionInput {
+// enrichContext merges stored context with the incoming binding invocation input.
+func (e *Invoker) enrichContext(ctx context.Context, in *openbindings.BindingInvocationInput) *openbindings.BindingInvocationInput {
 	if in.Store == nil {
 		return in
 	}
@@ -176,8 +176,8 @@ func (e *Executor) enrichContext(ctx context.Context, in *openbindings.BindingEx
 	return &cp
 }
 
-// executeGraphQL sends a query/mutation over HTTP and returns the result.
-func executeGraphQL(ctx context.Context, endpointURL, query string, variables map[string]any, fieldName string, headers map[string]string, start time.Time) *openbindings.ExecuteOutput {
+// invokeGraphQL sends a query/mutation over HTTP and returns the result.
+func invokeGraphQL(ctx context.Context, endpointURL, query string, variables map[string]any, fieldName string, headers map[string]string, start time.Time) *openbindings.InvocationOutput {
 	data, gqlErrors, err := doGraphQLHTTP(ctx, endpointURL, query, variables, headers)
 	if err != nil {
 		if he, ok := err.(*httpError); ok {
@@ -191,10 +191,10 @@ func executeGraphQL(ctx context.Context, endpointURL, query string, variables ma
 		for i, e := range gqlErrors {
 			msgs[i] = e.Message
 		}
-		return &openbindings.ExecuteOutput{
+		return &openbindings.InvocationOutput{
 			Status:     200,
 			DurationMs: time.Since(start).Milliseconds(),
-			Error: &openbindings.ExecuteError{
+			Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeExecutionFailed,
 				Message: strings.Join(msgs, "; "),
 			},
@@ -207,7 +207,7 @@ func executeGraphQL(ctx context.Context, endpointURL, query string, variables ma
 		output = data[fieldName]
 	}
 
-	return &openbindings.ExecuteOutput{Output: output, Status: 200, DurationMs: time.Since(start).Milliseconds()}
+	return &openbindings.InvocationOutput{Output: output, Status: 200, DurationMs: time.Since(start).Milliseconds()}
 }
 
 // Creator handles interface creation from GraphQL endpoints.

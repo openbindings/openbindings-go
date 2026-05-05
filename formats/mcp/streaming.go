@@ -10,12 +10,12 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// nextProgressToken provides a unique progress token per executeToolStreaming
+// nextProgressToken provides a unique progress token per invokeToolStreaming
 // invocation. MCP servers correlate notifications/progress messages back to
 // the request that originated the token.
 var nextProgressToken atomic.Int64
 
-// executeToolStreaming calls an MCP tool using a pooled session and forwards any
+// invokeToolStreaming calls an MCP tool using a pooled session and forwards any
 // `notifications/progress` events the server sends during the call as
 // intermediate stream events. The final tool result (or error) is emitted as
 // the last stream event before the channel closes.
@@ -32,7 +32,7 @@ var nextProgressToken atomic.Int64
 // The session is acquired from the pool on entry and released when the call
 // completes. Multiple concurrent tool calls to the same server share a single
 // MCP session and initialize handshake.
-func executeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion string, url string, toolName string, args map[string]any, headers map[string]string) <-chan openbindings.StreamEvent {
+func invokeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion string, url string, toolName string, args map[string]any, headers map[string]string) <-chan openbindings.StreamEvent {
 	ch := make(chan openbindings.StreamEvent, 32)
 
 	// sendMu + closed guard the channel against concurrent sends from the
@@ -73,7 +73,7 @@ func executeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion 
 		if err != nil {
 			ch <- openbindings.StreamEvent{
 				Status: 1,
-				Error: &openbindings.ExecuteError{
+				Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeConnectFailed,
 					Message: fmt.Sprintf("connect to MCP server: %v", err),
 				},
@@ -123,7 +123,7 @@ func executeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion 
 		if callErr != nil {
 			ch <- openbindings.StreamEvent{
 				Status: 1,
-				Error: &openbindings.ExecuteError{
+				Error: &openbindings.InvocationError{
 					Code:    mcpErrorCode(callErr),
 					Message: callErr.Error(),
 				},

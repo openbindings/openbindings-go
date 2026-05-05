@@ -96,11 +96,11 @@ func TestIntegration_SendNoCredentials401(t *testing.T) {
 	store := openbindings.NewMemoryStore()
 	ctx := context.Background()
 
-	exec := NewExecutor()
-	opExec := openbindings.NewOperationExecutor(exec)
-	opExec.ContextStore = store
+	binv := NewInvoker()
+	invoker := openbindings.NewOperationInvoker(binv)
+	invoker.ContextStore = store
 
-	client := openbindings.NewInterfaceClient(nil, opExec,
+	client := openbindings.NewInterfaceClient(nil, invoker,
 		openbindings.WithContextStore(store),
 	)
 	client.ResolveInterface(&openbindings.Interface{
@@ -118,7 +118,7 @@ func TestIntegration_SendNoCredentials401(t *testing.T) {
 		},
 	})
 
-	ch, err := client.Execute(ctx, "sendMessage", map[string]any{"text": "hi"})
+	ch, err := client.Invoke(ctx, "sendMessage", map[string]any{"text": "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,11 +142,11 @@ func TestIntegration_SendWithCredentials(t *testing.T) {
 	host := strings.TrimPrefix(srv.URL, "http://")
 	store.Set(ctx, host, map[string]any{"bearerToken": testSecret})
 
-	exec := NewExecutor()
-	opExec := openbindings.NewOperationExecutor(exec)
-	opExec.ContextStore = store
+	binv := NewInvoker()
+	invoker := openbindings.NewOperationInvoker(binv)
+	invoker.ContextStore = store
 
-	client := openbindings.NewInterfaceClient(nil, opExec,
+	client := openbindings.NewInterfaceClient(nil, invoker,
 		openbindings.WithContextStore(store),
 	)
 	client.ResolveInterface(&openbindings.Interface{
@@ -164,7 +164,7 @@ func TestIntegration_SendWithCredentials(t *testing.T) {
 		},
 	})
 
-	ch, err := client.Execute(ctx, "sendMessage", map[string]any{"text": "hello"})
+	ch, err := client.Invoke(ctx, "sendMessage", map[string]any{"text": "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,9 +195,9 @@ func TestIntegration_SSEReceiveWithCredentials(t *testing.T) {
 	host := strings.TrimPrefix(srv.URL, "http://")
 	store.Set(ctx, host, map[string]any{"bearerToken": testSecret})
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	binv := NewInvoker()
+	ch, err := binv.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: doc,
 		},
@@ -230,7 +230,7 @@ func TestIntegration_SSEReceiveWithCredentials(t *testing.T) {
 // or the caller cancels."
 //
 // These tests use httptest + nhooyr.io/websocket to spin up a real WebSocket
-// server and exercise the executor end-to-end. They cover:
+// server and exercise the driver end-to-end. They cover:
 //   - Bearer token sent in the first message body (the spec convention,
 //     because browsers can't set custom WebSocket upgrade headers)
 //   - Query-param apiKey appended to the WebSocket URL (regression test for
@@ -347,9 +347,9 @@ func TestIntegration_WebSocketBearerInFirstMessageBody(t *testing.T) {
 
 	doc := makeWSAsyncAPISpec(srv.URL, SecurityScheme{Type: "http", Scheme: "bearer"})
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	binv := NewInvoker()
+	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: doc,
 		},
@@ -357,7 +357,7 @@ func TestIntegration_WebSocketBearerInFirstMessageBody(t *testing.T) {
 		Context: map[string]any{"bearerToken": "test-bearer-xyz"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	events := drainStream(ch)
@@ -392,9 +392,9 @@ func TestIntegration_WebSocketQueryParamApiKey(t *testing.T) {
 		Name: "api_key",
 	})
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	binv := NewInvoker()
+	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: doc,
 		},
@@ -402,7 +402,7 @@ func TestIntegration_WebSocketQueryParamApiKey(t *testing.T) {
 		Context: map[string]any{"apiKey": "secret-key-abc"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 	_ = drainStream(ch)
 
@@ -412,7 +412,7 @@ func TestIntegration_WebSocketQueryParamApiKey(t *testing.T) {
 }
 
 // TestIntegration_WebSocketStreamingMultipleEvents verifies that the
-// executor forwards each server-pushed WebSocket message as a separate
+// driver forwards each server-pushed WebSocket message as a separate
 // stream event in arrival order.
 func TestIntegration_WebSocketStreamingMultipleEvents(t *testing.T) {
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
@@ -425,9 +425,9 @@ func TestIntegration_WebSocketStreamingMultipleEvents(t *testing.T) {
 
 	doc := makeWSAsyncAPISpec(srv.URL, SecurityScheme{Type: "http", Scheme: "bearer"})
 
-	exec := NewExecutor()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	binv := NewInvoker()
+	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: doc,
 		},
@@ -435,7 +435,7 @@ func TestIntegration_WebSocketStreamingMultipleEvents(t *testing.T) {
 		Context: map[string]any{"bearerToken": "tok"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	events := drainStream(ch)
@@ -472,11 +472,11 @@ func TestIntegration_WebSocketCancellation(t *testing.T) {
 
 	doc := makeWSAsyncAPISpec(srv.URL, SecurityScheme{Type: "http", Scheme: "bearer"})
 
-	exec := NewExecutor()
+	binv := NewInvoker()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	ch, err := exec.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := binv.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: doc,
 		},
@@ -484,7 +484,7 @@ func TestIntegration_WebSocketCancellation(t *testing.T) {
 		Context: map[string]any{"bearerToken": "tok"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	// Receive the first event.
@@ -537,10 +537,10 @@ func TestIntegration_WebSocketSendAction(t *testing.T) {
 	pubOp.Reply = &OperationReply{}
 	doc.Operations["publish"] = pubOp
 
-	exec := NewExecutor()
-	defer exec.Close()
-	ch, err := exec.ExecuteBinding(context.Background(), &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	binv := NewInvoker()
+	defer binv.Close()
+	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:  FormatToken,
 			Content: doc,
 		},
@@ -549,7 +549,7 @@ func TestIntegration_WebSocketSendAction(t *testing.T) {
 		Context: map[string]any{"bearerToken": "tok"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	events := drainStream(ch)

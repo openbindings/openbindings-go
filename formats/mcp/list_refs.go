@@ -8,9 +8,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// ListBindableRefs connects to an MCP server and returns all bindable refs
+// InspectSource connects to an MCP server and returns all bindable targets
 // (tools, resources, resource templates, and prompts).
-func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Source) (*openbindings.ListRefsResult, error) {
+func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	if source.Location == "" {
 		return nil, fmt.Errorf("MCP source requires a location (server URL)")
 	}
@@ -20,7 +20,7 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 		return nil, fmt.Errorf("MCP discovery: %w", err)
 	}
 
-	var refs []openbindings.BindableRef
+	var targets []openbindings.BindableTarget
 
 	sort.Slice(disc.Tools, func(i, j int) bool { return disc.Tools[i].Name < disc.Tools[j].Name })
 	for _, tool := range disc.Tools {
@@ -28,10 +28,7 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 		if desc == "" {
 			desc = tool.Title
 		}
-		refs = append(refs, openbindings.BindableRef{
-			Ref:         refPrefixTools + tool.Name,
-			Description: desc,
-		})
+		targets = append(targets, bindableTarget(refPrefixTools+tool.Name, desc))
 	}
 
 	sort.Slice(disc.Resources, func(i, j int) bool { return disc.Resources[i].Name < disc.Resources[j].Name })
@@ -40,10 +37,7 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 		if desc == "" {
 			desc = resource.Title
 		}
-		refs = append(refs, openbindings.BindableRef{
-			Ref:         refPrefixResources + resource.URI,
-			Description: desc,
-		})
+		targets = append(targets, bindableTarget(refPrefixResources+resource.URI, desc))
 	}
 
 	sort.Slice(disc.ResourceTemplates, func(i, j int) bool { return disc.ResourceTemplates[i].Name < disc.ResourceTemplates[j].Name })
@@ -52,10 +46,7 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 		if desc == "" {
 			desc = tmpl.Title
 		}
-		refs = append(refs, openbindings.BindableRef{
-			Ref:         refPrefixResources + tmpl.URITemplate,
-			Description: desc,
-		})
+		targets = append(targets, bindableTarget(refPrefixResources+tmpl.URITemplate, desc))
 	}
 
 	sort.Slice(disc.Prompts, func(i, j int) bool { return disc.Prompts[i].Name < disc.Prompts[j].Name })
@@ -64,11 +55,16 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 		if desc == "" {
 			desc = prompt.Title
 		}
-		refs = append(refs, openbindings.BindableRef{
-			Ref:         refPrefixPrompts + prompt.Name,
-			Description: desc,
-		})
+		targets = append(targets, bindableTarget(refPrefixPrompts+prompt.Name, desc))
 	}
 
-	return &openbindings.ListRefsResult{Refs: refs, Exhaustive: true}, nil
+	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+}
+
+func bindableTarget(ref, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref}
+	if description != "" {
+		target.Operation = &openbindings.Operation{Description: description}
+	}
+	return target
 }

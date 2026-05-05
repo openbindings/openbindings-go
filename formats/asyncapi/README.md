@@ -1,10 +1,10 @@
 # asyncapi-go
 
-AsyncAPI 3.x binding executor and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
+AsyncAPI 3.x binding invoker and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
 
-This package enables OpenBindings to execute operations against AsyncAPI specs and synthesize OBI documents from them. It supports HTTP/SSE for event streaming, HTTP POST for sending messages, and WebSocket for bidirectional communication. Credentials are applied via the spec's security schemes.
+This package enables OpenBindings to invoke operations against AsyncAPI specs and synthesize OBI documents from them. It supports HTTP/SSE for event streaming, HTTP POST for sending messages, and WebSocket for bidirectional communication. Credentials are applied via the spec's security schemes.
 
-See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how executors and creators fit into the OpenBindings architecture.
+See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how invokers and creators fit into the OpenBindings architecture.
 
 ## Install
 
@@ -16,7 +16,7 @@ Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the
 
 ## Usage
 
-### Register with OperationExecutor
+### Register with OperationInvoker
 
 ```go
 import (
@@ -24,19 +24,19 @@ import (
     asyncapi "github.com/openbindings/openbindings-go/formats/asyncapi"
 )
 
-exec := openbindings.NewOperationExecutor(asyncapi.NewExecutor())
+exec := openbindings.NewOperationInvoker(asyncapi.NewInvoker())
 ```
 
-The executor declares `asyncapi@^3.0.0` — it handles any AsyncAPI 3.x spec.
+The invoker declares `asyncapi@^3.0.0` — it handles any AsyncAPI 3.x spec.
 
-### Execute a binding
+### Invoke a binding
 
-The `OperationExecutor` routes operations to this executor based on the OBI's source format. Direct use:
+The `OperationInvoker` routes operations to this invoker based on the OBI's source format. Direct use:
 
 ```go
-executor := asyncapi.NewExecutor()
-ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-    Source: openbindings.ExecuteSource{
+invoker := asyncapi.NewInvoker()
+ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+    Source: openbindings.BindingInvocationSource{
         Format:   "asyncapi@3.0",
         Location: "https://api.example.com/asyncapi.json",
     },
@@ -105,7 +105,7 @@ Falls back to bearer, then basic, then apiKey when no security schemes are defin
 
 ### Protocol dispatch
 
-The executor determines the transport from the AsyncAPI spec's server protocol and the operation's action:
+The invoker determines the transport from the AsyncAPI spec's server protocol and the operation's action:
 
 | Protocol | Receive (subscribe) | Send (publish) |
 |----------|-------------------|----------------|
@@ -114,7 +114,7 @@ The executor determines the transport from the AsyncAPI spec's server protocol a
 
 ## How it works
 
-### Execution flow
+### Invocation flow
 
 1. Loads and caches the AsyncAPI document (JSON or YAML, local or remote)
 2. Parses the ref to extract the operation ID (`#/operations/sendMessage` -> `sendMessage`)

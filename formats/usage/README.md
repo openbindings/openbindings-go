@@ -1,10 +1,10 @@
 # usage-go
 
-Usage-spec binding executor, interface creator, and parser for the [OpenBindings](https://openbindings.com) Go SDK.
+Usage-spec binding invoker, interface creator, and parser for the [OpenBindings](https://openbindings.com) Go SDK.
 
 This package enables OpenBindings to execute CLI tools described by [Usage spec](https://usage.jdx.dev/) KDL documents and synthesize OBI documents from them. It parses usage-spec files, builds CLI arguments from OBI input, executes the binary, and returns the result as a stream event.
 
-See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how executors and creators fit into the OpenBindings architecture.
+See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how invokers and creators fit into the OpenBindings architecture.
 
 ## Install
 
@@ -16,7 +16,7 @@ Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the
 
 ## Usage
 
-### Register with OperationExecutor
+### Register with OperationInvoker
 
 ```go
 import (
@@ -24,17 +24,17 @@ import (
     usage "github.com/openbindings/openbindings-go/formats/usage"
 )
 
-exec := openbindings.NewOperationExecutor(usage.NewExecutor())
+exec := openbindings.NewOperationInvoker(usage.NewInvoker())
 ```
 
-The executor declares `usage@^2.0.0` -- it handles any Usage spec version 2.x.
+The invoker declares `usage@^2.0.0` -- it handles any Usage spec version 2.x.
 
-### Execute a binding
+### Invoke a binding
 
 ```go
-executor := usage.NewExecutor()
-ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-    Source: openbindings.ExecuteSource{
+invoker := usage.NewInvoker()
+ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+    Source: openbindings.BindingInvocationSource{
         Format:   "usage@2.0",
         Location: "mycli.usage.kdl",
     },
@@ -87,7 +87,7 @@ The ref mirrors how the command would be invoked on the command line (without th
 
 ### Credential application
 
-Usage-spec bindings execute local CLI binaries, not network services. There are no HTTP headers. Credentials and configuration are passed via `ExecutionOptions.Environment` as environment variables.
+Usage-spec bindings execute local CLI binaries, not network services. There are no HTTP headers. Credentials and configuration are passed via `InvocationOptions.Environment` as environment variables.
 
 ### Interface creation
 
@@ -95,11 +95,11 @@ Usage-spec bindings execute local CLI binaries, not network services. There are 
 - Operation keys use dot-separated paths (e.g., `config.set`)
 - Binding refs use space-separated paths (e.g., `config set`)
 - Input schemas built from flags (boolean, string, integer, array) and positional args
-- No security metadata (local execution)
+- No security metadata (local invocation)
 
 ## How it works
 
-### Execution flow
+### Invocation flow
 
 1. Loads and caches the usage-spec KDL document (from file, inline content, or `exec:` artifact)
 2. Finds the command matching the ref (space-separated path, e.g. `config set`)
@@ -110,7 +110,7 @@ Usage-spec bindings execute local CLI binaries, not network services. There are 
 
 ### Credential application
 
-Usage-spec bindings execute local CLI binaries, not network services. Credentials are applied via environment variables through `ExecutionOptions.Environment`, not HTTP headers.
+Usage-spec bindings execute local CLI binaries, not network services. Credentials are applied via environment variables through `InvocationOptions.Environment`, not HTTP headers.
 
 ### Interface creation
 

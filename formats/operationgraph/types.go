@@ -40,16 +40,10 @@ type Node struct {
 	Schema *json.RawMessage `json:"schema,omitempty"`
 
 	// filter (expression-based), transform, map
-	Transform *TransformDef `json:"transform,omitempty"`
+	Transform *string `json:"transform,omitempty"`
 
 	// exit
 	Error *bool `json:"error,omitempty"`
-}
-
-// TransformDef is a transform expression embedded on a node.
-type TransformDef struct {
-	Type       string `json:"type"`
-	Expression string `json:"expression"`
 }
 
 // Edge connects two nodes.

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	// maxEvents is the maximum number of data events processed per graph execution.
+	// maxEvents is the maximum number of data events processed per graph invocation.
 	// Protects against unbounded event amplification from map nodes in cycles.
 	maxEvents int64 = 100_000
 
@@ -37,11 +37,11 @@ func cloneEvent(ev *event) *event {
 	return &event{data: ev.data, source: ev.source, lineage: lin, errorDepth: ev.errorDepth}
 }
 
-// engine runs a single operation graph execution.
+// engine runs a single operation graph invocation.
 type engine struct {
-	graph     *Graph
-	opExec    *openbindings.OperationExecutor
-	bindingIn *openbindings.BindingExecutionInput
+	graph      *Graph
+	invoker *openbindings.OperationInvoker
+	bindingIn  *openbindings.BindingInvocationInput
 	transform openbindings.TransformEvaluator
 	origInput any
 	schemas   *schemaCache
@@ -57,7 +57,7 @@ type engine struct {
 	done       chan struct{}
 }
 
-func newEngine(g *Graph, opExec *openbindings.OperationExecutor, in *openbindings.BindingExecutionInput, te openbindings.TransformEvaluator, sc *schemaCache) *engine {
+func newEngine(g *Graph, invoker *openbindings.OperationInvoker, in *openbindings.BindingInvocationInput, te openbindings.TransformEvaluator, sc *schemaCache) *engine {
 	outE := make(map[string][]string)
 	inE := make(map[string][]string)
 	var inputKey string
@@ -71,10 +71,10 @@ func newEngine(g *Graph, opExec *openbindings.OperationExecutor, in *openbinding
 		}
 	}
 	return &engine{
-		graph:     g,
-		opExec:    opExec,
-		bindingIn: in,
-		transform: te,
+		graph:      g,
+		invoker: invoker,
+		bindingIn:  in,
+		transform:  te,
 		origInput: in.Input,
 		schemas:   sc,
 		outEdges:  outE,
@@ -97,7 +97,7 @@ func (eng *engine) decInflight() {
 // run validates and executes the graph, sending output events to out.
 func (eng *engine) run(ctx context.Context, out chan<- openbindings.StreamEvent) {
 	// Validate before executing.
-	// When Interface is nil (e.g. direct binding execution via host), skip
+	// When Interface is nil (e.g. direct binding invocation via host), skip
 	// operation key validation -- references will fail at runtime if invalid.
 	var opKeys map[string]bool
 	if eng.bindingIn.Interface != nil {
@@ -107,7 +107,7 @@ func (eng *engine) run(ctx context.Context, out chan<- openbindings.StreamEvent)
 		}
 	}
 	if err := Validate(eng.graph, opKeys); err != nil {
-		out <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+		out <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 			Code:    openbindings.ErrCodeValidationFailed,
 			Message: err.Error(),
 		}}
@@ -288,7 +288,7 @@ func (eng *engine) processNode(
 	// Check event amplification limit.
 	if eng.eventCount.Add(1) > maxEvents {
 		eng.exitFlag.Store(true)
-		out <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+		out <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 			Code:    openbindings.ErrCodeEventLimitExceeded,
 			Message: fmt.Sprintf("exceeded maximum event count (%d)", maxEvents),
 		}}
@@ -308,7 +308,7 @@ func (eng *engine) processNode(
 		eng.exitFlag.Store(true)
 		isError := node.Error != nil && *node.Error
 		if isError {
-			out <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+			out <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeOperationGraphExit,
 				Message: fmt.Sprintf("%v", ev.data),
 			}}
@@ -365,7 +365,7 @@ func (eng *engine) processOperation(
 		defer opCancel()
 	}
 
-	ch, err := eng.opExec.ExecuteOperation(opCtx, &openbindings.OperationExecutionInput{
+	ch, err := eng.invoker.Invoke(opCtx, &openbindings.OperationInvocationInput{
 		Interface: eng.bindingIn.Interface,
 		Operation: node.Operation,
 		Input:     ev.data,
@@ -410,7 +410,7 @@ func (eng *engine) processFilter(
 			sendError(key, "no transform evaluator available", ev.data, ev.lineage, ev.errorDepth)
 			return
 		}
-		result, err := eng.evaluateTransform(node.Transform, ev.data)
+		result, err := eng.evaluateTransform(*node.Transform, ev.data)
 		if err != nil {
 			sendError(key, err.Error(), ev.data, ev.lineage, ev.errorDepth)
 			return
@@ -430,7 +430,7 @@ func (eng *engine) processTransform(
 		sendError(key, "no transform evaluator available", ev.data, ev.lineage, ev.errorDepth)
 		return
 	}
-	result, err := eng.evaluateTransform(node.Transform, ev.data)
+	result, err := eng.evaluateTransform(*node.Transform, ev.data)
 	if err != nil {
 		sendError(key, err.Error(), ev.data, ev.lineage, ev.errorDepth)
 		return
@@ -447,7 +447,7 @@ func (eng *engine) processMap(
 		sendError(key, "no transform evaluator available", ev.data, ev.lineage, ev.errorDepth)
 		return
 	}
-	result, err := eng.evaluateTransform(node.Transform, ev.data)
+	result, err := eng.evaluateTransform(*node.Transform, ev.data)
 	if err != nil {
 		sendError(key, err.Error(), ev.data, ev.lineage, ev.errorDepth)
 		return
@@ -465,13 +465,13 @@ func (eng *engine) processMap(
 	}
 }
 
-func (eng *engine) evaluateTransform(td *TransformDef, data any) (any, error) {
+func (eng *engine) evaluateTransform(expression string, data any) (any, error) {
 	if eb, ok := eng.transform.(openbindings.TransformEvaluatorWithBindings); ok {
-		return eb.EvaluateWithBindings(td.Expression, data, map[string]any{
+		return eb.EvaluateWithBindings(expression, data, map[string]any{
 			"input": eng.origInput,
 		})
 	}
-	return eng.transform.Evaluate(td.Expression, data)
+	return eng.transform.Evaluate(expression, data)
 }
 
 func copyLineage(m map[string]int) map[string]int {

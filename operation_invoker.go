@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // BindingSelector determines which binding to use for an operation.
@@ -19,54 +21,54 @@ type TransformEvaluator interface {
 
 // TransformEvaluatorWithBindings extends TransformEvaluator with support for
 // additional named bindings (e.g., $input in operation graph transforms).
-// Executors that need extra context check for this interface via type assertion.
+// Invokers that need extra context check for this interface via type assertion.
 type TransformEvaluatorWithBindings interface {
 	TransformEvaluator
 	EvaluateWithBindings(expression string, data any, bindings map[string]any) (any, error)
 }
 
-// OperationExecutor composites multiple BindingExecutors into a higher-level
+// OperationInvoker composites multiple BindingInvokers into a higher-level
 // mux that can route by format and resolve OBI operations to bindings.
 //
-// When ContextStore is set, Store and Callbacks are propagated to the executor
+// When ContextStore is set, Store and Callbacks are propagated to the invoker
 // so it can look up stored context and invoke platform interactions during
-// execution. Executors derive context keys internally using NormalizeContextKey.
-type OperationExecutor struct {
+// invocation. Invokers derive context keys internally using NormalizeContextKey.
+type OperationInvoker struct {
 	BindingSelector    func(*Interface, string) (string, *BindingEntry, error)
 	TransformEvaluator TransformEvaluator
 	ContextStore       ContextStore
 	PlatformCallbacks  *PlatformCallbacks
 
-	executor BindingExecutor
+	invoker BindingInvoker
 }
 
-// NewOperationExecutor creates an OperationExecutor from one or more BindingExecutors.
+// NewOperationInvoker creates an OperationInvoker from one or more BindingInvokers.
 // Registration order matters: first registration wins for a given format name.
-func NewOperationExecutor(executors ...BindingExecutor) *OperationExecutor {
-	return &OperationExecutor{
-		executor: CombineExecutors(executors...),
+func NewOperationInvoker(invokers ...BindingInvoker) *OperationInvoker {
+	return &OperationInvoker{
+		invoker: CombineInvokers(invokers...),
 	}
 }
 
-// AddBindingExecutor registers an additional BindingExecutor after construction.
-// This is useful when an executor depends on the OperationExecutor itself,
+// AddBindingInvoker registers an additional BindingInvoker after construction.
+// This is useful when an invoker depends on the OperationInvoker itself,
 // which creates a circular dependency that cannot be resolved at construction time.
-// Must be called during initialization, before any concurrent use of the executor.
-func (e *OperationExecutor) AddBindingExecutor(exec BindingExecutor) {
-	e.executor.(*combinedExecutor).add(exec)
+// Must be called during initialization, before any concurrent use of the invoker.
+func (e *OperationInvoker) AddBindingInvoker(invoker BindingInvoker) {
+	e.invoker.(*combinedInvoker).add(invoker)
 }
 
-// WithRuntime returns a shallow copy of the executor with the given
+// WithRuntime returns a shallow copy of the invoker with the given
 // ContextStore and PlatformCallbacks. The copy shares the underlying
-// combined executor with the original but has independent runtime fields.
+// combined invoker with the original but has independent runtime fields.
 // Nil arguments inherit the original's values.
-func (e *OperationExecutor) WithRuntime(store ContextStore, callbacks *PlatformCallbacks) *OperationExecutor {
-	cp := &OperationExecutor{
+func (e *OperationInvoker) WithRuntime(store ContextStore, callbacks *PlatformCallbacks) *OperationInvoker {
+	cp := &OperationInvoker{
 		BindingSelector:    e.BindingSelector,
 		TransformEvaluator: e.TransformEvaluator,
 		ContextStore:       store,
 		PlatformCallbacks:  callbacks,
-		executor:           e.executor,
+		invoker:            e.invoker,
 	}
 	if cp.ContextStore == nil {
 		cp.ContextStore = e.ContextStore
@@ -77,32 +79,32 @@ func (e *OperationExecutor) WithRuntime(store ContextStore, callbacks *PlatformC
 	return cp
 }
 
-// Formats returns all formats registered with this executor.
-func (e *OperationExecutor) Formats() []FormatInfo {
-	return e.executor.Formats()
+// Formats returns all formats registered with this invoker.
+func (e *OperationInvoker) Formats() []FormatInfo {
+	return e.invoker.Formats()
 }
 
-func (e *OperationExecutor) availableFormats() map[string]bool {
+func (e *OperationInvoker) availableFormats() map[string]bool {
 	m := make(map[string]bool)
-	for _, f := range e.executor.Formats() {
+	for _, f := range e.invoker.Formats() {
 		m[f.Token] = true
 	}
 	return m
 }
 
-// ExecuteBinding routes a binding execution to the appropriate BindingExecutor
+// InvokeBinding routes a binding invocation to the appropriate BindingInvoker
 // by source format and returns a stream of events. Store and Callbacks are
-// propagated from the executor when not already set on the input. Executors
+// propagated from the invoker when not already set on the input. Invokers
 // are responsible for looking up stored context internally using
 // NormalizeContextKey.
-func (e *OperationExecutor) ExecuteBinding(ctx context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
-	return e.executor.ExecuteBinding(ctx, e.withRuntime(in))
+func (e *OperationInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+	return e.invoker.InvokeBinding(ctx, e.withRuntime(in))
 }
 
 // withRuntime returns a shallow copy of in with Store and Callbacks filled
-// from the executor when the input doesn't already have them. The caller's
+// from the invoker when the input doesn't already have them. The caller's
 // original input is never mutated.
-func (e *OperationExecutor) withRuntime(in *BindingExecutionInput) *BindingExecutionInput {
+func (e *OperationInvoker) withRuntime(in *BindingInvocationInput) *BindingInvocationInput {
 	if (in.Store != nil || e.ContextStore == nil) && (in.Callbacks != nil || e.PlatformCallbacks == nil) {
 		return in
 	}
@@ -116,14 +118,14 @@ func (e *OperationExecutor) withRuntime(in *BindingExecutionInput) *BindingExecu
 	return &cp
 }
 
-// ExecuteOperation resolves an OBI operation to a binding and returns a stream
+// Invoke resolves an OBI operation to a binding and returns a stream
 // of events. Every operation is a stream — unary calls produce a single event.
 //
-// The executor's ExecuteBinding returns a channel of StreamEvent. Output
+// The invoker's InvokeBinding returns a channel of StreamEvent. Output
 // transforms are applied per event.
 //
-// Input transforms are applied once before execution.
-func (e *OperationExecutor) ExecuteOperation(ctx context.Context, in *OperationExecutionInput) (<-chan StreamEvent, error) {
+// Input transforms are applied once before invocation.
+func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationInput) (<-chan StreamEvent, error) {
 	if in.Interface == nil {
 		return nil, ErrNilInterface
 	}
@@ -139,7 +141,7 @@ func (e *OperationExecutor) ExecuteOperation(ctx context.Context, in *OperationE
 		b, ok := in.Interface.Bindings[in.BindingKey]
 		if !ok {
 			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Error: &ExecuteError{
+			ch <- StreamEvent{Error: &InvocationError{
 				Code:    ErrCodeBindingNotFound,
 				Message: fmt.Sprintf("binding %q is not defined on this interface", in.BindingKey),
 			}}
@@ -168,43 +170,68 @@ func (e *OperationExecutor) ExecuteOperation(ctx context.Context, in *OperationE
 		return nil, fmt.Errorf("%w: binding %q references %q", ErrUnknownSource, bindingKey, binding.Source)
 	}
 
-	execInput := in.Input
+	// OBI-T-07: Validate input against the operation's input schema before transform.
+	if op.Input != nil && in.Input != nil {
+		defs := buildSchemaDefs(in.Interface.Schemas)
+		compiled, err := compileExampleSchema(op.Input, defs)
+		if err != nil {
+			ch := make(chan StreamEvent, 1)
+			ch <- StreamEvent{Error: &InvocationError{
+				Code:    ErrCodeValidationFailed,
+				Message: fmt.Sprintf("openbindings: input schema compilation failed for %q: %v", in.Operation, err),
+			}}
+			close(ch)
+			return ch, nil
+		}
+		if verr := compiled.Validate(in.Input); verr != nil {
+			ch := make(chan StreamEvent, 1)
+			lines := splitSchemaError(verr)
+			ch <- StreamEvent{Error: &InvocationError{
+				Code:    ErrCodeValidationFailed,
+				Message: fmt.Sprintf("openbindings: input validation failed for %q: %s", in.Operation, strings.Join(lines, "; ")),
+			}}
+			close(ch)
+			return ch, nil
+		}
+	}
+
+	invokeInput := in.Input
 	if binding.InputTransform != nil {
 		if e.TransformEvaluator == nil {
 			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Error: &ExecuteError{
+			ch <- StreamEvent{Error: &InvocationError{
 				Code:    ErrCodeTransformError,
 				Message: fmt.Sprintf("%v: binding %q has inputTransform", ErrNoTransformEvaluator, bindingKey),
 			}}
 			close(ch)
 			return ch, nil
 		}
-		transformed, err := applyTransformRef(e.TransformEvaluator, in.Interface.Transforms, binding.InputTransform, execInput)
+		transformed, err := applyTransformRef(e.TransformEvaluator, in.Interface.Transforms, binding.InputTransform, invokeInput)
 		if err != nil {
 			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Error: &ExecuteError{
+			ch <- StreamEvent{Error: &InvocationError{
 				Code:    ErrCodeTransformError,
 				Message: fmt.Sprintf("openbindings: input transform failed for %q: %v", bindingKey, err),
 			}}
 			close(ch)
 			return ch, nil
 		}
-		execInput = transformed
+		invokeInput = transformed
 	}
 
-	bindingIn := &BindingExecutionInput{
-		Source: BindingExecutionSource{
+	bindingIn := &BindingInvocationInput{
+		Source: BindingInvocationSource{
 			Format:   source.Format,
 			Location: source.Location,
 		},
 		Ref:         binding.Ref,
-		Input:       execInput,
+		Input:       invokeInput,
 		InputSchema: op.Input,
 		Context:     in.Context,
 		Options:     in.Options,
 		Interface:   in.Interface,
 	}
-	if source.Content != nil && source.Location == "" {
+	if source.Content != nil {
 		bindingIn.Source.Content = source.Content
 	}
 	if binding.Security != "" && in.Interface.Security != nil {
@@ -213,23 +240,24 @@ func (e *OperationExecutor) ExecuteOperation(ctx context.Context, in *OperationE
 		}
 	}
 
-	src, err := e.ExecuteBinding(ctx, bindingIn)
+	src, err := e.InvokeBinding(ctx, bindingIn)
 	if err != nil {
 		return nil, err
 	}
-	return e.transformStream(ctx, src, binding, in.Interface.Transforms, bindingKey), nil
+	return e.transformStream(ctx, src, binding, in.Interface.Transforms, bindingKey, op.Output, in.Interface.Schemas), nil
 }
 
 // transformStream wraps a source stream, applying outputTransform to each
-// event's Data. If no outputTransform is configured, returns src directly.
+// event's Data and validating against outputSchema (OBI-T-08). If neither
+// outputTransform nor outputSchema is configured, returns src directly.
 // The context is used to cancel drain goroutines when the parent is cancelled.
-func (e *OperationExecutor) transformStream(ctx context.Context, src <-chan StreamEvent, binding *BindingEntry, transforms map[string]Transform, bindingKey string) <-chan StreamEvent {
-	if binding.OutputTransform == nil {
+func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan StreamEvent, binding *BindingEntry, transforms map[string]Transform, bindingKey string, outputSchema JSONSchema, schemas map[string]JSONSchema) <-chan StreamEvent {
+	if binding.OutputTransform == nil && outputSchema == nil {
 		return src
 	}
-	if e.TransformEvaluator == nil {
+	if binding.OutputTransform != nil && e.TransformEvaluator == nil {
 		out := make(chan StreamEvent, 1)
-		out <- StreamEvent{Error: &ExecuteError{
+		out <- StreamEvent{Error: &InvocationError{
 			Code:    ErrCodeTransformError,
 			Message: fmt.Sprintf("%v: binding %q has outputTransform", ErrNoTransformEvaluator, bindingKey),
 		}}
@@ -251,6 +279,16 @@ func (e *OperationExecutor) transformStream(ctx context.Context, src <-chan Stre
 		return out
 	}
 
+	// Compile output schema once outside the loop.
+	var compiledOutput *jsonschema.Schema
+	if outputSchema != nil {
+		defs := buildSchemaDefs(schemas)
+		compiled, err := compileExampleSchema(outputSchema, defs)
+		if err == nil {
+			compiledOutput = compiled
+		}
+	}
+
 	out := make(chan StreamEvent)
 	go func() {
 		defer close(out)
@@ -266,15 +304,30 @@ func (e *OperationExecutor) transformStream(ctx context.Context, src <-chan Stre
 					out <- ev
 					continue
 				}
-				transformed, err := applyTransformRef(e.TransformEvaluator, transforms, binding.OutputTransform, ev.Data)
-				if err != nil {
-					out <- StreamEvent{Error: &ExecuteError{
-						Code:    ErrCodeTransformError,
-						Message: fmt.Sprintf("openbindings: output transform failed for %q: %v", bindingKey, err),
-					}}
-					continue
+				data := ev.Data
+				if binding.OutputTransform != nil {
+					transformed, err := applyTransformRef(e.TransformEvaluator, transforms, binding.OutputTransform, data)
+					if err != nil {
+						out <- StreamEvent{Error: &InvocationError{
+							Code:    ErrCodeTransformError,
+							Message: fmt.Sprintf("openbindings: output transform failed for %q: %v", bindingKey, err),
+						}}
+						continue
+					}
+					data = transformed
 				}
-				out <- StreamEvent{Data: transformed, Status: ev.Status, DurationMs: ev.DurationMs}
+				// OBI-T-08: Validate output after transform.
+				if compiledOutput != nil && data != nil {
+					if verr := compiledOutput.Validate(data); verr != nil {
+						lines := splitSchemaError(verr)
+						out <- StreamEvent{Error: &InvocationError{
+							Code:    ErrCodeValidationFailed,
+							Message: fmt.Sprintf("openbindings: output validation failed for %q: %s", bindingKey, strings.Join(lines, "; ")),
+						}}
+						continue
+					}
+				}
+				out <- StreamEvent{Data: data, Status: ev.Status, DurationMs: ev.DurationMs}
 			}
 		}
 	}()
@@ -309,7 +362,7 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 			continue
 		}
 
-		// Skip bindings whose source format the executor can't handle.
+		// Skip bindings whose source format the invoker can't handle.
 		if availableFormats != nil {
 			src, ok := iface.Sources[b.Source]
 			if ok && !formatMatches(src.Format, availableFormats) {
@@ -381,17 +434,17 @@ func applyTransformRef(eval TransformEvaluator, transforms map[string]Transform,
 		return data, nil
 	}
 
-	t := tor.Resolve(transforms)
-	if t == nil {
+	expr, ok := tor.Resolve(transforms)
+	if !ok {
 		if tor.IsRef() {
 			return nil, fmt.Errorf("%w: %q", ErrTransformRefNotFound, tor.Ref)
 		}
 		return nil, fmt.Errorf("openbindings: invalid transform: neither ref nor inline")
 	}
 
-	if t.Expression == "" {
+	if expr == "" {
 		return nil, ErrEmptyTransformExpression
 	}
 
-	return eval.Evaluate(t.Expression, data)
+	return eval.Evaluate(expr, data)
 }

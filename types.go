@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -45,9 +46,6 @@ var (
 	knownBindingEntrySet = knownSet(
 		"operation", "source", "ref", "priority", "description", "deprecated",
 		"security", "inputTransform", "outputTransform",
-	)
-	knownTransformSet = knownSet(
-		"type", "expression",
 	)
 	knownInterfaceSet = knownSet(
 		"openbindings", "name", "version", "description",
@@ -265,65 +263,25 @@ func (s Source) MarshalJSON() ([]byte, error) {
 	return marshalLossless(s.Unknown, s.Extensions, w)
 }
 
-// Transform represents a JSON-to-JSON transformation.
-// For v0.1, Type MUST be "jsonata".
-type Transform struct {
-	Type       string `json:"type"`
-	Expression string `json:"expression"`
+// Transform is a JSONata 2.0 expression string per OpenBindings v0.2 spec §6.5.
+// Tools claiming Invoking-class conformance MUST evaluate transforms according
+// to the JSONata 2.0 specification (OBI-T-11).
+type Transform = string
 
-	LosslessFields
-}
-
-type transformWire struct {
-	Type       string `json:"type"`
-	Expression string `json:"expression"`
-}
-
-func (t *Transform) UnmarshalJSON(b []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
-
-	var w transformWire
-	if err := json.Unmarshal(b, &w); err != nil {
-		return err
-	}
-
-	*t = Transform{
-		Type:       w.Type,
-		Expression: w.Expression,
-	}
-
-	t.Extensions, t.Unknown = splitLossless(raw, knownTransformSet)
-	return nil
-}
-
-func (t Transform) MarshalJSON() ([]byte, error) {
-	w := transformWire{
-		Type:       t.Type,
-		Expression: t.Expression,
-	}
-	return marshalLossless(t.Unknown, t.Extensions, w)
-}
-
-// TransformOrRef represents either an inline Transform or a $ref to a named transform.
-// Check IsRef() to determine which form is present.
+// TransformOrRef represents either an inline JSONata transform expression or
+// a $ref to a named transform in the document's `transforms` map.
 //
-// If both Ref and Transform are populated (which should not occur in well-formed
-// documents), Ref takes precedence during marshaling.
+// Per the v0.2 spec §6.5, the inline form is a JSONata expression string;
+// the reference form is an object {"$ref": "#/transforms/<name>"} with no
+// additional properties.
 type TransformOrRef struct {
-	// Ref is the JSON Pointer reference (e.g., "#/transforms/myTransform").
-	// If non-empty, this is a reference, not an inline transform.
+	// Inline is the JSONata expression string when this is an inline transform.
+	// Empty when IsRef() returns true.
+	Inline string
+
+	// Ref is the JSON Pointer reference (e.g., "#/transforms/myTransform")
+	// when this is a reference. Empty for inline transforms.
 	Ref string
-
-	// Transform is the inline transform definition.
-	// Only valid when Ref is empty.
-	Transform *Transform
-
-	// RefExtensions preserves x-* fields co-located with $ref on reference objects.
-	// Only populated when IsRef() is true.
-	RefExtensions map[string]json.RawMessage
 }
 
 // IsRef returns true if this is a reference to a named transform.
@@ -331,84 +289,53 @@ func (t TransformOrRef) IsRef() bool {
 	return t.Ref != ""
 }
 
-// Resolve returns the Transform, resolving $ref if necessary using the provided transforms map.
-// Returns nil if the reference cannot be resolved.
-// For inline transforms, returns the Transform directly.
-func (t TransformOrRef) Resolve(transforms map[string]Transform) *Transform {
+// Resolve returns the JSONata expression string this transform refers to.
+// For inline transforms, returns the inline expression directly.
+// For references, looks up the named transform in the provided map.
+// Returns ("", false) if the reference cannot be resolved.
+func (t TransformOrRef) Resolve(transforms map[string]string) (string, bool) {
 	if !t.IsRef() {
-		return t.Transform
+		return t.Inline, true
 	}
-
-	// Parse the $ref - expected format: #/transforms/<name>
 	const prefix = "#/transforms/"
 	if !strings.HasPrefix(t.Ref, prefix) {
-		return nil
+		return "", false
 	}
 	name := strings.TrimPrefix(t.Ref, prefix)
 	if name == "" {
-		return nil
+		return "", false
 	}
-	if tr, ok := transforms[name]; ok {
-		return &tr
-	}
-	return nil
+	expr, ok := transforms[name]
+	return expr, ok
 }
 
 func (t *TransformOrRef) UnmarshalJSON(b []byte) error {
-	// First, try to detect if this is a $ref
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
-
-	if refRaw, ok := raw["$ref"]; ok {
-		var ref string
-		if err := json.Unmarshal(refRaw, &ref); err != nil {
-			return err
-		}
-		tor := TransformOrRef{Ref: ref}
-		// Preserve x-* fields co-located with $ref.
-		for k, v := range raw {
-			if k == "$ref" {
-				continue
-			}
-			if strings.HasPrefix(k, "x-") {
-				if tor.RefExtensions == nil {
-					tor.RefExtensions = map[string]json.RawMessage{}
-				}
-				tor.RefExtensions[k] = v
-			}
-		}
-		*t = tor
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*t = TransformOrRef{Inline: s}
 		return nil
 	}
-
-	// Otherwise, parse as Transform
-	var tr Transform
-	if err := json.Unmarshal(b, &tr); err != nil {
-		return err
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return fmt.Errorf("transform: must be a JSONata expression string or a $ref object: %w", err)
 	}
-	*t = TransformOrRef{Transform: &tr}
+	refRaw, ok := raw["$ref"]
+	if !ok {
+		return fmt.Errorf("transform: object form requires a $ref field")
+	}
+	var ref string
+	if err := json.Unmarshal(refRaw, &ref); err != nil {
+		return fmt.Errorf("transform.$ref: %w", err)
+	}
+	*t = TransformOrRef{Ref: ref}
 	return nil
 }
 
 func (t TransformOrRef) MarshalJSON() ([]byte, error) {
-	if t.Ref != "" {
-		out := map[string]json.RawMessage{}
-		for k, v := range t.RefExtensions {
-			out[k] = v
-		}
-		refBytes, err := json.Marshal(t.Ref)
-		if err != nil {
-			return nil, err
-		}
-		out["$ref"] = refBytes
-		return json.Marshal(out)
+	if !t.IsRef() {
+		return json.Marshal(t.Inline)
 	}
-	if t.Transform != nil {
-		return json.Marshal(t.Transform)
-	}
-	return []byte("null"), nil
+	return json.Marshal(map[string]string{"$ref": t.Ref})
 }
 
 type BindingEntry struct {

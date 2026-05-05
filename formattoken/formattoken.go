@@ -78,7 +78,7 @@ const (
 	RangeCaret
 )
 
-// VersionRange represents a version constraint parsed from an executor's format token.
+// VersionRange represents a version constraint parsed from a driver's format token.
 type VersionRange struct {
 	Name    string // lowercase
 	Kind    RangeKind
@@ -88,7 +88,7 @@ type VersionRange struct {
 	Patch   int    // for Caret
 }
 
-// ParseRange parses an executor format token into a VersionRange.
+// ParseRange parses a driver format token into a VersionRange.
 // Tokens may be versionless ("grpc"), exact ("mcp@2025-11-25"), or caret ("openapi@^3.0.0").
 func ParseRange(s string) (VersionRange, error) {
 	s = strings.TrimSpace(s)

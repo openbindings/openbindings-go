@@ -12,19 +12,19 @@ const FormatToken = "usage@^2.0.0"
 
 const DefaultSourceName = "usage"
 
-// Executor handles binding execution for usage-spec KDL sources.
-type Executor struct {
+// Invoker handles binding invocation for usage-spec KDL sources.
+type Invoker struct {
 	specCache sync.Map // map[string]*Spec
 }
 
-// NewExecutor creates a new usage binding executor.
-func NewExecutor() *Executor {
-	return &Executor{}
+// NewInvoker creates a new usage binding invoker.
+func NewInvoker() *Invoker {
+	return &Invoker{}
 }
 
 // cachedLoadSpec loads a usage spec, caching by location within a process.
 // When content is provided, the cache is bypassed and updated with the fresh parse.
-func (e *Executor) cachedLoadSpec(ctx context.Context, location string, content any) (*Spec, error) {
+func (e *Invoker) cachedLoadSpec(ctx context.Context, location string, content any) (*Spec, error) {
 	if location != "" && content == nil {
 		if cached, ok := e.specCache.Load(location); ok {
 			return cached.(*Spec), nil
@@ -42,14 +42,14 @@ func (e *Executor) cachedLoadSpec(ctx context.Context, location string, content 
 	return spec, nil
 }
 
-// Formats returns the source formats supported by the usage executor.
-func (e *Executor) Formats() []openbindings.FormatInfo {
+// Formats returns the source formats supported by the usage driver.
+func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "CLI tools via usage-spec KDL"}}
 }
 
-// ExecuteBinding executes a CLI command based on a usage-spec binding,
+// InvokeBinding invokes a CLI command based on a usage-spec binding,
 // returning a single-event channel with the command's output.
-func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingExecutionInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
 	enriched := in
 	if in.Store != nil {
 		key := resolveUsageKey(ctx, in.Source.Location, in.Source.Content, e.cachedLoadSpec)
@@ -73,7 +73,7 @@ func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingE
 		}
 	}
 
-	return openbindings.SingleEventChannel(executeBindingCached(ctx, enriched, e.cachedLoadSpec)), nil
+	return openbindings.SingleEventChannel(invokeBindingCached(ctx, enriched, e.cachedLoadSpec)), nil
 }
 
 func resolveUsageKey(ctx context.Context, location string, content any, loader func(context.Context, string, any) (*Spec, error)) string {

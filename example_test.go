@@ -34,7 +34,7 @@ func ExampleInterface_basic() {
 	// Get a user by ID
 }
 
-func ExampleInterface_Validate() {
+func ExampleInterface_ValidateInterface() {
 	data := []byte(`{
 		"openbindings": "0.1.0",
 		"operations": {
@@ -52,7 +52,7 @@ func ExampleInterface_Validate() {
 		log.Fatal(err)
 	}
 
-	if err := iface.Validate(); err != nil {
+	if err := iface.ValidateInterface(); err != nil {
 		fmt.Println("invalid:", err)
 	} else {
 		fmt.Println("valid")
@@ -60,7 +60,7 @@ func ExampleInterface_Validate() {
 	// Output: valid
 }
 
-func ExampleInterface_Validate_strict() {
+func ExampleInterface_ValidateInterface_strict() {
 	data := []byte(`{
 		"openbindings": "0.1.0",
 		"unknownField": "should fail in strict mode",
@@ -73,11 +73,11 @@ func ExampleInterface_Validate_strict() {
 	_ = json.Unmarshal(data, &iface)
 
 	// Default: unknown fields are allowed (forward-compat)
-	err := iface.Validate()
+	err := iface.ValidateInterface()
 	fmt.Println("default:", err == nil)
 
 	// Strict: unknown fields are rejected
-	err = iface.Validate(openbindings.WithRejectUnknownTypedFields())
+	err = iface.ValidateInterface(openbindings.WithRejectUnknownTypedFields())
 	fmt.Println("strict:", err != nil)
 	// Output:
 	// default: true
@@ -161,17 +161,14 @@ func Example_formattoken() {
 }
 
 func ExampleTransform() {
-	// Define an interface with named transforms
+	// Per v0.2 §6.5, transforms are JSONata 2.0 expression strings.
 	iface := openbindings.Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]openbindings.Operation{
 			"processPayment": {},
 		},
 		Transforms: map[string]openbindings.Transform{
-			"toStripeInput": {
-				Type:       "jsonata",
-				Expression: "{ charge_amount: amount * 100 }",
-			},
+			"toStripeInput": "{ charge_amount: amount * 100 }",
 		},
 		Sources: map[string]openbindings.Source{
 			"stripe": {Format: "openapi@3.1", Location: "./stripe.json"},
@@ -187,28 +184,22 @@ func ExampleTransform() {
 		},
 	}
 
-	// Resolve the transform reference
 	binding := iface.Bindings["processPayment.stripe"]
-	transform := binding.InputTransform.Resolve(iface.Transforms)
+	expr, ok := binding.InputTransform.Resolve(iface.Transforms)
 
-	fmt.Println("Type:", transform.Type)
-	fmt.Println("Expression:", transform.Expression)
+	fmt.Println("Resolved:", ok)
+	fmt.Println("Expression:", expr)
 	// Output:
-	// Type: jsonata
+	// Resolved: true
 	// Expression: { charge_amount: amount * 100 }
 }
 
 func ExampleTransformOrRef_inline() {
-	// Create an inline transform (no reference)
-	tor := openbindings.TransformOrRef{
-		Transform: &openbindings.Transform{
-			Type:       "jsonata",
-			Expression: "{ total: price * quantity }",
-		},
-	}
+	// An inline transform is a bare JSONata expression string.
+	tor := openbindings.TransformOrRef{Inline: "{ total: price * quantity }"}
 
 	fmt.Println("IsRef:", tor.IsRef())
-	fmt.Println("Expression:", tor.Transform.Expression)
+	fmt.Println("Expression:", tor.Inline)
 	// Output:
 	// IsRef: false
 	// Expression: { total: price * quantity }

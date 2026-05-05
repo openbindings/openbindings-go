@@ -9,18 +9,18 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// ListBindableRefs returns all bindable refs (path+method combinations) from
+// InspectSource returns all bindable targets (path+method combinations) from
 // an OpenAPI document. Each ref is a JSON Pointer into the paths object.
-func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Source) (*openbindings.ListRefsResult, error) {
+func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	doc, err := loadDocument(source.Location, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
 
-	var refs []openbindings.BindableRef
+	var targets []openbindings.BindableTarget
 
 	if doc.Paths == nil {
-		return &openbindings.ListRefsResult{Refs: refs, Exhaustive: true}, nil
+		return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
 	}
 
 	pathKeys := make([]string, 0, doc.Paths.Len())
@@ -43,12 +43,17 @@ func (c *Creator) ListBindableRefs(ctx context.Context, source *openbindings.Sou
 			ref := buildJSONPointerRef(path, method)
 			desc := operationDescription(op)
 
-			refs = append(refs, openbindings.BindableRef{
-				Ref:         ref,
-				Description: desc,
-			})
+			targets = append(targets, bindableTarget(ref, desc))
 		}
 	}
 
-	return &openbindings.ListRefsResult{Refs: refs, Exhaustive: true}, nil
+	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+}
+
+func bindableTarget(ref, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref}
+	if description != "" {
+		target.Operation = &openbindings.Operation{Description: description}
+	}
+	return target
 }

@@ -38,8 +38,8 @@ func TestInterfaceClient_ResolveDirectOBI(t *testing.T) {
 	defer srv.Close()
 
 	required := makeTestInterface("my-component", "getStatus")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 
 	if client.State() != StateIdle {
 		t.Fatalf("expected idle, got %s", client.State())
@@ -80,8 +80,8 @@ func TestInterfaceClient_WellKnownDiscovery(t *testing.T) {
 	defer srv.Close()
 
 	required := makeTestInterface("my-component", "getStatus")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 
 	err := client.Resolve(context.Background(), srv.URL)
 	if err != nil {
@@ -101,8 +101,8 @@ func TestInterfaceClient_IncompatibleInterface(t *testing.T) {
 	defer srv.Close()
 
 	required := makeTestInterface("my-component", "getStatus")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 
 	err := client.Resolve(context.Background(), srv.URL)
 	if err != nil {
@@ -124,8 +124,8 @@ func TestInterfaceClient_ResolveInterface(t *testing.T) {
 	required := makeTestInterface("my-component", "getStatus")
 	provided := makeTestInterface("test-service", "getStatus")
 
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 
 	client.ResolveInterface(provided)
 
@@ -143,8 +143,8 @@ func TestInterfaceClient_Refresh(t *testing.T) {
 	defer srv.Close()
 
 	required := makeTestInterface("my-component", "getStatus")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 
 	err := client.Resolve(context.Background(), srv.URL)
 	if err != nil {
@@ -165,8 +165,8 @@ func TestInterfaceClient_Refresh(t *testing.T) {
 
 func TestInterfaceClient_RefreshNoTarget(t *testing.T) {
 	required := makeTestInterface("my-component", "getStatus")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 
 	err := client.Refresh(context.Background())
 	if err != nil {
@@ -179,8 +179,8 @@ func TestInterfaceClient_RefreshNoTarget(t *testing.T) {
 
 func TestInterfaceClient_ResolveEmpty(t *testing.T) {
 	required := makeTestInterface("my-component", "getStatus")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 
 	err := client.Resolve(context.Background(), "")
 	if err != nil {
@@ -198,8 +198,8 @@ func TestInterfaceClient_CancelledContext(t *testing.T) {
 	defer srv.Close()
 
 	required := makeTestInterface("my-component", "getStatus")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -218,10 +218,10 @@ func TestInterfaceClient_CancelledContext(t *testing.T) {
 
 func TestInterfaceClient_ExecuteWithoutBind(t *testing.T) {
 	required := makeTestInterface("my-component", "getStatus")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 
-	_, err := client.Execute(context.Background(), "getStatus", nil)
+	_, err := client.Invoke(context.Background(), "getStatus", nil)
 	if err == nil {
 		t.Fatal("expected error when not bound")
 	}
@@ -236,8 +236,8 @@ func TestInterfaceClient_DiscoveryMode_NilInterface(t *testing.T) {
 	srv := serveOBI(t, provided)
 	defer srv.Close()
 
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(nil, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(nil, invoker)
 
 	if client.Interface() != nil {
 		t.Fatal("expected nil interface in discovery mode")
@@ -266,8 +266,8 @@ func TestInterfaceClient_DiscoveryMode_NewUnboundClient(t *testing.T) {
 	srv := serveOBI(t, provided)
 	defer srv.Close()
 
-	exec := NewOperationExecutor()
-	client := NewUnboundClient(exec)
+	invoker := NewOperationInvoker()
+	client := NewUnboundClient(invoker)
 
 	if client.Interface() != nil {
 		t.Fatal("expected nil interface from NewUnboundClient")
@@ -284,8 +284,8 @@ func TestInterfaceClient_DiscoveryMode_NewUnboundClient(t *testing.T) {
 
 func TestInterfaceClient_DiscoveryMode_ResolveInterface(t *testing.T) {
 	provided := makeTestInterface("test-service", "getStatus", "search")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(nil, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(nil, invoker)
 
 	client.ResolveInterface(provided)
 	if client.State() != StateBound {
@@ -307,8 +307,8 @@ func TestInterfaceClient_Conforms_PassWhenCompatible(t *testing.T) {
 		},
 	}
 
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(nil, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(nil, invoker)
 	client.ResolveInterface(provided)
 
 	required := makeTestInterface("ws-manager", "listWorkspaces", "getWorkspace")
@@ -323,8 +323,8 @@ func TestInterfaceClient_Conforms_PassWhenCompatible(t *testing.T) {
 
 func TestInterfaceClient_Conforms_FailWhenMissing(t *testing.T) {
 	provided := makeTestInterface("test-service", "search")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(nil, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(nil, invoker)
 	client.ResolveInterface(provided)
 
 	required := makeTestInterface("ws-manager", "listWorkspaces", "getWorkspace")
@@ -349,8 +349,8 @@ func TestInterfaceClient_Conforms_WithSatisfiesMatch(t *testing.T) {
 		},
 	}
 
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(nil, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(nil, invoker)
 	client.ResolveInterface(provided)
 
 	required := makeTestInterface("ws-iface", "listWorkspaces")
@@ -364,8 +364,8 @@ func TestInterfaceClient_Conforms_WithSatisfiesMatch(t *testing.T) {
 }
 
 func TestInterfaceClient_Conforms_ErrorBeforeResolution(t *testing.T) {
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(nil, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(nil, invoker)
 
 	required := makeTestInterface("ws-manager", "listWorkspaces")
 	_, err := client.Conforms(required)
@@ -384,8 +384,8 @@ func TestInterfaceClient_Conforms_WorksInDemandMode(t *testing.T) {
 	}
 
 	required := makeTestInterface("narrow", "getInfo")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 	client.ResolveInterface(provided)
 
 	if client.State() != StateBound {
@@ -430,8 +430,8 @@ func TestInterfaceClient_WithInterfaceID_SatisfiesResolution(t *testing.T) {
 	defer srv.Close()
 
 	required := makeTestInterface("ws-manager", "listWorkspaces")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec, WithInterfaceID("openbindings.workspace-manager"))
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker, WithInterfaceID("openbindings.workspace-manager"))
 
 	err := client.Resolve(context.Background(), srv.URL)
 	if err != nil {
@@ -457,8 +457,8 @@ func TestInterfaceClient_WithoutInterfaceID_SatisfiesFails(t *testing.T) {
 	defer srv.Close()
 
 	required := makeTestInterface("ws-manager", "listWorkspaces")
-	exec := NewOperationExecutor()
-	client := NewInterfaceClient(required, exec)
+	invoker := NewOperationInvoker()
+	client := NewInterfaceClient(required, invoker)
 
 	err := client.Resolve(context.Background(), srv.URL)
 	if err != nil {

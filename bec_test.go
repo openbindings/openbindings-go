@@ -8,24 +8,24 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Mock executor for BEC tests
+// Mock invoker for BEC tests
 // ---------------------------------------------------------------------------
 
-type mockExecutor struct {
+type mockInvoker struct {
 	formats []FormatInfo
 
-	executeFn func(ctx context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error)
+	invokeFn func(ctx context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error)
 }
 
-func (m *mockExecutor) Formats() []FormatInfo { return m.formats }
-func (m *mockExecutor) ExecuteBinding(ctx context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
-	if m.executeFn != nil {
-		return m.executeFn(ctx, in)
+func (m *mockInvoker) Formats() []FormatInfo { return m.formats }
+func (m *mockInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+	if m.invokeFn != nil {
+		return m.invokeFn(ctx, in)
 	}
-	return SingleEventChannel(&ExecuteOutput{Output: "ok"}), nil
+	return SingleEventChannel(&InvocationOutput{Output: "ok"}), nil
 }
 
-var _ BindingExecutor = (*mockExecutor)(nil)
+var _ BindingInvoker = (*mockInvoker)(nil)
 
 // ---------------------------------------------------------------------------
 // MemoryStore tests
@@ -147,65 +147,65 @@ func TestNormalizeContextKey(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// OperationExecutor BEC tests
+// OperationInvoker BEC tests
 // ---------------------------------------------------------------------------
 
-func TestExecuteBinding_PropagatesStoreAndCallbacks(t *testing.T) {
+func TestInvokeBinding_PropagatesStoreAndCallbacks(t *testing.T) {
 	var capturedStore ContextStore
 	var capturedCallbacks *PlatformCallbacks
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			capturedStore = in.Store
 			capturedCallbacks = in.Callbacks
-			return SingleEventChannel(&ExecuteOutput{Output: "ok"}), nil
+			return SingleEventChannel(&InvocationOutput{Output: "ok"}), nil
 		},
 	}
 
 	store := NewMemoryStore()
 	callbacks := &PlatformCallbacks{}
 
-	exec := NewOperationExecutor(executor)
-	exec.ContextStore = store
-	exec.PlatformCallbacks = callbacks
+	invoker := NewOperationInvoker(mock)
+	invoker.ContextStore = store
+	invoker.PlatformCallbacks = callbacks
 
-	_, err := exec.ExecuteBinding(context.Background(), &BindingExecutionInput{
-		Source: BindingExecutionSource{Format: "test"},
+	_, err := invoker.InvokeBinding(context.Background(), &BindingInvocationInput{
+		Source: BindingInvocationSource{Format: "test"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if capturedStore != store {
-		t.Error("Store was not propagated to executor")
+		t.Error("Store was not propagated to driver")
 	}
 	if capturedCallbacks != callbacks {
-		t.Error("Callbacks were not propagated to executor")
+		t.Error("Callbacks were not propagated to driver")
 	}
 }
 
-func TestExecuteBinding_DoesNotOverrideExistingStoreCallbacks(t *testing.T) {
+func TestInvokeBinding_DoesNotOverrideExistingStoreCallbacks(t *testing.T) {
 	existingStore := NewMemoryStore()
 	existingCb := &PlatformCallbacks{}
 
 	var capturedStore ContextStore
 	var capturedCallbacks *PlatformCallbacks
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			capturedStore = in.Store
 			capturedCallbacks = in.Callbacks
-			return SingleEventChannel(&ExecuteOutput{Output: "ok"}), nil
+			return SingleEventChannel(&InvocationOutput{Output: "ok"}), nil
 		},
 	}
 
-	exec := NewOperationExecutor(executor)
-	exec.ContextStore = NewMemoryStore()
-	exec.PlatformCallbacks = &PlatformCallbacks{}
+	invoker := NewOperationInvoker(mock)
+	invoker.ContextStore = NewMemoryStore()
+	invoker.PlatformCallbacks = &PlatformCallbacks{}
 
-	_, err := exec.ExecuteBinding(context.Background(), &BindingExecutionInput{
-		Source:    BindingExecutionSource{Format: "test"},
+	_, err := invoker.InvokeBinding(context.Background(), &BindingInvocationInput{
+		Source:    BindingInvocationSource{Format: "test"},
 		Store:     existingStore,
 		Callbacks: existingCb,
 	})
@@ -220,20 +220,20 @@ func TestExecuteBinding_DoesNotOverrideExistingStoreCallbacks(t *testing.T) {
 	}
 }
 
-func TestExecuteBinding_ContextPassesThrough(t *testing.T) {
+func TestInvokeBinding_ContextPassesThrough(t *testing.T) {
 	var capturedCtx map[string]any
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			capturedCtx = in.Context
-			return SingleEventChannel(&ExecuteOutput{Output: "ok"}), nil
+			return SingleEventChannel(&InvocationOutput{Output: "ok"}), nil
 		},
 	}
 
-	exec := NewOperationExecutor(executor)
+	invoker := NewOperationInvoker(mock)
 
-	_, err := exec.ExecuteBinding(context.Background(), &BindingExecutionInput{
-		Source:  BindingExecutionSource{Format: "test"},
+	_, err := invoker.InvokeBinding(context.Background(), &BindingInvocationInput{
+		Source:  BindingInvocationSource{Format: "test"},
 		Context: map[string]any{"custom": "value"},
 	})
 	if err != nil {
@@ -249,8 +249,8 @@ func TestExecuteBinding_ContextPassesThrough(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWithRuntime_ClonesWithOverrides(t *testing.T) {
-	executor := &mockExecutor{formats: []FormatInfo{{Token: "test"}}}
-	orig := NewOperationExecutor(executor)
+	mock := &mockInvoker{formats: []FormatInfo{{Token: "test"}}}
+	orig := NewOperationInvoker(mock)
 	origStore := NewMemoryStore()
 	orig.ContextStore = origStore
 
@@ -270,13 +270,13 @@ func TestWithRuntime_ClonesWithOverrides(t *testing.T) {
 
 	fmts := clone.Formats()
 	if len(fmts) != 1 || fmts[0].Token != "test" {
-		t.Error("clone should share executor registrations")
+		t.Error("clone should share driver registrations")
 	}
 }
 
 func TestWithRuntime_NilInheritsOriginal(t *testing.T) {
-	executor := &mockExecutor{formats: []FormatInfo{{Token: "test"}}}
-	orig := NewOperationExecutor(executor)
+	mock := &mockInvoker{formats: []FormatInfo{{Token: "test"}}}
+	orig := NewOperationInvoker(mock)
 	origStore := NewMemoryStore()
 	origCb := &PlatformCallbacks{}
 	orig.ContextStore = origStore
@@ -296,34 +296,34 @@ func TestWithRuntime_NilInheritsOriginal(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFormats_ReturnsDefensiveCopy(t *testing.T) {
-	executor := &mockExecutor{formats: []FormatInfo{{Token: "test@1.0"}}}
-	exec := NewOperationExecutor(executor)
+	mock := &mockInvoker{formats: []FormatInfo{{Token: "test@1.0"}}}
+	invoker := NewOperationInvoker(mock)
 
-	fmts := exec.Formats()
+	fmts := invoker.Formats()
 	fmts[0] = FormatInfo{Token: "MUTATED"}
 
-	original := exec.Formats()
+	original := invoker.Formats()
 	if original[0].Token != "test@1.0" {
 		t.Errorf("Formats() did not return a copy; internal slice was mutated to %q", original[0].Token)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// ExecuteError tests
+// InvocationError tests
 // ---------------------------------------------------------------------------
 
-func TestExecuteError_FallsBackToCode(t *testing.T) {
-	e := &ExecuteError{Code: "auth_failed"}
+func TestInvocationError_FallsBackToCode(t *testing.T) {
+	e := &InvocationError{Code: "auth_failed"}
 	if e.Error() != "auth_failed" {
 		t.Errorf("expected Code fallback, got %q", e.Error())
 	}
 
-	e2 := &ExecuteError{Code: "auth_failed", Message: "invalid token"}
+	e2 := &InvocationError{Code: "auth_failed", Message: "invalid token"}
 	if e2.Error() != "invalid token" {
 		t.Errorf("expected Message, got %q", e2.Error())
 	}
 
-	var eNil *ExecuteError
+	var eNil *InvocationError
 	if eNil.Error() != "" {
 		t.Errorf("nil error should return empty string, got %q", eNil.Error())
 	}
@@ -431,29 +431,29 @@ func TestContextHelpers(t *testing.T) {
 func TestWithRuntime_DoesNotMutateCallerInput(t *testing.T) {
 	var capturedStore ContextStore
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			capturedStore = in.Store
-			return SingleEventChannel(&ExecuteOutput{Output: "ok"}), nil
+			return SingleEventChannel(&InvocationOutput{Output: "ok"}), nil
 		},
 	}
 
 	store := NewMemoryStore()
-	exec := NewOperationExecutor(executor)
-	exec.ContextStore = store
+	invoker := NewOperationInvoker(mock)
+	invoker.ContextStore = store
 
-	input := &BindingExecutionInput{
-		Source: BindingExecutionSource{Format: "test"},
+	input := &BindingInvocationInput{
+		Source: BindingInvocationSource{Format: "test"},
 	}
 
-	_, err := exec.ExecuteBinding(context.Background(), input)
+	_, err := invoker.InvokeBinding(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if capturedStore != store {
-		t.Error("executor should have received the store")
+		t.Error("driver should have received the store")
 	}
 	if input.Store != nil {
 		t.Error("caller's original input.Store was mutated; expected nil")
@@ -465,26 +465,26 @@ func TestWithRuntime_DoesNotMutateCallerInput(t *testing.T) {
 
 func TestWithRuntime_ReusableInput(t *testing.T) {
 	callCount := 0
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			callCount++
 			if in.Store == nil {
 				return nil, errors.New("store should be set")
 			}
-			return SingleEventChannel(&ExecuteOutput{Output: callCount}), nil
+			return SingleEventChannel(&InvocationOutput{Output: callCount}), nil
 		},
 	}
 
-	exec := NewOperationExecutor(executor)
-	exec.ContextStore = NewMemoryStore()
+	invoker := NewOperationInvoker(mock)
+	invoker.ContextStore = NewMemoryStore()
 
-	input := &BindingExecutionInput{
-		Source: BindingExecutionSource{Format: "test"},
+	input := &BindingInvocationInput{
+		Source: BindingInvocationSource{Format: "test"},
 	}
 
 	for i := 0; i < 3; i++ {
-		_, err := exec.ExecuteBinding(context.Background(), input)
+		_, err := invoker.InvokeBinding(context.Background(), input)
 		if err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
@@ -499,11 +499,11 @@ func TestWithRuntime_ReusableInput(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestInterfaceClient_Close(t *testing.T) {
-	executor := &mockExecutor{formats: []FormatInfo{{Token: "test"}}}
-	exec := NewOperationExecutor(executor)
+	mock := &mockInvoker{formats: []FormatInfo{{Token: "test"}}}
+	invoker := NewOperationInvoker(mock)
 	ic := NewInterfaceClient(
 		&Interface{OpenBindings: "0.1.0", Operations: map[string]Operation{}},
-		exec,
+		invoker,
 	)
 
 	if ic.State() != StateIdle {
@@ -536,14 +536,14 @@ func TestInterfaceClient_Close(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ExecuteOperation integration
+// Invoke integration
 // ---------------------------------------------------------------------------
 
-func TestExecuteOperation_ContextFlowsThrough(t *testing.T) {
+func TestInvoke_ContextFlowsThrough(t *testing.T) {
 	var capturedCtx map[string]any
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			capturedCtx = in.Context
 			ch := make(chan StreamEvent, 1)
 			ch <- StreamEvent{Data: "ok"}
@@ -552,8 +552,8 @@ func TestExecuteOperation_ContextFlowsThrough(t *testing.T) {
 		},
 	}
 
-	exec := NewOperationExecutor(executor)
-	exec.ContextStore = NewMemoryStore()
+	invoker := NewOperationInvoker(mock)
+	invoker.ContextStore = NewMemoryStore()
 
 	iface := &Interface{
 		OpenBindings: "0.1.0",
@@ -568,7 +568,7 @@ func TestExecuteOperation_ContextFlowsThrough(t *testing.T) {
 		},
 	}
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "getUser",
 		Context:   map[string]any{"bearerToken": "op-token"},
@@ -752,12 +752,12 @@ func makeTransformInterface(inputTransform, outputTransform *TransformOrRef) *In
 	return iface
 }
 
-func TestExecuteOperation_InputTransformApplied(t *testing.T) {
+func TestInvoke_InputTransformApplied(t *testing.T) {
 	eval := &captureEvaluator{}
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			// The input should have been passed through the transform evaluator
 			ch := make(chan StreamEvent, 1)
 			ch <- StreamEvent{Data: in.Input}
@@ -766,15 +766,15 @@ func TestExecuteOperation_InputTransformApplied(t *testing.T) {
 		},
 	}
 
-	exec := NewOperationExecutor(executor)
-	exec.TransformEvaluator = eval
+	invoker := NewOperationInvoker(mock)
+	invoker.TransformEvaluator = eval
 
 	iface := makeTransformInterface(
-		&TransformOrRef{Transform: &Transform{Type: "jsonata", Expression: "$.name"}},
+		&TransformOrRef{Inline: "$.name"},
 		nil,
 	)
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "op",
 		Input:     map[string]any{"name": "alice"},
@@ -793,12 +793,12 @@ func TestExecuteOperation_InputTransformApplied(t *testing.T) {
 	}
 }
 
-func TestExecuteOperation_OutputTransformApplied(t *testing.T) {
+func TestInvoke_OutputTransformApplied(t *testing.T) {
 	eval := &staticEvaluator{result: map[string]any{"transformed": true}}
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			ch := make(chan StreamEvent, 1)
 			ch <- StreamEvent{Data: map[string]any{"raw": true}}
 			close(ch)
@@ -806,15 +806,15 @@ func TestExecuteOperation_OutputTransformApplied(t *testing.T) {
 		},
 	}
 
-	exec := NewOperationExecutor(executor)
-	exec.TransformEvaluator = eval
+	invoker := NewOperationInvoker(mock)
+	invoker.TransformEvaluator = eval
 
 	iface := makeTransformInterface(
 		nil,
-		&TransformOrRef{Transform: &Transform{Type: "jsonata", Expression: "$.raw"}},
+		&TransformOrRef{Inline: "$.raw"},
 	)
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "op",
 	})
@@ -835,13 +835,13 @@ func TestExecuteOperation_OutputTransformApplied(t *testing.T) {
 	}
 }
 
-func TestExecuteOperation_OutputTransformMultipleEvents(t *testing.T) {
+func TestInvoke_OutputTransformMultipleEvents(t *testing.T) {
 	callCount := 0
 	eval := &captureEvaluator{}
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			ch := make(chan StreamEvent, 3)
 			ch <- StreamEvent{Data: "event1"}
 			ch <- StreamEvent{Data: "event2"}
@@ -852,15 +852,15 @@ func TestExecuteOperation_OutputTransformMultipleEvents(t *testing.T) {
 		},
 	}
 
-	exec := NewOperationExecutor(executor)
-	exec.TransformEvaluator = eval
+	invoker := NewOperationInvoker(mock)
+	invoker.TransformEvaluator = eval
 
 	iface := makeTransformInterface(
 		nil,
-		&TransformOrRef{Transform: &Transform{Type: "jsonata", Expression: "$"}},
+		&TransformOrRef{Inline: "$"},
 	)
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "op",
 	})
@@ -880,19 +880,19 @@ func TestExecuteOperation_OutputTransformMultipleEvents(t *testing.T) {
 	}
 }
 
-func TestExecuteOperation_InputTransformNoEvaluator(t *testing.T) {
-	executor := &mockExecutor{
+func TestInvoke_InputTransformNoEvaluator(t *testing.T) {
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
 	}
-	exec := NewOperationExecutor(executor)
+	invoker := NewOperationInvoker(mock)
 	// No TransformEvaluator set
 
 	iface := makeTransformInterface(
-		&TransformOrRef{Transform: &Transform{Type: "jsonata", Expression: "$"}},
+		&TransformOrRef{Inline: "$"},
 		nil,
 	)
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "op",
 	})
@@ -912,25 +912,25 @@ func TestExecuteOperation_InputTransformNoEvaluator(t *testing.T) {
 	}
 }
 
-func TestExecuteOperation_OutputTransformNoEvaluator(t *testing.T) {
-	executor := &mockExecutor{
+func TestInvoke_OutputTransformNoEvaluator(t *testing.T) {
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			ch := make(chan StreamEvent, 1)
 			ch <- StreamEvent{Data: "data"}
 			close(ch)
 			return ch, nil
 		},
 	}
-	exec := NewOperationExecutor(executor)
+	invoker := NewOperationInvoker(mock)
 	// No TransformEvaluator set
 
 	iface := makeTransformInterface(
 		nil,
-		&TransformOrRef{Transform: &Transform{Type: "jsonata", Expression: "$"}},
+		&TransformOrRef{Inline: "$"},
 	)
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "op",
 	})
@@ -950,12 +950,12 @@ func TestExecuteOperation_OutputTransformNoEvaluator(t *testing.T) {
 	}
 }
 
-func TestExecuteOperation_TransformRef(t *testing.T) {
+func TestInvoke_TransformRef(t *testing.T) {
 	eval := &captureEvaluator{}
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			ch := make(chan StreamEvent, 1)
 			ch <- StreamEvent{Data: in.Input}
 			close(ch)
@@ -963,18 +963,18 @@ func TestExecuteOperation_TransformRef(t *testing.T) {
 		},
 	}
 
-	exec := NewOperationExecutor(executor)
-	exec.TransformEvaluator = eval
+	invoker := NewOperationInvoker(mock)
+	invoker.TransformEvaluator = eval
 
 	iface := makeTransformInterface(
 		&TransformOrRef{Ref: "#/transforms/myTransform"},
 		nil,
 	)
 	iface.Transforms = map[string]Transform{
-		"myTransform": {Type: "jsonata", Expression: "$.id"},
+		"myTransform": "$.id",
 	}
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "op",
 		Input:     map[string]any{"id": 42},
@@ -993,14 +993,14 @@ func TestExecuteOperation_TransformRef(t *testing.T) {
 	}
 }
 
-func TestExecuteOperation_TransformRefNotFound(t *testing.T) {
+func TestInvoke_TransformRefNotFound(t *testing.T) {
 	eval := &captureEvaluator{}
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
 	}
-	exec := NewOperationExecutor(executor)
-	exec.TransformEvaluator = eval
+	invoker := NewOperationInvoker(mock)
+	invoker.TransformEvaluator = eval
 
 	iface := makeTransformInterface(
 		&TransformOrRef{Ref: "#/transforms/missing"},
@@ -1008,7 +1008,7 @@ func TestExecuteOperation_TransformRefNotFound(t *testing.T) {
 	)
 	// No transforms defined — reference will fail
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "op",
 	})
@@ -1028,27 +1028,27 @@ func TestExecuteOperation_TransformRefNotFound(t *testing.T) {
 	}
 }
 
-func TestExecuteOperation_OutputTransformErrorPassesThrough(t *testing.T) {
+func TestInvoke_OutputTransformErrorPassesThrough(t *testing.T) {
 	eval := &staticEvaluator{err: errors.New("eval boom")}
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			ch := make(chan StreamEvent, 1)
 			ch <- StreamEvent{Data: "data"}
 			close(ch)
 			return ch, nil
 		},
 	}
-	exec := NewOperationExecutor(executor)
-	exec.TransformEvaluator = eval
+	invoker := NewOperationInvoker(mock)
+	invoker.TransformEvaluator = eval
 
 	iface := makeTransformInterface(
 		nil,
-		&TransformOrRef{Transform: &Transform{Type: "jsonata", Expression: "$"}},
+		&TransformOrRef{Inline: "$"},
 	)
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "op",
 	})
@@ -1068,28 +1068,28 @@ func TestExecuteOperation_OutputTransformErrorPassesThrough(t *testing.T) {
 	}
 }
 
-func TestExecuteOperation_OutputTransformSkipsErrorEvents(t *testing.T) {
+func TestInvoke_OutputTransformSkipsErrorEvents(t *testing.T) {
 	eval := &captureEvaluator{}
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			ch := make(chan StreamEvent, 2)
-			ch <- StreamEvent{Error: &ExecuteError{Code: "upstream_error", Message: "something broke"}}
+			ch <- StreamEvent{Error: &InvocationError{Code: "upstream_error", Message: "something broke"}}
 			ch <- StreamEvent{Data: "good"}
 			close(ch)
 			return ch, nil
 		},
 	}
-	exec := NewOperationExecutor(executor)
-	exec.TransformEvaluator = eval
+	invoker := NewOperationInvoker(mock)
+	invoker.TransformEvaluator = eval
 
 	iface := makeTransformInterface(
 		nil,
-		&TransformOrRef{Transform: &Transform{Type: "jsonata", Expression: "$"}},
+		&TransformOrRef{Inline: "$"},
 	)
 
-	ch, err := exec.ExecuteOperation(context.Background(), &OperationExecutionInput{
+	ch, err := invoker.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "op",
 	})
@@ -1118,12 +1118,12 @@ func TestExecuteOperation_OutputTransformSkipsErrorEvents(t *testing.T) {
 	}
 }
 
-func TestExecuteOperation_TransformStreamCancellation(t *testing.T) {
+func TestInvoke_TransformStreamCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	executor := &mockExecutor{
+	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		executeFn: func(_ context.Context, in *BindingExecutionInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
 			ch := make(chan StreamEvent)
 			go func() {
 				defer close(ch)
@@ -1138,15 +1138,15 @@ func TestExecuteOperation_TransformStreamCancellation(t *testing.T) {
 			return ch, nil
 		},
 	}
-	exec := NewOperationExecutor(executor)
-	exec.TransformEvaluator = &captureEvaluator{}
+	invoker := NewOperationInvoker(mock)
+	invoker.TransformEvaluator = &captureEvaluator{}
 
 	iface := makeTransformInterface(
 		nil,
-		&TransformOrRef{Transform: &Transform{Type: "jsonata", Expression: "$"}},
+		&TransformOrRef{Inline: "$"},
 	)
 
-	ch, err := exec.ExecuteOperation(ctx, &OperationExecutionInput{
+	ch, err := invoker.Invoke(ctx, &OperationInvocationInput{
 		Interface: iface,
 		Operation: "op",
 	})

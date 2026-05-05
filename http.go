@@ -8,17 +8,17 @@ import (
 	"time"
 )
 
-// HTTPErrorOutput builds an ExecuteOutput from an HTTP error response.
+// HTTPErrorOutput builds an InvocationOutput from an HTTP error response.
 // status is typically resp.Status from net/http (e.g. "401 Unauthorized"), not a bare reason phrase.
-func HTTPErrorOutput(start time.Time, statusCode int, status string) *ExecuteOutput {
+func HTTPErrorOutput(start time.Time, statusCode int, status string) *InvocationOutput {
 	reason := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(status), strconv.Itoa(statusCode)))
 	if reason == "" {
 		reason = http.StatusText(statusCode)
 	}
-	return &ExecuteOutput{
+	return &InvocationOutput{
 		Status:     statusCode,
 		DurationMs: time.Since(start).Milliseconds(),
-		Error: &ExecuteError{
+		Error: &InvocationError{
 			Code:    httpErrorCode(statusCode),
 			Message: fmt.Sprintf("HTTP %d %s", statusCode, reason),
 		},

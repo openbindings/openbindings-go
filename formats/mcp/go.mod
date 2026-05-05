@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.4.1
-	github.com/openbindings/openbindings-go v0.1.0
+	github.com/openbindings/openbindings-go v0.2.0
 )
 
 require (

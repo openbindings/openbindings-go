@@ -3,7 +3,7 @@
 // The package handles:
 //   - Discovering gRPC services via server reflection or .proto files
 //   - Converting protobuf service descriptors to OpenBindings interfaces
-//   - Executing unary and server-streaming RPCs
+//   - Invoking unary and server-streaming RPCs
 package grpc
 
 import (
@@ -23,15 +23,15 @@ import (
 const FormatToken = "grpc"
 const DefaultSourceName = "grpcServer"
 
-// Executor handles binding execution for gRPC sources.
-type Executor struct {
+// Invoker handles binding invocation for gRPC sources.
+type Invoker struct {
 	conns sync.Map // address -> *grpc.ClientConn
 }
 
-// NewExecutor creates a new gRPC binding executor.
-func NewExecutor() *Executor { return &Executor{} }
+// NewInvoker creates a new gRPC binding invoker.
+func NewInvoker() *Invoker { return &Invoker{} }
 
-func (e *Executor) getConn(ctx context.Context, address string) (*grpc.ClientConn, error) {
+func (e *Invoker) getConn(ctx context.Context, address string) (*grpc.ClientConn, error) {
 	key := address
 	if v, ok := e.conns.Load(key); ok {
 		return v.(*grpc.ClientConn), nil
@@ -48,7 +48,7 @@ func (e *Executor) getConn(ctx context.Context, address string) (*grpc.ClientCon
 }
 
 // Close tears down all cached connections.
-func (e *Executor) Close() {
+func (e *Invoker) Close() {
 	e.conns.Range(func(key, value any) bool {
 		_ = value.(*grpc.ClientConn).Close()
 		e.conns.Delete(key)
@@ -56,15 +56,15 @@ func (e *Executor) Close() {
 	})
 }
 
-// Formats returns the source formats supported by the gRPC executor.
-func (e *Executor) Formats() []openbindings.FormatInfo {
+// Formats returns the source formats supported by the gRPC invoker.
+func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "gRPC via server reflection or .proto files"}}
 }
 
-// ExecuteBinding executes a gRPC binding, returning a channel of stream events.
+// InvokeBinding invokes a gRPC binding, returning a channel of stream events.
 // For server-streaming RPCs it yields events as they arrive; for unary RPCs it
 // returns a single event.
-func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingExecutionInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
 	enriched := in
 	if in.Store != nil {
 		key := normalizeAddress(in.Source.Location)
@@ -105,7 +105,7 @@ func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingE
 	// Resolve service and method descriptors. If inline content is provided
 	// (e.g., a .proto definition), parse it directly. Otherwise use server reflection.
 	// Note: isProtoFile is NOT checked here because Source.Location is the server
-	// address for execution. Proto file locations are only used by the Creator.
+	// address for invocation. Proto file locations are only used by the Creator.
 	var refClient *grpcreflect.Client
 	var svcDesc *desc.ServiceDescriptor
 	var methodDesc *desc.MethodDescriptor
@@ -233,7 +233,7 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 		sourceLocation = addr
 	}
 
-	iface, err := convertToInterface(disc, sourceLocation)
+	iface, err := convertToInterface(disc, sourceLocation, in.OnWarning)
 	if err != nil {
 		return nil, fmt.Errorf("gRPC convert: %w", err)
 	}

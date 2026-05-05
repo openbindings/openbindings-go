@@ -35,7 +35,7 @@ func IsAuthCancelled(err error) bool {
 // resolution loop aborts immediately and returns the cancellation error.
 //
 // This is a utility function that can be called at any time -- on auth error,
-// proactively before execution, from a CLI login command, or from any code
+// proactively before invocation, from a CLI login command, or from any code
 // that needs credentials for a set of security methods.
 //
 // Unknown method types are skipped. If no method can be resolved (because the
@@ -109,11 +109,19 @@ func resolveBearerMethod(ctx context.Context, method SecurityMethod, callbacks *
 }
 
 func resolveOAuth2Method(ctx context.Context, method SecurityMethod, callbacks *PlatformCallbacks, httpClient *http.Client) (map[string]any, error) {
+	authorizeURL := method.ExtraString("authorizeUrl")
+	tokenURL := method.ExtraString("tokenUrl")
+	clientID := method.ExtraString("clientId")
+	scopes := method.ExtraStringSlice("scopes")
+
 	// Try BrowserRedirect for the full PKCE flow
-	if callbacks.BrowserRedirect != nil && method.AuthorizeURL != "" && method.TokenURL != "" {
-		token, err := performPKCEFlow(ctx, method, callbacks.BrowserRedirect, httpClient)
+	if callbacks.BrowserRedirect != nil && authorizeURL != "" && tokenURL != "" {
+		token, err := performPKCEFlow(ctx, authorizeURL, tokenURL, clientID, scopes, callbacks.BrowserRedirect, httpClient)
 		if err == nil {
 			return map[string]any{"bearerToken": token}, nil
+		}
+		if IsAuthCancelled(err) {
+			return nil, err
 		}
 		// Fall through to prompt if PKCE fails
 	}
@@ -139,7 +147,7 @@ func resolveOAuth2Method(ctx context.Context, method SecurityMethod, callbacks *
 	return map[string]any{"bearerToken": value}, nil
 }
 
-func performPKCEFlow(ctx context.Context, method SecurityMethod, browserRedirect func(context.Context, string) (*BrowserRedirectResult, error), httpClient *http.Client) (string, error) {
+func performPKCEFlow(ctx context.Context, authorizeURL, tokenURL, clientID string, scopes []string, browserRedirect func(context.Context, string) (*BrowserRedirectResult, error), httpClient *http.Client) (string, error) {
 	// 1. Generate code verifier (32 random bytes, base64url encoded)
 	verifierBytes := make([]byte, 32)
 	if _, err := rand.Read(verifierBytes); err != nil {
@@ -159,7 +167,7 @@ func performPKCEFlow(ctx context.Context, method SecurityMethod, browserRedirect
 	state := base64.RawURLEncoding.EncodeToString(stateBytes)
 
 	// 4. Build authorization URL
-	authURL, err := url.Parse(method.AuthorizeURL)
+	authURL, err := url.Parse(authorizeURL)
 	if err != nil {
 		return "", fmt.Errorf("parse authorize URL: %w", err)
 	}
@@ -168,11 +176,11 @@ func performPKCEFlow(ctx context.Context, method SecurityMethod, browserRedirect
 	params.Set("code_challenge", codeChallenge)
 	params.Set("code_challenge_method", "S256")
 	params.Set("state", state)
-	if method.ClientID != "" {
-		params.Set("client_id", method.ClientID)
+	if clientID != "" {
+		params.Set("client_id", clientID)
 	}
-	if len(method.Scopes) > 0 {
-		params.Set("scope", strings.Join(method.Scopes, " "))
+	if len(scopes) > 0 {
+		params.Set("scope", strings.Join(scopes, " "))
 	}
 	authURL.RawQuery = params.Encode()
 
@@ -211,14 +219,14 @@ func performPKCEFlow(ctx context.Context, method SecurityMethod, browserRedirect
 		"code":          {code},
 		"code_verifier": {codeVerifier},
 	}
-	if method.ClientID != "" {
-		tokenParams.Set("client_id", method.ClientID)
+	if clientID != "" {
+		tokenParams.Set("client_id", clientID)
 	}
 	if result.RedirectURI != "" {
 		tokenParams.Set("redirect_uri", result.RedirectURI)
 	}
 
-	tokenReq, err := http.NewRequestWithContext(ctx, "POST", method.TokenURL, strings.NewReader(tokenParams.Encode()))
+	tokenReq, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(tokenParams.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("build token request: %w", err)
 	}

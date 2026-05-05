@@ -12,15 +12,15 @@
 // Workers runtime is a JavaScript/WASM environment; Go programs (the
 // `ob` CLI, server-side tooling, codegen) live outside the runtime
 // and have no way to invoke a sibling Worker's RPC method. The Go
-// implementations of `Executor` and `Creator` here exist solely to:
+// implementations of `Driver` and `Creator` here exist solely to:
 //
 //  1. Make the format token recognized by `ob`. Without this package,
 //     `ob create`, `ob sync`, and `ob diff` would reject any OBI that
 //     declared a workers-rpc source as "unknown format".
 //  2. Allow `ob codegen` to generate clients for workers-rpc bindings.
 //     The TypeScript codegen produces a typed client class that takes
-//     a `BindingExecutor[]` at construction; consumers wire in the
-//     real `WorkersRpcExecutor` from `@openbindings/workers-rpc` at
+//     a `BindingInvoker[]` at construction; consumers wire in the
+//     real `WorkersRpcInvoker` from `@openbindings/workers-rpc` at
 //     runtime, inside the Worker. Codegen itself only needs to know
 //     the format token + the operation/binding shapes; it does not
 //     need to dispatch.
@@ -29,7 +29,7 @@
 //     on the target Worker, not a machine-readable spec file), so
 //     there's no source artifact for the creator to derive from.
 //
-// Both `Executor.ExecuteBinding` and `Creator.CreateInterface` return
+// Both `Driver.InvokeBinding` and `Creator.CreateInterface` return
 // errors with helpful messages directing the caller to the TypeScript
 // runtime if they actually try to dispatch.
 package workersrpc
@@ -50,37 +50,37 @@ const FormatToken = "workers-rpc@^1.0.0"
 // a workers-rpc source in an OBInterface. Consumers can override.
 const DefaultSourceName = "workersRpc"
 
-// Executor is the Go-side stub registration for the workers-rpc format.
-// It satisfies the openbindings.BindingExecutor interface but rejects
+// Driver is the Go-side stub registration for the workers-rpc format.
+// It satisfies the openbindings.BindingInvoker interface but rejects
 // any actual dispatch attempt with a clear error — Workers RPC calls
 // can only be made from inside the Workers runtime, where the
-// TypeScript `WorkersRpcExecutor` from `@openbindings/workers-rpc`
+// TypeScript `WorkersRpcInvoker` from `@openbindings/workers-rpc`
 // handles dispatch.
-type Executor struct{}
+type Invoker struct{}
 
-// NewExecutor creates a new workers-rpc executor stub.
-func NewExecutor() *Executor {
-	return &Executor{}
+// NewInvoker creates a new workers-rpc driver stub.
+func NewInvoker() *Invoker {
+	return &Invoker{}
 }
 
-// Formats returns the format tokens this executor recognizes.
-func (e *Executor) Formats() []openbindings.FormatInfo {
+// Formats returns the format tokens this driver recognizes.
+func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{
 		Token:       FormatToken,
 		Description: "Cloudflare Workers RPC bindings (Go-side stub; dispatch requires the Workers runtime)",
 	}}
 }
 
-// ExecuteBinding always yields an error event: Go can't dispatch Workers RPC.
-// Use the `WorkersRpcExecutor` from `@openbindings/workers-rpc` from
+// InvokeBinding always yields an error event: Go can't dispatch Workers RPC.
+// Use the `WorkersRpcInvoker` from `@openbindings/workers-rpc` from
 // inside a Cloudflare Worker instead.
-func (e *Executor) ExecuteBinding(_ context.Context, _ *openbindings.BindingExecutionInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(_ context.Context, _ *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
 	return openbindings.SingleEventChannel(openbindings.FailedOutput(
 		time.Now(),
 		openbindings.ErrCodeSourceConfigError,
 		"workers-rpc bindings cannot be dispatched from Go: "+
 			"these bindings only work from inside a Cloudflare Worker. "+
-			"Use the WorkersRpcExecutor from @openbindings/workers-rpc "+
+			"Use the WorkersRpcInvoker from @openbindings/workers-rpc "+
 			"in your Worker entrypoint to make actual RPC calls",
 	)), nil
 }

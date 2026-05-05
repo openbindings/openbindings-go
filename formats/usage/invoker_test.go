@@ -48,7 +48,7 @@ func TestResolveUsageKey_Empty(t *testing.T) {
 }
 
 func TestFormats(t *testing.T) {
-	e := NewExecutor()
+	e := NewInvoker()
 	formats := e.Formats()
 	if len(formats) != 1 || formats[0].Token != FormatToken {
 		t.Errorf("Formats() = %v, want [{Token: %q}]", formats, FormatToken)

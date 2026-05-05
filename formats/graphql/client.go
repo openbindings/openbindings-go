@@ -254,7 +254,7 @@ func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables 
 				if ctx.Err() != nil {
 					return
 				}
-				ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+				ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeStreamError,
 					Message: err.Error(),
 				}}
@@ -267,7 +267,7 @@ func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables 
 				Payload json.RawMessage `json:"payload"`
 			}
 			if err := json.Unmarshal(raw, &msg); err != nil {
-				ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+				ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeResponseError,
 					Message: fmt.Sprintf("parse ws message: %v", err),
 				}}
@@ -281,14 +281,14 @@ func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables 
 					Errors []graphqlError `json:"errors"`
 				}
 				if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-					ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+					ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 						Code:    openbindings.ErrCodeResponseError,
 						Message: fmt.Sprintf("parse next payload: %v", err),
 					}}
 					return
 				}
 				if len(payload.Errors) > 0 {
-					ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+					ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 						Code:    openbindings.ErrCodeExecutionFailed,
 						Message: payload.Errors[0].Message,
 					}}
@@ -299,12 +299,12 @@ func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables 
 			case "error":
 				var errors []graphqlError
 				if err := json.Unmarshal(msg.Payload, &errors); err != nil {
-					ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+					ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 						Code:    openbindings.ErrCodeExecutionFailed,
 						Message: string(msg.Payload),
 					}}
 				} else if len(errors) > 0 {
-					ch <- openbindings.StreamEvent{Error: &openbindings.ExecuteError{
+					ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
 						Code:    openbindings.ErrCodeExecutionFailed,
 						Message: errors[0].Message,
 					}}
@@ -358,7 +358,7 @@ func httpToWS(u string) string {
 // buildHTTPHeaders constructs HTTP headers from binding context and execution options.
 // Returns nil when there are no headers to set (matches the convention used by
 // other binding format libraries to avoid sending an empty map downstream).
-func buildHTTPHeaders(bindCtx map[string]any, opts *openbindings.ExecutionOptions) map[string]string {
+func buildHTTPHeaders(bindCtx map[string]any, opts *openbindings.InvocationOptions) map[string]string {
 	var headers map[string]string
 	set := func(k, v string) {
 		if headers == nil {

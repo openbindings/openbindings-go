@@ -3,8 +3,8 @@ package openbindings
 import "errors"
 
 var (
-	// ErrNoExecutor is returned when no executor matches the requested format.
-	ErrNoExecutor = errors.New("openbindings: no executor for format")
+	// ErrNoInvoker is returned when no invoker matches the requested format.
+	ErrNoInvoker = errors.New("openbindings: no invoker for format")
 
 	// ErrNoCreator is returned when no creator matches the requested format.
 	ErrNoCreator = errors.New("openbindings: no creator for format")
@@ -33,7 +33,7 @@ var (
 	// ErrEmptyTransformExpression is returned when a transform has no expression to evaluate.
 	ErrEmptyTransformExpression = errors.New("openbindings: transform expression is empty")
 
-	// ErrContextInsufficient is returned when an executor cannot proceed
+	// ErrContextInsufficient is returned when an invoker cannot proceed
 	// because required context (credentials, configuration) is missing.
 	ErrContextInsufficient = errors.New("openbindings: context insufficient for this binding")
 
@@ -41,6 +41,6 @@ var (
 	// no platform callbacks are available to resolve it interactively.
 	ErrResolutionUnavailable = errors.New("openbindings: interactive context resolution not available")
 
-	// ErrRefListingUnsupported is returned when a creator does not implement RefLister.
-	ErrRefListingUnsupported = errors.New("openbindings: creator does not support ref listing")
+	// ErrSourceInspectionUnsupported is returned when a source inspector cannot inspect a format.
+	ErrSourceInspectionUnsupported = errors.New("openbindings: source inspection unsupported for format")
 )

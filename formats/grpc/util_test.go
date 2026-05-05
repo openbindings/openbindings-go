@@ -162,9 +162,9 @@ func TestApplyGRPCContext_NoCredentials(t *testing.T) {
 	}
 }
 
-func TestApplyGRPCContext_ExecutionOptionsHeaders(t *testing.T) {
+func TestApplyGRPCContext_InvocationOptionsHeaders(t *testing.T) {
 	ctx := context.Background()
-	opts := &openbindings.ExecutionOptions{
+	opts := &openbindings.InvocationOptions{
 		Headers: map[string]string{"X-Custom": "value"},
 	}
 	result := applyGRPCContext(ctx, nil, opts)

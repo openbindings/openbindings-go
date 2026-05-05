@@ -17,15 +17,15 @@ const (
 	refPrefixPrompts   = "prompts/"
 )
 
-// execute dispatches an MCP binding to the appropriate entity-type handler
+// invoke dispatches an MCP binding to the appropriate entity-type handler
 // and returns a stream of events. Tool calls return a multi-event channel
 // that yields one event per `notifications/progress` notification followed by
 // the final tool result. Resources and prompts return a single-event channel.
 //
-// Returns a channel rather than an *ExecuteOutput so the streaming tool path
+// Returns a channel rather than an *InvocationOutput so the streaming tool path
 // can surface progress notifications as intermediate events. The previous
 // behavior (one event per call) is preserved for resources and prompts.
-func execute(ctx context.Context, pool *sessionPool, clientVersion string, url string, ref string, input any, headers map[string]string) <-chan openbindings.StreamEvent {
+func invoke(ctx context.Context, pool *sessionPool, clientVersion string, url string, ref string, input any, headers map[string]string) <-chan openbindings.StreamEvent {
 	start := time.Now()
 
 	entityType, name, err := parseRef(ref)
@@ -37,14 +37,14 @@ func execute(ctx context.Context, pool *sessionPool, clientVersion string, url s
 	case "tools":
 		// Validate and shallow-copy the input map up front, then dispatch to
 		// the streaming tool path. Argument validation lives here (rather
-		// than inside executeToolStreaming) so it stays testable in
+		// than inside invokeToolStreaming) so it stays testable in
 		// isolation and so invalid-input errors are emitted as a clean
 		// single-event stream.
 		args, ok := openbindings.ToStringAnyMap(input)
 		if input != nil && !ok {
-			return openbindings.SingleEventChannel(&openbindings.ExecuteOutput{
+			return openbindings.SingleEventChannel(&openbindings.InvocationOutput{
 				Status: 1,
-				Error: &openbindings.ExecuteError{
+				Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeInvalidInput,
 					Message: fmt.Sprintf("tool input must be an object, got %T", input),
 				},
@@ -52,7 +52,7 @@ func execute(ctx context.Context, pool *sessionPool, clientVersion string, url s
 			})
 		}
 		// MCP servers expect an object for arguments, never null. Defensive
-		// shallow copy keeps the executor contract ("never mutate caller
+		// shallow copy keeps the driver contract ("never mutate caller
 		// input") even when the third-party MCP SDK passes args by reference.
 		if args == nil {
 			args = map[string]any{}
@@ -63,15 +63,15 @@ func execute(ctx context.Context, pool *sessionPool, clientVersion string, url s
 			}
 			args = cp
 		}
-		return executeToolStreaming(ctx, pool, clientVersion, url, name, args, headers)
+		return invokeToolStreaming(ctx, pool, clientVersion, url, name, args, headers)
 
 	case "resources":
-		out := executeResource(ctx, pool, clientVersion, url, name, headers)
+		out := invokeResource(ctx, pool, clientVersion, url, name, headers)
 		out.DurationMs = time.Since(start).Milliseconds()
 		return openbindings.SingleEventChannel(out)
 
 	case "prompts":
-		out := executePrompt(ctx, pool, clientVersion, url, name, input, headers)
+		out := invokePrompt(ctx, pool, clientVersion, url, name, input, headers)
 		out.DurationMs = time.Since(start).Milliseconds()
 		return openbindings.SingleEventChannel(out)
 
@@ -108,12 +108,12 @@ func parseRef(ref string) (entityType string, name string, err error) {
 		ref, refPrefixTools, refPrefixResources, refPrefixPrompts)
 }
 
-func executeResource(ctx context.Context, pool *sessionPool, clientVersion string, url string, uri string, headers map[string]string) *openbindings.ExecuteOutput {
+func invokeResource(ctx context.Context, pool *sessionPool, clientVersion string, url string, uri string, headers map[string]string) *openbindings.InvocationOutput {
 	result, err := readResourcePooled(ctx, pool, clientVersion, url, uri, headers)
 	if err != nil {
-		return &openbindings.ExecuteOutput{
+		return &openbindings.InvocationOutput{
 			Status: 1,
-			Error: &openbindings.ExecuteError{
+			Error: &openbindings.InvocationError{
 				Code:    mcpErrorCode(err),
 				Message: err.Error(),
 			},
@@ -123,12 +123,12 @@ func executeResource(ctx context.Context, pool *sessionPool, clientVersion strin
 	return readResourceResultToOutput(result)
 }
 
-func executePrompt(ctx context.Context, pool *sessionPool, clientVersion string, url string, promptName string, input any, headers map[string]string) *openbindings.ExecuteOutput {
+func invokePrompt(ctx context.Context, pool *sessionPool, clientVersion string, url string, promptName string, input any, headers map[string]string) *openbindings.InvocationOutput {
 	args, err := toStringStringMap(input)
 	if err != nil {
-		return &openbindings.ExecuteOutput{
+		return &openbindings.InvocationOutput{
 			Status: 1,
-			Error: &openbindings.ExecuteError{
+			Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeInvalidInput,
 				Message: fmt.Sprintf("prompt arguments must be an object with string values: %v", err),
 			},
@@ -137,9 +137,9 @@ func executePrompt(ctx context.Context, pool *sessionPool, clientVersion string,
 
 	result, err := getPromptPooled(ctx, pool, clientVersion, url, promptName, args, headers)
 	if err != nil {
-		return &openbindings.ExecuteOutput{
+		return &openbindings.InvocationOutput{
 			Status: 1,
-			Error: &openbindings.ExecuteError{
+			Error: &openbindings.InvocationError{
 				Code:    mcpErrorCode(err),
 				Message: err.Error(),
 			},
@@ -149,7 +149,7 @@ func executePrompt(ctx context.Context, pool *sessionPool, clientVersion string,
 	return getPromptResultToOutput(result)
 }
 
-func callToolResultToOutput(result *gomcp.CallToolResult) *openbindings.ExecuteOutput {
+func callToolResultToOutput(result *gomcp.CallToolResult) *openbindings.InvocationOutput {
 	// IsError is an application-level tool error, not a transport error.
 	// Status is always 200 for a successful MCP call; the caller can inspect
 	// the output or Error field to distinguish application-level failures.
@@ -160,23 +160,23 @@ func callToolResultToOutput(result *gomcp.CallToolResult) *openbindings.ExecuteO
 		case json.RawMessage:
 			var structured any
 			if json.Unmarshal(sc, &structured) == nil {
-				return &openbindings.ExecuteOutput{Output: structured, Status: 200}
+				return &openbindings.InvocationOutput{Output: structured, Status: 200}
 			}
 		default:
-			return &openbindings.ExecuteOutput{Output: sc, Status: 200}
+			return &openbindings.InvocationOutput{Output: sc, Status: 200}
 		}
 	}
 
 	output := extractContent(result.Content)
-	return &openbindings.ExecuteOutput{
+	return &openbindings.InvocationOutput{
 		Output: output,
 		Status: 200,
 	}
 }
 
-func readResourceResultToOutput(result *gomcp.ReadResourceResult) *openbindings.ExecuteOutput {
+func readResourceResultToOutput(result *gomcp.ReadResourceResult) *openbindings.InvocationOutput {
 	if len(result.Contents) == 0 {
-		return &openbindings.ExecuteOutput{Status: 200}
+		return &openbindings.InvocationOutput{Status: 200}
 	}
 
 	if len(result.Contents) == 1 {
@@ -184,11 +184,11 @@ func readResourceResultToOutput(result *gomcp.ReadResourceResult) *openbindings.
 		if c.Text != "" {
 			var parsed any
 			if json.Unmarshal([]byte(c.Text), &parsed) == nil {
-				return &openbindings.ExecuteOutput{Output: parsed, Status: 200}
+				return &openbindings.InvocationOutput{Output: parsed, Status: 200}
 			}
-			return &openbindings.ExecuteOutput{Output: c.Text, Status: 200}
+			return &openbindings.InvocationOutput{Output: c.Text, Status: 200}
 		}
-		return &openbindings.ExecuteOutput{Output: map[string]any{"uri": c.URI, "mimeType": c.MIMEType}, Status: 200}
+		return &openbindings.InvocationOutput{Output: map[string]any{"uri": c.URI, "mimeType": c.MIMEType}, Status: 200}
 	}
 
 	var items []any
@@ -199,10 +199,10 @@ func readResourceResultToOutput(result *gomcp.ReadResourceResult) *openbindings.
 			"text":     c.Text,
 		})
 	}
-	return &openbindings.ExecuteOutput{Output: items, Status: 200}
+	return &openbindings.InvocationOutput{Output: items, Status: 200}
 }
 
-func getPromptResultToOutput(result *gomcp.GetPromptResult) *openbindings.ExecuteOutput {
+func getPromptResultToOutput(result *gomcp.GetPromptResult) *openbindings.InvocationOutput {
 	var messages []any
 	for _, msg := range result.Messages {
 		if msg == nil {
@@ -224,7 +224,7 @@ func getPromptResultToOutput(result *gomcp.GetPromptResult) *openbindings.Execut
 		output["description"] = result.Description
 	}
 
-	return &openbindings.ExecuteOutput{Output: output, Status: 200}
+	return &openbindings.InvocationOutput{Output: output, Status: 200}
 }
 
 func extractContent(content []gomcp.Content) any {

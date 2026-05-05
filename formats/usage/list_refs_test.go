@@ -7,7 +7,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestListBindableRefs_BasicRefs(t *testing.T) {
+func TestInspectSource_BasicRefs(t *testing.T) {
 	content := `
 name "mycli"
 cmd "greet" help="Say hello"
@@ -15,22 +15,22 @@ cmd "farewell" help="Say goodbye"
 `
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 2 {
-		t.Fatalf("expected 2 refs, got %d", len(result.Refs))
+	if len(result.Targets) != 2 {
+		t.Fatalf("expected 2 refs, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")
 	}
 }
 
-func TestListBindableRefs_SpaceSeparatedPaths(t *testing.T) {
+func TestInspectSource_SpaceSeparatedPaths(t *testing.T) {
 	content := `
 name "mycli"
 cmd "config" {
@@ -40,7 +40,7 @@ cmd "config" {
 `
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -52,7 +52,7 @@ cmd "config" {
 		"config get": false,
 		"config":     false,
 	}
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if _, ok := wantRefs[ref.Ref]; ok {
 			wantRefs[ref.Ref] = true
 		}
@@ -64,7 +64,7 @@ cmd "config" {
 	}
 }
 
-func TestListBindableRefs_RootCommandRef(t *testing.T) {
+func TestInspectSource_RootCommandRef(t *testing.T) {
 	content := `
 name "grep"
 bin "grep"
@@ -74,23 +74,27 @@ arg "<pattern>" help="Search pattern"
 `
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) < 1 {
+	if len(result.Targets) < 1 {
 		t.Fatal("expected at least 1 ref for root command")
 	}
 
 	found := false
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if ref.Ref == "grep" {
 			found = true
-			if ref.Description != "Search for patterns" {
-				t.Errorf("root description = %q, want %q", ref.Description, "Search for patterns")
+			var description string
+			if ref.Operation != nil {
+				description = ref.Operation.Description
+			}
+			if description != "Search for patterns" {
+				t.Errorf("root description = %q, want %q", description, "Search for patterns")
 			}
 		}
 	}
@@ -99,7 +103,7 @@ arg "<pattern>" help="Search pattern"
 	}
 }
 
-func TestListBindableRefs_AlphabeticallySorted(t *testing.T) {
+func TestInspectSource_AlphabeticallySorted(t *testing.T) {
 	content := `
 name "mycli"
 cmd "zulu" help="Z"
@@ -108,28 +112,28 @@ cmd "mike" help="M"
 `
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 3 {
-		t.Fatalf("expected 3 refs, got %d", len(result.Refs))
+	if len(result.Targets) != 3 {
+		t.Fatalf("expected 3 refs, got %d", len(result.Targets))
 	}
-	if result.Refs[0].Ref != "alpha" {
-		t.Errorf("first ref = %q, want alpha", result.Refs[0].Ref)
+	if result.Targets[0].Ref != "alpha" {
+		t.Errorf("first ref = %q, want alpha", result.Targets[0].Ref)
 	}
-	if result.Refs[1].Ref != "mike" {
-		t.Errorf("second ref = %q, want mike", result.Refs[1].Ref)
+	if result.Targets[1].Ref != "mike" {
+		t.Errorf("second ref = %q, want mike", result.Targets[1].Ref)
 	}
-	if result.Refs[2].Ref != "zulu" {
-		t.Errorf("third ref = %q, want zulu", result.Refs[2].Ref)
+	if result.Targets[2].Ref != "zulu" {
+		t.Errorf("third ref = %q, want zulu", result.Targets[2].Ref)
 	}
 }
 
-func TestListBindableRefs_RefsMatchCreateInterface(t *testing.T) {
+func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
 	content := `
 name "mycli"
 cmd "greet" help="Say hello"
@@ -148,24 +152,24 @@ cmd "farewell" help="Say goodbye"
 	}
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if !createRefs[ref.Ref] {
-			t.Errorf("ListBindableRefs ref %q not in CreateInterface bindings", ref.Ref)
+			t.Errorf("InspectSource ref %q not in CreateInterface bindings", ref.Ref)
 		}
 	}
-	if len(result.Refs) != len(createRefs) {
-		t.Errorf("ref count mismatch: ListBindableRefs=%d, CreateInterface=%d", len(result.Refs), len(createRefs))
+	if len(result.Targets) != len(createRefs) {
+		t.Errorf("ref count mismatch: InspectSource=%d, CreateInterface=%d", len(result.Targets), len(createRefs))
 	}
 }
 
-func TestListBindableRefs_SkipsSubcommandRequired(t *testing.T) {
+func TestInspectSource_SkipsSubcommandRequired(t *testing.T) {
 	content := `
 name "mycli"
 cmd "config" subcommand_required=#true {
@@ -175,14 +179,14 @@ cmd "config" subcommand_required=#true {
 `
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if ref.Ref == "config" {
 			t.Error("did not expect ref 'config' (subcommand_required)")
 		}
@@ -192,7 +196,7 @@ cmd "config" subcommand_required=#true {
 		"config get": false,
 		"config set": false,
 	}
-	for _, ref := range result.Refs {
+	for _, ref := range result.Targets {
 		if _, ok := wantRefs[ref.Ref]; ok {
 			wantRefs[ref.Ref] = true
 		}
@@ -204,25 +208,25 @@ cmd "config" subcommand_required=#true {
 	}
 }
 
-func TestListBindableRefs_EmptySpec(t *testing.T) {
+func TestInspectSource_EmptySpec(t *testing.T) {
 	content := `name "mycli"`
 
 	creator := NewCreator()
-	result, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{
+	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(result.Refs) != 0 {
-		t.Errorf("expected 0 refs, got %d", len(result.Refs))
+	if len(result.Targets) != 0 {
+		t.Errorf("expected 0 refs, got %d", len(result.Targets))
 	}
 }
 
-func TestListBindableRefs_NilContent(t *testing.T) {
+func TestInspectSource_NilContent(t *testing.T) {
 	creator := NewCreator()
-	_, err := creator.ListBindableRefs(context.Background(), &openbindings.Source{})
+	_, err := creator.InspectSource(context.Background(), &openbindings.Source{})
 	if err == nil {
 		t.Error("expected error for empty source")
 	}

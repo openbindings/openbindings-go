@@ -37,9 +37,9 @@ const (
 type InterfaceClient struct {
 	iface       *Interface // nil in discovery mode
 	interfaceID string
-	executor    *OperationExecutor
+	invoker     *OperationInvoker
 	client      *http.Client
-	defaultOpts *ExecutionOptions
+	defaultOpts *InvocationOptions
 
 	contextStore      ContextStore
 	platformCallbacks *PlatformCallbacks
@@ -67,23 +67,23 @@ func WithHTTPClient(c *http.Client) InterfaceClientOption {
 }
 
 // WithContextStore configures a ContextStore for this client. The store is
-// injected into a dedicated executor copy so the original shared executor
+// injected into a dedicated invoker copy so the original shared invoker
 // is never mutated.
 func WithContextStore(s ContextStore) InterfaceClientOption {
 	return func(ic *InterfaceClient) { ic.contextStore = s }
 }
 
 // WithPlatformCallbacks configures PlatformCallbacks for this client.
-// Callbacks are injected into a dedicated executor copy so the original
-// shared executor is never mutated.
+// Callbacks are injected into a dedicated invoker copy so the original
+// shared invoker is never mutated.
 func WithPlatformCallbacks(cb *PlatformCallbacks) InterfaceClientOption {
 	return func(ic *InterfaceClient) { ic.platformCallbacks = cb }
 }
 
-// WithDefaultOptions sets client-level default ExecutionOptions that are
-// merged into every execution. Per-call options (via ExecuteWithOptions)
+// WithDefaultOptions sets client-level default InvocationOptions that are
+// merged into every invocation. Per-call options (via InvokeWithOptions)
 // override these defaults.
-func WithDefaultOptions(opts *ExecutionOptions) InterfaceClientOption {
+func WithDefaultOptions(opts *InvocationOptions) InterfaceClientOption {
 	return func(ic *InterfaceClient) { ic.defaultOpts = opts }
 }
 
@@ -95,21 +95,21 @@ func WithInterfaceID(id string) InterfaceClientOption {
 }
 
 // NewInterfaceClient creates a new InterfaceClient with the given required
-// interface and executor. Pass nil as iface for discovery mode (accepts any
-// service unconditionally). The executor must be configured with the
-// executors the client should attempt synthesis with.
-func NewInterfaceClient(iface *Interface, exec *OperationExecutor, opts ...InterfaceClientOption) *InterfaceClient {
+// interface and invoker. Pass nil as iface for discovery mode (accepts any
+// service unconditionally). The invoker must be configured with the
+// invokers the client should attempt synthesis with.
+func NewInterfaceClient(iface *Interface, invoker *OperationInvoker, opts ...InterfaceClientOption) *InterfaceClient {
 	ic := &InterfaceClient{
-		iface:    iface,
-		executor: exec,
-		client:   &http.Client{},
-		state:    StateIdle,
+		iface:   iface,
+		invoker: invoker,
+		client:  &http.Client{},
+		state:   StateIdle,
 	}
 	for _, o := range opts {
 		o(ic)
 	}
 	if ic.contextStore != nil || ic.platformCallbacks != nil {
-		ic.executor = ic.executor.WithRuntime(ic.contextStore, ic.platformCallbacks)
+		ic.invoker = ic.invoker.WithRuntime(ic.contextStore, ic.platformCallbacks)
 		ic.contextStore = nil
 		ic.platformCallbacks = nil
 	}
@@ -118,13 +118,13 @@ func NewInterfaceClient(iface *Interface, exec *OperationExecutor, opts ...Inter
 
 // NewUnboundClient creates an InterfaceClient in discovery mode (nil required
 // interface), accepting any resolved interface. Equivalent to
-// NewInterfaceClient(nil, exec, opts...).
-func NewUnboundClient(exec *OperationExecutor, opts ...InterfaceClientOption) *InterfaceClient {
-	return NewInterfaceClient(nil, exec, opts...)
+// NewInterfaceClient(nil, invoker, opts...).
+func NewUnboundClient(invoker *OperationInvoker, opts ...InterfaceClientOption) *InterfaceClient {
+	return NewInterfaceClient(nil, invoker, opts...)
 }
 
 // Close cancels any in-flight resolution and releases resources.
-// The client transitions to StateIdle and cannot be used for execution
+// The client transitions to StateIdle and cannot be used for invocation
 // until Resolve is called again. Close is safe to call multiple times.
 func (c *InterfaceClient) Close() {
 	c.mu.Lock()
@@ -287,7 +287,7 @@ func (c *InterfaceClient) ResolveInterface(provided *Interface) {
 }
 
 // Refresh re-resolves against the same target, bypassing any caches.
-// For HTTP targets this re-fetches the content and passes it to executors so
+// For HTTP targets this re-fetches the content and passes it to invokers so
 // cached parsed documents are replaced with fresh versions.
 func (c *InterfaceClient) Refresh(ctx context.Context) error {
 	c.mu.RLock()
@@ -350,17 +350,17 @@ func (c *InterfaceClient) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// Execute executes an operation against the bound service, returning a stream
+// Invoke invokes an operation against the bound service, returning a stream
 // of events. A unary operation produces exactly one event. Client-level default
 // options are applied automatically.
-func (c *InterfaceClient) Execute(ctx context.Context, op string, input any) (<-chan StreamEvent, error) {
-	return c.ExecuteWithOptions(ctx, op, input, nil)
+func (c *InterfaceClient) Invoke(ctx context.Context, op string, input any) (<-chan StreamEvent, error) {
+	return c.InvokeWithOptions(ctx, op, input, nil)
 }
 
-// ExecuteWithOptions executes an operation with per-call execution options,
+// InvokeWithOptions invokes an operation with per-call execution options,
 // returning a stream of events. Per-call options are merged on top of
 // client-level defaults (per-call wins).
-func (c *InterfaceClient) ExecuteWithOptions(ctx context.Context, op string, input any, opts *ExecutionOptions) (<-chan StreamEvent, error) {
+func (c *InterfaceClient) InvokeWithOptions(ctx context.Context, op string, input any, opts *InvocationOptions) (<-chan StreamEvent, error) {
 	c.mu.RLock()
 	state := c.state
 	resolved := c.resolved
@@ -370,8 +370,8 @@ func (c *InterfaceClient) ExecuteWithOptions(ctx context.Context, op string, inp
 		return nil, fmt.Errorf("openbindings: client is not bound to a service (state: %s)", state)
 	}
 
-	merged := mergeExecutionOptions(c.defaultOpts, opts)
-	return c.executor.ExecuteOperation(ctx, &OperationExecutionInput{
+	merged := mergeInvocationOptions(c.defaultOpts, opts)
+	return c.invoker.Invoke(ctx, &OperationInvocationInput{
 		Interface: resolved,
 		Operation: op,
 		Input:     input,
@@ -379,16 +379,16 @@ func (c *InterfaceClient) ExecuteWithOptions(ctx context.Context, op string, inp
 	})
 }
 
-// mergeExecutionOptions merges per-call options on top of defaults.
+// mergeInvocationOptions merges per-call options on top of defaults.
 // Per-call values override defaults. Returns nil when both are nil.
-func mergeExecutionOptions(defaults, perCall *ExecutionOptions) *ExecutionOptions {
+func mergeInvocationOptions(defaults, perCall *InvocationOptions) *InvocationOptions {
 	if defaults == nil {
 		return perCall
 	}
 	if perCall == nil {
 		return defaults
 	}
-	return &ExecutionOptions{
+	return &InvocationOptions{
 		Headers:     mergeMaps(defaults.Headers, perCall.Headers),
 		Cookies:     mergeMaps(defaults.Cookies, perCall.Cookies),
 		Environment: mergeMaps(defaults.Environment, perCall.Environment),
@@ -446,7 +446,7 @@ func (c *InterfaceClient) tryFetchOBI(ctx context.Context, target string) (*Inte
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "application/vnd.openbindings+json, application/json")
 
 	resp, err := c.client.Do(req)
 	if err != nil {

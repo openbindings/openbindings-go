@@ -124,8 +124,8 @@ func TestBuildHTTPHeaders_NoCredentials(t *testing.T) {
 	}
 }
 
-func TestBuildHTTPHeaders_ExecutionOptionsHeaders(t *testing.T) {
-	opts := &openbindings.ExecutionOptions{
+func TestBuildHTTPHeaders_InvocationOptionsHeaders(t *testing.T) {
+	opts := &openbindings.InvocationOptions{
 		Headers: map[string]string{"X-Custom": "value"},
 	}
 	h := buildHTTPHeaders(nil, opts)

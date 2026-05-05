@@ -11,34 +11,34 @@ import (
 )
 
 // FormatToken identifies this package as an operation graph handler.
-const FormatToken = "openbindings.operation-graph@0.1.0"
+const FormatToken = "openbindings.operation-graph@0.2.0"
 
-// Executor handles binding execution for operation graph sources.
-type Executor struct {
-	opExec    *openbindings.OperationExecutor
-	mu        sync.RWMutex
-	docCache  map[string]*Document
-	schemas   *schemaCache
+// Invoker handles binding invocation for operation graph sources.
+type Invoker struct {
+	invoker *openbindings.OperationInvoker
+	mu         sync.RWMutex
+	docCache   map[string]*Document
+	schemas    *schemaCache
 }
 
-// NewExecutor creates a new operation graph binding executor.
-// The OperationExecutor is used to invoke sub-operations referenced by
+// NewInvoker creates a new operation graph binding invoker.
+// The OperationInvoker is used to invoke sub-operations referenced by
 // operation nodes in the graph.
-func NewExecutor(opExec *openbindings.OperationExecutor) *Executor {
-	return &Executor{
-		opExec:   opExec,
-		docCache: make(map[string]*Document),
-		schemas:  newSchemaCache(),
+func NewInvoker(invoker *openbindings.OperationInvoker) *Invoker {
+	return &Invoker{
+		invoker: invoker,
+		docCache:   make(map[string]*Document),
+		schemas:    newSchemaCache(),
 	}
 }
 
-// Formats returns the binding format tokens this executor supports.
-func (e *Executor) Formats() []openbindings.FormatInfo {
+// Formats returns the binding format tokens this driver supports.
+func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "OpenBindings operation graphs"}}
 }
 
-// ExecuteBinding executes an operation graph binding.
-func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingExecutionInput) (<-chan openbindings.StreamEvent, error) {
+// InvokeBinding invokes an operation graph binding.
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
 	doc, err := e.loadDocument(in.Source.Location, in.Source.Content)
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(
@@ -57,13 +57,13 @@ func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingE
 	out := make(chan openbindings.StreamEvent)
 	go func() {
 		defer close(out)
-		eng := newEngine(graph, e.opExec, in, e.opExec.TransformEvaluator, e.schemas)
+		eng := newEngine(graph, e.invoker, in, e.invoker.TransformEvaluator, e.schemas)
 		eng.run(ctx, out)
 	}()
 	return out, nil
 }
 
-func (e *Executor) loadDocument(location string, content any) (*Document, error) {
+func (e *Invoker) loadDocument(location string, content any) (*Document, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
 		if doc, ok := e.docCache[location]; ok {

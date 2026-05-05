@@ -24,6 +24,11 @@ jobs:
           - formats/workersrpc
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        if: matrix.module == '.'
+        with:
+          repository: openbindings/spec
+          path: spec
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ matrix.module }}/go.mod

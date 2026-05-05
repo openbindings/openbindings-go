@@ -18,7 +18,7 @@
 //	    fmt.Println(name, op.Description)
 //	}
 //
-//	if err := iface.Validate(); err != nil {
+//	if err := iface.ValidateInterface(); err != nil {
 //	    log.Fatal(err)
 //	}
 //
@@ -41,7 +41,7 @@
 // # Concurrency
 //
 // All types in this package are safe for concurrent read access. Concurrent
-// writes to the same value require external synchronization. The Validate
+// writes to the same value require external synchronization. The ValidateInterface
 // method is safe for concurrent use on the same Interface value (read-only).
 //
 // JSON marshaling and unmarshaling follow standard library semantics:

@@ -128,8 +128,8 @@ func (cs *combineState) snapshot() map[string]any {
 	return result
 }
 
-// schemaCache is a per-Executor cache of compiled JSON schemas.
-// Storing it on the Executor avoids mutable package-level state.
+// schemaCache is a per-Driver cache of compiled JSON schemas.
+// Storing it on the Driver avoids mutable package-level state.
 type schemaCache struct {
 	mu      sync.RWMutex
 	schemas map[string]*jsonschema.Schema

@@ -279,7 +279,7 @@ func (p *sessionPool) invalidate(s *mcpSession) {
 	p.evict(s)
 }
 
-// closeAll closes all pooled sessions. Used by Executor.Close().
+// closeAll closes all pooled sessions. Used by Driver.Close().
 func (p *sessionPool) closeAll() {
 	p.mu.Lock()
 	sessions := make([]*mcpSession, 0, len(p.sessions))

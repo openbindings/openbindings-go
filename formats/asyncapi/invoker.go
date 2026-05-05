@@ -12,7 +12,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// maxRedirects bounds redirect chains for HTTP fetches and SSE/POST executions.
+// maxRedirects bounds redirect chains for HTTP fetches and SSE/POST invocations.
 // Prevents redirect loops without imposing any total request timeout
 // (which is the caller's responsibility via context).
 const maxRedirects = 10
@@ -28,17 +28,17 @@ func newDefaultHTTPClient() *http.Client {
 	}
 }
 
-// Executor handles binding execution for AsyncAPI 3.x sources.
-type Executor struct {
+// Invoker handles binding invocation for AsyncAPI 3.x sources.
+type Invoker struct {
 	httpClient *http.Client
 	mu         sync.RWMutex
 	docCache   map[string]*Document
 	wsPool     *wsPool
 }
 
-// NewExecutor creates a new AsyncAPI binding executor.
-func NewExecutor() *Executor {
-	return &Executor{
+// NewInvoker creates a new AsyncAPI binding invoker.
+func NewInvoker() *Invoker {
+	return &Invoker{
 		httpClient: newDefaultHTTPClient(),
 		docCache:   make(map[string]*Document),
 		wsPool:     newWSPool(),
@@ -46,14 +46,14 @@ func NewExecutor() *Executor {
 }
 
 // Close shuts down all pooled WebSocket connections. After Close returns, the
-// Executor should not be used for new executions.
-func (e *Executor) Close() {
+// Driver should not be used for new invocations.
+func (e *Invoker) Close() {
 	e.wsPool.closeAll()
 }
 
 // cachedLoadDocument loads an AsyncAPI doc, caching by location within a process.
 // When content is provided, the cache is bypassed and updated with the fresh parse.
-func (e *Executor) cachedLoadDocument(ctx context.Context, location string, content any) (*Document, error) {
+func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, content any) (*Document, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
 		if doc, ok := e.docCache[location]; ok {
@@ -98,15 +98,15 @@ func resolveServerKey(doc *Document) string {
 	return ""
 }
 
-// Formats returns the source formats supported by the AsyncAPI executor.
-func (e *Executor) Formats() []openbindings.FormatInfo {
+// Formats returns the source formats supported by the AsyncAPI driver.
+func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "AsyncAPI 3.x event-driven APIs"}}
 }
 
-// ExecuteBinding executes an AsyncAPI binding, returning a channel of stream events.
+// InvokeBinding invokes an AsyncAPI binding, returning a channel of stream events.
 // For send actions it performs a unary HTTP POST; for receive actions it subscribes
 // via SSE or WebSocket depending on the server protocol.
-func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingExecutionInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
 	doc, err := e.cachedLoadDocument(ctx, in.Source.Location, in.Source.Content)
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeSourceLoadFailed, err.Error())), nil
@@ -151,8 +151,8 @@ func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingE
 		}
 	}
 
-	// Unary path — wrap the ExecuteOutput as a single-event channel.
-	result := executeBindingWithDoc(ctx, e.httpClient, enriched, doc)
+	// Unary path — wrap the InvocationOutput as a single-event channel.
+	result := invokeBindingWithDoc(ctx, e.httpClient, enriched, doc)
 
 	// Auth retry: if the API returned auth_required and we have security methods
 	// and callbacks, resolve credentials and retry once.
@@ -180,7 +180,7 @@ func (e *Executor) ExecuteBinding(ctx context.Context, in *openbindings.BindingE
 				}
 			}
 
-			result = executeBindingWithDoc(ctx, e.httpClient, enriched, doc)
+			result = invokeBindingWithDoc(ctx, e.httpClient, enriched, doc)
 		}
 	}
 

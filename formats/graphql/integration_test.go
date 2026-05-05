@@ -64,7 +64,7 @@ var testSchema = introspectionSchema{
 }
 
 // newTestServer creates an httptest server that handles GraphQL introspection
-// and query/mutation execution.
+// and query/mutation invocation.
 func newTestServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -154,15 +154,15 @@ func newTestServer() *httptest.Server {
 	}))
 }
 
-func TestIntegrationExecuteQuery(t *testing.T) {
+func TestIntegrationInvokeQuery(t *testing.T) {
 	srv := newTestServer()
 	defer srv.Close()
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx := context.Background()
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   "graphql",
 			Location: srv.URL,
 		},
@@ -170,7 +170,7 @@ func TestIntegrationExecuteQuery(t *testing.T) {
 		Input: map[string]any{"id": "42"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := <-ch
@@ -190,22 +190,22 @@ func TestIntegrationExecuteQuery(t *testing.T) {
 	}
 }
 
-func TestIntegrationExecuteQueryNoArgs(t *testing.T) {
+func TestIntegrationInvokeQueryNoArgs(t *testing.T) {
 	srv := newTestServer()
 	defer srv.Close()
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx := context.Background()
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   "graphql",
 			Location: srv.URL,
 		},
 		Ref: "Query/users",
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := <-ch
@@ -222,15 +222,15 @@ func TestIntegrationExecuteQueryNoArgs(t *testing.T) {
 	}
 }
 
-func TestIntegrationExecuteMutation(t *testing.T) {
+func TestIntegrationInvokeMutation(t *testing.T) {
 	srv := newTestServer()
 	defer srv.Close()
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx := context.Background()
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   "graphql",
 			Location: srv.URL,
 		},
@@ -238,7 +238,7 @@ func TestIntegrationExecuteMutation(t *testing.T) {
 		Input: map[string]any{"name": "Charlie", "email": "charlie@example.com"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := <-ch
@@ -258,14 +258,14 @@ func TestIntegrationExecuteMutation(t *testing.T) {
 	}
 }
 
-func TestIntegrationExecuteWithSchemaQuery(t *testing.T) {
+func TestIntegrationInvokeWithSchemaQuery(t *testing.T) {
 	srv := newTestServer()
 	defer srv.Close()
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx := context.Background()
 
-	// Simulate what happens when the OperationExecutor passes through
+	// Simulate what happens when the OperationInvoker passes through
 	// the InputSchema with a _query const.
 	inputSchema := map[string]any{
 		"type": "object",
@@ -275,8 +275,8 @@ func TestIntegrationExecuteWithSchemaQuery(t *testing.T) {
 		},
 	}
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   "graphql",
 			Location: srv.URL,
 		},
@@ -285,7 +285,7 @@ func TestIntegrationExecuteWithSchemaQuery(t *testing.T) {
 		InputSchema: inputSchema,
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := <-ch
@@ -356,23 +356,23 @@ func TestIntegrationCreateInterface(t *testing.T) {
 }
 
 func TestIntegrationSourceContent(t *testing.T) {
-	// Test that the executor can use inline Source.Content instead of
+	// Test that the driver can use inline Source.Content instead of
 	// making a network introspection call.
 	srv := newTestServer()
 	defer srv.Close()
 
-	// Build the introspection content as the executor would receive it.
+	// Build the introspection content as the driver would receive it.
 	schemaJSON, _ := json.Marshal(map[string]any{
 		"data": map[string]any{
 			"__schema": testSchema,
 		},
 	})
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx := context.Background()
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   "graphql",
 			Location: srv.URL,
 			Content:  string(schemaJSON),
@@ -381,7 +381,7 @@ func TestIntegrationSourceContent(t *testing.T) {
 		Input: nil,
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := <-ch
@@ -435,12 +435,12 @@ func TestIntegrationAuthRetry(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx := context.Background()
 
 	promptCalled := false
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   "graphql",
 			Location: srv.URL,
 		},
@@ -456,7 +456,7 @@ func TestIntegrationAuthRetry(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	ev := <-ch
@@ -669,20 +669,20 @@ func formatInt(n int) string {
 	return string(digits)
 }
 
-// TestIntegrationExecuteSubscription verifies that the GraphQL executor opens
+// TestIntegrationInvokeSubscription verifies that the GraphQL driver opens
 // a graphql-transport-ws WebSocket connection, sends connection_init,
 // subscribes, and forwards each "next" payload as a separate stream event.
 // Closes cleanly on "complete".
-func TestIntegrationExecuteSubscription(t *testing.T) {
+func TestIntegrationInvokeSubscription(t *testing.T) {
 	srv := newSubscriptionTestServer(t)
 	defer srv.Close()
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   "graphql",
 			Location: srv.URL,
 		},
@@ -690,7 +690,7 @@ func TestIntegrationExecuteSubscription(t *testing.T) {
 		Input: map[string]any{"topic": "alerts"},
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	// Drain the channel until close. Expect three data events and no errors.
@@ -728,7 +728,7 @@ func TestIntegrationExecuteSubscription(t *testing.T) {
 // context closes the WebSocket cleanly without leaking the goroutine.
 func TestIntegrationSubscriptionCancellation(t *testing.T) {
 	// Server that holds the connection open after sending one event,
-	// so we can verify the executor closes on context cancellation.
+	// so we can verify the driver closes on context cancellation.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") == "websocket" {
 			conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -774,18 +774,18 @@ func TestIntegrationSubscriptionCancellation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{
 			Format:   "graphql",
 			Location: srv.URL,
 		},
 		Ref: "Subscription/messageStream",
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding error: %v", err)
+		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
 	// Receive the first event.
@@ -869,7 +869,7 @@ func subscriptionErrorTestServer(t *testing.T, exchange func(ctx context.Context
 }
 
 // TestIntegrationSubscription_ErrorMessage verifies that when the server
-// sends an "error" message instead of "next" payloads, the executor surfaces
+// sends an "error" message instead of "next" payloads, the driver surfaces
 // it as a stream error event with the right message.
 func TestIntegrationSubscription_ErrorMessage(t *testing.T) {
 	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
@@ -891,16 +891,16 @@ func TestIntegrationSubscription_ErrorMessage(t *testing.T) {
 	})
 	defer srv.Close()
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: "graphql", Location: srv.URL},
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding: %v", err)
+		t.Fatalf("InvokeBinding: %v", err)
 	}
 
 	var events []openbindings.StreamEvent
@@ -919,7 +919,7 @@ func TestIntegrationSubscription_ErrorMessage(t *testing.T) {
 }
 
 // TestIntegrationSubscription_ConnectionDropMidStream verifies that when the
-// server abruptly closes the WebSocket after sending one event, the executor
+// server abruptly closes the WebSocket after sending one event, the driver
 // emits a stream error and closes the channel cleanly.
 func TestIntegrationSubscription_ConnectionDropMidStream(t *testing.T) {
 	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
@@ -943,16 +943,16 @@ func TestIntegrationSubscription_ConnectionDropMidStream(t *testing.T) {
 	})
 	defer srv.Close()
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: "graphql", Location: srv.URL},
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
 	if err != nil {
-		t.Fatalf("ExecuteBinding: %v", err)
+		t.Fatalf("InvokeBinding: %v", err)
 	}
 
 	var events []openbindings.StreamEvent
@@ -979,7 +979,7 @@ func TestIntegrationSubscription_ConnectionDropMidStream(t *testing.T) {
 
 // TestIntegrationSubscription_ConnectionAckTimeout verifies that when the
 // server replies with the wrong message type instead of connection_ack,
-// the executor returns an error rather than hanging indefinitely.
+// the driver returns an error rather than hanging indefinitely.
 func TestIntegrationSubscription_ConnectionAckMismatch(t *testing.T) {
 	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
 		if expectClientMessage(ctx, conn, "connection_init") != nil {
@@ -990,17 +990,17 @@ func TestIntegrationSubscription_ConnectionAckMismatch(t *testing.T) {
 	})
 	defer srv.Close()
 
-	executor := NewExecutor()
+	invoker := NewInvoker()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ch, err := executor.ExecuteBinding(ctx, &openbindings.BindingExecutionInput{
-		Source: openbindings.BindingExecutionSource{Format: "graphql", Location: srv.URL},
+	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
+		Source: openbindings.BindingInvocationSource{Format: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
 	// The connection_ack failure surfaces either as a returned error from
-	// ExecuteBinding (precondition failure) or as the first stream event
-	// being an error. Either path is acceptable; both prove the executor
+	// InvokeBinding (precondition failure) or as the first stream event
+	// being an error. Either path is acceptable; both prove the driver
 	// doesn't hang.
 	if err != nil {
 		// Returned error is fine.
@@ -1016,7 +1016,7 @@ func TestIntegrationSubscription_ConnectionAckMismatch(t *testing.T) {
 			t.Fatal("expected stream error for connection_ack mismatch, got data event")
 		}
 	case <-deadline:
-		t.Fatal("ExecuteBinding hung waiting for connection_ack")
+		t.Fatal("InvokeBinding hung waiting for connection_ack")
 	}
 }
 
@@ -1086,7 +1086,7 @@ func TestIntegrationCreateInterface_RecursiveType(t *testing.T) {
 	if !ok {
 		t.Fatal("expected operation 'node' in created interface")
 	}
-	// The input schema must contain a _query const that the executor can use.
+	// The input schema must contain a _query const that the driver can use.
 	props, _ := op.Input["properties"].(map[string]any)
 	queryProp, _ := props["_query"].(map[string]any)
 	if queryProp == nil {
