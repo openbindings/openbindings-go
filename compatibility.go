@@ -34,19 +34,26 @@ type CheckCompatibilityOptions struct {
 }
 
 // CheckInterfaceCompatibility checks whether a provided interface satisfies
-// the requirements of a required interface. For each operation the required
-// interface declares, the algorithm searches the provided interface using
-// three strategies (first match wins):
+// the requirements of a required interface. This is a tooling convention,
+// not a spec requirement: OpenBindings 0.2.0 removed the operation-matching
+// algorithm from the spec body and left matching, comparison, and selection
+// to tools (see openbindings.md §2 Scope principle and the schemaprofile
+// package docstring). The algorithm below is the openbindings reference
+// tooling's matching convention; third-party tools may use different
+// strategies.
 //
-//  1. Direct key match — provided.Operations[opKey] exists
-//  2. Satisfies match — any provided operation has a Satisfies entry with
+// For each operation the required interface declares, the algorithm searches
+// the provided interface using three strategies (first match wins):
+//
+//  1. Direct key match: provided.Operations[opKey] exists.
+//  2. Satisfies match: any provided operation has a Satisfies entry with
 //     { Role: requiredInterfaceID, Operation: opKey }
-//     (requires opts.RequiredInterfaceID)
-//  3. Aliases match — any provided operation has Aliases containing opKey
+//     (requires opts.RequiredInterfaceID).
+//  3. Aliases match: any provided operation has Aliases containing opKey.
 //
 // For each matched pair, schemas are checked:
-//   - Output schemas must be compatible (provided output satisfies required output)
-//   - Input schemas must be compatible (required input satisfies provided input)
+//   - Output schemas must be compatible (provided output satisfies required output).
+//   - Input schemas must be compatible (required input satisfies provided input).
 //
 // Returns an empty slice when the provided interface is fully compatible.
 func CheckInterfaceCompatibility(required, provided *Interface, opts ...CheckCompatibilityOptions) []CompatibilityIssue {

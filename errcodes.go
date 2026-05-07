@@ -7,6 +7,12 @@ package openbindings
 //
 // These are SDK conventions, not spec requirements. Third-party
 // invokers MAY use different codes.
+//
+// Note: ErrCodeExecutionFailed retains the "execution" wording even
+// after the spec 0.2.0 executor->invoker rename. The codes name
+// runtime outcomes (the call was *executed* but the service returned
+// an error), not the SDK type or method that produced them, so this
+// retention is intentional and not a missed rename.
 const (
 	// ErrCodeAuthRequired indicates authentication is needed
 	// (e.g., HTTP 401, gRPC Unauthenticated). Retryable with credentials.

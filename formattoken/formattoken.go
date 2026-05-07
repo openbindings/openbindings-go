@@ -163,7 +163,7 @@ func Matches(vr VersionRange, sourceToken string) bool {
 		if srcVer == "" {
 			return false
 		}
-		return normalizeVersion(vr.Version) == normalizeVersion(srcVer)
+		return normalizeSemverVersion(vr.Version) == normalizeSemverVersion(srcVer)
 
 	case RangeCaret:
 		if srcVer == "" {
@@ -191,9 +191,17 @@ func Matches(vr VersionRange, sourceToken string) bool {
 	}
 }
 
-// normalizeVersion strips trailing .0 segments from numeric versions for exact comparison.
-// Non-numeric versions are returned as-is.
-func normalizeVersion(v string) string {
+// normalizeSemverVersion strips trailing ".0" segments from numeric versions
+// (e.g., "3.1.0" -> "3.1") so exact matching treats SemVer-equivalent strings
+// as equal. Non-numeric versions are returned unchanged.
+//
+// Spec 0.2.0 leaves format-token equivalence to each format community
+// (CHANGELOG: "Format token normalization removed"). This helper is therefore
+// a tool-level convention applied by openbindings reference tooling for
+// formats whose version strings follow SemVer (openapi, asyncapi, usage).
+// Date-versioned tokens (e.g., mcp@2025-11-25) and non-numeric versions are
+// left alone, matching their format communities' byte-exact semantics.
+func normalizeSemverVersion(v string) string {
 	parts := strings.Split(v, ".")
 	// Check all parts are numeric
 	for _, p := range parts {
