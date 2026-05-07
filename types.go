@@ -139,10 +139,10 @@ func (e OperationExample) MarshalJSON() ([]byte, error) {
 }
 
 type Operation struct {
-	Description string    `json:"description,omitempty"`
-	Deprecated  bool      `json:"deprecated,omitempty"`
-	Tags        []string  `json:"tags,omitempty"`
-	Aliases     []string  `json:"aliases,omitempty"`
+	Description string      `json:"description,omitempty"`
+	Deprecated  bool        `json:"deprecated,omitempty"`
+	Tags        []string    `json:"tags,omitempty"`
+	Aliases     []string    `json:"aliases,omitempty"`
 	Satisfies   []Satisfies `json:"satisfies,omitempty"`
 
 	Idempotent *bool      `json:"idempotent,omitempty"`
@@ -156,10 +156,10 @@ type Operation struct {
 }
 
 type operationWire struct {
-	Description string    `json:"description,omitempty"`
-	Deprecated  bool      `json:"deprecated,omitempty"`
-	Tags        []string  `json:"tags,omitempty"`
-	Aliases     []string  `json:"aliases,omitempty"`
+	Description string      `json:"description,omitempty"`
+	Deprecated  bool        `json:"deprecated,omitempty"`
+	Tags        []string    `json:"tags,omitempty"`
+	Aliases     []string    `json:"aliases,omitempty"`
 	Satisfies   []Satisfies `json:"satisfies,omitempty"`
 
 	Idempotent *bool      `json:"idempotent,omitempty"`

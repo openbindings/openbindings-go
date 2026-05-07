@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/openbindings/openbindings-go/formattoken"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -171,7 +172,7 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 	}
 
 	// OBI-T-07: Validate input against the operation's input schema before transform.
-	if op.Input != nil && in.Input != nil {
+	if op.Input != nil {
 		defs := buildSchemaDefs(in.Interface.Schemas)
 		compiled, err := compileExampleSchema(op.Input, defs)
 		if err != nil {
@@ -264,18 +265,7 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 		close(out)
 		// Drain src so the producer goroutine is not leaked.
 		// Respect context cancellation to avoid blocking forever on slow sources.
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case _, ok := <-src:
-					if !ok {
-						return
-					}
-				}
-			}
-		}()
+		go drainStream(ctx, src)
 		return out
 	}
 
@@ -284,9 +274,17 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 	if outputSchema != nil {
 		defs := buildSchemaDefs(schemas)
 		compiled, err := compileExampleSchema(outputSchema, defs)
-		if err == nil {
-			compiledOutput = compiled
+		if err != nil {
+			out := make(chan StreamEvent, 1)
+			out <- StreamEvent{Error: &InvocationError{
+				Code:    ErrCodeValidationFailed,
+				Message: fmt.Sprintf("openbindings: output schema compilation failed for %q: %v", bindingKey, err),
+			}}
+			close(out)
+			go drainStream(ctx, src)
+			return out
 		}
+		compiledOutput = compiled
 	}
 
 	out := make(chan StreamEvent)
@@ -300,7 +298,7 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 				if !ok {
 					return
 				}
-				if ev.Error != nil || ev.Data == nil {
+				if ev.Error != nil {
 					out <- ev
 					continue
 				}
@@ -317,7 +315,7 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 					data = transformed
 				}
 				// OBI-T-08: Validate output after transform.
-				if compiledOutput != nil && data != nil {
+				if compiledOutput != nil {
 					if verr := compiledOutput.Validate(data); verr != nil {
 						lines := splitSchemaError(verr)
 						out <- StreamEvent{Error: &InvocationError{
@@ -332,6 +330,19 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 		}
 	}()
 	return out
+}
+
+func drainStream(ctx context.Context, src <-chan StreamEvent) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-src:
+			if !ok {
+				return
+			}
+		}
+	}
 }
 
 // DefaultBindingSelector picks the best binding for an operation. Non-deprecated
@@ -395,23 +406,18 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 	return bestKey, best, nil
 }
 
-// formatMatches checks whether a source format token matches any in the set.
-// Handles versioned tokens: "mcp@2025-11-25" matches if the set contains
-// "mcp" or "mcp@2025-11-25".
+// formatMatches checks whether a source format token satisfies one of the
+// invoker-advertised format tokens/ranges.
 func formatMatches(sourceFormat string, available map[string]bool) bool {
 	if available[sourceFormat] {
 		return true
 	}
-	bare := sourceFormat
-	if idx := strings.Index(sourceFormat, "@"); idx >= 0 {
-		bare = sourceFormat[:idx]
-	}
 	for f := range available {
-		fBare := f
-		if idx := strings.Index(f, "@"); idx >= 0 {
-			fBare = f[:idx]
+		vr, err := formattoken.ParseRange(f)
+		if err != nil {
+			continue
 		}
-		if fBare == bare {
+		if formattoken.Matches(vr, sourceFormat) {
 			return true
 		}
 	}

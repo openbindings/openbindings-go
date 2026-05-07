@@ -11,7 +11,7 @@ import (
 type CompatibilityIssueKind string
 
 const (
-	CompatibilityMissing           CompatibilityIssueKind = "missing"
+	CompatibilityMissing            CompatibilityIssueKind = "missing"
 	CompatibilityOutputIncompatible CompatibilityIssueKind = "output_incompatible"
 	CompatibilityInputIncompatible  CompatibilityIssueKind = "input_incompatible"
 )

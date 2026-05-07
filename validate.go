@@ -11,10 +11,9 @@ import (
 
 type validateOptions struct {
 	rejectUnknownTypedFields bool
-	validateExamples         bool
 }
 
-// ValidateOption configures Interface.ValidateInterface.
+// ValidateOption configures Interface.Validate.
 type ValidateOption func(*validateOptions)
 
 // WithRejectUnknownTypedFields treats unknown (non-`x-`) fields in typed OpenBindings objects as errors.
@@ -23,31 +22,19 @@ func WithRejectUnknownTypedFields() ValidateOption {
 	return func(o *validateOptions) { o.rejectUnknownTypedFields = true }
 }
 
-// WithExampleValidation enables validation of operation examples against their
-// operation's input/output schemas (OBI-T-09). When enabled, each example's
-// Input is validated against the operation's Input schema and each example's
-// Output is validated against the operation's Output schema (OBI-D-15).
-// Operations without schemas or examples are skipped gracefully.
-//
-// This is opt-in because schema compilation adds cost and the spec marks
-// example validation as a SHOULD for tools, not a MUST.
-func WithExampleValidation() ValidateOption {
-	return func(o *validateOptions) { o.validateExamples = true }
-}
-
-// ValidateInterface performs shape-level checks useful for tooling correctness.
+// Validate performs shape-level checks useful for tooling correctness.
 // It is intentionally not full JSON Schema validation; OBI-D-02 (schema
 // validation) is a separate concern handled by a JSON Schema validator
 // against openbindings.schema.json.
 //
-// ValidateInterface unconditionally enforces OBI-D-16 (openbindings field must
+// Validate unconditionally enforces OBI-D-16 (openbindings field must
 // be a valid SemVer 2.0.0 string) and OBI-T-04 (refuse to load when the
 // document's major version is higher than this SDK's MaxTestedVersion, or --
 // while MaxTestedVersion is pre-1.0 -- when its minor is higher). Versions
 // outside the supported range in the other direction (older minor pre-1.0,
 // etc.) are accepted for forward compatibility; the spec's SHOULD-warn behavior
 // is left to higher-level tools.
-func (i Interface) ValidateInterface(opts ...ValidateOption) error {
+func (i Interface) Validate(opts ...ValidateOption) error {
 	o := validateOptions{
 		rejectUnknownTypedFields: false,
 	}
@@ -319,12 +306,9 @@ func (i Interface) ValidateInterface(opts ...ValidateOption) error {
 	// OBI-D-02: validate the document against openbindings.schema.json.
 	validateAgainstOBISchema(&errs, i)
 
-	// OBI-T-09 / OBI-D-15: validate every example's input/output against its
-	// operation's input/output schema, when the respective schema is specified.
-	// Opt-in via WithExampleValidation() because schema compilation adds cost.
-	if o.validateExamples {
-		validateExamplesAgainstOpSchemas(&errs, i)
-	}
+	// OBI-D-15: validate every example's input/output against its operation's
+	// input/output schema, when the respective schema is specified.
+	validateExamplesAgainstOpSchemas(&errs, i)
 
 	if len(errs) == 0 {
 		return nil

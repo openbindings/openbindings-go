@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func TestInterfaceValidateInterface_RequiresOpenBindingsAndOperations(t *testing.T) {
+func TestInterfaceValidate_RequiresOpenBindingsAndOperations(t *testing.T) {
 	i := Interface{}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -45,13 +45,13 @@ func TestParseDocumentRejectsDuplicateObjectKeys(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidateInterface_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
+func TestInterfaceValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
 	// OBI-T-04: refuse to load when document's major version exceeds MaxTested.
 	i := Interface{
 		OpenBindings: "1.0.0",
 		Operations:   map[string]Operation{},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error for higher-major version")
 	}
@@ -60,13 +60,13 @@ func TestInterfaceValidateInterface_RefusesHigherMajorVersion_OBI_T_04(t *testin
 	}
 }
 
-func TestInterfaceValidateInterface_RefusesPre1HigherMinor_OBI_T_04(t *testing.T) {
+func TestInterfaceValidate_RefusesPre1HigherMinor_OBI_T_04(t *testing.T) {
 	// OBI-T-04: while MaxTested is pre-1.0, refuse strictly higher minor too.
 	i := Interface{
 		OpenBindings: "0.99.0",
 		Operations:   map[string]Operation{},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error for pre-1.0 higher-minor version")
 	}
@@ -75,12 +75,12 @@ func TestInterfaceValidateInterface_RefusesPre1HigherMinor_OBI_T_04(t *testing.T
 	}
 }
 
-func TestInterfaceValidateInterface_RefusesInvalidSemver_OBI_D_16(t *testing.T) {
+func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_16(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error for invalid semver")
 	}
@@ -89,7 +89,7 @@ func TestInterfaceValidateInterface_RefusesInvalidSemver_OBI_D_16(t *testing.T) 
 	}
 }
 
-func TestInterfaceValidateInterface_UnknownTopLevelFields_StrictMode(t *testing.T) {
+func TestInterfaceValidate_UnknownTopLevelFields_StrictMode(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations:   map[string]Operation{},
@@ -99,12 +99,12 @@ func TestInterfaceValidateInterface_UnknownTopLevelFields_StrictMode(t *testing.
 			},
 		},
 	}
-	if err := i.ValidateInterface(WithRejectUnknownTypedFields()); err == nil {
+	if err := i.Validate(WithRejectUnknownTypedFields()); err == nil {
 		t.Fatalf("expected error")
 	}
 }
 
-func TestInterfaceValidateInterface_UnknownFields_StrictMode_CatchesNestedTypedObjects(t *testing.T) {
+func TestInterfaceValidate_UnknownFields_StrictMode_CatchesNestedTypedObjects(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Roles: map[string]string{
@@ -148,12 +148,12 @@ func TestInterfaceValidateInterface_UnknownFields_StrictMode_CatchesNestedTypedO
 			},
 		},
 	}
-	if err := i.ValidateInterface(WithRejectUnknownTypedFields()); err == nil {
+	if err := i.Validate(WithRejectUnknownTypedFields()); err == nil {
 		t.Fatalf("expected error")
 	}
 }
 
-func TestInterfaceValidateInterface_StrictMode_CatchesOperationExampleUnknownFields(t *testing.T) {
+func TestInterfaceValidate_StrictMode_CatchesOperationExampleUnknownFields(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -171,12 +171,12 @@ func TestInterfaceValidateInterface_StrictMode_CatchesOperationExampleUnknownFie
 			},
 		},
 	}
-	if err := i.ValidateInterface(WithRejectUnknownTypedFields()); err == nil {
+	if err := i.Validate(WithRejectUnknownTypedFields()); err == nil {
 		t.Fatalf("expected error for unknown field in example")
 	}
 }
 
-func TestInterfaceValidateInterface_StrictMode_CatchesInlineTransformUnknownFields(t *testing.T) {
+func TestInterfaceValidate_StrictMode_CatchesInlineTransformUnknownFields(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -197,12 +197,12 @@ func TestInterfaceValidateInterface_StrictMode_CatchesInlineTransformUnknownFiel
 			},
 		},
 	}
-	if err := i.ValidateInterface(WithRejectUnknownTypedFields()); err == nil {
+	if err := i.Validate(WithRejectUnknownTypedFields()); err == nil {
 		t.Fatalf("expected error for unknown field on binding entry")
 	}
 }
 
-func TestInterfaceValidateInterface_AliasesMustBeUniqueAcrossOperations(t *testing.T) {
+func TestInterfaceValidate_AliasesMustBeUniqueAcrossOperations(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -210,24 +210,24 @@ func TestInterfaceValidateInterface_AliasesMustBeUniqueAcrossOperations(t *testi
 			"b": {Aliases: []string{"shared"}},
 		},
 	}
-	if err := i.ValidateInterface(); err == nil {
+	if err := i.Validate(); err == nil {
 		t.Fatalf("expected error")
 	}
 }
 
-func TestInterfaceValidateInterface_SatisfiesFieldsMustBeNonEmpty(t *testing.T) {
+func TestInterfaceValidate_SatisfiesFieldsMustBeNonEmpty(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"a": {Satisfies: []Satisfies{{Role: "", Operation: ""}}},
 		},
 	}
-	if err := i.ValidateInterface(); err == nil {
+	if err := i.Validate(); err == nil {
 		t.Fatalf("expected error")
 	}
 }
 
-func TestInterfaceValidateInterface_SatisfiesRoleMustExistInRoles(t *testing.T) {
+func TestInterfaceValidate_SatisfiesRoleMustExistInRoles(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -238,7 +238,7 @@ func TestInterfaceValidateInterface_SatisfiesRoleMustExistInRoles(t *testing.T) 
 			},
 		},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error for dangling satisfies reference")
 	}
@@ -247,7 +247,7 @@ func TestInterfaceValidateInterface_SatisfiesRoleMustExistInRoles(t *testing.T) 
 	}
 }
 
-func TestInterfaceValidateInterface_SatisfiesRoleValidWhenRoleExists(t *testing.T) {
+func TestInterfaceValidate_SatisfiesRoleValidWhenRoleExists(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Roles: map[string]string{
@@ -261,17 +261,17 @@ func TestInterfaceValidateInterface_SatisfiesRoleValidWhenRoleExists(t *testing.
 			},
 		},
 	}
-	if err := i.ValidateInterface(); err != nil {
+	if err := i.Validate(); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
 
-func TestInterfaceValidateInterface_OpenBindingsVersionErrorMessageIsStable(t *testing.T) {
+func TestInterfaceValidate_OpenBindingsVersionErrorMessageIsStable(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1",
 		Operations:   map[string]Operation{},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -296,7 +296,7 @@ func containsProblem(err error, want string) bool {
 	return false
 }
 
-func TestInterfaceValidateInterface_SourceMustHaveLocationOrContent(t *testing.T) {
+func TestInterfaceValidate_SourceMustHaveLocationOrContent(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations:   map[string]Operation{},
@@ -304,7 +304,7 @@ func TestInterfaceValidateInterface_SourceMustHaveLocationOrContent(t *testing.T
 			"empty": {Format: "openapi@3.1"},
 		},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -313,7 +313,7 @@ func TestInterfaceValidateInterface_SourceMustHaveLocationOrContent(t *testing.T
 	}
 }
 
-func TestInterfaceValidateInterface_SourceAcceptsBothLocationAndContent(t *testing.T) {
+func TestInterfaceValidate_SourceAcceptsBothLocationAndContent(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations:   map[string]Operation{},
@@ -325,13 +325,13 @@ func TestInterfaceValidateInterface_SourceAcceptsBothLocationAndContent(t *testi
 			},
 		},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err != nil {
 		t.Fatalf("expected no error for source with both location and content, got %v", err)
 	}
 }
 
-func TestInterfaceValidateInterface_TransformExpressionMustBeNonEmpty(t *testing.T) {
+func TestInterfaceValidate_TransformExpressionMustBeNonEmpty(t *testing.T) {
 	// Per v0.2 spec §6.5, transforms are JSONata 2.0 expression strings.
 	// An empty string is not a valid expression.
 	i := Interface{
@@ -341,7 +341,7 @@ func TestInterfaceValidateInterface_TransformExpressionMustBeNonEmpty(t *testing
 			"empty": "",
 		},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -350,7 +350,7 @@ func TestInterfaceValidateInterface_TransformExpressionMustBeNonEmpty(t *testing
 	}
 }
 
-func TestInterfaceValidateInterface_BindingTransformRefMustExist(t *testing.T) {
+func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -369,7 +369,7 @@ func TestInterfaceValidateInterface_BindingTransformRefMustExist(t *testing.T) {
 			},
 		},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -378,7 +378,7 @@ func TestInterfaceValidateInterface_BindingTransformRefMustExist(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidateInterface_OperationRefMustExist(t *testing.T) {
+func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -394,7 +394,7 @@ func TestInterfaceValidateInterface_OperationRefMustExist(t *testing.T) {
 			},
 		},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -403,7 +403,7 @@ func TestInterfaceValidateInterface_OperationRefMustExist(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidateInterface_SourceRefMustExist(t *testing.T) {
+func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -416,7 +416,7 @@ func TestInterfaceValidateInterface_SourceRefMustExist(t *testing.T) {
 			},
 		},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -425,7 +425,7 @@ func TestInterfaceValidateInterface_SourceRefMustExist(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidateInterface_InlineTransformMustBeNonEmpty(t *testing.T) {
+func TestInterfaceValidate_InlineTransformMustBeNonEmpty(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -442,7 +442,7 @@ func TestInterfaceValidateInterface_InlineTransformMustBeNonEmpty(t *testing.T) 
 			},
 		},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -451,7 +451,7 @@ func TestInterfaceValidateInterface_InlineTransformMustBeNonEmpty(t *testing.T) 
 	}
 }
 
-func TestInterfaceValidateInterface_SecurityRefMustExist(t *testing.T) {
+func TestInterfaceValidate_SecurityRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -468,7 +468,7 @@ func TestInterfaceValidateInterface_SecurityRefMustExist(t *testing.T) {
 			},
 		},
 	}
-	err := i.ValidateInterface()
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -477,7 +477,7 @@ func TestInterfaceValidateInterface_SecurityRefMustExist(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidateInterface_SecurityRefValid(t *testing.T) {
+func TestInterfaceValidate_SecurityRefValid(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -497,12 +497,12 @@ func TestInterfaceValidateInterface_SecurityRefValid(t *testing.T) {
 			},
 		},
 	}
-	if err := i.ValidateInterface(); err != nil {
+	if err := i.Validate(); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
 
-func TestInterfaceValidateInterface_ValidInterfaceWithTransforms(t *testing.T) {
+func TestInterfaceValidate_ValidInterfaceWithTransforms(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -522,7 +522,7 @@ func TestInterfaceValidateInterface_ValidInterfaceWithTransforms(t *testing.T) {
 			},
 		},
 	}
-	if err := i.ValidateInterface(); err != nil {
+	if err := i.Validate(); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
@@ -557,7 +557,7 @@ func newInterfaceWithExamples(inputSchema, outputSchema JSONSchema, examples map
 	}
 }
 
-func TestInterfaceValidateInterface_ExampleValidation_ValidExamplePasses(t *testing.T) {
+func TestInterfaceValidate_ExampleValidation_ValidExamplePasses(t *testing.T) {
 	i := newInterfaceWithExamples(
 		JSONSchema{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
 		JSONSchema{"type": "object", "properties": map[string]any{"greeting": map[string]any{"type": "string"}}},
@@ -568,12 +568,12 @@ func TestInterfaceValidateInterface_ExampleValidation_ValidExamplePasses(t *test
 			},
 		},
 	)
-	if err := i.ValidateInterface(WithExampleValidation()); err != nil {
+	if err := i.Validate(); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
 
-func TestInterfaceValidateInterface_ExampleValidation_InvalidInputFails(t *testing.T) {
+func TestInterfaceValidate_ExampleValidation_InvalidInputFails(t *testing.T) {
 	i := newInterfaceWithExamples(
 		JSONSchema{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
 		nil, // no output schema
@@ -584,7 +584,7 @@ func TestInterfaceValidateInterface_ExampleValidation_InvalidInputFails(t *testi
 			},
 		},
 	)
-	err := i.ValidateInterface(WithExampleValidation())
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error for invalid example input")
 	}
@@ -596,7 +596,7 @@ func TestInterfaceValidateInterface_ExampleValidation_InvalidInputFails(t *testi
 	}
 }
 
-func TestInterfaceValidateInterface_ExampleValidation_InvalidOutputFails(t *testing.T) {
+func TestInterfaceValidate_ExampleValidation_InvalidOutputFails(t *testing.T) {
 	i := newInterfaceWithExamples(
 		nil, // no input schema
 		JSONSchema{"type": "object", "properties": map[string]any{"count": map[string]any{"type": "integer"}}, "additionalProperties": false},
@@ -607,7 +607,7 @@ func TestInterfaceValidateInterface_ExampleValidation_InvalidOutputFails(t *test
 			},
 		},
 	)
-	err := i.ValidateInterface(WithExampleValidation())
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error for invalid example output")
 	}
@@ -619,8 +619,7 @@ func TestInterfaceValidateInterface_ExampleValidation_InvalidOutputFails(t *test
 	}
 }
 
-func TestInterfaceValidateInterface_ExampleValidation_SkippedByDefault(t *testing.T) {
-	// Invalid example input, but WithExampleValidation is NOT passed.
+func TestInterfaceValidate_ExampleValidation_RunsByDefault(t *testing.T) {
 	i := newInterfaceWithExamples(
 		JSONSchema{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
 		nil,
@@ -630,12 +629,12 @@ func TestInterfaceValidateInterface_ExampleValidation_SkippedByDefault(t *testin
 			},
 		},
 	)
-	if err := i.ValidateInterface(); err != nil {
-		t.Fatalf("expected no error without WithExampleValidation, got %v", err)
+	if err := i.Validate(); err == nil {
+		t.Fatalf("expected error because OBI-D-15 is always enforced")
 	}
 }
 
-func TestInterfaceValidateInterface_ExampleValidation_NoSchemasSkipsGracefully(t *testing.T) {
+func TestInterfaceValidate_ExampleValidation_NoSchemasSkipsGracefully(t *testing.T) {
 	// Operation has examples but no input/output schemas at all.
 	i := newInterfaceWithExamples(
 		nil,
@@ -647,24 +646,24 @@ func TestInterfaceValidateInterface_ExampleValidation_NoSchemasSkipsGracefully(t
 			},
 		},
 	)
-	if err := i.ValidateInterface(WithExampleValidation()); err != nil {
+	if err := i.Validate(); err != nil {
 		t.Fatalf("expected no error when schemas are absent, got %v", err)
 	}
 }
 
-func TestInterfaceValidateInterface_ExampleValidation_NoExamplesSkipsGracefully(t *testing.T) {
+func TestInterfaceValidate_ExampleValidation_NoExamplesSkipsGracefully(t *testing.T) {
 	// Operation has schemas but no examples.
 	i := newInterfaceWithExamples(
 		JSONSchema{"type": "object"},
 		JSONSchema{"type": "object"},
 		nil,
 	)
-	if err := i.ValidateInterface(WithExampleValidation()); err != nil {
+	if err := i.Validate(); err != nil {
 		t.Fatalf("expected no error when examples are absent, got %v", err)
 	}
 }
 
-func TestInterfaceValidateInterface_ExampleValidation_ExampleWithoutInputOrOutput(t *testing.T) {
+func TestInterfaceValidate_ExampleValidation_ExampleWithoutInputOrOutput(t *testing.T) {
 	// Example has neither input nor output -- should be skipped, not crash.
 	i := newInterfaceWithExamples(
 		JSONSchema{"type": "object"},
@@ -673,12 +672,12 @@ func TestInterfaceValidateInterface_ExampleValidation_ExampleWithoutInputOrOutpu
 			"empty": {Description: "an example with no data"},
 		},
 	)
-	if err := i.ValidateInterface(WithExampleValidation()); err != nil {
+	if err := i.Validate(); err != nil {
 		t.Fatalf("expected no error for example without input/output, got %v", err)
 	}
 }
 
-func TestInterfaceValidateInterface_ExampleValidation_WithSchemaRef(t *testing.T) {
+func TestInterfaceValidate_ExampleValidation_WithSchemaRef(t *testing.T) {
 	// Operation input uses $ref to a document-level schema.
 	i := Interface{
 		OpenBindings: "0.2.0",
@@ -695,7 +694,7 @@ func TestInterfaceValidateInterface_ExampleValidation_WithSchemaRef(t *testing.T
 			},
 		},
 	}
-	err := i.ValidateInterface(WithExampleValidation())
+	err := i.Validate()
 	if err == nil {
 		t.Fatalf("expected error for invalid example against $ref schema")
 	}

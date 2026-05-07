@@ -116,15 +116,8 @@ func (c *combinedInvoker) findInvoker(sourceFormat string) BindingInvoker {
 	indices := c.byName[name]
 	for _, idx := range indices {
 		entry := &c.entries[idx]
-		if formattoken.Matches(entry.vr, sourceFormat) {
+		if entry.info.Token == sourceFormat || formattoken.Matches(entry.vr, sourceFormat) {
 			return entry.invoker
-		}
-	}
-	// Name-only fallback: handles cases where the source format is a range
-	// token rather than an exact version.
-	for _, idx := range indices {
-		if c.entries[idx].invoker != nil {
-			return c.entries[idx].invoker
 		}
 	}
 	return nil
@@ -187,15 +180,8 @@ func (c *combinedCreator) findCreator(sourceFormat string) InterfaceCreator {
 	indices := c.byName[name]
 	for _, idx := range indices {
 		entry := &c.entries[idx]
-		if formattoken.Matches(entry.vr, sourceFormat) {
+		if entry.info.Token == sourceFormat || formattoken.Matches(entry.vr, sourceFormat) {
 			return entry.creator
-		}
-	}
-	// Name-only fallback: handles synthesis where the source format is the
-	// creator's own range token rather than an exact version from an OBI.
-	for _, idx := range indices {
-		if c.entries[idx].creator != nil {
-			return c.entries[idx].creator
 		}
 	}
 	return nil

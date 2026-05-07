@@ -24,8 +24,8 @@ func TestCheckInterfaceCompatibility_FullyCompatible(t *testing.T) {
 				Output: JSONSchema{
 					"type": "object",
 					"properties": map[string]any{
-						"status":  map[string]any{"type": "string"},
-						"uptime":  map[string]any{"type": "number"},
+						"status": map[string]any{"type": "string"},
+						"uptime": map[string]any{"type": "number"},
 					},
 					"required": []any{"status"},
 				},

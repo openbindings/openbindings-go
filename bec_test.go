@@ -617,7 +617,7 @@ func TestDefaultBindingSelector_PrefersNonDeprecated(t *testing.T) {
 			},
 			"active": {
 				Operation: "op",
-				Source:     "s",
+				Source:    "s",
 			},
 		},
 	}
@@ -742,8 +742,8 @@ func makeTransformInterface(inputTransform, outputTransform *TransformOrRef) *In
 		Bindings: map[string]BindingEntry{
 			"op.src": {
 				Operation:       "op",
-				Source:           "src",
-				Ref:              "#/ref",
+				Source:          "src",
+				Ref:             "#/ref",
 				InputTransform:  inputTransform,
 				OutputTransform: outputTransform,
 			},

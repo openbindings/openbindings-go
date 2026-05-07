@@ -193,11 +193,10 @@ func TestOBIT07_InputValidation_SkippedWhenNoSchema(t *testing.T) {
 	}
 }
 
-func TestOBIT07_InputValidation_SkippedWhenNilInput(t *testing.T) {
+func TestOBIT07_InputValidation_RejectsNilInput(t *testing.T) {
 	inv := NewOperationInvoker(&stubInvoker{data: map[string]any{"ok": true}})
 	iface := testInterfaceWithInputSchema()
 
-	// nil input should not trigger validation.
 	ch, err := inv.Invoke(context.Background(), &OperationInvocationInput{
 		Interface: iface,
 		Operation: "createUser",
@@ -207,8 +206,11 @@ func TestOBIT07_InputValidation_SkippedWhenNilInput(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	ev := <-ch
-	if ev.Error != nil {
-		t.Fatalf("unexpected error event: %v", ev.Error.Message)
+	if ev.Error == nil {
+		t.Fatalf("expected validation error event")
+	}
+	if ev.Error.Code != ErrCodeValidationFailed {
+		t.Fatalf("error code = %q, want %q", ev.Error.Code, ErrCodeValidationFailed)
 	}
 }
 

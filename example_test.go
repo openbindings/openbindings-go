@@ -34,7 +34,7 @@ func ExampleInterface_basic() {
 	// Get a user by ID
 }
 
-func ExampleInterface_ValidateInterface() {
+func ExampleInterface_Validate() {
 	data := []byte(`{
 		"openbindings": "0.1.0",
 		"operations": {
@@ -52,7 +52,7 @@ func ExampleInterface_ValidateInterface() {
 		log.Fatal(err)
 	}
 
-	if err := iface.ValidateInterface(); err != nil {
+	if err := iface.Validate(); err != nil {
 		fmt.Println("invalid:", err)
 	} else {
 		fmt.Println("valid")
@@ -60,7 +60,7 @@ func ExampleInterface_ValidateInterface() {
 	// Output: valid
 }
 
-func ExampleInterface_ValidateInterface_strict() {
+func ExampleInterface_Validate_strict() {
 	data := []byte(`{
 		"openbindings": "0.1.0",
 		"unknownField": "should fail in strict mode",
@@ -73,11 +73,11 @@ func ExampleInterface_ValidateInterface_strict() {
 	_ = json.Unmarshal(data, &iface)
 
 	// Default: unknown fields are allowed (forward-compat)
-	err := iface.ValidateInterface()
+	err := iface.Validate()
 	fmt.Println("default:", err == nil)
 
 	// Strict: unknown fields are rejected
-	err = iface.ValidateInterface(openbindings.WithRejectUnknownTypedFields())
+	err = iface.Validate(openbindings.WithRejectUnknownTypedFields())
 	fmt.Println("strict:", err != nil)
 	// Output:
 	// default: true

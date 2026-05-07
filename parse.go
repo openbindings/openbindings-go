@@ -42,13 +42,13 @@ func prefixLines(prefix string, lines []string) []string {
 	return out
 }
 
-// ValidateDocument is a convenience that calls ParseDocument followed by ValidateInterface.
+// ValidateDocument is a convenience that calls ParseDocument followed by Validate.
 func ValidateDocument(data []byte) (*Interface, error) {
 	iface, err := ParseDocument(data)
 	if err != nil {
 		return nil, err
 	}
-	if err := iface.ValidateInterface(); err != nil {
+	if err := iface.Validate(); err != nil {
 		return iface, err
 	}
 	return iface, nil

@@ -476,11 +476,11 @@ func (c *InterfaceClient) tryFetchOBI(ctx context.Context, target string) (*Inte
 		return nil, finalURL, nil
 	}
 
-	var iface Interface
-	if err := json.Unmarshal(body, &iface); err != nil {
+	iface, err := ParseDocument(body)
+	if err != nil {
 		return nil, finalURL, err
 	}
-	return &iface, finalURL, nil
+	return iface, finalURL, nil
 }
 
 // fetchRawContent downloads raw bytes from a URL for cache-busting synthesis.

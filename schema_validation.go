@@ -16,7 +16,7 @@ import (
 var openbindingsSchemaJSON []byte
 
 // compiledOBISchema is the embedded OBI document schema, compiled once at init.
-// Used by ValidateInterface() to enforce OBI-D-02 (the document validates against
+// Used by Validate() to enforce OBI-D-02 (the document validates against
 // openbindings.schema.json).
 var compiledOBISchema *jsonschema.Schema
 

@@ -83,9 +83,7 @@ func runConformanceDir(t *testing.T, dir string) {
 				iface, parseErr := ParseDocument(tt.Document)
 				var validateErr error
 				if parseErr == nil {
-					// Enable all opt-in validation so the conformance corpus can
-					// exercise checks like OBI-D-15 (example schema validation).
-					validateErr = iface.ValidateInterface(WithExampleValidation())
+					validateErr = iface.Validate()
 				}
 				actualValid := parseErr == nil && validateErr == nil
 
