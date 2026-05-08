@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 (working draft)
+
+### Changed
+
+- **Renamed binding "executor" terminology to "invoker"** to track the spec 0.2.0 rename in `openbindings-go`. See the root `openbindings-go` CHANGELOG for the full rename table.
+
+- **Migrated to protobuf v2 + protocompile.** Direct dependencies on `github.com/jhump/protoreflect` (v1) and `github.com/golang/protobuf` are gone. Proto file parsing moved from `jhump/protoreflect/desc/protoparse` to `github.com/bufbuild/protocompile`, the v2-native successor maintained by Buf. Dynamic message construction now uses `google.golang.org/protobuf/types/dynamicpb`; JSON marshaling uses `google.golang.org/protobuf/encoding/protojson`. The unary and server-streaming integration tests pass against the same fixtures.
+
 ## 0.1.1 — 2026-04-20
 
 ### Fixed

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 (working draft)
+
+### Changed
+
+- **Renamed binding "executor" terminology to "invoker"** to track the spec 0.2.0 rename in `openbindings-go`. The module's exported types and methods follow the same pattern (`Executor` -> `Invoker`, `ExecuteBinding(...)` -> `InvokeBinding(...)`, etc.). See the root `openbindings-go` CHANGELOG for the full rename table.
+
+- **Migrated to protobuf v2.** Direct dependencies on `github.com/jhump/protoreflect` (v1) and `github.com/golang/protobuf` are gone. The module now consumes `github.com/jhump/protoreflect/v2/grpcdynamic`, `github.com/jhump/protoreflect/v2/grpcreflect`, `google.golang.org/protobuf/types/dynamicpb`, `google.golang.org/protobuf/encoding/protojson`, and `google.golang.org/protobuf/reflect/protoreflect` directly. The reflection client's `ResolveService` shorthand was replaced with `FileContainingSymbol` plus a small in-package walker. Source-info comment extraction moved from per-method `GetSourceInfo()` to file-level `SourceLocations().ByDescriptor(method)`. Behavior is preserved across the change; the bufconn integration suite passes against the same fixtures.
+
 ## 0.1.1 — 2026-04-20
 
 This release fixes several schema-emission issues that prevented
