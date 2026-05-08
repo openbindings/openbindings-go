@@ -1,49 +1,59 @@
 package connect
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
-	"github.com/jhump/protoreflect/desc"            //nolint:staticcheck // no v2 equivalent yet
-	"github.com/jhump/protoreflect/desc/protoparse"  //nolint:staticcheck // no v2 equivalent yet
+	"github.com/bufbuild/protocompile"
 	openbindings "github.com/openbindings/openbindings-go"
-	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type discovery struct {
-	services []*desc.ServiceDescriptor
+	services []protoreflect.ServiceDescriptor
 }
 
-// discoverFromProto parses a .proto file (or inline content) and extracts service descriptors.
-func discoverFromProto(location string, content any) (*discovery, error) {
-	var fds []*desc.FileDescriptor
-	var err error
+// discoverFromProto parses a .proto file (or inline content) and extracts
+// service descriptors. Uses protocompile (the v2-native successor to jhump's
+// protoparse, maintained by Buf).
+func discoverFromProto(ctx context.Context, location string, content any) (*discovery, error) {
+	var compiler protocompile.Compiler
+	var fileName string
 
 	if content != nil {
 		raw, convErr := openbindings.ContentToBytes(content)
 		if convErr != nil {
 			return nil, fmt.Errorf("convert proto content: %w", convErr)
 		}
-		p := protoparse.Parser{
-			Accessor: protoparse.FileContentsFromMap(map[string]string{
-				"inline.proto": string(raw),
-			}),
+		fileName = "inline.proto"
+		compiler = protocompile.Compiler{
+			Resolver: &protocompile.SourceResolver{
+				Accessor: protocompile.SourceAccessorFromMap(map[string]string{
+					fileName: string(raw),
+				}),
+			},
 		}
-		fds, err = p.ParseFiles("inline.proto")
 	} else if location != "" {
-		p := protoparse.Parser{}
-		fds, err = p.ParseFiles(location)
+		fileName = location
+		compiler = protocompile.Compiler{
+			Resolver: &protocompile.SourceResolver{},
+		}
 	} else {
 		return nil, fmt.Errorf("proto source requires a location or content")
 	}
 
+	files, err := compiler.Compile(ctx, fileName)
 	if err != nil {
 		return nil, fmt.Errorf("parse proto: %w", err)
 	}
 
 	disc := &discovery{}
-	for _, fd := range fds {
-		disc.services = append(disc.services, fd.GetServices()...)
+	for _, fd := range files {
+		services := fd.Services()
+		for i := 0; i < services.Len(); i++ {
+			disc.services = append(disc.services, services.Get(i))
+		}
 	}
 	return disc, nil
 }
@@ -74,35 +84,29 @@ func convertToInterface(disc *discovery, sourceLocation string) (openbindings.In
 	usedKeys := map[string]string{}
 
 	sort.Slice(disc.services, func(i, j int) bool {
-		return disc.services[i].GetFullyQualifiedName() < disc.services[j].GetFullyQualifiedName()
+		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
 	})
 
 	for _, svc := range disc.services {
-		methods := svc.GetMethods()
-		sort.Slice(methods, func(i, j int) bool {
-			return methods[i].GetName() < methods[j].GetName()
-		})
+		methods := serviceMethodsSorted(svc)
 		for _, method := range methods {
-			if method.IsClientStreaming() {
+			if method.IsStreamingClient() {
 				continue
 			}
 
-			fqn := svc.GetFullyQualifiedName() + "/" + method.GetName()
-			opKey := openbindings.SanitizeKey(method.GetName())
-			opKey = openbindings.ResolveKeyCollision(opKey, svc.GetName(), usedKeys)
+			fqn := string(svc.FullName()) + "/" + string(method.Name())
+			opKey := openbindings.SanitizeKey(string(method.Name()))
+			opKey = openbindings.ResolveKeyCollision(opKey, string(svc.Name()), usedKeys)
 			usedKeys[opKey] = fqn
 
 			op := openbindings.Operation{
 				Description: commentToDescription(method),
 			}
 
-			inputType := method.GetInputType()
-			if inputType != nil {
+			if inputType := method.Input(); inputType != nil {
 				op.Input = messageToJSONSchema(inputType)
 			}
-
-			outputType := method.GetOutputType()
-			if outputType != nil {
+			if outputType := method.Output(); outputType != nil {
 				op.Output = messageToJSONSchema(outputType)
 			}
 
@@ -119,7 +123,7 @@ func convertToInterface(disc *discovery, sourceLocation string) (openbindings.In
 
 	if len(disc.services) > 0 {
 		svc := disc.services[0]
-		iface.Name = svc.GetName()
+		iface.Name = string(svc.Name())
 		if len(disc.services) > 1 {
 			iface.Name = packageName(svc)
 		}
@@ -128,18 +132,35 @@ func convertToInterface(disc *discovery, sourceLocation string) (openbindings.In
 	return iface, nil
 }
 
-func packageName(svc *desc.ServiceDescriptor) string {
-	pkg := svc.GetFile().GetPackage()
-	if pkg != "" {
-		return pkg
+func serviceMethodsSorted(svc protoreflect.ServiceDescriptor) []protoreflect.MethodDescriptor {
+	methods := svc.Methods()
+	out := make([]protoreflect.MethodDescriptor, 0, methods.Len())
+	for i := 0; i < methods.Len(); i++ {
+		out = append(out, methods.Get(i))
 	}
-	return svc.GetName()
+	sort.Slice(out, func(i, j int) bool {
+		return string(out[i].Name()) < string(out[j].Name())
+	})
+	return out
 }
 
-func commentToDescription(method *desc.MethodDescriptor) string {
-	info := method.GetSourceInfo()
-	if info != nil && info.GetLeadingComments() != "" {
-		return trimComment(info.GetLeadingComments())
+func packageName(svc protoreflect.ServiceDescriptor) string {
+	if file := svc.ParentFile(); file != nil {
+		if pkg := string(file.Package()); pkg != "" {
+			return pkg
+		}
+	}
+	return string(svc.Name())
+}
+
+func commentToDescription(method protoreflect.MethodDescriptor) string {
+	file := method.ParentFile()
+	if file == nil {
+		return ""
+	}
+	loc := file.SourceLocations().ByDescriptor(method)
+	if loc.LeadingComments != "" {
+		return trimComment(loc.LeadingComments)
 	}
 	return ""
 }
@@ -154,15 +175,15 @@ func trimComment(s string) string {
 	return s
 }
 
-// messageToJSONSchema and helpers are identical to grpc-go's implementation.
+// messageToJSONSchema and helpers are similar to grpc-go's implementation.
 // Both formats use the same protobuf type system.
 
-func messageToJSONSchema(msg *desc.MessageDescriptor) map[string]any {
+func messageToJSONSchema(msg protoreflect.MessageDescriptor) map[string]any {
 	return messageToJSONSchemaVisited(msg, make(map[string]bool))
 }
 
-func messageToJSONSchemaVisited(msg *desc.MessageDescriptor, visited map[string]bool) map[string]any {
-	fqn := msg.GetFullyQualifiedName()
+func messageToJSONSchemaVisited(msg protoreflect.MessageDescriptor, visited map[string]bool) map[string]any {
+	fqn := string(msg.FullName())
 	if visited[fqn] {
 		return map[string]any{"type": "object"}
 	}
@@ -170,22 +191,23 @@ func messageToJSONSchemaVisited(msg *desc.MessageDescriptor, visited map[string]
 
 	schema := map[string]any{"type": "object"}
 
-	fields := msg.GetFields()
-	if len(fields) == 0 {
+	fields := msg.Fields()
+	if fields.Len() == 0 {
 		return schema
 	}
 
 	properties := map[string]any{}
-	for _, field := range fields {
-		properties[field.GetJSONName()] = fieldToSchema(field, visited)
+	for i := 0; i < fields.Len(); i++ {
+		field := fields.Get(i)
+		properties[field.JSONName()] = fieldToSchema(field, visited)
 	}
 	schema["properties"] = properties
 	return schema
 }
 
-func fieldToSchema(field *desc.FieldDescriptor, visited map[string]bool) map[string]any {
+func fieldToSchema(field protoreflect.FieldDescriptor, visited map[string]bool) map[string]any {
 	if field.IsMap() {
-		valField := field.GetMapValueType()
+		valField := field.MapValue()
 		return map[string]any{
 			"type":                 "object",
 			"additionalProperties": scalarOrMessageSchema(valField, visited),
@@ -194,7 +216,7 @@ func fieldToSchema(field *desc.FieldDescriptor, visited map[string]bool) map[str
 
 	s := scalarOrMessageSchema(field, visited)
 
-	if field.IsRepeated() && !field.IsMap() {
+	if field.Cardinality() == protoreflect.Repeated && !field.IsMap() {
 		return map[string]any{
 			"type":  "array",
 			"items": s,
@@ -204,50 +226,45 @@ func fieldToSchema(field *desc.FieldDescriptor, visited map[string]bool) map[str
 	return s
 }
 
-func scalarOrMessageSchema(field *desc.FieldDescriptor, visited map[string]bool) map[string]any {
-	t := field.GetType()
-	switch t {
-	case descriptorpb.FieldDescriptorProto_TYPE_BOOL:
+func scalarOrMessageSchema(field protoreflect.FieldDescriptor, visited map[string]bool) map[string]any {
+	switch field.Kind() {
+	case protoreflect.BoolKind:
 		return map[string]any{"type": "boolean"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_INT32,
-		descriptorpb.FieldDescriptorProto_TYPE_SINT32,
-		descriptorpb.FieldDescriptorProto_TYPE_SFIXED32,
-		descriptorpb.FieldDescriptorProto_TYPE_UINT32,
-		descriptorpb.FieldDescriptorProto_TYPE_FIXED32:
+	case protoreflect.Int32Kind,
+		protoreflect.Sint32Kind,
+		protoreflect.Sfixed32Kind,
+		protoreflect.Uint32Kind,
+		protoreflect.Fixed32Kind:
 		return map[string]any{"type": "integer"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_INT64,
-		descriptorpb.FieldDescriptorProto_TYPE_SINT64,
-		descriptorpb.FieldDescriptorProto_TYPE_SFIXED64,
-		descriptorpb.FieldDescriptorProto_TYPE_UINT64,
-		descriptorpb.FieldDescriptorProto_TYPE_FIXED64:
+	case protoreflect.Int64Kind,
+		protoreflect.Sint64Kind,
+		protoreflect.Sfixed64Kind,
+		protoreflect.Uint64Kind,
+		protoreflect.Fixed64Kind:
 		return map[string]any{"type": "string"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_FLOAT,
-		descriptorpb.FieldDescriptorProto_TYPE_DOUBLE:
+	case protoreflect.FloatKind, protoreflect.DoubleKind:
 		return map[string]any{"type": "number"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_STRING:
+	case protoreflect.StringKind, protoreflect.BytesKind:
 		return map[string]any{"type": "string"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_BYTES:
-		return map[string]any{"type": "string"}
-
-	case descriptorpb.FieldDescriptorProto_TYPE_ENUM:
-		enumDesc := field.GetEnumType()
+	case protoreflect.EnumKind:
+		enumDesc := field.Enum()
 		if enumDesc != nil {
-			var values []any
-			for _, v := range enumDesc.GetValues() {
-				values = append(values, v.GetName())
+			values := enumDesc.Values()
+			out := make([]any, 0, values.Len())
+			for i := 0; i < values.Len(); i++ {
+				out = append(out, string(values.Get(i).Name()))
 			}
-			return map[string]any{"type": "string", "enum": values}
+			return map[string]any{"type": "string", "enum": out}
 		}
 		return map[string]any{"type": "string"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
-		descriptorpb.FieldDescriptorProto_TYPE_GROUP:
-		msgDesc := field.GetMessageType()
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		msgDesc := field.Message()
 		if msgDesc != nil {
 			return messageToJSONSchemaVisited(msgDesc, visited)
 		}

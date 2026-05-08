@@ -15,7 +15,7 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 	var err error
 
 	if source.Content != nil || isProtoFile(source.Location) {
-		disc, err = discoverFromProto(source.Location, source.Content)
+		disc, err = discoverFromProto(ctx, source.Location, source.Content)
 		if err != nil {
 			return nil, fmt.Errorf("gRPC proto parse: %w", err)
 		}
@@ -33,19 +33,16 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 	var targets []openbindings.BindableTarget
 
 	sort.Slice(disc.services, func(i, j int) bool {
-		return disc.services[i].GetFullyQualifiedName() < disc.services[j].GetFullyQualifiedName()
+		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
 	})
 
 	for _, svc := range disc.services {
-		methods := svc.GetMethods()
-		sort.Slice(methods, func(i, j int) bool {
-			return methods[i].GetName() < methods[j].GetName()
-		})
+		methods := serviceMethodsSorted(svc)
 		for _, method := range methods {
-			if method.IsClientStreaming() {
+			if method.IsStreamingClient() {
 				continue
 			}
-			fqn := svc.GetFullyQualifiedName() + "/" + method.GetName()
+			fqn := string(svc.FullName()) + "/" + string(method.Name())
 			desc := commentToDescription(method)
 			targets = append(targets, bindableTarget(fqn, desc))
 		}

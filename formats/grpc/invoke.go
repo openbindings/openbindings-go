@@ -9,20 +9,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/protobuf/jsonpb" //nolint:staticcheck // required by jhump/protoreflect/dynamic
-	"github.com/golang/protobuf/proto"  //nolint:staticcheck // matches jhump/protoreflect return types
-	"github.com/jhump/protoreflect/desc"                //nolint:staticcheck // no v2 equivalent yet
-	"github.com/jhump/protoreflect/dynamic"             //nolint:staticcheck // no v2 equivalent yet
-	"github.com/jhump/protoreflect/dynamic/grpcdynamic" //nolint:staticcheck // depends on protoreflect/dynamic
-	"github.com/jhump/protoreflect/grpcreflect"         //nolint:staticcheck // depends on protoreflect/desc
+	"github.com/jhump/protoreflect/v2/grpcdynamic"
+	"github.com/jhump/protoreflect/v2/grpcreflect"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-func doGRPCCall(ctx context.Context, in *openbindings.BindingInvocationInput, conn *grpc.ClientConn, methodDesc *desc.MethodDescriptor) *openbindings.InvocationOutput {
+func doGRPCCall(ctx context.Context, in *openbindings.BindingInvocationInput, conn *grpc.ClientConn, methodDesc protoreflect.MethodDescriptor) *openbindings.InvocationOutput {
 	start := time.Now()
 
 	reqMsg, err := buildRequest(methodDesc, in.Input)
@@ -72,7 +72,7 @@ func applyGRPCContext(ctx context.Context, bindCtx map[string]any, opts *openbin
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
-func subscribe(ctx context.Context, in *openbindings.BindingInvocationInput, conn *grpc.ClientConn, refClient *grpcreflect.Client, methodDesc *desc.MethodDescriptor) (<-chan openbindings.StreamEvent, error) {
+func subscribe(ctx context.Context, in *openbindings.BindingInvocationInput, conn *grpc.ClientConn, refClient *grpcreflect.Client, methodDesc protoreflect.MethodDescriptor) (<-chan openbindings.StreamEvent, error) {
 	start := time.Now()
 
 	reqMsg, err := buildRequest(methodDesc, in.Input)
@@ -142,8 +142,8 @@ func parseRef(ref string) (string, string, error) {
 	return ref[:idx], ref[idx+1:], nil
 }
 
-func buildRequest(method *desc.MethodDescriptor, input any) (*dynamic.Message, error) {
-	msg := dynamic.NewMessage(method.GetInputType())
+func buildRequest(method protoreflect.MethodDescriptor, input any) (proto.Message, error) {
+	msg := dynamicpb.NewMessage(method.Input())
 	if input == nil {
 		return msg, nil
 	}
@@ -155,21 +155,17 @@ func buildRequest(method *desc.MethodDescriptor, input any) (*dynamic.Message, e
 	if err != nil {
 		return nil, fmt.Errorf("marshal input: %w", err)
 	}
-	if err := msg.UnmarshalJSONPB(&jsonpb.Unmarshaler{AllowUnknownFields: true}, jsonBytes); err != nil {
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(jsonBytes, msg); err != nil {
 		return nil, fmt.Errorf("unmarshal input to protobuf: %w", err)
 	}
 	return msg, nil
 }
 
 func responseToJSON(resp proto.Message) (any, error) {
-	dm, ok := resp.(*dynamic.Message)
-	if !ok {
-		return nil, fmt.Errorf("unexpected response type %T (expected *dynamic.Message)", resp)
-	}
 	// Emit proto3 JSON canonical names (camelCase) so response field names
-	// match what the creator writes into OBI schemas via field.GetJSONName().
-	// OrigName: true would emit snake_case and desync from the OBI contract.
-	jsonBytes, err := dm.MarshalJSONPB(&jsonpb.Marshaler{})
+	// match what the creator writes into OBI schemas via field.JSONName().
+	// UseProtoNames: true would emit snake_case and desync from the OBI contract.
+	jsonBytes, err := protojson.Marshal(resp)
 	if err != nil {
 		return nil, fmt.Errorf("marshal response: %w", err)
 	}

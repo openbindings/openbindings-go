@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/protobuf/jsonpb" //nolint:staticcheck // required by jhump/protoreflect/dynamic
-	"github.com/jhump/protoreflect/dynamic" //nolint:staticcheck // no v2 equivalent yet
 	openbindings "github.com/openbindings/openbindings-go"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // Connect streaming wire format constants.
@@ -120,7 +120,7 @@ func invokeConnectStreaming(ctx context.Context, client *http.Client, baseURL, s
 	var msgBytes []byte
 	if input != nil {
 		if mi != nil && mi.method != nil {
-			msg := dynamic.NewMessage(mi.method.GetInputType())
+			msg := dynamicpb.NewMessage(mi.method.Input())
 			inputMap, ok := input.(map[string]any)
 			if !ok {
 				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, fmt.Sprintf("input must be a JSON object, got %T", input))), nil
@@ -129,12 +129,12 @@ func invokeConnectStreaming(ctx context.Context, client *http.Client, baseURL, s
 			if err != nil {
 				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
 			}
-			if err := msg.UnmarshalJSONPB(&jsonpb.Unmarshaler{AllowUnknownFields: true}, jsonBytes); err != nil {
+			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(jsonBytes, msg); err != nil {
 				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
 			}
 			// Emit proto3 JSON canonical names (camelCase) so field names match
-			// what the creator writes into OBI schemas via field.GetJSONName().
-			msgBytes, err = msg.MarshalJSONPB(&jsonpb.Marshaler{})
+			// what the creator writes into OBI schemas via field.JSONName().
+			msgBytes, err = protojson.Marshal(msg)
 			if err != nil {
 				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
 			}

@@ -97,7 +97,7 @@ service TestService {
 		t.Fatal(err)
 	}
 
-	disc, err := discoverFromProto("", protoContent)
+	disc, err := discoverFromProto(context.Background(), "", protoContent)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jhump/protoreflect/desc"        //nolint:staticcheck // no v2 equivalent yet
-	"github.com/jhump/protoreflect/grpcreflect" //nolint:staticcheck // depends on protoreflect/desc
+	"github.com/jhump/protoreflect/v2/grpcreflect"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 const FormatToken = "grpc"
@@ -107,16 +107,16 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 	// Note: isProtoFile is NOT checked here because Source.Location is the server
 	// address for invocation. Proto file locations are only used by the Creator.
 	var refClient *grpcreflect.Client
-	var svcDesc *desc.ServiceDescriptor
-	var methodDesc *desc.MethodDescriptor
+	var svcDesc protoreflect.ServiceDescriptor
+	var methodDesc protoreflect.MethodDescriptor
 
 	if enriched.Source.Content != nil {
-		disc, parseErr := discoverFromProto(enriched.Source.Location, enriched.Source.Content)
+		disc, parseErr := discoverFromProto(rpcCtx, enriched.Source.Location, enriched.Source.Content)
 		if parseErr != nil {
 			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeSourceLoadFailed, parseErr.Error())), nil
 		}
 		for _, svc := range disc.services {
-			if svc.GetFullyQualifiedName() == svcName {
+			if string(svc.FullName()) == svcName {
 				svcDesc = svc
 				break
 			}
@@ -125,17 +125,16 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound,
 				fmt.Sprintf("service %q not found in proto definition", svcName))), nil
 		}
-		methodDesc = svcDesc.FindMethodByName(methodName)
+		methodDesc = svcDesc.Methods().ByName(protoreflect.Name(methodName))
 	} else {
 		refClient = grpcreflect.NewClientAuto(rpcCtx, conn)
-		var err error
-		svcDesc, err = refClient.ResolveService(svcName)
+		svcDesc, err = resolveService(refClient, protoreflect.FullName(svcName))
 		if err != nil {
 			refClient.Reset()
 			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound,
 				fmt.Sprintf("resolve service %q: %v", svcName, err))), nil
 		}
-		methodDesc = svcDesc.FindMethodByName(methodName)
+		methodDesc = svcDesc.Methods().ByName(protoreflect.Name(methodName))
 	}
 
 	if methodDesc == nil {
@@ -146,7 +145,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 			fmt.Sprintf("method %q not found in service %q", methodName, svcName))), nil
 	}
 
-	if methodDesc.IsServerStreaming() {
+	if methodDesc.IsStreamingServer() {
 		return subscribe(ctx, enriched, conn, refClient, methodDesc)
 	}
 
@@ -215,7 +214,7 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 
 	if src.Content != nil || isProtoFile(src.Location) {
 		// Parse from .proto file or inline content.
-		disc, err = discoverFromProto(src.Location, src.Content)
+		disc, err = discoverFromProto(ctx, src.Location, src.Content)
 		if err != nil {
 			return nil, fmt.Errorf("gRPC proto parse: %w", err)
 		}

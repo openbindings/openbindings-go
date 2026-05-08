@@ -1,11 +1,12 @@
 package connect
 
 import (
+	"context"
 	"testing"
 )
 
 func TestConvertToInterface_CreatesOperations(t *testing.T) {
-	disc, err := discoverFromProto("", `
+	disc, err := discoverFromProto(context.Background(), "", `
 syntax = "proto3";
 package testpkg;
 
@@ -38,7 +39,7 @@ service TestService {
 }
 
 func TestConvertToInterface_CreatesBindingsWithRefs(t *testing.T) {
-	disc, err := discoverFromProto("", `
+	disc, err := discoverFromProto(context.Background(), "", `
 syntax = "proto3";
 package testpkg;
 
@@ -72,7 +73,7 @@ service TestService {
 }
 
 func TestConvertToInterface_SkipsClientStreaming(t *testing.T) {
-	disc, err := discoverFromProto("", `
+	disc, err := discoverFromProto(context.Background(), "", `
 syntax = "proto3";
 package testpkg;
 
@@ -102,7 +103,7 @@ service TestService {
 }
 
 func TestConvertToInterface_SourceEntry(t *testing.T) {
-	disc, err := discoverFromProto("", `
+	disc, err := discoverFromProto(context.Background(), "", `
 syntax = "proto3";
 package testpkg;
 
@@ -142,7 +143,7 @@ func TestConvertToInterface_NilDiscovery(t *testing.T) {
 }
 
 func TestConvertToInterface_InputOutputSchemas(t *testing.T) {
-	disc, err := discoverFromProto("", `
+	disc, err := discoverFromProto(context.Background(), "", `
 syntax = "proto3";
 package testpkg;
 

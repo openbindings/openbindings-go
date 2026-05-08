@@ -3,24 +3,57 @@ package grpc
 import (
 	"testing"
 
-	"github.com/jhump/protoreflect/desc" //nolint:staticcheck // no v2 equivalent yet
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/schemaprofile"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 // buildTestDiscovery creates a Discovery with the given services for testing.
+// Files are registered into a shared protoregistry so later files can resolve
+// dependencies declared by earlier ones.
 func buildTestDiscovery(t *testing.T, files ...*descriptorpb.FileDescriptorProto) *discovery {
 	t.Helper()
 	disc := &discovery{address: "localhost:50051"}
+	var registry protoregistry.Files
 	for _, fdp := range files {
-		fd, err := desc.CreateFileDescriptor(fdp)
+		fd, err := protodesc.NewFile(fdp, &registry)
 		if err != nil {
 			t.Fatal(err)
 		}
-		disc.services = append(disc.services, fd.GetServices()...)
+		if err := registry.RegisterFile(fd); err != nil {
+			t.Fatal(err)
+		}
+		services := fd.Services()
+		for i := 0; i < services.Len(); i++ {
+			disc.services = append(disc.services, services.Get(i))
+		}
 	}
 	return disc
+}
+
+// servicesFromFiles parses files into FileDescriptors and returns just their
+// service descriptors, for tests that want to construct a discovery directly.
+func servicesFromFiles(t *testing.T, files ...*descriptorpb.FileDescriptorProto) []protoreflect.ServiceDescriptor {
+	t.Helper()
+	var registry protoregistry.Files
+	var out []protoreflect.ServiceDescriptor
+	for _, fdp := range files {
+		fd, err := protodesc.NewFile(fdp, &registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.RegisterFile(fd); err != nil {
+			t.Fatal(err)
+		}
+		services := fd.Services()
+		for i := 0; i < services.Len(); i++ {
+			out = append(out, services.Get(i))
+		}
+	}
+	return out
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -59,19 +92,19 @@ func unaryMethod(name string) *descriptorpb.MethodDescriptorProto {
 
 func serverStreamMethod(name string) *descriptorpb.MethodDescriptorProto {
 	return &descriptorpb.MethodDescriptorProto{
-		Name:             ptr(name),
-		InputType:        ptr(".testpkg.Request"),
-		OutputType:       ptr(".testpkg.Response"),
-		ServerStreaming:   ptr(true),
+		Name:            ptr(name),
+		InputType:       ptr(".testpkg.Request"),
+		OutputType:      ptr(".testpkg.Response"),
+		ServerStreaming: ptr(true),
 	}
 }
 
 func clientStreamMethod(name string) *descriptorpb.MethodDescriptorProto {
 	return &descriptorpb.MethodDescriptorProto{
-		Name:             ptr(name),
-		InputType:        ptr(".testpkg.Request"),
-		OutputType:       ptr(".testpkg.Response"),
-		ClientStreaming:   ptr(true),
+		Name:            ptr(name),
+		InputType:       ptr(".testpkg.Request"),
+		OutputType:      ptr(".testpkg.Response"),
+		ClientStreaming: ptr(true),
 	}
 }
 
@@ -188,7 +221,6 @@ func TestConvertToInterface_OperationsAreSorted(t *testing.T) {
 	if len(iface.Operations) != 3 {
 		t.Fatalf("expected 3 operations, got %d", len(iface.Operations))
 	}
-	// Verify all exist (map ordering doesn't matter, but bindings should have correct refs)
 	for _, name := range []string{"Alpha", "Mike", "Zulu"} {
 		if _, ok := iface.Operations[name]; !ok {
 			t.Errorf("expected operation %q", name)
@@ -353,10 +385,6 @@ func TestWellKnownSchema_StringValue(t *testing.T) {
 }
 
 func TestWellKnownSchema_BytesValue(t *testing.T) {
-	// Bytes emit as {"type":"string"} without contentEncoding; the v0.1
-	// schema profile rejects contentEncoding as outside the supported
-	// keyword set, and the base64 wire convention is a driver concern
-	// rather than a schema-level contract.
 	got := wellKnownSchema("google.protobuf.BytesValue")
 	if got["type"] != "string" {
 		t.Errorf("type = %v, want string", got["type"])
@@ -376,10 +404,6 @@ func TestWellKnownSchema_Int32Wrappers(t *testing.T) {
 }
 
 func TestWellKnownSchema_Int64Wrappers(t *testing.T) {
-	// 64-bit wrapper types emit the semantic form
-	// {"type":"integer","format":"int64"}. Wire encoding (JSON number vs
-	// string vs protobuf varint) is a driver concern; format:int64 is
-	// a codegen hint for precision-preserving language types.
 	for _, fqn := range []string{"google.protobuf.Int64Value", "google.protobuf.UInt64Value"} {
 		got := wellKnownSchema(fqn)
 		if got["type"] != "integer" {
@@ -457,11 +481,6 @@ func timestampFile() *descriptorpb.FileDescriptorProto {
 
 func TestConvertToInterface_WellKnownTimestampField(t *testing.T) {
 	wkFDP := timestampFile()
-	wkFD, err := desc.CreateFileDescriptor(wkFDP)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	useFDP := &descriptorpb.FileDescriptorProto{
 		Name:       ptr("testpkg.proto"),
 		Package:    ptr("testpkg"),
@@ -488,12 +507,9 @@ func TestConvertToInterface_WellKnownTimestampField(t *testing.T) {
 			}},
 		},
 	}
-	useFD, err := desc.CreateFileDescriptor(useFDP, wkFD)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	disc := &discovery{address: "localhost:50051", services: useFD.GetServices()}
+	services := servicesFromFiles(t, wkFDP, useFDP)
+	disc := &discovery{address: "localhost:50051", services: services}
 	iface, err := convertToInterface(disc, "localhost:50051", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -568,8 +584,6 @@ func TestConvertToInterface_OneofSingleGroup(t *testing.T) {
 		t.Fatalf("expected 2 oneOf variants, got %d", len(variants))
 	}
 
-	// Oneof members should NOT appear in top-level properties; only the
-	// variants carry them.
 	if props, ok := input["properties"].(map[string]any); ok {
 		if _, present := props["itemId"]; present {
 			t.Error("oneof member itemId should not appear in top-level properties")
@@ -579,7 +593,6 @@ func TestConvertToInterface_OneofSingleGroup(t *testing.T) {
 		}
 	}
 
-	// Collect the required field name from each variant.
 	seen := map[string]bool{}
 	for _, v := range variants {
 		vm, ok := v.(map[string]any)
@@ -660,10 +673,6 @@ func TestConvertToInterface_OneofWithRegularFields(t *testing.T) {
 }
 
 func TestConvertToInterface_OneofMultipleGroupsFallsBackToProperties(t *testing.T) {
-	// Multiple oneof groups on the same message: v0.1 profile rejects
-	// oneOf inside allOf, so multi-group messages fall back to treating
-	// all members as independent optional properties and emit a warning
-	// so callers know exclusivity cannot be enforced by the schema.
 	file := &descriptorpb.FileDescriptorProto{
 		Name:    ptr("testpkg.proto"),
 		Package: ptr("testpkg"),
@@ -747,10 +756,6 @@ func TestConvertToInterface_OneofMultipleGroupsFallsBackToProperties(t *testing.
 	}
 }
 
-// Proto3 `optional int32 foo = 1;` is wrapped in a synthetic single-field
-// oneof for explicit-presence tracking. It is not a user-declared union and
-// must be emitted as a regular optional property, not a single-variant
-// oneOf.
 func TestConvertToInterface_Proto3OptionalNotTreatedAsOneof(t *testing.T) {
 	file := &descriptorpb.FileDescriptorProto{
 		Name:    ptr("testpkg.proto"),
@@ -759,7 +764,6 @@ func TestConvertToInterface_Proto3OptionalNotTreatedAsOneof(t *testing.T) {
 		MessageType: []*descriptorpb.DescriptorProto{
 			{
 				Name: ptr("Request"),
-				// Synthetic oneof declaration wrapping the proto3 optional field.
 				OneofDecl: []*descriptorpb.OneofDescriptorProto{
 					{Name: ptr("_page_size")},
 				},
@@ -767,8 +771,9 @@ func TestConvertToInterface_Proto3OptionalNotTreatedAsOneof(t *testing.T) {
 					{Name: ptr("query"), Number: ptr(int32(1)), Type: ptr(descriptorpb.FieldDescriptorProto_TYPE_STRING),
 						JsonName: ptr("query"), Label: ptr(descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL)},
 					{Name: ptr("page_size"), Number: ptr(int32(2)), Type: ptr(descriptorpb.FieldDescriptorProto_TYPE_INT32),
-						JsonName: ptr("pageSize"), Label: ptr(descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
-						OneofIndex:      ptr(int32(0)),
+						JsonName:       ptr("pageSize"),
+						Label:          ptr(descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL),
+						OneofIndex:     ptr(int32(0)),
 						Proto3Optional: ptr(true)},
 				},
 			},
@@ -806,8 +811,6 @@ func TestConvertToInterface_Proto3OptionalNotTreatedAsOneof(t *testing.T) {
 	}
 }
 
-// Guard against regressions where the oneof shape drifts outside the v0.1
-// schema profile (e.g. oneOf-inside-allOf, which the normalizer rejects).
 func TestConvertToInterface_OneofShapeAcceptedByProfile(t *testing.T) {
 	file := &descriptorpb.FileDescriptorProto{
 		Name:    ptr("testpkg.proto"),
@@ -855,23 +858,8 @@ func TestConvertToInterface_OneofShapeAcceptedByProfile(t *testing.T) {
 	}
 }
 
-// TestConvertToInterface_ByteAndInt64ShapesAcceptedByProfile guards against
-// emission regressions where a scalar or well-known-type schema uses keywords
-// outside the v0.1 schema profile. Previously, bytes fields emitted
-// {"type":"string","contentEncoding":"base64"}, which the normalizer rejects
-// because contentEncoding is not in the profile's keyword set. 64-bit
-// integers must emit as {"type":"integer","format":"int64"} — format is
-// annotation-only and stripped during normalization, so the shape survives.
 func TestConvertToInterface_ByteAndInt64ShapesAcceptedByProfile(t *testing.T) {
 	wkFDP := timestampFile()
-	wkFD, err := desc.CreateFileDescriptor(wkFDP)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Add Int64Value + BytesValue well-known-type file descriptors inline
-	// so the fixture references them without pulling in the real WKT
-	// registry.
 	wrapperFDP := &descriptorpb.FileDescriptorProto{
 		Name:    ptr("google/protobuf/wrappers.proto"),
 		Package: ptr("google.protobuf"),
@@ -887,11 +875,6 @@ func TestConvertToInterface_ByteAndInt64ShapesAcceptedByProfile(t *testing.T) {
 			}},
 		},
 	}
-	wrapperFD, err := desc.CreateFileDescriptor(wrapperFDP)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	useFDP := &descriptorpb.FileDescriptorProto{
 		Name:    ptr("testpkg.proto"),
 		Package: ptr("testpkg"),
@@ -902,25 +885,20 @@ func TestConvertToInterface_ByteAndInt64ShapesAcceptedByProfile(t *testing.T) {
 		},
 		MessageType: []*descriptorpb.DescriptorProto{
 			{Name: ptr("Request"), Field: []*descriptorpb.FieldDescriptorProto{
-				// Scalar int64.
 				{Name: ptr("count"), Number: ptr(int32(1)), Type: ptr(descriptorpb.FieldDescriptorProto_TYPE_INT64),
 					JsonName: ptr("count"), Label: ptr(descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL)},
-				// Scalar bytes.
 				{Name: ptr("payload"), Number: ptr(int32(2)), Type: ptr(descriptorpb.FieldDescriptorProto_TYPE_BYTES),
 					JsonName: ptr("payload"), Label: ptr(descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL)},
-				// Int64Value wrapper.
 				{Name: ptr("wrapped_count"), Number: ptr(int32(3)),
 					Type:     ptr(descriptorpb.FieldDescriptorProto_TYPE_MESSAGE),
 					TypeName: ptr(".google.protobuf.Int64Value"),
 					JsonName: ptr("wrappedCount"),
 					Label:    ptr(descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL)},
-				// BytesValue wrapper.
 				{Name: ptr("wrapped_payload"), Number: ptr(int32(4)),
 					Type:     ptr(descriptorpb.FieldDescriptorProto_TYPE_MESSAGE),
 					TypeName: ptr(".google.protobuf.BytesValue"),
 					JsonName: ptr("wrappedPayload"),
 					Label:    ptr(descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL)},
-				// Timestamp for good measure.
 				{Name: ptr("created_at"), Number: ptr(int32(5)),
 					Type:     ptr(descriptorpb.FieldDescriptorProto_TYPE_MESSAGE),
 					TypeName: ptr(".google.protobuf.Timestamp"),
@@ -938,12 +916,9 @@ func TestConvertToInterface_ByteAndInt64ShapesAcceptedByProfile(t *testing.T) {
 			}},
 		},
 	}
-	useFD, err := desc.CreateFileDescriptor(useFDP, wkFD, wrapperFD)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	disc := &discovery{address: "localhost:50051", services: useFD.GetServices()}
+	services := servicesFromFiles(t, wkFDP, wrapperFDP, useFDP)
+	disc := &discovery{address: "localhost:50051", services: services}
 	iface, err := convertToInterface(disc, "localhost:50051", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -955,7 +930,6 @@ func TestConvertToInterface_ByteAndInt64ShapesAcceptedByProfile(t *testing.T) {
 		t.Fatalf("bytes/int64 schema rejected by v0.1 profile: %v", err)
 	}
 
-	// Spot-check individual field shapes.
 	props, _ := input["properties"].(map[string]any)
 	count, _ := props["count"].(map[string]any)
 	if count["type"] != "integer" || count["format"] != "int64" {

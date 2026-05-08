@@ -12,17 +12,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/protobuf/jsonpb" //nolint:staticcheck // required by jhump/protoreflect/dynamic
-	"github.com/jhump/protoreflect/desc" //nolint:staticcheck // no v2 equivalent yet
-	"github.com/jhump/protoreflect/dynamic" //nolint:staticcheck // no v2 equivalent yet
 	openbindings "github.com/openbindings/openbindings-go"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 const maxResponseBytes int64 = 10 * 1024 * 1024
 
 // methodInfo holds a resolved method descriptor for input/output marshaling.
 type methodInfo struct {
-	method *desc.MethodDescriptor
+	method protoreflect.MethodDescriptor
 }
 
 // parseRef extracts the service and method name from a Connect ref.
@@ -40,14 +40,14 @@ func parseRef(ref string) (string, string, error) {
 }
 
 // resolveMethod parses proto content and finds the method descriptor.
-func resolveMethod(content any, svcName, methodName string) (*methodInfo, error) {
-	disc, err := discoverFromProto("", content)
+func resolveMethod(ctx context.Context, content any, svcName, methodName string) (*methodInfo, error) {
+	disc, err := discoverFromProto(ctx, "", content)
 	if err != nil {
 		return nil, err
 	}
 	for _, svc := range disc.services {
-		if svc.GetFullyQualifiedName() == svcName {
-			m := svc.FindMethodByName(methodName)
+		if string(svc.FullName()) == svcName {
+			m := svc.Methods().ByName(protoreflect.Name(methodName))
 			if m == nil {
 				return nil, fmt.Errorf("method %q not found in service %q", methodName, svcName)
 			}
@@ -68,7 +68,7 @@ func invokeConnect(ctx context.Context, client *http.Client, baseURL, svcName, m
 	if input != nil {
 		if mi != nil && mi.method != nil {
 			// Use protobuf-aware marshaling for field name accuracy.
-			msg := dynamic.NewMessage(mi.method.GetInputType())
+			msg := dynamicpb.NewMessage(mi.method.Input())
 			inputMap, ok := input.(map[string]any)
 			if !ok {
 				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, fmt.Sprintf("input must be a JSON object, got %T", input))
@@ -77,12 +77,12 @@ func invokeConnect(ctx context.Context, client *http.Client, baseURL, svcName, m
 			if err != nil {
 				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
 			}
-			if err := msg.UnmarshalJSONPB(&jsonpb.Unmarshaler{AllowUnknownFields: true}, jsonBytes); err != nil {
+			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(jsonBytes, msg); err != nil {
 				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
 			}
 			// Emit proto3 JSON canonical names (camelCase) so field names match
-			// what the creator writes into OBI schemas via field.GetJSONName().
-			body, err = msg.MarshalJSONPB(&jsonpb.Marshaler{})
+			// what the creator writes into OBI schemas via field.JSONName().
+			body, err = protojson.Marshal(msg)
 			if err != nil {
 				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
 			}

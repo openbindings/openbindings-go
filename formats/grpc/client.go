@@ -6,17 +6,17 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jhump/protoreflect/desc"            //nolint:staticcheck // no v2 equivalent yet
-	"github.com/jhump/protoreflect/desc/protoparse"  //nolint:staticcheck // no v2 equivalent yet
-	"github.com/jhump/protoreflect/grpcreflect"      //nolint:staticcheck // depends on protoreflect/desc
+	"github.com/bufbuild/protocompile"
+	"github.com/jhump/protoreflect/v2/grpcreflect"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type discovery struct {
-	services []*desc.ServiceDescriptor
+	services []protoreflect.ServiceDescriptor
 	address  string
 }
 
@@ -37,10 +37,10 @@ func discover(ctx context.Context, address string) (*discovery, error) {
 
 	disc := &discovery{address: address}
 	for _, name := range serviceNames {
-		if isInfraService(name) {
+		if isInfraService(string(name)) {
 			continue
 		}
-		svcDesc, err := refClient.ResolveService(name)
+		svcDesc, err := resolveService(refClient, name)
 		if err != nil {
 			return nil, fmt.Errorf("resolve service %q: %w", name, err)
 		}
@@ -48,6 +48,32 @@ func discover(ctx context.Context, address string) (*discovery, error) {
 	}
 
 	return disc, nil
+}
+
+// resolveService asks the reflection server for the file containing a service
+// symbol and extracts the matching ServiceDescriptor. v2's grpcreflect.Client
+// (unlike the v1 wrapper) returns the FileDescriptor; we walk it to find the
+// named service.
+func resolveService(client *grpcreflect.Client, name protoreflect.FullName) (protoreflect.ServiceDescriptor, error) {
+	file, err := client.FileContainingSymbol(name)
+	if err != nil {
+		return nil, err
+	}
+	if svc := findServiceInFile(file, name); svc != nil {
+		return svc, nil
+	}
+	return nil, fmt.Errorf("service %q not found in file %q", name, file.Path())
+}
+
+func findServiceInFile(file protoreflect.FileDescriptor, name protoreflect.FullName) protoreflect.ServiceDescriptor {
+	services := file.Services()
+	for i := 0; i < services.Len(); i++ {
+		svc := services.Get(i)
+		if svc.FullName() == name {
+			return svc
+		}
+	}
+	return nil
 }
 
 func dial(ctx context.Context, address string) (*grpc.ClientConn, error) {
@@ -87,38 +113,45 @@ func isInfraService(name string) bool {
 }
 
 // discoverFromProto parses a .proto file (or inline content) and extracts
-// service descriptors without connecting to a live server.
-func discoverFromProto(location string, content any) (*discovery, error) {
-	var fds []*desc.FileDescriptor
-	var err error
+// service descriptors without connecting to a live server. Uses protocompile
+// (the v2-native successor to jhump's protoparse, maintained by Buf).
+func discoverFromProto(ctx context.Context, location string, content any) (*discovery, error) {
+	var compiler protocompile.Compiler
+	var fileName string
 
 	if content != nil {
-		// Parse inline proto content.
 		raw, convErr := openbindings.ContentToBytes(content)
 		if convErr != nil {
 			return nil, fmt.Errorf("convert proto content: %w", convErr)
 		}
-		p := protoparse.Parser{
-			Accessor: protoparse.FileContentsFromMap(map[string]string{
-				"inline.proto": string(raw),
-			}),
+		fileName = "inline.proto"
+		compiler = protocompile.Compiler{
+			Resolver: &protocompile.SourceResolver{
+				Accessor: protocompile.SourceAccessorFromMap(map[string]string{
+					fileName: string(raw),
+				}),
+			},
 		}
-		fds, err = p.ParseFiles("inline.proto")
 	} else if location != "" {
-		p := protoparse.Parser{}
-		fds, err = p.ParseFiles(location)
+		fileName = location
+		compiler = protocompile.Compiler{
+			Resolver: &protocompile.SourceResolver{},
+		}
 	} else {
 		return nil, fmt.Errorf("proto source requires a location or content")
 	}
 
+	files, err := compiler.Compile(ctx, fileName)
 	if err != nil {
 		return nil, fmt.Errorf("parse proto: %w", err)
 	}
 
 	disc := &discovery{}
-	for _, fd := range fds {
-		for _, svc := range fd.GetServices() {
-			if !isInfraService(svc.GetFullyQualifiedName()) {
+	for _, fd := range files {
+		services := fd.Services()
+		for i := 0; i < services.Len(); i++ {
+			svc := services.Get(i)
+			if !isInfraService(string(svc.FullName())) {
 				disc.services = append(disc.services, svc)
 			}
 		}

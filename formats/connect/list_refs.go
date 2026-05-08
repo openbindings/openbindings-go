@@ -15,7 +15,7 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		return nil, fmt.Errorf("Connect source requires a location or content")
 	}
 
-	disc, err := discoverFromProto(source.Location, source.Content)
+	disc, err := discoverFromProto(ctx, source.Location, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("Connect proto parse: %w", err)
 	}
@@ -23,19 +23,16 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 	var targets []openbindings.BindableTarget
 
 	sort.Slice(disc.services, func(i, j int) bool {
-		return disc.services[i].GetFullyQualifiedName() < disc.services[j].GetFullyQualifiedName()
+		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
 	})
 
 	for _, svc := range disc.services {
-		methods := svc.GetMethods()
-		sort.Slice(methods, func(i, j int) bool {
-			return methods[i].GetName() < methods[j].GetName()
-		})
+		methods := serviceMethodsSorted(svc)
 		for _, method := range methods {
-			if method.IsClientStreaming() {
+			if method.IsStreamingClient() {
 				continue
 			}
-			fqn := svc.GetFullyQualifiedName() + "/" + method.GetName()
+			fqn := string(svc.FullName()) + "/" + string(method.Name())
 			desc := commentToDescription(method)
 			targets = append(targets, bindableTarget(fqn, desc))
 		}

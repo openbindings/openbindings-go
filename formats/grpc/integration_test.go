@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/jhump/protoreflect/grpcreflect" //nolint:staticcheck // depends on protoreflect/desc
+	"github.com/jhump/protoreflect/v2/grpcreflect"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -180,10 +180,10 @@ func TestIntegration_CreateInterface_FromReflection(t *testing.T) {
 
 	disc := &discovery{address: "bufconn"}
 	for _, name := range serviceNames {
-		if isInfraService(name) {
+		if isInfraService(string(name)) {
 			continue
 		}
-		svcDesc, err := refClient.ResolveService(name)
+		svcDesc, err := resolveService(refClient, name)
 		if err != nil {
 			t.Fatal(err)
 		}

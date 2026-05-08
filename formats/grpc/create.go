@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/jhump/protoreflect/desc" //nolint:staticcheck // no v2 equivalent yet
 	openbindings "github.com/openbindings/openbindings-go"
-	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 func convertToInterface(disc *discovery, sourceLocation string, onWarning func(openbindings.CreatorWarning)) (openbindings.Interface, error) {
@@ -33,35 +32,29 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(o
 	usedKeys := map[string]string{}
 
 	sort.Slice(disc.services, func(i, j int) bool {
-		return disc.services[i].GetFullyQualifiedName() < disc.services[j].GetFullyQualifiedName()
+		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
 	})
 
 	for _, svc := range disc.services {
-		methods := svc.GetMethods()
-		sort.Slice(methods, func(i, j int) bool {
-			return methods[i].GetName() < methods[j].GetName()
-		})
+		methods := serviceMethodsSorted(svc)
 		for _, method := range methods {
-			if method.IsClientStreaming() {
+			if method.IsStreamingClient() {
 				continue
 			}
 
-			fqn := svc.GetFullyQualifiedName() + "/" + method.GetName()
-			opKey := openbindings.SanitizeKey(method.GetName())
-			opKey = openbindings.ResolveKeyCollision(opKey, svc.GetName(), usedKeys)
+			fqn := string(svc.FullName()) + "/" + string(method.Name())
+			opKey := openbindings.SanitizeKey(string(method.Name()))
+			opKey = openbindings.ResolveKeyCollision(opKey, string(svc.Name()), usedKeys)
 			usedKeys[opKey] = fqn
 
 			op := openbindings.Operation{
 				Description: commentToDescription(method),
 			}
 
-			inputType := method.GetInputType()
-			if inputType != nil {
+			if inputType := method.Input(); inputType != nil {
 				op.Input = newSchemaWalker(onWarning, "operations."+opKey+".input").message(inputType)
 			}
-
-			outputType := method.GetOutputType()
-			if outputType != nil {
+			if outputType := method.Output(); outputType != nil {
 				op.Output = newSchemaWalker(onWarning, "operations."+opKey+".output").message(outputType)
 			}
 
@@ -78,7 +71,7 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(o
 
 	if len(disc.services) > 0 {
 		svc := disc.services[0]
-		iface.Name = svc.GetName()
+		iface.Name = string(svc.Name())
 		if len(disc.services) > 1 {
 			iface.Name = packageName(svc)
 		}
@@ -92,18 +85,37 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(o
 	return iface, nil
 }
 
-func packageName(svc *desc.ServiceDescriptor) string {
-	pkg := svc.GetFile().GetPackage()
-	if pkg != "" {
-		return pkg
+// serviceMethodsSorted returns the methods of a service in stable name order
+// for deterministic output.
+func serviceMethodsSorted(svc protoreflect.ServiceDescriptor) []protoreflect.MethodDescriptor {
+	methods := svc.Methods()
+	out := make([]protoreflect.MethodDescriptor, 0, methods.Len())
+	for i := 0; i < methods.Len(); i++ {
+		out = append(out, methods.Get(i))
 	}
-	return svc.GetName()
+	sort.Slice(out, func(i, j int) bool {
+		return string(out[i].Name()) < string(out[j].Name())
+	})
+	return out
 }
 
-func commentToDescription(method *desc.MethodDescriptor) string {
-	info := method.GetSourceInfo()
-	if info != nil && info.GetLeadingComments() != "" {
-		return trimComment(info.GetLeadingComments())
+func packageName(svc protoreflect.ServiceDescriptor) string {
+	if file := svc.ParentFile(); file != nil {
+		if pkg := string(file.Package()); pkg != "" {
+			return pkg
+		}
+	}
+	return string(svc.Name())
+}
+
+func commentToDescription(method protoreflect.MethodDescriptor) string {
+	file := method.ParentFile()
+	if file == nil {
+		return ""
+	}
+	loc := file.SourceLocations().ByDescriptor(method)
+	if loc.LeadingComments != "" {
+		return trimComment(loc.LeadingComments)
 	}
 	return ""
 }
@@ -147,8 +159,8 @@ func (w *schemaWalker) warn(code, message string, details map[string]any) {
 	})
 }
 
-func (w *schemaWalker) message(msg *desc.MessageDescriptor) map[string]any {
-	fqn := msg.GetFullyQualifiedName()
+func (w *schemaWalker) message(msg protoreflect.MessageDescriptor) map[string]any {
+	fqn := string(msg.FullName())
 	if w.visited[fqn] {
 		return map[string]any{"type": "object"}
 	}
@@ -156,7 +168,7 @@ func (w *schemaWalker) message(msg *desc.MessageDescriptor) map[string]any {
 	// Well-known proto types have canonical JSON representations per the
 	// proto3 JSON mapping spec. Emit those directly instead of descending
 	// into the message's fields — traversing Timestamp's `seconds`/`nanos`
-	// produces a contract the driver's jsonpb layer cannot accept.
+	// produces a contract the driver's protojson layer cannot accept.
 	if wk := wellKnownSchema(fqn); wk != nil {
 		return wk
 	}
@@ -167,24 +179,25 @@ func (w *schemaWalker) message(msg *desc.MessageDescriptor) map[string]any {
 		"type": "object",
 	}
 
-	fields := msg.GetFields()
-	if len(fields) == 0 {
+	fieldsDesc := msg.Fields()
+	if fieldsDesc.Len() == 0 {
 		return schema
 	}
 
-	var regularFields []*desc.FieldDescriptor
-	oneofGroups := map[string][]*desc.FieldDescriptor{}
+	var regularFields []protoreflect.FieldDescriptor
+	oneofGroups := map[string][]protoreflect.FieldDescriptor{}
 	var oneofOrder []string
-	for _, field := range fields {
-		oo := field.GetOneOf()
+	for i := 0; i < fieldsDesc.Len(); i++ {
+		field := fieldsDesc.Get(i)
+		oo := field.ContainingOneof()
 		// Proto3 `optional` fields are wrapped in synthetic single-field
 		// oneofs for explicit-presence tracking; they are not user-declared
 		// unions and must not be emitted as oneOf variants.
-		if oo == nil || field.IsProto3Optional() {
+		if oo == nil || oo.IsSynthetic() {
 			regularFields = append(regularFields, field)
 			continue
 		}
-		name := oo.GetName()
+		name := string(oo.Name())
 		if _, seen := oneofGroups[name]; !seen {
 			oneofOrder = append(oneofOrder, name)
 		}
@@ -207,9 +220,9 @@ func (w *schemaWalker) message(msg *desc.MessageDescriptor) map[string]any {
 		groupNames = append(groupNames, oneofOrder...)
 		w.warn(
 			"grpc.multi_group_oneof",
-			fmt.Sprintf("message %s contains %d oneof groups; the v0.1 schema profile cannot express multi-group exclusivity, so members are emitted as independent optional properties", msg.GetName(), len(oneofGroups)),
+			fmt.Sprintf("message %s contains %d oneof groups; the v0.1 schema profile cannot express multi-group exclusivity, so members are emitted as independent optional properties", string(msg.Name()), len(oneofGroups)),
 			map[string]any{
-				"message": msg.GetFullyQualifiedName(),
+				"message": string(msg.FullName()),
 				"groups":  groupNames,
 			},
 		)
@@ -217,12 +230,12 @@ func (w *schemaWalker) message(msg *desc.MessageDescriptor) map[string]any {
 
 	properties := map[string]any{}
 	for _, field := range regularFields {
-		properties[field.GetJSONName()] = w.field(field)
+		properties[field.JSONName()] = w.field(field)
 	}
 	if !useOneOf {
 		for _, name := range oneofOrder {
 			for _, field := range oneofGroups[name] {
-				properties[field.GetJSONName()] = w.field(field)
+				properties[field.JSONName()] = w.field(field)
 			}
 		}
 	}
@@ -234,7 +247,7 @@ func (w *schemaWalker) message(msg *desc.MessageDescriptor) map[string]any {
 		group := oneofGroups[oneofOrder[0]]
 		variants := make([]any, 0, len(group))
 		for _, field := range group {
-			jsonName := field.GetJSONName()
+			jsonName := field.JSONName()
 			variants = append(variants, map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -305,9 +318,9 @@ func wellKnownSchema(fqn string) map[string]any {
 	return nil
 }
 
-func (w *schemaWalker) field(field *desc.FieldDescriptor) map[string]any {
+func (w *schemaWalker) field(field protoreflect.FieldDescriptor) map[string]any {
 	if field.IsMap() {
-		valField := field.GetMapValueType()
+		valField := field.MapValue()
 		return map[string]any{
 			"type":                 "object",
 			"additionalProperties": w.scalarOrMessage(valField),
@@ -316,7 +329,7 @@ func (w *schemaWalker) field(field *desc.FieldDescriptor) map[string]any {
 
 	s := w.scalarOrMessage(field)
 
-	if field.IsRepeated() && !field.IsMap() {
+	if field.Cardinality() == protoreflect.Repeated && !field.IsMap() {
 		return map[string]any{
 			"type":  "array",
 			"items": s,
@@ -326,50 +339,45 @@ func (w *schemaWalker) field(field *desc.FieldDescriptor) map[string]any {
 	return s
 }
 
-func (w *schemaWalker) scalarOrMessage(field *desc.FieldDescriptor) map[string]any {
-	t := field.GetType()
-	switch t {
-	case descriptorpb.FieldDescriptorProto_TYPE_BOOL:
+func (w *schemaWalker) scalarOrMessage(field protoreflect.FieldDescriptor) map[string]any {
+	switch field.Kind() {
+	case protoreflect.BoolKind:
 		return map[string]any{"type": "boolean"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_INT32,
-		descriptorpb.FieldDescriptorProto_TYPE_SINT32,
-		descriptorpb.FieldDescriptorProto_TYPE_SFIXED32,
-		descriptorpb.FieldDescriptorProto_TYPE_UINT32,
-		descriptorpb.FieldDescriptorProto_TYPE_FIXED32:
+	case protoreflect.Int32Kind,
+		protoreflect.Sint32Kind,
+		protoreflect.Sfixed32Kind,
+		protoreflect.Uint32Kind,
+		protoreflect.Fixed32Kind:
 		return map[string]any{"type": "integer"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_INT64,
-		descriptorpb.FieldDescriptorProto_TYPE_SINT64,
-		descriptorpb.FieldDescriptorProto_TYPE_SFIXED64,
-		descriptorpb.FieldDescriptorProto_TYPE_UINT64,
-		descriptorpb.FieldDescriptorProto_TYPE_FIXED64:
+	case protoreflect.Int64Kind,
+		protoreflect.Sint64Kind,
+		protoreflect.Sfixed64Kind,
+		protoreflect.Uint64Kind,
+		protoreflect.Fixed64Kind:
 		return map[string]any{"type": "integer", "format": "int64"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_FLOAT,
-		descriptorpb.FieldDescriptorProto_TYPE_DOUBLE:
+	case protoreflect.FloatKind, protoreflect.DoubleKind:
 		return map[string]any{"type": "number"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_STRING:
+	case protoreflect.StringKind, protoreflect.BytesKind:
 		return map[string]any{"type": "string"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_BYTES:
-		return map[string]any{"type": "string"}
-
-	case descriptorpb.FieldDescriptorProto_TYPE_ENUM:
-		enumDesc := field.GetEnumType()
+	case protoreflect.EnumKind:
+		enumDesc := field.Enum()
 		if enumDesc != nil {
-			var values []any
-			for _, v := range enumDesc.GetValues() {
-				values = append(values, v.GetName())
+			values := enumDesc.Values()
+			out := make([]any, 0, values.Len())
+			for i := 0; i < values.Len(); i++ {
+				out = append(out, string(values.Get(i).Name()))
 			}
-			return map[string]any{"type": "string", "enum": values}
+			return map[string]any{"type": "string", "enum": out}
 		}
 		return map[string]any{"type": "string"}
 
-	case descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
-		descriptorpb.FieldDescriptorProto_TYPE_GROUP:
-		msgDesc := field.GetMessageType()
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		msgDesc := field.Message()
 		if msgDesc != nil {
 			return w.message(msgDesc)
 		}

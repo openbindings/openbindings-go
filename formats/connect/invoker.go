@@ -78,7 +78,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 	// provided, we fall through as unary with generic JSON marshaling.
 	var methodDesc *methodInfo
 	if enriched.Source.Content != nil {
-		desc, parseErr := resolveMethod(enriched.Source.Content, svcName, methodName)
+		desc, parseErr := resolveMethod(ctx, enriched.Source.Content, svcName, methodName)
 		if parseErr != nil {
 			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeSourceLoadFailed, parseErr.Error())), nil
 		}
@@ -86,7 +86,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 	}
 
 	// Server-streaming dispatch.
-	if methodDesc != nil && methodDesc.method != nil && methodDesc.method.IsServerStreaming() {
+	if methodDesc != nil && methodDesc.method != nil && methodDesc.method.IsStreamingServer() {
 		headers := buildHTTPHeaders(enriched.Context, enriched.Options)
 		return invokeConnectStreaming(ctx, e.client, enriched.Source.Location, svcName, methodName, enriched.Input, headers, methodDesc, start)
 	}
@@ -155,7 +155,7 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 		return nil, fmt.Errorf("Connect source requires a location or content")
 	}
 
-	disc, err := discoverFromProto(src.Location, src.Content)
+	disc, err := discoverFromProto(ctx, src.Location, src.Content)
 	if err != nil {
 		return nil, fmt.Errorf("Connect proto parse: %w", err)
 	}
