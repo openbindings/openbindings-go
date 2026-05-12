@@ -190,6 +190,7 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 			ch <- StreamEvent{Error: &InvocationError{
 				Code:    ErrCodeValidationFailed,
 				Message: fmt.Sprintf("openbindings: input validation failed for %q: %s", in.Operation, strings.Join(lines, "; ")),
+				Details: ValidationFailureDetails{Failures: collectValidationFailures(verr)},
 			}}
 			close(ch)
 			return ch, nil
@@ -314,14 +315,26 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 					}
 					data = transformed
 				}
-				// OBI-T-08: Validate output after transform.
+				// OBI-T-08: Validate output after transform. On failure, yield
+				// the data alongside the error so callers can inspect or render
+				// the underlying response while still being informed of the
+				// schema mismatch. The spec describes a T-08 failure as an
+				// "invocation error for that operation"; it does not prescribe
+				// how the SDK surfaces that error, and it does not require
+				// hiding the data.
 				if compiledOutput != nil {
 					if verr := compiledOutput.Validate(data); verr != nil {
 						lines := splitSchemaError(verr)
-						out <- StreamEvent{Error: &InvocationError{
-							Code:    ErrCodeValidationFailed,
-							Message: fmt.Sprintf("openbindings: output validation failed for %q: %s", bindingKey, strings.Join(lines, "; ")),
-						}}
+						out <- StreamEvent{
+							Data: data,
+							Error: &InvocationError{
+								Code:    ErrCodeValidationFailed,
+								Message: fmt.Sprintf("openbindings: output validation failed for %q: %s", bindingKey, strings.Join(lines, "; ")),
+								Details: ValidationFailureDetails{Failures: collectValidationFailures(verr)},
+							},
+							Status:     ev.Status,
+							DurationMs: ev.DurationMs,
+						}
 						continue
 					}
 				}

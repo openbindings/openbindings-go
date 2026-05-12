@@ -169,3 +169,140 @@ func keys[V any](m map[string]V) []string {
 	}
 	return result
 }
+
+func TestConvertDocToInterface_TranslatesNullableIn30(t *testing.T) {
+	yaml := []byte(`openapi: 3.0.3
+info: { title: P, version: "1.0.0" }
+paths:
+  /ability:
+    get:
+      operationId: abilityList
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  next: { type: string, nullable: true, format: uri }
+                  previous: { type: string, nullable: true, format: uri }
+                required: [count]
+`)
+	doc, err := loadDocument("", yaml)
+	if err != nil {
+		t.Fatalf("loadDocument: %v", err)
+	}
+	iface := convertDocToInterface(doc, "")
+
+	op, ok := iface.Operations["abilityList"]
+	if !ok {
+		t.Fatalf("abilityList operation missing")
+	}
+
+	props, ok := op.Output["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("output.properties missing or wrong type: %#v", op.Output)
+	}
+
+	next, ok := props["next"].(map[string]any)
+	if !ok {
+		t.Fatalf("next property missing")
+	}
+	gotType, ok := next["type"].([]any)
+	if !ok {
+		t.Fatalf("next.type expected []any, got %#v", next["type"])
+	}
+	if len(gotType) != 2 || gotType[0] != "string" || gotType[1] != "null" {
+		t.Errorf("next.type = %#v, want [\"string\", \"null\"]", gotType)
+	}
+	if _, hasNullable := next["nullable"]; hasNullable {
+		t.Errorf("next.nullable should have been removed, got %#v", next)
+	}
+
+	if iface.Sources["openapi"].Format != "openapi@3.0" {
+		t.Errorf("source.format = %q, want \"openapi@3.0\"", iface.Sources["openapi"].Format)
+	}
+}
+
+func TestConvertDocToInterface_Preserves31Verbatim(t *testing.T) {
+	yaml := []byte(`openapi: 3.1.0
+info: { title: T, version: "1.0.0" }
+paths:
+  /x:
+    get:
+      operationId: x
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  next: { type: [string, "null"], format: uri }
+                  legacy: { type: string, nullable: true }
+`)
+	doc, err := loadDocument("", yaml)
+	if err != nil {
+		t.Fatalf("loadDocument: %v", err)
+	}
+	iface := convertDocToInterface(doc, "")
+
+	op := iface.Operations["x"]
+	props := op.Output["properties"].(map[string]any)
+
+	legacy := props["legacy"].(map[string]any)
+	// In 3.1, nullable: true is an inert annotation; we pass it through.
+	if legacy["nullable"] != true {
+		t.Errorf("legacy.nullable = %#v, want true (3.1 inert annotation should pass through)", legacy["nullable"])
+	}
+	if legacy["type"] != "string" {
+		t.Errorf("legacy.type = %#v, want \"string\"", legacy["type"])
+	}
+}
+
+func TestConvertDocToInterface_TranslatesExclusiveMinIn30(t *testing.T) {
+	yaml := []byte(`openapi: 3.0.3
+info: { title: T, version: "1.0.0" }
+paths:
+  /q:
+    get:
+      operationId: q
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            exclusiveMinimum: true
+            maximum: 100
+            exclusiveMaximum: false
+      responses:
+        '200': { description: OK }
+`)
+	doc, err := loadDocument("", yaml)
+	if err != nil {
+		t.Fatalf("loadDocument: %v", err)
+	}
+	iface := convertDocToInterface(doc, "")
+
+	op := iface.Operations["q"]
+	props := op.Input["properties"].(map[string]any)
+	page := props["page"].(map[string]any)
+
+	if _, hasMin := page["minimum"]; hasMin {
+		t.Errorf("page.minimum should have been removed, got %#v", page)
+	}
+	em, ok := page["exclusiveMinimum"].(float64)
+	if !ok || em != 0 {
+		t.Errorf("page.exclusiveMinimum = %#v, want 0 (numeric)", page["exclusiveMinimum"])
+	}
+	if max, ok := page["maximum"].(float64); !ok || max != 100 {
+		t.Errorf("page.maximum = %#v, want 100", page["maximum"])
+	}
+	if _, hasExMax := page["exclusiveMaximum"]; hasExMax {
+		t.Errorf("page.exclusiveMaximum (false) should have been removed, got %#v", page)
+	}
+}

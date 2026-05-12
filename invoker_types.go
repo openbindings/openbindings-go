@@ -263,6 +263,18 @@ type BindableTarget struct {
 }
 
 // StreamEvent represents a single event received from a streaming subscription.
+//
+// An event may carry:
+//   - Data only — success.
+//   - Error only — failure prior to producing data (transport error, input
+//     validation, transform failure, schema compilation failure).
+//   - Data AND Error — OBI-T-08 output validation failed against the declared
+//     output schema. The data is still surfaced so callers may inspect or
+//     render it, while the error reports the schema mismatch.
+//
+// Callers that previously short-circuited on Error will continue to see the
+// failure; callers that want to render the underlying response (e.g. a UI
+// debugger) should consult Data even when Error is set.
 type StreamEvent struct {
 	Data       any              `json:"data,omitempty"`
 	Error      *InvocationError `json:"error,omitempty"`
@@ -290,6 +302,26 @@ type InvocationError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Details any    `json:"details,omitempty"`
+}
+
+// ValidationFailure is a single OBI-T-07/T-08 schema-validation failure
+// in a stable, validator-agnostic shape. When validation produces multiple
+// failures (e.g., several fields violating the schema), each one appears
+// as a separate ValidationFailure in InvocationError.Details.Failures.
+type ValidationFailure struct {
+	// Path is a JSON Pointer into the instance, e.g. "/results/0/name".
+	// Empty string means the root.
+	Path string `json:"path"`
+	// Message is a human-readable diagnostic.
+	Message string `json:"message"`
+	// SchemaPath is an optional JSON Pointer into the schema.
+	SchemaPath string `json:"schemaPath,omitempty"`
+}
+
+// ValidationFailureDetails is the typed shape of InvocationError.Details
+// for OBI-T-07 / OBI-T-08 validation failures.
+type ValidationFailureDetails struct {
+	Failures []ValidationFailure `json:"failures"`
 }
 
 func (e *InvocationError) Error() string {

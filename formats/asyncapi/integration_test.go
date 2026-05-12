@@ -100,10 +100,7 @@ func TestIntegration_SendNoCredentials401(t *testing.T) {
 	invoker := openbindings.NewOperationInvoker(binv)
 	invoker.ContextStore = store
 
-	client := openbindings.NewInterfaceClient(nil, invoker,
-		openbindings.WithContextStore(store),
-	)
-	client.ResolveInterface(&openbindings.Interface{
+	client := openbindings.NewInterfaceClient(&openbindings.Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]openbindings.Operation{
 			"sendMessage":   {},
@@ -116,7 +113,7 @@ func TestIntegration_SendNoCredentials401(t *testing.T) {
 			"sendMessage." + DefaultSourceName:   {Operation: "sendMessage", Source: DefaultSourceName, Ref: "#/operations/sendMessage"},
 			"receiveEvents." + DefaultSourceName: {Operation: "receiveEvents", Source: DefaultSourceName, Ref: "#/operations/receiveEvents"},
 		},
-	})
+	}, invoker, openbindings.WithContextStore(store))
 
 	ch, err := client.Invoke(ctx, "sendMessage", map[string]any{"text": "hi"})
 	if err != nil {
@@ -146,10 +143,7 @@ func TestIntegration_SendWithCredentials(t *testing.T) {
 	invoker := openbindings.NewOperationInvoker(binv)
 	invoker.ContextStore = store
 
-	client := openbindings.NewInterfaceClient(nil, invoker,
-		openbindings.WithContextStore(store),
-	)
-	client.ResolveInterface(&openbindings.Interface{
+	client := openbindings.NewInterfaceClient(&openbindings.Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]openbindings.Operation{
 			"sendMessage":   {},
@@ -162,7 +156,7 @@ func TestIntegration_SendWithCredentials(t *testing.T) {
 			"sendMessage." + DefaultSourceName:   {Operation: "sendMessage", Source: DefaultSourceName, Ref: "#/operations/sendMessage"},
 			"receiveEvents." + DefaultSourceName: {Operation: "receiveEvents", Source: DefaultSourceName, Ref: "#/operations/receiveEvents"},
 		},
-	})
+	}, invoker, openbindings.WithContextStore(store))
 
 	ch, err := client.Invoke(ctx, "sendMessage", map[string]any{"text": "hello"})
 	if err != nil {

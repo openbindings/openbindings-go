@@ -296,14 +296,8 @@ func TestIntegration_NoCredentials401(t *testing.T) {
 	binv := NewInvoker()
 	invoker := openbindings.NewOperationInvoker(binv)
 
-	client := openbindings.NewInterfaceClient(nil, invoker, openbindings.WithContextStore(store))
-
 	iface := synthesizeOBI(t, specURL)
-	client.ResolveInterface(iface)
-
-	if client.State() != openbindings.StateBound {
-		t.Fatalf("state = %q, want %q", client.State(), openbindings.StateBound)
-	}
+	client := openbindings.NewInterfaceClient(iface, invoker, openbindings.WithContextStore(store))
 
 	ctx := context.Background()
 	ch, err := client.Invoke(ctx, "listItems", nil)
@@ -337,14 +331,8 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 
 	binv := NewInvoker()
 	invoker := openbindings.NewOperationInvoker(binv)
-	client := openbindings.NewInterfaceClient(nil, invoker, openbindings.WithContextStore(store))
-
 	iface := synthesizeOBI(t, specURL)
-	client.ResolveInterface(iface)
-
-	if client.State() != openbindings.StateBound {
-		t.Fatalf("state = %q, want %q", client.State(), openbindings.StateBound)
-	}
+	client := openbindings.NewInterfaceClient(iface, invoker, openbindings.WithContextStore(store))
 
 	// First call: listItems should succeed
 	ch, err := client.Invoke(ctx, "listItems", nil)
@@ -422,18 +410,15 @@ func TestIntegration_IsolatedStoresDontShareCredentials(t *testing.T) {
 		t.Fatalf("store1.Set failed: %v", err)
 	}
 
+	iface := synthesizeOBI(t, specURL)
+
 	exec1 := NewInvoker()
 	opExec1 := openbindings.NewOperationInvoker(exec1)
-	client1 := openbindings.NewInterfaceClient(nil, opExec1, openbindings.WithContextStore(store1))
+	client1 := openbindings.NewInterfaceClient(iface, opExec1, openbindings.WithContextStore(store1))
 
 	exec2 := NewInvoker()
 	opExec2 := openbindings.NewOperationInvoker(exec2)
-	client2 := openbindings.NewInterfaceClient(nil, opExec2, openbindings.WithContextStore(store2))
-
-	// Synthesize OBI from the spec and resolve both clients
-	iface := synthesizeOBI(t, specURL)
-	client1.ResolveInterface(iface)
-	client2.ResolveInterface(iface)
+	client2 := openbindings.NewInterfaceClient(iface, opExec2, openbindings.WithContextStore(store2))
 
 	// Client 1 should succeed (has credentials)
 	ch1, err := client1.Invoke(ctx, "listItems", nil)

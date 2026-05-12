@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
 )
 
 func TestInterfaceValidate_RequiresOpenBindingsAndOperations(t *testing.T) {

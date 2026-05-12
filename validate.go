@@ -7,13 +7,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
 )
 
 type validateOptions struct {
 	rejectUnknownTypedFields bool
 }
 
-// ValidateOption configures Interface.Validate.
+// Option configures Interface validation.
 type ValidateOption func(*validateOptions)
 
 // WithRejectUnknownTypedFields treats unknown (non-`x-`) fields in typed OpenBindings objects as errors.
@@ -330,18 +331,6 @@ func appendUnknownFieldProblems(errs *[]string, prefix string, unknown map[strin
 		return
 	}
 	*errs = append(*errs, fmt.Sprintf("%s: unknown fields: %s", prefix, strings.Join(keys, ", ")))
-}
-
-// ValidationError is a deterministic, multi-problem validation error.
-type ValidationError struct {
-	Problems []string
-}
-
-func (e *ValidationError) Error() string {
-	if e == nil || len(e.Problems) == 0 {
-		return "invalid interface"
-	}
-	return "invalid interface: " + strings.Join(e.Problems, "; ")
 }
 
 // validateTransformRef validates that a $ref points to a valid transform per OBI-D-12.

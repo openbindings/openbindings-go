@@ -36,10 +36,10 @@ func init() {
 	compiledOBISchema = s
 }
 
-// validateAgainstOBISchema reports OBI-D-02 violations: the document does not
-// validate against openbindings.schema.json. The Interface is round-tripped
-// through JSON to obtain a generic value (map[string]any/[]any/scalars) that
-// the schema validator accepts.
+// validateAgainstOBISchema reports OBI-D-02 violations: the document does
+// not validate against openbindings.schema.json. The Interface is
+// round-tripped through JSON to obtain a generic value
+// (map[string]any/[]any/scalars) that the schema validator accepts.
 func validateAgainstOBISchema(errs *[]string, i Interface) {
 	data, err := json.Marshal(i)
 	if err != nil {
@@ -58,12 +58,7 @@ func validateAgainstOBISchema(errs *[]string, i Interface) {
 	}
 }
 
-// validateExamplesAgainstOpSchemas reports OBI-D-15 violations: every example's
-// provided input/output must validate against its operation's input/output
-// schema, when the respective schema is specified. The operation's schema may
-// reference document-level schemas via `#/schemas/<name>`; those are rewritten
-// to `#/$defs/<name>` and a synthetic compound schema is compiled with the
-// document's schemas map exposed under $defs for $ref resolution.
+// validateExamplesAgainstOpSchemas reports OBI-D-15 violations.
 func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 	if len(i.Operations) == 0 {
 		return
@@ -109,9 +104,9 @@ func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 	}
 }
 
-// buildSchemaDefs deep-copies the document's schemas map and rewrites any
-// `$ref: "#/schemas/X"` to `$ref: "#/$defs/X"` so cross-schema references
-// resolve correctly inside the compound schema we compile per example.
+// buildSchemaDefs deep-copies the document's schemas map and rewrites
+// `$ref: "#/schemas/X"` → `$ref: "#/$defs/X"` so cross-schema refs
+// resolve inside the compound schema we compile per example.
 func buildSchemaDefs(schemas map[string]JSONSchema) map[string]any {
 	if len(schemas) == 0 {
 		return nil
@@ -123,9 +118,9 @@ func buildSchemaDefs(schemas map[string]JSONSchema) map[string]any {
 	return defs
 }
 
-// compileExampleSchema builds a compound JSON Schema rooted at the operation's
-// input/output schema, with the document's schemas map exposed under $defs
-// (and `#/schemas/X` $refs rewritten to `#/$defs/X`), then compiles it.
+// compileExampleSchema builds a compound JSON Schema rooted at the
+// operation's input/output schema, with the document's schemas map
+// exposed under $defs, then compiles it.
 func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema.Schema, error) {
 	root := deepCopyJSON(map[string]any(opSchema))
 	rootMap, ok := root.(map[string]any)
@@ -134,7 +129,6 @@ func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema
 	}
 	rewriteSchemaRefs(rootMap)
 	if len(defs) > 0 {
-		// Don't clobber an existing $defs the user authored.
 		if existing, has := rootMap["$defs"]; has {
 			if existingMap, isMap := existing.(map[string]any); isMap {
 				for k, v := range defs {
@@ -155,9 +149,6 @@ func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema
 	return c.Compile(url)
 }
 
-// rewriteSchemaRefs walks the JSON value and rewrites any string `$ref` value
-// matching `#/schemas/<name>` to `#/$defs/<name>` in place. Returns the input
-// unchanged for convenience.
 func rewriteSchemaRefs(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -175,10 +166,6 @@ func rewriteSchemaRefs(v any) any {
 	return v
 }
 
-// deepCopyJSON makes a deep copy of a JSON-shaped value (map[string]any /
-// []any / strings / numbers / bools / nil). Typed slices like []string are
-// normalized to []any so the result is always valid for JSON Schema validators.
-// Returns the input unchanged for scalar values.
 func deepCopyJSON(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -204,8 +191,6 @@ func deepCopyJSON(v any) any {
 	}
 }
 
-// splitSchemaError flattens a jsonschema.ValidationError into one line per
-// nested cause. Returns at least one line for every non-nil error.
 func splitSchemaError(err error) []string {
 	if err == nil {
 		return nil
@@ -214,6 +199,41 @@ func splitSchemaError(err error) []string {
 		return flattenValidationError(ve, "")
 	}
 	return []string{err.Error()}
+}
+
+// collectValidationFailures returns structured per-leaf failures. The
+// shape mirrors the TS SDK's ValidationFailure so consumers can render
+// per-field diagnostics from either runtime without parsing strings.
+func collectValidationFailures(err error) []ValidationFailure {
+	if err == nil {
+		return nil
+	}
+	ve, ok := err.(*jsonschema.ValidationError)
+	if !ok {
+		return []ValidationFailure{{Message: err.Error()}}
+	}
+	return flattenValidationFailures(ve)
+}
+
+func flattenValidationFailures(ve *jsonschema.ValidationError) []ValidationFailure {
+	if ve == nil {
+		return nil
+	}
+	if len(ve.Causes) == 0 {
+		path := ""
+		if len(ve.InstanceLocation) > 0 {
+			path = "/" + strings.Join(ve.InstanceLocation, "/")
+		}
+		return []ValidationFailure{{
+			Path:    path,
+			Message: fmt.Sprintf("%v", ve.ErrorKind),
+		}}
+	}
+	var out []ValidationFailure
+	for _, c := range ve.Causes {
+		out = append(out, flattenValidationFailures(c)...)
+	}
+	return out
 }
 
 func flattenValidationError(ve *jsonschema.ValidationError, prefix string) []string {

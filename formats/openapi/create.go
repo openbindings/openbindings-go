@@ -82,12 +82,14 @@ func convertDocToInterface(doc *openapi3.T, location string) openbindings.Interf
 
 			inputSchema := buildInputSchema(op, pathParams)
 			if inputSchema != nil {
-				obiOp.Input = inlineRefsInOperationSchema(inputSchema, refRegistry)
+				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry)
+				obiOp.Input = translateSchemaDialect(inlined, formatVersion)
 			}
 
 			outputSchema := buildOutputSchema(op)
 			if outputSchema != nil {
-				obiOp.Output = inlineRefsInOperationSchema(outputSchema, refRegistry)
+				inlined := inlineRefsInOperationSchema(outputSchema, refRegistry)
+				obiOp.Output = translateSchemaDialect(inlined, formatVersion)
 			}
 
 			iface.Operations[opKey] = obiOp

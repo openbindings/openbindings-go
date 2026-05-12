@@ -495,43 +495,17 @@ func TestWithRuntime_ReusableInput(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// InterfaceClient.Close tests
+// InterfaceClient basic construction
 // ---------------------------------------------------------------------------
 
-func TestInterfaceClient_Close(t *testing.T) {
+func TestInterfaceClient_BindsToProvidedInterface(t *testing.T) {
 	mock := &mockInvoker{formats: []FormatInfo{{Token: "test"}}}
 	invoker := NewOperationInvoker(mock)
-	ic := NewInterfaceClient(
-		&Interface{OpenBindings: "0.1.0", Operations: map[string]Operation{}},
-		invoker,
-	)
+	iface := &Interface{OpenBindings: "0.1.0", Operations: map[string]Operation{}}
+	ic := NewInterfaceClient(iface, invoker)
 
-	if ic.State() != StateIdle {
-		t.Fatalf("expected idle, got %s", ic.State())
-	}
-
-	ic.ResolveInterface(&Interface{
-		OpenBindings: "0.1.0",
-		Operations:   map[string]Operation{},
-	})
-	if ic.State() != StateBound {
-		t.Fatalf("expected bound, got %s", ic.State())
-	}
-
-	ic.Close()
-	if ic.State() != StateIdle {
-		t.Errorf("expected idle after Close, got %s", ic.State())
-	}
-	if ic.Resolved() != nil {
-		t.Error("resolved should be nil after Close")
-	}
-	if ic.ResolvedURL() != "" {
-		t.Error("resolvedURL should be empty after Close")
-	}
-
-	ic.Close()
-	if ic.State() != StateIdle {
-		t.Error("double Close should not panic or change state")
+	if ic.Interface() != iface {
+		t.Error("Interface() should return the provided interface")
 	}
 }
 
