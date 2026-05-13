@@ -95,7 +95,7 @@ func (eng *engine) decInflight() {
 }
 
 // run validates and executes the graph, sending output events to out.
-func (eng *engine) run(ctx context.Context, out chan<- openbindings.StreamEvent) {
+func (eng *engine) run(ctx context.Context, out chan<- openbindings.InvocationOutput) {
 	// Validate before executing.
 	// When Interface is nil (e.g. direct binding invocation via host), skip
 	// operation key validation -- references will fail at runtime if invalid.
@@ -107,7 +107,7 @@ func (eng *engine) run(ctx context.Context, out chan<- openbindings.StreamEvent)
 		}
 	}
 	if err := Validate(eng.graph, opKeys); err != nil {
-		out <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+		out <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 			Code:    openbindings.ErrCodeValidationFailed,
 			Message: err.Error(),
 		}}
@@ -270,7 +270,7 @@ func (eng *engine) run(ctx context.Context, out chan<- openbindings.StreamEvent)
 func (eng *engine) processNode(
 	ctx context.Context,
 	key string, node *Node, ev *event,
-	out chan<- openbindings.StreamEvent,
+	out chan<- openbindings.InvocationOutput,
 	cancel context.CancelFunc,
 	sendDownstream func(string, *event),
 	sendCompletion func(string),
@@ -288,7 +288,7 @@ func (eng *engine) processNode(
 	// Check event amplification limit.
 	if eng.eventCount.Add(1) > maxEvents {
 		eng.exitFlag.Store(true)
-		out <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+		out <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 			Code:    openbindings.ErrCodeEventLimitExceeded,
 			Message: fmt.Sprintf("exceeded maximum event count (%d)", maxEvents),
 		}}
@@ -302,18 +302,18 @@ func (eng *engine) processNode(
 		sendCompletion(key)
 
 	case "output":
-		out <- openbindings.StreamEvent{Data: ev.data}
+		out <- openbindings.InvocationOutput{Output: ev.data}
 
 	case "exit":
 		eng.exitFlag.Store(true)
 		isError := node.Error != nil && *node.Error
 		if isError {
-			out <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+			out <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeOperationGraphExit,
 				Message: fmt.Sprintf("%v", ev.data),
 			}}
 		} else {
-			out <- openbindings.StreamEvent{Data: ev.data}
+			out <- openbindings.InvocationOutput{Output: ev.data}
 		}
 		cancel()
 
@@ -385,7 +385,7 @@ func (eng *engine) processOperation(
 			sendError(key, streamEv.Error.Message, ev.data, ev.lineage, ev.errorDepth)
 			continue
 		}
-		sendDownstream(key, &event{data: streamEv.Data, source: key, lineage: copyLineage(lineage)})
+		sendDownstream(key, &event{data: streamEv.Output, source: key, lineage: copyLineage(lineage)})
 	}
 }
 

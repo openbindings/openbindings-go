@@ -49,7 +49,7 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 
 // InvokeBinding invokes a CLI command based on a usage-spec binding,
 // returning a single-event channel with the command's output.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
 	enriched := in
 	if in.Store != nil {
 		key := resolveUsageKey(ctx, in.Source.Location, in.Source.Content, e.cachedLoadSpec)

@@ -20,9 +20,9 @@ func (s *stubInvoker) Formats() []FormatInfo {
 	return []FormatInfo{{Token: "openapi@3.1"}}
 }
 
-func (s *stubInvoker) InvokeBinding(_ context.Context, _ *BindingInvocationInput) (<-chan StreamEvent, error) {
-	ch := make(chan StreamEvent, 1)
-	ch <- StreamEvent{Data: s.data}
+func (s *stubInvoker) InvokeBinding(_ context.Context, _ *BindingInvocationInput) (<-chan InvocationOutput, error) {
+	ch := make(chan InvocationOutput, 1)
+	ch <- InvocationOutput{Output: s.data}
 	close(ch)
 	return ch, nil
 }
@@ -161,7 +161,7 @@ func TestOBIT07_InputValidation_AcceptsValid(t *testing.T) {
 	if ev.Error != nil {
 		t.Fatalf("unexpected error event: %v", ev.Error.Message)
 	}
-	if ev.Data == nil {
+	if ev.Output == nil {
 		t.Fatal("expected data in event")
 	}
 }
@@ -242,9 +242,9 @@ func TestOBIT08_OutputValidation_YieldsDataWithError(t *testing.T) {
 	if ev.Error.Code != ErrCodeValidationFailed {
 		t.Fatalf("expected code %q, got %q", ErrCodeValidationFailed, ev.Error.Code)
 	}
-	gotData, ok := ev.Data.(map[string]any)
+	gotData, ok := ev.Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected data to be surfaced alongside the validation error, got %#v", ev.Data)
+		t.Fatalf("expected data to be surfaced alongside the validation error, got %#v", ev.Output)
 	}
 	if gotData["invalid"] != true {
 		t.Errorf("expected data {invalid:true}, got %#v", gotData)
@@ -267,7 +267,7 @@ func TestOBIT08_OutputValidation_AcceptsValid(t *testing.T) {
 	if ev.Error != nil {
 		t.Fatalf("unexpected error event: %v", ev.Error.Message)
 	}
-	if ev.Data == nil {
+	if ev.Output == nil {
 		t.Fatal("expected data in event")
 	}
 }
@@ -345,9 +345,9 @@ func TestOBIT08_OutputValidation_WithSchemaRef_YieldsDataWithError(t *testing.T)
 	if ev.Error.Code != ErrCodeValidationFailed {
 		t.Fatalf("expected code %q, got %q", ErrCodeValidationFailed, ev.Error.Code)
 	}
-	gotData, ok := ev.Data.(map[string]any)
+	gotData, ok := ev.Output.(map[string]any)
 	if !ok || gotData["missing"] != "fields" {
-		t.Errorf("expected data to be surfaced as {missing:\"fields\"}, got %#v", ev.Data)
+		t.Errorf("expected data to be surfaced as {missing:\"fields\"}, got %#v", ev.Output)
 	}
 }
 
@@ -406,7 +406,7 @@ func TestOBIT08_OutputValidation_AfterTransform(t *testing.T) {
 	if ev.Error != nil {
 		t.Fatalf("unexpected error event: %v", ev.Error.Message)
 	}
-	if ev.Data == nil {
+	if ev.Output == nil {
 		t.Fatal("expected data in event")
 	}
 }
@@ -462,9 +462,9 @@ func TestOBIT08_OutputValidation_AfterTransform_YieldsDataWithError(t *testing.T
 	if ev.Error.Code != ErrCodeValidationFailed {
 		t.Fatalf("expected code %q, got %q", ErrCodeValidationFailed, ev.Error.Code)
 	}
-	gotData, ok := ev.Data.(map[string]any)
+	gotData, ok := ev.Output.(map[string]any)
 	if !ok || gotData["wrong"] != "shape" {
-		t.Errorf("expected data to be post-transform {wrong:\"shape\"}, got %#v", ev.Data)
+		t.Errorf("expected data to be post-transform {wrong:\"shape\"}, got %#v", ev.Output)
 	}
 }
 
@@ -521,9 +521,9 @@ func TestOBIT08_OutputValidation_PokeAPIStyleNullableMismatch(t *testing.T) {
 	if !strings.Contains(ev.Error.Message, "output validation failed") {
 		t.Errorf("expected error message about output validation, got %q", ev.Error.Message)
 	}
-	data, ok := ev.Data.(map[string]any)
+	data, ok := ev.Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected data to be surfaced as a map, got %#v", ev.Data)
+		t.Fatalf("expected data to be surfaced as a map, got %#v", ev.Output)
 	}
 	if data["next"] != nil || data["count"] != 2 {
 		t.Errorf("expected data {count:2, next:nil, results:[]}, got %#v", data)

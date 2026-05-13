@@ -80,8 +80,8 @@ func testHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(404)
 }
 
-func drainStream(ch <-chan openbindings.StreamEvent) []openbindings.StreamEvent {
-	var events []openbindings.StreamEvent
+func drainStream(ch <-chan openbindings.InvocationOutput) []openbindings.InvocationOutput {
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -169,9 +169,9 @@ func TestIntegration_SendWithCredentials(t *testing.T) {
 	if events[0].Error != nil {
 		t.Fatalf("unexpected error: %s", events[0].Error.Message)
 	}
-	m, ok := events[0].Data.(map[string]any)
+	m, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map output, got %T", events[0].Data)
+		t.Fatalf("expected map output, got %T", events[0].Output)
 	}
 	if m["received"] == nil {
 		t.Error("expected 'received' field in output")
@@ -209,7 +209,7 @@ func TestIntegration_SSEReceiveWithCredentials(t *testing.T) {
 		t.Fatalf("unexpected error: %s", events[0].Error.Message)
 	}
 	// The SSE unary path collects events. Check we got data.
-	if events[0].Data == nil {
+	if events[0].Output == nil {
 		t.Error("expected data in first event")
 	}
 }
@@ -441,7 +441,7 @@ func TestIntegration_WebSocketStreamingMultipleEvents(t *testing.T) {
 			t.Errorf("event %d: unexpected error: %s", i, ev.Error.Message)
 			continue
 		}
-		data, _ := ev.Data.(map[string]any)
+		data, _ := ev.Output.(map[string]any)
 		seq, _ := data["seq"].(float64)
 		if int(seq) != i+1 {
 			t.Errorf("event %d: seq = %v, want %d", i, seq, i+1)
@@ -574,7 +574,7 @@ func TestIntegration_WebSocketSendAction(t *testing.T) {
 	if events[0].Error != nil {
 		t.Fatalf("unexpected error: %s", events[0].Error.Message)
 	}
-	reply, _ := events[0].Data.(map[string]any)
+	reply, _ := events[0].Output.(map[string]any)
 	if reply["ack"] != true {
 		t.Errorf("reply ack = %v, want true", reply["ack"])
 	}

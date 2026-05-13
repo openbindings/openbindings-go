@@ -47,7 +47,7 @@ func fakeConnectServer(t *testing.T, statusCode int, responseBody string) *httpt
 	}))
 }
 
-func drainOne(t *testing.T, ch <-chan openbindings.StreamEvent) openbindings.StreamEvent {
+func drainOne(t *testing.T, ch <-chan openbindings.InvocationOutput) openbindings.InvocationOutput {
 	t.Helper()
 	ev, ok := <-ch
 	if !ok {
@@ -84,9 +84,9 @@ func TestIntegration_InvokeBinding_Success(t *testing.T) {
 	if ev.Status != http.StatusOK {
 		t.Errorf("status = %d, want 200", ev.Status)
 	}
-	data, ok := ev.Data.(map[string]any)
+	data, ok := ev.Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", ev.Data)
+		t.Fatalf("expected map data, got %T", ev.Output)
 	}
 	if data["id"] != "abc" || data["name"] != "hello" {
 		t.Errorf("unexpected response data: %+v", data)
@@ -380,7 +380,7 @@ func TestIntegration_InvokeBinding_ServerStreaming_Success(t *testing.T) {
 		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -392,9 +392,9 @@ func TestIntegration_InvokeBinding_ServerStreaming_Success(t *testing.T) {
 		if ev.Error != nil {
 			t.Fatalf("event %d: unexpected error: %+v", i, ev.Error)
 		}
-		data, ok := ev.Data.(map[string]any)
+		data, ok := ev.Output.(map[string]any)
 		if !ok {
-			t.Fatalf("event %d: expected map data, got %T", i, ev.Data)
+			t.Fatalf("event %d: expected map data, got %T", i, ev.Output)
 		}
 		wantMessage := []string{"line 1", "line 2", "line 3"}[i]
 		if data["message"] != wantMessage {
@@ -421,7 +421,7 @@ func TestIntegration_InvokeBinding_ServerStreaming_EmptyStream(t *testing.T) {
 		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -453,7 +453,7 @@ func TestIntegration_InvokeBinding_ServerStreaming_EndStreamError(t *testing.T) 
 		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -575,7 +575,7 @@ func TestServerStreamingCompressedFrameRejected(t *testing.T) {
 		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}

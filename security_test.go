@@ -264,10 +264,10 @@ func TestInvoke_SecurityPassThrough(t *testing.T) {
 
 	driver := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 			capturedSecurity = in.Security
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Data: "ok"}
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Output: "ok"}
 			close(ch)
 			return ch, nil
 		},

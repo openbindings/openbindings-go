@@ -25,7 +25,7 @@ const (
 // Returns a channel rather than an *InvocationOutput so the streaming tool path
 // can surface progress notifications as intermediate events. The previous
 // behavior (one event per call) is preserved for resources and prompts.
-func invoke(ctx context.Context, pool *sessionPool, clientVersion string, url string, ref string, input any, headers map[string]string) <-chan openbindings.StreamEvent {
+func invoke(ctx context.Context, pool *sessionPool, clientVersion string, url string, ref string, input any, headers map[string]string) <-chan openbindings.InvocationOutput {
 	start := time.Now()
 
 	entityType, name, err := parseRef(ref)

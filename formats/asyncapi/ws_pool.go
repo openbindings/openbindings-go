@@ -217,7 +217,7 @@ func (p *wsPool) closeAll() {
 // The entire send+reply cycle is serialized through the connection's opMu to
 // prevent concurrent read corruption. Multiple goroutines will queue on the
 // mutex while still sharing the same underlying connection.
-func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.StreamEvent, error) {
+func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.InvocationOutput, error) {
 	pw, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, input.Context, input.Options)
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeConnectFailed, err.Error())), nil
@@ -242,7 +242,7 @@ func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input 
 
 	wantReply := asyncOp.Reply != nil
 
-	ch := make(chan openbindings.StreamEvent, 1)
+	ch := make(chan openbindings.InvocationOutput, 1)
 	go func() {
 		defer close(ch)
 		defer pw.release()
@@ -257,7 +257,7 @@ func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input 
 			// Connection is broken. Evict it so the next caller gets a fresh one.
 			pool.evict(pw)
 			select {
-			case ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+			case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeExecutionFailed,
 				Message: writeErr.Error(),
 			}}:
@@ -276,7 +276,7 @@ func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input 
 				return
 			}
 			select {
-			case ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+			case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeStreamError,
 				Message: readErr.Error(),
 			}}:
@@ -288,12 +288,12 @@ func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input 
 		var parsed any
 		if json.Unmarshal(msg, &parsed) == nil {
 			select {
-			case ch <- openbindings.StreamEvent{Data: parsed}:
+			case ch <- openbindings.InvocationOutput{Output: parsed}:
 			case <-ctx.Done():
 			}
 		} else {
 			select {
-			case ch <- openbindings.StreamEvent{Data: string(msg)}:
+			case ch <- openbindings.InvocationOutput{Output: string(msg)}:
 			case <-ctx.Done():
 			}
 		}

@@ -72,7 +72,7 @@ func applyGRPCContext(ctx context.Context, bindCtx map[string]any, opts *openbin
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
-func subscribe(ctx context.Context, in *openbindings.BindingInvocationInput, conn *grpc.ClientConn, refClient *grpcreflect.Client, methodDesc protoreflect.MethodDescriptor) (<-chan openbindings.StreamEvent, error) {
+func subscribe(ctx context.Context, in *openbindings.BindingInvocationInput, conn *grpc.ClientConn, refClient *grpcreflect.Client, methodDesc protoreflect.MethodDescriptor) (<-chan openbindings.InvocationOutput, error) {
 	start := time.Now()
 
 	reqMsg, err := buildRequest(methodDesc, in.Input)
@@ -93,7 +93,7 @@ func subscribe(ctx context.Context, in *openbindings.BindingInvocationInput, con
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, grpcErrorCode(err), err.Error())), nil
 	}
 
-	ch := make(chan openbindings.StreamEvent, 16)
+	ch := make(chan openbindings.InvocationOutput, 16)
 	go func() {
 		defer close(ch)
 		defer func() {
@@ -108,7 +108,7 @@ func subscribe(ctx context.Context, in *openbindings.BindingInvocationInput, con
 				if err == io.EOF || ctx.Err() != nil {
 					return
 				}
-				ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+				ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeStreamError,
 					Message: err.Error(),
 				}}
@@ -117,13 +117,13 @@ func subscribe(ctx context.Context, in *openbindings.BindingInvocationInput, con
 
 			output, err := responseToJSON(resp)
 			if err != nil {
-				ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+				ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeResponseError,
 					Message: err.Error(),
 				}}
 				return
 			}
-			ch <- openbindings.StreamEvent{Data: output}
+			ch <- openbindings.InvocationOutput{Output: output}
 		}
 	}()
 

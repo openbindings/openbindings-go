@@ -32,8 +32,8 @@ var nextProgressToken atomic.Int64
 // The session is acquired from the pool on entry and released when the call
 // completes. Multiple concurrent tool calls to the same server share a single
 // MCP session and initialize handshake.
-func invokeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion string, url string, toolName string, args map[string]any, headers map[string]string) <-chan openbindings.StreamEvent {
-	ch := make(chan openbindings.StreamEvent, 32)
+func invokeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion string, url string, toolName string, args map[string]any, headers map[string]string) <-chan openbindings.InvocationOutput {
+	ch := make(chan openbindings.InvocationOutput, 32)
 
 	// sendMu + closed guard the channel against concurrent sends from the
 	// progress handler and the main goroutine. The progress handler acquires
@@ -43,7 +43,7 @@ func invokeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion s
 	var sendMu sync.Mutex
 	closed := false
 
-	trySend := func(ev openbindings.StreamEvent) {
+	trySend := func(ev openbindings.InvocationOutput) {
 		sendMu.Lock()
 		defer sendMu.Unlock()
 		if closed {
@@ -71,7 +71,7 @@ func invokeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion s
 	go func() {
 		session, err := pool.acquire(ctx, clientVersion, url, headers)
 		if err != nil {
-			ch <- openbindings.StreamEvent{
+			ch <- openbindings.InvocationOutput{
 				Status: 1,
 				Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeConnectFailed,
@@ -91,7 +91,7 @@ func invokeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion s
 			}
 
 			params := req.Params
-			trySend(openbindings.StreamEvent{Data: map[string]any{
+			trySend(openbindings.InvocationOutput{Output: map[string]any{
 				"progressToken": params.ProgressToken,
 				"progress":      params.Progress,
 				"total":         params.Total,
@@ -121,7 +121,7 @@ func invokeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion s
 		result, callErr := session.session.CallTool(ctx, params)
 
 		if callErr != nil {
-			ch <- openbindings.StreamEvent{
+			ch <- openbindings.InvocationOutput{
 				Status: 1,
 				Error: &openbindings.InvocationError{
 					Code:    mcpErrorCode(callErr),
@@ -132,8 +132,8 @@ func invokeToolStreaming(ctx context.Context, pool *sessionPool, clientVersion s
 		}
 
 		out := callToolResultToOutput(result)
-		ev := openbindings.StreamEvent{
-			Data:   out.Output,
+		ev := openbindings.InvocationOutput{
+			Output:   out.Output,
 			Status: out.Status,
 		}
 		if out.Error != nil {

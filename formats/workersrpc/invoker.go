@@ -74,7 +74,7 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 // InvokeBinding always yields an error event: Go can't dispatch Workers RPC.
 // Use the `WorkersRpcInvoker` from `@openbindings/workers-rpc` from
 // inside a Cloudflare Worker instead.
-func (e *Invoker) InvokeBinding(_ context.Context, _ *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(_ context.Context, _ *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
 	return openbindings.SingleEventChannel(openbindings.FailedOutput(
 		time.Now(),
 		openbindings.ErrCodeSourceConfigError,

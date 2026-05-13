@@ -63,7 +63,7 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 // the driver can determine that the method is streaming. If no proto content
 // is available, the driver falls back to unary invocation and the binding
 // will fail at runtime if the method is actually streaming.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
 	enriched := enrichContext(ctx, in)
 	start := time.Now()
 

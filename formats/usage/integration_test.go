@@ -77,9 +77,9 @@ func TestIntegration_JSONOutput(t *testing.T) {
 	}
 
 	// JSON output should be parsed into a map (the driver parses stdout JSON).
-	result, ok := events[0].Data.(map[string]any)
+	result, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected parsed JSON map, got %T: %v", events[0].Data, events[0].Data)
+		t.Fatalf("expected parsed JSON map, got %T: %v", events[0].Output, events[0].Output)
 	}
 	if result["name"] != "alice" {
 		t.Errorf("name = %v, want alice", result["name"])
@@ -114,9 +114,9 @@ func TestIntegration_NonZeroExitCode(t *testing.T) {
 	if ev.Status != 1 {
 		t.Errorf("status = %d, want 1", ev.Status)
 	}
-	output, ok := ev.Data.(map[string]any)
+	output, ok := ev.Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map output, got %T: %v", ev.Data, ev.Data)
+		t.Fatalf("expected map output, got %T: %v", ev.Output, ev.Output)
 	}
 	stderr, _ := output["stderr"].(string)
 	if stderr == "" {
@@ -142,7 +142,7 @@ func TestIntegration_MixedOutput(t *testing.T) {
 		t.Fatal("expected 1 successful event")
 	}
 
-	output := events[0].Data.(map[string]any)
+	output := events[0].Output.(map[string]any)
 	stdout, _ := output["stdout"].(string)
 	stderr, _ := output["stderr"].(string)
 	if stdout == "" {
@@ -175,7 +175,7 @@ func TestIntegration_EchoCommand(t *testing.T) {
 		t.Fatal("expected 1 successful event")
 	}
 
-	output := events[0].Data.(map[string]any)
+	output := events[0].Output.(map[string]any)
 	stdout, _ := output["stdout"].(string)
 	if stdout != "hello world\n" {
 		t.Errorf("stdout = %q, want %q", stdout, "hello world\n")
@@ -317,7 +317,7 @@ arg "<words>..." help="Words to echo"
 		t.Fatal("expected 1 successful event")
 	}
 
-	output := events[0].Data.(map[string]any)
+	output := events[0].Output.(map[string]any)
 	stdout, _ := output["stdout"].(string)
 	if stdout != "hello world\n" {
 		t.Errorf("stdout = %q, want %q", stdout, "hello world\n")
@@ -346,9 +346,9 @@ func TestIntegration_InvalidRef(t *testing.T) {
 	}
 }
 
-func drainStream(t *testing.T, ch <-chan openbindings.StreamEvent) []openbindings.StreamEvent {
+func drainStream(t *testing.T, ch <-chan openbindings.InvocationOutput) []openbindings.InvocationOutput {
 	t.Helper()
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}

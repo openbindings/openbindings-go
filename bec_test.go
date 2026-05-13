@@ -14,11 +14,11 @@ import (
 type mockInvoker struct {
 	formats []FormatInfo
 
-	invokeFn func(ctx context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error)
+	invokeFn func(ctx context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error)
 }
 
 func (m *mockInvoker) Formats() []FormatInfo { return m.formats }
-func (m *mockInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+func (m *mockInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 	if m.invokeFn != nil {
 		return m.invokeFn(ctx, in)
 	}
@@ -156,7 +156,7 @@ func TestInvokeBinding_PropagatesStoreAndCallbacks(t *testing.T) {
 
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 			capturedStore = in.Store
 			capturedCallbacks = in.Callbacks
 			return SingleEventChannel(&InvocationOutput{Output: "ok"}), nil
@@ -193,7 +193,7 @@ func TestInvokeBinding_DoesNotOverrideExistingStoreCallbacks(t *testing.T) {
 
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 			capturedStore = in.Store
 			capturedCallbacks = in.Callbacks
 			return SingleEventChannel(&InvocationOutput{Output: "ok"}), nil
@@ -224,7 +224,7 @@ func TestInvokeBinding_ContextPassesThrough(t *testing.T) {
 	var capturedCtx map[string]any
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 			capturedCtx = in.Context
 			return SingleEventChannel(&InvocationOutput{Output: "ok"}), nil
 		},
@@ -433,7 +433,7 @@ func TestWithRuntime_DoesNotMutateCallerInput(t *testing.T) {
 
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 			capturedStore = in.Store
 			return SingleEventChannel(&InvocationOutput{Output: "ok"}), nil
 		},
@@ -467,7 +467,7 @@ func TestWithRuntime_ReusableInput(t *testing.T) {
 	callCount := 0
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 			callCount++
 			if in.Store == nil {
 				return nil, errors.New("store should be set")
@@ -517,10 +517,10 @@ func TestInvoke_ContextFlowsThrough(t *testing.T) {
 	var capturedCtx map[string]any
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 			capturedCtx = in.Context
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Data: "ok"}
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Output: "ok"}
 			close(ch)
 			return ch, nil
 		},
@@ -731,10 +731,10 @@ func TestInvoke_InputTransformApplied(t *testing.T) {
 
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 			// The input should have been passed through the transform evaluator
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Data: in.Input}
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Output: in.Input}
 			close(ch)
 			return ch, nil
 		},
@@ -772,9 +772,9 @@ func TestInvoke_OutputTransformApplied(t *testing.T) {
 
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Data: map[string]any{"raw": true}}
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Output: map[string]any{"raw": true}}
 			close(ch)
 			return ch, nil
 		},
@@ -796,16 +796,16 @@ func TestInvoke_OutputTransformApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var events []StreamEvent
+	var events []InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
-	m, ok := events[0].Data.(map[string]any)
+	m, ok := events[0].Output.(map[string]any)
 	if !ok || m["transformed"] != true {
-		t.Errorf("expected transformed output, got %v", events[0].Data)
+		t.Errorf("expected transformed output, got %v", events[0].Output)
 	}
 }
 
@@ -815,11 +815,11 @@ func TestInvoke_OutputTransformMultipleEvents(t *testing.T) {
 
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
-			ch := make(chan StreamEvent, 3)
-			ch <- StreamEvent{Data: "event1"}
-			ch <- StreamEvent{Data: "event2"}
-			ch <- StreamEvent{Data: "event3"}
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
+			ch := make(chan InvocationOutput, 3)
+			ch <- InvocationOutput{Output: "event1"}
+			ch <- InvocationOutput{Output: "event2"}
+			ch <- InvocationOutput{Output: "event3"}
 			close(ch)
 			callCount++
 			return ch, nil
@@ -842,7 +842,7 @@ func TestInvoke_OutputTransformMultipleEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var events []StreamEvent
+	var events []InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -874,7 +874,7 @@ func TestInvoke_InputTransformNoEvaluator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var events []StreamEvent
+	var events []InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -889,9 +889,9 @@ func TestInvoke_InputTransformNoEvaluator(t *testing.T) {
 func TestInvoke_OutputTransformNoEvaluator(t *testing.T) {
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Data: "data"}
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Output: "data"}
 			close(ch)
 			return ch, nil
 		},
@@ -912,7 +912,7 @@ func TestInvoke_OutputTransformNoEvaluator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var events []StreamEvent
+	var events []InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -929,9 +929,9 @@ func TestInvoke_TransformRef(t *testing.T) {
 
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Data: in.Input}
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Output: in.Input}
 			close(ch)
 			return ch, nil
 		},
@@ -990,7 +990,7 @@ func TestInvoke_TransformRefNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var events []StreamEvent
+	var events []InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -1007,9 +1007,9 @@ func TestInvoke_OutputTransformErrorPassesThrough(t *testing.T) {
 
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Data: "data"}
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Output: "data"}
 			close(ch)
 			return ch, nil
 		},
@@ -1030,7 +1030,7 @@ func TestInvoke_OutputTransformErrorPassesThrough(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var events []StreamEvent
+	var events []InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -1047,10 +1047,10 @@ func TestInvoke_OutputTransformSkipsErrorEvents(t *testing.T) {
 
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
-			ch := make(chan StreamEvent, 2)
-			ch <- StreamEvent{Error: &InvocationError{Code: "upstream_error", Message: "something broke"}}
-			ch <- StreamEvent{Data: "good"}
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
+			ch := make(chan InvocationOutput, 2)
+			ch <- InvocationOutput{Error: &InvocationError{Code: "upstream_error", Message: "something broke"}}
+			ch <- InvocationOutput{Output: "good"}
 			close(ch)
 			return ch, nil
 		},
@@ -1071,7 +1071,7 @@ func TestInvoke_OutputTransformSkipsErrorEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var events []StreamEvent
+	var events []InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -1083,8 +1083,8 @@ func TestInvoke_OutputTransformSkipsErrorEvents(t *testing.T) {
 		t.Errorf("expected upstream error passthrough, got %+v", events[0])
 	}
 	// Second event is transformed (captureEvaluator returns data unchanged)
-	if events[1].Data != "good" {
-		t.Errorf("expected transformed data, got %v", events[1].Data)
+	if events[1].Output != "good" {
+		t.Errorf("expected transformed data, got %v", events[1].Output)
 	}
 	// Only the data event should have been evaluated
 	if len(eval.calls) != 1 {
@@ -1097,13 +1097,13 @@ func TestInvoke_TransformStreamCancellation(t *testing.T) {
 
 	mock := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
-		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
-			ch := make(chan StreamEvent)
+		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
+			ch := make(chan InvocationOutput)
 			go func() {
 				defer close(ch)
 				for i := 0; ; i++ {
 					select {
-					case ch <- StreamEvent{Data: i}:
+					case ch <- InvocationOutput{Output: i}:
 					case <-ctx.Done():
 						return
 					}
@@ -1133,7 +1133,7 @@ func TestInvoke_TransformStreamCancellation(t *testing.T) {
 	if !ok {
 		t.Fatal("expected at least one event")
 	}
-	if ev.Data == nil {
+	if ev.Output == nil {
 		t.Fatal("expected data event")
 	}
 

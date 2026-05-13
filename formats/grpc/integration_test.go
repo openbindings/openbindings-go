@@ -149,9 +149,9 @@ func dialTestServer(t *testing.T, dialer func(context.Context, string) (net.Conn
 	return conn
 }
 
-func drainStream(t *testing.T, ch <-chan openbindings.StreamEvent) []openbindings.StreamEvent {
+func drainStream(t *testing.T, ch <-chan openbindings.InvocationOutput) []openbindings.InvocationOutput {
 	t.Helper()
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -319,9 +319,9 @@ func TestIntegration_ExecuteUnary(t *testing.T) {
 		t.Errorf("auth = %q, want %q", ts.lastAuth, "Bearer tok_secret")
 	}
 
-	resp, ok := events[0].Data.(map[string]any)
+	resp, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map response, got %T", events[0].Data)
+		t.Fatalf("expected map response, got %T", events[0].Output)
 	}
 	if resp["id"] != "42" {
 		t.Errorf("id = %v, want 42", resp["id"])
@@ -365,9 +365,9 @@ func TestIntegration_ExecuteStreaming(t *testing.T) {
 		t.Errorf("auth = %q, want %q", ts.lastAuth, "Bearer stream_tok")
 	}
 
-	first, ok := events[0].Data.(map[string]any)
+	first, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", events[0].Data)
+		t.Fatalf("expected map data, got %T", events[0].Output)
 	}
 	if first["id"] != "1" || first["name"] != "first" {
 		t.Errorf("first item = %v, want {id:1, name:first}", first)

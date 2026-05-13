@@ -64,7 +64,7 @@ func classifyHTTPError(ctx context.Context, err error) string {
 // The dual return shape avoids forcing every unary code path through a
 // channel allocation while still allowing SSE responses to surface as a
 // natural multi-event stream.
-func invokeBindingWithDoc(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *openapi3.T) (*openbindings.InvocationOutput, <-chan openbindings.StreamEvent) {
+func invokeBindingWithDoc(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *openapi3.T) (*openbindings.InvocationOutput, <-chan openbindings.InvocationOutput) {
 	start := time.Now()
 
 	pathTemplate, method, err := parseRef(input.Ref)
@@ -92,7 +92,7 @@ func invokeBindingWithDoc(ctx context.Context, client *http.Client, input *openb
 	return doHTTPRequest(ctx, client, input, doc, op, pathItem, pathTemplate, method, baseURL, start)
 }
 
-func doHTTPRequest(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *openapi3.T, op *openapi3.Operation, pathItem *openapi3.PathItem, pathTemplate, method, baseURL string, start time.Time) (*openbindings.InvocationOutput, <-chan openbindings.StreamEvent) {
+func doHTTPRequest(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *openapi3.T, op *openapi3.Operation, pathItem *openapi3.PathItem, pathTemplate, method, baseURL string, start time.Time) (*openbindings.InvocationOutput, <-chan openbindings.InvocationOutput) {
 	allParams := mergeParameters(pathItem.Parameters, op.Parameters)
 	inputMap, _ := openbindings.ToStringAnyMap(input.Input)
 	if inputMap == nil {

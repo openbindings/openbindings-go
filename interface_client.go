@@ -76,14 +76,14 @@ func (c *InterfaceClient) InterfaceJSON() string {
 // Invoke invokes an operation, returning a stream of events. A unary
 // operation produces exactly one event. Client-level default options
 // are applied automatically.
-func (c *InterfaceClient) Invoke(ctx context.Context, op string, input any) (<-chan StreamEvent, error) {
+func (c *InterfaceClient) Invoke(ctx context.Context, op string, input any) (<-chan InvocationOutput, error) {
 	return c.InvokeWithOptions(ctx, op, input, nil)
 }
 
 // InvokeWithOptions invokes an operation with per-call execution options,
 // returning a stream of events. Per-call options are merged on top of
 // client-level defaults (per-call wins).
-func (c *InterfaceClient) InvokeWithOptions(ctx context.Context, op string, input any, opts *InvocationOptions) (<-chan StreamEvent, error) {
+func (c *InterfaceClient) InvokeWithOptions(ctx context.Context, op string, input any, opts *InvocationOptions) (<-chan InvocationOutput, error) {
 	merged := mergeInvocationOptions(c.defaultOpts, opts)
 	return c.invoker.Invoke(ctx, &OperationInvocationInput{
 		Interface: c.iface,

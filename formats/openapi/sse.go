@@ -34,7 +34,7 @@ func isSSEContentType(contentType string) bool {
 
 // streamSSEResponse reads a `text/event-stream` HTTP response body line by
 // line per the W3C Server-Sent Events specification, dispatching each parsed
-// event as a StreamEvent on the returned channel. The channel closes when the
+// event as a InvocationOutput on the returned channel. The channel closes when the
 // body is exhausted, the caller cancels via ctx, or an unrecoverable error
 // occurs.
 //
@@ -43,14 +43,14 @@ func isSSEContentType(contentType string) bool {
 //   - `data:` lines accumulate; multiple data lines for one event are joined
 //     with a literal newline (per the spec)
 //   - `event:`, `id:`, `retry:` fields are parsed but currently surfaced only
-//     by encoding the event name into the StreamEvent's Data when present
+//     by encoding the event name into the InvocationOutput's Data when present
 //   - Comment lines (starting with `:`) are ignored
 //   - Blank lines dispatch the accumulated event
 //
 // If a data payload parses as JSON, the parsed value is emitted as
-// StreamEvent.Data. Otherwise the raw string is emitted.
-func streamSSEResponse(ctx context.Context, resp *http.Response, start time.Time) <-chan openbindings.StreamEvent {
-	ch := make(chan openbindings.StreamEvent, 16)
+// InvocationOutput.Data. Otherwise the raw string is emitted.
+func streamSSEResponse(ctx context.Context, resp *http.Response, start time.Time) <-chan openbindings.InvocationOutput {
+	ch := make(chan openbindings.InvocationOutput, 16)
 	go func() {
 		defer close(ch)
 		defer resp.Body.Close()
@@ -98,7 +98,7 @@ func streamSSEResponse(ctx context.Context, resp *http.Response, start time.Time
 			}
 
 			select {
-			case ch <- openbindings.StreamEvent{Data: data, Status: resp.StatusCode}:
+			case ch <- openbindings.InvocationOutput{Output: data, Status: resp.StatusCode}:
 			case <-ctx.Done():
 			}
 
@@ -162,7 +162,7 @@ func streamSSEResponse(ctx context.Context, resp *http.Response, start time.Time
 				return
 			}
 			select {
-			case ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+			case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeStreamError,
 				Message: err.Error(),
 			}}:

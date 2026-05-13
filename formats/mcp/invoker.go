@@ -110,7 +110,7 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 // stream and forwarded to the caller. This makes the auth retry compatible
 // with both unary and progress-streaming tool calls (where the first event
 // might be either an auth error or a progress notification).
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
 	enriched := in
 	if in.Store != nil {
 		key := normalizeEndpoint(in.Source.Location)
@@ -150,7 +150,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 // The original `in` is passed alongside `enriched` so the function can
 // detect whether `enriched` is still aliased to `in` (no store-merge
 // happened) and copy on first mutation.
-func (e *Invoker) invokeWithAuthRetry(ctx context.Context, in, enriched *openbindings.BindingInvocationInput) <-chan openbindings.StreamEvent {
+func (e *Invoker) invokeWithAuthRetry(ctx context.Context, in, enriched *openbindings.BindingInvocationInput) <-chan openbindings.InvocationOutput {
 	headers := buildHTTPHeaders(enriched.Context, enriched.Options)
 	stream := invoke(ctx, e.pool, e.clientVersion, enriched.Source.Location, enriched.Ref, enriched.Input, headers)
 
@@ -158,7 +158,7 @@ func (e *Invoker) invokeWithAuthRetry(ctx context.Context, in, enriched *openbin
 	// closes immediately (no events), forward an empty closed channel.
 	first, ok := <-stream
 	if !ok {
-		empty := make(chan openbindings.StreamEvent)
+		empty := make(chan openbindings.InvocationOutput)
 		close(empty)
 		return empty
 	}
@@ -218,8 +218,8 @@ func (e *Invoker) invokeWithAuthRetry(ctx context.Context, in, enriched *openbin
 
 // prependEvent returns a new channel that yields `first` followed by every
 // event remaining on `rest`, then closes when `rest` closes.
-func prependEvent(first openbindings.StreamEvent, rest <-chan openbindings.StreamEvent) <-chan openbindings.StreamEvent {
-	out := make(chan openbindings.StreamEvent, 16)
+func prependEvent(first openbindings.InvocationOutput, rest <-chan openbindings.InvocationOutput) <-chan openbindings.InvocationOutput {
+	out := make(chan openbindings.InvocationOutput, 16)
 	go func() {
 		defer close(out)
 		out <- first
@@ -233,7 +233,7 @@ func prependEvent(first openbindings.StreamEvent, rest <-chan openbindings.Strea
 // drainStreamAsync consumes any remaining events on the channel so the
 // producing goroutine isn't blocked on a full buffer. Used when an auth retry
 // abandons the original stream.
-func drainStreamAsync(ch <-chan openbindings.StreamEvent) {
+func drainStreamAsync(ch <-chan openbindings.InvocationOutput) {
 	go func() {
 		for range ch {
 		}

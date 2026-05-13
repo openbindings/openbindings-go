@@ -178,9 +178,9 @@ func TestIntegrationInvokeQuery(t *testing.T) {
 		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
 	}
 
-	data, ok := ev.Data.(map[string]any)
+	data, ok := ev.Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", ev.Data)
+		t.Fatalf("expected map data, got %T", ev.Output)
 	}
 	if data["id"] != "42" {
 		t.Errorf("user id = %v, want 42", data["id"])
@@ -213,9 +213,9 @@ func TestIntegrationInvokeQueryNoArgs(t *testing.T) {
 		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
 	}
 
-	data, ok := ev.Data.([]any)
+	data, ok := ev.Output.([]any)
 	if !ok {
-		t.Fatalf("expected array data, got %T", ev.Data)
+		t.Fatalf("expected array data, got %T", ev.Output)
 	}
 	if len(data) != 2 {
 		t.Errorf("expected 2 users, got %d", len(data))
@@ -246,9 +246,9 @@ func TestIntegrationInvokeMutation(t *testing.T) {
 		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
 	}
 
-	data, ok := ev.Data.(map[string]any)
+	data, ok := ev.Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", ev.Data)
+		t.Fatalf("expected map data, got %T", ev.Output)
 	}
 	if data["name"] != "Charlie" {
 		t.Errorf("user name = %v, want Charlie", data["name"])
@@ -293,9 +293,9 @@ func TestIntegrationInvokeWithSchemaQuery(t *testing.T) {
 		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
 	}
 
-	data, ok := ev.Data.(map[string]any)
+	data, ok := ev.Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", ev.Data)
+		t.Fatalf("expected map data, got %T", ev.Output)
 	}
 	if data["id"] != "99" {
 		t.Errorf("user id = %v, want 99", data["id"])
@@ -389,9 +389,9 @@ func TestIntegrationSourceContent(t *testing.T) {
 		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
 	}
 
-	data, ok := ev.Data.([]any)
+	data, ok := ev.Output.([]any)
 	if !ok {
-		t.Fatalf("expected array data, got %T", ev.Data)
+		t.Fatalf("expected array data, got %T", ev.Output)
 	}
 	if len(data) != 2 {
 		t.Errorf("expected 2 users, got %d", len(data))
@@ -694,7 +694,7 @@ func TestIntegrationInvokeSubscription(t *testing.T) {
 	}
 
 	// Drain the channel until close. Expect three data events and no errors.
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -706,9 +706,9 @@ func TestIntegrationInvokeSubscription(t *testing.T) {
 		if ev.Error != nil {
 			t.Fatalf("event %d: unexpected stream error: %s: %s", i, ev.Error.Code, ev.Error.Message)
 		}
-		data, ok := ev.Data.(map[string]any)
+		data, ok := ev.Output.(map[string]any)
 		if !ok {
-			t.Fatalf("event %d: expected map data, got %T", i, ev.Data)
+			t.Fatalf("event %d: expected map data, got %T", i, ev.Output)
 		}
 		ms, ok := data["messageStream"].(map[string]any)
 		if !ok {
@@ -903,7 +903,7 @@ func TestIntegrationSubscription_ErrorMessage(t *testing.T) {
 		t.Fatalf("InvokeBinding: %v", err)
 	}
 
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -955,7 +955,7 @@ func TestIntegrationSubscription_ConnectionDropMidStream(t *testing.T) {
 		t.Fatalf("InvokeBinding: %v", err)
 	}
 
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}

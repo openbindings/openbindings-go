@@ -120,9 +120,9 @@ func setupMCPServer(t *testing.T) (*httptest.Server, *testState) {
 	return ts, state
 }
 
-func drainStream(t *testing.T, ch <-chan openbindings.StreamEvent) []openbindings.StreamEvent {
+func drainStream(t *testing.T, ch <-chan openbindings.InvocationOutput) []openbindings.InvocationOutput {
 	t.Helper()
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -209,8 +209,8 @@ func TestIntegration_ExecuteTool(t *testing.T) {
 	}
 
 	// Verify response.
-	if events[0].Data != "echo: hello world" {
-		t.Errorf("data = %v, want 'echo: hello world'", events[0].Data)
+	if events[0].Output != "echo: hello world" {
+		t.Errorf("data = %v, want 'echo: hello world'", events[0].Output)
 	}
 }
 
@@ -232,9 +232,9 @@ func TestIntegration_ExecuteResource(t *testing.T) {
 	}
 
 	// The JSON text should be parsed into a map.
-	resp, ok := events[0].Data.(map[string]any)
+	resp, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map response, got %T: %v", events[0].Data, events[0].Data)
+		t.Fatalf("expected map response, got %T: %v", events[0].Output, events[0].Output)
 	}
 	if resp["ok"] != true {
 		t.Errorf("ok = %v, want true", resp["ok"])
@@ -259,9 +259,9 @@ func TestIntegration_ExecutePrompt(t *testing.T) {
 		t.Fatalf("expected 1 successful event, got %d", len(events))
 	}
 
-	resp, ok := events[0].Data.(map[string]any)
+	resp, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map response, got %T", events[0].Data)
+		t.Fatalf("expected map response, got %T", events[0].Output)
 	}
 	if resp["description"] != "A greeting prompt" {
 		t.Errorf("description = %v", resp["description"])
@@ -395,10 +395,10 @@ func TestIntegration_ToolProgressNotifications(t *testing.T) {
 	}
 
 	// Separate progress events from the final result.
-	var progressEvents []openbindings.StreamEvent
-	var finalEvent *openbindings.StreamEvent
+	var progressEvents []openbindings.InvocationOutput
+	var finalEvent *openbindings.InvocationOutput
 	for i := range events {
-		data, ok := events[i].Data.(map[string]any)
+		data, ok := events[i].Output.(map[string]any)
 		if ok {
 			if _, hasToken := data["progressToken"]; hasToken {
 				progressEvents = append(progressEvents, events[i])
@@ -417,7 +417,7 @@ func TestIntegration_ToolProgressNotifications(t *testing.T) {
 		if ev.Error != nil {
 			t.Fatalf("progress event %d: unexpected error: %+v", i, ev.Error)
 		}
-		data := ev.Data.(map[string]any)
+		data := ev.Output.(map[string]any)
 		if _, ok := data["progress"]; !ok {
 			t.Errorf("progress event %d: missing progress field", i)
 		}

@@ -5,14 +5,14 @@ import "context"
 // BindingInvoker invokes bindings against format-specific sources.
 // Implementations handle a specific binding format (e.g., OpenAPI, gRPC, MCP).
 //
-// InvokeBinding returns a channel of StreamEvent. Unary operations send a
+// InvokeBinding returns a channel of InvocationOutput. Unary operations send a
 // single event and close the channel. Streaming operations send multiple events.
 // Callers MUST drain the channel to avoid goroutine leaks.
 //
 // A concrete invoker may also implement InterfaceCreator; check via type assertion.
 type BindingInvoker interface {
 	Formats() []FormatInfo
-	InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error)
+	InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error)
 }
 
 // InterfaceCreator creates OpenBindings interfaces from format-specific sources.

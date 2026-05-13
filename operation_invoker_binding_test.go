@@ -19,10 +19,10 @@ func (r *recordingInvoker) Formats() []FormatInfo {
 	return []FormatInfo{{Token: r.format}}
 }
 
-func (r *recordingInvoker) InvokeBinding(_ context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+func (r *recordingInvoker) InvokeBinding(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 	r.lastInput = in
-	ch := make(chan StreamEvent, 1)
-	ch <- StreamEvent{Data: r.data}
+	ch := make(chan InvocationOutput, 1)
+	ch <- InvocationOutput{Output: r.data}
 	close(ch)
 	return ch, nil
 }
@@ -50,7 +50,7 @@ func multiBindingInterface(opKey string, bindingKeys []string) *Interface {
 	}
 }
 
-func drainEvent(t *testing.T, ch <-chan StreamEvent) StreamEvent {
+func drainEvent(t *testing.T, ch <-chan InvocationOutput) InvocationOutput {
 	t.Helper()
 	ev, ok := <-ch
 	if !ok {

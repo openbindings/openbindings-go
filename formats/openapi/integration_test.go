@@ -254,8 +254,8 @@ func testHandler(baseURL string) http.HandlerFunc {
 	}
 }
 
-func drainStream(ch <-chan openbindings.StreamEvent) *openbindings.StreamEvent {
-	var last *openbindings.StreamEvent
+func drainStream(ch <-chan openbindings.InvocationOutput) *openbindings.InvocationOutput {
+	var last *openbindings.InvocationOutput
 	for ev := range ch {
 		ev := ev
 		last = &ev
@@ -348,7 +348,7 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 	}
 
 	// Verify the data matches expected items
-	data, err := json.Marshal(ev.Data)
+	data, err := json.Marshal(ev.Output)
 	if err != nil {
 		t.Fatalf("failed to marshal response data: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 		t.Fatalf("getItem unexpected error: %s: %s", ev3.Error.Code, ev3.Error.Message)
 	}
 
-	itemData, err := json.Marshal(ev3.Data)
+	itemData, err := json.Marshal(ev3.Output)
 	if err != nil {
 		t.Fatalf("failed to marshal getItem response: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
 		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -540,27 +540,27 @@ func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
 	}
 
 	// Event 1: simple data-only payload — emitted as the parsed JSON object directly.
-	first, ok := events[0].Data.(map[string]any)
+	first, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("event 0: expected map data, got %T", events[0].Data)
+		t.Fatalf("event 0: expected map data, got %T", events[0].Output)
 	}
 	if first["id"] != "1" || first["msg"] != "first" {
 		t.Errorf("event 0 data = %+v, want id=1 msg=first", first)
 	}
 
 	// Event 2: simple data-only payload.
-	second, ok := events[1].Data.(map[string]any)
+	second, ok := events[1].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("event 1: expected map data, got %T", events[1].Data)
+		t.Fatalf("event 1: expected map data, got %T", events[1].Output)
 	}
 	if second["id"] != "2" || second["msg"] != "second" {
 		t.Errorf("event 1 data = %+v, want id=2 msg=second", second)
 	}
 
 	// Event 3: has event name + id, so wrapped in {data, event, id}.
-	third, ok := events[2].Data.(map[string]any)
+	third, ok := events[2].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("event 2: expected wrapped map, got %T", events[2].Data)
+		t.Fatalf("event 2: expected wrapped map, got %T", events[2].Output)
 	}
 	if third["event"] != "progress" {
 		t.Errorf("event 2 event name = %v, want progress", third["event"])
@@ -597,16 +597,16 @@ func TestIntegration_SSEResponse_NotSSE_StaysUnary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InvokeBinding error: %v", err)
 	}
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
 	if len(events) != 1 {
 		t.Fatalf("expected 1 unary event, got %d", len(events))
 	}
-	data, ok := events[0].Data.(map[string]any)
+	data, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", events[0].Data)
+		t.Fatalf("expected map data, got %T", events[0].Output)
 	}
 	if data["msg"] != "hi" {
 		t.Errorf("data msg = %v, want hi", data["msg"])
@@ -630,7 +630,7 @@ func TestIntegration_SSEResponse_MultilineData(t *testing.T) {
 			Content: sseSpec(srv.URL),
 		},
 	})
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -638,9 +638,9 @@ func TestIntegration_SSEResponse_MultilineData(t *testing.T) {
 		t.Fatalf("expected 1 event from multiline data, got %d", len(events))
 	}
 	// The combined data is plain text (not JSON), so it should pass through as a string.
-	str, ok := events[0].Data.(string)
+	str, ok := events[0].Output.(string)
 	if !ok {
-		t.Fatalf("expected string data, got %T", events[0].Data)
+		t.Fatalf("expected string data, got %T", events[0].Output)
 	}
 	if str != "line one\nline two\nline three" {
 		t.Errorf("data = %q, want \"line one\\nline two\\nline three\"", str)
@@ -694,7 +694,7 @@ func TestIntegration_SSEResponse_MidStreamClose(t *testing.T) {
 
 	// Drain. The channel must close on its own — no hang.
 	timeout := time.After(3 * time.Second)
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 loop:
 	for {
 		select {
@@ -748,7 +748,7 @@ func TestIntegration_SSEResponse_MalformedLines(t *testing.T) {
 		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -757,7 +757,7 @@ func TestIntegration_SSEResponse_MalformedLines(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("expected 2 valid events from malformed stream, got %d", len(events))
 	}
-	first, _ := events[0].Data.(map[string]any)
+	first, _ := events[0].Output.(map[string]any)
 	if first["id"] != "survivor" {
 		t.Errorf("first event id = %v, want survivor", first["id"])
 	}
@@ -795,7 +795,7 @@ func TestNewInvokerWithClient(t *testing.T) {
 		t.Fatalf("InvokeBinding error: %v", err)
 	}
 
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -806,9 +806,9 @@ func TestNewInvokerWithClient(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
-	data, ok := events[0].Data.(map[string]any)
+	data, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", events[0].Data)
+		t.Fatalf("expected map data, got %T", events[0].Output)
 	}
 	if data["custom"] != "client" {
 		t.Errorf("expected response from custom client, got %+v", data)

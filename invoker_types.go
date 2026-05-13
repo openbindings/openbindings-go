@@ -182,12 +182,20 @@ func (m SecurityMethod) ExtraStringSlice(key string) []string {
 	}
 }
 
-// InvocationOutput is the result of an operation invocation.
+// InvocationOutput is a single output produced by an operation invocation.
+// Unary invocations produce one InvocationOutput; streaming invocations
+// produce many over time. Each one may carry:
+//   - Output only — success.
+//   - Error only — failure prior to producing output (transport error, input
+//     validation, transform failure, schema compilation failure).
+//   - Output AND Error — OBI-T-08 output validation failed against the
+//     declared output schema. The data is still surfaced so callers may
+//     inspect or render it, while the error reports the schema mismatch.
 type InvocationOutput struct {
 	Output     any              `json:"output,omitempty"`
-	Status     int              `json:"status"`
-	DurationMs int64            `json:"durationMs,omitempty"`
 	Error      *InvocationError `json:"error,omitempty"`
+	Status     int              `json:"status,omitempty"`     // HTTP status or exit code
+	DurationMs int64            `json:"durationMs,omitempty"` // invocation duration
 }
 
 // CreateSource describes a binding source for interface creation.
@@ -262,37 +270,14 @@ type BindableTarget struct {
 	Operation *Operation `json:"operation,omitempty"`
 }
 
-// StreamEvent represents a single event received from a streaming subscription.
-//
-// An event may carry:
-//   - Data only — success.
-//   - Error only — failure prior to producing data (transport error, input
-//     validation, transform failure, schema compilation failure).
-//   - Data AND Error — OBI-T-08 output validation failed against the declared
-//     output schema. The data is still surfaced so callers may inspect or
-//     render it, while the error reports the schema mismatch.
-//
-// Callers that previously short-circuited on Error will continue to see the
-// failure; callers that want to render the underlying response (e.g. a UI
-// debugger) should consult Data even when Error is set.
-type StreamEvent struct {
-	Data       any              `json:"data,omitempty"`
-	Error      *InvocationError `json:"error,omitempty"`
-	Status     int              `json:"status,omitempty"`     // HTTP status or exit code, carried for unary compat
-	DurationMs int64            `json:"durationMs,omitempty"` // invocation duration, carried for unary compat
-}
-
 // SingleEventChannel wraps a single InvocationOutput as a closed, buffered
-// channel of StreamEvent. Convenience for invokers that return unary results.
-func SingleEventChannel(output *InvocationOutput) <-chan StreamEvent {
-	ch := make(chan StreamEvent, 1)
-	ev := StreamEvent{Status: output.Status, DurationMs: output.DurationMs}
-	if output.Error != nil {
-		ev.Error = output.Error
-	} else {
-		ev.Data = output.Output
+// channel of InvocationOutput. Convenience for invokers that return a single
+// unary result.
+func SingleEventChannel(output *InvocationOutput) <-chan InvocationOutput {
+	ch := make(chan InvocationOutput, 1)
+	if output != nil {
+		ch <- *output
 	}
-	ch <- ev
 	close(ch)
 	return ch
 }

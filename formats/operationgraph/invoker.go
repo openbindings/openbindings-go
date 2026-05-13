@@ -38,7 +38,7 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 }
 
 // InvokeBinding invokes an operation graph binding.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
 	doc, err := e.loadDocument(in.Source.Location, in.Source.Content)
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(
@@ -54,7 +54,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 		)), nil
 	}
 
-	out := make(chan openbindings.StreamEvent)
+	out := make(chan openbindings.InvocationOutput)
 	go func() {
 		defer close(out)
 		eng := newEngine(graph, e.invoker, in, e.invoker.TransformEvaluator, e.schemas)

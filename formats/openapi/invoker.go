@@ -115,7 +115,7 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 }
 
 // InvokeBinding invokes an HTTP request based on an OpenAPI binding.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
 	doc, err := e.cachedLoadDocument(in.Source.Location, in.Source.Content)
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeSourceLoadFailed, err.Error())), nil

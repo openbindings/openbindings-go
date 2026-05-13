@@ -64,7 +64,7 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 // InvokeBinding invokes a gRPC binding, returning a channel of stream events.
 // For server-streaming RPCs it yields events as they arrive; for unary RPCs it
 // returns a single event.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
 	enriched := in
 	if in.Store != nil {
 		key := normalizeAddress(in.Source.Location)

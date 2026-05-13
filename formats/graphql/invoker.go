@@ -68,7 +68,7 @@ func (e *Invoker) cachedIntrospect(ctx context.Context, endpointURL string, head
 // InvokeBinding invokes a GraphQL binding, returning a channel of stream events.
 // For subscriptions it yields events as they arrive; for queries and mutations it
 // returns a single event.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.StreamEvent, error) {
+func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
 	enriched := e.enrichContext(ctx, in)
 	start := time.Now()
 

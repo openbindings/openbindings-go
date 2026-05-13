@@ -103,7 +103,7 @@ func (c *combinedInvoker) Formats() []FormatInfo {
 	return cp
 }
 
-func (c *combinedInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+func (c *combinedInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 	invoker := c.findInvoker(in.Source.Format)
 	if invoker == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNoInvoker, in.Source.Format)

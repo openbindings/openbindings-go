@@ -201,7 +201,7 @@ func (e *httpError) Error() string {
 
 // subscribeGraphQL opens a WebSocket connection using the graphql-ws protocol
 // and subscribes to a GraphQL subscription, streaming events to the returned channel.
-func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables map[string]any, headers map[string]string) (<-chan openbindings.StreamEvent, error) {
+func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables map[string]any, headers map[string]string) (<-chan openbindings.InvocationOutput, error) {
 	wsURL := httpToWS(endpointURL)
 
 	wsHeaders := http.Header{}
@@ -243,7 +243,7 @@ func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables 
 		return nil, fmt.Errorf("subscribe: %w", err)
 	}
 
-	ch := make(chan openbindings.StreamEvent, 16)
+	ch := make(chan openbindings.InvocationOutput, 16)
 	go func() {
 		defer close(ch)
 		defer conn.Close(websocket.StatusNormalClosure, "")
@@ -254,7 +254,7 @@ func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables 
 				if ctx.Err() != nil {
 					return
 				}
-				ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+				ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeStreamError,
 					Message: err.Error(),
 				}}
@@ -267,7 +267,7 @@ func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables 
 				Payload json.RawMessage `json:"payload"`
 			}
 			if err := json.Unmarshal(raw, &msg); err != nil {
-				ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+				ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeResponseError,
 					Message: fmt.Sprintf("parse ws message: %v", err),
 				}}
@@ -281,30 +281,30 @@ func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables 
 					Errors []graphqlError `json:"errors"`
 				}
 				if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-					ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+					ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 						Code:    openbindings.ErrCodeResponseError,
 						Message: fmt.Sprintf("parse next payload: %v", err),
 					}}
 					return
 				}
 				if len(payload.Errors) > 0 {
-					ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+					ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 						Code:    openbindings.ErrCodeExecutionFailed,
 						Message: payload.Errors[0].Message,
 					}}
 					return
 				}
-				ch <- openbindings.StreamEvent{Data: payload.Data}
+				ch <- openbindings.InvocationOutput{Output: payload.Data}
 
 			case "error":
 				var errors []graphqlError
 				if err := json.Unmarshal(msg.Payload, &errors); err != nil {
-					ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+					ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 						Code:    openbindings.ErrCodeExecutionFailed,
 						Message: string(msg.Payload),
 					}}
 				} else if len(errors) > 0 {
-					ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+					ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 						Code:    openbindings.ErrCodeExecutionFailed,
 						Message: errors[0].Message,
 					}}

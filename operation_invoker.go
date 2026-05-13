@@ -98,7 +98,7 @@ func (e *OperationInvoker) availableFormats() map[string]bool {
 // propagated from the invoker when not already set on the input. Invokers
 // are responsible for looking up stored context internally using
 // NormalizeContextKey.
-func (e *OperationInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan StreamEvent, error) {
+func (e *OperationInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 	return e.invoker.InvokeBinding(ctx, e.withRuntime(in))
 }
 
@@ -122,11 +122,11 @@ func (e *OperationInvoker) withRuntime(in *BindingInvocationInput) *BindingInvoc
 // Invoke resolves an OBI operation to a binding and returns a stream
 // of events. Every operation is a stream — unary calls produce a single event.
 //
-// The invoker's InvokeBinding returns a channel of StreamEvent. Output
+// The invoker's InvokeBinding returns a channel of InvocationOutput. Output
 // transforms are applied per event.
 //
 // Input transforms are applied once before invocation.
-func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationInput) (<-chan StreamEvent, error) {
+func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationInput) (<-chan InvocationOutput, error) {
 	if in.Interface == nil {
 		return nil, ErrNilInterface
 	}
@@ -141,8 +141,8 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 	if in.BindingKey != "" {
 		b, ok := in.Interface.Bindings[in.BindingKey]
 		if !ok {
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Error: &InvocationError{
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Error: &InvocationError{
 				Code:    ErrCodeBindingNotFound,
 				Message: fmt.Sprintf("binding %q is not defined on this interface", in.BindingKey),
 			}}
@@ -176,8 +176,8 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 		defs := buildSchemaDefs(in.Interface.Schemas)
 		compiled, err := compileExampleSchema(op.Input, defs)
 		if err != nil {
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Error: &InvocationError{
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Error: &InvocationError{
 				Code:    ErrCodeValidationFailed,
 				Message: fmt.Sprintf("openbindings: input schema compilation failed for %q: %v", in.Operation, err),
 			}}
@@ -185,9 +185,9 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 			return ch, nil
 		}
 		if verr := compiled.Validate(in.Input); verr != nil {
-			ch := make(chan StreamEvent, 1)
+			ch := make(chan InvocationOutput, 1)
 			lines := splitSchemaError(verr)
-			ch <- StreamEvent{Error: &InvocationError{
+			ch <- InvocationOutput{Error: &InvocationError{
 				Code:    ErrCodeValidationFailed,
 				Message: fmt.Sprintf("openbindings: input validation failed for %q: %s", in.Operation, strings.Join(lines, "; ")),
 				Details: ValidationFailureDetails{Failures: collectValidationFailures(verr)},
@@ -200,8 +200,8 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 	invokeInput := in.Input
 	if binding.InputTransform != nil {
 		if e.TransformEvaluator == nil {
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Error: &InvocationError{
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Error: &InvocationError{
 				Code:    ErrCodeTransformError,
 				Message: fmt.Sprintf("%v: binding %q has inputTransform", ErrNoTransformEvaluator, bindingKey),
 			}}
@@ -210,8 +210,8 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 		}
 		transformed, err := applyTransformRef(e.TransformEvaluator, in.Interface.Transforms, binding.InputTransform, invokeInput)
 		if err != nil {
-			ch := make(chan StreamEvent, 1)
-			ch <- StreamEvent{Error: &InvocationError{
+			ch := make(chan InvocationOutput, 1)
+			ch <- InvocationOutput{Error: &InvocationError{
 				Code:    ErrCodeTransformError,
 				Message: fmt.Sprintf("openbindings: input transform failed for %q: %v", bindingKey, err),
 			}}
@@ -253,13 +253,13 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 // event's Data and validating against outputSchema (OBI-T-08). If neither
 // outputTransform nor outputSchema is configured, returns src directly.
 // The context is used to cancel drain goroutines when the parent is cancelled.
-func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan StreamEvent, binding *BindingEntry, transforms map[string]Transform, bindingKey string, outputSchema JSONSchema, schemas map[string]JSONSchema) <-chan StreamEvent {
+func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan InvocationOutput, binding *BindingEntry, transforms map[string]Transform, bindingKey string, outputSchema JSONSchema, schemas map[string]JSONSchema) <-chan InvocationOutput {
 	if binding.OutputTransform == nil && outputSchema == nil {
 		return src
 	}
 	if binding.OutputTransform != nil && e.TransformEvaluator == nil {
-		out := make(chan StreamEvent, 1)
-		out <- StreamEvent{Error: &InvocationError{
+		out := make(chan InvocationOutput, 1)
+		out <- InvocationOutput{Error: &InvocationError{
 			Code:    ErrCodeTransformError,
 			Message: fmt.Sprintf("%v: binding %q has outputTransform", ErrNoTransformEvaluator, bindingKey),
 		}}
@@ -276,8 +276,8 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 		defs := buildSchemaDefs(schemas)
 		compiled, err := compileExampleSchema(outputSchema, defs)
 		if err != nil {
-			out := make(chan StreamEvent, 1)
-			out <- StreamEvent{Error: &InvocationError{
+			out := make(chan InvocationOutput, 1)
+			out <- InvocationOutput{Error: &InvocationError{
 				Code:    ErrCodeValidationFailed,
 				Message: fmt.Sprintf("openbindings: output schema compilation failed for %q: %v", bindingKey, err),
 			}}
@@ -288,7 +288,7 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 		compiledOutput = compiled
 	}
 
-	out := make(chan StreamEvent)
+	out := make(chan InvocationOutput)
 	go func() {
 		defer close(out)
 		for {
@@ -303,11 +303,11 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 					out <- ev
 					continue
 				}
-				data := ev.Data
+				data := ev.Output
 				if binding.OutputTransform != nil {
 					transformed, err := applyTransformRef(e.TransformEvaluator, transforms, binding.OutputTransform, data)
 					if err != nil {
-						out <- StreamEvent{Error: &InvocationError{
+						out <- InvocationOutput{Error: &InvocationError{
 							Code:    ErrCodeTransformError,
 							Message: fmt.Sprintf("openbindings: output transform failed for %q: %v", bindingKey, err),
 						}}
@@ -325,8 +325,8 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 				if compiledOutput != nil {
 					if verr := compiledOutput.Validate(data); verr != nil {
 						lines := splitSchemaError(verr)
-						out <- StreamEvent{
-							Data: data,
+						out <- InvocationOutput{
+							Output: data,
 							Error: &InvocationError{
 								Code:    ErrCodeValidationFailed,
 								Message: fmt.Sprintf("openbindings: output validation failed for %q: %s", bindingKey, strings.Join(lines, "; ")),
@@ -338,14 +338,14 @@ func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan Strea
 						continue
 					}
 				}
-				out <- StreamEvent{Data: data, Status: ev.Status, DurationMs: ev.DurationMs}
+				out <- InvocationOutput{Output: data, Status: ev.Status, DurationMs: ev.DurationMs}
 			}
 		}
 	}()
 	return out
 }
 
-func drainStream(ctx context.Context, src <-chan StreamEvent) {
+func drainStream(ctx context.Context, src <-chan InvocationOutput) {
 	for {
 		select {
 		case <-ctx.Done():

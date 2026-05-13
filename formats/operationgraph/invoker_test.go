@@ -12,9 +12,9 @@ import (
 )
 
 // collectEvents drains a stream channel with a timeout.
-func collectEvents(t *testing.T, ch <-chan openbindings.StreamEvent) []openbindings.StreamEvent {
+func collectEvents(t *testing.T, ch <-chan openbindings.InvocationOutput) []openbindings.InvocationOutput {
 	t.Helper()
-	var events []openbindings.StreamEvent
+	var events []openbindings.InvocationOutput
 	timeout := time.After(5 * time.Second)
 	for {
 		select {
@@ -31,7 +31,7 @@ func collectEvents(t *testing.T, ch <-chan openbindings.StreamEvent) []openbindi
 }
 
 // invokeGraph is a test helper that parses and invokes a graph document.
-func invokeGraph(t *testing.T, graphJSON string, ref string, input any, invoker *openbindings.OperationInvoker) []openbindings.StreamEvent {
+func invokeGraph(t *testing.T, graphJSON string, ref string, input any, invoker *openbindings.OperationInvoker) []openbindings.InvocationOutput {
 	t.Helper()
 	invoker.AddBindingInvoker(NewInvoker(invoker))
 	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
@@ -68,7 +68,7 @@ func TestSimplePassthrough(t *testing.T) {
 	if events[0].Error != nil {
 		t.Fatalf("unexpected error: %v", events[0].Error)
 	}
-	data := events[0].Data.(map[string]any)
+	data := events[0].Output.(map[string]any)
 	if data["hello"] != "world" {
 		t.Fatalf("expected hello=world, got %v", data["hello"])
 	}
@@ -115,7 +115,7 @@ func TestExitSuccess(t *testing.T) {
 	hasExitEvent := false
 	for _, ev := range events {
 		if ev.Error == nil {
-			if data, ok := ev.Data.(map[string]any); ok && data["stop"] == true {
+			if data, ok := ev.Output.(map[string]any); ok && data["stop"] == true {
 				hasExitEvent = true
 			}
 		}
@@ -249,9 +249,9 @@ func TestOnErrorRouting(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 error event via onError, got %d", len(events))
 	}
-	data, ok := events[0].Data.(map[string]any)
+	data, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map error event, got %T", events[0].Data)
+		t.Fatalf("expected map error event, got %T", events[0].Output)
 	}
 	if _, hasError := data["error"]; !hasError {
 		t.Fatal("expected error field in routed error event")
@@ -444,8 +444,8 @@ func TestTransformWithEvaluator(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
-	if events[0].Data != "Alice" {
-		t.Fatalf("expected 'Alice', got %v", events[0].Data)
+	if events[0].Output != "Alice" {
+		t.Fatalf("expected 'Alice', got %v", events[0].Output)
 	}
 }
 
@@ -485,8 +485,8 @@ func TestTransformWithBindings(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
-	if events[0].Data != "from-input" {
-		t.Fatalf("expected 'from-input', got %v", events[0].Data)
+	if events[0].Output != "from-input" {
+		t.Fatalf("expected 'from-input', got %v", events[0].Output)
 	}
 }
 
@@ -543,7 +543,7 @@ func rawJSON(s string) *json.RawMessage {
 }
 
 // invokeGraphWithTransform is a test helper that parses and invokes with a transform evaluator.
-func invokeGraphWithTransform(t *testing.T, graphJSON string, ref string, input any, te openbindings.TransformEvaluator) []openbindings.StreamEvent {
+func invokeGraphWithTransform(t *testing.T, graphJSON string, ref string, input any, te openbindings.TransformEvaluator) []openbindings.InvocationOutput {
 	t.Helper()
 	invoker := openbindings.NewOperationInvoker()
 	invoker.TransformEvaluator = te
@@ -586,9 +586,9 @@ func TestBufferDrain(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event (buffered array), got %d", len(events))
 	}
-	arr, ok := events[0].Data.([]any)
+	arr, ok := events[0].Output.([]any)
 	if !ok {
-		t.Fatalf("expected array, got %T", events[0].Data)
+		t.Fatalf("expected array, got %T", events[0].Output)
 	}
 	if len(arr) != 1 {
 		t.Fatalf("expected array of 1, got %d", len(arr))
@@ -622,9 +622,9 @@ func TestBufferLimit(t *testing.T) {
 	}
 	// First two batches should have 2 items, last should have 1.
 	for i, ev := range events {
-		arr, ok := ev.Data.([]any)
+		arr, ok := ev.Output.([]any)
 		if !ok {
-			t.Fatalf("event %d: expected array, got %T", i, ev.Data)
+			t.Fatalf("event %d: expected array, got %T", i, ev.Output)
 		}
 		if i < 2 && len(arr) != 2 {
 			t.Fatalf("event %d: expected 2 items, got %d", i, len(arr))
@@ -668,8 +668,8 @@ func TestBufferUntil(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("expected 2 batches, got %d", len(events))
 	}
-	batch1, _ := events[0].Data.([]any)
-	batch2, _ := events[1].Data.([]any)
+	batch1, _ := events[0].Output.([]any)
+	batch2, _ := events[1].Output.([]any)
 	if len(batch1) != 2 {
 		t.Fatalf("first batch: expected 2 items, got %d", len(batch1))
 	}
@@ -711,8 +711,8 @@ func TestBufferThrough(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("expected 2 batches, got %d", len(events))
 	}
-	batch1, _ := events[0].Data.([]any)
-	batch2, _ := events[1].Data.([]any)
+	batch1, _ := events[0].Output.([]any)
+	batch2, _ := events[1].Output.([]any)
 	if len(batch1) != 3 {
 		t.Fatalf("first batch: expected 3 items (inclusive), got %d", len(batch1))
 	}
@@ -746,9 +746,9 @@ func TestFilterToBufferCompletion(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
-	arr, ok := events[0].Data.([]any)
+	arr, ok := events[0].Output.([]any)
 	if !ok {
-		t.Fatalf("expected array, got %T", events[0].Data)
+		t.Fatalf("expected array, got %T", events[0].Output)
 	}
 	if len(arr) != 1 {
 		t.Fatalf("expected array of 1, got %d", len(arr))
@@ -789,7 +789,7 @@ func TestCombineBasic(t *testing.T) {
 		t.Fatalf("expected 2 events (combineLatest), got %d", len(events))
 	}
 	// The last event should have both keys non-null.
-	last := events[len(events)-1].Data.(map[string]any)
+	last := events[len(events)-1].Output.(map[string]any)
 	if last["pathA"] == nil {
 		t.Fatal("expected pathA in last combined event")
 	}
@@ -826,9 +826,9 @@ func TestCombineMissingSource(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
-	result, ok := events[0].Data.(map[string]any)
+	result, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map, got %T", events[0].Data)
+		t.Fatalf("expected map, got %T", events[0].Output)
 	}
 	if result["pathA"] == nil {
 		t.Fatal("expected pathA to have a value")
@@ -862,8 +862,8 @@ func TestMapUnpack(t *testing.T) {
 	if len(events) != 3 {
 		t.Fatalf("expected 3 events, got %d", len(events))
 	}
-	if events[0].Data != "a" || events[1].Data != "b" || events[2].Data != "c" {
-		t.Fatalf("unexpected event data: %v, %v, %v", events[0].Data, events[1].Data, events[2].Data)
+	if events[0].Output != "a" || events[1].Output != "b" || events[2].Output != "c" {
+		t.Fatalf("unexpected event data: %v, %v, %v", events[0].Output, events[1].Output, events[2].Output)
 	}
 }
 
@@ -890,9 +890,9 @@ func TestMapNotArray(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 error event, got %d", len(events))
 	}
-	data, ok := events[0].Data.(map[string]any)
+	data, ok := events[0].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map, got %T", events[0].Data)
+		t.Fatalf("expected map, got %T", events[0].Output)
 	}
 	if data["error"] != "map_not_array" {
 		t.Fatalf("expected map_not_array error, got %v", data["error"])
@@ -926,9 +926,9 @@ func TestTransformToBufferCompletion(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
-	arr, ok := events[0].Data.([]any)
+	arr, ok := events[0].Output.([]any)
 	if !ok {
-		t.Fatalf("expected array, got %T", events[0].Data)
+		t.Fatalf("expected array, got %T", events[0].Output)
 	}
 	if len(arr) != 1 || arr[0] != "Alice" {
 		t.Fatalf("expected [Alice], got %v", arr)
@@ -974,9 +974,9 @@ func TestMapBufferCombineIntegration(t *testing.T) {
 		t.Fatalf("expected 2 events (combineLatest), got %d", len(events))
 	}
 	// Last event has both buffers.
-	result, ok := events[len(events)-1].Data.(map[string]any)
+	result, ok := events[len(events)-1].Output.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map, got %T", events[len(events)-1].Data)
+		t.Fatalf("expected map, got %T", events[len(events)-1].Output)
 	}
 	bufAResult, _ := result["bufA"].([]any)
 	bufBResult, _ := result["bufB"].([]any)

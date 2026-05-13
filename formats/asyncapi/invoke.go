@@ -55,7 +55,7 @@ func invokeBindingWithDoc(ctx context.Context, client *http.Client, input *openb
 	}
 }
 
-func subscribeBindingWithDoc(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *Document, pool *wsPool) (<-chan openbindings.StreamEvent, error) {
+func subscribeBindingWithDoc(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *Document, pool *wsPool) (<-chan openbindings.InvocationOutput, error) {
 	opID, err := parseRef(input.Ref)
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeInvalidRef, err.Error())), nil
@@ -252,7 +252,7 @@ func doSSESubscribe(ctx context.Context, client *http.Client, serverURL, address
 	}
 }
 
-func subscribeSSE(ctx context.Context, client *http.Client, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.StreamEvent, error) {
+func subscribeSSE(ctx context.Context, client *http.Client, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.InvocationOutput, error) {
 	sseURL := serverURL + "/" + strings.TrimLeft(address, "/")
 
 	req, err := http.NewRequestWithContext(ctx, "GET", sseURL, nil)
@@ -272,7 +272,7 @@ func subscribeSSE(ctx context.Context, client *http.Client, serverURL, address s
 		return openbindings.SingleEventChannel(openbindings.HTTPErrorOutput(time.Now(), resp.StatusCode, resp.Status)), nil
 	}
 
-	ch := make(chan openbindings.StreamEvent)
+	ch := make(chan openbindings.InvocationOutput)
 	go func() {
 		defer func() { _ = resp.Body.Close() }()
 		defer close(ch)
@@ -290,7 +290,7 @@ func subscribeSSE(ctx context.Context, client *http.Client, serverURL, address s
 			totalBytes += len(line) + 1 // +1 for newline
 			if totalBytes > maxResponseBytes {
 				select {
-				case ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{
+				case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeResponseError,
 					Message: fmt.Sprintf("SSE stream exceeds %d byte limit", maxResponseBytes),
 				}}:
@@ -308,7 +308,7 @@ func subscribeSSE(ctx context.Context, client *http.Client, serverURL, address s
 				ev := parseSSEPayload(dataLines)
 				dataLines = dataLines[:0]
 				select {
-				case ch <- openbindings.StreamEvent{Data: ev}:
+				case ch <- openbindings.InvocationOutput{Output: ev}:
 				case <-ctx.Done():
 					return
 				}
@@ -317,14 +317,14 @@ func subscribeSSE(ctx context.Context, client *http.Client, serverURL, address s
 
 		if len(dataLines) > 0 {
 			select {
-			case ch <- openbindings.StreamEvent{Data: parseSSEPayload(dataLines)}:
+			case ch <- openbindings.InvocationOutput{Output: parseSSEPayload(dataLines)}:
 			case <-ctx.Done():
 			}
 		}
 
 		if err := scanner.Err(); err != nil && ctx.Err() == nil {
 			select {
-			case ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()}}:
+			case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()}}:
 			case <-ctx.Done():
 			}
 		}
@@ -415,7 +415,7 @@ func doHTTPSend(ctx context.Context, client *http.Client, serverURL, address str
 	}
 }
 
-func subscribeWS(ctx context.Context, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.StreamEvent, error) {
+func subscribeWS(ctx context.Context, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.InvocationOutput, error) {
 	wsURL := serverURL + "/" + strings.TrimLeft(address, "/")
 
 	// Build HTTP headers for the upgrade request using applyHTTPContext.
@@ -464,7 +464,7 @@ func subscribeWS(ctx context.Context, serverURL, address string, input *openbind
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeExecutionFailed, err.Error())), nil
 	}
 
-	ch := make(chan openbindings.StreamEvent)
+	ch := make(chan openbindings.InvocationOutput)
 	go func() {
 		defer close(ch)
 		defer conn.Close(websocket.StatusNormalClosure, "done")
@@ -483,7 +483,7 @@ func subscribeWS(ctx context.Context, serverURL, address string, input *openbind
 					return
 				}
 				select {
-				case ch <- openbindings.StreamEvent{Error: &openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()}}:
+				case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()}}:
 				case <-ctx.Done():
 				}
 				return
@@ -507,20 +507,20 @@ func subscribeWS(ctx context.Context, serverURL, address string, input *openbind
 						execErr.Message = string(errJSON)
 					}
 					select {
-					case ch <- openbindings.StreamEvent{Error: &execErr}:
+					case ch <- openbindings.InvocationOutput{Error: &execErr}:
 					case <-ctx.Done():
 						return
 					}
 				} else if dataVal, ok := parsed["data"]; ok {
 					select {
-					case ch <- openbindings.StreamEvent{Data: dataVal}:
+					case ch <- openbindings.InvocationOutput{Output: dataVal}:
 					case <-ctx.Done():
 						return
 					}
 				} else {
 					// Send the whole parsed object as data.
 					select {
-					case ch <- openbindings.StreamEvent{Data: any(parsed)}:
+					case ch <- openbindings.InvocationOutput{Output: any(parsed)}:
 					case <-ctx.Done():
 						return
 					}
@@ -528,7 +528,7 @@ func subscribeWS(ctx context.Context, serverURL, address string, input *openbind
 			} else {
 				// Not JSON — send raw string as data.
 				select {
-				case ch <- openbindings.StreamEvent{Data: string(msg)}:
+				case ch <- openbindings.InvocationOutput{Output: string(msg)}:
 				case <-ctx.Done():
 					return
 				}
