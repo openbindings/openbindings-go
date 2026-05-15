@@ -23,6 +23,21 @@
 
 - **`ErrCodeExecutionFailed` retains its name** with a new comment explaining the deliberate retention: error codes name runtime outcomes (the call was *executed* and the service returned an error), not the SDK type or method that produced them, so the rename did not propagate to the error code.
 
+### Removed
+
+- **`InterfaceClient`.** The struct and its `InterfaceClientOption`,
+  `WithContextStore`, `WithPlatformCallbacks`, and `WithDefaultContext`
+  options are gone. Generated typed invokers (from `ob codegen`) wrap an
+  `*OperationInvoker` directly and take the OBI per method call. Direct
+  callers use `OperationInvoker.Invoke(ctx, &OperationInvocationInput{...})`
+  and configure runtime via `OperationInvoker.WithRuntime(store, callbacks)`.
+
+- **`InvocationOptions`.** Folded into `BindingContext`. Transport fields
+  (`headers`, `cookies`, `environment`, `metadata`) are well-known keys
+  inside the context map; helpers `ContextHeaders`/`ContextCookies`/
+  `ContextEnvironment`/`ContextMetadata` read them. `BindingInvocationInput`
+  no longer carries a separate `Options` field.
+
 ### Added
 
 - **URI helpers** `CanonicalizeLocation` and `ResolveRef` per spec §10 (Location Equality) and §12 (Reference Resolution). `CanonicalizeLocation` lifts bare absolute paths to `file://`, lowercases scheme and host, IDN-punycodes via `golang.org/x/net/idna`, strips the default port and fragment, removes dot-segments, and normalizes percent-encoding of unreserved characters; reassembly is manual to preserve encoded reserved characters (e.g., `%2F`) that `url.URL.String()` would otherwise discard. `ResolveRef` is a thin wrapper over `url.URL.ResolveReference` with the spec-required guards for empty/non-absolute bases.

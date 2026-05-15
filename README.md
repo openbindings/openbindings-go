@@ -58,8 +58,8 @@ go install github.com/openbindings/openbindings-go/cmd/ob@latest
 - **Lossless JSON** round-tripping that preserves unknown fields and `x-*` extensions for forward compatibility
 - **Validation** with shape-level checks, strict mode for unknown fields, and format token validation
 - **Schema compatibility** checking under the OpenBindings Profile v0.1 (covariant outputs, contravariant inputs) with diagnostic reasons
-- **InterfaceClient** for resolving OBIs from URLs, well-known discovery, or synthesis from raw specs
-- **OperationInvoker** for routing operations to binding invokers by format, with transform support
+- **`FetchInterface`** for resolving OBIs from URLs (well-known discovery, then synthesis from raw OpenAPI / AsyncAPI / etc. via supplied creators)
+- **`OperationInvoker`** that dispatches operations to per-format binding invokers and applies transforms
 - **Context store** for per-host credential persistence with scheme-agnostic key normalization
 
 The SDK is the foundation layer. It defines the contracts that binding invokers (OpenAPI, AsyncAPI, gRPC, etc.) implement but does not contain any format-specific logic itself.
@@ -96,19 +96,24 @@ import (
     openapi "github.com/openbindings/openbindings-go/formats/openapi"
 )
 
-// Create an invoker with format support
-exec := openbindings.NewOperationInvoker(openapi.NewInvoker())
+// Wire up an invoker with the format(s) you need.
+opInv := openbindings.NewOperationInvoker(openapi.NewInvoker()).
+    WithRuntime(openbindings.NewMemoryStore(), nil)
 
-// Create a client and resolve an OBI from a URL
-client := openbindings.NewInterfaceClient(nil, exec,
-    openbindings.WithContextStore(openbindings.NewMemoryStore()),
-)
-if err := client.Resolve(ctx, "https://api.example.com"); err != nil {
+// Resolve an OBI from a URL (well-known discovery + creator synthesis).
+fetched, err := openbindings.FetchInterface(ctx, "https://api.example.com",
+    openbindings.WithCreators(openapi.NewCreator()))
+if err != nil {
     log.Fatal(err)
 }
+iface := &fetched.Interface
 
-// Invoke an operation — everything is a stream
-ch, err := client.Invoke(ctx, "listItems", map[string]any{"limit": 10})
+// Invoke. Every operation returns a stream — unary calls produce one event.
+ch, err := opInv.Invoke(ctx, &openbindings.OperationInvocationInput{
+    Interface: iface,
+    Operation: "listItems",
+    Input:     map[string]any{"limit": 10},
+})
 if err != nil {
     log.Fatal(err)
 }
@@ -116,9 +121,11 @@ for ev := range ch {
     if ev.Error != nil {
         log.Fatal(ev.Error.Message)
     }
-    fmt.Println(ev.Data)
+    fmt.Println(ev.Output)
 }
 ```
+
+For typed methods per operation, run `ob codegen <obi> --lang go` to produce a `<Name>Invoker` struct that wraps an `OperationInvoker` and provides one method per operation.
 
 ### Check compatibility
 
@@ -131,13 +138,17 @@ for _, issue := range issues {
 
 ## Invocation model
 
-Every operation returns a stream of events (`<-chan StreamEvent`). A unary operation produces one event and closes the channel. A streaming operation produces many. The consumer code is the same for both:
+Every operation returns a stream of events (`<-chan InvocationOutput`). A unary operation produces one event and closes the channel. A streaming operation produces many. The consumer code is the same for both:
 
 ```go
-ch, err := invoker.Invoke(ctx, input)
+ch, err := opInv.Invoke(ctx, &openbindings.OperationInvocationInput{
+    Interface: iface,
+    Operation: "listItems",
+    Input:     input,
+})
 for ev := range ch {
     if ev.Error != nil { /* handle */ }
-    fmt.Println(ev.Data)
+    fmt.Println(ev.Output)
 }
 ```
 
@@ -166,7 +177,7 @@ key := openbindings.NormalizeContextKey("https://api.example.com/v1/users")
 store.Set(ctx, key, map[string]any{"bearerToken": "tok_123"})
 ```
 
-Invokers read from the context store automatically when it's configured on the `OperationInvoker` or `InterfaceClient`.
+Invokers read from the context store automatically when it's configured on the `OperationInvoker` (via construction or `WithRuntime`).
 
 ## Security
 
