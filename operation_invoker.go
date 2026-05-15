@@ -230,7 +230,6 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 		Input:       invokeInput,
 		InputSchema: op.Input,
 		Context:     in.Context,
-		Options:     in.Options,
 		Interface:   in.Interface,
 	}
 	if source.Content != nil {

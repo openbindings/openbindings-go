@@ -87,11 +87,11 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 
 	// Server-streaming dispatch.
 	if methodDesc != nil && methodDesc.method != nil && methodDesc.method.IsStreamingServer() {
-		headers := buildHTTPHeaders(enriched.Context, enriched.Options)
+		headers := buildHTTPHeaders(enriched.Context)
 		return invokeConnectStreaming(ctx, e.client, enriched.Source.Location, svcName, methodName, enriched.Input, headers, methodDesc, start)
 	}
 
-	headers := buildHTTPHeaders(enriched.Context, enriched.Options)
+	headers := buildHTTPHeaders(enriched.Context)
 	result := invokeConnect(ctx, e.client, enriched.Source.Location, svcName, methodName, enriched.Input, headers, methodDesc, start)
 
 	// Auth retry (unary path only — streaming auth retry is harder because
@@ -118,7 +118,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 				}
 			}
 
-			headers = buildHTTPHeaders(cp.Context, cp.Options)
+			headers = buildHTTPHeaders(cp.Context)
 			result = invokeConnect(ctx, e.client, cp.Source.Location, svcName, methodName, cp.Input, headers, methodDesc, start)
 
 			// On retry failure, wrap the error message with operation context

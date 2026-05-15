@@ -79,8 +79,7 @@ type BindingInvocationInput struct {
 	Ref         string                  `json:"ref"`
 	Input       any                     `json:"input,omitempty"`
 	InputSchema JSONSchema              `json:"-"`
-	Context     map[string]any          `json:"-"`
-	Options     *InvocationOptions      `json:"options,omitempty"`
+	Context     map[string]any          `json:"context,omitempty"`
 	Store       ContextStore            `json:"-"`
 	Callbacks   *PlatformCallbacks      `json:"-"`
 	Security    []SecurityMethod        `json:"-"`
@@ -92,22 +91,12 @@ type BindingInvocationInput struct {
 // OperationInvocationInput is the input for invoking an OBI operation.
 // The OperationInvoker resolves the binding internally.
 type OperationInvocationInput struct {
-	Interface *Interface         `json:"interface"`
-	Operation string             `json:"operation"`
-	Input     any                `json:"input,omitempty"`
-	Context   map[string]any     `json:"context,omitempty"`
-	Options   *InvocationOptions `json:"options,omitempty"`
+	Interface *Interface     `json:"interface"`
+	Operation string         `json:"operation"`
+	Input     any            `json:"input,omitempty"`
+	Context   map[string]any `json:"context,omitempty"`
 	// When set, bypass the binding selector and use this binding key directly.
 	BindingKey string `json:"bindingKey,omitempty"`
-}
-
-// InvocationOptions holds developer-supplied per-request settings passed through
-// to the invoker. Unlike context, options are not stored or resolved.
-type InvocationOptions struct {
-	Headers     map[string]string `json:"headers,omitempty"`
-	Cookies     map[string]string `json:"cookies,omitempty"`
-	Environment map[string]string `json:"environment,omitempty"`
-	Metadata    map[string]any    `json:"metadata,omitempty"`
 }
 
 // SecurityMethod describes an authentication method available for a binding.
@@ -399,6 +388,49 @@ func ContextString(ctx map[string]any, key string) string {
 	}
 	v, _ := ctx[key].(string)
 	return v
+}
+
+// ContextHeaders extracts the well-known 'headers' field from context as a
+// typed map[string]string. Returns nil if absent or not a string map.
+func ContextHeaders(ctx map[string]any) map[string]string {
+	return extractStringMap(ctx, "headers")
+}
+
+// ContextCookies extracts the well-known 'cookies' field from context.
+func ContextCookies(ctx map[string]any) map[string]string {
+	return extractStringMap(ctx, "cookies")
+}
+
+// ContextEnvironment extracts the well-known 'environment' field from context.
+func ContextEnvironment(ctx map[string]any) map[string]string {
+	return extractStringMap(ctx, "environment")
+}
+
+// ContextMetadata extracts the well-known 'metadata' field from context.
+// Returns nil if absent or not an object.
+func ContextMetadata(ctx map[string]any) map[string]any {
+	if ctx == nil {
+		return nil
+	}
+	v, _ := ctx["metadata"].(map[string]any)
+	return v
+}
+
+func extractStringMap(ctx map[string]any, key string) map[string]string {
+	if ctx == nil {
+		return nil
+	}
+	raw, ok := ctx[key].(map[string]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
 }
 
 // NormalizeContextKey normalizes a URL to a stable context store key.

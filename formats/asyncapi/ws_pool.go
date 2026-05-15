@@ -73,7 +73,7 @@ func wsPoolKey(serverURL, address string) string {
 //
 // If multiple goroutines call acquire for the same key concurrently, only one
 // creates the connection while the others wait.
-func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any, opts *openbindings.InvocationOptions) (*pooledWS, error) {
+func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any) (*pooledWS, error) {
 	key := wsPoolKey(serverURL, address)
 
 	for {
@@ -108,7 +108,7 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Do
 		p.creating[key] = waitCh
 		p.mu.Unlock()
 
-		pw, err := p.createConn(ctx, serverURL, address, key, doc, asyncOp, bindCtx, opts)
+		pw, err := p.createConn(ctx, serverURL, address, key, doc, asyncOp, bindCtx)
 
 		p.mu.Lock()
 		delete(p.creating, key)
@@ -129,14 +129,14 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Do
 
 // createConn establishes a new WebSocket connection with auth headers applied
 // via applyHTTPContext on the upgrade request.
-func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *Document, asyncOp *Operation, bindCtx map[string]any, opts *openbindings.InvocationOptions) (*pooledWS, error) {
+func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *Document, asyncOp *Operation, bindCtx map[string]any) (*pooledWS, error) {
 	wsURL := serverURL + "/" + trimLeadingSlash(address)
 
 	upgradeReq, err := http.NewRequestWithContext(ctx, "GET", wsURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building upgrade request: %w", err)
 	}
-	applyHTTPContext(upgradeReq, doc, asyncOp, bindCtx, opts)
+	applyHTTPContext(upgradeReq, doc, asyncOp, bindCtx)
 
 	dialOpts := &websocket.DialOptions{
 		HTTPHeader: upgradeReq.Header,
@@ -218,7 +218,7 @@ func (p *wsPool) closeAll() {
 // prevent concurrent read corruption. Multiple goroutines will queue on the
 // mutex while still sharing the same underlying connection.
 func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.InvocationOutput, error) {
-	pw, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, input.Context, input.Options)
+	pw, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, input.Context)
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeConnectFailed, err.Error())), nil
 	}

@@ -370,7 +370,6 @@ func (eng *engine) processOperation(
 		Operation: node.Operation,
 		Input:     ev.data,
 		Context:   eng.bindingIn.Context,
-		Options:   eng.bindingIn.Options,
 	})
 	if err != nil {
 		sendError(key, err.Error(), ev.data, ev.lineage, ev.errorDepth)

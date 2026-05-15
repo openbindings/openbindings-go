@@ -72,7 +72,7 @@ func invokeBindingWithDoc(ctx context.Context, client *http.Client, input *openb
 		return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidRef, err.Error()), nil
 	}
 
-	baseURL, err := resolveBaseURLWithLocation(doc, input.Options, input.Source.Location)
+	baseURL, err := resolveBaseURLWithLocation(doc, input.Context, input.Source.Location)
 	if err != nil {
 		return openbindings.FailedOutput(start, openbindings.ErrCodeSourceConfigError, err.Error()), nil
 	}
@@ -146,7 +146,7 @@ func doHTTPRequest(ctx context.Context, client *http.Client, input *openbindings
 		req.Header.Set(k, fmt.Sprintf("%v", v))
 	}
 
-	applyHTTPContext(req, doc, op, input.Context, input.Options)
+	applyHTTPContext(req, doc, op, input.Context)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -227,9 +227,9 @@ func parseRef(ref string) (path string, method string, err error) {
 	return path, strings.ToLower(method), nil
 }
 
-func resolveBaseURL(doc *openapi3.T, opts *openbindings.InvocationOptions) (string, error) {
-	if opts != nil && opts.Metadata != nil {
-		if base, ok := opts.Metadata["baseURL"].(string); ok && base != "" {
+func resolveBaseURL(doc *openapi3.T, ctx map[string]any) (string, error) {
+	if meta := openbindings.ContextMetadata(ctx); meta != nil {
+		if base, ok := meta["baseURL"].(string); ok && base != "" {
 			return strings.TrimRight(base, "/"), nil
 		}
 	}
@@ -241,13 +241,13 @@ func resolveBaseURL(doc *openapi3.T, opts *openbindings.InvocationOptions) (stri
 		}
 	}
 
-	return "", fmt.Errorf("no server URL: set servers in the OpenAPI doc or provide baseURL in execution options metadata")
+	return "", fmt.Errorf("no server URL: set servers in the OpenAPI doc or provide baseURL in context metadata")
 }
 
 // resolveBaseURLWithLocation resolves the base URL, falling back to the source
 // location's origin when the spec has a relative server URL (e.g. "/api/v3").
-func resolveBaseURLWithLocation(doc *openapi3.T, opts *openbindings.InvocationOptions, sourceLocation string) (string, error) {
-	base, err := resolveBaseURL(doc, opts)
+func resolveBaseURLWithLocation(doc *openapi3.T, ctx map[string]any, sourceLocation string) (string, error) {
+	base, err := resolveBaseURL(doc, ctx)
 	if err != nil {
 		return "", err
 	}
@@ -391,22 +391,21 @@ func resolveBinaryFields(op *openapi3.Operation) map[string]bool {
 }
 
 // applyHTTPContext applies opaque binding context (credentials via well-known
-// fields) and execution options (headers, cookies) to an HTTP request, using
-// OpenAPI securitySchemes for spec-driven credential placement.
-func applyHTTPContext(req *http.Request, doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, opts *openbindings.InvocationOptions) {
+// fields, plus transport hints headers/cookies via well-known fields) to an
+// HTTP request, using OpenAPI securitySchemes for spec-driven credential
+// placement.
+func applyHTTPContext(req *http.Request, doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any) {
 	if len(bindCtx) > 0 {
 		if !applyCredentialsViaSecuritySchemes(req, doc, op, bindCtx) {
 			applyCredentialsFallback(req, bindCtx)
 		}
 	}
 
-	if opts != nil {
-		for k, v := range opts.Headers {
-			req.Header.Set(k, v)
-		}
-		for k, v := range opts.Cookies {
-			req.AddCookie(&http.Cookie{Name: k, Value: v})
-		}
+	for k, v := range openbindings.ContextHeaders(bindCtx) {
+		req.Header.Set(k, v)
+	}
+	for k, v := range openbindings.ContextCookies(bindCtx) {
+		req.AddCookie(&http.Cookie{Name: k, Value: v})
 	}
 }
 

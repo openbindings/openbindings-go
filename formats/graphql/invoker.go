@@ -77,7 +77,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidRef, err.Error())), nil
 	}
 
-	headers := buildHTTPHeaders(enriched.Context, enriched.Options)
+	headers := buildHTTPHeaders(enriched.Context)
 
 	// If inline content is provided, parse it as an introspection result
 	// instead of making a network introspection call.
@@ -139,7 +139,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 				}
 			}
 
-			headers = buildHTTPHeaders(enriched.Context, enriched.Options)
+			headers = buildHTTPHeaders(enriched.Context)
 			result = invokeGraphQL(ctx, enriched.Source.Location, query, variables, fieldName, headers, start)
 		}
 	}

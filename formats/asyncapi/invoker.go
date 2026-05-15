@@ -143,7 +143,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 				return subscribeBindingWithDoc(ctx, e.httpClient, enriched, doc, e.wsPool)
 			}
 			if asyncOp.Action == "send" {
-				_, protocol, _ := resolveServer(doc, enriched.Options)
+				_, protocol, _ := resolveServer(doc, enriched.Context)
 				if protocol == "ws" || protocol == "wss" {
 					return subscribeBindingWithDoc(ctx, e.httpClient, enriched, doc, e.wsPool)
 				}

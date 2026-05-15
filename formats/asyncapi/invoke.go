@@ -32,7 +32,7 @@ func invokeBindingWithDoc(ctx context.Context, client *http.Client, input *openb
 		return openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound, fmt.Sprintf("operation %q not in AsyncAPI doc", opID))
 	}
 
-	serverURL, protocol, err := resolveServer(doc, input.Options)
+	serverURL, protocol, err := resolveServer(doc, input.Context)
 	if err != nil {
 		return openbindings.FailedOutput(start, openbindings.ErrCodeSourceConfigError, err.Error())
 	}
@@ -66,7 +66,7 @@ func subscribeBindingWithDoc(ctx context.Context, client *http.Client, input *op
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeRefNotFound, fmt.Sprintf("operation %q not in AsyncAPI doc", opID))), nil
 	}
 
-	serverURL, protocol, err := resolveServer(doc, input.Options)
+	serverURL, protocol, err := resolveServer(doc, input.Context)
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeSourceConfigError, err.Error())), nil
 	}
@@ -121,9 +121,9 @@ func parseRef(ref string) (string, error) {
 	return ref, nil
 }
 
-func resolveServer(doc *Document, opts *openbindings.InvocationOptions) (url string, protocol string, err error) {
-	if opts != nil && opts.Metadata != nil {
-		if base, ok := opts.Metadata["baseURL"].(string); ok && base != "" {
+func resolveServer(doc *Document, ctx map[string]any) (url string, protocol string, err error) {
+	if meta := openbindings.ContextMetadata(ctx); meta != nil {
+		if base, ok := meta["baseURL"].(string); ok && base != "" {
 			proto := "http"
 			if strings.HasPrefix(base, "https://") {
 				proto = "https"
@@ -198,7 +198,7 @@ func doSSESubscribe(ctx context.Context, client *http.Client, serverURL, address
 		return openbindings.FailedOutput(start, openbindings.ErrCodeExecutionFailed, err.Error())
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	applyHTTPContext(req, doc, asyncOp, input.Context, input.Options)
+	applyHTTPContext(req, doc, asyncOp, input.Context)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -260,7 +260,7 @@ func subscribeSSE(ctx context.Context, client *http.Client, serverURL, address s
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeExecutionFailed, err.Error())), nil
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	applyHTTPContext(req, doc, asyncOp, input.Context, input.Options)
+	applyHTTPContext(req, doc, asyncOp, input.Context)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -353,7 +353,7 @@ func doHTTPSend(ctx context.Context, client *http.Client, serverURL, address str
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	applyHTTPContext(req, doc, asyncOp, input.Context, input.Options)
+	applyHTTPContext(req, doc, asyncOp, input.Context)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -429,7 +429,7 @@ func subscribeWS(ctx context.Context, serverURL, address string, input *openbind
 	if err != nil {
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeExecutionFailed, err.Error())), nil
 	}
-	applyHTTPContext(upgradeReq, doc, asyncOp, input.Context, input.Options)
+	applyHTTPContext(upgradeReq, doc, asyncOp, input.Context)
 
 	dialOpts := &websocket.DialOptions{
 		HTTPHeader: upgradeReq.Header,
@@ -551,7 +551,7 @@ func parseSSEPayload(dataLines []string) any {
 // applyHTTPContext applies opaque binding context (credentials via well-known
 // fields) and execution options (headers, cookies) to an HTTP request, using
 // AsyncAPI securitySchemes for spec-driven credential placement.
-func applyHTTPContext(req *http.Request, doc *Document, asyncOp *Operation, bindCtx map[string]any, opts *openbindings.InvocationOptions) {
+func applyHTTPContext(req *http.Request, doc *Document, asyncOp *Operation, bindCtx map[string]any) {
 	if len(bindCtx) > 0 {
 		applied, queryParams := applyCredentialsViaSecuritySchemes(req, doc, asyncOp, bindCtx)
 		if !applied {
@@ -568,13 +568,11 @@ func applyHTTPContext(req *http.Request, doc *Document, asyncOp *Operation, bind
 		}
 	}
 
-	if opts != nil {
-		for k, v := range opts.Headers {
-			req.Header.Set(k, v)
-		}
-		for k, v := range opts.Cookies {
-			req.AddCookie(&http.Cookie{Name: k, Value: v})
-		}
+	for k, v := range openbindings.ContextHeaders(bindCtx) {
+		req.Header.Set(k, v)
+	}
+	for k, v := range openbindings.ContextCookies(bindCtx) {
+		req.AddCookie(&http.Cookie{Name: k, Value: v})
 	}
 }
 

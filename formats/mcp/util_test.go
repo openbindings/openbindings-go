@@ -3,8 +3,6 @@ package mcp
 import (
 	"encoding/base64"
 	"testing"
-
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func TestParseRef_Tool(t *testing.T) {
@@ -89,21 +87,21 @@ func TestNormalizeEndpoint_Empty(t *testing.T) {
 }
 
 func TestBuildHTTPHeaders_BearerToken(t *testing.T) {
-	h := buildHTTPHeaders(map[string]any{"bearerToken": "tok_123"}, nil)
+	h := buildHTTPHeaders(map[string]any{"bearerToken": "tok_123"})
 	if h["Authorization"] != "Bearer tok_123" {
 		t.Errorf("Authorization = %q, want Bearer tok_123", h["Authorization"])
 	}
 }
 
 func TestBuildHTTPHeaders_APIKey(t *testing.T) {
-	h := buildHTTPHeaders(map[string]any{"apiKey": "key_abc"}, nil)
+	h := buildHTTPHeaders(map[string]any{"apiKey": "key_abc"})
 	if h["Authorization"] != "ApiKey key_abc" {
 		t.Errorf("Authorization = %q, want ApiKey key_abc", h["Authorization"])
 	}
 }
 
 func TestBuildHTTPHeaders_BasicAuth(t *testing.T) {
-	h := buildHTTPHeaders(map[string]any{"basic": map[string]any{"username": "user", "password": "pass"}}, nil)
+	h := buildHTTPHeaders(map[string]any{"basic": map[string]any{"username": "user", "password": "pass"}})
 	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("user:pass"))
 	if h["Authorization"] != want {
 		t.Errorf("Authorization = %q, want %q", h["Authorization"], want)
@@ -111,24 +109,24 @@ func TestBuildHTTPHeaders_BasicAuth(t *testing.T) {
 }
 
 func TestBuildHTTPHeaders_BearerTakesPriority(t *testing.T) {
-	h := buildHTTPHeaders(map[string]any{"bearerToken": "tok", "apiKey": "key"}, nil)
+	h := buildHTTPHeaders(map[string]any{"bearerToken": "tok", "apiKey": "key"})
 	if h["Authorization"] != "Bearer tok" {
 		t.Errorf("Authorization = %q, want Bearer tok", h["Authorization"])
 	}
 }
 
 func TestBuildHTTPHeaders_NoCredentials(t *testing.T) {
-	h := buildHTTPHeaders(nil, nil)
+	h := buildHTTPHeaders(nil)
 	if h != nil {
 		t.Errorf("expected nil headers, got %v", h)
 	}
 }
 
-func TestBuildHTTPHeaders_InvocationOptionsHeaders(t *testing.T) {
-	opts := &openbindings.InvocationOptions{
-		Headers: map[string]string{"X-Custom": "value"},
+func TestBuildHTTPHeaders_ContextHeaders(t *testing.T) {
+	bindCtx := map[string]any{
+		"headers": map[string]any{"X-Custom": "value"},
 	}
-	h := buildHTTPHeaders(nil, opts)
+	h := buildHTTPHeaders(bindCtx)
 	if h["X-Custom"] != "value" {
 		t.Errorf("X-Custom = %q, want value", h["X-Custom"])
 	}

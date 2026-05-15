@@ -16,9 +16,9 @@ import (
 //
 // InterfaceClient is safe for concurrent use.
 type InterfaceClient struct {
-	iface       *Interface
-	invoker     *OperationInvoker
-	defaultOpts *InvocationOptions
+	iface          *Interface
+	invoker        *OperationInvoker
+	defaultContext map[string]any
 }
 
 // InterfaceClientOption configures an InterfaceClient.
@@ -42,11 +42,10 @@ func WithPlatformCallbacks(cb *PlatformCallbacks) InterfaceClientOption {
 	}
 }
 
-// WithDefaultOptions sets client-level default InvocationOptions that are
-// merged into every invocation. Per-call options (via InvokeWithOptions)
-// override these defaults.
-func WithDefaultOptions(opts *InvocationOptions) InterfaceClientOption {
-	return func(ic *InterfaceClient) { ic.defaultOpts = opts }
+// WithDefaultContext sets a client-level default Context map that is merged
+// into every invocation. Per-call Context values override these defaults.
+func WithDefaultContext(ctx map[string]any) InterfaceClientOption {
+	return func(ic *InterfaceClient) { ic.defaultContext = ctx }
 }
 
 // NewInterfaceClient creates a new InterfaceClient bound to the given
@@ -74,40 +73,42 @@ func (c *InterfaceClient) InterfaceJSON() string {
 }
 
 // Invoke invokes an operation, returning a stream of events. A unary
-// operation produces exactly one event. Client-level default options
-// are applied automatically.
+// operation produces exactly one event. Client-level default context
+// is applied automatically.
 func (c *InterfaceClient) Invoke(ctx context.Context, op string, input any) (<-chan InvocationOutput, error) {
-	return c.InvokeWithOptions(ctx, op, input, nil)
+	return c.InvokeWithContext(ctx, op, input, nil)
 }
 
-// InvokeWithOptions invokes an operation with per-call execution options,
-// returning a stream of events. Per-call options are merged on top of
-// client-level defaults (per-call wins).
-func (c *InterfaceClient) InvokeWithOptions(ctx context.Context, op string, input any, opts *InvocationOptions) (<-chan InvocationOutput, error) {
-	merged := mergeInvocationOptions(c.defaultOpts, opts)
+// InvokeWithContext invokes an operation with per-call context, returning a
+// stream of events. Per-call context is merged on top of client-level
+// defaults (per-call wins).
+func (c *InterfaceClient) InvokeWithContext(ctx context.Context, op string, input any, perCall map[string]any) (<-chan InvocationOutput, error) {
+	merged := mergeContext(c.defaultContext, perCall)
 	return c.invoker.Invoke(ctx, &OperationInvocationInput{
 		Interface: c.iface,
 		Operation: op,
 		Input:     input,
-		Options:   merged,
+		Context:   merged,
 	})
 }
 
-// mergeInvocationOptions merges per-call options on top of defaults.
-// Per-call values override defaults. Returns nil when both are nil.
-func mergeInvocationOptions(defaults, perCall *InvocationOptions) *InvocationOptions {
-	if defaults == nil {
+// mergeContext merges per-call context on top of defaults. Per-call values
+// override defaults. Returns nil when both are nil.
+func mergeContext(defaults, perCall map[string]any) map[string]any {
+	if len(defaults) == 0 {
 		return perCall
 	}
-	if perCall == nil {
+	if len(perCall) == 0 {
 		return defaults
 	}
-	return &InvocationOptions{
-		Headers:     mergeMaps(defaults.Headers, perCall.Headers),
-		Cookies:     mergeMaps(defaults.Cookies, perCall.Cookies),
-		Environment: mergeMaps(defaults.Environment, perCall.Environment),
-		Metadata:    mergeMaps(defaults.Metadata, perCall.Metadata),
+	result := make(map[string]any, len(defaults)+len(perCall))
+	for k, v := range defaults {
+		result[k] = v
 	}
+	for k, v := range perCall {
+		result[k] = v
+	}
+	return result
 }
 
 func mergeMaps[V any](base, overlay map[string]V) map[string]V {

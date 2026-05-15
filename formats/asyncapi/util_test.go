@@ -3,7 +3,6 @@ package asyncapi
 import (
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func TestParseRef_BareID(t *testing.T) {
@@ -57,10 +56,8 @@ func TestResolveServer_MetadataOverride(t *testing.T) {
 			"prod": {Host: "api.example.com", Protocol: "https"},
 		},
 	}
-	opts := &openbindings.InvocationOptions{
-		Metadata: map[string]any{"baseURL": "http://localhost:8080"},
-	}
-	url, proto, err := resolveServer(doc, opts)
+	ctx := map[string]any{"metadata": map[string]any{"baseURL": "http://localhost:8080"}}
+	url, proto, err := resolveServer(doc, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

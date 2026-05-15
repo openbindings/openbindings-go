@@ -157,8 +157,8 @@ func invokeConnect(ctx context.Context, client *http.Client, baseURL, svcName, m
 	return &openbindings.InvocationOutput{Output: output, Status: resp.StatusCode, DurationMs: duration}
 }
 
-// buildHTTPHeaders constructs HTTP headers from binding context and execution options.
-func buildHTTPHeaders(bindCtx map[string]any, opts *openbindings.InvocationOptions) map[string]string {
+// buildHTTPHeaders constructs HTTP headers from binding context.
+func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 	headers := map[string]string{}
 
 	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
@@ -170,18 +170,16 @@ func buildHTTPHeaders(bindCtx map[string]any, opts *openbindings.InvocationOptio
 		headers["Authorization"] = "Basic " + encoded
 	}
 
-	if opts != nil {
-		for k, v := range opts.Headers {
-			headers[k] = v
+	for k, v := range openbindings.ContextHeaders(bindCtx) {
+		headers[k] = v
+	}
+	if cookies := openbindings.ContextCookies(bindCtx); len(cookies) > 0 {
+		pairs := make([]string, 0, len(cookies))
+		for k, v := range cookies {
+			pairs = append(pairs, k+"="+v)
 		}
-		if len(opts.Cookies) > 0 {
-			pairs := make([]string, 0, len(opts.Cookies))
-			for k, v := range opts.Cookies {
-				pairs = append(pairs, k+"="+v)
-			}
-			sort.Strings(pairs)
-			headers["Cookie"] = strings.Join(pairs, "; ")
-		}
+		sort.Strings(pairs)
+		headers["Cookie"] = strings.Join(pairs, "; ")
 	}
 
 	return headers

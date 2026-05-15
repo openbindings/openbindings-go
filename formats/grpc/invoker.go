@@ -100,7 +100,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeConnectFailed, err.Error())), nil
 	}
 
-	rpcCtx := applyGRPCContext(ctx, enriched.Context, enriched.Options)
+	rpcCtx := applyGRPCContext(ctx, enriched.Context)
 
 	// Resolve service and method descriptors. If inline content is provided
 	// (e.g., a .proto definition), parse it directly. Otherwise use server reflection.

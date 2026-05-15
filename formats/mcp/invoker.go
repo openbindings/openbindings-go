@@ -151,7 +151,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 // detect whether `enriched` is still aliased to `in` (no store-merge
 // happened) and copy on first mutation.
 func (e *Invoker) invokeWithAuthRetry(ctx context.Context, in, enriched *openbindings.BindingInvocationInput) <-chan openbindings.InvocationOutput {
-	headers := buildHTTPHeaders(enriched.Context, enriched.Options)
+	headers := buildHTTPHeaders(enriched.Context)
 	stream := invoke(ctx, e.pool, e.clientVersion, enriched.Source.Location, enriched.Ref, enriched.Input, headers)
 
 	// Peek at the first event for auth-retry detection. If the channel
@@ -212,7 +212,7 @@ func (e *Invoker) invokeWithAuthRetry(ctx context.Context, in, enriched *openbin
 	// Drain the original stream so its goroutine exits cleanly, then return
 	// a fresh stream from the retried call.
 	drainStreamAsync(stream)
-	headers = buildHTTPHeaders(enriched.Context, enriched.Options)
+	headers = buildHTTPHeaders(enriched.Context)
 	return invoke(ctx, e.pool, e.clientVersion, enriched.Source.Location, enriched.Ref, enriched.Input, headers)
 }
 
@@ -303,7 +303,7 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 
 // buildHTTPHeaders constructs HTTP headers from binding context credentials
 // and execution options for the MCP Streamable HTTP transport.
-func buildHTTPHeaders(bindCtx map[string]any, opts *openbindings.InvocationOptions) map[string]string {
+func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 	headers := map[string]string{}
 
 	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
@@ -315,18 +315,16 @@ func buildHTTPHeaders(bindCtx map[string]any, opts *openbindings.InvocationOptio
 		headers["Authorization"] = "Basic " + encoded
 	}
 
-	if opts != nil {
-		for k, v := range opts.Headers {
-			headers[k] = v
+	for k, v := range openbindings.ContextHeaders(bindCtx) {
+		headers[k] = v
+	}
+	if cookies := openbindings.ContextCookies(bindCtx); len(cookies) > 0 {
+		var parts []string
+		for name, value := range cookies {
+			parts = append(parts, name+"="+value)
 		}
-		if len(opts.Cookies) > 0 {
-			var parts []string
-			for name, value := range opts.Cookies {
-				parts = append(parts, name+"="+value)
-			}
-			sort.Strings(parts)
-			headers["Cookie"] = strings.Join(parts, "; ")
-		}
+		sort.Strings(parts)
+		headers["Cookie"] = strings.Join(parts, "; ")
 	}
 
 	if len(headers) == 0 {

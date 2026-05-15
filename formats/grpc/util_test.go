@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -94,7 +93,7 @@ func TestNormalizeAddress_Whitespace(t *testing.T) {
 func TestApplyGRPCContext_BearerToken(t *testing.T) {
 	ctx := context.Background()
 	bindCtx := map[string]any{"bearerToken": "tok_123"}
-	result := applyGRPCContext(ctx, bindCtx, nil)
+	result := applyGRPCContext(ctx, bindCtx)
 
 	md, ok := metadata.FromOutgoingContext(result)
 	if !ok {
@@ -109,7 +108,7 @@ func TestApplyGRPCContext_BearerToken(t *testing.T) {
 func TestApplyGRPCContext_APIKey(t *testing.T) {
 	ctx := context.Background()
 	bindCtx := map[string]any{"apiKey": "key_abc"}
-	result := applyGRPCContext(ctx, bindCtx, nil)
+	result := applyGRPCContext(ctx, bindCtx)
 
 	md, ok := metadata.FromOutgoingContext(result)
 	if !ok {
@@ -124,7 +123,7 @@ func TestApplyGRPCContext_APIKey(t *testing.T) {
 func TestApplyGRPCContext_BasicAuth(t *testing.T) {
 	ctx := context.Background()
 	bindCtx := map[string]any{"basic": map[string]any{"username": "user", "password": "pass"}}
-	result := applyGRPCContext(ctx, bindCtx, nil)
+	result := applyGRPCContext(ctx, bindCtx)
 
 	md, ok := metadata.FromOutgoingContext(result)
 	if !ok {
@@ -143,7 +142,7 @@ func TestApplyGRPCContext_BearerTakesPriority(t *testing.T) {
 		"bearerToken": "tok_123",
 		"apiKey":      "key_abc",
 	}
-	result := applyGRPCContext(ctx, bindCtx, nil)
+	result := applyGRPCContext(ctx, bindCtx)
 
 	md, _ := metadata.FromOutgoingContext(result)
 	auth := md.Get("authorization")
@@ -154,7 +153,7 @@ func TestApplyGRPCContext_BearerTakesPriority(t *testing.T) {
 
 func TestApplyGRPCContext_NoCredentials(t *testing.T) {
 	ctx := context.Background()
-	result := applyGRPCContext(ctx, nil, nil)
+	result := applyGRPCContext(ctx, nil)
 
 	_, ok := metadata.FromOutgoingContext(result)
 	if ok {
@@ -162,12 +161,12 @@ func TestApplyGRPCContext_NoCredentials(t *testing.T) {
 	}
 }
 
-func TestApplyGRPCContext_InvocationOptionsHeaders(t *testing.T) {
+func TestApplyGRPCContext_ContextHeaders(t *testing.T) {
 	ctx := context.Background()
-	opts := &openbindings.InvocationOptions{
-		Headers: map[string]string{"X-Custom": "value"},
+	bindCtx := map[string]any{
+		"headers": map[string]any{"X-Custom": "value"},
 	}
-	result := applyGRPCContext(ctx, nil, opts)
+	result := applyGRPCContext(ctx, bindCtx)
 
 	md, ok := metadata.FromOutgoingContext(result)
 	if !ok {

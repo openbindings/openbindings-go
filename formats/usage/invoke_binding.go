@@ -23,7 +23,7 @@ func invokeBindingCached(ctx context.Context, input *openbindings.BindingInvocat
 	var binName string
 	var args []string
 
-	binary := metadataBinary(input.Options)
+	binary := metadataBinary(input.Context)
 
 	if binary != "" {
 		binName = binary
@@ -67,7 +67,7 @@ func invokeBindingCached(ctx context.Context, input *openbindings.BindingInvocat
 		}
 	}
 
-	output, status, err := runCLI(ctx, binName, args, input.Options)
+	output, status, err := runCLI(ctx, binName, args, input.Context)
 	duration := time.Since(start).Milliseconds()
 
 	if ctx.Err() != nil {
@@ -99,12 +99,13 @@ func invokeBindingCached(ctx context.Context, input *openbindings.BindingInvocat
 	}
 }
 
-// metadataBinary extracts the "binary" hint from execution options metadata.
-func metadataBinary(opts *openbindings.InvocationOptions) string {
-	if opts == nil || opts.Metadata == nil {
+// metadataBinary extracts the "binary" hint from context metadata.
+func metadataBinary(ctx map[string]any) string {
+	meta := openbindings.ContextMetadata(ctx)
+	if meta == nil {
 		return ""
 	}
-	if b, ok := opts.Metadata["binary"].(string); ok {
+	if b, ok := meta["binary"].(string); ok {
 		return b
 	}
 	return ""
@@ -415,12 +416,12 @@ func formatFlagWithDef(name string, value any, flagDef Flag) ([]string, error) {
 	}
 }
 
-func runCLI(ctx context.Context, binName string, args []string, opts *openbindings.InvocationOptions) (any, int, error) {
+func runCLI(ctx context.Context, binName string, args []string, bindCtx map[string]any) (any, int, error) {
 	cmd := exec.CommandContext(ctx, binName, args...)
 
-	if opts != nil && len(opts.Environment) > 0 {
+	if env := openbindings.ContextEnvironment(bindCtx); len(env) > 0 {
 		cmd.Env = os.Environ()
-		for k, v := range opts.Environment {
+		for k, v := range env {
 			cmd.Env = append(cmd.Env, k+"="+v)
 		}
 	}

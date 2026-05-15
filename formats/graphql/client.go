@@ -358,7 +358,7 @@ func httpToWS(u string) string {
 // buildHTTPHeaders constructs HTTP headers from binding context and execution options.
 // Returns nil when there are no headers to set (matches the convention used by
 // other binding format libraries to avoid sending an empty map downstream).
-func buildHTTPHeaders(bindCtx map[string]any, opts *openbindings.InvocationOptions) map[string]string {
+func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 	var headers map[string]string
 	set := func(k, v string) {
 		if headers == nil {
@@ -375,18 +375,16 @@ func buildHTTPHeaders(bindCtx map[string]any, opts *openbindings.InvocationOptio
 		set("Authorization", "Basic "+basicAuth(u, p))
 	}
 
-	if opts != nil {
-		for k, v := range opts.Headers {
-			set(k, v)
+	for k, v := range openbindings.ContextHeaders(bindCtx) {
+		set(k, v)
+	}
+	if cookies := openbindings.ContextCookies(bindCtx); len(cookies) > 0 {
+		pairs := make([]string, 0, len(cookies))
+		for k, v := range cookies {
+			pairs = append(pairs, k+"="+v)
 		}
-		if len(opts.Cookies) > 0 {
-			pairs := make([]string, 0, len(opts.Cookies))
-			for k, v := range opts.Cookies {
-				pairs = append(pairs, k+"="+v)
-			}
-			sort.Strings(pairs)
-			set("Cookie", strings.Join(pairs, "; "))
-		}
+		sort.Strings(pairs)
+		set("Cookie", strings.Join(pairs, "; "))
 	}
 
 	return headers

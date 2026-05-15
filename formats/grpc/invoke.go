@@ -30,7 +30,7 @@ func doGRPCCall(ctx context.Context, in *openbindings.BindingInvocationInput, co
 		return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
 	}
 
-	rpcCtx := applyGRPCContext(ctx, in.Context, in.Options)
+	rpcCtx := applyGRPCContext(ctx, in.Context)
 	stub := grpcdynamic.NewStub(conn)
 
 	resp, err := stub.InvokeRpc(rpcCtx, methodDesc, reqMsg)
@@ -46,9 +46,9 @@ func doGRPCCall(ctx context.Context, in *openbindings.BindingInvocationInput, co
 	return &openbindings.InvocationOutput{Output: output, Status: 200, DurationMs: time.Since(start).Milliseconds()}
 }
 
-// applyGRPCContext attaches binding context credentials and execution option
+// applyGRPCContext attaches binding context credentials and transport-hint
 // headers as gRPC outgoing metadata.
-func applyGRPCContext(ctx context.Context, bindCtx map[string]any, opts *openbindings.InvocationOptions) context.Context {
+func applyGRPCContext(ctx context.Context, bindCtx map[string]any) context.Context {
 	md := metadata.MD{}
 
 	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
@@ -60,10 +60,8 @@ func applyGRPCContext(ctx context.Context, bindCtx map[string]any, opts *openbin
 		md.Set("authorization", "Basic "+encoded)
 	}
 
-	if opts != nil {
-		for k, v := range opts.Headers {
-			md.Set(strings.ToLower(k), v)
-		}
+	for k, v := range openbindings.ContextHeaders(bindCtx) {
+		md.Set(strings.ToLower(k), v)
 	}
 
 	if len(md) == 0 {
@@ -83,7 +81,7 @@ func subscribe(ctx context.Context, in *openbindings.BindingInvocationInput, con
 		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
 	}
 
-	rpcCtx := applyGRPCContext(ctx, in.Context, in.Options)
+	rpcCtx := applyGRPCContext(ctx, in.Context)
 	stub := grpcdynamic.NewStub(conn)
 	stream, err := stub.InvokeRpcServerStream(rpcCtx, methodDesc, reqMsg)
 	if err != nil {
