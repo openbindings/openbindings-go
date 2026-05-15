@@ -294,13 +294,15 @@ func TestIntegration_NoCredentials401(t *testing.T) {
 
 	store := openbindings.NewMemoryStore()
 	binv := NewInvoker()
-	invoker := openbindings.NewOperationInvoker(binv)
+	invoker := openbindings.NewOperationInvoker(binv).WithRuntime(store, nil)
 
 	iface := synthesizeOBI(t, specURL)
-	client := openbindings.NewInterfaceClient(iface, invoker, openbindings.WithContextStore(store))
 
 	ctx := context.Background()
-	ch, err := client.Invoke(ctx, "listItems", nil)
+	ch, err := invoker.Invoke(ctx, &openbindings.OperationInvocationInput{
+		Interface: iface,
+		Operation: "listItems",
+	})
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -330,12 +332,14 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 	}
 
 	binv := NewInvoker()
-	invoker := openbindings.NewOperationInvoker(binv)
+	invoker := openbindings.NewOperationInvoker(binv).WithRuntime(store, nil)
 	iface := synthesizeOBI(t, specURL)
-	client := openbindings.NewInterfaceClient(iface, invoker, openbindings.WithContextStore(store))
 
 	// First call: listItems should succeed
-	ch, err := client.Invoke(ctx, "listItems", nil)
+	ch, err := invoker.Invoke(ctx, &openbindings.OperationInvocationInput{
+		Interface: iface,
+		Operation: "listItems",
+	})
 	if err != nil {
 		t.Fatalf("Execute listItems failed: %v", err)
 	}
@@ -361,7 +365,10 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 	}
 
 	// Second call: same operation reuses credentials
-	ch2, err := client.Invoke(ctx, "listItems", nil)
+	ch2, err := invoker.Invoke(ctx, &openbindings.OperationInvocationInput{
+		Interface: iface,
+		Operation: "listItems",
+	})
 	if err != nil {
 		t.Fatalf("Execute listItems (2nd) failed: %v", err)
 	}
@@ -371,7 +378,11 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 	}
 
 	// Different operation: getItem with path parameter
-	ch3, err := client.Invoke(ctx, "getItem", map[string]any{"id": 1})
+	ch3, err := invoker.Invoke(ctx, &openbindings.OperationInvocationInput{
+		Interface: iface,
+		Operation: "getItem",
+		Input:     map[string]any{"id": 1},
+	})
 	if err != nil {
 		t.Fatalf("Execute getItem failed: %v", err)
 	}
@@ -413,25 +424,29 @@ func TestIntegration_IsolatedStoresDontShareCredentials(t *testing.T) {
 	iface := synthesizeOBI(t, specURL)
 
 	exec1 := NewInvoker()
-	opExec1 := openbindings.NewOperationInvoker(exec1)
-	client1 := openbindings.NewInterfaceClient(iface, opExec1, openbindings.WithContextStore(store1))
+	opExec1 := openbindings.NewOperationInvoker(exec1).WithRuntime(store1, nil)
 
 	exec2 := NewInvoker()
-	opExec2 := openbindings.NewOperationInvoker(exec2)
-	client2 := openbindings.NewInterfaceClient(iface, opExec2, openbindings.WithContextStore(store2))
+	opExec2 := openbindings.NewOperationInvoker(exec2).WithRuntime(store2, nil)
 
-	// Client 1 should succeed (has credentials)
-	ch1, err := client1.Invoke(ctx, "listItems", nil)
+	// Invoker 1 should succeed (has credentials)
+	ch1, err := opExec1.Invoke(ctx, &openbindings.OperationInvocationInput{
+		Interface: iface,
+		Operation: "listItems",
+	})
 	if err != nil {
-		t.Fatalf("client1 Execute failed: %v", err)
+		t.Fatalf("opExec1 Execute failed: %v", err)
 	}
 	ev1 := drainStream(ch1)
 	if ev1 == nil || ev1.Error != nil {
-		t.Fatal("client1 should succeed with stored credentials")
+		t.Fatal("opExec1 should succeed with stored credentials")
 	}
 
-	// Client 2 should get 401 (no credentials)
-	ch2, err := client2.Invoke(ctx, "listItems", nil)
+	// Invoker 2 should get 401 (no credentials)
+	ch2, err := opExec2.Invoke(ctx, &openbindings.OperationInvocationInput{
+		Interface: iface,
+		Operation: "listItems",
+	})
 	if err != nil {
 		t.Fatalf("client2 Execute failed: %v", err)
 	}

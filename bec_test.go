@@ -495,23 +495,22 @@ func TestWithRuntime_ReusableInput(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// InterfaceClient basic construction
-// ---------------------------------------------------------------------------
-
-func TestInterfaceClient_BindsToProvidedInterface(t *testing.T) {
-	mock := &mockInvoker{formats: []FormatInfo{{Token: "test"}}}
-	invoker := NewOperationInvoker(mock)
-	iface := &Interface{OpenBindings: "0.1.0", Operations: map[string]Operation{}}
-	ic := NewInterfaceClient(iface, invoker)
-
-	if ic.Interface() != iface {
-		t.Error("Interface() should return the provided interface")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Invoke integration
 // ---------------------------------------------------------------------------
+
+// makeTestInterface builds a minimal Interface for tests that need a value
+// to pass into OperationInvoker.Invoke.
+func makeTestInterface(name string, ops ...string) *Interface {
+	iface := &Interface{
+		OpenBindings: "0.1.0",
+		Name:         name,
+		Operations:   map[string]Operation{},
+	}
+	for _, op := range ops {
+		iface.Operations[op] = Operation{}
+	}
+	return iface
+}
 
 func TestInvoke_ContextFlowsThrough(t *testing.T) {
 	var capturedCtx map[string]any
