@@ -1,13 +1,12 @@
 package operationgraph
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/santhosh-tekuri/jsonschema/v5"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // msToDuration converts milliseconds to time.Duration.
@@ -128,8 +127,8 @@ func (cs *combineState) snapshot() map[string]any {
 	return result
 }
 
-// schemaCache is a per-Driver cache of compiled JSON schemas.
-// Storing it on the Driver avoids mutable package-level state.
+// schemaCache is a per-Invoker cache of compiled JSON schemas.
+// Storing it on the Invoker avoids mutable package-level state.
 type schemaCache struct {
 	mu      sync.RWMutex
 	schemas map[string]*jsonschema.Schema
@@ -149,8 +148,12 @@ func (sc *schemaCache) match(schema *json.RawMessage, data any) (bool, error) {
 	sc.mu.RUnlock()
 
 	if !ok {
+		var schemaDoc any
+		if err := json.Unmarshal(*schema, &schemaDoc); err != nil {
+			return false, fmt.Errorf("compile filter schema: %w", err)
+		}
 		compiler := jsonschema.NewCompiler()
-		if err := compiler.AddResource("filter.json", bytes.NewReader(*schema)); err != nil {
+		if err := compiler.AddResource("filter.json", schemaDoc); err != nil {
 			return false, fmt.Errorf("compile filter schema: %w", err)
 		}
 		var err error

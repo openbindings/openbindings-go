@@ -249,7 +249,7 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 }
 
 // transformStream wraps a source stream, applying outputTransform to each
-// event's Data and validating against outputSchema (OBI-T-08). If neither
+// event's Output and validating against outputSchema (OBI-T-08). If neither
 // outputTransform nor outputSchema is configured, returns src directly.
 // The context is used to cancel drain goroutines when the parent is cancelled.
 func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan InvocationOutput, binding *BindingEntry, transforms map[string]Transform, bindingKey string, outputSchema JSONSchema, schemas map[string]JSONSchema) <-chan InvocationOutput {

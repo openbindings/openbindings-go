@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,12 +42,12 @@ func isSSEContentType(contentType string) bool {
 //   - `data:` lines accumulate; multiple data lines for one event are joined
 //     with a literal newline (per the spec)
 //   - `event:`, `id:`, `retry:` fields are parsed but currently surfaced only
-//     by encoding the event name into the InvocationOutput's Data when present
+//     by encoding the event name into the InvocationOutput's Output when present
 //   - Comment lines (starting with `:`) are ignored
 //   - Blank lines dispatch the accumulated event
 //
 // If a data payload parses as JSON, the parsed value is emitted as
-// InvocationOutput.Data. Otherwise the raw string is emitted.
+// InvocationOutput.Output. Otherwise the raw string is emitted.
 func streamSSEResponse(ctx context.Context, resp *http.Response, start time.Time) <-chan openbindings.InvocationOutput {
 	ch := make(chan openbindings.InvocationOutput, 16)
 	go func() {
@@ -169,7 +168,6 @@ func streamSSEResponse(ctx context.Context, resp *http.Response, start time.Time
 			case <-ctx.Done():
 			}
 		}
-		_ = io.Discard
 	}()
 	return ch
 }

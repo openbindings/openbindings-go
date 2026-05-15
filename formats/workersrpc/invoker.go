@@ -12,7 +12,7 @@
 // Workers runtime is a JavaScript/WASM environment; Go programs (the
 // `ob` CLI, server-side tooling, codegen) live outside the runtime
 // and have no way to invoke a sibling Worker's RPC method. The Go
-// implementations of `Driver` and `Creator` here exist solely to:
+// implementations of `Invoker` and `Creator` here exist solely to:
 //
 //  1. Make the format token recognized by `ob`. Without this package,
 //     `ob create`, `ob sync`, and `ob diff` would reject any OBI that
@@ -29,7 +29,7 @@
 //     on the target Worker, not a machine-readable spec file), so
 //     there's no source artifact for the creator to derive from.
 //
-// Both `Driver.InvokeBinding` and `Creator.CreateInterface` return
+// Both `Invoker.InvokeBinding` and `Creator.CreateInterface` return
 // errors with helpful messages directing the caller to the TypeScript
 // runtime if they actually try to dispatch.
 package workersrpc
@@ -50,7 +50,7 @@ const FormatToken = "workers-rpc@^1.0.0"
 // a workers-rpc source in an OBInterface. Consumers can override.
 const DefaultSourceName = "workersRpc"
 
-// Driver is the Go-side stub registration for the workers-rpc format.
+// Invoker is the Go-side stub registration for the workers-rpc format.
 // It satisfies the openbindings.BindingInvoker interface but rejects
 // any actual dispatch attempt with a clear error — Workers RPC calls
 // can only be made from inside the Workers runtime, where the
@@ -71,7 +71,7 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 	}}
 }
 
-// InvokeBinding always yields an error event: Go can't dispatch Workers RPC.
+// InvokeBinding always yields an error event: Go cannot dispatch Workers RPC.
 // Use the `WorkersRpcInvoker` from `@openbindings/workers-rpc` from
 // inside a Cloudflare Worker instead.
 func (e *Invoker) InvokeBinding(_ context.Context, _ *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {

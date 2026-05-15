@@ -32,7 +32,7 @@ const maxRedirects = 10
 
 // newDefaultHTTPClient constructs an HTTP client with the driver's default
 // redirect policy and no overall timeout (the caller controls cancellation
-// via context). Each Driver gets its own client so multiple Drivers can
+// via context). Each Invoker gets its own client so multiple Invokers can
 // be configured independently and tests can substitute clients without
 // reaching into package-level globals.
 func newDefaultHTTPClient() *http.Client {
@@ -48,10 +48,10 @@ func newDefaultHTTPClient() *http.Client {
 
 // Invoker handles binding invocation for OpenAPI 3.x sources.
 //
-// Each Driver owns an HTTP client (*http.Client is safe for concurrent use
-// by multiple goroutines, so all calls on a single Driver share one client)
+// Each Invoker owns an HTTP client (*http.Client is safe for concurrent use
+// by multiple goroutines, so all calls on a single Invoker share one client)
 // and a per-instance document cache keyed by source location. The cache is
-// scoped to the Driver instance to avoid cross-tenant contamination in
+// scoped to the Invoker instance to avoid cross-tenant contamination in
 // multi-tenant servers.
 type Invoker struct {
 	client   *http.Client
@@ -69,7 +69,7 @@ func NewInvoker() *Invoker {
 	}
 }
 
-// NewInvokerWithClient creates a Driver that uses the supplied
+// NewInvokerWithClient creates an Invoker that uses the supplied
 // *http.Client for all outbound requests. The caller is responsible for
 // configuring redirect policy, transport, and any other client-level
 // behavior. No overall request timeout should be set on the client because

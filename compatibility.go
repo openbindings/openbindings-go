@@ -35,12 +35,11 @@ type CheckCompatibilityOptions struct {
 
 // CheckInterfaceCompatibility checks whether a provided interface satisfies
 // the requirements of a required interface. This is a tooling convention,
-// not a spec requirement: OpenBindings 0.2.0 removed the operation-matching
-// algorithm from the spec body and left matching, comparison, and selection
-// to tools (see openbindings.md §2 Scope principle and the schemaprofile
-// package docstring). The algorithm below is the openbindings reference
-// tooling's matching convention; third-party tools may use different
-// strategies.
+// not a spec requirement: the spec leaves matching, comparison, and
+// selection to tools (see openbindings.md §2 Scope principle and the
+// schemaprofile package docstring). The algorithm below is the openbindings
+// reference tooling's matching convention; third-party tools may use
+// different strategies.
 //
 // For each operation the required interface declares, the algorithm searches
 // the provided interface using three strategies (first match wins):

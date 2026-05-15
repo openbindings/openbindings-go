@@ -34,14 +34,14 @@ const FormatToken = "mcp@2025-11-25"
 
 // Invoker handles binding invocation for MCP sources.
 //
-// The Driver pools MCP sessions by server URL and auth headers. Multiple
+// The Invoker pools MCP sessions by server URL and auth headers. Multiple
 // InvokeBinding calls to the same server reuse a single MCP session (one
 // initialize handshake). A session stays alive as long as any invocation on it
 // is active. When the last invocation ends, the session remains idle for up to
 // 30 seconds before being closed. New invocations arriving during the idle
 // window reuse the warm session without re-handshaking.
 //
-// Call Close to shut down all pooled sessions when the Driver is no longer
+// Call Close to shut down all pooled sessions when the Invoker is no longer
 // needed.
 type Invoker struct {
 	clientVersion string
@@ -49,7 +49,7 @@ type Invoker struct {
 	pool          *sessionPool
 }
 
-// InvokerOption configures a Driver.
+// InvokerOption configures an Invoker.
 type InvokerOption func(*Invoker)
 
 // WithClientVersion sets the client version reported to MCP servers.

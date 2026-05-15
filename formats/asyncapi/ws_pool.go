@@ -188,7 +188,7 @@ func (p *wsPool) evict(pw *pooledWS) {
 	pw.conn.Close(websocket.StatusNormalClosure, "idle timeout")
 }
 
-// closeAll closes all pooled WebSocket connections. Used by Driver.Close().
+// closeAll closes all pooled WebSocket connections. Used by Invoker.Close().
 func (p *wsPool) closeAll() {
 	p.mu.Lock()
 	conns := make([]*pooledWS, 0, len(p.conns))

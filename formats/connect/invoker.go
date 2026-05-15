@@ -120,13 +120,6 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 
 			headers = buildHTTPHeaders(cp.Context)
 			result = invokeConnect(ctx, e.client, cp.Source.Location, svcName, methodName, cp.Input, headers, methodDesc, start)
-
-			// On retry failure, wrap the error message with operation context
-			// so the consumer knows which call failed. The original message
-			// from the underlying RPC is preserved.
-			if result.Error != nil {
-				result.Error.Message = fmt.Sprintf("connect retry %s/%s at %s: %s", svcName, methodName, cp.Source.Location, result.Error.Message)
-			}
 		}
 	}
 

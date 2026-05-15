@@ -46,7 +46,7 @@ func NewInvoker() *Invoker {
 }
 
 // Close shuts down all pooled WebSocket connections. After Close returns, the
-// Driver should not be used for new invocations.
+// Invoker should not be used for new invocations.
 func (e *Invoker) Close() {
 	e.wsPool.closeAll()
 }
