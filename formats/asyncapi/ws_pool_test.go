@@ -341,7 +341,7 @@ func TestWSPool_ReceiveStillUsesDedicatedConnection(t *testing.T) {
 	}
 }
 
-// TestWSPool_CloseClosesAllConnections verifies that Driver.Close() closes
+// TestWSPool_CloseClosesAllConnections verifies that Invoker.Close() closes
 // all pooled WebSocket connections.
 func TestWSPool_CloseClosesAllConnections(t *testing.T) {
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {

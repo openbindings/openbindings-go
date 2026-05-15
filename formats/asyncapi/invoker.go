@@ -98,7 +98,7 @@ func resolveServerKey(doc *Document) string {
 	return ""
 }
 
-// Formats returns the source formats supported by the AsyncAPI driver.
+// Formats returns the source formats supported by the AsyncAPI invoker.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "AsyncAPI 3.x event-driven APIs"}}
 }

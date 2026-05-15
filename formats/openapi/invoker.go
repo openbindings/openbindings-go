@@ -30,7 +30,7 @@ const DefaultSourceName = "openapi"
 // (which is the caller's responsibility via context).
 const maxRedirects = 10
 
-// newDefaultHTTPClient constructs an HTTP client with the driver's default
+// newDefaultHTTPClient constructs an HTTP client with the invoker's default
 // redirect policy and no overall timeout (the caller controls cancellation
 // via context). Each Invoker gets its own client so multiple Invokers can
 // be configured independently and tests can substitute clients without
@@ -109,7 +109,7 @@ func (e *Invoker) cachedLoadDocument(location string, content any) (*openapi3.T,
 	return doc, nil
 }
 
-// Formats returns the binding format tokens this driver supports.
+// Formats returns the binding format tokens this invoker supports.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "OpenAPI 3.x HTTP APIs"}}
 }

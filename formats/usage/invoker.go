@@ -42,7 +42,7 @@ func (e *Invoker) cachedLoadSpec(ctx context.Context, location string, content a
 	return spec, nil
 }
 
-// Formats returns the source formats supported by the usage driver.
+// Formats returns the source formats supported by the usage invoker.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "CLI tools via usage-spec KDL"}}
 }

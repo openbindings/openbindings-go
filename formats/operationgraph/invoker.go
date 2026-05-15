@@ -32,7 +32,7 @@ func NewInvoker(invoker *openbindings.OperationInvoker) *Invoker {
 	}
 }
 
-// Formats returns the binding format tokens this driver supports.
+// Formats returns the binding format tokens this invoker supports.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "OpenBindings operation graphs"}}
 }

@@ -177,10 +177,10 @@ func TestInvokeBinding_PropagatesStoreAndCallbacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if capturedStore != store {
-		t.Error("Store was not propagated to driver")
+		t.Error("Store was not propagated to invoker")
 	}
 	if capturedCallbacks != callbacks {
-		t.Error("Callbacks were not propagated to driver")
+		t.Error("Callbacks were not propagated to invoker")
 	}
 }
 
@@ -270,7 +270,7 @@ func TestWithRuntime_ClonesWithOverrides(t *testing.T) {
 
 	fmts := clone.Formats()
 	if len(fmts) != 1 || fmts[0].Token != "test" {
-		t.Error("clone should share driver registrations")
+		t.Error("clone should share invoker registrations")
 	}
 }
 
@@ -453,7 +453,7 @@ func TestWithRuntime_DoesNotMutateCallerInput(t *testing.T) {
 	}
 
 	if capturedStore != store {
-		t.Error("driver should have received the store")
+		t.Error("invoker should have received the store")
 	}
 	if input.Store != nil {
 		t.Error("caller's original input.Store was mutated; expected nil")

@@ -58,12 +58,12 @@ const DefaultSourceName = "workersRpc"
 // handles dispatch.
 type Invoker struct{}
 
-// NewInvoker creates a new workers-rpc driver stub.
+// NewInvoker creates a new workers-rpc invoker stub.
 func NewInvoker() *Invoker {
 	return &Invoker{}
 }
 
-// Formats returns the format tokens this driver recognizes.
+// Formats returns the format tokens this invoker recognizes.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{
 		Token:       FormatToken,

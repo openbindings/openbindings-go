@@ -52,7 +52,7 @@ func invoke(ctx context.Context, pool *sessionPool, clientVersion string, url st
 			})
 		}
 		// MCP servers expect an object for arguments, never null. Defensive
-		// shallow copy keeps the driver contract ("never mutate caller
+		// shallow copy keeps the invoker contract ("never mutate caller
 		// input") even when the third-party MCP SDK passes args by reference.
 		if args == nil {
 			args = map[string]any{}

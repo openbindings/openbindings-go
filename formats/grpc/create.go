@@ -79,7 +79,7 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(o
 
 	// gRPC/protobuf definitions do not expose security metadata, so we
 	// leave the security section empty. If the server requires auth, the
-	// driver's auth retry flow will handle it (Unauthenticated → resolve
+	// invoker's auth retry flow will handle it (Unauthenticated → resolve
 	// credentials → retry).
 
 	return iface, nil
@@ -168,7 +168,7 @@ func (w *schemaWalker) message(msg protoreflect.MessageDescriptor) map[string]an
 	// Well-known proto types have canonical JSON representations per the
 	// proto3 JSON mapping spec. Emit those directly instead of descending
 	// into the message's fields — traversing Timestamp's `seconds`/`nanos`
-	// produces a contract the driver's protojson layer cannot accept.
+	// produces a contract the invoker's protojson layer cannot accept.
 	if wk := wellKnownSchema(fqn); wk != nil {
 		return wk
 	}
@@ -268,7 +268,7 @@ func (w *schemaWalker) message(msg protoreflect.MessageDescriptor) map[string]an
 //
 // Schemas describe semantic types, not wire encoding. 64-bit integers emit
 // as {"type":"integer","format":"int64"}; the wire's choice of carrying them
-// as JSON numbers, JSON strings, or protobuf varints is a driver concern.
+// as JSON numbers, JSON strings, or protobuf varints is an invoker concern.
 // Downstream codegen can read format:int64 to pick precision-preserving
 // language types (TypeScript string, Go int64, Rust i64).
 func wellKnownSchema(fqn string) map[string]any {

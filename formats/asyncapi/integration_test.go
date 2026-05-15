@@ -232,12 +232,11 @@ func TestIntegration_SSEReceiveWithCredentials(t *testing.T) {
 // or the caller cancels."
 //
 // These tests use httptest + nhooyr.io/websocket to spin up a real WebSocket
-// server and exercise the driver end-to-end. They cover:
+// server and exercise the invoker end-to-end. They cover:
 //   - Bearer token sent in the first message body (the spec convention,
 //     because browsers can't set custom WebSocket upgrade headers)
-//   - Query-param apiKey appended to the WebSocket URL (regression test for
-//     a bug fixed earlier in the v0.1.0 polish cycle where credentials in
-//     the query were silently dropped)
+//   - Query-param apiKey appended to the WebSocket URL — credentials in the
+//     query must reach the WebSocket URL, not be silently dropped
 //   - Multi-event streaming with clean cancellation
 //   - Send-action over WebSocket
 // ---------------------------------------------------------------------------

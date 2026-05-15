@@ -90,7 +90,7 @@ func (e *Invoker) Close() {
 	e.pool.closeAll()
 }
 
-// Formats returns the source formats supported by the MCP driver.
+// Formats returns the source formats supported by the MCP invoker.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "Model Context Protocol"}}
 }
@@ -98,11 +98,11 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 // InvokeBinding invokes an MCP binding and returns a stream of events. For
 // resource and prompt invocations the channel yields a single event. For tool
 // invocations the channel may yield zero or more `notifications/progress`
-// events as intermediate `Data` events, followed by the final tool result as
-// the last event. See `binding-format-conventions.md` for the OBI invocation
-// model around streaming patterns.
+// events as intermediate `Output` events, followed by the final tool result
+// as the last event. See `binding-format-conventions.md` for the OBI
+// invocation model around streaming patterns.
 //
-// Auth retry uses a peek-and-forward pattern: the driver reads the first
+// Auth retry uses a peek-and-forward pattern: the invoker reads the first
 // event from the channel returned by `invoke`. If that event is an
 // auth-required error and security methods + platform callbacks are
 // available, credentials are resolved and the call is retried with a fresh

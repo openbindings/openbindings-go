@@ -262,7 +262,7 @@ func TestSecurityMethod_JSONRoundTrip(t *testing.T) {
 func TestInvoke_SecurityPassThrough(t *testing.T) {
 	var capturedSecurity []SecurityMethod
 
-	driver := &mockInvoker{
+	mockBI := &mockInvoker{
 		formats: []FormatInfo{{Token: "test"}},
 		invokeFn: func(_ context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
 			capturedSecurity = in.Security
@@ -273,7 +273,7 @@ func TestInvoke_SecurityPassThrough(t *testing.T) {
 		},
 	}
 
-	invoker := NewOperationInvoker(driver)
+	invoker := NewOperationInvoker(mockBI)
 
 	iface := &Interface{
 		OpenBindings: "0.1.0",

@@ -32,7 +32,7 @@ func NewInvoker() *Invoker {
 	return &Invoker{schemas: make(map[string]*introspectionSchema)}
 }
 
-// Formats returns the source formats supported by the GraphQL driver.
+// Formats returns the source formats supported by the GraphQL invoker.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "GraphQL APIs"}}
 }

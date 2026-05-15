@@ -48,7 +48,7 @@ func NewInvoker() *Invoker {
 	}
 }
 
-// Formats returns the source formats supported by the Connect driver.
+// Formats returns the source formats supported by the Connect invoker.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "Connect (Buf) via HTTP"}}
 }
@@ -60,8 +60,8 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 // received or the caller cancels via ctx.
 //
 // Server-streaming requires the source to provide inline proto `content` so
-// the driver can determine that the method is streaming. If no proto content
-// is available, the driver falls back to unary invocation and the binding
+// the invoker can determine that the method is streaming. If no proto content
+// is available, the invoker falls back to unary invocation and the binding
 // will fail at runtime if the method is actually streaming.
 func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
 	enriched := enrichContext(ctx, in)
@@ -73,7 +73,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 	}
 
 	// Resolve method descriptor from inline content. The descriptor lets the
-	// driver distinguish unary from server-streaming methods and lets it use
+	// invoker distinguish unary from server-streaming methods and lets it use
 	// proto-aware marshaling for accurate field names. If no content is
 	// provided, we fall through as unary with generic JSON marshaling.
 	var methodDesc *methodInfo
