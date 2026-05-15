@@ -778,7 +778,7 @@ func TestIntegration_SSEResponse_MalformedLines(t *testing.T) {
 	}
 }
 
-// TestNewInvokerWithClient verifies that a Driver created with a custom
+// TestNewInvokerWithClient verifies that an Invoker created with a custom
 // HTTP client uses that client for outbound requests, allowing tests and
 // applications to substitute transport behavior without reaching into
 // package-level globals.

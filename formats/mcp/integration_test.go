@@ -473,7 +473,7 @@ func TestIntegration_ToolNoProgress_StaysSingleEvent(t *testing.T) {
 //
 // The test wraps the standard MCP server handler with a request counter that
 // increments on every `initialize` call. After two InvokeBinding calls using
-// the same Driver, the counter must be 1.
+// the same Invoker, the counter must be 1.
 func TestIntegration_SessionPooling(t *testing.T) {
 	server := gomcp.NewServer(&gomcp.Implementation{
 		Name:    "session-pool-test",
