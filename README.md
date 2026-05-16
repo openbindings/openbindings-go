@@ -164,7 +164,7 @@ exec := openbindings.NewOperationInvoker(
 )
 ```
 
-Invokers implement `BindingInvoker`. Interface creators (which synthesize OBIs from raw specs) implement `InterfaceCreator`. A single type may implement both.
+Invokers implement `BindingInvoker`. Interface creators (which synthesize OBIs from raw specs) implement `InterfaceCreator`. Source inspectors (which enumerate refs in a source) implement `SourceInspector`. A single type may implement any combination. See [Implementing a Binding Format](https://github.com/openbindings/spec/blob/main/guides/implementing-a-binding-format.md) for a step-by-step walkthrough.
 
 ## Context store
 
