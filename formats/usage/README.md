@@ -45,7 +45,7 @@ for ev := range ch {
     if ev.Error != nil {
         log.Fatal(ev.Error.Message)
     }
-    fmt.Println(ev.Data)
+    fmt.Println(ev.Output)
 }
 ```
 
@@ -87,7 +87,7 @@ The ref mirrors how the command would be invoked on the command line (without th
 
 ### Credential application
 
-Usage-spec bindings execute local CLI binaries, not network services. There are no HTTP headers. Credentials and configuration are passed via `InvocationOptions.Environment` as environment variables.
+Usage-spec bindings execute local CLI binaries, not network services. There are no HTTP headers. Credentials and configuration are supplied through the `environment` key in the `BindingContext` and surfaced to the child process as environment variables.
 
 ### Interface creation
 
@@ -110,7 +110,7 @@ Usage-spec bindings execute local CLI binaries, not network services. There are 
 
 ### Credential application
 
-Usage-spec bindings execute local CLI binaries, not network services. Credentials are applied via environment variables through `InvocationOptions.Environment`, not HTTP headers.
+Usage-spec bindings execute local CLI binaries, not network services. Credentials are applied via environment variables through the `environment` key in the `BindingContext`, not HTTP headers.
 
 ### Interface creation
 

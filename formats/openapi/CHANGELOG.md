@@ -2,7 +2,7 @@
 
 ## 0.2.0 (working draft)
 
-This release tracks the spec 0.2.0 alignment of `openbindings-go`. The public API breaks from the executor->invoker rename (`BindingExecutor` -> `BindingInvoker`, `ExecuteBinding(...)` -> `InvokeBinding(...)`, `NewExecutor` -> `NewInvoker`, `ExecutionOptions` -> `InvocationOptions`, etc.) propagate to this module's exported surface; see the root `openbindings-go` CHANGELOG for the full rename table. No format-specific behavior changed.
+This release tracks the spec 0.2.0 alignment of `openbindings-go`. The public API breaks from the root SDK (executor → invoker rename, `BindingExecutionInput`/`BindingExecutionSource` → `BindingInvocationInput`/`BindingInvocationSource`, `InvocationOptions` folded into `BindingContext`, `InterfaceClient` removed in favor of codegen-emitted `<Name>Invoker` types, `.Data` event field renamed to `.Output`) propagate to this module's exported surface. See the root `openbindings-go` CHANGELOG for the full table. No format-specific behavior changed.
 
 ## 0.1.0 — 2026-03-31
 

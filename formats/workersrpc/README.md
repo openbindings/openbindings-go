@@ -61,7 +61,7 @@ Workers RPC OBIs are **hand-authored**. The contract is the TypeScript class on 
 }
 ```
 
-The binding's `ref` field is the literal method name on the target `WorkerEntrypoint` class. The source's `location` is symbolic — `workers-rpc://` is a convention that `InterfaceClient.resolve()` recognizes as a non-HTTP source and handles via the embedded interface.
+The binding's `ref` field is the literal method name on the target `WorkerEntrypoint` class. The source's `location` is symbolic — `workers-rpc://` is a convention indicating a non-HTTP source whose OBI is embedded in the codegen output rather than fetched from `/.well-known/openbindings`. Callers pass that embedded interface to typed invoker methods directly.
 
 See [`spec/guides/binding-format-conventions.md`](https://github.com/openbindings/spec/blob/main/guides/binding-format-conventions.md) for the broader context on binding format conventions.
 

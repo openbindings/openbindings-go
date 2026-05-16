@@ -50,7 +50,7 @@ for ev := range ch {
     if ev.Error != nil {
         log.Fatal(ev.Error.Message)
     }
-    fmt.Println(ev.Data)
+    fmt.Println(ev.Output)
 }
 ```
 
