@@ -356,12 +356,12 @@ func TestIntegrationCreateInterface(t *testing.T) {
 }
 
 func TestIntegrationSourceContent(t *testing.T) {
-	// Test that the driver can use inline Source.Content instead of
+	// Test that the invoker can use inline Source.Content instead of
 	// making a network introspection call.
 	srv := newTestServer()
 	defer srv.Close()
 
-	// Build the introspection content as the driver would receive it.
+	// Build the introspection content as the invoker would receive it.
 	schemaJSON, _ := json.Marshal(map[string]any{
 		"data": map[string]any{
 			"__schema": testSchema,
@@ -669,7 +669,7 @@ func formatInt(n int) string {
 	return string(digits)
 }
 
-// TestIntegrationInvokeSubscription verifies that the GraphQL driver opens
+// TestIntegrationInvokeSubscription verifies that the GraphQL invoker opens
 // a graphql-transport-ws WebSocket connection, sends connection_init,
 // subscribes, and forwards each "next" payload as a separate stream event.
 // Closes cleanly on "complete".
@@ -728,7 +728,7 @@ func TestIntegrationInvokeSubscription(t *testing.T) {
 // context closes the WebSocket cleanly without leaking the goroutine.
 func TestIntegrationSubscriptionCancellation(t *testing.T) {
 	// Server that holds the connection open after sending one event,
-	// so we can verify the driver closes on context cancellation.
+	// so we can verify the invoker closes on context cancellation.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") == "websocket" {
 			conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -869,7 +869,7 @@ func subscriptionErrorTestServer(t *testing.T, exchange func(ctx context.Context
 }
 
 // TestIntegrationSubscription_ErrorMessage verifies that when the server
-// sends an "error" message instead of "next" payloads, the driver surfaces
+// sends an "error" message instead of "next" payloads, the invoker surfaces
 // it as a stream error event with the right message.
 func TestIntegrationSubscription_ErrorMessage(t *testing.T) {
 	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
@@ -919,7 +919,7 @@ func TestIntegrationSubscription_ErrorMessage(t *testing.T) {
 }
 
 // TestIntegrationSubscription_ConnectionDropMidStream verifies that when the
-// server abruptly closes the WebSocket after sending one event, the driver
+// server abruptly closes the WebSocket after sending one event, the invoker
 // emits a stream error and closes the channel cleanly.
 func TestIntegrationSubscription_ConnectionDropMidStream(t *testing.T) {
 	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
@@ -979,7 +979,7 @@ func TestIntegrationSubscription_ConnectionDropMidStream(t *testing.T) {
 
 // TestIntegrationSubscription_ConnectionAckTimeout verifies that when the
 // server replies with the wrong message type instead of connection_ack,
-// the driver returns an error rather than hanging indefinitely.
+// the invoker returns an error rather than hanging indefinitely.
 func TestIntegrationSubscription_ConnectionAckMismatch(t *testing.T) {
 	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
 		if expectClientMessage(ctx, conn, "connection_init") != nil {
@@ -1000,7 +1000,7 @@ func TestIntegrationSubscription_ConnectionAckMismatch(t *testing.T) {
 	})
 	// The connection_ack failure surfaces either as a returned error from
 	// InvokeBinding (precondition failure) or as the first stream event
-	// being an error. Either path is acceptable; both prove the driver
+	// being an error. Either path is acceptable; both prove the invoker
 	// doesn't hang.
 	if err != nil {
 		// Returned error is fine.
@@ -1086,7 +1086,7 @@ func TestIntegrationCreateInterface_RecursiveType(t *testing.T) {
 	if !ok {
 		t.Fatal("expected operation 'node' in created interface")
 	}
-	// The input schema must contain a _query const that the driver can use.
+	// The input schema must contain a _query const that the invoker can use.
 	props, _ := op.Input["properties"].(map[string]any)
 	queryProp, _ := props["_query"].(map[string]any)
 	if queryProp == nil {

@@ -296,7 +296,7 @@ func TestIntegration_InvokeBinding_RedirectLimit(t *testing.T) {
 	}
 }
 
-// streamingProto declares a server-streaming method so the driver takes the
+// streamingProto declares a server-streaming method so the invoker takes the
 // streaming dispatch path. The method returns multiple LogEntry messages.
 const streamingProto = `
 syntax = "proto3";
@@ -513,7 +513,7 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 }
 
 // TestWriteCompressedEnvelopeRejected verifies that writeConnectEnvelope
-// refuses to emit a frame with the COMPRESSED flag set, since the driver
+// refuses to emit a frame with the COMPRESSED flag set, since the invoker
 // does not support compression in v0.1.
 func TestWriteCompressedEnvelopeRejected(t *testing.T) {
 	var buf bytes.Buffer
@@ -545,14 +545,14 @@ func TestReadCompressedEnvelopeRejected(t *testing.T) {
 	}
 }
 
-// TestServerStreamingCompressedFrameRejected exercises the driver end-to-end
+// TestServerStreamingCompressedFrameRejected exercises the invoker end-to-end
 // against a server that sends a compressed frame, verifying that the streaming
-// driver surfaces the rejection as a stream error event.
+// invoker surfaces the rejection as a stream error event.
 func TestServerStreamingCompressedFrameRejected(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/connect+json")
 		w.WriteHeader(http.StatusOK)
-		// Manually write a compressed envelope. The driver must reject it.
+		// Manually write a compressed envelope. The invoker must reject it.
 		header := []byte{connectFlagCompressed, 0, 0, 0, 7}
 		_, _ = w.Write(header)
 		_, _ = w.Write([]byte(`{"a":1}`))

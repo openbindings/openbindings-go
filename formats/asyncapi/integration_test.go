@@ -413,7 +413,7 @@ func TestIntegration_WebSocketQueryParamApiKey(t *testing.T) {
 }
 
 // TestIntegration_WebSocketStreamingMultipleEvents verifies that the
-// driver forwards each server-pushed WebSocket message as a separate
+// invoker forwards each server-pushed WebSocket message as a separate
 // stream event in arrival order.
 func TestIntegration_WebSocketStreamingMultipleEvents(t *testing.T) {
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {

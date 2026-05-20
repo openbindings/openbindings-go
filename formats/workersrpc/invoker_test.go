@@ -8,7 +8,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestDriver_Formats(t *testing.T) {
+func TestInvoker_Formats(t *testing.T) {
 	invoker := NewInvoker()
 	formats := invoker.Formats()
 	if len(formats) != 1 {
@@ -22,8 +22,8 @@ func TestDriver_Formats(t *testing.T) {
 	}
 }
 
-func TestDriver_InvokeBinding_AlwaysFails(t *testing.T) {
-	// Workers RPC dispatch is not possible from Go. The Go driver stub
+func TestInvoker_InvokeBinding_AlwaysFails(t *testing.T) {
+	// Workers RPC dispatch is not possible from Go. The Go invoker stub
 	// must yield a clear, actionable error event on the channel (not return
 	// a Go error) directing the caller to the TypeScript runtime.
 	invoker := NewInvoker()

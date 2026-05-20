@@ -354,7 +354,7 @@ func intToString(n int) string {
 	return string(digits)
 }
 
-// TestIntegration_ToolProgressNotifications verifies that the driver
+// TestIntegration_ToolProgressNotifications verifies that the invoker
 // surfaces MCP `notifications/progress` events as intermediate stream events
 // during a long-running tool call, with the final tool result as the last
 // event.

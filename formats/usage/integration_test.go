@@ -76,7 +76,7 @@ func TestIntegration_JSONOutput(t *testing.T) {
 		t.Fatalf("unexpected error: %s: %s", events[0].Error.Code, events[0].Error.Message)
 	}
 
-	// JSON output should be parsed into a map (the driver parses stdout JSON).
+	// JSON output should be parsed into a map (the invoker parses stdout JSON).
 	result, ok := events[0].Output.(map[string]any)
 	if !ok {
 		t.Fatalf("expected parsed JSON map, got %T: %v", events[0].Output, events[0].Output)

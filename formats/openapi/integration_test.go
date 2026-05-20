@@ -503,7 +503,7 @@ func sseSpec(serverURL string) string {
 
 func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The driver must advertise SSE in its Accept header.
+		// The invoker must advertise SSE in its Accept header.
 		if accept := r.Header.Get("Accept"); !strings.Contains(accept, "text/event-stream") {
 			t.Errorf("Accept header = %q, expected to contain text/event-stream", accept)
 		}
@@ -593,7 +593,7 @@ func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
 }
 
 func TestIntegration_SSEResponse_NotSSE_StaysUnary(t *testing.T) {
-	// Server returns plain JSON (not SSE) — the driver should fall through
+	// Server returns plain JSON (not SSE) — the invoker should fall through
 	// to the unary path and emit a single event.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -663,7 +663,7 @@ func TestIntegration_SSEResponse_MultilineData(t *testing.T) {
 }
 
 // TestIntegration_SSEResponse_MidStreamClose verifies that when the server
-// abruptly closes the connection after some events, the driver emits the
+// abruptly closes the connection after some events, the invoker emits the
 // events received before the close and then closes the channel cleanly.
 // No goroutine leak, no panic, no hung channel.
 func TestIntegration_SSEResponse_MidStreamClose(t *testing.T) {
