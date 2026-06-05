@@ -30,11 +30,8 @@ type LosslessFields struct {
 // Pre-computed known field sets for efficient lossless JSON unmarshaling.
 // These are computed once at package init to avoid repeated allocations.
 var (
-	knownSatisfiesSet = knownSet(
-		"role", "operation",
-	)
 	knownOperationSet = knownSet(
-		"description", "deprecated", "tags", "aliases", "satisfies",
+		"description", "deprecated", "tags", "aliases",
 		"idempotent", "input", "output", "examples",
 	)
 	knownOperationExampleSet = knownSet(
@@ -49,49 +46,10 @@ var (
 	)
 	knownInterfaceSet = knownSet(
 		"openbindings", "name", "version", "description",
-		"schemas", "operations", "roles",
+		"schemas", "operations",
 		"sources", "bindings", "security", "transforms",
 	)
 )
-
-type Satisfies struct {
-	Role      string `json:"role"`
-	Operation string `json:"operation"`
-	LosslessFields
-}
-
-type satisfiesWire struct {
-	Role      string `json:"role"`
-	Operation string `json:"operation"`
-}
-
-func (s *Satisfies) UnmarshalJSON(b []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
-
-	var w satisfiesWire
-	if err := json.Unmarshal(b, &w); err != nil {
-		return err
-	}
-
-	*s = Satisfies{
-		Role:      w.Role,
-		Operation: w.Operation,
-	}
-
-	s.Extensions, s.Unknown = splitLossless(raw, knownSatisfiesSet)
-	return nil
-}
-
-func (s Satisfies) MarshalJSON() ([]byte, error) {
-	w := satisfiesWire{
-		Role:      s.Role,
-		Operation: s.Operation,
-	}
-	return marshalLossless(s.Unknown, s.Extensions, w)
-}
 
 // OperationExample represents an example input/output pair for an operation.
 type OperationExample struct {
@@ -139,11 +97,13 @@ func (e OperationExample) MarshalJSON() ([]byte, error) {
 }
 
 type Operation struct {
-	Description string      `json:"description,omitempty"`
-	Deprecated  bool        `json:"deprecated,omitempty"`
-	Tags        []string    `json:"tags,omitempty"`
-	Aliases     []string    `json:"aliases,omitempty"`
-	Satisfies   []Satisfies `json:"satisfies,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Deprecated  bool     `json:"deprecated,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	// Aliases are additional names for this operation, equal in standing to its
+	// key. The key plus aliases form one flat, document-unique namespace; every
+	// name resolves to this operation (see ResolveOperation / OBI-T-13).
+	Aliases []string `json:"aliases,omitempty"`
 
 	Idempotent *bool      `json:"idempotent,omitempty"`
 	Input      JSONSchema `json:"input,omitempty"`
@@ -156,11 +116,10 @@ type Operation struct {
 }
 
 type operationWire struct {
-	Description string      `json:"description,omitempty"`
-	Deprecated  bool        `json:"deprecated,omitempty"`
-	Tags        []string    `json:"tags,omitempty"`
-	Aliases     []string    `json:"aliases,omitempty"`
-	Satisfies   []Satisfies `json:"satisfies,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Deprecated  bool     `json:"deprecated,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Aliases     []string `json:"aliases,omitempty"`
 
 	Idempotent *bool      `json:"idempotent,omitempty"`
 	Input      JSONSchema `json:"input,omitempty"`
@@ -185,7 +144,6 @@ func (o *Operation) UnmarshalJSON(b []byte) error {
 		Deprecated:  w.Deprecated,
 		Tags:        w.Tags,
 		Aliases:     w.Aliases,
-		Satisfies:   w.Satisfies,
 		Idempotent:  w.Idempotent,
 		Input:       w.Input,
 		Output:      w.Output,
@@ -202,7 +160,6 @@ func (o Operation) MarshalJSON() ([]byte, error) {
 		Deprecated:  o.Deprecated,
 		Tags:        o.Tags,
 		Aliases:     o.Aliases,
-		Satisfies:   o.Satisfies,
 		Idempotent:  o.Idempotent,
 		Input:       o.Input,
 		Output:      o.Output,
@@ -420,10 +377,6 @@ type Interface struct {
 	Schemas    map[string]JSONSchema `json:"schemas,omitempty"`
 	Operations map[string]Operation  `json:"operations"`
 
-	// Roles is an optional role table mapping local aliases to URLs/paths
-	// of other OpenBindings interfaces. Used by satisfies references.
-	Roles map[string]string `json:"roles,omitempty"`
-
 	Sources  map[string]Source       `json:"sources,omitempty"`
 	Bindings map[string]BindingEntry `json:"bindings,omitempty"`
 
@@ -444,8 +397,6 @@ type interfaceWire struct {
 
 	Schemas    map[string]JSONSchema `json:"schemas,omitempty"`
 	Operations map[string]Operation  `json:"operations"`
-
-	Roles map[string]string `json:"roles,omitempty"`
 
 	Sources  map[string]Source       `json:"sources,omitempty"`
 	Bindings map[string]BindingEntry `json:"bindings,omitempty"`
@@ -473,7 +424,6 @@ func (i *Interface) UnmarshalJSON(b []byte) error {
 		Description:  w.Description,
 		Schemas:      w.Schemas,
 		Operations:   w.Operations,
-		Roles:        w.Roles,
 		Sources:      w.Sources,
 		Bindings:     w.Bindings,
 		Security:     w.Security,
@@ -492,7 +442,6 @@ func (i Interface) MarshalJSON() ([]byte, error) {
 		Description:  i.Description,
 		Schemas:      i.Schemas,
 		Operations:   i.Operations,
-		Roles:        i.Roles,
 		Sources:      i.Sources,
 		Bindings:     i.Bindings,
 		Security:     i.Security,

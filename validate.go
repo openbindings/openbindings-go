@@ -59,23 +59,6 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		errs = append(errs, fmt.Sprintf("openbindings: %q exceeds this SDK's MaxTestedVersion %q (OBI-T-04)", i.OpenBindings, MaxTestedVersion))
 	}
 
-	// Validate roles: keys match identifier pattern (OBI-D-04), values are
-	// non-empty and well-formed URI references (OBI-D-06).
-	roleKeys := make([]string, 0, len(i.Roles))
-	for k := range i.Roles {
-		roleKeys = append(roleKeys, k)
-	}
-	sort.Strings(roleKeys)
-	for _, k := range roleKeys {
-		validateIdent(&errs, "roles key", k)
-		v := i.Roles[k]
-		if strings.TrimSpace(v) == "" {
-			errs = append(errs, fmt.Sprintf("roles[%q]: value must be non-empty", k))
-		} else {
-			validateURIRef(&errs, fmt.Sprintf("roles[%q]", k), v)
-		}
-	}
-
 	// Validate schemas: keys match identifier pattern (OBI-D-04); each schema
 	// is walked for OBI-D-06 ($ref URI), OBI-D-07 ($schema dialect), OBI-D-08
 	// (no $vocabulary).
@@ -146,25 +129,6 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 			aliasOwner[a] = k
 		}
 
-		// Satisfies sanity + OBI-D-14 (no duplicate role+operation pairs).
-		seenSatisfies := map[string]int{}
-		for idx, s := range op.Satisfies {
-			if strings.TrimSpace(s.Role) == "" {
-				errs = append(errs, fmt.Sprintf("operations[%q].satisfies[%d].role: required", k, idx))
-			} else if _, ok := i.Roles[s.Role]; !ok {
-				errs = append(errs, fmt.Sprintf("operations[%q].satisfies[%d].role: references unknown role %q (OBI-D-13)", k, idx, s.Role))
-			}
-			if strings.TrimSpace(s.Operation) == "" {
-				errs = append(errs, fmt.Sprintf("operations[%q].satisfies[%d].operation: required", k, idx))
-			}
-			pair := s.Role + "\x00" + s.Operation
-			if firstIdx, dup := seenSatisfies[pair]; dup {
-				errs = append(errs, fmt.Sprintf("operations[%q].satisfies[%d]: duplicate (role=%q, operation=%q) — already at [%d] (OBI-D-14)", k, idx, s.Role, s.Operation, firstIdx))
-			} else {
-				seenSatisfies[pair] = idx
-			}
-		}
-
 		// Walk operation input/output schemas for OBI-D-06/D-07/D-08.
 		if op.Input != nil {
 			walkSchema(&errs, fmt.Sprintf("operations[%q].input", k), op.Input)
@@ -185,9 +149,6 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 
 		if o.rejectUnknownTypedFields {
 			appendUnknownFieldProblems(&errs, fmt.Sprintf("operations[%q]", k), op.Unknown)
-			for idx, s := range op.Satisfies {
-				appendUnknownFieldProblems(&errs, fmt.Sprintf("operations[%q].satisfies[%d]", k, idx), s.Unknown)
-			}
 			for ek, ex := range op.Examples {
 				appendUnknownFieldProblems(&errs, fmt.Sprintf("operations[%q].examples[%q]", k, ek), ex.Unknown)
 			}

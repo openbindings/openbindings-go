@@ -130,9 +130,12 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 	if in.Interface == nil {
 		return nil, ErrNilInterface
 	}
-	op, ok := in.Interface.Operations[in.Operation]
+	// OBI-T-13: resolve against the flat key+aliases namespace. Bindings are
+	// selected by the resolved canonical key, not the name the caller used.
+	opKey, op, ok := ResolveOperation(in.Interface, in.Operation)
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrOperationNotFound, in.Operation)
+		return nil, fmt.Errorf("%w: %s; searched operation identifiers (keys and aliases): [%s]",
+			ErrOperationNotFound, in.Operation, strings.Join(AllOperationIdentifiers(in.Interface), ", "))
 	}
 
 	var bindingKey string
@@ -160,7 +163,7 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 		}
 
 		var err error
-		bindingKey, binding, err = selector(in.Interface, in.Operation)
+		bindingKey, binding, err = selector(in.Interface, opKey)
 		if err != nil {
 			return nil, err
 		}

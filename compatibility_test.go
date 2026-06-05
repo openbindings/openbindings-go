@@ -219,7 +219,9 @@ func TestCheckInterfaceCompatibility_ProvidedHasExtras(t *testing.T) {
 	}
 }
 
-func TestCheckInterfaceCompatibility_SatisfiesMatch(t *testing.T) {
+func TestCheckInterfaceCompatibility_AliasCorrespondenceMatch(t *testing.T) {
+	// An implementation claims to fulfill a shared contract by carrying the
+	// contract's operation names as aliases on its own operations.
 	required := &Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -230,50 +232,14 @@ func TestCheckInterfaceCompatibility_SatisfiesMatch(t *testing.T) {
 	provided := &Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
-			"myListOp": {
-				Satisfies: []Satisfies{
-					{Role: "openbindings.workspace-manager", Operation: "listWorkspaces"},
-				},
-			},
-			"myGetOp": {
-				Satisfies: []Satisfies{
-					{Role: "openbindings.workspace-manager", Operation: "getWorkspace"},
-				},
-			},
-		},
-	}
-
-	issues := CheckInterfaceCompatibility(required, provided,
-		CheckCompatibilityOptions{RequiredInterfaceID: "openbindings.workspace-manager"})
-	if len(issues) != 0 {
-		t.Fatalf("expected no issues with satisfies match, got %d: %+v", len(issues), issues)
-	}
-}
-
-func TestCheckInterfaceCompatibility_SatisfiesMatchRequiresInterfaceID(t *testing.T) {
-	required := &Interface{
-		OpenBindings: "0.1.0",
-		Operations: map[string]Operation{
-			"listWorkspaces": {},
-		},
-	}
-	provided := &Interface{
-		OpenBindings: "0.1.0",
-		Operations: map[string]Operation{
-			"myListOp": {
-				Satisfies: []Satisfies{
-					{Role: "openbindings.workspace-manager", Operation: "listWorkspaces"},
-				},
-			},
+			"myListOp": {Aliases: []string{"listWorkspaces"}},
+			"myGetOp":  {Aliases: []string{"getWorkspace"}},
 		},
 	}
 
 	issues := CheckInterfaceCompatibility(required, provided)
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue without interface ID, got %d: %+v", len(issues), issues)
-	}
-	if issues[0].Kind != CompatibilityMissing {
-		t.Fatalf("expected missing, got %s", issues[0].Kind)
+	if len(issues) != 0 {
+		t.Fatalf("expected no issues with alias correspondence, got %d: %+v", len(issues), issues)
 	}
 }
 

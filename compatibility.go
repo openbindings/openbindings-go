@@ -24,15 +24,6 @@ type CompatibilityIssue struct {
 	Detail    string
 }
 
-// CheckCompatibilityOptions configures the compatibility check.
-type CheckCompatibilityOptions struct {
-	// RequiredInterfaceID is the role key identifying the required interface
-	// (e.g., "openbindings.workspace-manager"). When set, enables satisfies-based
-	// matching: a provided operation can satisfy a required operation via its
-	// Satisfies entry { Role: requiredInterfaceID, Operation: opKey }.
-	RequiredInterfaceID string
-}
-
 // CheckInterfaceCompatibility checks whether a provided interface satisfies
 // the requirements of a required interface. This is a tooling convention,
 // not a spec requirement: the spec leaves matching, comparison, and
@@ -41,21 +32,18 @@ type CheckCompatibilityOptions struct {
 // reference tooling's matching convention; third-party tools may use
 // different strategies.
 //
-// For each operation the required interface declares, the algorithm searches
-// the provided interface using three strategies (first match wins):
-//
-//  1. Direct key match: provided.Operations[opKey] exists.
-//  2. Satisfies match: any provided operation has a Satisfies entry with
-//     { Role: requiredInterfaceID, Operation: opKey }
-//     (requires opts.RequiredInterfaceID).
-//  3. Aliases match: any provided operation has Aliases containing opKey.
+// For each operation the required interface declares by key, the provided
+// interface is searched by that name against its flat key+aliases namespace
+// (OBI-T-13): a provided operation matches if its key equals the required key
+// or one of its aliases does. Carrying the required contract's operation name
+// as an alias is exactly how an implementation claims to fulfill that contract.
 //
 // For each matched pair, schemas are checked:
 //   - Output schemas must be compatible (provided output satisfies required output).
 //   - Input schemas must be compatible (required input satisfies provided input).
 //
 // Returns an empty slice when the provided interface is fully compatible.
-func CheckInterfaceCompatibility(required, provided *Interface, opts ...CheckCompatibilityOptions) []CompatibilityIssue {
+func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityIssue {
 	if required == nil {
 		return nil
 	}
@@ -65,11 +53,6 @@ func CheckInterfaceCompatibility(required, provided *Interface, opts ...CheckCom
 			issues = append(issues, CompatibilityIssue{Operation: opKey, Kind: CompatibilityMissing})
 		}
 		return issues
-	}
-
-	var interfaceID string
-	if len(opts) > 0 {
-		interfaceID = opts[0].RequiredInterfaceID
 	}
 
 	var issues []CompatibilityIssue
@@ -83,7 +66,7 @@ func CheckInterfaceCompatibility(required, provided *Interface, opts ...CheckCom
 
 	for _, opKey := range opKeys {
 		reqOp := required.Operations[opKey]
-		provOp, ok := findMatchingOperation(provided, opKey, interfaceID)
+		_, provOp, ok := ResolveOperation(provided, opKey)
 		if !ok {
 			issues = append(issues, CompatibilityIssue{
 				Operation: opKey,
@@ -145,34 +128,6 @@ func CheckInterfaceCompatibility(required, provided *Interface, opts ...CheckCom
 	}
 
 	return issues
-}
-
-// findMatchingOperation searches provided for an operation matching opKey
-// using three strategies: direct key, satisfies, aliases.
-func findMatchingOperation(provided *Interface, opKey, requiredInterfaceID string) (Operation, bool) {
-	if op, ok := provided.Operations[opKey]; ok {
-		return op, true
-	}
-
-	if requiredInterfaceID != "" {
-		for _, op := range provided.Operations {
-			for _, s := range op.Satisfies {
-				if s.Role == requiredInterfaceID && s.Operation == opKey {
-					return op, true
-				}
-			}
-		}
-	}
-
-	for _, op := range provided.Operations {
-		for _, alias := range op.Aliases {
-			if alias == opKey {
-				return op, true
-			}
-		}
-	}
-
-	return Operation{}, false
 }
 
 // IsOBInterface returns true if the given map looks like a valid OpenBindings

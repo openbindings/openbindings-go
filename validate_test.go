@@ -108,23 +108,8 @@ func TestInterfaceValidate_UnknownTopLevelFields_StrictMode(t *testing.T) {
 func TestInterfaceValidate_UnknownFields_StrictMode_CatchesNestedTypedObjects(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",
-		Roles: map[string]string{
-			"io.example@1.0": "https://example.com/interface.json",
-		},
 		Operations: map[string]Operation{
-			"op": {
-				Satisfies: []Satisfies{
-					{
-						Role:      "io.example@1.0",
-						Operation: "op",
-						LosslessFields: LosslessFields{
-							Unknown: map[string]json.RawMessage{
-								"unknownField": json.RawMessage(`{"value":"unknownFieldValue"}`),
-							},
-						},
-					},
-				},
-			},
+			"op": {},
 		},
 		Sources: map[string]Source{
 			"src": {
@@ -216,49 +201,14 @@ func TestInterfaceValidate_AliasesMustBeUniqueAcrossOperations(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_SatisfiesFieldsMustBeNonEmpty(t *testing.T) {
+func TestInterfaceValidate_AliasAsContractNameIsValid(t *testing.T) {
+	// Cross-document correspondence is now expressed by adopting the shared
+	// contract's operation name as an alias; no roles/satisfies machinery.
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
-			"a": {Satisfies: []Satisfies{{Role: "", Operation: ""}}},
-		},
-	}
-	if err := i.Validate(); err == nil {
-		t.Fatalf("expected error")
-	}
-}
-
-func TestInterfaceValidate_SatisfiesRoleMustExistInRoles(t *testing.T) {
-	i := Interface{
-		OpenBindings: "0.1.0",
-		Operations: map[string]Operation{
-			"a": {
-				Satisfies: []Satisfies{
-					{Role: "nonexistent", Operation: "a"},
-				},
-			},
-		},
-	}
-	err := i.Validate()
-	if err == nil {
-		t.Fatalf("expected error for dangling satisfies reference")
-	}
-	if !containsProblem(err, `operations["a"].satisfies[0].role: references unknown role "nonexistent" (OBI-D-13)`) {
-		t.Fatalf("expected role reference error, got %v", err)
-	}
-}
-
-func TestInterfaceValidate_SatisfiesRoleValidWhenRoleExists(t *testing.T) {
-	i := Interface{
-		OpenBindings: "0.1.0",
-		Roles: map[string]string{
-			"taskmanager": "https://example.com/taskmanager/v1.json",
-		},
-		Operations: map[string]Operation{
-			"tasks.create": {
-				Satisfies: []Satisfies{
-					{Role: "taskmanager", Operation: "tasks.create"},
-				},
+			"createTask": {
+				Aliases: []string{"tasks.create"},
 			},
 		},
 	}

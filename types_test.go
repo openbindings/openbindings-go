@@ -303,70 +303,13 @@ func TestBindingEntry_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	}
 }
 
-func TestSatisfies_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
-	in := []byte(`{
-  "role": "io.example@1.0",
-  "operation": "op",
-  "x-extensionField": "extensionFieldValue",
-  "unknownField": {"value": "unknownFieldValue"}
-}`)
-
-	var s Satisfies
-	outMap := mustRoundTripToMap(t, in, &s)
-	assertPreservedExtensionAndUnknown(t, outMap)
-
-	if outMap["role"] != "io.example@1.0" {
-		t.Fatalf("expected role preserved, got %#v", outMap["role"])
-	}
-	if outMap["operation"] != "op" {
-		t.Fatalf("expected operation preserved, got %#v", outMap["operation"])
-	}
-}
-
-func TestSatisfies_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
-	s := Satisfies{
-		Role:      "typed.role@2.0",
-		Operation: "typedOp",
-		LosslessFields: LosslessFields{
-			Unknown: map[string]json.RawMessage{
-				"role":      json.RawMessage(`"unknown.role@1.0"`),
-				"operation": json.RawMessage(`"unknownOp"`),
-			},
-			Extensions: map[string]json.RawMessage{
-				"x-custom": json.RawMessage(`"kept"`),
-			},
-		},
-	}
-
-	out := mustMarshalJSON(t, s)
-	outMap := mustUnmarshalToMap(t, out)
-
-	if outMap["role"] != "typed.role@2.0" {
-		t.Fatalf("expected typed role to win, got %#v", outMap["role"])
-	}
-	if outMap["operation"] != "typedOp" {
-		t.Fatalf("expected typed operation to win, got %#v", outMap["operation"])
-	}
-	if outMap["x-custom"] != "kept" {
-		t.Fatalf("expected extension preserved, got %#v", outMap["x-custom"])
-	}
-}
-
-func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingAndSatisfiesFields(t *testing.T) {
+func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingFields(t *testing.T) {
 	in := []byte(`{
   "openbindings": "0.1.0",
   "operations": {
     "op": {
       "x-extensionField": "extensionFieldValue",
-      "unknownField": {"value": "unknownFieldValue"},
-      "satisfies": [
-        {
-          "role": "io.example@1.0",
-          "operation": "op",
-          "x-extensionField": "extensionFieldValue",
-          "unknownField": {"value": "unknownFieldValue"}
-        }
-      ]
+      "unknownField": {"value": "unknownFieldValue"}
     }
   },
   "sources": {
@@ -414,20 +357,6 @@ func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingAndSatisfies
 	}
 	if _, ok := op["unknownField"].(map[string]any); !ok {
 		t.Fatalf("expected operation unknownField preserved, got %#v", op["unknownField"])
-	}
-	satList, ok := op["satisfies"].([]any)
-	if !ok || len(satList) != 1 {
-		t.Fatalf("expected satisfies array, got %#v", op["satisfies"])
-	}
-	sat, ok := satList[0].(map[string]any)
-	if !ok {
-		t.Fatalf("expected satisfies[0] object, got %#v", satList[0])
-	}
-	if sat["x-extensionField"] != "extensionFieldValue" {
-		t.Fatalf("expected satisfies x-extensionField preserved, got %#v", sat["x-extensionField"])
-	}
-	if _, ok := sat["unknownField"].(map[string]any); !ok {
-		t.Fatalf("expected satisfies unknownField preserved, got %#v", sat["unknownField"])
 	}
 
 	bsMap, ok := outMap["sources"].(map[string]any)
