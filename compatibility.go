@@ -34,7 +34,7 @@ type CompatibilityIssue struct {
 //
 // For each operation the required interface declares by key, the provided
 // interface is searched by that name against its flat key+aliases namespace
-// (OBI-T-13): a provided operation matches if its key equals the required key
+// (OBI-T-12): a provided operation matches if its key equals the required key
 // or one of its aliases does. Carrying the required contract's operation name
 // as an alias is exactly how an implementation claims to fulfill that contract.
 //

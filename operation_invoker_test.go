@@ -1,0 +1,772 @@
+package openbindings
+
+// Operation-layer tests mirroring the TS SDK's operation-invoker.test.ts:
+// wiring, cardinalities, OBI-T-07/T-08, CONTEXT_REQUIRED negotiation
+// (resolve-replay-retry, preflight), and metadata pass-through.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+	"testing"
+)
+
+// ---------------------------------------------------------------------------
+// Mock binding invoker (the design doc's reference mock, ref-dispatched)
+// ---------------------------------------------------------------------------
+
+var bearerDetails = &ContextRequiredDetails{
+	Key:          "api.example.com",
+	Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.bearer"}}}},
+}
+
+type mockOpts struct {
+	token           string
+	requireBearer   bool // getUser challenges when context lacks bearerToken (after reading input)
+	challengeAlways bool // getUser challenges unconditionally (tests the retry cap)
+	preflight       bool // expose PrepareBinding reporting the bearer requirement
+}
+
+type mockBindingInvoker struct {
+	opts mockOpts
+
+	mu       sync.Mutex
+	attempts int
+	prepares int
+	reads    [][]any // inputs read per attempt
+	contexts []map[string]any
+}
+
+func (m *mockBindingInvoker) Formats() []FormatInfo {
+	tok := m.opts.token
+	if tok == "" {
+		tok = "mock@1.0"
+	}
+	return []FormatInfo{{Token: tok}}
+}
+
+func (m *mockBindingInvoker) snapshot() (attempts, prepares int, reads [][]any, contexts []map[string]any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.attempts, m.prepares, m.reads, m.contexts
+}
+
+func (m *mockBindingInvoker) InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any] {
+	inv := NewInvocationImpl[any, any](ctx)
+	m.mu.Lock()
+	m.attempts++
+	m.contexts = append(m.contexts, args.Context)
+	idx := len(m.reads)
+	m.reads = append(m.reads, nil)
+	m.mu.Unlock()
+	record := func(v any) {
+		m.mu.Lock()
+		m.reads[idx] = append(m.reads[idx], v)
+		m.mu.Unlock()
+	}
+	go func() {
+		if err := m.run(ctx, args, inv, record); err != nil {
+			inv.FireError(AsInvocationError(err))
+		}
+	}()
+	return inv
+}
+
+func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArgs, h *InvocationImpl[any, any], record func(any)) error {
+	readFirst := func() (any, bool, error) {
+		v, err := h.ReadInput(ctx)
+		if err == io.EOF {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		return v, true, nil
+	}
+
+	switch args.Ref {
+	case "ping":
+		_ = h.CloseInput()
+		_ = h.SetHeader(Metadata{"x-mock": {"ping"}})
+		if err := h.EmitOutput(map[string]any{"ok": true}); err != nil {
+			return nil
+		}
+		h.SetTrailer(Metadata{"x-mock-trailer": {"done"}})
+		h.CloseOutput()
+	case "getUser":
+		// Unary: read first input, then (deliberately AFTER the read — the
+		// "read ≠ consumed" case) check context.
+		first, ok, err := readFirst()
+		if err != nil {
+			return nil
+		}
+		if !ok {
+			h.FireError(&InvocationError{Code: ErrCodeMissingInput, Message: "getUser requires input"})
+			return nil
+		}
+		record(first)
+		if m.opts.challengeAlways || (m.opts.requireBearer && ContextBearerToken(args.Context) == "") {
+			h.FireError(NewContextRequiredError("bearer token required", bearerDetails))
+			return nil
+		}
+		_ = h.CloseInput()
+		id, _ := first.(map[string]any)["id"]
+		if err := h.EmitOutput(map[string]any{"id": id, "name": "Ada"}); err != nil {
+			return nil
+		}
+		h.CloseOutput()
+	case "echoInput":
+		first, _, err := readFirst()
+		if err != nil {
+			return nil
+		}
+		record(first)
+		_ = h.CloseInput()
+		if err := h.EmitOutput(first); err != nil {
+			return nil
+		}
+		h.CloseOutput()
+	case "watchOrders":
+		first, _, err := readFirst()
+		if err != nil {
+			return nil
+		}
+		record(first)
+		_ = h.CloseInput()
+		for _, status := range []string{"created", "paid", "shipped"} {
+			if err := h.EmitOutput(map[string]any{"id": "ord_1", "status": status}); err != nil {
+				return nil
+			}
+		}
+		h.CloseOutput()
+	case "watchThenChallenge":
+		// Mid-stream challenge: observable progress happened, so the
+		// operation layer must surface, not retry.
+		_ = h.CloseInput()
+		if err := h.EmitOutput(map[string]any{"id": "ord_1", "status": "created"}); err != nil {
+			return nil
+		}
+		h.FireError(NewContextRequiredError("token expired mid-stream", bearerDetails))
+	case "streamBadSecond":
+		_ = h.CloseInput()
+		if err := h.EmitOutput(map[string]any{"n": float64(1)}); err != nil {
+			return nil
+		}
+		if err := h.EmitOutput(map[string]any{"bad": true}); err != nil {
+			return nil
+		}
+		h.CloseOutput()
+	case "badUser":
+		first, _, err := readFirst()
+		if err != nil {
+			return nil
+		}
+		record(first)
+		_ = h.CloseInput()
+		if err := h.EmitOutput(map[string]any{"wrong": "shape"}); err != nil {
+			return nil
+		}
+		h.CloseOutput()
+	case "chat":
+		for {
+			msg, ok, err := readFirst()
+			if err != nil {
+				return nil
+			}
+			if !ok {
+				break
+			}
+			record(msg)
+			text, _ := msg.(map[string]any)["text"]
+			if err := h.EmitOutput(map[string]any{"ack": text}); err != nil {
+				return nil
+			}
+		}
+		h.CloseOutput()
+	case "uploadChunks":
+		count := 0
+		for {
+			chunk, ok, err := readFirst()
+			if err != nil {
+				return nil
+			}
+			if !ok {
+				break
+			}
+			record(chunk)
+			count++
+		}
+		if err := h.EmitOutput(map[string]any{"count": float64(count)}); err != nil {
+			return nil
+		}
+		h.CloseOutput()
+	default:
+		h.FireError(&InvocationError{Code: ErrCodeRuntime, Message: fmt.Sprintf("unknown ref: %s", args.Ref)})
+	}
+	return nil
+}
+
+// PrepareBinding is attached via the preparerMock wrapper so that plain
+// mocks do NOT implement BindingPreparer.
+type preparerMock struct {
+	*mockBindingInvoker
+}
+
+func (p *preparerMock) PrepareBinding(_ context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+	p.mu.Lock()
+	p.prepares++
+	p.mu.Unlock()
+	if ContextBearerToken(args.Context) != "" {
+		return nil, nil
+	}
+	return bearerDetails, nil
+}
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+type exprEvaluator struct{}
+
+func (exprEvaluator) Evaluate(expr string, data any) (any, error) {
+	switch expr {
+	case "idToUserId":
+		id, _ := data.(map[string]any)["id"]
+		return map[string]any{"userId": id}, nil
+	case "breakShape":
+		return map[string]any{"broken": true}, nil
+	case "boom":
+		return nil, errors.New("transform exploded")
+	default:
+		return nil, fmt.Errorf("unknown expression: %s", expr)
+	}
+}
+
+func pf(v float64) *float64 { return &v }
+
+func opTestInterface() *Interface {
+	return &Interface{
+		OpenBindings: "0.2.0",
+		Schemas: map[string]JSONSchema{
+			"UserInput": {
+				"type":                 "object",
+				"properties":           map[string]any{"id": map[string]any{"type": "string"}},
+				"required":             []any{"id"},
+				"additionalProperties": false,
+			},
+		},
+		Operations: map[string]Operation{
+			"ping": {},
+			"getUser": {
+				Aliases: []string{"fetchUser"},
+				Input:   JSONSchema{"$ref": "#/schemas/UserInput"},
+				Output: JSONSchema{
+					"type": "object",
+					"properties": map[string]any{
+						"id":   map[string]any{"type": "string"},
+						"name": map[string]any{"type": "string"},
+					},
+					"required": []any{"id", "name"},
+				},
+			},
+			"echo": {},
+			"watchOrders": {
+				Output: JSONSchema{
+					"type": "object",
+					"properties": map[string]any{
+						"id":     map[string]any{"type": "string"},
+						"status": map[string]any{"type": "string"},
+					},
+					"required": []any{"id", "status"},
+				},
+			},
+			"watchTyped": {
+				Output: JSONSchema{
+					"type":       "object",
+					"properties": map[string]any{"n": map[string]any{"type": "number"}},
+					"required":   []any{"n"},
+				},
+			},
+			"chat":         {},
+			"uploadChunks": {},
+		},
+		Sources: map[string]Source{
+			"mock": {Format: "mock@1.0", Location: "mem://mock"},
+		},
+		Bindings: map[string]BindingEntry{
+			"ping.main":    {Operation: "ping", Source: "mock", Ref: "ping"},
+			"getUser.main": {Operation: "getUser", Source: "mock", Ref: "getUser", Priority: pf(1)},
+			"getUser.bad":  {Operation: "getUser", Source: "mock", Ref: "badUser", Priority: pf(99)},
+			"echo.transformed": {
+				Operation: "echo", Source: "mock", Ref: "echoInput",
+				InputTransform: &TransformOrRef{Inline: "idToUserId"},
+			},
+			"watchOrders.main": {Operation: "watchOrders", Source: "mock", Ref: "watchOrders", Priority: pf(1)},
+			"watchOrders.challenge": {
+				Operation: "watchOrders", Source: "mock", Ref: "watchThenChallenge", Priority: pf(99),
+			},
+			"watchTyped.main":   {Operation: "watchTyped", Source: "mock", Ref: "streamBadSecond"},
+			"chat.main":         {Operation: "chat", Source: "mock", Ref: "chat"},
+			"uploadChunks.main": {Operation: "uploadChunks", Source: "mock", Ref: "uploadChunks"},
+		},
+	}
+}
+
+func newOpInvoker(mock BindingInvoker, resolver ContextResolver) *OperationInvoker {
+	op := NewOperationInvoker(mock)
+	op.TransformEvaluator = exprEvaluator{}
+	op.ContextResolver = resolver
+	return op
+}
+
+func drainOutputs(t *testing.T, call Invocation[any, any]) ([]any, error) {
+	t.Helper()
+	return collectStream(t, call.Outputs())
+}
+
+// ---------------------------------------------------------------------------
+// Wiring & resolution
+// ---------------------------------------------------------------------------
+
+func TestOpInvokeNoInputViaSingle(t *testing.T) { // NI
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "ping"})
+	v, err := Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := v.(map[string]any)["ok"].(bool); !ok {
+		t.Fatalf("got %v", v)
+	}
+}
+
+func TestOpAliasResolution(t *testing.T) { // OBI-T-12
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "fetchUser"})
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.(map[string]any)["name"] != "Ada" {
+		t.Fatalf("got %v", v)
+	}
+}
+
+func TestOpWiringErrorsAreErroredHandles(t *testing.T) {
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	cases := []struct {
+		name string
+		args *OperationInvocationArgs
+		code string
+	}{
+		{"unknown operation", &OperationInvocationArgs{Interface: opTestInterface(), Operation: "nope"}, ErrCodeOperationNotFound},
+		{"unknown bindingKey", &OperationInvocationArgs{Interface: opTestInterface(), Operation: "ping", BindingKey: "nope"}, ErrCodeBindingNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			call := op.Invoke(bg(), tc.args)
+			_, err := drainOutputs(t, call)
+			if codeOf(t, err) != tc.code {
+				t.Fatalf("expected %s, got %v", tc.code, err)
+			}
+		})
+	}
+
+	t.Run("unknown source", func(t *testing.T) {
+		iface := opTestInterface()
+		delete(iface.Sources, "mock")
+		call := op.Invoke(bg(), &OperationInvocationArgs{Interface: iface, Operation: "ping", BindingKey: "ping.main"})
+		_, err := drainOutputs(t, call)
+		if codeOf(t, err) != ErrCodeUnknownSource {
+			t.Fatalf("expected ERR_UNKNOWN_SOURCE, got %v", err)
+		}
+	})
+
+	t.Run("no invoker for format", func(t *testing.T) {
+		iface := opTestInterface()
+		src := iface.Sources["mock"]
+		src.Format = "absent@1.0"
+		iface.Sources["mock"] = src
+		call := op.Invoke(bg(), &OperationInvocationArgs{Interface: iface, Operation: "ping", BindingKey: "ping.main"})
+		_, err := drainOutputs(t, call)
+		if codeOf(t, err) != ErrCodeBindingNotFound {
+			t.Fatalf("expected ERR_BINDING_NOT_FOUND, got %v", err)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Cardinalities through one shape
+// ---------------------------------------------------------------------------
+
+func TestOpServerStreaming(t *testing.T) { // SS
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "watchOrders"})
+	if err := call.Write(bg(), map[string]any{"accountId": "a1"}); err != nil {
+		t.Fatal(err)
+	}
+	vals, err := drainOutputs(t, call)
+	if err != nil || len(vals) != 3 {
+		t.Fatalf("expected 3 outputs, got %d err=%v", len(vals), err)
+	}
+}
+
+func TestOpClientStreaming(t *testing.T) { // CS
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "uploadChunks"})
+	for _, c := range []string{"a", "b", "c"} {
+		if err := call.Write(bg(), map[string]any{"chunk": c}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := call.Close(); err != nil {
+		t.Fatal(err)
+	}
+	v, err := Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.(map[string]any)["count"] != float64(3) {
+		t.Fatalf("got %v", v)
+	}
+}
+
+func TestOpBidi(t *testing.T) { // BD
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "chat"})
+	go func() {
+		for _, text := range []string{"hi", "there"} {
+			if err := call.Write(bg(), map[string]any{"text": text}); err != nil {
+				return
+			}
+		}
+		_ = call.Close()
+	}()
+	vals, err := drainOutputs(t, call)
+	if err != nil || len(vals) != 2 {
+		t.Fatalf("expected 2 acks, got %d err=%v", len(vals), err)
+	}
+	if vals[0].(map[string]any)["ack"] != "hi" || vals[1].(map[string]any)["ack"] != "there" {
+		t.Fatalf("got %v", vals)
+	}
+}
+
+func TestOpCancelPropagatesToBinding(t *testing.T) {
+	mock := &mockBindingInvoker{}
+	op := newOpInvoker(mock, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "chat"})
+	if err := call.Write(bg(), map[string]any{"text": "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	// Consume the first ack so the pipeline is live.
+	out := call.Outputs()
+	if _, err := out.Read(shortCtx(t)); err != nil {
+		t.Fatal(err)
+	}
+	call.Cancel()
+	_, err := out.Read(shortCtx(t))
+	if codeOf(t, err) != ErrCodeCancelled {
+		t.Fatalf("expected ERR_CANCELLED, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OBI-T-07 — input validation (terminal + write rejects, before transform)
+// ---------------------------------------------------------------------------
+
+func TestOpT07InvalidWriteRejectsAndTerminates(t *testing.T) {
+	mock := &mockBindingInvoker{}
+	op := newOpInvoker(mock, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	err := call.Write(bg(), map[string]any{"id": 42})
+	if codeOf(t, err) != ErrCodeValidationFailed {
+		t.Fatalf("expected write rejection, got %v", err)
+	}
+	_, derr := drainOutputs(t, call)
+	if codeOf(t, derr) != ErrCodeValidationFailed {
+		t.Fatalf("expected terminal, got %v", derr)
+	}
+	if _, _, reads, _ := mock.snapshot(); len(reads) > 0 && len(reads[0]) > 0 {
+		t.Fatalf("binding must never see the invalid message: %v", reads)
+	}
+}
+
+func TestOpT07ValidatesBeforeTransform(t *testing.T) {
+	iface := opTestInterface()
+	echo := iface.Operations["echo"]
+	echo.Input = JSONSchema{
+		"type":       "object",
+		"properties": map[string]any{"id": map[string]any{"type": "string"}},
+		"required":   []any{"id"},
+	}
+	iface.Operations["echo"] = echo
+	mock := &mockBindingInvoker{}
+	op := newOpInvoker(mock, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: iface, Operation: "echo"})
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil { // validates PRE-transform shape
+		t.Fatal(err)
+	}
+	v, err := Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.(map[string]any)["userId"] != "u1" {
+		t.Fatalf("binding must receive the transformed message, got %v", v)
+	}
+}
+
+func TestOpInputTransformFailureIsTerminal(t *testing.T) {
+	iface := opTestInterface()
+	b := iface.Bindings["echo.transformed"]
+	b.InputTransform = &TransformOrRef{Inline: "boom"}
+	iface.Bindings["echo.transformed"] = b
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: iface, Operation: "echo"})
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != ErrCodeTransformError {
+		t.Fatalf("expected ERR_TRANSFORM_ERROR, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OBI-T-08 — output validation (terminal, value not emitted, per item)
+// ---------------------------------------------------------------------------
+
+func TestOpT08InvalidOutputNotEmitted(t *testing.T) {
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{
+		Interface: opTestInterface(), Operation: "getUser", BindingKey: "getUser.bad",
+	})
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	vals, err := drainOutputs(t, call)
+	if len(vals) != 0 {
+		t.Fatalf("invalid output must not be emitted, got %v", vals)
+	}
+	if codeOf(t, err) != ErrCodeValidationFailed {
+		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", err)
+	}
+}
+
+func TestOpT08PerItemForStreaming(t *testing.T) { // SS
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "watchTyped"})
+	vals, err := drainOutputs(t, call)
+	if len(vals) != 1 || vals[0].(map[string]any)["n"] != float64(1) {
+		t.Fatalf("valid prefix must be delivered, got %v", vals)
+	}
+	if codeOf(t, err) != ErrCodeValidationFailed {
+		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", err)
+	}
+}
+
+func TestOpT08ValidatesAfterTransform(t *testing.T) {
+	iface := opTestInterface()
+	b := iface.Bindings["watchTyped.main"]
+	b.OutputTransform = &TransformOrRef{Inline: "breakShape"}
+	iface.Bindings["watchTyped.main"] = b
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: iface, Operation: "watchTyped"})
+	vals, err := drainOutputs(t, call)
+	if len(vals) != 0 {
+		t.Fatalf("transform broke the shape; nothing should emit, got %v", vals)
+	}
+	if codeOf(t, err) != ErrCodeValidationFailed {
+		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CONTEXT_REQUIRED negotiation
+// ---------------------------------------------------------------------------
+
+func TestOpContextRequiredSurfacesWithoutResolver(t *testing.T) {
+	mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
+	op := newOpInvoker(mock, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := drainOutputs(t, call)
+	var ie *InvocationError
+	if !errors.As(err, &ie) || ContextRequiredFrom(ie) == nil {
+		t.Fatalf("expected CONTEXT_REQUIRED with details, got %v", err)
+	}
+}
+
+func TestOpResolveAndRetryReplaysInput(t *testing.T) { // U — read ≠ consumed
+	mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
+	var resolverCalls int
+	var rmu sync.Mutex
+	resolver := func(_ context.Context, details *ContextRequiredDetails) (map[string]any, error) {
+		rmu.Lock()
+		resolverCalls++
+		rmu.Unlock()
+		if details.Key != "api.example.com" {
+			return nil, fmt.Errorf("wrong key: %s", details.Key)
+		}
+		return map[string]any{"bearerToken": "tok-123"}, nil
+	}
+	op := newOpInvoker(mock, resolver)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil { // written ONCE
+		t.Fatal(err)
+	}
+	v, err := Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.(map[string]any)["name"] != "Ada" {
+		t.Fatalf("got %v", v)
+	}
+
+	attempts, _, reads, contexts := mock.snapshot()
+	rmu.Lock()
+	rc := resolverCalls
+	rmu.Unlock()
+	if rc != 1 {
+		t.Fatalf("resolver calls: %d", rc)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts: %d", attempts)
+	}
+	// Both attempts read the same lone input: the prefix was replayed.
+	if len(reads[0]) != 1 || len(reads[1]) != 1 {
+		t.Fatalf("replay failed: %v", reads)
+	}
+	if reads[1][0].(map[string]any)["id"] != "u1" {
+		t.Fatalf("replayed wrong value: %v", reads[1])
+	}
+	if ContextBearerToken(contexts[1]) != "tok-123" {
+		t.Fatalf("retry context missing token: %v", contexts[1])
+	}
+}
+
+func TestOpResolverDeclineSurfaces(t *testing.T) {
+	mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
+	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
+		return nil, nil
+	})
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != ErrCodeContextRequired {
+		t.Fatalf("expected CONTEXT_REQUIRED, got %v", err)
+	}
+	if attempts, _, _, _ := mock.snapshot(); attempts != 1 {
+		t.Fatalf("attempts: %d", attempts)
+	}
+}
+
+func TestOpRetryRoundsAreCapped(t *testing.T) {
+	mock := &mockBindingInvoker{opts: mockOpts{challengeAlways: true}}
+	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
+		return map[string]any{"bearerToken": "never-enough"}, nil
+	})
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != ErrCodeContextRequired {
+		t.Fatalf("expected CONTEXT_REQUIRED after cap, got %v", err)
+	}
+	if attempts, _, _, _ := mock.snapshot(); attempts > maxContextRounds+2 {
+		t.Fatalf("retry loop not capped: %d attempts", attempts)
+	}
+}
+
+func TestOpMidStreamChallengeSurfaces(t *testing.T) { // SS — no retry after progress
+	mock := &mockBindingInvoker{}
+	var resolverCalled bool
+	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
+		resolverCalled = true
+		return map[string]any{"bearerToken": "tok"}, nil
+	})
+	call := op.Invoke(bg(), &OperationInvocationArgs{
+		Interface: opTestInterface(), Operation: "watchOrders", BindingKey: "watchOrders.challenge",
+	})
+	vals, err := drainOutputs(t, call)
+	if len(vals) != 1 {
+		t.Fatalf("the delivered prefix must survive, got %v", vals)
+	}
+	if codeOf(t, err) != ErrCodeContextRequired {
+		t.Fatalf("expected CONTEXT_REQUIRED, got %v", err)
+	}
+	if resolverCalled {
+		t.Fatal("no retry after observable progress")
+	}
+	if attempts, _, _, _ := mock.snapshot(); attempts != 1 {
+		t.Fatalf("attempts: %d", attempts)
+	}
+}
+
+func TestOpPreflightCollapsesChallenge(t *testing.T) { // CS-friendly path
+	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+	var resolverCalls int
+	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
+		resolverCalls++
+		return map[string]any{"bearerToken": "tok-pre"}, nil
+	})
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Single(shortCtx(t), call.Outputs()); err != nil {
+		t.Fatal(err)
+	}
+	attempts, prepares, _, contexts := mock.snapshot()
+	if prepares != 1 || resolverCalls != 1 {
+		t.Fatalf("prepares=%d resolverCalls=%d", prepares, resolverCalls)
+	}
+	if attempts != 1 {
+		t.Fatalf("preflight must collapse the challenge round-trip: %d attempts", attempts)
+	}
+	if ContextBearerToken(contexts[0]) != "tok-pre" {
+		t.Fatalf("first attempt missing preflight-resolved context: %v", contexts[0])
+	}
+}
+
+func TestOpPreflightWithoutResolverSurfaces(t *testing.T) {
+	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+	op := newOpInvoker(mock, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != ErrCodeContextRequired {
+		t.Fatalf("expected CONTEXT_REQUIRED, got %v", err)
+	}
+	if attempts, _, _, _ := mock.snapshot(); attempts != 0 {
+		t.Fatalf("no attempt should run after a failed preflight: %d", attempts)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Metadata pass-through
+// ---------------------------------------------------------------------------
+
+func TestOpMetadataPassThrough(t *testing.T) {
+	op := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "ping"})
+	vals, err := drainOutputs(t, call)
+	if err != nil || len(vals) != 1 {
+		t.Fatalf("got %v err=%v", vals, err)
+	}
+	md, err := call.Header(shortCtx(t))
+	if err != nil || len(md["x-mock"]) != 1 {
+		t.Fatalf("header: %v err=%v", md, err)
+	}
+	if tr := call.Trailer(); len(tr["x-mock-trailer"]) != 1 {
+		t.Fatalf("trailer: %v", tr)
+	}
+}

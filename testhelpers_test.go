@@ -50,3 +50,15 @@ func assertPreservedExtensionAndUnknown(t *testing.T, outMap map[string]any) {
 		t.Fatalf("expected unknownField.value preserved, got %#v", unknownField["value"])
 	}
 }
+
+func makeTestInterface(name string, ops ...string) *Interface {
+	iface := &Interface{
+		OpenBindings: "0.1.0",
+		Name:         name,
+		Operations:   map[string]Operation{},
+	}
+	for _, op := range ops {
+		iface.Operations[op] = Operation{}
+	}
+	return iface
+}

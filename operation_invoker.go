@@ -3,12 +3,20 @@ package openbindings
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"strings"
+	"sync"
 
 	"github.com/openbindings/openbindings-go/formattoken"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
+
+// maxContextRounds caps CONTEXT_REQUIRED resolve-and-retry rounds per
+// invocation. A binding that keeps challenging after resolution is either
+// mis-declaring its requirements or being fed an insufficient resolver;
+// surfacing beats looping.
+const maxContextRounds = 3
 
 // BindingSelector determines which binding to use for an operation.
 // Returns the binding key and the binding entry, or an error.
@@ -28,26 +36,52 @@ type TransformEvaluatorWithBindings interface {
 	EvaluateWithBindings(expression string, data any, bindings map[string]any) (any, error)
 }
 
-// OperationInvoker composites multiple BindingInvokers into a higher-level
-// mux that can route by format and resolve OBI operations to bindings.
+// ContextResolver resolves a CONTEXT_REQUIRED challenge into context data.
+// Returning (nil, nil) declines, at which point the challenge surfaces to
+// the caller unchanged. Composition-time wiring: whether it consults a
+// context store, reads an env var, prompts a keychain, or returns a
+// hardcoded value is the resolver's business — invisible to the invoker and
+// to bindings.
+type ContextResolver func(ctx context.Context, details *ContextRequiredDetails) (map[string]any, error)
+
+// OperationInvoker is the operation-layer invoker: it resolves an OBI
+// operation to a binding (OBI-T-12 name resolution, OBI-T-09 selection) and
+// returns a cardinality-agnostic Invocation handle.
 //
-// When ContextStore is set, Store and Callbacks are propagated to the invoker
-// so it can look up stored context and invoke platform interactions during
-// invocation. Invokers derive context keys internally using NormalizeContextKey.
+// Between the caller and the binding it enforces the operation contract:
+//   - OBI-T-07: every caller input validates against the operation's input
+//     schema BEFORE the input transform; a failure is terminal and rejects
+//     the offending Write with the same error.
+//   - inputTransform / outputTransform evaluate per message (JSONata 2.0).
+//   - OBI-T-08: each (transformed) output validates against the output
+//     schema before it is emitted; a failure is terminal and the value is
+//     not emitted. Callers that need to inspect unvalidated payloads call
+//     InvokeBinding directly.
+//   - CONTEXT_REQUIRED negotiation: challenges raised by the binding before
+//     any input was consumed are resolved via ContextResolver and the
+//     binding is re-driven against the same input buffer (the
+//     already-forwarded prefix is replayed). Once the binding shows
+//     observable progress (a first output), challenges surface instead.
+//
+// Wiring errors (unknown operation, binding, or source; no invoker for the
+// format) surface as an already-errored handle with a local wiring code
+// (ErrCodeOperationNotFound, ErrCodeBindingNotFound, ErrCodeUnknownSource).
 type OperationInvoker struct {
 	BindingSelector    func(*Interface, string) (string, *BindingEntry, error)
 	TransformEvaluator TransformEvaluator
-	ContextStore       ContextStore
-	PlatformCallbacks  *PlatformCallbacks
+	// ContextResolver resolves CONTEXT_REQUIRED challenges raised by
+	// bindings. When nil, or when it declines, the challenge surfaces to the
+	// caller as an ordinary terminal *InvocationError.
+	ContextResolver ContextResolver
 
-	invoker BindingInvoker
+	invoker *combinedInvoker
 }
 
 // NewOperationInvoker creates an OperationInvoker from one or more BindingInvokers.
 // Registration order matters: first registration wins for a given format name.
 func NewOperationInvoker(invokers ...BindingInvoker) *OperationInvoker {
 	return &OperationInvoker{
-		invoker: CombineInvokers(invokers...),
+		invoker: CombineInvokers(invokers...).(*combinedInvoker),
 	}
 }
 
@@ -56,26 +90,22 @@ func NewOperationInvoker(invokers ...BindingInvoker) *OperationInvoker {
 // which creates a circular dependency that cannot be resolved at construction time.
 // Must be called during initialization, before any concurrent use of the invoker.
 func (e *OperationInvoker) AddBindingInvoker(invoker BindingInvoker) {
-	e.invoker.(*combinedInvoker).add(invoker)
+	e.invoker.add(invoker)
 }
 
 // WithRuntime returns a shallow copy of the invoker with the given
-// ContextStore and PlatformCallbacks. The copy shares the underlying
-// combined invoker with the original but has independent runtime fields.
-// Nil arguments inherit the original's values.
-func (e *OperationInvoker) WithRuntime(store ContextStore, callbacks *PlatformCallbacks) *OperationInvoker {
+// ContextResolver. The copy shares the underlying combined invoker with the
+// original but has an independent resolver. A nil argument inherits the
+// original's resolver.
+func (e *OperationInvoker) WithRuntime(resolver ContextResolver) *OperationInvoker {
 	cp := &OperationInvoker{
 		BindingSelector:    e.BindingSelector,
 		TransformEvaluator: e.TransformEvaluator,
-		ContextStore:       store,
-		PlatformCallbacks:  callbacks,
+		ContextResolver:    resolver,
 		invoker:            e.invoker,
 	}
-	if cp.ContextStore == nil {
-		cp.ContextStore = e.ContextStore
-	}
-	if cp.PlatformCallbacks == nil {
-		cp.PlatformCallbacks = e.PlatformCallbacks
+	if cp.ContextResolver == nil {
+		cp.ContextResolver = e.ContextResolver
 	}
 	return cp
 }
@@ -93,66 +123,55 @@ func (e *OperationInvoker) availableFormats() map[string]bool {
 	return m
 }
 
-// InvokeBinding routes a binding invocation to the appropriate BindingInvoker
-// by source format and returns a stream of events. Store and Callbacks are
-// propagated from the invoker when not already set on the input. Invokers
-// are responsible for looking up stored context internally using
-// NormalizeContextKey.
-func (e *OperationInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
-	return e.invoker.InvokeBinding(ctx, e.withRuntime(in))
+// InvokeBinding routes a binding invocation directly to the matching
+// BindingInvoker by source format, without operation-layer validation,
+// transforms, or context negotiation.
+func (e *OperationInvoker) InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any] {
+	return e.invoker.InvokeBinding(ctx, args)
 }
 
-// withRuntime returns a shallow copy of in with Store and Callbacks filled
-// from the invoker when the input doesn't already have them. The caller's
-// original input is never mutated.
-func (e *OperationInvoker) withRuntime(in *BindingInvocationInput) *BindingInvocationInput {
-	if (in.Store != nil || e.ContextStore == nil) && (in.Callbacks != nil || e.PlatformCallbacks == nil) {
-		return in
-	}
-	cp := *in
-	if cp.Store == nil && e.ContextStore != nil {
-		cp.Store = e.ContextStore
-	}
-	if cp.Callbacks == nil && e.PlatformCallbacks != nil {
-		cp.Callbacks = e.PlatformCallbacks
-	}
-	return &cp
+// PrepareBinding is the side-effect-free preflight for a resolved binding
+// (binding-invoker role prepareBinding).
+func (e *OperationInvoker) PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+	return e.invoker.prepareBinding(ctx, args)
 }
 
-// Invoke resolves an OBI operation to a binding and returns a stream
-// of events. Every operation is a stream — unary calls produce a single event.
-//
-// The invoker's InvokeBinding returns a channel of InvocationOutput. Output
-// transforms are applied per event.
-//
-// Input transforms are applied once before invocation.
-func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationInput) (<-chan InvocationOutput, error) {
-	if in.Interface == nil {
-		return nil, ErrNilInterface
+// Invoke resolves an OBI operation to a binding and returns the invocation
+// handle. The handle is returned synchronously and creation is inert: no
+// I/O happens until the invocation is driven. ctx is the invocation's
+// lifetime (the Go analog of an abort signal); per-message deadlines belong
+// on the ctx passed to Write/Read.
+func (e *OperationInvoker) Invoke(ctx context.Context, args *OperationInvocationArgs) Invocation[any, any] {
+	if args.Interface == nil {
+		return NewErroredInvocation[any, any](&InvocationError{
+			Code: ErrCodeValidationFailed, Message: ErrNilInterface.Error(),
+		})
 	}
-	// OBI-T-13: resolve against the flat key+aliases namespace. Bindings are
+	iface := args.Interface
+
+	// OBI-T-12: resolve against the flat key+aliases namespace. Bindings are
 	// selected by the resolved canonical key, not the name the caller used.
-	opKey, op, ok := ResolveOperation(in.Interface, in.Operation)
+	opKey, opVal, ok := ResolveOperation(iface, args.Operation)
+	op := &opVal
 	if !ok {
-		return nil, fmt.Errorf("%w: %s; searched operation identifiers (keys and aliases): [%s]",
-			ErrOperationNotFound, in.Operation, strings.Join(AllOperationIdentifiers(in.Interface), ", "))
+		return NewErroredInvocation[any, any](&InvocationError{
+			Code: ErrCodeOperationNotFound,
+			Message: fmt.Sprintf("%v: %s; searched operation identifiers (keys and aliases): [%s]",
+				ErrOperationNotFound, args.Operation, strings.Join(AllOperationIdentifiers(iface), ", ")),
+		})
 	}
 
 	var bindingKey string
 	var binding *BindingEntry
-
-	if in.BindingKey != "" {
-		b, ok := in.Interface.Bindings[in.BindingKey]
+	if args.BindingKey != "" {
+		b, ok := iface.Bindings[args.BindingKey]
 		if !ok {
-			ch := make(chan InvocationOutput, 1)
-			ch <- InvocationOutput{Error: &InvocationError{
+			return NewErroredInvocation[any, any](&InvocationError{
 				Code:    ErrCodeBindingNotFound,
-				Message: fmt.Sprintf("binding %q is not defined on this interface", in.BindingKey),
-			}}
-			close(ch)
-			return ch, nil
+				Message: fmt.Sprintf("binding %q is not defined on this interface", args.BindingKey),
+			})
 		}
-		bindingKey = in.BindingKey
+		bindingKey = args.BindingKey
 		binding = &b
 	} else {
 		selector := e.BindingSelector
@@ -161,203 +180,443 @@ func (e *OperationInvoker) Invoke(ctx context.Context, in *OperationInvocationIn
 				return selectBinding(iface, opKey, e.availableFormats())
 			}
 		}
-
 		var err error
-		bindingKey, binding, err = selector(in.Interface, opKey)
+		bindingKey, binding, err = selector(iface, opKey)
 		if err != nil {
-			return nil, err
+			return NewErroredInvocation[any, any](&InvocationError{
+				Code: ErrCodeBindingNotFound, Message: err.Error(),
+			})
 		}
 	}
 
-	source, ok := in.Interface.Sources[binding.Source]
+	source, ok := iface.Sources[binding.Source]
 	if !ok {
-		return nil, fmt.Errorf("%w: binding %q references %q", ErrUnknownSource, bindingKey, binding.Source)
+		return NewErroredInvocation[any, any](&InvocationError{
+			Code:    ErrCodeUnknownSource,
+			Message: fmt.Sprintf("%v: binding %q references %q", ErrUnknownSource, bindingKey, binding.Source),
+		})
 	}
 
-	// OBI-T-07: Validate input against the operation's input schema before transform.
-	if op.Input != nil {
-		defs := buildSchemaDefs(in.Interface.Schemas)
-		compiled, err := compileExampleSchema(op.Input, defs)
-		if err != nil {
-			ch := make(chan InvocationOutput, 1)
-			ch <- InvocationOutput{Error: &InvocationError{
-				Code:    ErrCodeValidationFailed,
-				Message: fmt.Sprintf("openbindings: input schema compilation failed for %q: %v", in.Operation, err),
-			}}
-			close(ch)
-			return ch, nil
-		}
-		if verr := compiled.Validate(in.Input); verr != nil {
-			ch := make(chan InvocationOutput, 1)
-			lines := splitSchemaError(verr)
-			ch <- InvocationOutput{Error: &InvocationError{
-				Code:    ErrCodeValidationFailed,
-				Message: fmt.Sprintf("openbindings: input validation failed for %q: %s", in.Operation, strings.Join(lines, "; ")),
-				Details: ValidationFailureDetails{Failures: collectValidationFailures(verr)},
-			}}
-			close(ch)
-			return ch, nil
-		}
-	}
+	caller := NewInvocationImpl[any, any](ctx)
+	caller.validateInput = makeInputValidator(op, iface, args.Operation)
 
-	invokeInput := in.Input
-	if binding.InputTransform != nil {
-		if e.TransformEvaluator == nil {
-			ch := make(chan InvocationOutput, 1)
-			ch <- InvocationOutput{Error: &InvocationError{
-				Code:    ErrCodeTransformError,
-				Message: fmt.Sprintf("%v: binding %q has inputTransform", ErrNoTransformEvaluator, bindingKey),
-			}}
-			close(ch)
-			return ch, nil
-		}
-		transformed, err := applyTransformRef(e.TransformEvaluator, in.Interface.Transforms, binding.InputTransform, invokeInput)
-		if err != nil {
-			ch := make(chan InvocationOutput, 1)
-			ch <- InvocationOutput{Error: &InvocationError{
-				Code:    ErrCodeTransformError,
-				Message: fmt.Sprintf("openbindings: input transform failed for %q: %v", bindingKey, err),
-			}}
-			close(ch)
-			return ch, nil
-		}
-		invokeInput = transformed
-	}
+	go func() {
+		// A panicking third-party invoker must not kill the process: it
+		// terminates this invocation loudly instead.
+		defer func() {
+			if r := recover(); r != nil {
+				caller.FireError(&InvocationError{
+					Code:    ErrCodeRuntime,
+					Message: fmt.Sprintf("openbindings: invoker panic: %v", r),
+				})
+			}
+		}()
+		e.run(ctx, caller, iface, op, binding, bindingKey, &source, args.Context)
+	}()
 
-	bindingIn := &BindingInvocationInput{
-		Source: BindingInvocationSource{
-			Format:   source.Format,
-			Location: source.Location,
-		},
-		Ref:         binding.Ref,
-		Input:       invokeInput,
-		InputSchema: op.Input,
-		Context:     in.Context,
-		Interface:   in.Interface,
-	}
-	if source.Content != nil {
-		bindingIn.Source.Content = source.Content
-	}
-	if binding.Security != "" && in.Interface.Security != nil {
-		if methods, ok := in.Interface.Security[binding.Security]; ok {
-			bindingIn.Security = methods
-		}
-	}
-
-	src, err := e.InvokeBinding(ctx, bindingIn)
-	if err != nil {
-		return nil, err
-	}
-	return e.transformStream(ctx, src, binding, in.Interface.Transforms, bindingKey, op.Output, in.Interface.Schemas), nil
+	return caller
 }
 
-// transformStream wraps a source stream, applying outputTransform to each
-// event's Output and validating against outputSchema (OBI-T-08). If neither
-// outputTransform nor outputSchema is configured, returns src directly.
-// The context is used to cancel drain goroutines when the parent is cancelled.
-func (e *OperationInvoker) transformStream(ctx context.Context, src <-chan InvocationOutput, binding *BindingEntry, transforms map[string]Transform, bindingKey string, outputSchema JSONSchema, schemas map[string]JSONSchema) <-chan InvocationOutput {
-	if binding.OutputTransform == nil && outputSchema == nil {
-		return src
-	}
-	if binding.OutputTransform != nil && e.TransformEvaluator == nil {
-		out := make(chan InvocationOutput, 1)
-		out <- InvocationOutput{Error: &InvocationError{
+// run drives the binding-layer invocation(s) behind one caller-facing
+// handle: an input pump forwarding (transformed) caller inputs, an output
+// loop forwarding (transformed, T-08-validated) binding outputs, and the
+// CONTEXT_REQUIRED resolve-replay-retry machinery between attempts.
+func (e *OperationInvoker) run(
+	ctx context.Context,
+	caller *InvocationImpl[any, any],
+	iface *Interface,
+	op *Operation,
+	binding *BindingEntry,
+	bindingKey string,
+	source *Source,
+	initialContext map[string]any,
+) {
+	if (binding.InputTransform != nil || binding.OutputTransform != nil) && e.TransformEvaluator == nil {
+		caller.FireError(&InvocationError{
 			Code:    ErrCodeTransformError,
-			Message: fmt.Sprintf("%v: binding %q has outputTransform", ErrNoTransformEvaluator, bindingKey),
-		}}
-		close(out)
-		// Drain src so the producer goroutine is not leaked.
-		// Respect context cancellation to avoid blocking forever on slow sources.
-		go drainStream(ctx, src)
-		return out
+			Message: fmt.Sprintf("%v: binding %q has a transform", ErrNoTransformEvaluator, bindingKey),
+		})
+		return
 	}
 
-	// Compile output schema once outside the loop.
+	// OBI-T-08: compile the output schema once per invocation.
 	var compiledOutput *jsonschema.Schema
-	if outputSchema != nil {
-		defs := buildSchemaDefs(schemas)
-		compiled, err := compileExampleSchema(outputSchema, defs)
+	if op.Output != nil {
+		defs := buildSchemaDefs(iface.Schemas)
+		compiled, err := compileExampleSchema(op.Output, defs)
 		if err != nil {
-			out := make(chan InvocationOutput, 1)
-			out <- InvocationOutput{Error: &InvocationError{
+			caller.FireError(&InvocationError{
 				Code:    ErrCodeValidationFailed,
 				Message: fmt.Sprintf("openbindings: output schema compilation failed for %q: %v", bindingKey, err),
-			}}
-			close(out)
-			go drainStream(ctx, src)
-			return out
+			})
+			return
 		}
 		compiledOutput = compiled
 	}
 
-	out := make(chan InvocationOutput)
-	go func() {
-		defer close(out)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case ev, ok := <-src:
-				if !ok {
-					return
-				}
-				if ev.Error != nil {
-					out <- ev
-					continue
-				}
-				data := ev.Output
-				if binding.OutputTransform != nil {
-					transformed, err := applyTransformRef(e.TransformEvaluator, transforms, binding.OutputTransform, data)
-					if err != nil {
-						out <- InvocationOutput{Error: &InvocationError{
-							Code:    ErrCodeTransformError,
-							Message: fmt.Sprintf("openbindings: output transform failed for %q: %v", bindingKey, err),
-						}}
-						continue
-					}
-					data = transformed
-				}
-				// OBI-T-08: Validate output after transform. On failure, yield
-				// the data alongside the error so callers can inspect or render
-				// the underlying response while still being informed of the
-				// schema mismatch. The spec describes a T-08 failure as an
-				// "invocation error for that operation"; it does not prescribe
-				// how the SDK surfaces that error, and it does not require
-				// hiding the data.
-				if compiledOutput != nil {
-					if verr := compiledOutput.Validate(data); verr != nil {
-						lines := splitSchemaError(verr)
-						out <- InvocationOutput{
-							Output: data,
-							Error: &InvocationError{
-								Code:    ErrCodeValidationFailed,
-								Message: fmt.Sprintf("openbindings: output validation failed for %q: %s", bindingKey, strings.Join(lines, "; ")),
-								Details: ValidationFailureDetails{Failures: collectValidationFailures(verr)},
-							},
-							Status:     ev.Status,
-							DurationMs: ev.DurationMs,
-						}
-						continue
-					}
-				}
-				out <- InvocationOutput{Output: data, Status: ev.Status, DurationMs: ev.DurationMs}
-			}
+	contextData := initialContext
+	bindingArgs := func() *BindingInvocationArgs {
+		a := &BindingInvocationArgs{
+			Source: InvocationSource{
+				Format:   source.Format,
+				Location: source.Location,
+			},
+			Ref:         binding.Ref,
+			Binding:     binding,
+			Context:     contextData,
+			Interface:   iface,
+			InputSchema: op.Input,
 		}
-	}()
-	return out
-}
+		if source.Content != nil {
+			a.Source.Content = source.Content
+		}
+		return a
+	}
+	mergeResolved := func(resolved map[string]any) {
+		merged := make(map[string]any, len(contextData)+len(resolved))
+		for k, v := range contextData {
+			merged[k] = v
+		}
+		for k, v := range resolved {
+			merged[k] = v
+		}
+		contextData = merged
+	}
 
-func drainStream(ctx context.Context, src <-chan InvocationOutput) {
-	for {
-		select {
-		case <-ctx.Done():
+	// Preflight (binding-invoker role prepareBinding): collapse
+	// knowable-upfront context challenges into the clean no-input-consumed
+	// case before anything is forwarded.
+	details, err := e.invoker.prepareBinding(ctx, bindingArgs())
+	if err != nil {
+		caller.FireError(wireError(err))
+		return
+	}
+	if details != nil {
+		resolved := e.resolveContext(ctx, details)
+		if resolved == nil {
+			caller.FireError(NewContextRequiredError("openbindings: binding requires context", details))
 			return
-		case _, ok := <-src:
-			if !ok {
-				return
-			}
+		}
+		mergeResolved(resolved)
+	}
+
+	// Inputs already forwarded to the binding, post-transform, recorded for
+	// replay while the retry window is open. The window closes at the
+	// binding's first output (observable progress: by the binding contract,
+	// CONTEXT_REQUIRED precedes any side effect, so a challenge after
+	// output cannot be retried safely).
+	var (
+		retryMu       sync.Mutex
+		replayLog     []any
+		retryEligible = true
+	)
+	closeRetryWindow := func() {
+		retryMu.Lock()
+		retryEligible = false
+		replayLog = nil
+		retryMu.Unlock()
+	}
+	recordIfEligible := func(v any) {
+		retryMu.Lock()
+		if retryEligible {
+			replayLog = append(replayLog, v)
+		}
+		retryMu.Unlock()
+	}
+	snapshotReplay := func() []any {
+		retryMu.Lock()
+		defer retryMu.Unlock()
+		out := make([]any, len(replayLog))
+		copy(out, replayLog)
+		return out
+	}
+
+	headerForwarded := false
+	forwardHeader := func(inner Invocation[any, any]) {
+		if headerForwarded {
+			return
+		}
+		headerForwarded = true
+		if md, err := inner.Header(context.Background()); err == nil {
+			_ = caller.SetHeader(md)
 		}
 	}
+	forwardTrailer := func(inner Invocation[any, any]) {
+		// Every call site cancels (or has observed the terminal of) the
+		// inner first; the recover guards foreign Invocation impls whose
+		// Trailer panics on a not-yet-settled terminal race.
+		defer func() { _ = recover() }()
+		if t := inner.Trailer(); len(t) > 0 {
+			caller.SetTrailer(t)
+		}
+	}
+
+	rounds := 0
+	for {
+		// innerCtx bounds this attempt's binding: it cancels when the caller
+		// handle terminates (cancel propagation) and when the attempt ends.
+		innerCtx, innerCancel := DoneContext(ctx, caller.Done())
+		inner := e.invoker.InvokeBinding(innerCtx, bindingArgs())
+
+		// The input pump reads the caller's buffer under attemptCtx so a
+		// retry swap can unpark it WITHOUT consuming an in-flight input.
+		// The replay prefix is snapshotted BEFORE the attempt runs: this
+		// attempt's own first output closes the retry window and clears the
+		// shared log, which must not race the replay.
+		attemptCtx, attemptCancel := context.WithCancel(innerCtx)
+		replay := snapshotReplay()
+		pumpDone := make(chan struct{})
+		go func() {
+			defer close(pumpDone)
+			e.pumpInputs(attemptCtx, innerCtx, caller, inner, binding, bindingKey, iface,
+				replay, recordIfEligible)
+		}()
+
+		surface, retryDetails := e.runOutputs(
+			innerCtx, caller, inner, binding, bindingKey, iface,
+			compiledOutput, closeRetryWindow, forwardHeader,
+			func() bool { retryMu.Lock(); defer retryMu.Unlock(); return retryEligible },
+		)
+
+		// Retire this attempt's pump before deciding next steps: the
+		// caller's input buffer must have exactly one reader at a time.
+		attemptCancel()
+		<-pumpDone
+
+		if retryDetails != nil && rounds < maxContextRounds {
+			resolved := e.resolveContext(ctx, retryDetails)
+			if resolved != nil {
+				mergeResolved(resolved)
+				rounds++
+				innerCancel()
+				continue
+			}
+			surface = NewContextRequiredError("openbindings: binding requires context", retryDetails)
+		} else if retryDetails != nil {
+			surface = NewContextRequiredError("openbindings: binding requires context", retryDetails)
+		}
+
+		// Ensure the inner is terminal before metadata reads (idempotent
+		// no-op on the clean-close and already-errored paths).
+		inner.Cancel()
+		forwardHeader(inner)
+		forwardTrailer(inner)
+		if surface != nil {
+			caller.FireError(surface)
+		} else {
+			caller.CloseOutput()
+		}
+		innerCancel()
+		return
+	}
+}
+
+// pumpInputs forwards caller inputs to the current binding attempt: first
+// the replayed prefix, then live messages. It exits when the caller closes
+// input (forwarding the close), when the attempt ends (attemptCtx), or when
+// the inner invocation terminates.
+func (e *OperationInvoker) pumpInputs(
+	attemptCtx, innerCtx context.Context,
+	caller *InvocationImpl[any, any],
+	inner Invocation[any, any],
+	binding *BindingEntry,
+	bindingKey string,
+	iface *Interface,
+	replay []any,
+	record func(any),
+) {
+	writeInner := func(v any) (stop bool) {
+		if err := inner.Write(innerCtx, v); err != nil {
+			var ie *InvocationError
+			if asIE(err, &ie) && ie.Code == ErrCodeInputClosed {
+				// The binding closed its input side deliberately (no-input /
+				// unary / read-enough): propagate so further caller writes
+				// reject, and stop forwarding. Outputs continue to flow.
+				_ = caller.CloseInput()
+			}
+			// Inner terminal: if a retry follows, the value is in the
+			// replay log; the output loop owns reporting.
+			return true
+		}
+		return false
+	}
+
+	for _, v := range replay {
+		if writeInner(v) {
+			return
+		}
+	}
+
+	for {
+		// Read from the caller's binding-side buffer. attemptCtx cancellation
+		// unparks WITHOUT consuming, so no input is lost across a retry swap.
+		v, err := caller.ReadInput(attemptCtx)
+		if err == io.EOF {
+			_ = inner.Close()
+			return
+		}
+		if err != nil {
+			return // attempt retired, or caller terminal (output loop reports)
+		}
+
+		if binding.InputTransform != nil {
+			transformed, terr := applyTransformRef(e.TransformEvaluator, iface.Transforms, binding.InputTransform, v)
+			if terr != nil {
+				inner.Cancel()
+				caller.FireError(&InvocationError{
+					Code:    ErrCodeTransformError,
+					Message: fmt.Sprintf("openbindings: input transform failed for %q: %v", bindingKey, terr),
+				})
+				return
+			}
+			v = transformed
+		}
+
+		record(v)
+		if writeInner(v) {
+			return
+		}
+	}
+}
+
+// runOutputs consumes one binding attempt's outputs, forwarding them
+// (transformed, T-08-validated) to the caller. Returns a terminal error to
+// surface, or retry details for a resolvable CONTEXT_REQUIRED challenge.
+func (e *OperationInvoker) runOutputs(
+	innerCtx context.Context,
+	caller *InvocationImpl[any, any],
+	inner Invocation[any, any],
+	binding *BindingEntry,
+	bindingKey string,
+	iface *Interface,
+	compiledOutput *jsonschema.Schema,
+	closeRetryWindow func(),
+	forwardHeader func(Invocation[any, any]),
+	retryEligible func() bool,
+) (surface *InvocationError, retry *ContextRequiredDetails) {
+	out := inner.Outputs()
+	for {
+		v, err := out.Read(innerCtx)
+		if err == io.EOF {
+			return nil, nil // clean end
+		}
+		if err != nil {
+			ie := AsInvocationError(err)
+			if details := ContextRequiredFrom(ie); details != nil && retryEligible() && e.ContextResolver != nil {
+				return nil, details
+			}
+			return ie, nil
+		}
+
+		closeRetryWindow()
+
+		data := v
+		if binding.OutputTransform != nil {
+			transformed, terr := applyTransformRef(e.TransformEvaluator, iface.Transforms, binding.OutputTransform, data)
+			if terr != nil {
+				inner.Cancel()
+				return &InvocationError{
+					Code:    ErrCodeTransformError,
+					Message: fmt.Sprintf("openbindings: output transform failed for %q: %v", bindingKey, terr),
+				}, nil
+			}
+			data = transformed
+		}
+
+		// OBI-T-08: an invalid output is not emitted; the invocation
+		// terminates. Per-item for streaming bindings.
+		if compiledOutput != nil {
+			if verr := compiledOutput.Validate(data); verr != nil {
+				inner.Cancel()
+				lines := splitSchemaError(verr)
+				return &InvocationError{
+					Code:    ErrCodeValidationFailed,
+					Message: fmt.Sprintf("openbindings: output validation failed for %q: %s", bindingKey, strings.Join(lines, "; ")),
+					Details: ValidationFailureDetails{Failures: collectValidationFailures(verr)},
+				}, nil
+			}
+		}
+
+		forwardHeader(inner)
+		if err := caller.EmitOutput(data); err != nil {
+			// Caller-side terminal (cancel / abandoned stream): tear down
+			// the binding and stop. Nothing to report — the caller handle
+			// is already terminal.
+			inner.Cancel()
+			return nil, nil
+		}
+	}
+}
+
+func (e *OperationInvoker) resolveContext(ctx context.Context, details *ContextRequiredDetails) map[string]any {
+	if e.ContextResolver == nil {
+		return nil
+	}
+	resolved, err := e.ContextResolver(ctx, details)
+	if err != nil || len(resolved) == 0 {
+		return nil
+	}
+	return resolved
+}
+
+// makeInputValidator builds the OBI-T-07 write-validation hook for an
+// operation, compiling lazily on the first write (concurrency-safe).
+func makeInputValidator(op *Operation, iface *Interface, operationName string) func(any) *InvocationError {
+	if op.Input == nil {
+		return nil
+	}
+	var (
+		once         sync.Once
+		compiled     *jsonschema.Schema
+		compileError *InvocationError
+	)
+	return func(input any) *InvocationError {
+		once.Do(func() {
+			defs := buildSchemaDefs(iface.Schemas)
+			c, err := compileExampleSchema(op.Input, defs)
+			if err != nil {
+				compileError = &InvocationError{
+					Code:    ErrCodeValidationFailed,
+					Message: fmt.Sprintf("openbindings: input schema compilation failed for %q: %v", operationName, err),
+				}
+				return
+			}
+			compiled = c
+		})
+		if compileError != nil {
+			return compileError
+		}
+		if verr := compiled.Validate(input); verr != nil {
+			lines := splitSchemaError(verr)
+			return &InvocationError{
+				Code:    ErrCodeValidationFailed,
+				Message: fmt.Sprintf("openbindings: input validation failed for %q: %s", operationName, strings.Join(lines, "; ")),
+				Details: ValidationFailureDetails{Failures: collectValidationFailures(verr)},
+			}
+		}
+		return nil
+	}
+}
+
+// asIE unwraps err into *InvocationError when it is one (exact type; the
+// code is load-bearing).
+func asIE(err error, target **InvocationError) bool {
+	ie, ok := err.(*InvocationError) //nolint:errorlint
+	if ok {
+		*target = ie
+	}
+	return ok
+}
+
+// wireError converts wiring errors raised mid-run into terminal invocation errors.
+func wireError(err error) *InvocationError {
+	if ie, ok := err.(*InvocationError); ok { //nolint:errorlint
+		return ie
+	}
+	if strings.Contains(err.Error(), ErrNoInvoker.Error()) {
+		return &InvocationError{Code: ErrCodeBindingNotFound, Message: err.Error()}
+	}
+	return AsInvocationError(err)
 }
 
 // DefaultBindingSelector picks the best binding for an operation. Non-deprecated

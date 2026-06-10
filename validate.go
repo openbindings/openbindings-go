@@ -28,7 +28,7 @@ func WithRejectUnknownTypedFields() ValidateOption {
 // validation) is a separate concern handled by a JSON Schema validator
 // against openbindings.schema.json.
 //
-// Validate unconditionally enforces OBI-D-16 (openbindings field must
+// Validate unconditionally enforces OBI-D-13 (openbindings field must
 // be a valid SemVer 2.0.0 string) and OBI-T-04 (refuse to load when the
 // document's major version is higher than this SDK's MaxTestedVersion, or --
 // while MaxTestedVersion is pre-1.0 -- when its minor is higher). Versions
@@ -47,12 +47,12 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 
 	var errs []string
 
-	// OBI-D-16: openbindings field MUST be a valid SemVer 2.0.0 string.
+	// OBI-D-13: openbindings field MUST be a valid SemVer 2.0.0 string.
 	// OBI-T-04: refuse higher major (or pre-1.0 higher minor) than MaxTested.
 	if strings.TrimSpace(i.OpenBindings) == "" {
-		errs = append(errs, "openbindings: required (OBI-D-16)")
+		errs = append(errs, "openbindings: required (OBI-D-13)")
 	} else if !IsValidSemver(i.OpenBindings) {
-		errs = append(errs, fmt.Sprintf("openbindings: %q is not a valid SemVer 2.0.0 string (OBI-D-16)", i.OpenBindings))
+		errs = append(errs, fmt.Sprintf("openbindings: %q is not a valid SemVer 2.0.0 string (OBI-D-13)", i.OpenBindings))
 	} else if higher, err := IsHigherMajorOrPre1MinorThanMaxTested(i.OpenBindings); err != nil {
 		errs = append(errs, fmt.Sprintf("openbindings: %v (OBI-T-04)", err))
 	} else if higher {
@@ -196,16 +196,6 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		validateInlineTransform(&errs, fmt.Sprintf("transforms[%q]", k), tr)
 	}
 
-	// OBI-D-04: security keys must match the identifier pattern.
-	secKeys := make([]string, 0, len(i.Security))
-	for k := range i.Security {
-		secKeys = append(secKeys, k)
-	}
-	sort.Strings(secKeys)
-	for _, k := range secKeys {
-		validateIdent(&errs, "security key", k)
-	}
-
 	// Validate bindings.
 	bndKeys := make([]string, 0, len(i.Bindings))
 	for k := range i.Bindings {
@@ -227,13 +217,6 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 			errs = append(errs, fmt.Sprintf("bindings[%q].source: required", k))
 		} else if _, ok := i.Sources[b.Source]; !ok {
 			errs = append(errs, fmt.Sprintf("bindings[%q].source: references unknown source %q (OBI-D-10)", k, b.Source))
-		}
-
-		// OBI-D-11: bindings[*].security must reference an existing security entry.
-		if strings.TrimSpace(b.Security) != "" {
-			if _, ok := i.Security[b.Security]; !ok {
-				errs = append(errs, fmt.Sprintf("bindings[%q].security: references unknown security %q (OBI-D-11)", k, b.Security))
-			}
 		}
 
 		// Validate transform references.

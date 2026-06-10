@@ -103,12 +103,28 @@ func (c *combinedInvoker) Formats() []FormatInfo {
 	return cp
 }
 
-func (c *combinedInvoker) InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error) {
-	invoker := c.findInvoker(in.Source.Format)
+func (c *combinedInvoker) InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any] {
+	invoker := c.findInvoker(args.Source.Format)
 	if invoker == nil {
-		return nil, fmt.Errorf("%w: %s", ErrNoInvoker, in.Source.Format)
+		return NewErroredInvocation[any, any](&InvocationError{
+			Code:    ErrCodeBindingNotFound,
+			Message: fmt.Sprintf("%v: %s", ErrNoInvoker, args.Source.Format),
+		})
 	}
-	return invoker.InvokeBinding(ctx, in)
+	return invoker.InvokeBinding(ctx, args)
+}
+
+// prepareBinding routes the side-effect-free preflight to the matching inner
+// invoker. An invoker without BindingPreparer simply reports no requirement.
+func (c *combinedInvoker) prepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+	invoker := c.findInvoker(args.Source.Format)
+	if invoker == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNoInvoker, args.Source.Format)
+	}
+	if p, ok := invoker.(BindingPreparer); ok {
+		return p.PrepareBinding(ctx, args)
+	}
+	return nil, nil
 }
 
 func (c *combinedInvoker) findInvoker(sourceFormat string) BindingInvoker {

@@ -5,14 +5,31 @@ import "context"
 // BindingInvoker invokes bindings against format-specific sources.
 // Implementations handle a specific binding format (e.g., OpenAPI, gRPC, MCP).
 //
-// InvokeBinding returns a channel of InvocationOutput. Unary operations send a
-// single event and close the channel. Streaming operations send multiple events.
-// Callers MUST drain the channel to avoid goroutine leaks.
+// InvokeBinding returns the Invocation handle synchronously; creation is
+// inert (no I/O during construction). The binding's work is scheduled on its
+// own goroutine and MUST raise CONTEXT_REQUIRED (and any other pre-dispatch
+// failure) before any observable side effect. ctx is the invocation's
+// lifetime: its cancellation converges with the handle's Cancel().
 //
-// A concrete invoker may also implement InterfaceCreator; check via type assertion.
+// Wiring failures knowable synchronously (e.g. an unloadable ref) surface as
+// an already-errored handle, never as a panic.
+//
+// A concrete invoker may also implement InterfaceCreator, SourceInspector,
+// or BindingPreparer; check via type assertion.
 type BindingInvoker interface {
 	Formats() []FormatInfo
-	InvokeBinding(ctx context.Context, in *BindingInvocationInput) (<-chan InvocationOutput, error)
+	InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any]
+}
+
+// BindingPreparer is the optional side-effect-free preflight capability (the
+// prepareBinding operation of the openbindings.binding-invoker role): it
+// reports the context the binding would require for this invocation, or nil
+// when the binding can proceed. Lets the operation layer resolve context
+// BEFORE the caller streams input, collapsing knowable-upfront challenges
+// into the clean no-input-consumed case. Implementations MUST NOT perform
+// network I/O or any other side effect.
+type BindingPreparer interface {
+	PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error)
 }
 
 // InterfaceCreator creates OpenBindings interfaces from format-specific sources.

@@ -1,0 +1,681 @@
+package openbindings
+
+// Phase-6 acceptance: the conformance test matrix for the reference
+// InvocationImpl and the Single terminal (operation-invoker-design.md),
+// mirroring the TS SDK's invocation.test.ts. Run with -race.
+// Cardinality tags: U unary, SS server-streaming, CS client-streaming,
+// BD bidi, NI no-input.
+
+import (
+	"context"
+	"errors"
+	"io"
+	"sync"
+	"testing"
+	"time"
+)
+
+func bg() context.Context { return context.Background() }
+
+func shortCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func codeOf(t *testing.T, err error) string {
+	t.Helper()
+	var ie *InvocationError
+	if !errors.As(err, &ie) {
+		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
+	}
+	return ie.Code
+}
+
+func collectStream[O any](t *testing.T, out OutputStream[O]) ([]O, error) {
+	t.Helper()
+	var vals []O
+	for {
+		v, err := out.Read(shortCtx(t))
+		if err == io.EOF {
+			return vals, nil
+		}
+		if err != nil {
+			return vals, err
+		}
+		vals = append(vals, v)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle & ordering
+// ---------------------------------------------------------------------------
+
+func TestDrainBeforeTerminal(t *testing.T) { // SS
+	inv := NewInvocationImpl[any, int](bg())
+	if err := inv.EmitOutput(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := inv.EmitOutput(2); err != nil {
+		t.Fatal(err)
+	}
+	inv.FireError(&InvocationError{Code: ErrCodeStreamError, Message: "boom"})
+
+	vals, err := collectStream(t, inv.Outputs())
+	if len(vals) != 2 || vals[0] != 1 || vals[1] != 2 {
+		t.Fatalf("expected [1 2] before terminal, got %v", vals)
+	}
+	if codeOf(t, err) != ErrCodeStreamError {
+		t.Fatalf("expected ERR_STREAM_ERROR after drain, got %v", err)
+	}
+}
+
+func TestQueuedBeforeAcquire(t *testing.T) { // U, NI
+	inv := NewInvocationImpl[any, string](bg())
+	if err := inv.EmitOutput("early"); err != nil {
+		t.Fatal(err)
+	}
+	inv.CloseOutput()
+
+	vals, err := collectStream(t, inv.Outputs())
+	if err != nil || len(vals) != 1 || vals[0] != "early" {
+		t.Fatalf("expected [early], got %v err=%v", vals, err)
+	}
+}
+
+func TestTerminalStickyAndSingle(t *testing.T) {
+	inv := NewInvocationImpl[any, any](bg())
+	inv.CloseOutput()
+	inv.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "late"}) // no-op
+	inv.Cancel()                                                          // no-op
+	if _, err := collectStream(t, inv.Outputs()); err != nil {
+		t.Fatalf("normal close must win: %v", err)
+	}
+
+	inv2 := NewInvocationImpl[any, any](bg())
+	inv2.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "first"})
+	inv2.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "second"}) // no-op
+	inv2.CloseOutput()                                                        // no-op
+	_, err := collectStream(t, inv2.Outputs())
+	if err == nil || err.Error() != "first" {
+		t.Fatalf("first terminal must stick, got %v", err)
+	}
+}
+
+func TestCancelDoesNotOverwriteRealTerminal(t *testing.T) {
+	inv := NewInvocationImpl[any, any](bg())
+	real := &InvocationError{Code: ErrCodeExecutionFailed, Message: "real failure"}
+	inv.FireError(real)
+	inv.Cancel()
+	_, err := collectStream(t, inv.Outputs())
+	if codeOf(t, err) != ErrCodeExecutionFailed {
+		t.Fatalf("cancel overwrote real terminal: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Single-consumer (acquire-once)
+// ---------------------------------------------------------------------------
+
+func TestSecondOutputsAcquisitionPanics(t *testing.T) {
+	inv := NewInvocationImpl[any, int](bg())
+	_ = inv.Outputs()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on second Outputs()")
+		}
+	}()
+	_ = inv.Outputs()
+}
+
+func TestConcurrentInputReadersPanic(t *testing.T) { // BD
+	inv := NewInvocationImpl[int, any](bg())
+	ready := make(chan struct{})
+	go func() {
+		close(ready)
+		_, _ = inv.ReadInput(bg()) // parks (no input)
+	}()
+	<-ready
+	time.Sleep(20 * time.Millisecond) // let the first reader park
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on concurrent ReadInput")
+		}
+		_ = inv.Close() // unpark the goroutine reader
+	}()
+	_, _ = inv.ReadInput(bg())
+}
+
+// ---------------------------------------------------------------------------
+// Single
+// ---------------------------------------------------------------------------
+
+func TestSingleReturnsTheOneOutput(t *testing.T) { // U
+	inv := NewInvocationImpl[any, string](bg())
+	_ = inv.EmitOutput("only")
+	inv.CloseOutput()
+	v, err := Single(shortCtx(t), inv.Outputs())
+	if err != nil || v != "only" {
+		t.Fatalf("got %q err=%v", v, err)
+	}
+}
+
+func TestSingleErrorsOnZero(t *testing.T) {
+	inv := NewInvocationImpl[any, string](bg())
+	inv.CloseOutput()
+	_, err := Single(shortCtx(t), inv.Outputs())
+	if codeOf(t, err) != ErrCodeExpectedSingle {
+		t.Fatalf("expected ERR_EXPECTED_SINGLE, got %v", err)
+	}
+}
+
+func TestSingleShortCircuitsOnSecond(t *testing.T) { // SS — the critical misuse case
+	inv := NewInvocationImpl[any, int](bg())
+	_ = inv.EmitOutput(1)
+	_ = inv.EmitOutput(2)
+	_, err := Single(shortCtx(t), inv.Outputs())
+	if codeOf(t, err) != ErrCodeExpectedSingle {
+		t.Fatalf("expected ERR_EXPECTED_SINGLE, got %v", err)
+	}
+	// Abandoning cancelled the invocation: the binding's Done fired and the
+	// terminal is ERR_CANCELLED.
+	select {
+	case <-inv.Done():
+	default:
+		t.Fatal("short-circuit must cancel the invocation")
+	}
+	if err := inv.EmitOutput(3); codeOf(t, err) != ErrCodeCancelled {
+		t.Fatalf("expected ERR_CANCELLED for the binding, got %v", err)
+	}
+}
+
+func TestSingleSurfacesTerminalAfterFirst(t *testing.T) { // SS
+	inv := NewInvocationImpl[any, int](bg())
+	_ = inv.EmitOutput(1)
+	inv.FireError(&InvocationError{Code: ErrCodeStreamError, Message: "mid-stream death"})
+	_, err := Single(shortCtx(t), inv.Outputs())
+	if codeOf(t, err) != ErrCodeStreamError {
+		t.Fatalf("expected the real terminal, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Backpressure (bounded-block)
+// ---------------------------------------------------------------------------
+
+func TestEmitParksAtCapacityAndWakesOnDrain(t *testing.T) { // SS
+	inv := NewInvocationImpl[any, int](bg())
+	for i := 0; i < outputBufferCapacity; i++ {
+		if err := inv.EmitOutput(i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parked := make(chan error, 1)
+	go func() { parked <- inv.EmitOutput(99) }()
+	select {
+	case err := <-parked:
+		t.Fatalf("emit must park at capacity, returned %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	out := inv.Outputs()
+	v, err := out.Read(shortCtx(t))
+	if err != nil || v != 0 {
+		t.Fatalf("expected 0, got %v err=%v", v, err)
+	}
+	select {
+	case err := <-parked:
+		if err != nil {
+			t.Fatalf("parked emit must succeed after drain: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parked emit not admitted after drain")
+	}
+	inv.CloseOutput()
+	rest, err := collectStream(t, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exact order: remaining buffered values then the parked value.
+	expected := make([]int, 0, outputBufferCapacity)
+	for i := 1; i < outputBufferCapacity; i++ {
+		expected = append(expected, i)
+	}
+	expected = append(expected, 99)
+	if len(rest) != len(expected) {
+		t.Fatalf("expected %v, got %v", expected, rest)
+	}
+	for i := range expected {
+		if rest[i] != expected[i] {
+			t.Fatalf("order: expected %v, got %v", expected, rest)
+		}
+	}
+}
+
+func TestParkedEmitRejectsOnTerminal(t *testing.T) { // SS, BD
+	inv := NewInvocationImpl[any, int](bg())
+	for i := 0; i < outputBufferCapacity; i++ {
+		_ = inv.EmitOutput(i)
+	}
+	parked := make(chan error, 1)
+	go func() { parked <- inv.EmitOutput(99) }()
+	time.Sleep(20 * time.Millisecond)
+	inv.FireError(&InvocationError{Code: ErrCodeStreamError, Message: "died while parked"})
+	select {
+	case err := <-parked:
+		if codeOf(t, err) != ErrCodeStreamError {
+			t.Fatalf("parked emit must reject with the terminal, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parked emit stranded after terminal")
+	}
+}
+
+func TestWriteParksAtInputCapacityAndWakesOnRead(t *testing.T) { // CS
+	inv := NewInvocationImpl[int, any](bg())
+	for i := 0; i < inputBufferCapacity; i++ {
+		if err := inv.Write(bg(), i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parked := make(chan error, 1)
+	go func() { parked <- inv.Write(bg(), 99) }()
+	select {
+	case err := <-parked:
+		t.Fatalf("write must park at capacity, returned %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if v, err := inv.ReadInput(shortCtx(t)); err != nil || v != 0 {
+		t.Fatalf("expected 0, got %v err=%v", v, err)
+	}
+	select {
+	case err := <-parked:
+		if err != nil {
+			t.Fatalf("parked write must succeed after read: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parked write not admitted after read")
+	}
+}
+
+func TestParkedWriteRejectsOnTerminal(t *testing.T) { // CS
+	inv := NewInvocationImpl[int, any](bg())
+	for i := 0; i < inputBufferCapacity; i++ {
+		_ = inv.Write(bg(), i)
+	}
+	parked := make(chan error, 1)
+	go func() { parked <- inv.Write(bg(), 99) }()
+	time.Sleep(20 * time.Millisecond)
+	inv.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "terminal while write parked"})
+	select {
+	case err := <-parked:
+		if codeOf(t, err) != ErrCodeRuntime {
+			t.Fatalf("parked write must reject with the terminal, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parked write stranded after terminal")
+	}
+}
+
+func TestSlowConsumerFlowControlsBinding(t *testing.T) { // SS end-to-end
+	inv := NewInvocationImpl[any, int](bg())
+	total := outputBufferCapacity + 5
+	var emitted int
+	var mu sync.Mutex
+	go func() {
+		for i := 0; i < total; i++ {
+			if err := inv.EmitOutput(i); err != nil {
+				return
+			}
+			mu.Lock()
+			emitted++
+			mu.Unlock()
+		}
+		inv.CloseOutput()
+	}()
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	ahead := emitted
+	mu.Unlock()
+	if ahead > outputBufferCapacity {
+		t.Fatalf("binding ran %d ahead of a %d-slot buffer", ahead, outputBufferCapacity)
+	}
+	vals, err := collectStream(t, inv.Outputs())
+	if err != nil || len(vals) != total {
+		t.Fatalf("expected %d values, got %d err=%v", total, len(vals), err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Input side
+// ---------------------------------------------------------------------------
+
+func TestCallerCloseEndsBindingReadCleanly(t *testing.T) { // CS
+	inv := NewInvocationImpl[string, any](bg())
+	if err := inv.Write(bg(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	done := make(chan error, 1)
+	go func() {
+		for {
+			v, err := inv.ReadInput(bg())
+			if err != nil {
+				done <- err
+				return
+			}
+			seen = append(seen, v)
+		}
+	}()
+	time.Sleep(20 * time.Millisecond)
+	if err := inv.Write(bg(), "b"); err != nil {
+		t.Fatal(err)
+	}
+	_ = inv.Close()
+	if err := <-done; err != io.EOF {
+		t.Fatalf("expected io.EOF on close, got %v", err)
+	}
+	if len(seen) != 2 || seen[0] != "a" || seen[1] != "b" {
+		t.Fatalf("expected [a b], got %v", seen)
+	}
+}
+
+func TestFireErrorMakesParkedReadThrow(t *testing.T) {
+	inv := NewInvocationImpl[string, any](bg())
+	done := make(chan error, 1)
+	go func() {
+		_, err := inv.ReadInput(bg())
+		done <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	inv.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "terminal"})
+	if err := <-done; codeOf(t, err) != ErrCodeRuntime {
+		t.Fatalf("parked read must surface the terminal, got %v", err)
+	}
+}
+
+func TestWriteAfterCloseRejectsNonTerminal(t *testing.T) {
+	inv := NewInvocationImpl[string, string](bg())
+	_ = inv.Close()
+	if err := inv.Write(bg(), "late"); codeOf(t, err) != ErrCodeInputClosed {
+		t.Fatalf("expected ERR_INPUT_CLOSED, got %v", err)
+	}
+	// Non-terminal: outputs still flow.
+	if err := inv.EmitOutput("still alive"); err != nil {
+		t.Fatal(err)
+	}
+	inv.CloseOutput()
+	vals, err := collectStream(t, inv.Outputs())
+	if err != nil || len(vals) != 1 || vals[0] != "still alive" {
+		t.Fatalf("invocation must continue after input close: %v err=%v", vals, err)
+	}
+}
+
+func TestBindingCloseInputFreesCaller(t *testing.T) { // NI, U
+	inv := NewInvocationImpl[string, string](bg())
+	_ = inv.CloseInput() // binding-side: no-input operation
+	if err := inv.Write(bg(), "x"); codeOf(t, err) != ErrCodeInputClosed {
+		t.Fatalf("expected ERR_INPUT_CLOSED, got %v", err)
+	}
+	_ = inv.EmitOutput("out")
+	inv.CloseOutput()
+	vals, err := collectStream(t, inv.Outputs())
+	if err != nil || len(vals) != 1 {
+		t.Fatalf("got %v err=%v", vals, err)
+	}
+}
+
+func TestWriteAfterTerminalReturnsTerminal(t *testing.T) {
+	inv := NewInvocationImpl[string, any](bg())
+	term := &InvocationError{Code: ErrCodeRuntime, Message: "done for"}
+	inv.FireError(term)
+	err := inv.Write(bg(), "x")
+	var ie *InvocationError
+	if !errors.As(err, &ie) || ie != term {
+		t.Fatalf("expected the terminal error itself, got %v", err)
+	}
+}
+
+func TestInputDrainsBufferedValueOnClose(t *testing.T) {
+	// Write then Close: the buffered value must surface before EOF.
+	inv := NewInvocationImpl[string, any](bg())
+	_ = inv.Write(bg(), "buffered")
+	_ = inv.Close()
+	v, err := inv.ReadInput(shortCtx(t))
+	if err != nil || v != "buffered" {
+		t.Fatalf("buffered input lost on close: %v err=%v", v, err)
+	}
+	if _, err := inv.ReadInput(shortCtx(t)); err != io.EOF {
+		t.Fatalf("expected EOF after drain, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OBI-T-07 validation hook
+// ---------------------------------------------------------------------------
+
+func TestValidateHookDualSignal(t *testing.T) {
+	t07 := &InvocationError{Code: ErrCodeValidationFailed, Message: "input validation failed"}
+	inv := NewInvocationImpl[int, any](bg())
+	inv.validateInput = func(v int) *InvocationError {
+		if v < 0 {
+			return t07
+		}
+		return nil
+	}
+	if err := inv.Write(bg(), 1); err != nil {
+		t.Fatal(err)
+	}
+	err := inv.Write(bg(), -1)
+	var ie *InvocationError
+	if !errors.As(err, &ie) || ie != t07 {
+		t.Fatalf("write must reject with the same T-07 error, got %v", err)
+	}
+	// Terminal: the binding's read surfaces the same error.
+	if _, rerr := inv.ReadInput(shortCtx(t)); codeOf(t, rerr) != ErrCodeValidationFailed {
+		t.Fatalf("expected terminal on binding side, got %v", rerr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cancellation & close
+// ---------------------------------------------------------------------------
+
+func TestCancelBeforeDriveTearsDownInertHandle(t *testing.T) {
+	inv := NewInvocationImpl[any, any](bg())
+	inv.Cancel()
+	select {
+	case <-inv.Done():
+	default:
+		t.Fatal("Done must fire on cancel")
+	}
+	_, err := collectStream(t, inv.Outputs())
+	if codeOf(t, err) != ErrCodeCancelled {
+		t.Fatalf("expected ERR_CANCELLED, got %v", err)
+	}
+}
+
+func TestUpstreamCtxConvergesWithCancel(t *testing.T) { // SS, BD
+	ctx, cancel := context.WithCancel(bg())
+	inv := NewInvocationImpl[any, int](ctx)
+	cancel()
+	out := inv.Outputs()
+	_, err := out.Read(shortCtx(t))
+	if codeOf(t, err) != ErrCodeCancelled {
+		t.Fatalf("expected ERR_CANCELLED via upstream ctx, got %v", err)
+	}
+}
+
+func TestPreCancelledCtxIsImmediatelyTerminal(t *testing.T) {
+	ctx, cancel := context.WithCancel(bg())
+	cancel()
+	inv := NewInvocationImpl[any, any](ctx)
+	select {
+	case <-inv.Done():
+	default:
+		t.Fatal("pre-cancelled ctx must yield a terminal handle")
+	}
+}
+
+func TestStopCancelsInvocation(t *testing.T) {
+	inv := NewInvocationImpl[any, int](bg())
+	_ = inv.EmitOutput(1)
+	out := inv.Outputs()
+	if _, err := out.Read(shortCtx(t)); err != nil {
+		t.Fatal(err)
+	}
+	out.Stop() // Go's explicit early-abandon (no for-await return() hook)
+	select {
+	case <-inv.Done():
+	default:
+		t.Fatal("Stop must cancel the invocation")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Metadata
+// ---------------------------------------------------------------------------
+
+func TestHeaderResolvesWithBindingMetadata(t *testing.T) { // SS, U
+	inv := NewInvocationImpl[any, string](bg())
+	if err := inv.SetHeader(Metadata{"content-type": {"application/json"}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = inv.EmitOutput("x")
+	md, err := inv.Header(shortCtx(t))
+	if err != nil || len(md["content-type"]) != 1 {
+		t.Fatalf("got %v err=%v", md, err)
+	}
+}
+
+func TestHeaderSettlesEmptyOnFirstOutput(t *testing.T) {
+	inv := NewInvocationImpl[any, string](bg())
+	_ = inv.EmitOutput("x")
+	md, err := inv.Header(shortCtx(t))
+	if err != nil || len(md) != 0 {
+		t.Fatalf("expected empty header, got %v err=%v", md, err)
+	}
+}
+
+func TestHeaderSettlesOnTerminal(t *testing.T) {
+	inv := NewInvocationImpl[any, any](bg())
+	inv.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "early death"})
+	md, err := inv.Header(shortCtx(t))
+	if err != nil || len(md) != 0 {
+		t.Fatalf("header must settle on terminal, got %v err=%v", md, err)
+	}
+}
+
+func TestTrailerValidOnlyAfterTermination(t *testing.T) {
+	inv := NewInvocationImpl[any, string](bg())
+	inv.SetTrailer(Metadata{"grpc-status": {"0"}})
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("Trailer before termination must panic")
+			}
+		}()
+		_ = inv.Trailer()
+	}()
+	inv.CloseOutput()
+	if md := inv.Trailer(); len(md["grpc-status"]) != 1 {
+		t.Fatalf("expected trailer after close, got %v", md)
+	}
+}
+
+func TestSetHeaderAfterFirstEmitErrors(t *testing.T) {
+	inv := NewInvocationImpl[any, string](bg())
+	_ = inv.EmitOutput("x")
+	if err := inv.SetHeader(Metadata{"late": {"true"}}); err == nil {
+		t.Fatal("late SetHeader must error")
+	}
+}
+
+func TestTrailerAfterSingleShortCircuit(t *testing.T) {
+	inv := NewInvocationImpl[any, int](bg())
+	_ = inv.SetHeader(Metadata{"x-stream": {"yes"}})
+	_ = inv.EmitOutput(1)
+	_ = inv.EmitOutput(2)
+	if _, err := Single(shortCtx(t), inv.Outputs()); codeOf(t, err) != ErrCodeExpectedSingle {
+		t.Fatalf("expected short-circuit, got %v", err)
+	}
+	md, _ := inv.Header(shortCtx(t))
+	if len(md["x-stream"]) != 1 {
+		t.Fatalf("header set before output must remain valid, got %v", md)
+	}
+	if tr := inv.Trailer(); len(tr) != 0 {
+		t.Fatalf("trailer of a cancelled call should be empty, got %v", tr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bidi & drive
+// ---------------------------------------------------------------------------
+
+func TestBidiSeparateGoroutineDrive(t *testing.T) { // BD
+	inv := NewInvocationImpl[int, int](bg())
+	const n = 25 // far beyond both buffer bounds
+
+	// The "binding": echo loop.
+	go func() {
+		for {
+			v, err := inv.ReadInput(bg())
+			if err != nil {
+				inv.CloseOutput()
+				return
+			}
+			if err := inv.EmitOutput(v * 2); err != nil {
+				return
+			}
+		}
+	}()
+
+	// The caller: pump and drain on separate goroutines (the blessed pattern).
+	go func() {
+		for i := 0; i < n; i++ {
+			if err := inv.Write(bg(), i); err != nil {
+				return
+			}
+		}
+		_ = inv.Close()
+	}()
+
+	vals, err := collectStream(t, inv.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vals) != n {
+		t.Fatalf("expected %d outputs, got %d", n, len(vals))
+	}
+	for i, v := range vals {
+		if v != i*2 {
+			t.Fatalf("order violated at %d: %d", i, v)
+		}
+	}
+}
+
+func TestTypedInvocationMismatch(t *testing.T) {
+	inv := NewInvocationImpl[any, any](bg())
+	typed := NewTypedInvocation[string, string](inv)
+	_ = inv.EmitOutput(42) // wrong type for O=string
+	inv.CloseOutput()
+	_, err := typed.Outputs().Read(shortCtx(t))
+	if codeOf(t, err) != "ERR_TYPE_MISMATCH" {
+		t.Fatalf("expected ERR_TYPE_MISMATCH, got %v", err)
+	}
+}
+
+func TestContextRequiredIsJustATerminalCode(t *testing.T) {
+	inv := NewInvocationImpl[any, any](bg())
+	details := &ContextRequiredDetails{
+		Key:          "api.example.com",
+		Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.bearer"}}}},
+	}
+	inv.FireError(NewContextRequiredError("bearer token required", details))
+	_, err := collectStream(t, inv.Outputs())
+	var ie *InvocationError
+	if !errors.As(err, &ie) || ContextRequiredFrom(ie) == nil {
+		t.Fatalf("expected CONTEXT_REQUIRED with details, got %v", err)
+	}
+}

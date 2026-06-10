@@ -124,7 +124,7 @@ func CanonicalizeLocation(uri string) (string, error) {
 
 // ResolveRef resolves a relative URI reference against a base URI per
 // RFC 3986 §5 Reference Resolution. This is the spec §12 operation: it
-// converts a roles[*] value, sources[*].location value, or schema $ref
+// converts a sources[*].location value or a schema $ref
 // into a fully-qualified URI suitable for fetching or comparison.
 //
 // Resolution is directory-relative: the merge step strips everything

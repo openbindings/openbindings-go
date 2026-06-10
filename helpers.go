@@ -3,7 +3,6 @@ package openbindings
 import (
 	"encoding/json"
 	"strings"
-	"time"
 )
 
 // ContentToBytes converts a content value (string, []byte, or JSON-marshalable) to raw bytes.
@@ -15,18 +14,6 @@ func ContentToBytes(content any) ([]byte, error) {
 		return c, nil
 	default:
 		return json.Marshal(c)
-	}
-}
-
-// FailedOutput builds an InvocationOutput for a pre-request failure.
-func FailedOutput(start time.Time, code, message string) *InvocationOutput {
-	return &InvocationOutput{
-		Status:     1,
-		DurationMs: time.Since(start).Milliseconds(),
-		Error: &InvocationError{
-			Code:    code,
-			Message: message,
-		},
 	}
 }
 

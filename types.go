@@ -42,12 +42,12 @@ var (
 	)
 	knownBindingEntrySet = knownSet(
 		"operation", "source", "ref", "priority", "description", "deprecated",
-		"security", "inputTransform", "outputTransform",
+		"inputTransform", "outputTransform",
 	)
 	knownInterfaceSet = knownSet(
 		"openbindings", "name", "version", "description",
 		"schemas", "operations",
-		"sources", "bindings", "security", "transforms",
+		"sources", "bindings", "transforms",
 	)
 )
 
@@ -102,7 +102,7 @@ type Operation struct {
 	Tags        []string `json:"tags,omitempty"`
 	// Aliases are additional names for this operation, equal in standing to its
 	// key. The key plus aliases form one flat, document-unique namespace; every
-	// name resolves to this operation (see ResolveOperation / OBI-T-13).
+	// name resolves to this operation (see ResolveOperation / OBI-T-12).
 	Aliases []string `json:"aliases,omitempty"`
 
 	Idempotent *bool      `json:"idempotent,omitempty"`
@@ -302,7 +302,6 @@ type BindingEntry struct {
 	Priority    *float64 `json:"priority,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Deprecated  bool     `json:"deprecated,omitempty"`
-	Security    string   `json:"security,omitempty"`
 
 	// InputTransform transforms operation input to binding input structure.
 	InputTransform *TransformOrRef `json:"inputTransform,omitempty"`
@@ -319,7 +318,6 @@ type bindingEntryWire struct {
 	Priority    *float64 `json:"priority,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Deprecated  bool     `json:"deprecated,omitempty"`
-	Security    string   `json:"security,omitempty"`
 
 	InputTransform  *TransformOrRef `json:"inputTransform,omitempty"`
 	OutputTransform *TransformOrRef `json:"outputTransform,omitempty"`
@@ -343,7 +341,6 @@ func (be *BindingEntry) UnmarshalJSON(b []byte) error {
 		Priority:        w.Priority,
 		Description:     w.Description,
 		Deprecated:      w.Deprecated,
-		Security:        w.Security,
 		InputTransform:  w.InputTransform,
 		OutputTransform: w.OutputTransform,
 	}
@@ -360,7 +357,6 @@ func (be BindingEntry) MarshalJSON() ([]byte, error) {
 		Priority:        be.Priority,
 		Description:     be.Description,
 		Deprecated:      be.Deprecated,
-		Security:        be.Security,
 		InputTransform:  be.InputTransform,
 		OutputTransform: be.OutputTransform,
 	}
@@ -380,9 +376,6 @@ type Interface struct {
 	Sources  map[string]Source       `json:"sources,omitempty"`
 	Bindings map[string]BindingEntry `json:"bindings,omitempty"`
 
-	// Security contains named security entries referenced by bindings.
-	Security map[string][]SecurityMethod `json:"security,omitempty"`
-
 	// Transforms contains named transforms that can be referenced by bindings.
 	Transforms map[string]Transform `json:"transforms,omitempty"`
 
@@ -400,8 +393,6 @@ type interfaceWire struct {
 
 	Sources  map[string]Source       `json:"sources,omitempty"`
 	Bindings map[string]BindingEntry `json:"bindings,omitempty"`
-
-	Security map[string][]SecurityMethod `json:"security,omitempty"`
 
 	Transforms map[string]Transform `json:"transforms,omitempty"`
 }
@@ -426,7 +417,6 @@ func (i *Interface) UnmarshalJSON(b []byte) error {
 		Operations:   w.Operations,
 		Sources:      w.Sources,
 		Bindings:     w.Bindings,
-		Security:     w.Security,
 		Transforms:   w.Transforms,
 	}
 
@@ -444,7 +434,6 @@ func (i Interface) MarshalJSON() ([]byte, error) {
 		Operations:   i.Operations,
 		Sources:      i.Sources,
 		Bindings:     i.Bindings,
-		Security:     i.Security,
 		Transforms:   i.Transforms,
 	}
 	return marshalLossless(i.Unknown, i.Extensions, w)

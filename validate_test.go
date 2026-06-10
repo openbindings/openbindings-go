@@ -85,8 +85,8 @@ func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_16(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for invalid semver")
 	}
-	if !containsProblem(err, `openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-16)`) {
-		t.Fatalf("expected OBI-D-16 problem, got %v", err)
+	if !containsProblem(err, `openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-13)`) {
+		t.Fatalf("expected OBI-D-13 problem, got %v", err)
 	}
 }
 
@@ -229,7 +229,7 @@ func TestInterfaceValidate_OpenBindingsVersionErrorMessageIsStable(t *testing.T)
 	if err.Error() == "" || err.Error() == "invalid interface" {
 		t.Fatalf("expected detailed error, got %q", err.Error())
 	}
-	if want := `openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-16)`; !containsProblem(err, want) {
+	if want := `openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-13)`; !containsProblem(err, want) {
 		t.Fatalf("expected problem %q, got %q", want, err.Error())
 	}
 }
@@ -399,57 +399,6 @@ func TestInterfaceValidate_InlineTransformMustBeNonEmpty(t *testing.T) {
 	}
 	if !containsProblem(err, `bindings["op.api"].outputTransform: must be a non-empty JSONata expression`) {
 		t.Fatalf("expected empty-inline-transform error, got %v", err)
-	}
-}
-
-func TestInterfaceValidate_SecurityRefMustExist(t *testing.T) {
-	i := Interface{
-		OpenBindings: "0.1.0",
-		Operations: map[string]Operation{
-			"op": {},
-		},
-		Sources: map[string]Source{
-			"api": {Format: "openapi@3.1", Location: "./api.json"},
-		},
-		Bindings: map[string]BindingEntry{
-			"op.api": {
-				Operation: "op",
-				Source:    "api",
-				Security:  "nonexistent",
-			},
-		},
-	}
-	err := i.Validate()
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if !containsProblem(err, `bindings["op.api"].security: references unknown security "nonexistent" (OBI-D-11)`) {
-		t.Fatalf("expected security ref error, got %v", err)
-	}
-}
-
-func TestInterfaceValidate_SecurityRefValid(t *testing.T) {
-	i := Interface{
-		OpenBindings: "0.1.0",
-		Operations: map[string]Operation{
-			"op": {},
-		},
-		Sources: map[string]Source{
-			"api": {Format: "openapi@3.1", Location: "./api.json"},
-		},
-		Security: map[string][]SecurityMethod{
-			"default": {{Type: "bearer"}},
-		},
-		Bindings: map[string]BindingEntry{
-			"op.api": {
-				Operation: "op",
-				Source:    "api",
-				Security:  "default",
-			},
-		},
-	}
-	if err := i.Validate(); err != nil {
-		t.Fatalf("expected no error, got %v", err)
 	}
 }
 

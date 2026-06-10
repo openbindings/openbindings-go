@@ -5,28 +5,27 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
-// HTTPErrorOutput builds an InvocationOutput from an HTTP error response.
-// status is typically resp.Status from net/http (e.g. "401 Unauthorized"), not a bare reason phrase.
-func HTTPErrorOutput(start time.Time, statusCode int, status string) *InvocationOutput {
+// HTTPError builds the terminal *InvocationError for an HTTP error response,
+// carrying the status in Details. status is typically resp.Status from
+// net/http (e.g. "401 Unauthorized"), not a bare reason phrase. Format
+// invokers fire it via BindingHandle.FireError.
+func HTTPError(statusCode int, status string) *InvocationError {
 	reason := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(status), strconv.Itoa(statusCode)))
 	if reason == "" {
 		reason = http.StatusText(statusCode)
 	}
-	return &InvocationOutput{
-		Status:     statusCode,
-		DurationMs: time.Since(start).Milliseconds(),
-		Error: &InvocationError{
-			Code:    httpErrorCode(statusCode),
-			Message: fmt.Sprintf("HTTP %d %s", statusCode, reason),
-		},
+	return &InvocationError{
+		Code:    HTTPErrorCode(statusCode),
+		Message: fmt.Sprintf("HTTP %d %s", statusCode, reason),
+		Details: map[string]any{"status": statusCode},
 	}
 }
 
-// httpErrorCode maps an HTTP status code to a standard error code constant.
-func httpErrorCode(statusCode int) string {
+// HTTPErrorCode maps an HTTP status code to a standard error code constant.
+// Shared utility for format invokers that handle HTTP responses.
+func HTTPErrorCode(statusCode int) string {
 	switch statusCode {
 	case 401:
 		return ErrCodeAuthRequired

@@ -3,7 +3,7 @@ package openbindings
 import "sort"
 
 // ResolveOperation resolves an operation by name against an interface, per
-// OBI-T-13.
+// OBI-T-12.
 //
 // An operation's identifiers are its key plus its Aliases; together they form
 // one flat namespace in which key and alias matches are equally authoritative.

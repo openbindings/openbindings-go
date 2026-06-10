@@ -2,7 +2,6 @@ package openbindings
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 )
 
@@ -44,9 +43,12 @@ type FileSelectOptions struct {
 	Extensions []string
 }
 
-// PlatformCallbacks are functions injected into invokers so they can
-// interact with the runtime environment without knowing what platform
-// they're running on. Each field is nil when the capability is unavailable.
+// PlatformCallbacks are functions an application wires into its own
+// ContextResolver so interactive context resolution (prompts, browser
+// redirects, file pickers) can run without the resolver knowing what
+// platform it's on. Each field is nil when the capability is unavailable.
+// Bindings never see these: a binding depends on context data, never on the
+// mechanism that produced it.
 type PlatformCallbacks struct {
 	BrowserRedirect func(ctx context.Context, url string) (*BrowserRedirectResult, error)
 	Prompt          func(ctx context.Context, message string, opts *PromptOptions) (string, error)
@@ -55,136 +57,53 @@ type PlatformCallbacks struct {
 }
 
 // ---------------------------------------------------------------------------
-// Invocation types
+// Invocation argument types
 // ---------------------------------------------------------------------------
 
-// BindingInvocationSource identifies the binding source for invocation.
-type BindingInvocationSource struct {
+// InvocationSource identifies the binding source for invocation.
+type InvocationSource struct {
 	Format   string `json:"format"`
 	Location string `json:"location,omitempty"`
 	Content  any    `json:"content,omitempty"`
 }
 
-// BindingInvocationInput is the input for invoking a binding against a
-// format-specific source. The OperationInvoker populates Context from the
-// ContextStore when available; Store and Callbacks let the invoker
-// persist updated context and invoke platform interactions during invocation.
-// Security is populated by the OperationInvoker from the OBI's security
-// section when the binding has a security reference. InputSchema is populated
-// from the operation's input schema when available, enabling format-specific
-// invokers to read schema metadata (e.g., const values) that inform how the
-// binding is invoked.
-type BindingInvocationInput struct {
-	Source      BindingInvocationSource `json:"source"`
-	Ref         string                  `json:"ref"`
-	Input       any                     `json:"input,omitempty"`
-	InputSchema JSONSchema              `json:"-"`
-	Context     map[string]any          `json:"context,omitempty"`
-	Store       ContextStore            `json:"-"`
-	Callbacks   *PlatformCallbacks      `json:"-"`
-	Security    []SecurityMethod        `json:"-"`
+// BindingInvocationArgs are the arguments for invoking a resolved binding
+// against a format-specific source. Input messages are NOT part of the args:
+// they flow through the returned Invocation handle's Write channel.
+//
+// Runtime prerequisites (credentials, configuration) travel in Context as
+// opaque well-known fields; a binding that needs context it wasn't given
+// terminates with CONTEXT_REQUIRED before any side effect, and resolution
+// happens above the binding (see OperationInvoker.ContextResolver).
+type BindingInvocationArgs struct {
+	Source InvocationSource `json:"source"`
+	// Ref is the format-specific pointer into the source artifact. Empty
+	// when the format doesn't use refs.
+	Ref string `json:"ref"`
+	// Binding is the selected binding entry. Populated by the operation
+	// invoker; optional for direct calls.
+	Binding *BindingEntry  `json:"-"`
+	Context map[string]any `json:"context,omitempty"`
 	// Interface is the containing OBI. Most invokers do not need this;
 	// it is used by invokers that invoke sub-operations (e.g., operation graphs).
 	Interface *Interface `json:"-"`
+	// InputSchema is the operation's input schema, populated by the
+	// operation invoker. Enables format-specific invokers to read schema
+	// metadata (e.g., const values).
+	InputSchema JSONSchema `json:"-"`
 }
 
-// OperationInvocationInput is the input for invoking an OBI operation.
-// The OperationInvoker resolves the binding internally.
-type OperationInvocationInput struct {
+// OperationInvocationArgs are the arguments for invoking an OBI operation.
+// The invoker resolves the operation name (OBI-T-12), selects a binding
+// (OBI-T-09), and returns an Invocation handle; input messages flow through
+// the handle.
+type OperationInvocationArgs struct {
 	Interface *Interface     `json:"interface"`
 	Operation string         `json:"operation"`
-	Input     any            `json:"input,omitempty"`
 	Context   map[string]any `json:"context,omitempty"`
-	// When set, bypass the binding selector and use this binding key directly.
+	// BindingKey, when set, bypasses the binding selector and uses this
+	// binding key directly.
 	BindingKey string `json:"bindingKey,omitempty"`
-}
-
-// SecurityMethod describes an authentication method available for a binding.
-// Per spec §6.6, only Type (required) and Description (optional) are spec-defined;
-// all other fields are open-ended and scheme-specific. Use Extra to read/write
-// scheme-specific fields (e.g., "authorizeUrl", "tokenUrl" for oauth2).
-type SecurityMethod struct {
-	Type        string         `json:"type"`
-	Description string         `json:"description,omitempty"`
-	Extra       map[string]any `json:"-"`
-}
-
-func (m SecurityMethod) MarshalJSON() ([]byte, error) {
-	out := make(map[string]any, 2+len(m.Extra))
-	for k, v := range m.Extra {
-		out[k] = v
-	}
-	out["type"] = m.Type
-	if m.Description != "" {
-		out["description"] = m.Description
-	}
-	return json.Marshal(out)
-}
-
-func (m *SecurityMethod) UnmarshalJSON(b []byte) error {
-	var raw map[string]any
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return err
-	}
-	if t, ok := raw["type"].(string); ok {
-		m.Type = t
-	}
-	if d, ok := raw["description"].(string); ok {
-		m.Description = d
-	}
-	delete(raw, "type")
-	delete(raw, "description")
-	if len(raw) > 0 {
-		m.Extra = raw
-	}
-	return nil
-}
-
-// ExtraString returns a string field from Extra, or "" if absent/wrong type.
-func (m SecurityMethod) ExtraString(key string) string {
-	if m.Extra == nil {
-		return ""
-	}
-	s, _ := m.Extra[key].(string)
-	return s
-}
-
-// ExtraStringSlice returns a string slice field from Extra, or nil if absent.
-// Handles both []string (in-memory construction) and []any (after JSON round-trip).
-func (m SecurityMethod) ExtraStringSlice(key string) []string {
-	if m.Extra == nil {
-		return nil
-	}
-	switch v := m.Extra[key].(type) {
-	case []string:
-		return v
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, elem := range v {
-			if s, ok := elem.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-// InvocationOutput is a single output produced by an operation invocation.
-// Unary invocations produce one InvocationOutput; streaming invocations
-// produce many over time. Each one may carry:
-//   - Output only — success.
-//   - Error only — failure prior to producing output (transport error, input
-//     validation, transform failure, schema compilation failure).
-//   - Output AND Error — OBI-T-08 output validation failed against the
-//     declared output schema. The data is still surfaced so callers may
-//     inspect or render it, while the error reports the schema mismatch.
-type InvocationOutput struct {
-	Output     any              `json:"output,omitempty"`
-	Error      *InvocationError `json:"error,omitempty"`
-	Status     int              `json:"status,omitempty"`     // HTTP status or exit code
-	DurationMs int64            `json:"durationMs,omitempty"` // invocation duration
 }
 
 // CreateSource describes a binding source for interface creation.
@@ -259,19 +178,8 @@ type BindableTarget struct {
 	Operation *Operation `json:"operation,omitempty"`
 }
 
-// SingleEventChannel wraps a single InvocationOutput as a closed, buffered
-// channel of InvocationOutput. Convenience for invokers that return a single
-// unary result.
-func SingleEventChannel(output *InvocationOutput) <-chan InvocationOutput {
-	ch := make(chan InvocationOutput, 1)
-	if output != nil {
-		ch <- *output
-	}
-	close(ch)
-	return ch
-}
-
-// InvocationError represents a structured invocation error.
+// InvocationError is the structured error type for all terminal invocation
+// failures.
 type InvocationError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
