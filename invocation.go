@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sync"
@@ -653,10 +654,12 @@ func Single[O any](ctx context.Context, out OutputStream[O]) (O, error) {
 
 // TypedInvocation wraps an untyped Invocation[any, any] with concrete input
 // and output types. Codegen emits one TypedInvocation-returning method per
-// OBI operation. The operation-layer invoker validates (OBI-T-08) and decodes
-// each raw output into a concrete O upstream; this adapter then type-asserts.
-// On a mismatch Read returns a zero O and ErrCodeValidationFailed-adjacent
-// ERR_TYPE_MISMATCH; it never panics.
+// OBI operation. Each raw output is decoded into O at the typed boundary: a
+// direct type assertion first (zero-cost when the binding emitted a concrete
+// O), then a JSON round-trip (the OBI-T-08-validated outputs of the operation
+// layer are generic maps). On a decode failure Read returns a zero O and a
+// terminal ERR_TYPE_MISMATCH; it never panics — so the `O` a typed invoker
+// hands out is a guarantee backed by T-08 plus a checked decode, not an IOU.
 type TypedInvocation[I, O any] struct {
 	inner Invocation[any, any]
 }
@@ -667,7 +670,24 @@ func NewTypedInvocation[I, O any](inner Invocation[any, any]) *TypedInvocation[I
 }
 
 func (t *TypedInvocation[I, O]) Write(ctx context.Context, input I) error {
-	return t.inner.Write(ctx, input)
+	// Encode at the typed boundary, symmetric with the output decode:
+	// OBI-T-07 validation and format invokers operate on generic JSON values
+	// (maps/slices/primitives), not Go structs.
+	b, err := json.Marshal(input)
+	if err != nil {
+		return &InvocationError{
+			Code:    "ERR_TYPE_MISMATCH",
+			Message: fmt.Sprintf("openbindings: input %T is not JSON-encodable: %v", input, err),
+		}
+	}
+	var generic any
+	if err := json.Unmarshal(b, &generic); err != nil {
+		return &InvocationError{
+			Code:    "ERR_TYPE_MISMATCH",
+			Message: fmt.Sprintf("openbindings: input %T round-trip failed: %v", input, err),
+		}
+	}
+	return t.inner.Write(ctx, generic)
 }
 
 func (t *TypedInvocation[I, O]) Close() error { return t.inner.Close() }
@@ -692,20 +712,27 @@ type typedOutputStream[O any] struct {
 func (s *typedOutputStream[O]) Stop() { s.inner.Stop() }
 
 func (s *typedOutputStream[O]) Read(ctx context.Context) (O, error) {
+	var zero O
 	raw, err := s.inner.Read(ctx)
 	if err != nil {
-		var zero O
 		return zero, err
 	}
-	typed, ok := raw.(O)
-	if !ok {
-		var zero O
-		return zero, &InvocationError{
-			Code:    "ERR_TYPE_MISMATCH",
-			Message: fmt.Sprintf("openbindings: expected %T, got %T", zero, raw),
+	if typed, ok := raw.(O); ok {
+		return typed, nil
+	}
+	// Decode at the typed boundary: the operation layer emits generic JSON
+	// values (maps/slices); round-trip them into the concrete O.
+	b, merr := json.Marshal(raw)
+	if merr == nil {
+		var typed O
+		if uerr := json.Unmarshal(b, &typed); uerr == nil {
+			return typed, nil
 		}
 	}
-	return typed, nil
+	return zero, &InvocationError{
+		Code:    "ERR_TYPE_MISMATCH",
+		Message: fmt.Sprintf("openbindings: expected %T, got %T", zero, raw),
+	}
 }
 
 // ---------------------------------------------------------------------------
