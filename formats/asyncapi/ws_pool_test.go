@@ -209,6 +209,33 @@ func TestWSPool_ClientStreamingFrames(t *testing.T) {
 	}
 }
 
+// TestWSPool_DifferentCredentialsNeverShareConnection verifies the pool key
+// includes credential identity: invocations with different bearer tokens must
+// not share an authenticated socket (cross-tenant credential leak), while a
+// repeat invocation with an already-seen token reuses its socket.
+func TestWSPool_DifferentCredentialsNeverShareConnection(t *testing.T) {
+	var upgrades atomic.Int32
+	frames := make(chan map[string]any, 16)
+	srv := wsTestServer(t, frameCollector(&upgrades, frames))
+
+	binv := NewInvoker()
+	defer binv.Close()
+	source := wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"})
+
+	sendOnce(t, binv, source, map[string]any{"bearerToken": "tenant-a"}, map[string]any{"seq": 0})
+	sendOnce(t, binv, source, map[string]any{"bearerToken": "tenant-b"}, map[string]any{"seq": 1})
+	if c := upgrades.Load(); c != 2 {
+		t.Fatalf("different bearer tokens must not share a socket: got %d upgrades, want 2", c)
+	}
+
+	// Same token as the first call: must reuse tenant-a's socket.
+	sendOnce(t, binv, source, map[string]any{"bearerToken": "tenant-a"}, map[string]any{"seq": 2})
+	if c := upgrades.Load(); c != 2 {
+		t.Errorf("same bearer token must share a socket: got %d upgrades, want 2", c)
+	}
+	collectFrames(t, frames, 3)
+}
+
 // TestWSPool_SendAndReceiveShareConnection verifies the AsyncAPI
 // two-operation pattern the pool exists for: a receive subscription and a
 // send publish on the same channel share one socket, so server state keyed

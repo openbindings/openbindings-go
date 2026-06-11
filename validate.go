@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-
 )
 
 type validateOptions struct {
@@ -183,7 +182,10 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		}
 	}
 
-	// Validate transforms.
+	// Validate transforms. No document rule constrains the expression's
+	// content (an empty string is schema-valid); evaluation failures,
+	// including empty expressions, surface at invoke time per OBI-T-10
+	// (ErrEmptyTransformExpression / ERR_TRANSFORM_ERROR).
 	trKeys := make([]string, 0, len(i.Transforms))
 	for k := range i.Transforms {
 		trKeys = append(trKeys, k)
@@ -192,8 +194,6 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 	for _, k := range trKeys {
 		// OBI-D-04: transform keys must match the identifier pattern.
 		validateIdent(&errs, "transforms key", k)
-		tr := i.Transforms[k]
-		validateInlineTransform(&errs, fmt.Sprintf("transforms[%q]", k), tr)
 	}
 
 	// Validate bindings.
@@ -231,14 +231,6 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 			}
 		}
 
-		// Validate inline transforms.
-		if b.InputTransform != nil && !b.InputTransform.IsRef() {
-			validateInlineTransform(&errs, fmt.Sprintf("bindings[%q].inputTransform", k), b.InputTransform.Inline)
-		}
-		if b.OutputTransform != nil && !b.OutputTransform.IsRef() {
-			validateInlineTransform(&errs, fmt.Sprintf("bindings[%q].outputTransform", k), b.OutputTransform.Inline)
-		}
-
 		if o.rejectUnknownTypedFields {
 			appendUnknownFieldProblems(&errs, fmt.Sprintf("bindings[%q]", k), b.Unknown)
 		}
@@ -251,7 +243,7 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 	// OBI-D-02: validate the document against openbindings.schema.json.
 	validateAgainstOBISchema(&errs, i)
 
-	// OBI-D-15: validate every example's input/output against its operation's
+	// OBI-D-12: validate every example's input/output against its operation's
 	// input/output schema, when the respective schema is specified.
 	validateExamplesAgainstOpSchemas(&errs, i)
 
@@ -277,31 +269,20 @@ func appendUnknownFieldProblems(errs *[]string, prefix string, unknown map[strin
 	*errs = append(*errs, fmt.Sprintf("%s: unknown fields: %s", prefix, strings.Join(keys, ", ")))
 }
 
-// validateTransformRef validates that a $ref points to a valid transform per OBI-D-12.
+// validateTransformRef validates that a $ref resolves to a named transform per OBI-D-11.
 func validateTransformRef(ref string, transforms map[string]Transform) error {
 	const prefix = "#/transforms/"
 	if !strings.HasPrefix(ref, prefix) {
-		return fmt.Errorf("must start with %q (OBI-D-12)", prefix)
+		return fmt.Errorf("must start with %q (OBI-D-11)", prefix)
 	}
 	name := strings.TrimPrefix(ref, prefix)
 	if name == "" {
-		return fmt.Errorf("transform name is empty (OBI-D-12)")
+		return fmt.Errorf("transform name is empty (OBI-D-11)")
 	}
 	if _, ok := transforms[name]; !ok {
-		return fmt.Errorf("references unknown transform %q (OBI-D-12)", name)
+		return fmt.Errorf("references unknown transform %q (OBI-D-11)", name)
 	}
 	return nil
-}
-
-// validateInlineTransform validates an inline JSONata transform expression.
-// Per the v0.2 spec §6.5, transforms are JSONata 2.0 expression strings;
-// the spec requires non-empty expressions but does not require SDKs to parse
-// them. Tools claiming Invoking-class conformance evaluate transforms per
-// JSONata 2.0 (OBI-T-11).
-func validateInlineTransform(errs *[]string, prefix string, expr Transform) {
-	if strings.TrimSpace(expr) == "" {
-		*errs = append(*errs, fmt.Sprintf("%s: must be a non-empty JSONata expression", prefix))
-	}
 }
 
 // identPattern enforces OBI-D-04: every map key and every operation alias must match.

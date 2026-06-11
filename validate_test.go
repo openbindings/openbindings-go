@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
 )
 
 func TestInterfaceValidate_RequiresOpenBindingsAndOperations(t *testing.T) {
@@ -282,9 +281,10 @@ func TestInterfaceValidate_SourceAcceptsBothLocationAndContent(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_TransformExpressionMustBeNonEmpty(t *testing.T) {
-	// Per v0.2 spec §6.5, transforms are JSONata 2.0 expression strings.
-	// An empty string is not a valid expression.
+func TestInterfaceValidate_EmptyTransformExpressionAccepted(t *testing.T) {
+	// No document rule forbids an empty transform expression (the schema
+	// allows any string). Evaluation failures surface at invoke time via
+	// ErrEmptyTransformExpression, not at document validation.
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations:   map[string]Operation{},
@@ -292,12 +292,8 @@ func TestInterfaceValidate_TransformExpressionMustBeNonEmpty(t *testing.T) {
 			"empty": "",
 		},
 	}
-	err := i.Validate()
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if !containsProblem(err, `transforms["empty"]: must be a non-empty JSONata expression`) {
-		t.Fatalf("expected transform empty-expression error, got %v", err)
+	if err := i.Validate(); err != nil {
+		t.Fatalf("expected empty named transform to be accepted, got %v", err)
 	}
 }
 
@@ -324,7 +320,7 @@ func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, `bindings["op.api"].inputTransform.$ref: references unknown transform "nonexistent" (OBI-D-12)`) {
+	if !containsProblem(err, `bindings["op.api"].inputTransform.$ref: references unknown transform "nonexistent" (OBI-D-11)`) {
 		t.Fatalf("expected transform ref error, got %v", err)
 	}
 }
@@ -376,7 +372,9 @@ func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_InlineTransformMustBeNonEmpty(t *testing.T) {
+func TestInterfaceValidate_EmptyInlineTransformAccepted(t *testing.T) {
+	// No document rule forbids an empty inline transform expression; the
+	// invoke layer fails empty expressions at run time instead.
 	i := Interface{
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
@@ -393,12 +391,8 @@ func TestInterfaceValidate_InlineTransformMustBeNonEmpty(t *testing.T) {
 			},
 		},
 	}
-	err := i.Validate()
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if !containsProblem(err, `bindings["op.api"].outputTransform: must be a non-empty JSONata expression`) {
-		t.Fatalf("expected empty-inline-transform error, got %v", err)
+	if err := i.Validate(); err != nil {
+		t.Fatalf("expected empty inline transform to be accepted, got %v", err)
 	}
 }
 
@@ -489,10 +483,10 @@ func TestInterfaceValidate_ExampleValidation_InvalidInputFails(t *testing.T) {
 		t.Fatalf("expected error for invalid example input")
 	}
 	if !containsProblemSubstring(err, `operations["greet"].examples["bad"].input:`) {
-		t.Fatalf("expected OBI-D-15 input problem, got %v", err)
+		t.Fatalf("expected OBI-D-12 input problem, got %v", err)
 	}
-	if !containsProblemSubstring(err, "OBI-D-15") {
-		t.Fatalf("expected OBI-D-15 tag, got %v", err)
+	if !containsProblemSubstring(err, "OBI-D-12") {
+		t.Fatalf("expected OBI-D-12 tag, got %v", err)
 	}
 }
 
@@ -512,10 +506,10 @@ func TestInterfaceValidate_ExampleValidation_InvalidOutputFails(t *testing.T) {
 		t.Fatalf("expected error for invalid example output")
 	}
 	if !containsProblemSubstring(err, `operations["greet"].examples["bad"].output:`) {
-		t.Fatalf("expected OBI-D-15 output problem, got %v", err)
+		t.Fatalf("expected OBI-D-12 output problem, got %v", err)
 	}
-	if !containsProblemSubstring(err, "OBI-D-15") {
-		t.Fatalf("expected OBI-D-15 tag, got %v", err)
+	if !containsProblemSubstring(err, "OBI-D-12") {
+		t.Fatalf("expected OBI-D-12 tag, got %v", err)
 	}
 }
 
@@ -530,7 +524,7 @@ func TestInterfaceValidate_ExampleValidation_RunsByDefault(t *testing.T) {
 		},
 	)
 	if err := i.Validate(); err == nil {
-		t.Fatalf("expected error because OBI-D-15 is always enforced")
+		t.Fatalf("expected error because OBI-D-12 is always enforced")
 	}
 }
 
@@ -604,5 +598,172 @@ func TestInterfaceValidate_ExampleValidation_WithSchemaRef(t *testing.T) {
 	}
 	if containsProblemSubstring(err, `operations["greet"].examples["valid"].input:`) {
 		t.Fatalf("valid example should not produce errors, got %v", err)
+	}
+}
+
+func TestParseDocument_UnknownTopLevelFieldValidates_OBI_T_02(t *testing.T) {
+	// OBI-T-02: unknown non-x- fields are ignored, not fatal. The vendored
+	// v0.2.0 schema keeps additionalProperties open at the root; "security"
+	// (removed from the spec in 0.2.0) must validate as an unknown field.
+	doc := []byte(`{"openbindings":"0.2.0","operations":{},"security":"abc"}`)
+	iface, err := ParseDocument(doc)
+	if err != nil {
+		t.Fatalf("expected unknown top-level field to parse, got %v", err)
+	}
+	if err := iface.Validate(); err != nil {
+		t.Fatalf("expected unknown top-level field to validate (OBI-T-02), got %v", err)
+	}
+}
+
+func TestParseDocument_TransformRefWithExtensionKeyValidates_OBI_T_03(t *testing.T) {
+	// OBI-T-03: x- prefixed fields are extensions and must not fail
+	// validation; the v0.2.0 schema allows additional properties on the
+	// transform $ref object form.
+	doc := []byte(`{
+		"openbindings": "0.2.0",
+		"operations": {"op": {}},
+		"transforms": {"t": "$.payload"},
+		"sources": {"api": {"format": "openapi@3.1", "location": "./api.json"}},
+		"bindings": {
+			"op.api": {
+				"operation": "op",
+				"source": "api",
+				"inputTransform": {"$ref": "#/transforms/t", "x-note": "hi"}
+			}
+		}
+	}`)
+	iface, err := ParseDocument(doc)
+	if err != nil {
+		t.Fatalf("expected transform $ref with x- key to parse, got %v", err)
+	}
+	if err := iface.Validate(); err != nil {
+		t.Fatalf("expected transform $ref with x- key to validate (OBI-T-03), got %v", err)
+	}
+}
+
+func TestParseDocument_RejectsInvalidUTF8_OBI_D_01(t *testing.T) {
+	// OBI-D-01: documents are UTF-8 encoded JSON. 0xFF can never appear in
+	// valid UTF-8.
+	doc := []byte(`{"openbindings":"0.2.0","name":"X`)
+	doc = append(doc, 0xFF, 0xFE)
+	doc = append(doc, []byte(`","operations":{}}`)...)
+	_, err := ParseDocument(doc)
+	if err == nil {
+		t.Fatalf("expected invalid-UTF-8 parse error")
+	}
+	if !strings.Contains(err.Error(), "UTF-8") {
+		t.Fatalf("expected error mentioning UTF-8, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_ExampleValidation_ExplicitNullIsValidated(t *testing.T) {
+	// OBI-D-12: an explicit JSON null is a provided example value distinct
+	// from an absent field, and must validate against the schema.
+	doc := []byte(`{
+		"openbindings": "0.2.0",
+		"operations": {
+			"greet": {
+				"input": {"type": "object"},
+				"examples": {"nullCase": {"input": null}}
+			}
+		}
+	}`)
+	iface, err := ParseDocument(doc)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	err = iface.Validate()
+	if err == nil {
+		t.Fatalf("expected explicit-null example input to fail against {\"type\":\"object\"}")
+	}
+	if !containsProblemSubstring(err, `operations["greet"].examples["nullCase"].input:`) {
+		t.Fatalf("expected null example input problem, got %v", err)
+	}
+	if !containsProblemSubstring(err, "OBI-D-12") {
+		t.Fatalf("expected OBI-D-12 tag, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_ExampleValidation_AbsentInputStillSkipped(t *testing.T) {
+	// Absent input/output (as opposed to explicit null) is not validated.
+	doc := []byte(`{
+		"openbindings": "0.2.0",
+		"operations": {
+			"greet": {
+				"input": {"type": "object"},
+				"examples": {"onlyOutput": {"output": {"ok": true}}}
+			}
+		}
+	}`)
+	iface, err := ParseDocument(doc)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := iface.Validate(); err != nil {
+		t.Fatalf("expected absent example input to be skipped, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_ExampleValidation_ExternalRefAbstains(t *testing.T) {
+	// A schema whose $ref points outside the document cannot be resolved by
+	// a document validator; per the spec's capability-relative verification
+	// posture it abstains from example validation rather than failing the
+	// document.
+	i := newInterfaceWithExamples(
+		JSONSchema{"$ref": "https://schemas.example.com/user.json"},
+		nil,
+		map[string]OperationExample{
+			"opaque": {Input: map[string]any{"anything": true}},
+		},
+	)
+	if err := i.Validate(); err != nil {
+		t.Fatalf("expected abstention for external $ref schema, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_ExampleValidation_ExternalRefInSchemasMapAbstains(t *testing.T) {
+	// External $refs reachable via the document's schemas map also trigger
+	// abstention: the local schema space is not fully resolvable.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Schemas: map[string]JSONSchema{
+			"User": {"$ref": "https://schemas.example.com/user.json"},
+		},
+		Operations: map[string]Operation{
+			"greet": {
+				Input: JSONSchema{"$ref": "#/schemas/User"},
+				Examples: map[string]OperationExample{
+					"opaque": {Input: map[string]any{"anything": true}},
+				},
+			},
+		},
+	}
+	if err := i.Validate(); err != nil {
+		t.Fatalf("expected abstention for external $ref via schemas map, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_ExampleValidation_InternalRefStillValidated(t *testing.T) {
+	// Internal #/schemas/ refs remain fully validated (no abstention).
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Schemas: map[string]JSONSchema{
+			"User": {"type": "object", "required": []any{"name"}},
+		},
+		Operations: map[string]Operation{
+			"greet": {
+				Input: JSONSchema{"$ref": "#/schemas/User"},
+				Examples: map[string]OperationExample{
+					"bad": {Input: map[string]any{"wrong": 42}},
+				},
+			},
+		},
+	}
+	err := i.Validate()
+	if err == nil {
+		t.Fatalf("expected internal-ref example validation to fail")
+	}
+	if !containsProblemSubstring(err, "OBI-D-12") {
+		t.Fatalf("expected OBI-D-12 tag, got %v", err)
 	}
 }

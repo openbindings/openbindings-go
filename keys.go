@@ -9,12 +9,20 @@ import (
 var nonKeyChars = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 
 // SanitizeKey converts a name to a valid OBI operation key by replacing
-// non-alphanumeric characters (except '.', '_', '-') with underscores.
+// non-alphanumeric characters (except '.', '_', '-') with underscores. The
+// result always matches the OBI-D-04 identifier pattern
+// ^[A-Za-z_][A-Za-z0-9_.-]*$: keys that would start with a digit, '.', or
+// '-' are prefixed with an underscore.
 func SanitizeKey(name string) string {
 	key := nonKeyChars.ReplaceAllString(name, "_")
 	key = strings.Trim(key, "_")
 	if key == "" {
-		key = "unnamed"
+		return "unnamed"
+	}
+	// OBI-D-04 requires the first character to be a letter or underscore.
+	c := key[0]
+	if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '_') {
+		key = "_" + key
 	}
 	return key
 }

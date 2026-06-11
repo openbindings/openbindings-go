@@ -6,10 +6,18 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 )
 
 // ParseDocument validates raw JSON bytes against the OBI schema, then unmarshals into an Interface.
 func ParseDocument(data []byte) (*Interface, error) {
+	// OBI-D-01: an OBI document is UTF-8 encoded JSON. encoding/json
+	// tolerates invalid byte sequences (replacing them with U+FFFD), so
+	// check encoding validity explicitly.
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("parse document: invalid JSON: input is not valid UTF-8 (OBI-D-01)")
+	}
+
 	if err := rejectDuplicateObjectKeys(data); err != nil {
 		return nil, fmt.Errorf("parse document: invalid JSON: %w", err)
 	}

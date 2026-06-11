@@ -52,13 +52,37 @@ var (
 )
 
 // OperationExample represents an example input/output pair for an operation.
+//
+// JSON null is a meaningful example value, distinct from an absent field
+// (OBI-D-12 validates an explicit null against the operation's schema; an
+// absent field is not validated). Because Go's `any` cannot distinguish the
+// two, InputPresent/OutputPresent record field presence: UnmarshalJSON
+// populates them, and MarshalJSON re-emits an explicit null for a present
+// field holding nil. When constructing examples in Go code, a non-nil
+// Input/Output already implies presence; set the booleans only to express
+// an explicit JSON null.
 type OperationExample struct {
 	Description string `json:"description,omitempty"`
 	Input       any    `json:"input,omitempty"`
 	Output      any    `json:"output,omitempty"`
 
+	// InputPresent reports whether the "input" field was present in the JSON,
+	// distinguishing an explicit null from an absent field.
+	InputPresent bool `json:"-"`
+	// OutputPresent reports whether the "output" field was present in the JSON,
+	// distinguishing an explicit null from an absent field.
+	OutputPresent bool `json:"-"`
+
 	LosslessFields
 }
+
+// HasInput reports whether the example provides an input value (including an
+// explicit JSON null).
+func (e OperationExample) HasInput() bool { return e.InputPresent || e.Input != nil }
+
+// HasOutput reports whether the example provides an output value (including an
+// explicit JSON null).
+func (e OperationExample) HasOutput() bool { return e.OutputPresent || e.Output != nil }
 
 type operationExampleWire struct {
 	Description string `json:"description,omitempty"`
@@ -82,6 +106,8 @@ func (e *OperationExample) UnmarshalJSON(b []byte) error {
 		Input:       w.Input,
 		Output:      w.Output,
 	}
+	_, e.InputPresent = raw["input"]
+	_, e.OutputPresent = raw["output"]
 
 	e.Extensions, e.Unknown = splitLossless(raw, knownOperationExampleSet)
 	return nil
@@ -93,7 +119,19 @@ func (e OperationExample) MarshalJSON() ([]byte, error) {
 		Input:       e.Input,
 		Output:      e.Output,
 	}
-	return marshalLossless(e.Unknown, e.Extensions, w)
+	// omitempty drops nil Input/Output; re-emit explicit nulls for fields
+	// recorded as present so explicit-null examples round-trip.
+	var overrides map[string]json.RawMessage
+	if e.InputPresent && e.Input == nil {
+		overrides = map[string]json.RawMessage{"input": json.RawMessage("null")}
+	}
+	if e.OutputPresent && e.Output == nil {
+		if overrides == nil {
+			overrides = map[string]json.RawMessage{}
+		}
+		overrides["output"] = json.RawMessage("null")
+	}
+	return marshalLosslessWith(e.Unknown, e.Extensions, w, overrides)
 }
 
 type Operation struct {
@@ -165,7 +203,21 @@ func (o Operation) MarshalJSON() ([]byte, error) {
 		Output:      o.Output,
 		Examples:    o.Examples,
 	}
-	return marshalLossless(o.Unknown, o.Extensions, w)
+	// The spec distinguishes an empty {} schema (accepts any value) from an
+	// absent one (contract unspecified). omitempty drops both nil and empty
+	// maps, so re-emit {} for non-nil empty schemas to preserve the
+	// distinction on round-trip.
+	var overrides map[string]json.RawMessage
+	if o.Input != nil && len(o.Input) == 0 {
+		overrides = map[string]json.RawMessage{"input": json.RawMessage("{}")}
+	}
+	if o.Output != nil && len(o.Output) == 0 {
+		if overrides == nil {
+			overrides = map[string]json.RawMessage{}
+		}
+		overrides["output"] = json.RawMessage("{}")
+	}
+	return marshalLosslessWith(o.Unknown, o.Extensions, w, overrides)
 }
 
 type Source struct {
@@ -221,8 +273,8 @@ func (s Source) MarshalJSON() ([]byte, error) {
 }
 
 // Transform is a JSONata 2.0 expression string per OpenBindings v0.2 spec §6.5.
-// Tools claiming Invoking-class conformance MUST evaluate transforms according
-// to the JSONata 2.0 specification (OBI-T-11).
+// Tools that evaluate transforms MUST do so according to the JSONata 2.0
+// specification (OBI-T-10).
 type Transform = string
 
 // TransformOrRef represents either an inline JSONata transform expression or

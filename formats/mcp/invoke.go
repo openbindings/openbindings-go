@@ -67,11 +67,21 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// --- Collect input from the handle. ---
 	// Tools and prompts take one named-arguments object; resource reads take
 	// no input. Close input as early as possible so callers never have to.
+	//
+	// No-input convention: when the operation layer drives an operation that
+	// declares no input (Binding set, InputSchema nil — e.g. a zero-argument
+	// tool or prompt), close input on entry and dispatch with empty arguments
+	// rather than reading. A caller of a no-input operation never writes nor
+	// closes, so an unconditional ReadInput would park forever.
+	noInput := args.Binding != nil && args.InputSchema == nil
 	var toolArgs map[string]any
 	var promptArgs map[string]string
-	switch entityType {
-	case "resources":
+	switch {
+	case entityType == "resources", noInput:
 		_ = inv.CloseInput()
+		if entityType == "tools" {
+			toolArgs = map[string]any{}
+		}
 	default:
 		first, err := inv.ReadInput(bctx)
 		_ = inv.CloseInput()
@@ -219,20 +229,32 @@ func runTool(
 	// backpressure (no side buffer); it returns the terminal error if the
 	// invocation ends while parked, which stops the handler cleanly.
 	var emitMu sync.Mutex
+	var emitFailed bool
 	session.registerProgress(progressToken, func(_ context.Context, req *gomcp.ProgressNotificationClientRequest) {
 		if req == nil || req.Params == nil {
 			return
 		}
 		emitMu.Lock()
 		defer emitMu.Unlock()
+		if emitFailed {
+			// A prior emit observed the invocation terminate; stop emitting
+			// (parking, the backpressure side effect, would otherwise resume).
+			return
+		}
 		setHeader()
 		p := req.Params
-		_ = inv.EmitOutput(map[string]any{
-			"progressToken": p.ProgressToken,
-			"progress":      p.Progress,
-			"total":         p.Total,
-			"message":       p.Message,
-		})
+		// Shape mirrors the TS SDK: {progress, total?, message?}. The internal
+		// progressToken is correlation plumbing, not part of the output.
+		out := map[string]any{"progress": p.Progress}
+		if p.Total != 0 {
+			out["total"] = p.Total
+		}
+		if p.Message != "" {
+			out["message"] = p.Message
+		}
+		if err := inv.EmitOutput(out); err != nil {
+			emitFailed = true
+		}
 	})
 	defer session.unregisterProgress(progressToken)
 
@@ -485,18 +507,31 @@ func resourceValue(result *gomcp.ReadResourceResult) any {
 			}
 			return c.Text
 		}
-		return map[string]any{"uri": c.URI, "mimeType": c.MIMEType}
+		// Non-text (e.g. blob) content: return the whole content object so
+		// binary data survives, matching the TS SDK which returns `c` as-is.
+		return contentToGeneric(c)
 	}
 
 	var items []any
 	for _, c := range result.Contents {
-		items = append(items, map[string]any{
-			"uri":      c.URI,
-			"mimeType": c.MIMEType,
-			"text":     c.Text,
-		})
+		items = append(items, contentToGeneric(c))
 	}
 	return items
+}
+
+// contentToGeneric round-trips a resource content through JSON so every field
+// (uri, mimeType, text, blob, _meta) survives into the generic output value,
+// rather than hand-copying a subset and silently dropping blob data.
+func contentToGeneric(c *gomcp.ResourceContents) any {
+	b, err := json.Marshal(c)
+	if err != nil {
+		return map[string]any{"uri": c.URI, "mimeType": c.MIMEType}
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil {
+		return map[string]any{"uri": c.URI, "mimeType": c.MIMEType}
+	}
+	return m
 }
 
 // promptValue converts a GetPromptResult into the output value.

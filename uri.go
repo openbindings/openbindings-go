@@ -19,9 +19,13 @@ var defaultPorts = map[string]string{
 	"ftp":   "21",
 }
 
-// CanonicalizeLocation produces the canonical form of a URI per spec §10
-// (Location Equality). Two URIs refer to the same OBI iff their canonical
-// forms are byte-equal.
+// CanonicalizeLocation produces a normalized form of a URI suitable for
+// caching and deduplicating fetched documents. Comparing URIs for identity
+// is a tool concern: the spec (v0.2.0 §10, Reference resolution) defines no
+// canonical URI equality. This SDK's convention applies RFC 3986 §6.2
+// syntax-based normalization so that trivially equivalent spellings of the
+// same location compare equal; distinct normalized forms may still address
+// the same resource.
 //
 // The function applies, in order:
 //
@@ -35,12 +39,13 @@ var defaultPorts = map[string]string{
 //  5. The fragment component is stripped.
 //
 // Path and query case, query strings, userinfo, scheme (http vs https),
-// and trailing slashes on non-empty paths remain significant per the
-// spec. The URI used for equality is the declared URI (or caller-supplied
-// base), regardless of any HTTP redirects encountered during fetching.
+// and trailing slashes on non-empty paths remain significant. The URI
+// normalized is the declared URI (or caller-supplied base); per spec §10 a
+// redirect encountered while fetching does not change the base URI unless
+// the loader explicitly adopts the redirected URI.
 //
 // Non-hierarchical URIs (e.g., mailto:, urn:) are returned with only the
-// scheme lowercased; they are outside this spec's canonicalization rules.
+// scheme lowercased; they are outside this normalization's scope.
 func CanonicalizeLocation(uri string) (string, error) {
 	if uri == "" {
 		return "", errors.New("openbindings: cannot canonicalize empty URI")
@@ -123,9 +128,10 @@ func CanonicalizeLocation(uri string) (string, error) {
 }
 
 // ResolveRef resolves a relative URI reference against a base URI per
-// RFC 3986 §5 Reference Resolution. This is the spec §12 operation: it
-// converts a sources[*].location value or a schema $ref
-// into a fully-qualified URI suitable for fetching or comparison.
+// RFC 3986 §5 Reference Resolution. This is the spec §10 (Reference
+// resolution) operation: it converts a sources[*].location value or a
+// schema $ref into a fully-qualified URI suitable for fetching or
+// comparison.
 //
 // Resolution is directory-relative: the merge step strips everything
 // after the last "/" in the base URI's path before appending the

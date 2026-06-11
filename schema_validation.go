@@ -58,50 +58,88 @@ func validateAgainstOBISchema(errs *[]string, i Interface) {
 	}
 }
 
-// validateExamplesAgainstOpSchemas reports OBI-D-15 violations.
+// validateExamplesAgainstOpSchemas reports OBI-D-12 violations: every
+// example's provided input/output (including an explicit JSON null) must
+// validate against its operation's input/output schema, when the respective
+// schema is specified.
+//
+// Verification is capability-relative (cf. the spec's §8 / OBI-D-14
+// discussion): when a schema's $refs point outside the document, this
+// validator cannot resolve them and abstains from example validation for
+// that operation rather than failing the document.
 func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 	if len(i.Operations) == 0 {
 		return
 	}
 	defs := buildSchemaDefs(i.Schemas)
+	// If any document schema carries an external $ref, the compound schema
+	// space is not fully resolvable locally; abstain across the board.
+	defsExternal := schemaHasExternalRef(defs)
 	for opKey, op := range i.Operations {
 		if len(op.Examples) == 0 {
 			continue
 		}
 		var inputSchema, outputSchema *jsonschema.Schema
-		if op.Input != nil {
+		if op.Input != nil && !defsExternal && !schemaHasExternalRef(op.Input) {
 			compiled, err := compileExampleSchema(op.Input, defs)
 			if err != nil {
-				*errs = append(*errs, fmt.Sprintf("operations[%q].input: cannot compile schema: %v (OBI-D-15)", opKey, err))
+				*errs = append(*errs, fmt.Sprintf("operations[%q].input: cannot compile schema: %v (OBI-D-12)", opKey, err))
 			} else {
 				inputSchema = compiled
 			}
 		}
-		if op.Output != nil {
+		if op.Output != nil && !defsExternal && !schemaHasExternalRef(op.Output) {
 			compiled, err := compileExampleSchema(op.Output, defs)
 			if err != nil {
-				*errs = append(*errs, fmt.Sprintf("operations[%q].output: cannot compile schema: %v (OBI-D-15)", opKey, err))
+				*errs = append(*errs, fmt.Sprintf("operations[%q].output: cannot compile schema: %v (OBI-D-12)", opKey, err))
 			} else {
 				outputSchema = compiled
 			}
 		}
 		for exKey, ex := range op.Examples {
-			if ex.Input != nil && inputSchema != nil {
+			if ex.HasInput() && inputSchema != nil {
 				if verr := inputSchema.Validate(ex.Input); verr != nil {
 					for _, line := range splitSchemaError(verr) {
-						*errs = append(*errs, fmt.Sprintf("operations[%q].examples[%q].input: %s (OBI-D-15)", opKey, exKey, line))
+						*errs = append(*errs, fmt.Sprintf("operations[%q].examples[%q].input: %s (OBI-D-12)", opKey, exKey, line))
 					}
 				}
 			}
-			if ex.Output != nil && outputSchema != nil {
+			if ex.HasOutput() && outputSchema != nil {
 				if verr := outputSchema.Validate(ex.Output); verr != nil {
 					for _, line := range splitSchemaError(verr) {
-						*errs = append(*errs, fmt.Sprintf("operations[%q].examples[%q].output: %s (OBI-D-15)", opKey, exKey, line))
+						*errs = append(*errs, fmt.Sprintf("operations[%q].examples[%q].output: %s (OBI-D-12)", opKey, exKey, line))
 					}
 				}
 			}
 		}
 	}
+}
+
+// schemaHasExternalRef reports whether any $ref in the schema tree points
+// outside the document (i.e., does not start with "#"). Such references are
+// unresolvable without fetching external resources, so document validation
+// abstains from example checks against them.
+func schemaHasExternalRef(v any) bool {
+	switch t := v.(type) {
+	case JSONSchema:
+		return schemaHasExternalRef(map[string]any(t))
+	case map[string]any:
+		if ref, ok := t["$ref"].(string); ok && !strings.HasPrefix(ref, "#") {
+			return true
+		}
+		for _, child := range t {
+			if schemaHasExternalRef(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range t {
+			if schemaHasExternalRef(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // buildSchemaDefs deep-copies the document's schemas map and rewrites

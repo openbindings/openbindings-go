@@ -6,7 +6,7 @@ OpenBindings is an open standard: one interface, limitless bindings. An OBI (Ope
 
 **Spec version:** implements OpenBindings 0.2. Exact range is exported as `openbindings.MinSupportedVersion` / `openbindings.MaxTestedVersion`; check programmatically via `openbindings.IsSupportedVersion(version)`.
 
-**Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through OBI-D-17 and OBI-T-04. OBI-D-02 (document validates against `openbindings.schema.json`) and OBI-D-15 (examples validate against their operation's input/output schemas) are enforced via [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema). The schema is embedded at build time (synced via `scripts/sync-schema.sh`). In this monorepo, run `go test ./...` from the root module with the spec repo checked out at `./spec` or `../spec` to exercise the core conformance corpus.
+**Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through OBI-D-13 and OBI-T-04. OBI-D-02 (document validates against `openbindings.schema.json`) and OBI-D-12 (examples validate against their operation's input/output schemas) are enforced via [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema). The schema is embedded at build time (synced via `scripts/sync-schema.sh`). In this monorepo, run `go test ./...` from the root module with the spec repo checked out at `./spec` or `../spec` to exercise the core conformance corpus.
 
 ## Layout
 

@@ -777,3 +777,25 @@ func TestServerStreamingCompressedFrameRejected(t *testing.T) {
 		t.Errorf("error message = %q, want to mention compression", ierr.Message)
 	}
 }
+
+// TestInvokeBinding_NoInputConvention verifies that an operation-layer call
+// for an operation declaring no input (Binding set, InputSchema nil)
+// dispatches an empty request without waiting for a write. The caller writes
+// nothing and never closes; a missing convention would park forever.
+func TestInvokeBinding_NoInputConvention(t *testing.T) {
+	ctx := testContext(t)
+	srv := fakeConnectServer(t, http.StatusOK, `{"id":"","name":"ok"}`)
+
+	args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
+	args.Binding = &openbindings.BindingEntry{Operation: "getItem", Source: "s", Ref: "testpkg.TestService/GetItem"}
+	// InputSchema deliberately nil → no-input operation.
+
+	inv := NewInvoker().InvokeBinding(ctx, args)
+	got, err := openbindings.Single[any](ctx, inv.Outputs())
+	if err != nil {
+		t.Fatalf("no-input convention should dispatch without a write: %v", err)
+	}
+	if data, ok := got.(map[string]any); !ok || data["name"] != "ok" {
+		t.Fatalf("unexpected output: %v", got)
+	}
+}

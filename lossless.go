@@ -42,6 +42,14 @@ func knownSet(keys ...string) map[string]struct{} {
 
 // marshalLossless merges unknown + extensions with the typed view such that known fields win.
 func marshalLossless(unknown, extensions map[string]json.RawMessage, typed any) ([]byte, error) {
+	return marshalLosslessWith(unknown, extensions, typed, nil)
+}
+
+// marshalLosslessWith is marshalLossless plus post-merge overrides that win
+// over both the lossless and the typed fields. Used where omitempty on a wire
+// struct cannot express a present-but-empty value (an explicit JSON null
+// example, an empty {} schema).
+func marshalLosslessWith(unknown, extensions map[string]json.RawMessage, typed any, overrides map[string]json.RawMessage) ([]byte, error) {
 	// Start from the lossless fields, then overwrite with the typed view so known fields win.
 	out := map[string]json.RawMessage{}
 	for k, v := range unknown {
@@ -60,6 +68,9 @@ func marshalLossless(unknown, extensions map[string]json.RawMessage, typed any) 
 		return nil, err
 	}
 	for k, v := range known {
+		out[k] = v
+	}
+	for k, v := range overrides {
 		out[k] = v
 	}
 

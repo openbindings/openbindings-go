@@ -175,7 +175,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	reqMsg, ok := readRequest(bctx, inv, methodDesc)
+	noInput := args.Binding != nil && args.InputSchema == nil
+	reqMsg, ok := readRequest(bctx, inv, methodDesc, noInput)
 	if !ok {
 		return
 	}

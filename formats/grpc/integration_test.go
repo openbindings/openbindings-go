@@ -665,3 +665,25 @@ func TestIntegration_CtxCancelBeforeWrite(t *testing.T) {
 		t.Fatalf("expected ERR_CANCELLED, got %v", terr)
 	}
 }
+
+// TestIntegration_NoInputConvention verifies that an operation-layer call for
+// an operation declaring no input (Binding set, InputSchema nil) dispatches an
+// empty request without waiting for a write — even for a method whose request
+// message HAS fields. The caller writes nothing and never closes; a missing
+// convention would park forever.
+func TestIntegration_NoInputConvention(t *testing.T) {
+	dialer, _ := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	ctx := testCtx(t)
+	args := bufconnArgs("testpkg.ItemService/GetItem", nil)
+	args.Binding = &openbindings.BindingEntry{Operation: "getItem", Source: "s", Ref: "testpkg.ItemService/GetItem"}
+	// InputSchema deliberately nil → no-input operation.
+
+	inv := invoker.InvokeBinding(ctx, args)
+	// No write, no close: the convention must dispatch an empty request.
+	if _, err := openbindings.Single(ctx, inv.Outputs()); err != nil {
+		t.Fatalf("no-input convention should dispatch without a write: %v", err)
+	}
+}

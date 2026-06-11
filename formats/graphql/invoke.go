@@ -54,14 +54,12 @@ func resolveField(schema *introspectionSchema, rootType, fieldName string) (*fie
 	return nil, fmt.Errorf("field %q not found on %s type %q", fieldName, rootType, typeName)
 }
 
-// buildQueryFromIntrospection constructs a query by introspecting the schema
-// and auto-generating a selection set (depth-limited, cycle-safe).
 // buildQuery selects the GraphQL query for a field: a prebuilt `_query` const
 // in the operation's input schema (with passthrough variables) when present,
 // otherwise one synthesized from the introspected field descriptor. The
-// invoker's run loop inlines this choice to skip introspection on the prebuilt
-// path; this wrapper is the single-call form used where a schema is already in
-// hand.
+// invoker's run loop inlines this choice (to skip introspection on the
+// prebuilt path), so this single-call wrapper is a test convenience with no
+// production callers.
 func buildQuery(schema *introspectionSchema, rootType, fieldName string, input any, inputSchema map[string]any) (string, map[string]any, error) {
 	if q, ok := queryFromSchema(inputSchema); ok {
 		return q, inputToVariablesPassthrough(input), nil
@@ -69,6 +67,8 @@ func buildQuery(schema *introspectionSchema, rootType, fieldName string, input a
 	return buildQueryFromIntrospection(schema, rootType, fieldName, input)
 }
 
+// buildQueryFromIntrospection constructs a query by introspecting the schema
+// and auto-generating a selection set (depth-limited, cycle-safe).
 func buildQueryFromIntrospection(schema *introspectionSchema, rootType, fieldName string, input any) (string, map[string]any, error) {
 	targetField, err := resolveField(schema, rootType, fieldName)
 	if err != nil {
@@ -283,22 +283,6 @@ func queryFromSchema(schema map[string]any) (string, bool) {
 		return "", false
 	}
 	return constVal, true
-}
-
-// schemaDeclaresVariables reports whether the operation's input schema
-// declares variable properties beyond the _query const. When it doesn't, the
-// operation takes no input and the binding dispatches with empty variables.
-func schemaDeclaresVariables(schema map[string]any) bool {
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		return false
-	}
-	for k := range props {
-		if k != queryFieldName {
-			return true
-		}
-	}
-	return false
 }
 
 // inputToVariablesPassthrough converts the operation input to a GraphQL

@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -292,9 +293,14 @@ func (e *OperationInvoker) run(
 		return
 	}
 	if details != nil {
-		resolved := e.resolveContext(ctx, details)
+		resolved, rerr := e.resolveContext(ctx, details)
 		if resolved == nil {
-			caller.FireError(NewContextRequiredError("openbindings: binding requires context", details))
+			challenge := NewContextRequiredError("openbindings: binding requires context", details)
+			if rerr != nil {
+				// Distinguish "no credentials" from a broken resolver.
+				challenge.Message = fmt.Sprintf("openbindings: binding requires context (resolver failed: %v)", rerr)
+			}
+			caller.FireError(challenge)
 			return
 		}
 		mergeResolved(resolved)
@@ -337,7 +343,10 @@ func (e *OperationInvoker) run(
 			return
 		}
 		headerForwarded = true
-		if md, err := inner.Header(context.Background()); err == nil {
+		// Bounded by the invocation ctx: our impl returns a settled header
+		// even under a cancelled ctx (non-blocking-first), and a foreign impl
+		// that never settles cannot hang the run loop.
+		if md, err := inner.Header(ctx); err == nil {
 			_ = caller.SetHeader(md)
 		}
 	}
@@ -368,15 +377,32 @@ func (e *OperationInvoker) run(
 		pumpDone := make(chan struct{})
 		go func() {
 			defer close(pumpDone)
+			// The pump calls foreign code (transform evaluators, third-party
+			// inner Invocation impls) on its own goroutine; the run
+			// goroutine's recover cannot reach it. Same no-process-kill
+			// promise applies here.
+			defer func() {
+				if r := recover(); r != nil {
+					inner.Cancel()
+					caller.FireError(&InvocationError{
+						Code:    ErrCodeRuntime,
+						Message: fmt.Sprintf("openbindings: invoker panic: %v", r),
+					})
+				}
+			}()
 			e.pumpInputs(attemptCtx, innerCtx, caller, inner, binding, bindingKey, iface,
 				replay, recordIfEligible)
 		}()
 
-		surface, retryDetails := e.runOutputs(
+		surface, retryChallenge := e.runOutputs(
 			innerCtx, caller, inner, binding, bindingKey, iface,
 			compiledOutput, closeRetryWindow, forwardHeader,
 			func() bool { retryMu.Lock(); defer retryMu.Unlock(); return retryEligible },
 		)
+		var retryDetails *ContextRequiredDetails
+		if retryChallenge != nil {
+			retryDetails = ContextRequiredFrom(retryChallenge)
+		}
 
 		// Retire this attempt's pump before deciding next steps: the
 		// caller's input buffer must have exactly one reader at a time.
@@ -384,16 +410,18 @@ func (e *OperationInvoker) run(
 		<-pumpDone
 
 		if retryDetails != nil && rounds < maxContextRounds {
-			resolved := e.resolveContext(ctx, retryDetails)
+			resolved, _ := e.resolveContext(ctx, retryDetails)
 			if resolved != nil {
 				mergeResolved(resolved)
 				rounds++
 				innerCancel()
 				continue
 			}
-			surface = NewContextRequiredError("openbindings: binding requires context", retryDetails)
-		} else if retryDetails != nil {
-			surface = NewContextRequiredError("openbindings: binding requires context", retryDetails)
+		}
+		if retryDetails != nil && surface == nil {
+			// Decline or cap exhausted: surface the binding's ORIGINAL
+			// challenge (its message is the human-readable part).
+			surface = retryChallenge
 		}
 
 		// Ensure the inner is terminal before metadata reads (idempotent
@@ -493,17 +521,17 @@ func (e *OperationInvoker) runOutputs(
 	closeRetryWindow func(),
 	forwardHeader func(Invocation[any, any]),
 	retryEligible func() bool,
-) (surface *InvocationError, retry *ContextRequiredDetails) {
+) (surface, retryChallenge *InvocationError) {
 	out := inner.Outputs()
 	for {
 		v, err := out.Read(innerCtx)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil, nil // clean end
 		}
 		if err != nil {
 			ie := AsInvocationError(err)
-			if details := ContextRequiredFrom(ie); details != nil && retryEligible() && e.ContextResolver != nil {
-				return nil, details
+			if ContextRequiredFrom(ie) != nil && retryEligible() && e.ContextResolver != nil {
+				return nil, ie
 			}
 			return ie, nil
 		}
@@ -548,15 +576,15 @@ func (e *OperationInvoker) runOutputs(
 	}
 }
 
-func (e *OperationInvoker) resolveContext(ctx context.Context, details *ContextRequiredDetails) map[string]any {
+func (e *OperationInvoker) resolveContext(ctx context.Context, details *ContextRequiredDetails) (map[string]any, error) {
 	if e.ContextResolver == nil {
-		return nil
+		return nil, nil
 	}
 	resolved, err := e.ContextResolver(ctx, details)
 	if err != nil || len(resolved) == 0 {
-		return nil
+		return nil, err
 	}
-	return resolved
+	return resolved, nil
 }
 
 // makeInputValidator builds the OBI-T-07 write-validation hook for an
@@ -598,22 +626,20 @@ func makeInputValidator(op *Operation, iface *Interface, operationName string) f
 	}
 }
 
-// asIE unwraps err into *InvocationError when it is one (exact type; the
-// code is load-bearing).
+// asIE unwraps err into *InvocationError (including wrapped ones — a foreign
+// Invocation impl may wrap the SDK error while preserving its load-bearing
+// Code).
 func asIE(err error, target **InvocationError) bool {
-	ie, ok := err.(*InvocationError) //nolint:errorlint
-	if ok {
-		*target = ie
-	}
-	return ok
+	return errors.As(err, target)
 }
 
 // wireError converts wiring errors raised mid-run into terminal invocation errors.
 func wireError(err error) *InvocationError {
-	if ie, ok := err.(*InvocationError); ok { //nolint:errorlint
+	var ie *InvocationError
+	if errors.As(err, &ie) {
 		return ie
 	}
-	if strings.Contains(err.Error(), ErrNoInvoker.Error()) {
+	if errors.Is(err, ErrNoInvoker) || strings.Contains(err.Error(), ErrNoInvoker.Error()) {
 		return &InvocationError{Code: ErrCodeBindingNotFound, Message: err.Error()}
 	}
 	return AsInvocationError(err)

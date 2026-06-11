@@ -2,8 +2,13 @@ package openbindings
 
 // Canonical invocation error codes. Wire values are SCREAMING_SNAKE with an
 // ERR_ prefix, plus the un-prefixed negotiation signal CONTEXT_REQUIRED,
-// matching the openbindings.binding-invoker role. The TypeScript SDK emits
-// the same values; consumers switching on Code are portable across both.
+// matching the openbindings.binding-invoker role. The TypeScript SDK uses
+// the same values for the same failure classes, so consumers switching on
+// Code are portable for every code an invocation handle can carry. (One
+// idiom split: the local wiring failures — unknown operation/binding/source
+// — surface as pre-errored handles carrying these codes in Go but THROW
+// typed errors in TypeScript; the values exist in both SDKs for
+// documentation.)
 //
 // The lifecycle codes are produced by the SDK's invocation machinery; the
 // operational codes are SDK conventions for format invokers. Third-party
@@ -55,6 +60,11 @@ const (
 	// Details carries a ContextRequiredDetails. Un-prefixed: it is a
 	// negotiation signal, not a failure of the operation.
 	ErrCodeContextRequired = "CONTEXT_REQUIRED"
+
+	// ErrCodeTypeMismatch indicates a typed-invoker boundary failure: a value
+	// could not be decoded into (or encoded from) the generated concrete type.
+	// Produced only by TypedInvocation (the codegen boundary).
+	ErrCodeTypeMismatch = "ERR_TYPE_MISMATCH"
 
 	// -----------------------------------------------------------------------
 	// Local wiring codes (operation-layer resolution failures; never cross

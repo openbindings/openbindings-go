@@ -4,7 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
 	"sync"
+	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -18,6 +23,7 @@ type Invoker struct {
 	mu       sync.RWMutex
 	docCache map[string]*Document
 	schemas  *schemaCache
+	client   *http.Client
 }
 
 // NewInvoker creates a new operation graph binding invoker.
@@ -28,8 +34,20 @@ func NewInvoker(invoker *openbindings.OperationInvoker) *Invoker {
 		invoker:  invoker,
 		docCache: make(map[string]*Document),
 		schemas:  newSchemaCache(),
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				return nil
+			},
+		},
 	}
 }
+
+// maxGraphDocBytes bounds a graph document fetched from a remote location.
+const maxGraphDocBytes = 8 << 20 // 8 MiB
 
 // Formats returns the binding format tokens this invoker supports.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
@@ -101,7 +119,14 @@ func (e *Invoker) loadDocument(location string, content any) (*Document, error) 
 	}
 
 	if data == nil {
-		return nil, fmt.Errorf("no content or location provided")
+		if location == "" {
+			return nil, fmt.Errorf("source must have location or content")
+		}
+		var err error
+		data, err = e.loadLocation(location)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	doc, err := ParseDocument(data)
@@ -115,4 +140,38 @@ func (e *Invoker) loadDocument(location string, content any) (*Document, error) 
 		e.mu.Unlock()
 	}
 	return doc, nil
+}
+
+// loadLocation reads a graph document from an http(s) URL or a local file
+// path (bare path or file:// URI). Remote responses are size-bounded.
+func (e *Invoker) loadLocation(location string) ([]byte, error) {
+	if openbindings.IsHTTPURL(location) {
+		req, err := http.NewRequest(http.MethodGet, location, nil)
+		if err != nil {
+			return nil, fmt.Errorf("invalid location %q: %w", location, err)
+		}
+		resp, err := e.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("fetch operation graph %q: %w", location, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("fetch operation graph %q: HTTP %d", location, resp.StatusCode)
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxGraphDocBytes+1))
+		if err != nil {
+			return nil, fmt.Errorf("read operation graph %q: %w", location, err)
+		}
+		if len(data) > maxGraphDocBytes {
+			return nil, fmt.Errorf("operation graph %q exceeds %d bytes", location, maxGraphDocBytes)
+		}
+		return data, nil
+	}
+
+	path := strings.TrimPrefix(location, "file://")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read operation graph %q: %w", location, err)
+	}
+	return data, nil
 }

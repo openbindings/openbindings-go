@@ -118,21 +118,32 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	// ----- Input flows through the handle, not the args. Unary and
 	// server-streaming both take exactly one request message. -----
-	input, gotInput, rerr := readFirstInput(bctx, inv)
-	if rerr != nil {
-		// Terminal (cancelled) or ctx error; FireError is an idempotent no-op
-		// when the invocation already terminated.
-		inv.FireError(openbindings.AsInvocationError(rerr))
-		return
+	//
+	// No-input convention: when the operation layer drives an operation that
+	// declares no input (Binding set, InputSchema nil), close input on entry
+	// and dispatch an empty request — a caller of a no-input operation never
+	// writes nor closes, so reading would park forever.
+	var input any
+	if args.Binding != nil && args.InputSchema == nil {
+		_ = inv.CloseInput()
+	} else {
+		in, gotInput, rerr := readFirstInput(bctx, inv)
+		if rerr != nil {
+			// Terminal (cancelled) or ctx error; FireError is an idempotent
+			// no-op when the invocation already terminated.
+			inv.FireError(openbindings.AsInvocationError(rerr))
+			return
+		}
+		if !gotInput && !emptyRequestMessage(methodDesc) {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeMissingInput,
+				Message: fmt.Sprintf("Connect method %s/%s requires an input message", svcName, methodName),
+			})
+			return
+		}
+		_ = inv.CloseInput()
+		input = in
 	}
-	if !gotInput && !emptyRequestMessage(methodDesc) {
-		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeMissingInput,
-			Message: fmt.Sprintf("Connect method %s/%s requires an input message", svcName, methodName),
-		})
-		return
-	}
-	_ = inv.CloseInput()
 
 	headers := buildHTTPHeaders(args.Context)
 

@@ -350,8 +350,8 @@ func TestResolveRefs_EndToEnd_CreateInterface(t *testing.T) {
 
 func TestResolveRefs_ComponentSchemaRefToAnotherSchema(t *testing.T) {
 	doc := &Document{
-		AsyncAPI: "3.0.0",
-		Info:     Info{Title: "Test", Version: "1.0.0"},
+		AsyncAPI:   "3.0.0",
+		Info:       Info{Title: "Test", Version: "1.0.0"},
 		Operations: map[string]Operation{},
 		Components: &Components{
 			Schemas: map[string]any{

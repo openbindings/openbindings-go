@@ -100,8 +100,8 @@ func (s *introspectionSchema) rootTypeName(rootType string) string {
 }
 
 // discover introspects a GraphQL endpoint and returns the schema.
-func discover(ctx context.Context, endpointURL string, headers map[string]string) (*discovery, error) {
-	schema, err := introspect(ctx, endpointURL, headers)
+func discover(ctx context.Context, client *http.Client, endpointURL string, headers map[string]string) (*discovery, error) {
+	schema, err := introspect(ctx, client, endpointURL, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -109,8 +109,8 @@ func discover(ctx context.Context, endpointURL string, headers map[string]string
 }
 
 // introspect sends the standard introspection query and parses the result.
-func introspect(ctx context.Context, endpointURL string, headers map[string]string) (*introspectionSchema, error) {
-	data, _, errors, err := doGraphQLHTTP(ctx, endpointURL, introspectionQuery, nil, headers)
+func introspect(ctx context.Context, client *http.Client, endpointURL string, headers map[string]string) (*introspectionSchema, error) {
+	data, _, errors, err := doGraphQLHTTP(ctx, client, endpointURL, introspectionQuery, nil, headers)
 	if err != nil {
 		return nil, fmt.Errorf("introspection: %w", err)
 	}
@@ -139,7 +139,7 @@ func introspect(ctx context.Context, endpointURL string, headers map[string]stri
 
 // doGraphQLHTTP sends a GraphQL query over HTTP POST and returns the parsed
 // data and errors from the response.
-func doGraphQLHTTP(ctx context.Context, endpointURL, query string, variables map[string]any, headers map[string]string) (map[string]any, http.Header, []graphqlError, error) {
+func doGraphQLHTTP(ctx context.Context, client *http.Client, endpointURL, query string, variables map[string]any, headers map[string]string) (map[string]any, http.Header, []graphqlError, error) {
 	body := map[string]any{"query": query}
 	if variables != nil {
 		body["variables"] = variables
@@ -161,15 +161,20 @@ func doGraphQLHTTP(ctx context.Context, endpointURL, query string, variables map
 		}
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	// The +1 sentinel distinguishes an at-limit response from an over-limit
+	// one (parity with openapi/connect).
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return nil, resp.Header, nil, fmt.Errorf("read response: %w", err)
+	}
+	if int64(len(respBody)) > maxResponseBytes {
+		return nil, resp.Header, nil, fmt.Errorf("response exceeds %d byte limit", maxResponseBytes)
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {

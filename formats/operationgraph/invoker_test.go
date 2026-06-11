@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1594,5 +1596,41 @@ func TestOperationLayerEndToEnd(t *testing.T) {
 	}
 	if vals[0].(map[string]any)["n"] != float64(42) {
 		t.Fatalf("expected n=42, got %v", vals[0])
+	}
+}
+
+func TestLoadDocument_FromLocalFile(t *testing.T) {
+	doc := `{
+		"operationGraph": "0.2.0",
+		"graphs": { "g": { "nodes": {
+			"in": {"type": "input"},
+			"out": {"type": "output"}
+		}, "edges": [{"from": "in", "to": "out"}] } }
+	}`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "graph.json")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	e := NewInvoker(nil)
+	got, err := e.loadDocument(path, nil)
+	if err != nil {
+		t.Fatalf("loadDocument from file: %v", err)
+	}
+	if _, ok := got.Graphs["g"]; !ok {
+		t.Fatalf("graph not parsed: %+v", got)
+	}
+	// Cached on second load.
+	again, err := e.loadDocument(path, nil)
+	if err != nil || again != got {
+		t.Fatalf("expected cache hit, got %v err=%v", again, err)
+	}
+}
+
+func TestLoadDocument_MissingLocationAndContent(t *testing.T) {
+	e := NewInvoker(nil)
+	if _, err := e.loadDocument("", nil); err == nil {
+		t.Fatal("expected error for empty location and content")
 	}
 }

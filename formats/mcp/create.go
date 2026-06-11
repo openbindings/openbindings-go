@@ -181,9 +181,10 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 		}
 	}
 
-	// MCP discovery does not expose security metadata, so we leave the
-	// security section empty. If the server requires auth, the invoker's
-	// auth retry flow will handle it (401 → resolve credentials → retry).
+	// MCP discovery does not expose security metadata, and OBI documents carry
+	// no security section: runtime context is negotiated at call time. If the
+	// server requires auth, the invoker surfaces a CONTEXT_REQUIRED challenge
+	// (e.g. on a 401) for the operation layer to resolve and replay.
 
 	return &iface, nil
 }

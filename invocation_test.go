@@ -8,6 +8,7 @@ package openbindings
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"sync"
@@ -88,7 +89,7 @@ func TestTerminalStickyAndSingle(t *testing.T) {
 	inv := NewInvocationImpl[any, any](bg())
 	inv.CloseOutput()
 	inv.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "late"}) // no-op
-	inv.Cancel()                                                          // no-op
+	inv.Cancel()                                                           // no-op
 	if _, err := collectStream(t, inv.Outputs()); err != nil {
 		t.Fatalf("normal close must win: %v", err)
 	}
@@ -677,5 +678,134 @@ func TestContextRequiredIsJustATerminalCode(t *testing.T) {
 	var ie *InvocationError
 	if !errors.As(err, &ie) || ContextRequiredFrom(ie) == nil {
 		t.Fatalf("expected CONTEXT_REQUIRED with details, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Regression tests (post-review fixes)
+// ---------------------------------------------------------------------------
+
+// TestAcceptedEmitNeverLostUnderRacingTerminal stresses the seam between the
+// mutex-guarded state machine and the channel select: an EmitOutput that
+// returns nil ("accepted") must be observable by a reader draining to
+// terminal, even when the terminal raced in from another goroutine.
+// (Previously ~3.5e-5 of racing emits stranded an accepted value.)
+func TestAcceptedEmitNeverLostUnderRacingTerminal(t *testing.T) {
+	for iter := 0; iter < 20000; iter++ {
+		inv := NewInvocationImpl[any, int](bg())
+
+		accepted := make(chan bool, 1)
+		go func() {
+			err := inv.EmitOutput(42)
+			accepted <- err == nil
+		}()
+		go inv.Cancel()
+
+		got := false
+		out := inv.Outputs()
+		for {
+			v, err := out.Read(bg())
+			if err != nil {
+				break
+			}
+			if v == 42 {
+				got = true
+			}
+		}
+		if <-accepted && !got {
+			t.Fatalf("iter %d: emit accepted but value never surfaced before terminal", iter)
+		}
+	}
+}
+
+func TestConcurrentOutputReadersPanic(t *testing.T) { // SS, BD
+	inv := NewInvocationImpl[any, int](bg())
+	out := inv.Outputs()
+	ready := make(chan struct{})
+	go func() {
+		close(ready)
+		_, _ = out.Read(bg()) // parks (no output yet)
+	}()
+	<-ready
+	time.Sleep(20 * time.Millisecond)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on concurrent OutputStream.Read")
+		}
+		inv.CloseOutput() // unpark the goroutine reader
+	}()
+	_, _ = out.Read(bg())
+}
+
+func TestSetTrailerAfterTerminalPanics(t *testing.T) {
+	inv := NewInvocationImpl[any, any](bg())
+	inv.CloseOutput()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("late SetTrailer must fail loudly (TS parity)")
+		}
+	}()
+	inv.SetTrailer(Metadata{"late": {"true"}})
+}
+
+func TestMetadataReturnsAreIsolated(t *testing.T) {
+	inv := NewInvocationImpl[any, string](bg())
+	md := Metadata{"k": {"v"}}
+	_ = inv.SetHeader(md)
+	md["k"][0] = "mutated-by-binding" // binding mutates its map after set
+
+	got, err := inv.Header(shortCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["k"][0] != "v" {
+		t.Fatalf("header aliased the binding's map: %v", got)
+	}
+	got["k"] = []string{"mutated-by-caller"}
+	again, _ := inv.Header(shortCtx(t))
+	if again["k"][0] != "v" {
+		t.Fatalf("header aliased a previous return: %v", again)
+	}
+}
+
+func TestContextRequirementJSONRoundTripsExtra(t *testing.T) {
+	durable := false
+	req := ContextRequirement{
+		Type:        "auth.oauth2",
+		Durable:     &durable,
+		Description: "OAuth token",
+		Extra:       map[string]any{"authorizeUrl": "https://auth.example.com", "scopes": []any{"read"}},
+	}
+	b, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back ContextRequirement
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Type != "auth.oauth2" || back.Durable == nil || *back.Durable || back.Description != "OAuth token" {
+		t.Fatalf("typed fields lost: %+v", back)
+	}
+	if back.Extra["authorizeUrl"] != "https://auth.example.com" {
+		t.Fatalf("family-specific fields lost: %+v", back.Extra)
+	}
+}
+
+func TestContextRequiredFromDecodesMapDetails(t *testing.T) {
+	// Details that crossed a JSON boundary arrive as a generic map; the
+	// operation layer must still recognize the challenge as retryable.
+	err := &InvocationError{
+		Code:    ErrCodeContextRequired,
+		Message: "bearer required",
+		Details: map[string]any{
+			"key":          "api.example.com",
+			"alternatives": []any{map[string]any{"requirements": []any{map[string]any{"type": "auth.bearer"}}}},
+		},
+	}
+	d := ContextRequiredFrom(err)
+	if d == nil || d.Key != "api.example.com" || len(d.Alternatives) != 1 ||
+		d.Alternatives[0].Requirements[0].Type != "auth.bearer" {
+		t.Fatalf("map-shaped details not decoded: %+v", d)
 	}
 }

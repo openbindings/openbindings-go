@@ -3,8 +3,10 @@ package openbindings
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"sync"
 	"sync/atomic"
 )
@@ -33,7 +35,8 @@ type Metadata map[string][]string
 
 // ContextRequirement is one runtime prerequisite. Type names a requirement
 // family (e.g. "auth.bearer", "auth.apiKey", "auth.basic", "auth.oauth2");
-// additional fields are family-specific.
+// additional fields are family-specific and round-trip through Extra (the
+// binding-invoker role declares requirement objects open).
 type ContextRequirement struct {
 	Type string `json:"type"`
 	// Durable reports whether resolved context MAY be cached under the
@@ -42,6 +45,44 @@ type ContextRequirement struct {
 	Durable     *bool          `json:"durable,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Extra       map[string]any `json:"-"`
+}
+
+func (r ContextRequirement) MarshalJSON() ([]byte, error) {
+	out := make(map[string]any, 3+len(r.Extra))
+	for k, v := range r.Extra {
+		out[k] = v
+	}
+	out["type"] = r.Type
+	if r.Durable != nil {
+		out["durable"] = *r.Durable
+	}
+	if r.Description != "" {
+		out["description"] = r.Description
+	}
+	return json.Marshal(out)
+}
+
+func (r *ContextRequirement) UnmarshalJSON(b []byte) error {
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if t, ok := raw["type"].(string); ok {
+		r.Type = t
+	}
+	if d, ok := raw["durable"].(bool); ok {
+		r.Durable = &d
+	}
+	if d, ok := raw["description"].(string); ok {
+		r.Description = d
+	}
+	delete(raw, "type")
+	delete(raw, "durable")
+	delete(raw, "description")
+	if len(raw) > 0 {
+		r.Extra = raw
+	}
+	return nil
 }
 
 // ContextAlternative is a conjunctive requirement set: ALL requirements must
@@ -66,13 +107,31 @@ func NewContextRequiredError(message string, details *ContextRequiredDetails) *I
 }
 
 // ContextRequiredFrom narrows a terminal error to a CONTEXT_REQUIRED
-// challenge, returning its details, or nil when err is not one.
+// challenge, returning its details, or nil when err is not one. Details that
+// crossed a JSON boundary (the binding-invoker wire protocol) arrive as a
+// generic map and are decoded back into the typed shape.
 func ContextRequiredFrom(err *InvocationError) *ContextRequiredDetails {
 	if err == nil || err.Code != ErrCodeContextRequired {
 		return nil
 	}
-	d, _ := err.Details.(*ContextRequiredDetails)
-	return d
+	switch d := err.Details.(type) {
+	case *ContextRequiredDetails:
+		return d
+	case ContextRequiredDetails:
+		return &d
+	case map[string]any:
+		b, merr := json.Marshal(d)
+		if merr != nil {
+			return nil
+		}
+		var details ContextRequiredDetails
+		if json.Unmarshal(b, &details) != nil || details.Key == "" {
+			return nil
+		}
+		return &details
+	default:
+		return nil
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +301,13 @@ type InvocationImpl[I, O any] struct {
 
 	outputsClaimed bool
 	inputReaders   atomic.Int32
+	outputReaders  atomic.Int32
+	// pendingEmits counts EmitOutput calls between their open-state check and
+	// their select resolution. The reader's terminal path waits for in-flight
+	// emits to settle before surfacing the terminal, closing the
+	// state-machine-vs-channel-select seam where an emit could win the send
+	// AFTER a racing terminal and strand an "accepted" value.
+	pendingEmits atomic.Int32
 
 	// validateInput is the OBI-T-07 hook installed by the operation layer:
 	// a returned error is terminal AND rejects the offending Write with the
@@ -392,7 +458,7 @@ func (i *InvocationImpl[I, O]) headerSnapshot() Metadata {
 	if i.headerMD == nil {
 		return Metadata{}
 	}
-	return i.headerMD
+	return copyMetadata(i.headerMD)
 }
 
 func (i *InvocationImpl[I, O]) Trailer() Metadata {
@@ -404,7 +470,7 @@ func (i *InvocationImpl[I, O]) Trailer() Metadata {
 	if i.trailerMD == nil {
 		return Metadata{}
 	}
-	return i.trailerMD
+	return copyMetadata(i.trailerMD)
 }
 
 // ----- Binding-facing -----
@@ -436,16 +502,17 @@ func (i *InvocationImpl[I, O]) ReadInput(ctx context.Context) (I, error) {
 	case v := <-i.inputCh:
 		return v, nil
 	case <-i.inputClosedCh:
-		// Input closed after the caller buffered a value: drain it first.
+		// A terminal transition also closes the input side; terminal-first
+		// applies here exactly as at entry — the binding must stop, not act
+		// on one more buffered input (and must never see a clean EOF).
+		if err := i.erroredErr(); err != nil {
+			return zero, err
+		}
+		// NORMAL close after the caller buffered a value: drain it first.
 		select {
 		case v := <-i.inputCh:
 			return v, nil
 		default:
-		}
-		// A terminal transition also closes the input side; the binding
-		// must see the terminal error, not a clean EOF.
-		if err := i.erroredErr(); err != nil {
-			return zero, err
 		}
 		return zero, io.EOF
 	case <-i.done:
@@ -496,7 +563,14 @@ func (i *InvocationImpl[I, O]) EmitOutput(output O) error {
 	}
 	// Header settles with the first output if the binding never set it.
 	i.settleHeaderLocked()
+	// The pending-emit window opens INSIDE the critical section: any emit
+	// that passed the open-state check is counted before a racing terminal
+	// can acquire the mutex and close `done`, so the reader's terminal path
+	// always observes it (the increment is ordered before close(done) by
+	// the mutex, and close(done) is the reader's synchronization point).
+	i.pendingEmits.Add(1)
 	i.mu.Unlock()
+	defer i.pendingEmits.Add(-1)
 
 	// The bounded buffered channel IS the backpressure: a full-channel send
 	// parks; `done` wakes a parked producer on terminal so it returns the
@@ -551,19 +625,33 @@ func (i *InvocationImpl[I, O]) SetHeader(md Metadata) error {
 	if i.headerSettled {
 		return fmt.Errorf("openbindings: SetHeader must precede the first EmitOutput/CloseOutput")
 	}
-	i.headerMD = md
+	i.headerMD = copyMetadata(md)
 	i.settleHeaderLocked()
 	return nil
+}
+
+// copyMetadata clones md so binding-held maps and caller-held returns never
+// alias unsynchronized shared state.
+func copyMetadata(md Metadata) Metadata {
+	if md == nil {
+		return nil
+	}
+	cp := make(Metadata, len(md))
+	for k, vs := range md {
+		cp[k] = append([]string(nil), vs...)
+	}
+	return cp
 }
 
 func (i *InvocationImpl[I, O]) SetTrailer(md Metadata) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.state != stateOpen {
-		// Must precede CloseOutput/FireError; late sets are dropped.
-		return
+		// A binding bug ("must precede CloseOutput/FireError"): fail loudly,
+		// mirroring the TS SDK's throw, instead of silently dropping metadata.
+		panic("openbindings: SetTrailer must precede CloseOutput/FireError")
 	}
-	i.trailerMD = md
+	i.trailerMD = copyMetadata(md)
 }
 
 func (i *InvocationImpl[I, O]) settleHeaderLocked() {
@@ -582,6 +670,16 @@ type outputStream[I, O any] struct {
 
 func (s *outputStream[I, O]) Read(ctx context.Context) (O, error) {
 	var zero O
+
+	if n := s.impl.outputReaders.Add(1); n > 1 {
+		s.impl.outputReaders.Add(-1)
+		// A second concurrent reader on the single acquired stream is a
+		// caller bug (it would silently split outputs): fail loudly,
+		// symmetric with the ReadInput guard.
+		panic(fmt.Sprintf("openbindings: %s: concurrent OutputStream.Read on one invocation", ErrCodeAlreadyConsumed))
+	}
+	defer s.impl.outputReaders.Add(-1)
+
 	// Drain-before-terminal: buffered outputs always surface before the
 	// terminal error, even when emit and FireError raced in one critical
 	// section.
@@ -594,11 +692,21 @@ func (s *outputStream[I, O]) Read(ctx context.Context) (O, error) {
 	case v := <-s.impl.outputCh:
 		return v, nil
 	case <-s.impl.done:
-		// A value may have landed between the drain attempt and done firing.
-		select {
-		case v := <-s.impl.outputCh:
-			return v, nil
-		default:
+		// Settle the seam between the state machine and the channel select:
+		// an emit that passed its open-state check may win the send AFTER
+		// done closed (the racing-terminal window). Wait for in-flight emits
+		// to resolve, draining anything they land, before surfacing the
+		// terminal — preserving drain-before-terminal unconditionally.
+		for {
+			select {
+			case v := <-s.impl.outputCh:
+				return v, nil
+			default:
+			}
+			if s.impl.pendingEmits.Load() == 0 {
+				break
+			}
+			runtime.Gosched()
 		}
 		if err := s.impl.erroredErr(); err != nil {
 			return zero, err
@@ -631,18 +739,19 @@ func Single[O any](ctx context.Context, out OutputStream[O]) (O, error) {
 	var zero O
 	first, err := out.Read(ctx)
 	if err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return zero, &InvocationError{Code: ErrCodeExpectedSingle, Message: "expected one output, got none"}
 		}
+		// Errors pass through without Stop: a terminal already ended the
+		// invocation (Stop would be a no-op), and a per-call ctx error
+		// leaves the live invocation to the caller's discretion.
 		return zero, err
 	}
 	if _, err := out.Read(ctx); err == nil {
-		out.Stop() // abandon -> cancel
+		out.Stop() // abandon -> cancel: the one Stop Single owns
 		return zero, &InvocationError{Code: ErrCodeExpectedSingle, Message: "expected one output, got more"}
-	} else if err != io.EOF {
+	} else if !errors.Is(err, io.EOF) {
 		// A real terminal error after the first output surfaces as-is.
-		// (Stop after a real terminal is a no-op; it cannot overwrite it.)
-		out.Stop()
 		return zero, err
 	}
 	return first, nil
@@ -676,14 +785,14 @@ func (t *TypedInvocation[I, O]) Write(ctx context.Context, input I) error {
 	b, err := json.Marshal(input)
 	if err != nil {
 		return &InvocationError{
-			Code:    "ERR_TYPE_MISMATCH",
+			Code:    ErrCodeTypeMismatch,
 			Message: fmt.Sprintf("openbindings: input %T is not JSON-encodable: %v", input, err),
 		}
 	}
 	var generic any
 	if err := json.Unmarshal(b, &generic); err != nil {
 		return &InvocationError{
-			Code:    "ERR_TYPE_MISMATCH",
+			Code:    ErrCodeTypeMismatch,
 			Message: fmt.Sprintf("openbindings: input %T round-trip failed: %v", input, err),
 		}
 	}
@@ -730,7 +839,7 @@ func (s *typedOutputStream[O]) Read(ctx context.Context) (O, error) {
 		}
 	}
 	return zero, &InvocationError{
-		Code:    "ERR_TYPE_MISMATCH",
+		Code:    ErrCodeTypeMismatch,
 		Message: fmt.Sprintf("openbindings: expected %T, got %T", zero, raw),
 	}
 }
@@ -772,10 +881,11 @@ func AsInvocationError(err error) *InvocationError {
 	if err == nil {
 		return nil
 	}
-	if ie, ok := err.(*InvocationError); ok { //nolint:errorlint // exact type carries the code
+	var ie *InvocationError
+	if errors.As(err, &ie) {
 		return ie
 	}
-	if err == context.Canceled || err == context.DeadlineExceeded {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return &InvocationError{Code: ErrCodeCancelled, Message: err.Error()}
 	}
 	return &InvocationError{Code: ErrCodeRuntime, Message: err.Error()}

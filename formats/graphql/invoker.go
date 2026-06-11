@@ -23,15 +23,35 @@ import (
 const FormatToken = "graphql"
 const DefaultSourceName = "graphql"
 
+// maxRedirects bounds the redirect chain a single request may follow.
+// Prevents redirect loops without imposing any total request timeout
+// (which is the caller's responsibility via context).
+const maxRedirects = 10
+
+func newDefaultHTTPClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			return nil
+		},
+	}
+}
+
 // Invoker handles binding invocation for GraphQL sources.
 type Invoker struct {
+	client  *http.Client
 	mu      sync.RWMutex
-	schemas map[string]*introspectionSchema // endpoint URL -> cached schema
+	schemas map[string]*introspectionSchema // normalized endpoint -> cached schema
 }
 
 // NewInvoker creates a new GraphQL binding invoker.
 func NewInvoker() *Invoker {
-	return &Invoker{schemas: make(map[string]*introspectionSchema)}
+	return &Invoker{
+		client:  newDefaultHTTPClient(),
+		schemas: make(map[string]*introspectionSchema),
+	}
 }
 
 // Formats returns the source formats supported by the GraphQL invoker.
@@ -39,14 +59,12 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "GraphQL APIs"}}
 }
 
-// cachedIntrospect returns a cached introspection result or performs a fresh introspection.
-// The cache key is the normalized endpoint URL so that trailing slashes and other
-// trivial differences don't cause redundant introspection calls.
+// cachedIntrospect returns a cached introspection result or performs a fresh
+// introspection. The cache key is the FULL normalized endpoint
+// (scheme://host/path): two GraphQL endpoints on one host must not share a
+// schema; trailing-slash and host-case differences still collapse.
 func (e *Invoker) cachedIntrospect(ctx context.Context, endpointURL string, headers map[string]string) (*introspectionSchema, error) {
-	key := normalizeEndpoint(endpointURL)
-	if key == "" {
-		key = endpointURL
-	}
+	key := introspectionCacheKey(endpointURL)
 
 	e.mu.RLock()
 	if s, ok := e.schemas[key]; ok {
@@ -55,7 +73,7 @@ func (e *Invoker) cachedIntrospect(ctx context.Context, endpointURL string, head
 	}
 	e.mu.RUnlock()
 
-	schema, err := introspect(ctx, endpointURL, headers)
+	schema, err := introspect(ctx, e.client, endpointURL, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -140,13 +158,17 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 
 	// Query / mutation: unary HTTP dispatch.
-	data, respHeaders, gqlErrors, err := doGraphQLHTTP(bctx, args.Source.Location, query, variables, headers)
+	data, respHeaders, gqlErrors, err := doGraphQLHTTP(bctx, e.client, args.Source.Location, query, variables, headers)
 	if err != nil {
 		if bctx.Err() != nil {
 			return
 		}
 		if he, ok := err.(*httpError); ok {
-			inv.FireError(openbindings.HTTPError(he.StatusCode, fmt.Sprintf("HTTP %d", he.StatusCode)))
+			ierr := openbindings.HTTPError(he.StatusCode, fmt.Sprintf("HTTP %d", he.StatusCode))
+			if d, ok := ierr.Details.(map[string]any); ok && he.Body != "" {
+				d["body"] = he.Body
+			}
+			inv.FireError(ierr)
 			return
 		}
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
@@ -193,8 +215,19 @@ func (e *Invoker) resolveSchema(ctx context.Context, args *openbindings.BindingI
 	}
 	s, err := e.cachedIntrospect(ctx, args.Source.Location, headers)
 	if err != nil {
-		if isAuthError(err) {
-			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeAuthRequired, Message: err.Error()}
+		var he *httpError
+		if errors.As(err, &he) && (he.StatusCode == 401 || he.StatusCode == 403) {
+			// 401 → ERR_AUTH_REQUIRED, 403 → ERR_PERMISSION_DENIED (TS
+			// parity), with the response body in Details for diagnosis.
+			ierr := &openbindings.InvocationError{
+				Code:    openbindings.HTTPErrorCode(he.StatusCode),
+				Message: err.Error(),
+				Details: map[string]any{"status": he.StatusCode},
+			}
+			if he.Body != "" {
+				ierr.Details.(map[string]any)["body"] = he.Body
+			}
+			return nil, ierr
 		}
 		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: err.Error()}
 	}
@@ -231,7 +264,7 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 	if endpoint == "" {
 		return nil, fmt.Errorf("GraphQL source requires a location (endpoint URL)")
 	}
-	disc, err := discover(ctx, endpoint, nil)
+	disc, err := discover(ctx, newDefaultHTTPClient(), endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("GraphQL introspection: %w", err)
 	}
@@ -251,16 +284,21 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 	return &iface, nil
 }
 
-// normalizeEndpoint extracts a stable context key from a GraphQL endpoint URL.
-func normalizeEndpoint(endpoint string) string {
+// introspectionCacheKey normalizes an endpoint URL to a schema cache key
+// preserving the full target (scheme://host/path[?query]) — keying by host
+// alone would let two endpoints on one host share a schema (wrong results).
+// Host case and a trailing slash still collapse to one key.
+func introspectionCacheKey(endpoint string) string {
 	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" {
-		return ""
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
+		return endpoint
 	}
-	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
-		return openbindings.NormalizeContextKey(u.Host)
+	key := strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host) + strings.TrimRight(u.Path, "/")
+	if u.RawQuery != "" {
+		key += "?" + u.RawQuery
 	}
-	return openbindings.NormalizeContextKey(endpoint)
+	return key
 }
 
 // parseIntrospectionContent parses inline Source.Content as a GraphQL
@@ -299,11 +337,4 @@ func parseIntrospectionContent(content any) (*introspectionSchema, error) {
 		return nil, fmt.Errorf("unrecognized introspection content format")
 	}
 	return &schema, nil
-}
-
-func isAuthError(err error) bool {
-	if he, ok := err.(*httpError); ok {
-		return he.StatusCode == 401 || he.StatusCode == 403
-	}
-	return false
 }

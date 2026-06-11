@@ -35,6 +35,10 @@ import (
 
 const maxResponseBytes = 10 * 1024 * 1024 // 10 MB
 
+// sseMaxLineBytes bounds individual SSE line length to prevent runaway memory
+// use from a misbehaving server (parity with openapi/sse.go).
+const sseMaxLineBytes = 16 * 1024 * 1024
+
 type handle = openbindings.BindingHandle[any, any]
 
 // ---------------------------------------------------------------------------
@@ -149,6 +153,24 @@ func resolveServer(doc *Document, ctx map[string]any) (url string, protocol stri
 		}
 	}
 
+	if server := pickDocServer(doc); server != nil {
+		proto := strings.ToLower(server.Protocol)
+		url := proto + "://" + server.Host
+		if server.PathName != "" {
+			url += server.PathName
+		}
+		return strings.TrimRight(url, "/"), proto, nil
+	}
+
+	return "", "", fmt.Errorf("no supported server found (need http, https, ws, or wss protocol)")
+}
+
+// pickDocServer returns the doc server a connection targets: the first
+// (sorted by name) server with a supported protocol, or nil when none
+// exists. Security derivation MUST consult this same server so the
+// requirements always describe the server actually dialed, never some other
+// server that happens to declare security.
+func pickDocServer(doc *Document) *Server {
 	serverNames := make([]string, 0, len(doc.Servers))
 	for name := range doc.Servers {
 		serverNames = append(serverNames, name)
@@ -157,19 +179,12 @@ func resolveServer(doc *Document, ctx map[string]any) (url string, protocol stri
 
 	for _, name := range serverNames {
 		server := doc.Servers[name]
-		proto := strings.ToLower(server.Protocol)
-
-		switch proto {
+		switch strings.ToLower(server.Protocol) {
 		case "http", "https", "ws", "wss":
-			url := proto + "://" + server.Host
-			if server.PathName != "" {
-				url += server.PathName
-			}
-			return strings.TrimRight(url, "/"), proto, nil
+			return &server
 		}
 	}
-
-	return "", "", fmt.Errorf("no supported server found (need http, https, ws, or wss protocol)")
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -203,31 +218,62 @@ func requirementType(s SecurityScheme) string {
 
 // requiredContext computes the context the binding requires for this
 // operation, or nil when the provided context already satisfies it (or the
-// doc declares nothing checkable). Each declared scheme is one alternative:
-// satisfying any one suffices. Side-effect-free; shared by runBinding and
-// PrepareBinding.
+// doc declares nothing checkable). The document model represents security as
+// requirement OBJECTS (scheme name -> scopes): the list is a disjunction (OR)
+// of objects, each object a conjunction (AND) of schemes — exactly the
+// alternatives/requirements shape of ContextRequiredDetails. An empty
+// requirement object means anonymous access is allowed (no challenge for the
+// whole operation, mirroring openapi); an object containing a scheme the SDK
+// cannot express is skipped entirely rather than degraded into a weaker
+// requirement. Side-effect-free; shared by runBinding and PrepareBinding.
 func requiredContext(doc *Document, asyncOp *Operation, serverURL string, ctx map[string]any) *openbindings.ContextRequiredDetails {
-	schemes := resolveSecuritySchemes(doc, asyncOp)
+	requirements := securityRequirements(doc, asyncOp)
+	if len(requirements) == 0 || doc.Components == nil || len(doc.Components.SecuritySchemes) == 0 {
+		return nil
+	}
+
 	var alternatives []openbindings.ContextAlternative
-	for _, s := range schemes {
-		typ := requirementType(s)
-		if typ == "" {
+	for _, reqObj := range requirements {
+		if len(reqObj) == 0 {
+			// Empty requirement object: anonymous access is allowed.
+			return nil
+		}
+		schemeNames := make([]string, 0, len(reqObj))
+		for name := range reqObj {
+			schemeNames = append(schemeNames, name)
+		}
+		sort.Strings(schemeNames)
+
+		var reqs []openbindings.ContextRequirement
+		expressible := true
+		for _, name := range schemeNames {
+			scheme, ok := doc.Components.SecuritySchemes[name]
+			if !ok {
+				expressible = false
+				break
+			}
+			typ := requirementType(scheme)
+			if typ == "" {
+				expressible = false
+				break
+			}
+			req := openbindings.ContextRequirement{Type: typ}
+			if scheme.Description != "" {
+				req.Description = scheme.Description
+			}
+			reqs = append(reqs, req)
+		}
+		if !expressible || len(reqs) == 0 {
 			continue
 		}
-		req := openbindings.ContextRequirement{Type: typ}
-		if s.Description != "" {
-			req.Description = s.Description
-		}
-		alternatives = append(alternatives, openbindings.ContextAlternative{
-			Requirements: []openbindings.ContextRequirement{req},
-		})
+		alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: reqs})
 	}
 	if len(alternatives) == 0 {
 		return nil
 	}
 
 	details := &openbindings.ContextRequiredDetails{
-		Key:          openbindings.NormalizeContextKey(serverURL),
+		Key:          openbindings.NormalizeEndpoint(serverURL),
 		Alternatives: alternatives,
 	}
 	if openbindings.ContextSatisfies(ctx, details) {
@@ -236,28 +282,52 @@ func requiredContext(doc *Document, asyncOp *Operation, serverURL string, ctx ma
 	return details
 }
 
+// securityRequirements returns the security requirement objects applicable to
+// an operation: operation-level security overrides; otherwise the
+// requirements of the doc server the connection targets (the same server
+// pickDocServer selects).
+func securityRequirements(doc *Document, asyncOp *Operation) []map[string][]string {
+	if asyncOp != nil && len(asyncOp.Security) > 0 {
+		return asyncOp.Security
+	}
+	if server := pickDocServer(doc); server != nil && len(server.Security) > 0 {
+		return server.Security
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Send over HTTP: unary POST
 // ---------------------------------------------------------------------------
 
 func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address string, doc *Document, asyncOp *Operation, args *openbindings.BindingInvocationArgs, h handle) {
-	// Unary: the first input is the message payload. An AsyncAPI send always
-	// carries a message.
-	first, err := h.ReadInput(ctx)
-	if err == io.EOF {
-		h.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeMissingInput,
-			Message: "send operation requires an input message",
-		})
-		return
+	// Unary: the first input is the message payload. No-input convention:
+	// an operation-layer call (Binding != nil) for an operation that declares
+	// no input (InputSchema == nil) closes input on entry and sends one empty
+	// message — callers of no-input operations never write nor close, so
+	// reading would park forever.
+	var first any
+	if args.Binding != nil && args.InputSchema == nil {
+		_ = h.CloseInput()
+	} else {
+		v, rerr := h.ReadInput(ctx)
+		if rerr == io.EOF {
+			h.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeMissingInput,
+				Message: "send operation requires an input message",
+			})
+			return
+		}
+		if rerr != nil {
+			return // invocation already terminal (or cancelled)
+		}
+		first = v
+		_ = h.CloseInput()
 	}
-	if err != nil {
-		return // invocation already terminal (or cancelled)
-	}
-	_ = h.CloseInput()
 
 	body := []byte("{}")
 	if first != nil {
+		var err error
 		body, err = json.Marshal(first)
 		if err != nil {
 			h.FireError(openbindings.AsInvocationError(err))
@@ -370,16 +440,21 @@ func runSSEReceive(ctx context.Context, client *http.Client, serverURL, address 
 	_ = h.SetHeader(headerMetadata(resp.Header))
 
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), sseMaxLineBytes)
 	var dataLines []string
-	var totalBytes int
+	var eventBytes int
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		totalBytes += len(line) + 1 // +1 for newline
-		if totalBytes > maxResponseBytes {
+		// The size cap is PER EVENT, not cumulative: a long-lived
+		// subscription legitimately streams more than maxResponseBytes in
+		// total (the same choice connect/streaming.go documents for its
+		// per-envelope cap).
+		eventBytes += len(line) + 1 // +1 for newline
+		if eventBytes > maxResponseBytes {
 			h.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeResponseError,
-				Message: fmt.Sprintf("SSE stream exceeds %d byte limit", maxResponseBytes),
+				Message: fmt.Sprintf("SSE event exceeds %d byte limit", maxResponseBytes),
 			})
 			return
 		}
@@ -389,11 +464,14 @@ func runSSEReceive(ctx context.Context, client *http.Client, serverURL, address 
 			continue
 		}
 
-		if line == "" && len(dataLines) > 0 {
-			ev := parseSSEPayload(dataLines)
-			dataLines = dataLines[:0]
-			if h.EmitOutput(ev) != nil {
-				return // invocation terminated while the emit was parked
+		if line == "" {
+			eventBytes = 0
+			if len(dataLines) > 0 {
+				ev := parseSSEPayload(dataLines)
+				dataLines = dataLines[:0]
+				if h.EmitOutput(ev) != nil {
+					return // invocation terminated while the emit was parked
+				}
 			}
 		}
 	}
@@ -467,17 +545,23 @@ func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, 
 	defer unsubscribe()
 
 	// First-frame bearer convention: browsers cannot set headers on WebSocket
-	// upgrades, so the token travels in the first message body.
-	if token := openbindings.ContextBearerToken(args.Context); token != "" {
+	// upgrades, so the token travels in the first message body — but only
+	// when the resolved server's security declares a bearer-family scheme,
+	// and only once per pooled connection (a reused socket has already
+	// authenticated; re-sending would leak the frame into the message stream).
+	if token := openbindings.ContextBearerToken(args.Context); token != "" && declaresBearerScheme(doc, asyncOp) {
 		frame, merr := json.Marshal(map[string]any{"bearerToken": token})
-		if merr == nil {
-			if werr := pw.send(ctx, frame); werr != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
+		if merr != nil {
+			// A failed marshal must not silently skip auth.
+			h.FireError(openbindings.AsInvocationError(merr))
+			return
+		}
+		if werr := pw.sendFirstFrameAuth(ctx, frame); werr != nil {
+			if ctx.Err() != nil {
 				return
 			}
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
+			return
 		}
 	}
 
@@ -526,6 +610,22 @@ func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, 
 			return // invocation terminated while the emit was parked
 		}
 	}
+}
+
+// declaresBearerScheme reports whether the security applicable to the
+// operation (resolved against the same server the connection targets)
+// declares a bearer-family scheme — http bearer, httpBearer, or oauth2, the
+// schemes whose credential is a bearer token. Gates the first-frame bearer
+// convention so the token is never volunteered to servers that do not
+// declare bearer auth.
+func declaresBearerScheme(doc *Document, asyncOp *Operation) bool {
+	for _, s := range resolveSecuritySchemes(doc, asyncOp) {
+		switch requirementType(s) {
+		case "auth.bearer", "auth.oauth2":
+			return true
+		}
+	}
+	return false
 }
 
 // wsSubscription buffers broadcast frames from a pooled socket for one
@@ -605,6 +705,24 @@ func runWSSend(ctx context.Context, pool *wsPool, serverURL, address string, doc
 		return
 	}
 	defer pw.release()
+
+	// No-input convention: an operation-layer call (Binding != nil) for an
+	// operation that declares no input (InputSchema == nil) closes input on
+	// entry and publishes one empty-object frame — callers of no-input
+	// operations never write nor close, so reading would park forever.
+	if args.Binding != nil && args.InputSchema == nil {
+		_ = h.CloseInput()
+		if werr := pw.send(ctx, []byte("{}")); werr != nil {
+			pool.evict(pw)
+			if ctx.Err() != nil {
+				return
+			}
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
+			return
+		}
+		h.CloseOutput()
+		return
+	}
 
 	// Client-streaming publish: every input is one frame; the caller closing
 	// input completes the call with zero outputs (a publish yields no
@@ -714,32 +832,12 @@ func applyHTTPContext(req *http.Request, doc *Document, asyncOp *Operation, bind
 	}
 }
 
-// resolveSecuritySchemes returns the security schemes applicable to an operation.
-// Operation-level security overrides server-level; falls back to the first server's
-// security if not set on the operation.
+// resolveSecuritySchemes returns the security schemes applicable to an
+// operation, flattened for credential placement. The requirements come from
+// securityRequirements (operation-level, else the server the connection
+// targets).
 func resolveSecuritySchemes(doc *Document, asyncOp *Operation) []SecurityScheme {
-	var requirements []map[string][]string
-
-	if asyncOp != nil && len(asyncOp.Security) > 0 {
-		requirements = asyncOp.Security
-	}
-
-	if len(requirements) == 0 && doc.Servers != nil {
-		// Use the first server's security (sorted by name for determinism).
-		serverNames := make([]string, 0, len(doc.Servers))
-		for name := range doc.Servers {
-			serverNames = append(serverNames, name)
-		}
-		sort.Strings(serverNames)
-		for _, name := range serverNames {
-			srv := doc.Servers[name]
-			if len(srv.Security) > 0 {
-				requirements = srv.Security
-				break
-			}
-		}
-	}
-
+	requirements := securityRequirements(doc, asyncOp)
 	if len(requirements) == 0 {
 		return nil
 	}

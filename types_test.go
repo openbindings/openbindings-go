@@ -767,3 +767,94 @@ func TestTransformOrRef_Resolve(t *testing.T) {
 		t.Fatal("expected malformed ref to return ok=false")
 	}
 }
+
+func TestOperation_EmptySchemaRoundTrip(t *testing.T) {
+	// The spec distinguishes an empty {} schema (any value) from an absent
+	// schema (unspecified contract); omitempty alone would drop {}.
+	in := []byte(`{"openbindings":"0.2.0","operations":{"op":{"input":{},"output":{}}}}`)
+	var i Interface
+	if err := json.Unmarshal(in, &i); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	op := i.Operations["op"]
+	if op.Input == nil || len(op.Input) != 0 {
+		t.Fatalf("expected non-nil empty Input schema, got %#v", op.Input)
+	}
+	out, err := json.Marshal(i)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(out, &round); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	opMap := round["operations"].(map[string]any)["op"].(map[string]any)
+	if inp, ok := opMap["input"]; !ok {
+		t.Fatalf("expected input to survive round-trip, got %s", out)
+	} else if m, isMap := inp.(map[string]any); !isMap || len(m) != 0 {
+		t.Fatalf("expected input to round-trip as {}, got %#v", inp)
+	}
+	if outp, ok := opMap["output"]; !ok {
+		t.Fatalf("expected output to survive round-trip, got %s", out)
+	} else if m, isMap := outp.(map[string]any); !isMap || len(m) != 0 {
+		t.Fatalf("expected output to round-trip as {}, got %#v", outp)
+	}
+}
+
+func TestOperation_AbsentSchemaStaysAbsent(t *testing.T) {
+	in := []byte(`{"openbindings":"0.2.0","operations":{"op":{}}}`)
+	var i Interface
+	if err := json.Unmarshal(in, &i); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	out, err := json.Marshal(i)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(out, &round); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	opMap := round["operations"].(map[string]any)["op"].(map[string]any)
+	if _, ok := opMap["input"]; ok {
+		t.Fatalf("expected absent input to stay absent, got %s", out)
+	}
+	if _, ok := opMap["output"]; ok {
+		t.Fatalf("expected absent output to stay absent, got %s", out)
+	}
+}
+
+func TestOperationExample_ExplicitNullPresenceAndRoundTrip(t *testing.T) {
+	in := []byte(`{"input":null,"description":"null input"}`)
+	var ex OperationExample
+	if err := json.Unmarshal(in, &ex); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !ex.InputPresent {
+		t.Fatalf("expected InputPresent for explicit null input")
+	}
+	if ex.OutputPresent {
+		t.Fatalf("expected OutputPresent false for absent output")
+	}
+	if !ex.HasInput() || ex.HasOutput() {
+		t.Fatalf("expected HasInput && !HasOutput, got %v %v", ex.HasInput(), ex.HasOutput())
+	}
+	out, err := json.Marshal(ex)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round map[string]json.RawMessage
+	if err := json.Unmarshal(out, &round); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	raw, ok := round["input"]
+	if !ok {
+		t.Fatalf("expected explicit null input to survive round-trip, got %s", out)
+	}
+	if string(raw) != "null" {
+		t.Fatalf("expected input to round-trip as null, got %s", raw)
+	}
+	if _, ok := round["output"]; ok {
+		t.Fatalf("expected absent output to stay absent, got %s", out)
+	}
+}

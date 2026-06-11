@@ -2,7 +2,6 @@ package asyncapi
 
 import (
 	"testing"
-
 )
 
 func TestParseRef_BareID(t *testing.T) {
@@ -163,6 +162,109 @@ func TestRequiredContext_OperationOverridesServer(t *testing.T) {
 	}
 	if details.Alternatives[0].Requirements[0].Type != "auth.apiKey" {
 		t.Errorf("operation-level security must win, got %+v", details.Alternatives[0])
+	}
+}
+
+// TestRequiredContext_ConjunctionMapsToOneAlternative verifies the AND shape:
+// a requirement OBJECT naming several schemes is one alternative carrying ALL
+// of them as requirements (the document model represents multi-scheme
+// conjunctions).
+func TestRequiredContext_ConjunctionMapsToOneAlternative(t *testing.T) {
+	doc := &Document{
+		Servers: map[string]Server{
+			"prod": {Host: "api.example.com", Protocol: "https", Security: []map[string][]string{
+				{"bearer": {}, "key": {}}, // one object: bearer AND key
+			}},
+		},
+		Operations: map[string]Operation{"op": {Action: "send"}},
+		Components: &Components{SecuritySchemes: map[string]SecurityScheme{
+			"bearer": {Type: "http", Scheme: "bearer"},
+			"key":    {Type: "apiKey", In: "header", Name: "X-Key"},
+		}},
+	}
+	op := doc.Operations["op"]
+
+	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	if details == nil || len(details.Alternatives) != 1 {
+		t.Fatalf("expected 1 alternative, got %+v", details)
+	}
+	reqs := details.Alternatives[0].Requirements
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 requirements in the conjunction, got %+v", reqs)
+	}
+	types := map[string]bool{reqs[0].Type: true, reqs[1].Type: true}
+	if !types["auth.bearer"] || !types["auth.apiKey"] {
+		t.Errorf("requirement types = %v, want auth.bearer and auth.apiKey", types)
+	}
+
+	// One credential alone must NOT satisfy the conjunction.
+	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t"}); got == nil {
+		t.Error("bearer alone must not satisfy a bearer-AND-apiKey conjunction")
+	}
+	// Both together do.
+	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t", "apiKey": "k"}); got != nil {
+		t.Errorf("bearer+apiKey should satisfy, got %+v", got)
+	}
+}
+
+// TestRequiredContext_EmptyRequirementObjectAllowsAnonymous verifies the
+// openapi-mirroring rule: an empty requirement object means anonymous access
+// is allowed, so no challenge is warranted at all.
+func TestRequiredContext_EmptyRequirementObjectAllowsAnonymous(t *testing.T) {
+	doc := secureDoc(map[string]SecurityScheme{
+		"bearer": {Type: "http", Scheme: "bearer"},
+	}, "bearer")
+	server := doc.Servers["prod"]
+	server.Security = append(server.Security, map[string][]string{}) // anonymous alternative
+	doc.Servers["prod"] = server
+	op := doc.Operations["op"]
+
+	if got := requiredContext(doc, &op, "https://api.example.com", nil); got != nil {
+		t.Errorf("an empty requirement object allows anonymous access, got %+v", got)
+	}
+}
+
+// TestRequiredContext_InexpressibleSchemeSkipsWholeAlternative verifies that
+// a conjunction containing an unmappable scheme is dropped entirely rather
+// than degraded into a weaker requirement.
+func TestRequiredContext_InexpressibleSchemeSkipsWholeAlternative(t *testing.T) {
+	doc := &Document{
+		Servers: map[string]Server{
+			"prod": {Host: "api.example.com", Protocol: "https", Security: []map[string][]string{
+				{"bearer": {}, "custom": {}},
+			}},
+		},
+		Operations: map[string]Operation{"op": {Action: "send"}},
+		Components: &Components{SecuritySchemes: map[string]SecurityScheme{
+			"bearer": {Type: "http", Scheme: "bearer"},
+			"custom": {Type: "scramSha256"},
+		}},
+	}
+	op := doc.Operations["op"]
+	if got := requiredContext(doc, &op, "https://api.example.com", nil); got != nil {
+		t.Errorf("an alternative with an inexpressible scheme must be skipped, got %+v", got)
+	}
+}
+
+// TestRequiredContext_DerivesFromConnectionServer verifies the requirements
+// come from the SAME server the connection targets (first sorted supported
+// server), never from another server that happens to declare security.
+func TestRequiredContext_DerivesFromConnectionServer(t *testing.T) {
+	doc := &Document{
+		Servers: map[string]Server{
+			// "a" sorts first and is the connection target: no security.
+			"a": {Host: "open.example.com", Protocol: "https"},
+			// "b" declares security but is NOT the server dialed.
+			"b": {Host: "secure.example.com", Protocol: "https", Security: []map[string][]string{{"bearer": {}}}},
+		},
+		Operations: map[string]Operation{"op": {Action: "send"}},
+		Components: &Components{SecuritySchemes: map[string]SecurityScheme{
+			"bearer": {Type: "http", Scheme: "bearer"},
+		}},
+	}
+	op := doc.Operations["op"]
+	if got := requiredContext(doc, &op, "https://open.example.com", nil); got != nil {
+		t.Errorf("requirements must derive from the connection's server (no security), got %+v", got)
 	}
 }
 

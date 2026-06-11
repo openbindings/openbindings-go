@@ -792,3 +792,26 @@ func keys[V any](m map[string]V) []string {
 	}
 	return ks
 }
+
+// TestIntegration_NoInputConvention verifies the operation-layer no-input
+// convention: a binding driven for an operation that declares no input
+// (Binding set, InputSchema nil) closes input on entry and dispatches with
+// empty arguments. The caller writes nothing and never closes — a missing
+// convention would park ReadInput forever.
+func TestIntegration_NoInputConvention(t *testing.T) {
+	ts, _ := setupMCPServer(t)
+
+	invoker := NewInvoker(WithClientVersion("test"))
+	args := invocationArgs(ts.URL, "tools/alwaysFails", nil)
+	args.Binding = &openbindings.BindingEntry{Operation: "alwaysFails", Source: "s", Ref: "tools/alwaysFails"}
+	// InputSchema deliberately left nil → no-input operation.
+
+	call := invoker.InvokeBinding(bg(), args)
+	// The caller never writes nor closes; the binding must run regardless.
+	_, err := openbindings.Single(shortCtx(t), call.Outputs())
+	// alwaysFails reports an application error; what matters here is that the
+	// invocation TERMINATED (no deadlock), not its verdict.
+	if err != nil && codeOf(t, err) != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("expected completion or ERR_EXECUTION_FAILED, got %v", err)
+	}
+}

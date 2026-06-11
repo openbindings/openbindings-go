@@ -2,10 +2,15 @@ package asyncapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"nhooyr.io/websocket"
 )
 
@@ -43,7 +48,8 @@ type wsListener struct {
 	onClose func(err error)
 }
 
-// wsPool manages pooled WebSocket connections keyed by "serverURL|address".
+// wsPool manages pooled WebSocket connections keyed by
+// "serverURL|address|credentialDigest".
 type wsPool struct {
 	mu          sync.Mutex
 	conns       map[string]*pooledWS
@@ -65,6 +71,12 @@ type pooledWS struct {
 	// writeMu serializes frame writes from concurrent operations.
 	writeMu sync.Mutex
 
+	// authMu guards firstFrameAuthSent: the first-frame bearer convention
+	// authenticates a connection exactly once, not once per invocation that
+	// reuses the pooled socket.
+	authMu             sync.Mutex
+	firstFrameAuthSent bool
+
 	// Listener registry and close state, guarded by lmu.
 	lmu        sync.Mutex
 	listeners  map[int]*wsListener
@@ -82,9 +94,56 @@ func newWSPool() *wsPool {
 	}
 }
 
-// wsPoolKey builds a cache key from the server URL and channel address.
-func wsPoolKey(serverURL, address string) string {
-	return serverURL + "|" + address
+// wsPoolKey builds a cache key from the server URL, channel address, and a
+// digest of the credential identity the dial would use. Two invocations with
+// different credentials must never share an authenticated socket
+// (cross-tenant credential leak); identical credentials still pool.
+func wsPoolKey(serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any) string {
+	return serverURL + "|" + address + "|" + credentialDigest(serverURL, address, doc, asyncOp, bindCtx)
+}
+
+// credentialDigest summarizes the auth-relevant material a dial for this
+// binding would use: the upgrade headers and query credentials that
+// applyHTTPContext places (spec-driven schemes, fallback credentials, context
+// headers/cookies) plus the first-frame bearer token. The digest — not the
+// raw material — goes into the pool key so credentials never sit in map keys.
+func credentialDigest(serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any) string {
+	h := sha256.New()
+	if req, err := http.NewRequest(http.MethodGet, serverURL+"/"+trimLeadingSlash(address), nil); err == nil {
+		applyHTTPContext(req, doc, asyncOp, bindCtx)
+		names := make([]string, 0, len(req.Header))
+		for name := range req.Header {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			h.Write([]byte(name))
+			h.Write([]byte{0})
+			h.Write([]byte(strings.Join(req.Header[name], "\x00")))
+			h.Write([]byte{0})
+		}
+		h.Write([]byte(req.URL.RawQuery))
+		h.Write([]byte{0})
+	}
+	// The first-frame bearer token authenticates the connection itself even
+	// when no scheme placed it on the upgrade request.
+	h.Write([]byte(openbindings.ContextBearerToken(bindCtx)))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// sendFirstFrameAuth sends the first-frame auth message exactly once per
+// pooled connection; a reused socket that already authenticated skips it.
+func (pw *pooledWS) sendFirstFrameAuth(ctx context.Context, frame []byte) error {
+	pw.authMu.Lock()
+	defer pw.authMu.Unlock()
+	if pw.firstFrameAuthSent {
+		return nil
+	}
+	if err := pw.send(ctx, frame); err != nil {
+		return err
+	}
+	pw.firstFrameAuthSent = true
+	return nil
 }
 
 // acquire returns a pooled WebSocket connection for the given server URL and
@@ -99,7 +158,7 @@ func wsPoolKey(serverURL, address string) string {
 // If multiple goroutines call acquire for the same key concurrently, only one
 // creates the connection while the others wait.
 func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any, l *wsListener) (*pooledWS, func(), error) {
-	key := wsPoolKey(serverURL, address)
+	key := wsPoolKey(serverURL, address, doc, asyncOp, bindCtx)
 
 	for {
 		p.mu.Lock()

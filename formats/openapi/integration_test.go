@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -424,6 +425,205 @@ func TestIntegration_IsolatedStoresDontShareCredentials(t *testing.T) {
 	_, ierr := driveSingle(t, call2, nil)
 	if ierr == nil || ierr.Code != openbindings.ErrCodeContextRequired {
 		t.Fatalf("client2 should fail with CONTEXT_REQUIRED, got %v", ierr)
+	}
+}
+
+// countingServer wraps a handler with a request counter for zero-I/O
+// assertions.
+func countingServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		handler(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &requests
+}
+
+// widgetSpec declares ops with required inputs and a cookie param, without
+// security (so input handling is exercised, not the CONTEXT_REQUIRED gate).
+func widgetSpec(baseURL string) string {
+	spec := map[string]any{
+		"openapi": "3.0.3",
+		"info":    map[string]any{"title": "Widget API", "version": "1.0.0"},
+		"servers": []map[string]any{{"url": baseURL}},
+		"paths": map[string]any{
+			"/widgets/{id}": map[string]any{
+				"get": map[string]any{
+					"operationId": "getWidget",
+					"parameters": []map[string]any{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]any{"type": "integer"}},
+					},
+					"responses": map[string]any{"200": map[string]any{"description": "OK"}},
+				},
+			},
+			"/widgets": map[string]any{
+				"post": map[string]any{
+					"operationId": "createWidget",
+					"requestBody": map[string]any{
+						"required": true,
+						"content": map[string]any{
+							"application/json": map[string]any{"schema": map[string]any{"type": "object"}},
+						},
+					},
+					"responses": map[string]any{"201": map[string]any{"description": "Created"}},
+				},
+			},
+			"/session": map[string]any{
+				"get": map[string]any{
+					"operationId": "getSession",
+					"parameters": []map[string]any{
+						{"name": "session_id", "in": "cookie", "schema": map[string]any{"type": "string"}},
+					},
+					"responses": map[string]any{"200": map[string]any{"description": "OK"}},
+				},
+			},
+		},
+	}
+	b, _ := json.Marshal(spec)
+	return string(b)
+}
+
+// TestIntegration_MissingRequiredInput_NoDispatch verifies cross-SDK parity:
+// a bare input close on an operation with a required parameter (or required
+// requestBody) fires ERR_MISSING_INPUT BEFORE dispatch — the server sees
+// zero requests.
+func TestIntegration_MissingRequiredInput_NoDispatch(t *testing.T) {
+	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	})
+	source := openbindings.InvocationSource{Format: FormatToken, Content: widgetSpec(srv.URL)}
+	binv := NewInvoker()
+
+	cases := []struct {
+		name string
+		ref  string
+	}{
+		{"required path parameter", "#/paths/~1widgets~1{id}/get"},
+		{"required request body", "#/paths/~1widgets/post"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := requests.Load()
+			call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+				Source: source,
+				Ref:    tc.ref,
+			})
+			// Bare close: no input written.
+			_, ierr := driveOutputs(context.Background(), call, nil)
+			if ierr == nil || ierr.Code != openbindings.ErrCodeMissingInput {
+				t.Fatalf("expected ERR_MISSING_INPUT, got %v", ierr)
+			}
+			if got := requests.Load(); got != before {
+				t.Errorf("missing input must fire before dispatch: %d requests hit the server", got-before)
+			}
+		})
+	}
+}
+
+// TestIntegration_NoInputOperationConvention verifies the operation-layer
+// no-input convention: a call carrying Binding != nil and InputSchema == nil
+// dispatches with empty input without waiting for a write — even when the
+// OpenAPI doc declares params (here a cookie-only param the OBI did not
+// express). The caller never writes nor closes.
+func TestIntegration_NoInputOperationConvention(t *testing.T) {
+	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+	binv := NewInvoker()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	call := binv.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{Format: FormatToken, Content: widgetSpec(srv.URL)},
+		Ref:     "#/paths/~1session/get",
+		Binding: &openbindings.BindingEntry{Operation: "getSession", Source: "api", Ref: "#/paths/~1session/get"},
+		// InputSchema nil → no-input operation; the binding closes input itself.
+	})
+	// No Write, no Close: read directly (bounded by ctx so a parked binding
+	// fails the test instead of hanging it).
+	out, err := openbindings.Single(ctx, call.Outputs())
+	if err != nil {
+		t.Fatalf("no-input convention failed: %v", err)
+	}
+	if m, _ := out.(map[string]any); m["ok"] != true {
+		t.Fatalf("got %v", out)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("expected exactly 1 dispatch, got %d", got)
+	}
+}
+
+// TestIntegration_OAuth2CredentialsApplied verifies oauth2/openIdConnect
+// schemes place the accessToken (falling back to bearerToken) as
+// Authorization: Bearer.
+func TestIntegration_OAuth2CredentialsApplied(t *testing.T) {
+	var gotAuth string
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+
+	spec := map[string]any{
+		"openapi": "3.0.3",
+		"info":    map[string]any{"title": "OAuth API", "version": "1.0.0"},
+		"servers": []map[string]any{{"url": srv.URL}},
+		"paths": map[string]any{
+			"/me": map[string]any{
+				"get": map[string]any{
+					"operationId": "me",
+					"security":    []map[string]any{{"oidc": []any{}}},
+					"responses":   map[string]any{"200": map[string]any{"description": "OK"}},
+				},
+			},
+		},
+		"components": map[string]any{
+			"securitySchemes": map[string]any{
+				"oidc": map[string]any{"type": "oauth2", "flows": map[string]any{
+					"clientCredentials": map[string]any{"tokenUrl": srv.URL + "/token", "scopes": map[string]any{}},
+				}},
+			},
+		},
+	}
+	specBytes, _ := json.Marshal(spec)
+
+	binv := NewInvoker()
+	call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{Format: FormatToken, Content: string(specBytes)},
+		Ref:     "#/paths/~1me/get",
+		Context: map[string]any{"accessToken": "at-123"},
+	})
+	if _, ierr := driveSingle(t, call, nil); ierr != nil {
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+	}
+	if gotAuth != "Bearer at-123" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer at-123")
+	}
+}
+
+// TestIntegration_ContextRequired_ZeroIO verifies the CONTEXT_REQUIRED
+// challenge is raised pre-dispatch: the request-counting server sees zero
+// requests (parity with the asyncapi/mcp zero-I/O tests).
+func TestIntegration_ContextRequired_ZeroIO(t *testing.T) {
+	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	})
+	spec, _ := json.Marshal(makeOpenAPISpec(srv.URL))
+
+	binv := NewInvoker()
+	call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: string(spec)},
+		Ref:    "#/paths/~1items/get",
+	})
+	_, ierr := driveOutputs(context.Background(), call, nil)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeContextRequired {
+		t.Fatalf("expected CONTEXT_REQUIRED, got %v", ierr)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Errorf("challenge must precede any I/O: %d requests dispatched", got)
 	}
 }
 

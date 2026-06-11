@@ -23,16 +23,19 @@ import (
 // readRequest obtains the single request message for a unary or
 // server-streaming call from the invocation handle.
 //
-// Methods whose request message has no fields are no-input bindings: input is
-// closed on entry (binding contract: the caller never has to Close()) and the
-// empty request is sent without waiting for a write. For all other methods
-// the first written input becomes the request; a close-without-write is a
-// terminal ERR_MISSING_INPUT.
+// No-input bindings close input on entry (binding contract: the caller never
+// has to Close()) and send an empty request without waiting for a write. A
+// binding is no-input when its request message has no fields, OR when the
+// operation layer drives an operation that declares no input (noInput: Binding
+// set with InputSchema nil) — the latter guards a no-input operation over a
+// fielded message from parking on a write that never comes. For all other
+// methods the first written input becomes the request; a close-without-write
+// is a terminal ERR_MISSING_INPUT.
 //
 // The bool result reports whether dispatch should proceed; on false the
 // invocation is already terminal.
-func readRequest(ctx context.Context, inv openbindings.BindingHandle[any, any], methodDesc protoreflect.MethodDescriptor) (proto.Message, bool) {
-	if methodDesc.Input().Fields().Len() == 0 {
+func readRequest(ctx context.Context, inv openbindings.BindingHandle[any, any], methodDesc protoreflect.MethodDescriptor, noInput bool) (proto.Message, bool) {
+	if noInput || methodDesc.Input().Fields().Len() == 0 {
 		_ = inv.CloseInput()
 		return dynamicpb.NewMessage(methodDesc.Input()), true
 	}

@@ -17,7 +17,7 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		return nil, fmt.Errorf("GraphQL source requires a location (endpoint URL)")
 	}
 
-	disc, err := discover(ctx, endpoint, nil)
+	disc, err := discover(ctx, newDefaultHTTPClient(), endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("GraphQL introspection: %w", err)
 	}

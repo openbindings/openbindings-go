@@ -473,9 +473,10 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 		}
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &cappedBuffer{limit: maxCLIOutputBytes}
+	stderr := &cappedBuffer{limit: maxCLIOutputBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	err := cmd.Run()
 
@@ -486,6 +487,10 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 		} else {
 			return nil, 1, err
 		}
+	}
+
+	if stdout.overflow || stderr.overflow {
+		return nil, 1, fmt.Errorf("command %q output exceeded %d bytes", binName, maxCLIOutputBytes)
 	}
 
 	stdoutStr := stdout.String()
@@ -535,12 +540,50 @@ func resolveCommandArtifact(ctx context.Context, location string) (string, error
 	args := parts[1:]
 
 	cmd := exec.CommandContext(ctx, binName, args...)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
+	stdout := &cappedBuffer{limit: maxCLIOutputBytes}
+	cmd.Stdout = stdout
 
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("command %q failed: %w", binName, err)
 	}
+	if stdout.overflow {
+		return "", fmt.Errorf("command %q output exceeded %d bytes", binName, maxCLIOutputBytes)
+	}
 
 	return stdout.String(), nil
 }
+
+// maxCLIOutputBytes bounds stdout/stderr captured from a spawned command, so a
+// runaway process cannot exhaust memory.
+const maxCLIOutputBytes = 10 << 20 // 10 MiB
+
+// cappedBuffer stops growing past limit and records the overflow, rather than
+// letting an unbounded child fill memory. It always reports a full write so the
+// child is not killed by a short-write error; the caller inspects overflow
+// after the command completes.
+//
+// bytes.Buffer is held as a field, NOT embedded: embedding would promote
+// bytes.Buffer.ReadFrom, which os/exec's io.Copy prefers over Write, bypassing
+// the cap entirely.
+type cappedBuffer struct {
+	buf      bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if c.overflow {
+		return len(p), nil
+	}
+	if c.buf.Len()+len(p) > c.limit {
+		c.overflow = true
+		if remain := c.limit - c.buf.Len(); remain > 0 {
+			c.buf.Write(p[:remain])
+		}
+		return len(p), nil
+	}
+	return c.buf.Write(p)
+}
+
+func (c *cappedBuffer) String() string { return c.buf.String() }
+func (c *cappedBuffer) Len() int       { return c.buf.Len() }

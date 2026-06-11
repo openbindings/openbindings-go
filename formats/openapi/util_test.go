@@ -214,6 +214,53 @@ func TestRequiredContext(t *testing.T) {
 	}
 }
 
+// TestSchemeToRequirementType verifies the scheme→requirement mapping:
+// openIdConnect stays auth.oauth2 (TS is aligned TO this), while http schemes
+// other than bearer/basic (e.g. digest) are inexpressible — the alternative
+// is skipped rather than degraded to auth.bearer.
+func TestSchemeToRequirementType(t *testing.T) {
+	cases := []struct {
+		scheme *openapi3.SecurityScheme
+		want   string
+	}{
+		{&openapi3.SecurityScheme{Type: "http", Scheme: "bearer"}, "auth.bearer"},
+		{&openapi3.SecurityScheme{Type: "http", Scheme: "Bearer"}, "auth.bearer"},
+		{&openapi3.SecurityScheme{Type: "http", Scheme: "basic"}, "auth.basic"},
+		{&openapi3.SecurityScheme{Type: "http", Scheme: "digest"}, ""},
+		{&openapi3.SecurityScheme{Type: "http", Scheme: "negotiate"}, ""},
+		{&openapi3.SecurityScheme{Type: "apiKey"}, "auth.apiKey"},
+		{&openapi3.SecurityScheme{Type: "oauth2"}, "auth.oauth2"},
+		{&openapi3.SecurityScheme{Type: "openIdConnect"}, "auth.oauth2"},
+		{&openapi3.SecurityScheme{Type: "mutualTLS"}, ""},
+	}
+	for _, tc := range cases {
+		if got := schemeToRequirementType(tc.scheme); got != tc.want {
+			t.Errorf("schemeToRequirementType(%s/%s) = %q, want %q", tc.scheme.Type, tc.scheme.Scheme, got, tc.want)
+		}
+	}
+}
+
+// TestRequiredContext_DigestOnlyAlternativeSkipped verifies an operation
+// whose only security alternative is inexpressible (http digest) raises no
+// challenge at all.
+func TestRequiredContext_DigestOnlyAlternativeSkipped(t *testing.T) {
+	doc := &openapi3.T{
+		Components: &openapi3.Components{
+			SecuritySchemes: openapi3.SecuritySchemes{
+				"digestAuth": &openapi3.SecuritySchemeRef{
+					Value: &openapi3.SecurityScheme{Type: "http", Scheme: "digest"},
+				},
+			},
+		},
+	}
+	op := &openapi3.Operation{
+		Security: openapi3.NewSecurityRequirements().With(openapi3.NewSecurityRequirement().Authenticate("digestAuth")),
+	}
+	if d := requiredContext(doc, op, nil, "https://api.example.com"); d != nil {
+		t.Errorf("an inexpressible-only alternative must yield no challenge, got %+v", d)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // classifyInput
 // ---------------------------------------------------------------------------
@@ -248,6 +295,35 @@ func TestClassifyInput_PathQueryHeaderBody(t *testing.T) {
 	}
 	if _, ok := body["id"]; ok {
 		t.Error("body should not contain path parameter 'id'")
+	}
+}
+
+// TestClassifyInput_CookieParamsGoToCookieHeader verifies declared cookie
+// params travel in a Cookie header (sorted, "; "-joined), never in the body.
+func TestClassifyInput_CookieParamsGoToCookieHeader(t *testing.T) {
+	params := openapi3.Parameters{
+		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "session_id", In: "cookie"}},
+		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "csrf", In: "cookie"}},
+	}
+	input := map[string]any{
+		"session_id": "s-1",
+		"csrf":       "c-2",
+		"title":      "hello",
+	}
+
+	_, _, headers, body := classifyInput(params, input, "/session")
+
+	if got := headers["Cookie"]; got != "csrf=c-2; session_id=s-1" {
+		t.Errorf("headers[Cookie] = %v, want %q", got, "csrf=c-2; session_id=s-1")
+	}
+	if _, ok := body["session_id"]; ok {
+		t.Error("body should not contain cookie parameter 'session_id'")
+	}
+	if _, ok := body["csrf"]; ok {
+		t.Error("body should not contain cookie parameter 'csrf'")
+	}
+	if body["title"] != "hello" {
+		t.Errorf("body[title] = %v, want %q", body["title"], "hello")
 	}
 }
 

@@ -356,8 +356,12 @@ func (eng *engine) processNode(
 				Code:    openbindings.ErrCodeOperationGraphExit,
 				Message: fmt.Sprintf("%v", ev.data),
 			})
-		} else {
-			_ = eng.handle.EmitOutput(ev.data)
+		} else if err := eng.handle.EmitOutput(ev.data); err != nil {
+			// The invocation terminated while emitting the exit value. The
+			// exit flag is already set and the cancel() below tears the engine
+			// down; observing the error keeps parity with the output node
+			// rather than silently discarding it with `_ =`.
+			_ = err
 		}
 		cancel()
 

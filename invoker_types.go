@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"context"
+	"net/url"
 	"strings"
 )
 
@@ -339,6 +340,20 @@ func extractStringMap(ctx map[string]any, key string) map[string]string {
 		}
 	}
 	return out
+}
+
+// NormalizeEndpoint normalizes a remote endpoint URL to a stable context key:
+// it URL-parses the input (lowercasing the host, stripping userinfo) and
+// returns NormalizeContextKey over the host[:port], falling back to
+// NormalizeContextKey(raw) for non-URL strings. Format invokers use this to
+// derive CONTEXT_REQUIRED challenge keys — it matches the TypeScript SDK's
+// normalizeEndpoint so challenge keys are identical across languages.
+func NormalizeEndpoint(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return NormalizeContextKey(u.Host)
+	}
+	return NormalizeContextKey(raw)
 }
 
 // NormalizeContextKey normalizes a URL to a stable context store key.

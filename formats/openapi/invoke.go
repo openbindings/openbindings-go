@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -109,14 +110,32 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	// no parameters and no request body takes no input. -----
 	allParams := mergeParameters(pathItem.Parameters, op.Parameters)
 	inputMap := map[string]any{}
-	if len(allParams) == 0 && !hasRequestBody(op) {
+	switch {
+	case args.Binding != nil && args.InputSchema == nil:
+		// Operation-layer no-input convention (checked BEFORE the
+		// source-derived detection below): the call came through the
+		// operation layer for an operation that declares no input. Callers
+		// of no-input operations never write nor close, so reading would
+		// park forever. Dispatch with empty input even when the OpenAPI doc
+		// declares params (e.g. cookie-only params the OBI did not express).
 		_ = inv.CloseInput()
-	} else {
+	case len(allParams) == 0 && !hasRequestBody(op):
+		_ = inv.CloseInput()
+	default:
 		v, rerr := inv.ReadInput(bctx)
 		switch {
 		case errors.Is(rerr, io.EOF):
-			// Bare close: parameters and body are optional unless the server
-			// rejects the request. Proceed with an empty input.
+			// Bare close: with a required parameter or required requestBody
+			// the dispatch cannot succeed — fire ERR_MISSING_INPUT before
+			// any network I/O (cross-SDK parity). Otherwise parameters and
+			// body are optional; proceed with an empty input.
+			if missing := requiredInputMissing(allParams, op); missing != "" {
+				inv.FireError(&openbindings.InvocationError{
+					Code:    openbindings.ErrCodeMissingInput,
+					Message: missing,
+				})
+				return
+			}
 		case rerr != nil:
 			inv.FireError(openbindings.AsInvocationError(rerr))
 			return
@@ -314,7 +333,7 @@ func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string
 	}
 
 	details := &openbindings.ContextRequiredDetails{
-		Key:          openbindings.NormalizeContextKey(baseURL),
+		Key:          openbindings.NormalizeEndpoint(baseURL),
 		Alternatives: alternatives,
 	}
 	// Already satisfiable from the supplied context: no challenge needed.
@@ -333,8 +352,12 @@ func schemeToRequirementType(s *openapi3.SecurityScheme) string {
 		switch strings.ToLower(s.Scheme) {
 		case "basic":
 			return "auth.basic"
-		default:
+		case "bearer":
 			return "auth.bearer"
+		default:
+			// digest, negotiate, etc.: not expressible as a context
+			// requirement, so the whole alternative is skipped (TS parity).
+			return ""
 		}
 	case "apiKey":
 		return "auth.apiKey"
@@ -412,6 +435,7 @@ func classifyInput(params openapi3.Parameters, input map[string]any, pathTemplat
 	query = map[string]any{}
 	headers = map[string]any{}
 	body = map[string]any{}
+	cookies := map[string]any{}
 
 	paramClassification := map[string]string{}
 	for _, paramRef := range params {
@@ -435,9 +459,27 @@ func classifyInput(params openapi3.Parameters, input map[string]any, pathTemplat
 			query[name] = value
 		case "header":
 			headers[name] = value
+		case "cookie":
+			cookies[name] = value
 		default:
 			body[name] = value
 		}
+	}
+
+	// Declared cookie params travel in a Cookie header (sorted for a
+	// deterministic value), never in the body. Context-supplied cookies are
+	// appended later by applyHTTPContext via req.AddCookie.
+	if len(cookies) > 0 {
+		names := make([]string, 0, len(cookies))
+		for name := range cookies {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		pairs := make([]string, 0, len(names))
+		for _, name := range names {
+			pairs = append(pairs, fmt.Sprintf("%s=%v", name, cookies[name]))
+		}
+		headers["Cookie"] = strings.Join(pairs, "; ")
 	}
 
 	return resolvedPath, query, headers, body
@@ -445,6 +487,21 @@ func classifyInput(params openapi3.Parameters, input map[string]any, pathTemplat
 
 func hasRequestBody(op *openapi3.Operation) bool {
 	return op.RequestBody != nil && op.RequestBody.Value != nil
+}
+
+// requiredInputMissing reports why a bare input close cannot satisfy the
+// operation: a non-empty string names the first required parameter or the
+// required request body. Empty string means an empty request is dispatchable.
+func requiredInputMissing(params openapi3.Parameters, op *openapi3.Operation) string {
+	for _, paramRef := range params {
+		if paramRef != nil && paramRef.Value != nil && paramRef.Value.Required {
+			return fmt.Sprintf("operation requires parameter %q", paramRef.Value.Name)
+		}
+	}
+	if hasRequestBody(op) && op.RequestBody.Value.Required {
+		return "operation requires a request body"
+	}
+	return ""
 }
 
 // isMultipartFormData returns true when the operation's request body specifies
@@ -603,6 +660,16 @@ func applyCredentialsViaSecuritySchemes(req *http.Request, doc *openapi3.T, op *
 					req.SetBasicAuth(u, p)
 					applied = true
 				}
+			}
+
+		case "oauth2", "openIdConnect":
+			token := openbindings.ContextString(bindCtx, "accessToken")
+			if token == "" {
+				token = openbindings.ContextBearerToken(bindCtx)
+			}
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+				applied = true
 			}
 		}
 	}
