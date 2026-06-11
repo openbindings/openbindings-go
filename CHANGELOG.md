@@ -4,6 +4,65 @@
 
 ### Changed
 
+- **Invocation is now a cardinality-agnostic handle.** `BindingInvoker.InvokeBinding`
+  and `OperationInvoker.Invoke` return an `Invocation[I, O]` synchronously
+  instead of `(<-chan InvocationOutput, error)`: the caller writes input
+  messages (`Write`/`Close`), acquires the output sequence (`Outputs()
+  OutputStream[O]`, read to `io.EOF` / terminal), and observes lifecycle via
+  `Cancel`, `Header`, and `Trailer`. One call shape serves unary,
+  server-streaming, client-streaming, and bidirectional bindings; cardinality
+  lives in the binding, never in the signature. Bindings implement the
+  push-side `BindingHandle[I, O]` (`ReadInput`, `CloseInput`, `EmitOutput`,
+  `CloseOutput`, `FireError`, `Done`, `SetHeader`/`SetTrailer`) over the
+  shared reference `InvocationImpl` (`NewInvocationImpl(ctx)`). The impl uses
+  bounded buffered channels that are never closed on terminal — terminal state
+  is a `done` channel plus `terminalErr`, every blocking op `select`s on it,
+  and readers drain buffered outputs before surfacing the error (verified under
+  `-race`). `Outputs()` is acquire-once (a second call panics
+  `ERR_ALREADY_CONSUMED`); `OutputStream.Stop()` cancels. The one blessed
+  terminal is the free function `Single(ctx, out)` — strict, short-circuiting
+  "exactly one" (`ERR_EXPECTED_SINGLE`). `TypedInvocation[I, O]` adapts the
+  untyped handle at the codegen boundary. The `InvocationOutput` envelope and
+  its `Status`/`DurationMs` fields are gone: outputs are bare values; transport
+  facts surface via `Header` metadata and error `Details`.
+  - `BindingInvocationInput`/`BindingInvocationSource` → `BindingInvocationArgs`/
+    `InvocationSource` (`{Source, Ref, Binding, Context, Interface, InputSchema}`;
+    no `Input`, no `Security`, no `Store`, no `Callbacks`);
+    `OperationInvocationInput` → `OperationInvocationArgs` (input flows through
+    the handle). `SingleEventChannel`, `FailedOutput`, and `HTTPErrorOutput`
+    are removed (`HTTPError`/`HTTPErrorCode` replace the HTTP helpers).
+  - OBI-T-07 failures are terminal AND reject the offending `Write` with the
+    same `*InvocationError`; OBI-T-08 failures are terminal and the invalid
+    value is not emitted (previously surfaced data-alongside-error in the
+    envelope). Transforms evaluate per message in both directions.
+  - `Invoke` returns a pre-errored handle (local codes
+    `ERR_OPERATION_NOT_FOUND` / `ERR_BINDING_NOT_FOUND` / `ERR_UNKNOWN_SOURCE`)
+    for wiring errors; runtime outcomes travel on the handle.
+
+- **Error-code wire values are now SCREAMING_SNAKE with the `ERR_` prefix**
+  (`ErrCodeCancelled = "ERR_CANCELLED"`, etc.), plus the un-prefixed
+  negotiation signal `CONTEXT_REQUIRED` (`ErrCodeContextRequired`), in lockstep
+  with the TypeScript SDK and the `openbindings.binding-invoker` role. New
+  codes: `ErrCodeAlreadyConsumed`, `ErrCodeExpectedSingle`, `ErrCodeInputClosed`,
+  `ErrCodeInvocationClosed`, `ErrCodeTooManyInputs`, `ErrCodeMissingInput`,
+  `ErrCodeProtocol`, `ErrCodeTransportClosed`, `ErrCodeRuntime`. Consumers
+  switching on `Code` must update. `ErrCodeInvalidInput` is removed (use
+  `ErrCodeValidationFailed`).
+
+- **Authentication is negotiated context, not a document field.** Bindings that
+  need missing runtime context fire `CONTEXT_REQUIRED` (details:
+  `ContextRequiredDetails` — `Key` + disjunctive `Alternatives` over
+  conjunctive `Requirements`, families
+  `auth.bearer`/`auth.apiKey`/`auth.basic`/`auth.oauth2`) BEFORE any observable
+  side effect. The `OperationInvoker` resolves challenges via a
+  composition-time `ContextResolver`, re-driving the binding against the same
+  input buffer (the already-forwarded prefix is replayed; once a binding shows
+  observable progress the challenge surfaces instead). Invokers that can derive
+  requirements from their source implement the side-effect-free `BindingPreparer`
+  preflight; `StoreContextResolver(store)`/`ContextSatisfies` compose the
+  binding-invoker and context-store roles. `OperationInvoker.WithRuntime` now
+  takes a `ContextResolver`.
+
 - **Renamed binding "executor" terminology to "invoker" / "invoke"** to align with the OpenBindings spec 0.2.0 rename. Pre-1.0 hard rename, no deprecated aliases. Both layers — the per-format component and the orchestrator — use the `Invoker` noun, with the verb `Invoke` shared across them.
   - Types: `BindingExecutor` → `BindingInvoker`; `OperationExecutor` → `OperationInvoker`; per-format `*.Executor` → `*.Invoker` (e.g., `openapi.Executor` → `openapi.Invoker`); `BindingExecutionInput`/`BindingExecutionSource` → `BindingInvocationInput`/`BindingInvocationSource`; `OperationExecutionInput` → `OperationInvocationInput`; `ExecuteOutput`/`ExecuteError`/`ExecutionOptions` → `InvocationOutput`/`InvocationError`/`InvocationOptions`.
   - Methods: `BindingExecutor.ExecuteBinding(...)` → `BindingInvoker.InvokeBinding(...)`; `OperationExecutor.ExecuteOperation(...)` → `OperationInvoker.Invoke(...)`; `OperationExecutor.AddBindingExecutor(...)` → `OperationInvoker.AddBindingInvoker(...)`; `InterfaceClient.Execute(...)`/`ExecuteWithOptions(...)` → `InterfaceClient.Invoke(...)`/`InvokeWithOptions(...)`.
@@ -25,12 +84,27 @@
 
 ### Removed
 
+- **The `security` surface, per spec 0.2.0**: the OBI `security` section
+  (`Interface.Security`), `BindingEntry.Security`, `SecurityMethod`,
+  `ResolveSecurity`, and the security-reference validation
+  (`security.go`/`security_test.go` deleted). Credentials are never part of an
+  OBI document; they are context, supplied per call or resolved through the
+  `CONTEXT_REQUIRED` protocol. Format invokers derive auth requirements from
+  their source artifacts (e.g. OpenAPI `securitySchemes`) and read credentials
+  from context's well-known fields. `ContextStore`/`PlatformCallbacks` are no
+  longer threaded through binding invocations; interactive resolution lives in
+  the app's `ContextResolver`.
+
+- **Conformance rule IDs corrected** to match the spec: `OBI-D-16` → `OBI-D-13`
+  (SemVer `openbindings` field), `OBI-T-13` → `OBI-T-12` (operation-name
+  resolution).
+
 - **`InterfaceClient`.** The struct and its `InterfaceClientOption`,
   `WithContextStore`, `WithPlatformCallbacks`, and `WithDefaultContext`
   options are gone. Generated typed invokers (from `ob codegen`) wrap an
   `*OperationInvoker` directly and take the OBI per method call. Direct
-  callers use `OperationInvoker.Invoke(ctx, &OperationInvocationInput{...})`
-  and configure runtime via `OperationInvoker.WithRuntime(store, callbacks)`.
+  callers use `OperationInvoker.Invoke(ctx, &OperationInvocationArgs{...})`
+  and configure runtime via `OperationInvoker.WithRuntime(resolver)`.
 
 - **`InvocationOptions`.** Folded into `BindingContext`. Transport fields
   (`headers`, `cookies`, `environment`, `metadata`) are well-known keys

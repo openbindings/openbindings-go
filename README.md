@@ -138,19 +138,41 @@ for _, issue := range issues {
 
 ## Invocation model
 
-Every operation returns a stream of events (`<-chan InvocationOutput`). A unary operation produces one event and closes the channel. A streaming operation produces many. The consumer code is the same for both:
+Every operation returns a cardinality-agnostic `Invocation[I, O]` handle: the
+caller writes input messages until done; the invocation yields output messages
+until done. One shape serves unary, server-streaming, client-streaming, and
+bidirectional bindings — cardinality is a property of the selected binding,
+never of the call signature:
 
 ```go
-ch, err := opInv.Invoke(ctx, &openbindings.OperationInvocationInput{
+call := opInv.Invoke(ctx, &openbindings.OperationInvocationArgs{
     Interface: iface,
     Operation: "listItems",
-    Input:     input,
 })
-for ev := range ch {
-    if ev.Error != nil { /* handle */ }
-    fmt.Println(ev.Output)
+if err := call.Write(ctx, input); err != nil { /* handle */ } // unary: binding closes input after one read
+out := call.Outputs()
+for {
+    item, err := out.Read(ctx)
+    if err == io.EOF { break }
+    if err != nil { /* terminal *InvocationError */ }
+    fmt.Println(item) // bare output value
 }
 ```
+
+For an operation you are confident yields exactly one output, the one blessed
+terminal is `openbindings.Single`:
+
+```go
+call := opInv.Invoke(ctx, &openbindings.OperationInvocationArgs{Interface: iface, Operation: "getItem"})
+_ = call.Write(ctx, map[string]any{"id": "item_1"})
+item, err := openbindings.Single(ctx, call.Outputs())
+```
+
+Client-streaming and bidirectional callers own `Close()` (and drive input and
+output from separate goroutines); `Header`/`Trailer` carry leading/trailing
+metadata and `Cancel()` tears the invocation down. Missing runtime context
+surfaces as a `CONTEXT_REQUIRED` terminal error raised before any side effect,
+resolved by the operation invoker's `ContextResolver` when one is configured.
 
 ## Binding invokers
 
@@ -166,9 +188,12 @@ exec := openbindings.NewOperationInvoker(
 
 Invokers implement `BindingInvoker`. Interface creators (which synthesize OBIs from raw specs) implement `InterfaceCreator`. Source inspectors (which enumerate refs in a source) implement `SourceInspector`. A single type may implement any combination. See [Implementing a Binding Format](https://github.com/openbindings/spec/blob/main/guides/implementing-a-binding-format.md) for a step-by-step walkthrough.
 
-## Context store
+## Context and authentication
 
-Credentials are stored per host, not per request. The context key is `host[:port]` — scheme-agnostic, so `http://`, `https://`, and `ws://` for the same host share credentials:
+Credentials are never part of an OBI document — they are context, supplied per
+call or resolved at invocation time. The context key is `host[:port]` —
+scheme-agnostic, so `http://`, `https://`, and `ws://` for the same host share
+context:
 
 ```go
 store := openbindings.NewMemoryStore()
@@ -177,18 +202,16 @@ key := openbindings.NormalizeContextKey("https://api.example.com/v1/users")
 store.Set(ctx, key, map[string]any{"bearerToken": "tok_123"})
 ```
 
-Invokers read from the context store automatically when it's configured on the `OperationInvoker` (via construction or `WithRuntime`).
-
-## Security
-
-OBI documents can declare security methods on bindings via the `security` section. The SDK provides:
-
-- `SecurityMethod` -- describes an authentication method (bearer, oauth2, basic, apiKey)
-- `Interface.Security` -- named security entries referenced by bindings
-- `BindingEntry.Security` -- references a key in the security section
-- `ResolveSecurity` -- walks security methods in preference order, uses `PlatformCallbacks` to acquire credentials interactively
-
-The `OperationInvoker` resolves security methods from the OBI and passes them to binding invokers via `BindingInvocationInput.Security`.
+A binding that needs context it wasn't given raises a `CONTEXT_REQUIRED`
+challenge before any side effect; the operation invoker resolves challenges
+through its configured `ContextResolver` and re-drives the binding.
+`openbindings.StoreContextResolver(store)` is the store-backed resolver — the
+composition of the `binding-invoker` and `context-store` roles — and is wired
+in via `OperationInvoker.WithRuntime(resolver)`. Apps that resolve
+interactively (prompts, browser redirects, keychains) supply their own
+resolver instead. Format invokers that can derive requirements from their
+source (e.g. OpenAPI `securitySchemes`) also implement the side-effect-free
+`BindingPreparer` preflight.
 
 ## Schema compatibility profile
 

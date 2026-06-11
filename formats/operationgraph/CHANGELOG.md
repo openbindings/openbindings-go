@@ -4,6 +4,14 @@
 
 ### Changed
 
+- **Invocation handle migration.** `InvokeBinding` now returns the
+  cardinality-agnostic `Invocation[I, O]` handle, and the engine drives
+  sub-operations through `OperationInvoker.Invoke`'s handle (Write the node
+  input, Read outputs to `io.EOF`/terminal) with cancellation chained through
+  the sub-call context. The `InvocationOutput` envelope is gone; graph events
+  are bare outputs and terminal failures use the SCREAMING error codes
+  (`ERR_OPERATION_GRAPH_EXIT`, `ERR_EVENT_LIMIT_EXCEEDED`, `ERR_MAP_NOT_ARRAY`).
+  See the root CHANGELOG for the full shape.
 - **Breaking:** Transforms are now plain JSONata expression strings instead of
   `{"type": "jsonata", "expression": "..."}` objects, matching the
   operation-graph format spec v0.2.0.

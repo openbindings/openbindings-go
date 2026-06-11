@@ -4,6 +4,8 @@
 
 ### Changed
 
+**Invocation handle migration.** `InvokeBinding` now returns the cardinality-agnostic `Invocation[I, O]` handle (input via `Write`, outputs via `Outputs().Read` to `io.EOF`/terminal) instead of `(<-chan InvocationOutput, error)`. Auth moved off the removed `SecurityMethod`/`ContextStore` path to context (credentials in the binding context; `CONTEXT_REQUIRED` where the source declares requirements). Error codes use the new SCREAMING wire values. See the root CHANGELOG for the full shape.
+
 - **Renamed binding "executor" terminology to "invoker"** to track the spec 0.2.0 rename in `openbindings-go`. See the root `openbindings-go` CHANGELOG for the full rename table.
 
 - **Migrated to protobuf v2 + protocompile.** Direct dependencies on `github.com/jhump/protoreflect` (v1) and `github.com/golang/protobuf` are gone. Proto file parsing moved from `jhump/protoreflect/desc/protoparse` to `github.com/bufbuild/protocompile`, the v2-native successor maintained by Buf. Dynamic message construction now uses `google.golang.org/protobuf/types/dynamicpb`; JSON marshaling uses `google.golang.org/protobuf/encoding/protojson`. The unary and server-streaming integration tests pass against the same fixtures.
