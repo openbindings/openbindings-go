@@ -3,10 +3,13 @@ package asyncapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +19,53 @@ import (
 
 const testSecret = "test-token-123"
 
+// ---------------------------------------------------------------------------
+// Handle-driving helpers
+// ---------------------------------------------------------------------------
+
+func bg() context.Context { return context.Background() }
+
+func shortCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func codeOf(t *testing.T, err error) string {
+	t.Helper()
+	var ie *openbindings.InvocationError
+	if !errors.As(err, &ie) {
+		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
+	}
+	return ie.Code
+}
+
+// drainOutputs reads the invocation's outputs to EOF or terminal error.
+func drainOutputs(t *testing.T, call openbindings.Invocation[any, any]) ([]any, error) {
+	t.Helper()
+	out := call.Outputs()
+	var vals []any
+	for {
+		v, err := out.Read(shortCtx(t))
+		if err == io.EOF {
+			return vals, nil
+		}
+		if err != nil {
+			return vals, err
+		}
+		vals = append(vals, v)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HTTP fixture: unary send + SSE receive
+// ---------------------------------------------------------------------------
+
+// makeAsyncAPISpec builds the HTTP test document. Bearer security is declared
+// per-operation (sendMessage, receiveEvents); sendOpenMessage, sendAck, and
+// receiveStream carry no security so server-side failures and cancellation
+// can be exercised without tripping the CONTEXT_REQUIRED gate.
 func makeAsyncAPISpec(baseURL string) *Document {
 	return &Document{
 		AsyncAPI: "3.0.0",
@@ -24,16 +74,28 @@ func makeAsyncAPISpec(baseURL string) *Document {
 			"test": {
 				Host:     strings.TrimPrefix(strings.TrimPrefix(baseURL, "http://"), "https://"),
 				Protocol: "http",
-				Security: []map[string][]string{{"bearer": {}}},
 			},
 		},
 		Channels: map[string]Channel{
 			"messages": {Address: "/messages"},
 			"events":   {Address: "/events"},
+			"stream":   {Address: "/stream"},
+			"ack":      {Address: "/ack"},
 		},
 		Operations: map[string]Operation{
-			"sendMessage":   {Action: "send", Channel: ChannelRef{Ref: "#/channels/messages"}},
-			"receiveEvents": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/events"}},
+			"sendMessage": {
+				Action:   "send",
+				Channel:  ChannelRef{Ref: "#/channels/messages"},
+				Security: []map[string][]string{{"bearer": {}}},
+			},
+			"sendOpenMessage": {Action: "send", Channel: ChannelRef{Ref: "#/channels/messages"}},
+			"sendAck":         {Action: "send", Channel: ChannelRef{Ref: "#/channels/ack"}},
+			"receiveEvents": {
+				Action:   "receive",
+				Channel:  ChannelRef{Ref: "#/channels/events"},
+				Security: []map[string][]string{{"bearer": {}}},
+			},
+			"receiveStream": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/stream"}},
 		},
 		Components: &Components{
 			SecuritySchemes: map[string]SecurityScheme{
@@ -43,220 +105,481 @@ func makeAsyncAPISpec(baseURL string) *Document {
 	}
 }
 
-func testHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/messages" && r.Method == "POST" {
-		if r.Header.Get("Authorization") != "Bearer "+testSecret {
-			w.WriteHeader(401)
-			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
-			return
-		}
-		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"received": body})
-		return
-	}
+// newHTTPFixture starts the HTTP test server and returns it with a request
+// counter for zero-I/O assertions.
+func newHTTPFixture(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var requests atomic.Int32
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 
-	if r.URL.Path == "/events" && r.Method == "GET" {
-		if r.Header.Get("Authorization") != "Bearer "+testSecret {
-			w.WriteHeader(401)
-			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			w.WriteHeader(500)
-			return
-		}
-		fmt.Fprintf(w, "data: {\"msg\":\"hello\"}\n\n")
-		flusher.Flush()
-		fmt.Fprintf(w, "data: {\"msg\":\"world\"}\n\n")
-		flusher.Flush()
-		return
-	}
+		switch {
+		case r.URL.Path == "/messages" && r.Method == "POST":
+			if r.Header.Get("Authorization") != "Bearer "+testSecret {
+				w.WriteHeader(401)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+				return
+			}
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"received": body})
 
-	w.WriteHeader(404)
+		case r.URL.Path == "/ack" && r.Method == "POST":
+			w.WriteHeader(202)
+
+		case r.URL.Path == "/events" && r.Method == "GET":
+			if r.Header.Get("Authorization") != "Bearer "+testSecret {
+				w.WriteHeader(401)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher := w.(http.Flusher)
+			fmt.Fprintf(w, "data: {\"seq\":1}\n\n")
+			flusher.Flush()
+			fmt.Fprintf(w, "data: {\"seq\":2}\n\n")
+			flusher.Flush()
+
+		case r.URL.Path == "/stream" && r.Method == "GET":
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher := w.(http.Flusher)
+			fmt.Fprintf(w, "data: {\"tick\":1}\n\n")
+			flusher.Flush()
+			<-r.Context().Done() // never ends; the client cancels
+
+		case r.URL.Path == "/spec.json" && r.Method == "GET":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(makeAsyncAPISpec(srv.URL))
+
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &requests
 }
 
-func drainStream(ch <-chan openbindings.InvocationOutput) []openbindings.InvocationOutput {
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
-	}
-	return events
+func httpSource(srv *httptest.Server) openbindings.InvocationSource {
+	return openbindings.InvocationSource{Format: FormatToken, Content: makeAsyncAPISpec(srv.URL)}
 }
 
-func TestIntegration_SendNoCredentials401(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(testHandler))
-	defer srv.Close()
+// ---------------------------------------------------------------------------
+// CONTEXT_REQUIRED negotiation
+// ---------------------------------------------------------------------------
 
-	doc := makeAsyncAPISpec(srv.URL)
-	store := openbindings.NewMemoryStore()
-	ctx := context.Background()
-
+func TestContextRequiredBeforeAnyIO(t *testing.T) {
+	srv, requests := newHTTPFixture(t)
 	binv := NewInvoker()
-	invoker := openbindings.NewOperationInvoker(binv)
-	invoker.ContextStore = store
+	defer binv.Close()
 
-	iface := &openbindings.Interface{
-		OpenBindings: "0.1.0",
-		Operations: map[string]openbindings.Operation{
-			"sendMessage":   {},
-			"receiveEvents": {},
-		},
-		Sources: map[string]openbindings.Source{
-			DefaultSourceName: {Format: FormatToken, Content: doc},
-		},
-		Bindings: map[string]openbindings.BindingEntry{
-			"sendMessage." + DefaultSourceName:   {Operation: "sendMessage", Source: DefaultSourceName, Ref: "#/operations/sendMessage"},
-			"receiveEvents." + DefaultSourceName: {Operation: "receiveEvents", Source: DefaultSourceName, Ref: "#/operations/receiveEvents"},
-		},
-	}
-
-	ch, err := invoker.Invoke(ctx, &openbindings.OperationInvocationInput{
-		Interface: iface,
-		Operation: "sendMessage",
-		Input:     map[string]any{"text": "hi"},
+	before := requests.Load()
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: httpSource(srv),
+		Ref:    "#/operations/sendMessage",
 	})
-	if err != nil {
+	if err := call.Write(bg(), map[string]any{"text": "hi"}); err != nil {
 		t.Fatal(err)
 	}
-	events := drainStream(ch)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
+	_, err := drainOutputs(t, call)
+
+	var ie *openbindings.InvocationError
+	if !errors.As(err, &ie) {
+		t.Fatalf("expected *InvocationError, got %v", err)
 	}
-	if events[0].Error == nil || events[0].Error.Code != openbindings.ErrCodeAuthRequired {
-		t.Errorf("expected http_401 error, got %+v", events[0])
+	details := openbindings.ContextRequiredFrom(ie)
+	if details == nil {
+		t.Fatalf("expected CONTEXT_REQUIRED with details, got %v", err)
+	}
+	wantKey := strings.TrimPrefix(srv.URL, "http://")
+	if details.Key != wantKey {
+		t.Errorf("Key = %q, want %q", details.Key, wantKey)
+	}
+	if len(details.Alternatives) != 1 || details.Alternatives[0].Requirements[0].Type != "auth.bearer" {
+		t.Errorf("alternatives = %+v, want one auth.bearer requirement", details.Alternatives)
+	}
+	if got := requests.Load(); got != before {
+		t.Errorf("challenge must precede any I/O: %d requests dispatched", got-before)
 	}
 }
 
-func TestIntegration_SendWithCredentials(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(testHandler))
-	defer srv.Close()
-
-	doc := makeAsyncAPISpec(srv.URL)
-	store := openbindings.NewMemoryStore()
-	ctx := context.Background()
-
-	host := strings.TrimPrefix(srv.URL, "http://")
-	store.Set(ctx, host, map[string]any{"bearerToken": testSecret})
-
+func TestContextRequiredOnReceive(t *testing.T) {
+	srv, requests := newHTTPFixture(t)
 	binv := NewInvoker()
-	invoker := openbindings.NewOperationInvoker(binv)
-	invoker.ContextStore = store
+	defer binv.Close()
 
-	iface := &openbindings.Interface{
-		OpenBindings: "0.1.0",
-		Operations: map[string]openbindings.Operation{
-			"sendMessage":   {},
-			"receiveEvents": {},
-		},
-		Sources: map[string]openbindings.Source{
-			DefaultSourceName: {Format: FormatToken, Content: doc},
-		},
-		Bindings: map[string]openbindings.BindingEntry{
-			"sendMessage." + DefaultSourceName:   {Operation: "sendMessage", Source: DefaultSourceName, Ref: "#/operations/sendMessage"},
-			"receiveEvents." + DefaultSourceName: {Operation: "receiveEvents", Source: DefaultSourceName, Ref: "#/operations/receiveEvents"},
-		},
-	}
-
-	ch, err := invoker.Invoke(ctx, &openbindings.OperationInvocationInput{
-		Interface: iface,
-		Operation: "sendMessage",
-		Input:     map[string]any{"text": "hello"},
+	before := requests.Load()
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: httpSource(srv),
+		Ref:    "#/operations/receiveEvents",
 	})
-	if err != nil {
-		t.Fatal(err)
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != openbindings.ErrCodeContextRequired {
+		t.Fatalf("expected CONTEXT_REQUIRED, got %v", err)
 	}
-	events := drainStream(ch)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Error != nil {
-		t.Fatalf("unexpected error: %s", events[0].Error.Message)
-	}
-	m, ok := events[0].Output.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map output, got %T", events[0].Output)
-	}
-	if m["received"] == nil {
-		t.Error("expected 'received' field in output")
-	}
-}
-
-func TestIntegration_SSEReceiveWithCredentials(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(testHandler))
-	defer srv.Close()
-
-	doc := makeAsyncAPISpec(srv.URL)
-	store := openbindings.NewMemoryStore()
-	ctx := context.Background()
-
-	host := strings.TrimPrefix(srv.URL, "http://")
-	store.Set(ctx, host, map[string]any{"bearerToken": testSecret})
-
-	binv := NewInvoker()
-	ch, err := binv.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: doc,
-		},
-		Ref:   "#/operations/receiveEvents",
-		Store: store,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	events := drainStream(ch)
-	if len(events) < 1 {
-		t.Fatal("expected at least 1 event")
-	}
-	if events[0].Error != nil {
-		t.Fatalf("unexpected error: %s", events[0].Error.Message)
-	}
-	// The SSE unary path collects events. Check we got data.
-	if events[0].Output == nil {
-		t.Error("expected data in first event")
+	if got := requests.Load(); got != before {
+		t.Errorf("challenge must precede any I/O: %d requests dispatched", got-before)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket integration tests
-//
-// AsyncAPI 3.x supports WebSocket as a transport, with bidirectional
-// streaming patterns. The asyncapi-go library models WS as
-// "send one input message containing the operation arguments + bearer token,
-// then read a stream of server-pushed messages until the connection closes
-// or the caller cancels."
-//
-// These tests use httptest + nhooyr.io/websocket to spin up a real WebSocket
-// server and exercise the invoker end-to-end. They cover:
-//   - Bearer token sent in the first message body (the spec convention,
-//     because browsers can't set custom WebSocket upgrade headers)
-//   - Query-param apiKey appended to the WebSocket URL — credentials in the
-//     query must reach the WebSocket URL, not be silently dropped
-//   - Multi-event streaming with clean cancellation
-//   - Send-action over WebSocket
+// Unary send over HTTP
+// ---------------------------------------------------------------------------
+
+func TestUnarySendAppliesBearerAndYieldsResponse(t *testing.T) {
+	srv, _ := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  httpSource(srv),
+		Ref:     "#/operations/sendMessage",
+		Context: map[string]any{"bearerToken": testSecret},
+	})
+	if err := call.Write(bg(), map[string]any{"text": "hello"}); err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := openbindings.Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	received, _ := v.(map[string]any)["received"].(map[string]any)
+	if received["text"] != "hello" {
+		t.Fatalf("got %v", v)
+	}
+
+	md, err := call.Header(shortCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(md["content-type"]) != 1 || md["content-type"][0] != "application/json" {
+		t.Errorf("header content-type = %v", md["content-type"])
+	}
+}
+
+func TestServer401MapsToAuthRequired(t *testing.T) {
+	srv, _ := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+
+	// sendOpenMessage declares no security, so the request dispatches and the
+	// server's 401 surfaces operationally.
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: httpSource(srv),
+		Ref:    "#/operations/sendOpenMessage",
+	})
+	if err := call.Write(bg(), map[string]any{"text": "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := drainOutputs(t, call)
+	var ie *openbindings.InvocationError
+	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeAuthRequired {
+		t.Fatalf("expected ERR_AUTH_REQUIRED, got %v", err)
+	}
+	details, _ := ie.Details.(map[string]any)
+	if details["status"] != 401 {
+		t.Errorf("details.status = %v, want 401", details["status"])
+	}
+	body, _ := details["body"].(map[string]any)
+	if body["error"] != "unauthorized" {
+		t.Errorf("details.body = %v", details["body"])
+	}
+}
+
+func TestMissingInputOnSend(t *testing.T) {
+	srv, _ := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: httpSource(srv),
+		Ref:    "#/operations/sendOpenMessage",
+	})
+	if err := call.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != openbindings.ErrCodeMissingInput {
+		t.Fatalf("expected ERR_MISSING_INPUT, got %v", err)
+	}
+}
+
+func TestSendAckYieldsZeroOutputs(t *testing.T) {
+	srv, _ := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: httpSource(srv),
+		Ref:    "#/operations/sendAck",
+	})
+	if err := call.Write(bg(), map[string]any{"cmd": "go"}); err != nil {
+		t.Fatal(err)
+	}
+	vals, err := drainOutputs(t, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vals) != 0 {
+		t.Fatalf("a 202 publish ack is not an output, got %v", vals)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SSE receive
+// ---------------------------------------------------------------------------
+
+func TestSSEReceiveStreamsBareOutputs(t *testing.T) {
+	srv, _ := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  httpSource(srv),
+		Ref:     "#/operations/receiveEvents",
+		Context: map[string]any{"bearerToken": testSecret},
+	})
+	vals, err := drainOutputs(t, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vals) != 2 {
+		t.Fatalf("expected 2 events, got %d: %v", len(vals), vals)
+	}
+	for i, want := range []float64{1, 2} {
+		if got := vals[i].(map[string]any)["seq"]; got != want {
+			t.Errorf("event %d: seq = %v, want %v", i, got, want)
+		}
+	}
+}
+
+func TestStopCancelsLiveSubscription(t *testing.T) {
+	srv, _ := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: httpSource(srv),
+		Ref:    "#/operations/receiveStream",
+	})
+	out := call.Outputs()
+	first, err := out.Read(shortCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.(map[string]any)["tick"] != float64(1) {
+		t.Fatalf("got %v", first)
+	}
+
+	out.Stop()
+	_, err = out.Read(shortCtx(t))
+	if codeOf(t, err) != openbindings.ErrCodeCancelled {
+		t.Fatalf("expected ERR_CANCELLED, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Wiring failures (pre-side-effect)
+// ---------------------------------------------------------------------------
+
+func TestWiringErrors(t *testing.T) {
+	srv, requests := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+
+	cases := []struct {
+		name string
+		args *openbindings.BindingInvocationArgs
+		code string
+	}{
+		{"unknown operation", &openbindings.BindingInvocationArgs{
+			Source: httpSource(srv), Ref: "#/operations/nope",
+		}, openbindings.ErrCodeRefNotFound},
+		{"empty ref", &openbindings.BindingInvocationArgs{
+			Source: httpSource(srv), Ref: "",
+		}, openbindings.ErrCodeInvalidRef},
+		{"unparsable source", &openbindings.BindingInvocationArgs{
+			Source: openbindings.InvocationSource{Format: FormatToken, Content: "not asyncapi"},
+			Ref:    "#/operations/sendMessage",
+		}, openbindings.ErrCodeSourceLoadFailed},
+	}
+	before := requests.Load()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			call := binv.InvokeBinding(bg(), tc.args)
+			_, err := drainOutputs(t, call)
+			if codeOf(t, err) != tc.code {
+				t.Fatalf("expected %s, got %v", tc.code, err)
+			}
+		})
+	}
+	if got := requests.Load(); got != before {
+		t.Errorf("wiring failures must not dispatch requests: %d dispatched", got-before)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PrepareBinding (side-effect-free preflight)
+// ---------------------------------------------------------------------------
+
+func TestPrepareBindingReportsBearerRequirement(t *testing.T) {
+	srv, requests := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+
+	before := requests.Load()
+	details, err := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: httpSource(srv),
+		Ref:    "#/operations/sendMessage",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details == nil {
+		t.Fatal("expected details")
+	}
+	wantKey := strings.TrimPrefix(srv.URL, "http://")
+	if details.Key != wantKey {
+		t.Errorf("Key = %q, want %q", details.Key, wantKey)
+	}
+	if len(details.Alternatives) != 1 || details.Alternatives[0].Requirements[0].Type != "auth.bearer" {
+		t.Errorf("alternatives = %+v", details.Alternatives)
+	}
+	if got := requests.Load(); got != before {
+		t.Errorf("PrepareBinding must be side-effect-free: %d requests dispatched", got-before)
+	}
+}
+
+func TestPrepareBindingNilWhenSatisfiedOrUndeclared(t *testing.T) {
+	srv, _ := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+
+	if d, _ := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  httpSource(srv),
+		Ref:     "#/operations/sendMessage",
+		Context: map[string]any{"bearerToken": testSecret},
+	}); d != nil {
+		t.Errorf("satisfied context: expected nil, got %+v", d)
+	}
+
+	if d, _ := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: httpSource(srv),
+		Ref:    "#/operations/sendOpenMessage",
+	}); d != nil {
+		t.Errorf("no declared security: expected nil, got %+v", d)
+	}
+}
+
+func TestPrepareBindingNeverFetches(t *testing.T) {
+	srv, requests := newHTTPFixture(t)
+	specURL := srv.URL + "/spec.json"
+
+	// Cold cache + location-only source: not knowable without I/O -> nil.
+	cold := NewInvoker()
+	defer cold.Close()
+	before := requests.Load()
+	if d, err := cold.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Location: specURL},
+		Ref:    "#/operations/sendMessage",
+	}); err != nil || d != nil {
+		t.Fatalf("cold cache: expected (nil, nil), got (%+v, %v)", d, err)
+	}
+	if got := requests.Load(); got != before {
+		t.Fatalf("PrepareBinding must never fetch: %d requests dispatched", got-before)
+	}
+
+	// Warm the cache through a real invocation, then preflight answers.
+	call := cold.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{Format: FormatToken, Location: specURL},
+		Ref:     "#/operations/sendMessage",
+		Context: map[string]any{"bearerToken": testSecret},
+	})
+	if err := call.Write(bg(), map[string]any{"text": "warm"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openbindings.Single(shortCtx(t), call.Outputs()); err != nil {
+		t.Fatal(err)
+	}
+
+	warmBefore := requests.Load()
+	d, err := cold.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Location: specURL},
+		Ref:    "#/operations/sendMessage",
+	})
+	if err != nil || d == nil {
+		t.Fatalf("warm cache: expected details, got (%+v, %v)", d, err)
+	}
+	if got := requests.Load(); got != warmBefore {
+		t.Errorf("warm-cache preflight must not fetch: %d requests dispatched", got-warmBefore)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end through the operation invoker (resolve-and-retry)
+// ---------------------------------------------------------------------------
+
+func TestOperationInvokerResolvesChallengeFromStore(t *testing.T) {
+	srv, _ := newHTTPFixture(t)
+	binv := NewInvoker()
+	defer binv.Close()
+
+	store := openbindings.NewMemoryStore()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	if err := store.Set(bg(), host, map[string]any{"bearerToken": testSecret}); err != nil {
+		t.Fatal(err)
+	}
+
+	op := openbindings.NewOperationInvoker(binv)
+	op.ContextResolver = openbindings.StoreContextResolver(store)
+
+	iface := &openbindings.Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]openbindings.Operation{
+			"sendMessage": {},
+		},
+		Sources: map[string]openbindings.Source{
+			DefaultSourceName: {Format: FormatToken, Content: makeAsyncAPISpec(srv.URL)},
+		},
+		Bindings: map[string]openbindings.BindingEntry{
+			"sendMessage." + DefaultSourceName: {
+				Operation: "sendMessage", Source: DefaultSourceName, Ref: "#/operations/sendMessage",
+			},
+		},
+	}
+
+	call := op.Invoke(bg(), &openbindings.OperationInvocationArgs{
+		Interface: iface,
+		Operation: "sendMessage",
+	})
+	if err := call.Write(bg(), map[string]any{"text": "negotiated"}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := openbindings.Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	received, _ := v.(map[string]any)["received"].(map[string]any)
+	if received["text"] != "negotiated" {
+		t.Fatalf("got %v", v)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket fixture
 // ---------------------------------------------------------------------------
 
 // makeWSAsyncAPISpec returns an AsyncAPI 3.x document configured with a
-// WebSocket server, given the host:port of an httptest.Server. The protocol
-// is "ws" (not "wss") because httptest uses plain HTTP. Operations and
-// channels are named the same as the HTTP test fixture for consistency.
-func makeWSAsyncAPISpec(httpURL string, securityScheme SecurityScheme) *Document {
+// WebSocket server, given the host:port of an httptest.Server. scheme nil
+// means no declared security.
+func makeWSAsyncAPISpec(httpURL string, scheme *SecurityScheme) *Document {
 	host := strings.TrimPrefix(strings.TrimPrefix(httpURL, "http://"), "https://")
+	server := Server{Host: host, Protocol: "ws"}
 	doc := &Document{
 		AsyncAPI: "3.0.0",
 		Info:     Info{Title: "WS Test API", Version: "1.0.0"},
-		Servers: map[string]Server{
-			"wsServer": {
-				Host:     host,
-				Protocol: "ws",
-				Security: []map[string][]string{{"auth": {}}},
-			},
-		},
 		Channels: map[string]Channel{
 			"stream": {Address: "/ws"},
 		},
@@ -264,23 +587,22 @@ func makeWSAsyncAPISpec(httpURL string, securityScheme SecurityScheme) *Document
 			"subscribe": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/stream"}},
 			"publish":   {Action: "send", Channel: ChannelRef{Ref: "#/channels/stream"}},
 		},
-		Components: &Components{
-			SecuritySchemes: map[string]SecurityScheme{
-				"auth": securityScheme,
-			},
-		},
 	}
+	if scheme != nil {
+		server.Security = []map[string][]string{{"auth": {}}}
+		doc.Components = &Components{
+			SecuritySchemes: map[string]SecurityScheme{"auth": *scheme},
+		}
+	}
+	doc.Servers = map[string]Server{"wsServer": server}
 	return doc
 }
 
 // wsTestServer returns an httptest.Server that upgrades GET /ws to a
-// WebSocket and dispatches to the supplied exchange function. The exchange
-// receives the upgraded connection and the http.Request (so it can inspect
-// query parameters and headers from the upgrade request) and is responsible
-// for reading client messages and writing server messages.
+// WebSocket and dispatches to the supplied exchange function.
 func wsTestServer(t *testing.T, exchange func(ctx context.Context, conn *websocket.Conn, r *http.Request)) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ws" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -295,6 +617,8 @@ func wsTestServer(t *testing.T, exchange func(ctx context.Context, conn *websock
 		defer conn.Close(websocket.StatusNormalClosure, "test done")
 		exchange(r.Context(), conn, r)
 	}))
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 // readWSJSON reads a single WebSocket text message and decodes it as JSON.
@@ -323,266 +647,237 @@ func writeWSJSON(ctx context.Context, conn *websocket.Conn, msg any) error {
 	return conn.Write(writeCtx, websocket.MessageText, raw)
 }
 
-// TestIntegration_WebSocketBearerInFirstMessageBody verifies the spec
-// convention for WebSocket auth: the bearer token is sent in the body of the
-// first message after the upgrade, because browsers cannot set custom
-// WebSocket upgrade headers. The test server reads the first message,
-// asserts it carries a bearerToken field, and then streams two events.
-func TestIntegration_WebSocketBearerInFirstMessageBody(t *testing.T) {
-	receivedToken := ""
+func wsSource(srv *httptest.Server, scheme *SecurityScheme) openbindings.InvocationSource {
+	return openbindings.InvocationSource{Format: FormatToken, Content: makeWSAsyncAPISpec(srv.URL, scheme)}
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket receive
+// ---------------------------------------------------------------------------
+
+// TestWebSocketBearerInFirstFrame verifies the WebSocket auth convention:
+// the bearer token is sent in the body of the first frame after the upgrade,
+// because browsers cannot set custom WebSocket upgrade headers.
+func TestWebSocketBearerInFirstFrame(t *testing.T) {
+	tokenCh := make(chan string, 1)
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		// Read the first message which carries auth.
 		first, err := readWSJSON(ctx, conn)
 		if err != nil {
-			t.Errorf("read first message: %v", err)
 			return
 		}
-		if tok, ok := first["bearerToken"].(string); ok {
-			receivedToken = tok
-		}
-		// Stream two events back.
+		tok, _ := first["bearerToken"].(string)
+		tokenCh <- tok
 		_ = writeWSJSON(ctx, conn, map[string]any{"id": "1", "msg": "first"})
 		_ = writeWSJSON(ctx, conn, map[string]any{"id": "2", "msg": "second"})
 	})
-	defer srv.Close()
-
-	doc := makeWSAsyncAPISpec(srv.URL, SecurityScheme{Type: "http", Scheme: "bearer"})
-
-	binv := NewInvoker()
-	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: doc,
-		},
-		Ref:     "#/operations/subscribe",
-		Context: map[string]any{"bearerToken": "test-bearer-xyz"},
-	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
-	}
-
-	events := drainStream(ch)
-	if receivedToken != "test-bearer-xyz" {
-		t.Errorf("server received bearerToken = %q, want %q", receivedToken, "test-bearer-xyz")
-	}
-	if len(events) < 2 {
-		t.Fatalf("expected at least 2 stream events, got %d", len(events))
-	}
-}
-
-// TestIntegration_WebSocketQueryParamApiKey is the regression test for the
-// bug where query-param credentials populated by applyHTTPContext were
-// dropped because subscribeWS dialed with the original wsURL string instead
-// of the URL the request had been mutated to. This is the test the original
-// bug would have failed on.
-func TestIntegration_WebSocketQueryParamApiKey(t *testing.T) {
-	receivedKey := ""
-	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		// The query param should be present on the WebSocket upgrade URL.
-		receivedKey = r.URL.Query().Get("api_key")
-		// Drain any first message and send a response.
-		_, _ = readWSJSON(ctx, conn)
-		_ = writeWSJSON(ctx, conn, map[string]any{"ok": true})
-	})
-	defer srv.Close()
-
-	// Configure the spec to put the apiKey in the query.
-	doc := makeWSAsyncAPISpec(srv.URL, SecurityScheme{
-		Type: "apiKey",
-		In:   "query",
-		Name: "api_key",
-	})
-
-	binv := NewInvoker()
-	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: doc,
-		},
-		Ref:     "#/operations/subscribe",
-		Context: map[string]any{"apiKey": "secret-key-abc"},
-	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
-	}
-	_ = drainStream(ch)
-
-	if receivedKey != "secret-key-abc" {
-		t.Errorf("query-param apiKey not propagated to WebSocket URL: got %q, want %q", receivedKey, "secret-key-abc")
-	}
-}
-
-// TestIntegration_WebSocketStreamingMultipleEvents verifies that the
-// invoker forwards each server-pushed WebSocket message as a separate
-// stream event in arrival order.
-func TestIntegration_WebSocketStreamingMultipleEvents(t *testing.T) {
-	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		_, _ = readWSJSON(ctx, conn)
-		for i := 1; i <= 5; i++ {
-			_ = writeWSJSON(ctx, conn, map[string]any{"seq": i, "msg": fmt.Sprintf("event-%d", i)})
-		}
-	})
-	defer srv.Close()
-
-	doc := makeWSAsyncAPISpec(srv.URL, SecurityScheme{Type: "http", Scheme: "bearer"})
-
-	binv := NewInvoker()
-	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: doc,
-		},
-		Ref:     "#/operations/subscribe",
-		Context: map[string]any{"bearerToken": "tok"},
-	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
-	}
-
-	events := drainStream(ch)
-	if len(events) != 5 {
-		t.Fatalf("expected 5 stream events, got %d", len(events))
-	}
-	for i, ev := range events {
-		if ev.Error != nil {
-			t.Errorf("event %d: unexpected error: %s", i, ev.Error.Message)
-			continue
-		}
-		data, _ := ev.Output.(map[string]any)
-		seq, _ := data["seq"].(float64)
-		if int(seq) != i+1 {
-			t.Errorf("event %d: seq = %v, want %d", i, seq, i+1)
-		}
-	}
-}
-
-// TestIntegration_WebSocketCancellation verifies that cancelling the
-// caller's context closes the WebSocket cleanly without leaving the goroutine
-// hanging or panicking. The test server holds the connection open after
-// sending one event, simulating a long-running subscription.
-func TestIntegration_WebSocketCancellation(t *testing.T) {
-	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		_, _ = readWSJSON(ctx, conn)
-		_ = writeWSJSON(ctx, conn, map[string]any{"id": "1"})
-		// Hold the connection open until the request context is done
-		// (the client cancellation propagates here through the HTTP
-		// hijacker's request context).
-		<-ctx.Done()
-	})
-	defer srv.Close()
-
-	doc := makeWSAsyncAPISpec(srv.URL, SecurityScheme{Type: "http", Scheme: "bearer"})
-
-	binv := NewInvoker()
-	ctx, cancel := context.WithCancel(context.Background())
-
-	ch, err := binv.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: doc,
-		},
-		Ref:     "#/operations/subscribe",
-		Context: map[string]any{"bearerToken": "tok"},
-	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
-	}
-
-	// Receive the first event.
-	ev, ok := <-ch
-	if !ok {
-		t.Fatal("channel closed before first event")
-	}
-	if ev.Error != nil {
-		t.Fatalf("first event error: %s", ev.Error.Message)
-	}
-
-	// Cancel and verify the channel closes within a reasonable time.
-	cancel()
-	timeout := time.After(3 * time.Second)
-	for {
-		select {
-		case _, open := <-ch:
-			if !open {
-				return // success: channel closed cleanly
-			}
-		case <-timeout:
-			t.Fatal("WebSocket channel did not close within 3s of cancellation")
-		}
-	}
-}
-
-// TestIntegration_WebSocketSendAction verifies that an AsyncAPI send operation
-// with a Reply defined over WebSocket uses connection pooling: the input is
-// sent as a message on the pooled connection, and one reply is read back.
-// Auth is on the upgrade headers (not in the message body).
-func TestIntegration_WebSocketSendAction(t *testing.T) {
-	var clientPayload map[string]any
-	var upgradeAuth string
-	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		upgradeAuth = r.Header.Get("Authorization")
-		first, err := readWSJSON(ctx, conn)
-		if err != nil {
-			t.Errorf("read send payload: %v", err)
-			return
-		}
-		clientPayload = first
-		// Echo back a reply.
-		_ = writeWSJSON(ctx, conn, map[string]any{"ack": true, "command": first["command"]})
-	})
-	defer srv.Close()
-
-	doc := makeWSAsyncAPISpec(srv.URL, SecurityScheme{Type: "http", Scheme: "bearer"})
-	// Add a Reply to the publish operation so it reads one response.
-	pubOp := doc.Operations["publish"]
-	pubOp.Reply = &OperationReply{}
-	doc.Operations["publish"] = pubOp
 
 	binv := NewInvoker()
 	defer binv.Close()
-	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: doc,
-		},
-		Ref:     "#/operations/publish",
-		Input:   map[string]any{"command": "do-thing", "value": 42},
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"}),
+		Ref:     "#/operations/subscribe",
+		Context: map[string]any{"bearerToken": "test-bearer-xyz"},
+	})
+	vals, err := drainOutputs(t, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vals) != 2 {
+		t.Fatalf("expected 2 stream events, got %d: %v", len(vals), vals)
+	}
+	select {
+	case tok := <-tokenCh:
+		if tok != "test-bearer-xyz" {
+			t.Errorf("server received bearerToken = %q, want test-bearer-xyz", tok)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server never received the first frame")
+	}
+}
+
+// TestWebSocketQueryParamApiKey is the regression test for query-param
+// credentials populated by applyHTTPContext reaching the dialed WebSocket
+// URL (browsers cannot set upgrade headers, so a query apiKey is the only
+// way to authenticate a browser WebSocket).
+func TestWebSocketQueryParamApiKey(t *testing.T) {
+	keyCh := make(chan string, 1)
+	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
+		keyCh <- r.URL.Query().Get("api_key")
+		_ = writeWSJSON(ctx, conn, map[string]any{"ok": true})
+	})
+
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  wsSource(srv, &SecurityScheme{Type: "apiKey", In: "query", Name: "api_key"}),
+		Ref:     "#/operations/subscribe",
+		Context: map[string]any{"apiKey": "secret-key-abc"},
+	})
+	vals, err := drainOutputs(t, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vals) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(vals))
+	}
+	select {
+	case key := <-keyCh:
+		if key != "secret-key-abc" {
+			t.Errorf("query-param apiKey not propagated: got %q, want secret-key-abc", key)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server never saw the upgrade")
+	}
+}
+
+// TestWebSocketStreamingMultipleEvents verifies each server-pushed frame is
+// one bare output in arrival order, and a clean server close ends the stream.
+func TestWebSocketStreamingMultipleEvents(t *testing.T) {
+	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
+		_, _ = readWSJSON(ctx, conn) // bearer first-frame
+		for i := 1; i <= 5; i++ {
+			_ = writeWSJSON(ctx, conn, map[string]any{"seq": i})
+		}
+	})
+
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"}),
+		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "tok"},
 	})
+	vals, err := drainOutputs(t, call)
 	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+		t.Fatal(err)
+	}
+	if len(vals) != 5 {
+		t.Fatalf("expected 5 events, got %d: %v", len(vals), vals)
+	}
+	for i, v := range vals {
+		if seq, _ := v.(map[string]any)["seq"].(float64); int(seq) != i+1 {
+			t.Errorf("event %d: seq = %v, want %d", i, v, i+1)
+		}
+	}
+}
+
+// TestWebSocketStopCancelsSubscription verifies that abandoning the output
+// stream cancels the invocation without stranding goroutines.
+func TestWebSocketStopCancelsSubscription(t *testing.T) {
+	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
+		_, _ = readWSJSON(ctx, conn)
+		_ = writeWSJSON(ctx, conn, map[string]any{"id": "1"})
+		<-ctx.Done() // hold the connection open; the client cancels
+	})
+
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"}),
+		Ref:     "#/operations/subscribe",
+		Context: map[string]any{"bearerToken": "tok"},
+	})
+	out := call.Outputs()
+	if _, err := out.Read(shortCtx(t)); err != nil {
+		t.Fatal(err)
+	}
+	out.Stop()
+	_, err := out.Read(shortCtx(t))
+	if codeOf(t, err) != openbindings.ErrCodeCancelled {
+		t.Fatalf("expected ERR_CANCELLED, got %v", err)
+	}
+}
+
+// TestWebSocketServerErrorFrame verifies an {"error": ...} frame is a
+// terminal ERR_STREAM_ERROR carrying the server's message.
+func TestWebSocketServerErrorFrame(t *testing.T) {
+	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
+		_, _ = readWSJSON(ctx, conn)
+		_ = writeWSJSON(ctx, conn, map[string]any{"data": map[string]any{"ok": true}})
+		_ = writeWSJSON(ctx, conn, map[string]any{"error": map[string]any{"message": "boom"}})
+	})
+
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"}),
+		Ref:     "#/operations/subscribe",
+		Context: map[string]any{"bearerToken": "tok"},
+	})
+	vals, err := drainOutputs(t, call)
+	if len(vals) != 1 {
+		t.Fatalf("the {data} frame before the error must be delivered, got %v", vals)
+	}
+	if vals[0].(map[string]any)["ok"] != true {
+		t.Fatalf("data frame must unwrap to its payload, got %v", vals[0])
+	}
+	var ie *openbindings.InvocationError
+	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeStreamError {
+		t.Fatalf("expected ERR_STREAM_ERROR, got %v", err)
+	}
+	if ie.Message != "boom" {
+		t.Errorf("Message = %q, want boom", ie.Message)
+	}
+}
+
+// TestWebSocketBidiControlFrames verifies the receive binding is
+// bidi-capable: caller inputs are forwarded as socket frames, and closing
+// input does NOT end the subscription.
+func TestWebSocketBidiControlFrames(t *testing.T) {
+	inputClosed := make(chan struct{})
+	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
+		control, err := readWSJSON(ctx, conn) // no bearer context: first frame is the control frame
+		if err != nil {
+			return
+		}
+		_ = writeWSJSON(ctx, conn, map[string]any{"ack": control["subscribe"]})
+		select {
+		case <-inputClosed:
+		case <-ctx.Done():
+			return
+		}
+		_ = writeWSJSON(ctx, conn, map[string]any{"final": true})
+	})
+
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: wsSource(srv, nil),
+		Ref:    "#/operations/subscribe",
+	})
+
+	if err := call.Write(bg(), map[string]any{"subscribe": "orders"}); err != nil {
+		t.Fatal(err)
+	}
+	out := call.Outputs()
+	ack, err := out.Read(shortCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack.(map[string]any)["ack"] != "orders" {
+		t.Fatalf("got %v", ack)
 	}
 
-	events := drainStream(ch)
+	// Close the input side; the subscription must keep flowing.
+	if err := call.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(inputClosed)
 
-	// Auth should be on the upgrade request, not in the message body.
-	if upgradeAuth != "Bearer tok" {
-		t.Errorf("upgrade Authorization = %q, want %q", upgradeAuth, "Bearer tok")
+	final, err := out.Read(shortCtx(t))
+	if err != nil {
+		t.Fatalf("closing input must not end the subscription: %v", err)
 	}
-
-	// Server should have received the input fields (no bearerToken in body).
-	if clientPayload == nil {
-		t.Fatal("server did not receive any client payload")
+	if final.(map[string]any)["final"] != true {
+		t.Fatalf("got %v", final)
 	}
-	if clientPayload["command"] != "do-thing" {
-		t.Errorf("server payload command = %v, want do-thing", clientPayload["command"])
-	}
-	if v, _ := clientPayload["value"].(float64); int(v) != 42 {
-		t.Errorf("server payload value = %v, want 42", clientPayload["value"])
-	}
-	if _, hasBearerToken := clientPayload["bearerToken"]; hasBearerToken {
-		t.Error("pooled send should not include bearerToken in the message body")
-	}
-
-	// Client should have received the reply.
-	if len(events) != 1 {
-		t.Fatalf("expected 1 reply event, got %d", len(events))
-	}
-	if events[0].Error != nil {
-		t.Fatalf("unexpected error: %s", events[0].Error.Message)
-	}
-	reply, _ := events[0].Output.(map[string]any)
-	if reply["ack"] != true {
-		t.Errorf("reply ack = %v, want true", reply["ack"])
+	if _, err := out.Read(shortCtx(t)); err != io.EOF {
+		t.Fatalf("expected clean EOF after server close, got %v", err)
 	}
 }

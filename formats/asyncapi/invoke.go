@@ -11,70 +11,71 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"time"
+	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"nhooyr.io/websocket"
 )
+
+// AsyncAPI binding execution over the cardinality-agnostic invocation handle.
+//
+// One entrypoint (runBinding) drives every channel shape against the
+// binding-facing BindingHandle:
+//
+//	send + http/https     unary HTTP POST: first input -> request body,
+//	                      response -> single output
+//	send + ws/wss         client-streaming publish: every input -> one
+//	                      socket frame; closing input closes the call
+//	receive + http/https  SSE subscribe: server events -> outputs
+//	receive + ws/wss      WebSocket subscribe (bidi-capable): socket
+//	                      frames -> outputs, caller inputs -> socket frames
+//
+// All pre-dispatch failures (bad ref, missing server, missing context) are
+// raised via FireError BEFORE any network I/O, per the binding-author
+// contract.
 
 const maxResponseBytes = 10 * 1024 * 1024 // 10 MB
 
-func invokeBindingWithDoc(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *Document) *openbindings.InvocationOutput {
-	start := time.Now()
+type handle = openbindings.BindingHandle[any, any]
 
-	opID, err := parseRef(input.Ref)
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+// runBinding resolves the operation, checks runtime context, and dispatches
+// to the protocol-specific runner. Terminates the handle exactly once. ctx is
+// expected to be bound to the invocation's lifetime (DoneContext).
+func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *openbindings.BindingInvocationArgs, h handle, doc *Document) {
+	opID, err := parseRef(args.Ref)
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidRef, err.Error())
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: err.Error()})
+		return
 	}
 
 	asyncOp, ok := doc.Operations[opID]
 	if !ok {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound, fmt.Sprintf("operation %q not in AsyncAPI doc", opID))
+		h.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeRefNotFound,
+			Message: fmt.Sprintf("operation %q not in AsyncAPI doc", opID),
+		})
+		return
 	}
 
-	serverURL, protocol, err := resolveServer(doc, input.Context)
+	serverURL, protocol, err := resolveServer(doc, args.Context)
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeSourceConfigError, err.Error())
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		return
+	}
+
+	// Context negotiation: challenge BEFORE any connection is opened.
+	if details := requiredContext(doc, &asyncOp, serverURL, args.Context); details != nil {
+		h.FireError(openbindings.NewContextRequiredError(
+			fmt.Sprintf("operation %q requires credentials the context does not provide", opID), details))
+		return
 	}
 
 	channelName := extractRefName(asyncOp.Channel.Ref)
-	channel, hasChannel := doc.Channels[channelName]
-
 	address := channelName
-	if hasChannel && channel.Address != "" {
-		address = channel.Address
-	}
-
-	switch asyncOp.Action {
-	case "receive":
-		return invokeReceive(ctx, client, serverURL, protocol, address, input, doc, &asyncOp, start)
-	case "send":
-		return invokeSend(ctx, client, serverURL, protocol, address, input, doc, &asyncOp, start)
-	default:
-		return openbindings.FailedOutput(start, openbindings.ErrCodeSourceConfigError, fmt.Sprintf("unknown action %q", asyncOp.Action))
-	}
-}
-
-func subscribeBindingWithDoc(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *Document, pool *wsPool) (<-chan openbindings.InvocationOutput, error) {
-	opID, err := parseRef(input.Ref)
-	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeInvalidRef, err.Error())), nil
-	}
-
-	asyncOp, ok := doc.Operations[opID]
-	if !ok {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeRefNotFound, fmt.Sprintf("operation %q not in AsyncAPI doc", opID))), nil
-	}
-
-	serverURL, protocol, err := resolveServer(doc, input.Context)
-	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeSourceConfigError, err.Error())), nil
-	}
-
-	channelName := extractRefName(asyncOp.Channel.Ref)
-	channel, hasChannel := doc.Channels[channelName]
-	address := channelName
-	if hasChannel && channel.Address != "" {
+	if channel, hasChannel := doc.Channels[channelName]; hasChannel && channel.Address != "" {
 		address = channel.Address
 	}
 
@@ -82,26 +83,38 @@ func subscribeBindingWithDoc(ctx context.Context, client *http.Client, input *op
 	case "receive":
 		switch protocol {
 		case "ws", "wss":
-			return subscribeWS(ctx, serverURL, address, input, doc, &asyncOp)
+			runWSReceive(ctx, pool, serverURL, address, doc, &asyncOp, args, h)
 		case "http", "https":
-			return subscribeSSE(ctx, client, serverURL, address, input, doc, &asyncOp)
+			runSSEReceive(ctx, client, serverURL, address, doc, &asyncOp, args, h)
 		default:
-			return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeSourceConfigError,
-				fmt.Sprintf("streaming not supported for protocol %q (supported: http, https, ws, wss)", protocol))), nil
+			h.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeSourceConfigError,
+				Message: fmt.Sprintf("receive not supported for protocol %q (supported: http, https, ws, wss)", protocol),
+			})
 		}
 	case "send":
 		switch protocol {
 		case "ws", "wss":
-			return sendWS(ctx, pool, serverURL, address, input, doc, &asyncOp)
+			runWSSend(ctx, pool, serverURL, address, doc, &asyncOp, args, h)
+		case "http", "https":
+			runHTTPSend(ctx, client, serverURL, address, doc, &asyncOp, args, h)
 		default:
-			return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeSourceConfigError,
-				fmt.Sprintf("streaming for send action requires ws or wss protocol (got %q)", protocol))), nil
+			h.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeSourceConfigError,
+				Message: fmt.Sprintf("send not supported for protocol %q (supported: http, https, ws, wss)", protocol),
+			})
 		}
 	default:
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeSourceConfigError,
-			fmt.Sprintf("unknown action %q", asyncOp.Action))), nil
+		h.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: fmt.Sprintf("unknown action %q", asyncOp.Action),
+		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Ref parsing & server resolution
+// ---------------------------------------------------------------------------
 
 func parseRef(ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
@@ -145,14 +158,12 @@ func resolveServer(doc *Document, ctx map[string]any) (url string, protocol stri
 	for _, name := range serverNames {
 		server := doc.Servers[name]
 		proto := strings.ToLower(server.Protocol)
-		host := server.Host
-		pathname := server.PathName
 
 		switch proto {
 		case "http", "https", "ws", "wss":
-			url := proto + "://" + host
-			if pathname != "" {
-				url += pathname
+			url := proto + "://" + server.Host
+			if server.PathName != "" {
+				url += server.PathName
 			}
 			return strings.TrimRight(url, "/"), proto, nil
 		}
@@ -161,66 +172,216 @@ func resolveServer(doc *Document, ctx map[string]any) (url string, protocol stri
 	return "", "", fmt.Errorf("no supported server found (need http, https, ws, or wss protocol)")
 }
 
-func invokeReceive(ctx context.Context, client *http.Client, serverURL, protocol, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation, start time.Time) *openbindings.InvocationOutput {
-	maxEvents := 1
-	if input.Input != nil {
-		if m, ok := input.Input.(map[string]any); ok {
-			if n, ok := m["maxEvents"].(float64); ok && n > 0 {
-				maxEvents = int(n)
-			}
+// ---------------------------------------------------------------------------
+// Context requirements (CONTEXT_REQUIRED negotiation)
+// ---------------------------------------------------------------------------
+
+// requirementType maps an AsyncAPI security scheme to a standard requirement
+// family, or "" when the scheme family is unknown (not checkable, not
+// enforced).
+func requirementType(s SecurityScheme) string {
+	switch s.Type {
+	case "http":
+		switch strings.ToLower(s.Scheme) {
+		case "bearer":
+			return "auth.bearer"
+		case "basic":
+			return "auth.basic"
+		}
+		return ""
+	case "httpBearer":
+		return "auth.bearer"
+	case "userPassword":
+		return "auth.basic"
+	case "apiKey", "httpApiKey":
+		return "auth.apiKey"
+	case "oauth2":
+		return "auth.oauth2"
+	}
+	return ""
+}
+
+// requiredContext computes the context the binding requires for this
+// operation, or nil when the provided context already satisfies it (or the
+// doc declares nothing checkable). Each declared scheme is one alternative:
+// satisfying any one suffices. Side-effect-free; shared by runBinding and
+// PrepareBinding.
+func requiredContext(doc *Document, asyncOp *Operation, serverURL string, ctx map[string]any) *openbindings.ContextRequiredDetails {
+	schemes := resolveSecuritySchemes(doc, asyncOp)
+	var alternatives []openbindings.ContextAlternative
+	for _, s := range schemes {
+		typ := requirementType(s)
+		if typ == "" {
+			continue
+		}
+		req := openbindings.ContextRequirement{Type: typ}
+		if s.Description != "" {
+			req.Description = s.Description
+		}
+		alternatives = append(alternatives, openbindings.ContextAlternative{
+			Requirements: []openbindings.ContextRequirement{req},
+		})
+	}
+	if len(alternatives) == 0 {
+		return nil
+	}
+
+	details := &openbindings.ContextRequiredDetails{
+		Key:          openbindings.NormalizeContextKey(serverURL),
+		Alternatives: alternatives,
+	}
+	if openbindings.ContextSatisfies(ctx, details) {
+		return nil
+	}
+	return details
+}
+
+// ---------------------------------------------------------------------------
+// Send over HTTP: unary POST
+// ---------------------------------------------------------------------------
+
+func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address string, doc *Document, asyncOp *Operation, args *openbindings.BindingInvocationArgs, h handle) {
+	// Unary: the first input is the message payload. An AsyncAPI send always
+	// carries a message.
+	first, err := h.ReadInput(ctx)
+	if err == io.EOF {
+		h.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeMissingInput,
+			Message: "send operation requires an input message",
+		})
+		return
+	}
+	if err != nil {
+		return // invocation already terminal (or cancelled)
+	}
+	_ = h.CloseInput()
+
+	body := []byte("{}")
+	if first != nil {
+		body, err = json.Marshal(first)
+		if err != nil {
+			h.FireError(openbindings.AsInvocationError(err))
+			return
 		}
 	}
 
-	switch protocol {
-	case "http", "https":
-		return doSSESubscribe(ctx, client, serverURL, address, maxEvents, input, doc, asyncOp, start)
-	default:
-		return openbindings.FailedOutput(start, openbindings.ErrCodeSourceConfigError,
-			fmt.Sprintf("receive not supported for protocol %q (supported: http, https)", protocol))
-	}
-}
-
-func invokeSend(ctx context.Context, client *http.Client, serverURL, protocol, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation, start time.Time) *openbindings.InvocationOutput {
-	switch protocol {
-	case "http", "https":
-		return doHTTPSend(ctx, client, serverURL, address, input, doc, asyncOp, start)
-	default:
-		return openbindings.FailedOutput(start, openbindings.ErrCodeSourceConfigError,
-			fmt.Sprintf("send not supported for protocol %q (supported: http, https)", protocol))
-	}
-}
-
-func doSSESubscribe(ctx context.Context, client *http.Client, serverURL, address string, maxEvents int, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation, start time.Time) *openbindings.InvocationOutput {
 	url := serverURL + "/" + strings.TrimLeft(address, "/")
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeExecutionFailed, err.Error())
+		h.FireError(openbindings.AsInvocationError(err))
+		return
 	}
-	req.Header.Set("Accept", "text/event-stream")
-	applyHTTPContext(req, doc, asyncOp, input.Context)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	applyHTTPContext(req, doc, asyncOp, args.Context)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeConnectFailed, err.Error())
+		if ctx.Err() != nil {
+			return // cancellation is already terminal
+		}
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 {
+		h.FireError(httpStatusError(resp))
+		return
+	}
+
+	_ = h.SetHeader(headerMetadata(resp.Header))
+
+	if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusNoContent {
+		// Accepted with no payload: a publish acknowledgment, not an output.
+		h.CloseOutput()
+		return
+	}
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
+		return
+	}
+	if len(respBody) > maxResponseBytes {
+		h.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeResponseError,
+			Message: fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes),
+		})
+		return
+	}
+
+	if len(respBody) == 0 {
+		h.CloseOutput()
+		return
+	}
+
+	var output any
+	trimmed := strings.TrimSpace(string(respBody))
+	if openbindings.MaybeJSON(trimmed) {
+		if json.Unmarshal(respBody, &output) != nil {
+			output = string(respBody)
+		}
+	} else {
+		output = string(respBody)
+	}
+
+	if h.EmitOutput(output) != nil {
+		return // invocation terminated while the emit was parked
+	}
+	h.CloseOutput()
+}
+
+// ---------------------------------------------------------------------------
+// Receive over HTTP: SSE subscribe
+// ---------------------------------------------------------------------------
+
+func runSSEReceive(ctx context.Context, client *http.Client, serverURL, address string, doc *Document, asyncOp *Operation, args *openbindings.BindingInvocationArgs, h handle) {
+	// Server -> client: the channel takes no caller input.
+	_ = h.CloseInput()
+
+	url := serverURL + "/" + strings.TrimLeft(address, "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		h.FireError(openbindings.AsInvocationError(err))
+		return
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	applyHTTPContext(req, doc, asyncOp, args.Context)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return openbindings.HTTPErrorOutput(start, resp.StatusCode, resp.Status)
+		h.FireError(httpStatusError(resp))
+		return
 	}
 
-	var events []any
+	_ = h.SetHeader(headerMetadata(resp.Header))
+
 	scanner := bufio.NewScanner(resp.Body)
 	var dataLines []string
 	var totalBytes int
 
-	for scanner.Scan() && len(events) < maxEvents {
+	for scanner.Scan() {
 		line := scanner.Text()
 		totalBytes += len(line) + 1 // +1 for newline
 		if totalBytes > maxResponseBytes {
-			return openbindings.FailedOutput(start, openbindings.ErrCodeResponseError,
-				fmt.Sprintf("SSE stream exceeds %d byte limit", maxResponseBytes))
+			h.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeResponseError,
+				Message: fmt.Sprintf("SSE stream exceeds %d byte limit", maxResponseBytes),
+			})
+			return
 		}
 
 		if strings.HasPrefix(line, "data:") {
@@ -229,315 +390,254 @@ func doSSESubscribe(ctx context.Context, client *http.Client, serverURL, address
 		}
 
 		if line == "" && len(dataLines) > 0 {
-			events = append(events, parseSSEPayload(dataLines))
+			ev := parseSSEPayload(dataLines)
 			dataLines = dataLines[:0]
+			if h.EmitOutput(ev) != nil {
+				return // invocation terminated while the emit was parked
+			}
 		}
 	}
 
 	if len(dataLines) > 0 {
-		events = append(events, parseSSEPayload(dataLines))
+		if h.EmitOutput(parseSSEPayload(dataLines)) != nil {
+			return
+		}
 	}
 
-	var output any
-	if len(events) == 1 {
-		output = events[0]
-	} else {
-		output = events
+	if serr := scanner.Err(); serr != nil {
+		if ctx.Err() == nil {
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: serr.Error()})
+		}
+		return
+	}
+	h.CloseOutput()
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket frames
+// ---------------------------------------------------------------------------
+
+// parseWSFrame interprets one socket frame. `{"error": ...}` frames are
+// terminal stream errors; `{"data": ...}` frames unwrap to the payload;
+// everything else passes through (raw string when not JSON).
+func parseWSFrame(raw []byte) (out any, terminal *openbindings.InvocationError) {
+	var parsed any
+	if json.Unmarshal(raw, &parsed) != nil {
+		return string(raw), nil
+	}
+	if obj, ok := parsed.(map[string]any); ok {
+		if errVal, hasErr := obj["error"]; hasErr && errVal != nil {
+			msg := "server reported an error"
+			if em, ok := errVal.(map[string]any); ok {
+				if m, ok := em["message"].(string); ok && m != "" {
+					msg = m
+				}
+			}
+			return nil, &openbindings.InvocationError{
+				Code:    openbindings.ErrCodeStreamError,
+				Message: msg,
+				Details: map[string]any{"error": errVal},
+			}
+		}
+		if dataVal, hasData := obj["data"]; hasData {
+			return dataVal, nil
+		}
+	}
+	return parsed, nil
+}
+
+// ---------------------------------------------------------------------------
+// Receive over WebSocket: subscribe (bidi-capable) on a pooled socket
+// ---------------------------------------------------------------------------
+
+func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, doc *Document, asyncOp *Operation, args *openbindings.BindingInvocationArgs, h handle) {
+	// The subscription is registered inside acquire (before the reader
+	// starts on a fresh dial) so no early server push can be lost.
+	sub := newWSSubscription()
+	pw, unsubscribe, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, args.Context,
+		&wsListener{onFrame: sub.push, onClose: sub.close})
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		return
+	}
+	defer pw.release()
+	defer unsubscribe()
+
+	// First-frame bearer convention: browsers cannot set headers on WebSocket
+	// upgrades, so the token travels in the first message body.
+	if token := openbindings.ContextBearerToken(args.Context); token != "" {
+		frame, merr := json.Marshal(map[string]any{"bearerToken": token})
+		if merr == nil {
+			if werr := pw.send(ctx, frame); werr != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
+				return
+			}
+		}
 	}
 
-	return &openbindings.InvocationOutput{
-		Output:     output,
-		Status:     resp.StatusCode,
-		DurationMs: time.Since(start).Milliseconds(),
+	// Inputs -> socket. Lets callers push subscription/control frames; the
+	// caller closing input does NOT end the subscription (outputs keep
+	// flowing). The pump exits on input EOF, on invocation terminal, or when
+	// ctx (bound to the invocation's lifetime) ends.
+	go func() {
+		for {
+			msg, rerr := h.ReadInput(ctx)
+			if rerr != nil {
+				return
+			}
+			frame, merr := json.Marshal(msg)
+			if merr != nil {
+				h.FireError(openbindings.AsInvocationError(merr))
+				return
+			}
+			if pw.send(ctx, frame) != nil {
+				return
+			}
+		}
+	}()
+
+	// Socket -> outputs. Owns the terminal transition: clean socket close ->
+	// CloseOutput; socket error -> ERR_STREAM_ERROR.
+	for {
+		frame, closed, closeErr, ok := sub.next(ctx)
+		if !ok {
+			return // invocation terminated (cancelled) while waiting
+		}
+		if closed {
+			if closeErr != nil {
+				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: closeErr.Error()})
+			} else {
+				h.CloseOutput()
+			}
+			return
+		}
+		out, terminal := parseWSFrame(frame)
+		if terminal != nil {
+			h.FireError(terminal)
+			return
+		}
+		if h.EmitOutput(out) != nil {
+			return // invocation terminated while the emit was parked
+		}
 	}
 }
 
-func subscribeSSE(ctx context.Context, client *http.Client, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.InvocationOutput, error) {
-	sseURL := serverURL + "/" + strings.TrimLeft(address, "/")
+// wsSubscription buffers broadcast frames from a pooled socket for one
+// consumer, preserving arrival order without blocking the shared reader
+// goroutine (the EmitOutput parking downstream is the real backpressure).
+type wsSubscription struct {
+	mu       sync.Mutex
+	frames   [][]byte
+	closed   bool
+	closeErr error
+	notify   chan struct{} // 1-buffered wake signal
+}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", sseURL, nil)
+func newWSSubscription() *wsSubscription {
+	return &wsSubscription{notify: make(chan struct{}, 1)}
+}
+
+func (s *wsSubscription) push(frame []byte) {
+	s.mu.Lock()
+	s.frames = append(s.frames, frame)
+	s.mu.Unlock()
+	s.wake()
+}
+
+func (s *wsSubscription) close(err error) {
+	s.mu.Lock()
+	s.closed = true
+	s.closeErr = err
+	s.mu.Unlock()
+	s.wake()
+}
+
+func (s *wsSubscription) wake() {
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
+}
+
+// next returns the next frame, or closed=true once the socket has closed
+// (buffered frames always drain first), or ok=false when ctx ends first.
+func (s *wsSubscription) next(ctx context.Context) (frame []byte, closed bool, closeErr error, ok bool) {
+	for {
+		s.mu.Lock()
+		if len(s.frames) > 0 {
+			frame = s.frames[0]
+			s.frames = s.frames[1:]
+			s.mu.Unlock()
+			return frame, false, nil, true
+		}
+		if s.closed {
+			err := s.closeErr
+			s.mu.Unlock()
+			return nil, true, err, true
+		}
+		s.mu.Unlock()
+
+		select {
+		case <-s.notify:
+		case <-ctx.Done():
+			return nil, false, nil, false
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Send over WebSocket: client-streaming publish on a pooled socket
+// ---------------------------------------------------------------------------
+
+func runWSSend(ctx context.Context, pool *wsPool, serverURL, address string, doc *Document, asyncOp *Operation, args *openbindings.BindingInvocationArgs, h handle) {
+	pw, _, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, args.Context, nil)
 	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeExecutionFailed, err.Error())), nil
+		if ctx.Err() != nil {
+			return
+		}
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		return
 	}
-	req.Header.Set("Accept", "text/event-stream")
-	applyHTTPContext(req, doc, asyncOp, input.Context)
+	defer pw.release()
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeConnectFailed, err.Error())), nil
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_ = resp.Body.Close()
-		return openbindings.SingleEventChannel(openbindings.HTTPErrorOutput(time.Now(), resp.StatusCode, resp.Status)), nil
-	}
-
-	ch := make(chan openbindings.InvocationOutput)
-	go func() {
-		defer func() { _ = resp.Body.Close() }()
-		defer close(ch)
-
-		scanner := bufio.NewScanner(resp.Body)
-		var dataLines []string
-		var totalBytes int
-
-		for scanner.Scan() {
+	// Client-streaming publish: every input is one frame; the caller closing
+	// input completes the call with zero outputs (a publish yields no
+	// outputs; auth rides the upgrade request, never the message body).
+	for {
+		msg, rerr := h.ReadInput(ctx)
+		if rerr == io.EOF {
+			h.CloseOutput()
+			return
+		}
+		if rerr != nil {
+			return // invocation already terminal (or cancelled)
+		}
+		frame, merr := json.Marshal(msg)
+		if merr != nil {
+			h.FireError(openbindings.AsInvocationError(merr))
+			return
+		}
+		if werr := pw.send(ctx, frame); werr != nil {
+			// Broken socket: evict it so the next caller dials a fresh one.
+			pool.evict(pw)
 			if ctx.Err() != nil {
 				return
 			}
-
-			line := scanner.Text()
-			totalBytes += len(line) + 1 // +1 for newline
-			if totalBytes > maxResponseBytes {
-				select {
-				case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeResponseError,
-					Message: fmt.Sprintf("SSE stream exceeds %d byte limit", maxResponseBytes),
-				}}:
-				case <-ctx.Done():
-				}
-				return
-			}
-
-			if strings.HasPrefix(line, "data:") {
-				dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-				continue
-			}
-
-			if line == "" && len(dataLines) > 0 {
-				ev := parseSSEPayload(dataLines)
-				dataLines = dataLines[:0]
-				select {
-				case ch <- openbindings.InvocationOutput{Output: ev}:
-				case <-ctx.Done():
-					return
-				}
-			}
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
+			return
 		}
-
-		if len(dataLines) > 0 {
-			select {
-			case ch <- openbindings.InvocationOutput{Output: parseSSEPayload(dataLines)}:
-			case <-ctx.Done():
-			}
-		}
-
-		if err := scanner.Err(); err != nil && ctx.Err() == nil {
-			select {
-			case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()}}:
-			case <-ctx.Done():
-			}
-		}
-	}()
-
-	return ch, nil
-}
-
-func doHTTPSend(ctx context.Context, client *http.Client, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation, start time.Time) *openbindings.InvocationOutput {
-	url := serverURL + "/" + strings.TrimLeft(address, "/")
-
-	var bodyData []byte
-	if input.Input != nil {
-		var marshalErr error
-		bodyData, marshalErr = json.Marshal(input.Input)
-		if marshalErr != nil {
-			return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, marshalErr.Error())
-		}
-	} else {
-		bodyData = []byte("{}")
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyData))
-	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeExecutionFailed, err.Error())
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	applyHTTPContext(req, doc, asyncOp, input.Context)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeExecutionFailed, err.Error())
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	duration := time.Since(start).Milliseconds()
-
-	if resp.StatusCode >= 400 {
-		errOutput := openbindings.HTTPErrorOutput(start, resp.StatusCode, resp.Status)
-		if body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1)); readErr == nil && len(body) > 0 {
-			if len(body) > maxResponseBytes {
-				errOutput.Output = fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes)
-			} else {
-				var parsed any
-				if json.Unmarshal(body, &parsed) == nil {
-					errOutput.Output = parsed
-				} else {
-					errOutput.Output = string(body)
-				}
-			}
-		}
-		return errOutput
-	}
-
-	if resp.StatusCode == 202 || resp.StatusCode == 204 {
-		return &openbindings.InvocationOutput{
-			Status:     resp.StatusCode,
-			DurationMs: duration,
-		}
-	}
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
-	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeResponseError, err.Error())
-	}
-	if len(respBody) > maxResponseBytes {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeResponseError,
-			fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes))
-	}
-
-	var output any
-	if len(respBody) > 0 {
-		trimmed := strings.TrimSpace(string(respBody))
-		if openbindings.MaybeJSON(trimmed) {
-			if json.Unmarshal(respBody, &output) != nil {
-				output = string(respBody)
-			}
-		} else {
-			output = string(respBody)
-		}
-	}
-
-	return &openbindings.InvocationOutput{
-		Output:     output,
-		Status:     resp.StatusCode,
-		DurationMs: duration,
 	}
 }
 
-func subscribeWS(ctx context.Context, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.InvocationOutput, error) {
-	wsURL := serverURL + "/" + strings.TrimLeft(address, "/")
-
-	// Build HTTP headers for the upgrade request using applyHTTPContext.
-	// applyHTTPContext may also append query parameters (for spec-driven apiKey
-	// credentials placed in the query) to upgradeReq.URL.RawQuery, so we must
-	// dial using the request's reconstructed URL rather than the original wsURL
-	// to ensure those credentials reach the server. Browsers cannot set custom
-	// WebSocket upgrade headers, so query-param apiKeys are the only way to
-	// authenticate a WebSocket from a browser.
-	upgradeReq, err := http.NewRequestWithContext(ctx, "GET", wsURL, nil)
-	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeExecutionFailed, err.Error())), nil
-	}
-	applyHTTPContext(upgradeReq, doc, asyncOp, input.Context)
-
-	dialOpts := &websocket.DialOptions{
-		HTTPHeader: upgradeReq.Header,
-	}
-
-	conn, _, err := websocket.Dial(ctx, upgradeReq.URL.String(), dialOpts)
-	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeConnectFailed, err.Error())), nil
-	}
-
-	// Build and send the initial message: input fields spread at top level + bearerToken.
-	payload := make(map[string]any)
-	if input.Input != nil {
-		if m, ok := input.Input.(map[string]any); ok {
-			for k, v := range m {
-				payload[k] = v
-			}
-		}
-	}
-	if token := openbindings.ContextBearerToken(input.Context); token != "" {
-		payload["bearerToken"] = token
-	}
-
-	initMsg, marshalErr := json.Marshal(payload)
-	if marshalErr != nil {
-		conn.Close(websocket.StatusNormalClosure, "marshal error")
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeExecutionFailed, marshalErr.Error())), nil
-	}
-
-	if err := conn.Write(ctx, websocket.MessageText, initMsg); err != nil {
-		conn.Close(websocket.StatusNormalClosure, "write error")
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeExecutionFailed, err.Error())), nil
-	}
-
-	ch := make(chan openbindings.InvocationOutput)
-	go func() {
-		defer close(ch)
-		defer conn.Close(websocket.StatusNormalClosure, "done")
-
-		for {
-			_, msg, err := conn.Read(ctx)
-			if err != nil {
-				// On context cancellation, close cleanly.
-				if ctx.Err() != nil {
-					conn.Close(websocket.StatusNormalClosure, "aborted")
-					return
-				}
-				// Normal close — just return.
-				status := websocket.CloseStatus(err)
-				if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
-					return
-				}
-				select {
-				case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()}}:
-				case <-ctx.Done():
-				}
-				return
-			}
-
-			var parsed map[string]any
-			if json.Unmarshal(msg, &parsed) == nil {
-				if errVal, ok := parsed["error"]; ok {
-					// Send as error event.
-					var execErr openbindings.InvocationError
-					if errMap, ok := errVal.(map[string]any); ok {
-						if code, ok := errMap["code"].(string); ok {
-							execErr.Code = code
-						}
-						if message, ok := errMap["message"].(string); ok {
-							execErr.Message = message
-						}
-					} else {
-						errJSON, _ := json.Marshal(errVal)
-						execErr.Code = openbindings.ErrCodeStreamError
-						execErr.Message = string(errJSON)
-					}
-					select {
-					case ch <- openbindings.InvocationOutput{Error: &execErr}:
-					case <-ctx.Done():
-						return
-					}
-				} else if dataVal, ok := parsed["data"]; ok {
-					select {
-					case ch <- openbindings.InvocationOutput{Output: dataVal}:
-					case <-ctx.Done():
-						return
-					}
-				} else {
-					// Send the whole parsed object as data.
-					select {
-					case ch <- openbindings.InvocationOutput{Output: any(parsed)}:
-					case <-ctx.Done():
-						return
-					}
-				}
-			} else {
-				// Not JSON — send raw string as data.
-				select {
-				case ch <- openbindings.InvocationOutput{Output: string(msg)}:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-
-	return ch, nil
-}
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
 
 func parseSSEPayload(dataLines []string) any {
 	raw := strings.Join(dataLines, "\n")
@@ -547,6 +647,44 @@ func parseSSEPayload(dataLines []string) any {
 	}
 	return raw
 }
+
+// headerMetadata converts HTTP response headers to invocation metadata.
+// Keys are lowercased for cross-SDK portability (the TS SDK's Headers
+// iteration yields lowercase keys).
+func headerMetadata(hdr http.Header) openbindings.Metadata {
+	md := make(openbindings.Metadata, len(hdr))
+	for k, vs := range hdr {
+		md[strings.ToLower(k)] = append([]string(nil), vs...)
+	}
+	return md
+}
+
+// httpStatusError builds the terminal error for an HTTP error response,
+// attaching the (parsed) body to Details alongside the status.
+func httpStatusError(resp *http.Response) *openbindings.InvocationError {
+	ie := openbindings.HTTPError(resp.StatusCode, resp.Status)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil || len(body) == 0 {
+		return ie
+	}
+	details := map[string]any{"status": resp.StatusCode}
+	if len(body) > maxResponseBytes {
+		details["body"] = fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes)
+	} else {
+		var parsed any
+		if openbindings.MaybeJSON(strings.TrimSpace(string(body))) && json.Unmarshal(body, &parsed) == nil {
+			details["body"] = parsed
+		} else {
+			details["body"] = string(body)
+		}
+	}
+	ie.Details = details
+	return ie
+}
+
+// ---------------------------------------------------------------------------
+// Credential application
+// ---------------------------------------------------------------------------
 
 // applyHTTPContext applies opaque binding context (credentials via well-known
 // fields) and execution options (headers, cookies) to an HTTP request, using
@@ -613,7 +751,12 @@ func resolveSecuritySchemes(doc *Document, asyncOp *Operation) []SecurityScheme 
 	var result []SecurityScheme
 	seen := map[string]bool{}
 	for _, req := range requirements {
+		schemeNames := make([]string, 0, len(req))
 		for schemeName := range req {
+			schemeNames = append(schemeNames, schemeName)
+		}
+		sort.Strings(schemeNames)
+		for _, schemeName := range schemeNames {
 			if seen[schemeName] {
 				continue
 			}
@@ -680,6 +823,16 @@ func applyCredentialsViaSecuritySchemes(req *http.Request, doc *Document, asyncO
 
 		case "httpBearer":
 			if token := openbindings.ContextBearerToken(bindCtx); token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+				applied = true
+			}
+
+		case "oauth2":
+			token := openbindings.ContextBearerToken(bindCtx)
+			if token == "" {
+				token = openbindings.ContextString(bindCtx, "accessToken")
+			}
+			if token != "" {
 				req.Header.Set("Authorization", "Bearer "+token)
 				applied = true
 			}

@@ -35,7 +35,7 @@ func TestValueBool(t *testing.T) {
 	}{
 		{"true", true, true, true},
 		{"false", false, false, true},
-		{"string true", "true", true, true},   // KDL compat: string "true" is truthy
+		{"string true", "true", true, true},    // KDL compat: string "true" is truthy
 		{"string false", "false", false, true}, // KDL compat: string "false" is falsy
 		{"string #true", "#true", true, true},  // KDL v2 boolean syntax
 		{"string #false", "#false", false, true},
@@ -154,8 +154,8 @@ func TestDecodeCommand(t *testing.T) {
 			{Name: "flag", Args: []Value{{Raw: "-v --verbose"}}, Props: map[string]Value{"global": {Raw: true}}},
 			{Name: "arg", Args: []Value{{Raw: "<key>"}}},
 			{
-				Name: "cmd",
-				Args: []Value{{Raw: "set"}},
+				Name:  "cmd",
+				Args:  []Value{{Raw: "set"}},
 				Props: map[string]Value{"help": {Raw: "Set a config value"}},
 			},
 		},

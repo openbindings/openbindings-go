@@ -84,7 +84,7 @@ func (bs *bufferState) flush() any {
 type combineState struct {
 	mu       sync.Mutex
 	expected map[string]bool
-	latest   map[string]any // latest event per source (nil if not yet received)
+	latest   map[string]any  // latest event per source (nil if not yet received)
 	has      map[string]bool // whether a source has produced at least one event
 }
 

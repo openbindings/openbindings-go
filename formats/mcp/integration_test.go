@@ -3,10 +3,14 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -45,9 +49,42 @@ func setupMCPServer(t *testing.T) (*httptest.Server, *testState) {
 		}, nil, nil
 	})
 
+	// Register a tool that always reports an application-level error
+	// (CallToolResult.isError) rather than a protocol error.
+	type failInput struct{}
+	gomcp.AddTool(server, &gomcp.Tool{
+		Name:        "alwaysFails",
+		Description: "Always reports an application-level tool error",
+	}, func(ctx context.Context, req *gomcp.CallToolRequest, args failInput) (*gomcp.CallToolResult, any, error) {
+		return &gomcp.CallToolResult{
+			IsError: true,
+			Content: []gomcp.Content{
+				&gomcp.TextContent{Text: "the tool exploded"},
+			},
+		}, nil, nil
+	})
+
+	// Register a tool that blocks until its context is cancelled (or a
+	// bounded timeout elapses — kept short because in stateless HTTP mode the
+	// server cannot always correlate a cancellation notification back to the
+	// in-flight request, and httptest.Server.Close waits for the handler).
+	type slowInput struct{}
+	gomcp.AddTool(server, &gomcp.Tool{
+		Name:        "slow",
+		Description: "Blocks until cancelled",
+	}, func(ctx context.Context, req *gomcp.CallToolRequest, args slowInput) (*gomcp.CallToolResult, any, error) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
+		return &gomcp.CallToolResult{
+			Content: []gomcp.Content{&gomcp.TextContent{Text: "done"}},
+		}, nil, nil
+	})
+
 	// Register a tool that emits progress notifications during invocation.
-	// The tool sends three progress events with progress=1/3, 2/3, 3/3 and
-	// then returns the final result.
+	// The tool sends `steps` progress events and then returns the final
+	// result.
 	type progressInput struct {
 		Steps int `json:"steps"`
 	}
@@ -66,13 +103,13 @@ func setupMCPServer(t *testing.T) (*httptest.Server, *testState) {
 					ProgressToken: token,
 					Progress:      float64(i),
 					Total:         float64(steps),
-					Message:       "step " + intToString(i),
+					Message:       "step " + strconv.Itoa(i),
 				})
 			}
 		}
 		return &gomcp.CallToolResult{
 			Content: []gomcp.Content{
-				&gomcp.TextContent{Text: "completed " + intToString(steps) + " steps"},
+				&gomcp.TextContent{Text: "completed " + strconv.Itoa(steps) + " steps"},
 			},
 		}, nil, nil
 	})
@@ -120,13 +157,100 @@ func setupMCPServer(t *testing.T) (*httptest.Server, *testState) {
 	return ts, state
 }
 
-func drainStream(t *testing.T, ch <-chan openbindings.InvocationOutput) []openbindings.InvocationOutput {
+// setupCountingServer starts an MCP server with a single echo tool whose
+// HTTP handler counts `initialize` JSON-RPC calls, for session-pooling tests.
+func setupCountingServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
+
+	server := gomcp.NewServer(&gomcp.Implementation{
+		Name:    "counting-test",
+		Version: "1.0.0",
+	}, nil)
+
+	type echoInput struct {
+		Message string `json:"message"`
 	}
-	return events
+	gomcp.AddTool(server, &gomcp.Tool{
+		Name:        "echo",
+		Description: "Echoes the input message",
+	}, func(ctx context.Context, req *gomcp.CallToolRequest, args echoInput) (*gomcp.CallToolResult, any, error) {
+		return &gomcp.CallToolResult{
+			Content: []gomcp.Content{
+				&gomcp.TextContent{Text: "echo: " + args.Message},
+			},
+		}, nil, nil
+	})
+
+	initCount := &atomic.Int32{}
+	mcpHandler := gomcp.NewStreamableHTTPHandler(func(r *http.Request) *gomcp.Server {
+		return server
+	}, &gomcp.StreamableHTTPOptions{Stateless: true})
+
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Inspect the body for initialize calls. We have to copy the body
+		// because http.Request.Body is single-read.
+		if r.Method == http.MethodPost && r.Body != nil {
+			body, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			if bytes.Contains(body, []byte(`"method":"initialize"`)) {
+				initCount.Add(1)
+			}
+		}
+		mcpHandler.ServeHTTP(w, r)
+	})
+
+	ts := httptest.NewServer(wrapped)
+	t.Cleanup(ts.Close)
+	return ts, initCount
+}
+
+// --- Handle-driving helpers ---
+
+func bg() context.Context { return context.Background() }
+
+func shortCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func invocationArgs(url, ref string, bindCtx map[string]any) *openbindings.BindingInvocationArgs {
+	return &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{Format: FormatToken, Location: url},
+		Ref:     ref,
+		Context: bindCtx,
+	}
+}
+
+// drainOutputs reads the invocation's output stream to io.EOF or terminal,
+// returning the collected outputs and the terminal error (nil on clean EOF).
+func drainOutputs(t *testing.T, call openbindings.Invocation[any, any]) ([]any, error) {
+	t.Helper()
+	out := call.Outputs()
+	var vals []any
+	for {
+		v, err := out.Read(shortCtx(t))
+		if err == io.EOF {
+			return vals, nil
+		}
+		if err != nil {
+			return vals, err
+		}
+		vals = append(vals, v)
+	}
+}
+
+func codeOf(t *testing.T, err error) string {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected a terminal error, got nil")
+	}
+	var ie *openbindings.InvocationError
+	if !errors.As(err, &ie) {
+		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
+	}
+	return ie.Code
 }
 
 // --- Integration Tests ---
@@ -152,21 +276,14 @@ func TestIntegration_CreateInterface(t *testing.T) {
 		t.Errorf("version = %q, want 1.0.0", iface.Version)
 	}
 
-	// Should have: echo (tool), longRunning (tool), status (resource), greet (prompt)
-	if len(iface.Operations) != 4 {
-		t.Fatalf("expected 4 operations, got %d: %v", len(iface.Operations), keys(iface.Operations))
+	// Tools: echo, alwaysFails, slow, longRunning; resource: status; prompt: greet.
+	if len(iface.Operations) != 6 {
+		t.Fatalf("expected 6 operations, got %d: %v", len(iface.Operations), keys(iface.Operations))
 	}
-	if _, ok := iface.Operations["echo"]; !ok {
-		t.Error("expected operation 'echo'")
-	}
-	if _, ok := iface.Operations["longRunning"]; !ok {
-		t.Error("expected operation 'longRunning'")
-	}
-	if _, ok := iface.Operations["status"]; !ok {
-		t.Error("expected operation 'status'")
-	}
-	if _, ok := iface.Operations["greet"]; !ok {
-		t.Error("expected operation 'greet'")
+	for _, op := range []string{"echo", "longRunning", "status", "greet"} {
+		if _, ok := iface.Operations[op]; !ok {
+			t.Errorf("expected operation %q", op)
+		}
 	}
 
 	// Verify binding refs
@@ -185,22 +302,20 @@ func TestIntegration_ExecuteTool(t *testing.T) {
 	ts, state := setupMCPServer(t)
 
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source:  openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:     "tools/echo",
-		Input:   map[string]any{"message": "hello world"},
-		Context: map[string]any{"bearerToken": "tok_secret"},
-	})
-	if err != nil {
+	defer invoker.Close()
+
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/echo",
+		map[string]any{"bearerToken": "tok_secret"}))
+	if err := call.Write(bg(), map[string]any{"message": "hello world"}); err != nil {
 		t.Fatal(err)
 	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
+	v, err := openbindings.Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if events[0].Error != nil {
-		t.Fatalf("unexpected error: %s: %s", events[0].Error.Code, events[0].Error.Message)
+	if v != "echo: hello world" {
+		t.Errorf("output = %v, want 'echo: hello world'", v)
 	}
 
 	// Verify credentials flowed through.
@@ -208,9 +323,13 @@ func TestIntegration_ExecuteTool(t *testing.T) {
 		t.Errorf("auth = %q, want Bearer tok_secret", state.lastAuth)
 	}
 
-	// Verify response.
-	if events[0].Output != "echo: hello world" {
-		t.Errorf("data = %v, want 'echo: hello world'", events[0].Output)
+	// Leading metadata carries the call's HTTP response headers.
+	md, err := call.Header(shortCtx(t))
+	if err != nil {
+		t.Fatalf("header: %v", err)
+	}
+	if len(md["Content-Type"]) == 0 {
+		t.Errorf("expected Content-Type in header metadata, got %v", md)
 	}
 }
 
@@ -218,23 +337,19 @@ func TestIntegration_ExecuteResource(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:    "resources/app://status",
-	})
+	defer invoker.Close()
+
+	// Resource reads take no input: no Write needed.
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "resources/app://status", nil))
+	v, err := openbindings.Single(shortCtx(t), call.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 || events[0].Error != nil {
-		t.Fatalf("expected 1 successful event, got %d", len(events))
-	}
-
 	// The JSON text should be parsed into a map.
-	resp, ok := events[0].Output.(map[string]any)
+	resp, ok := v.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map response, got %T: %v", events[0].Output, events[0].Output)
+		t.Fatalf("expected map response, got %T: %v", v, v)
 	}
 	if resp["ok"] != true {
 		t.Errorf("ok = %v, want true", resp["ok"])
@@ -245,23 +360,20 @@ func TestIntegration_ExecutePrompt(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:    "prompts/greet",
-		Input:  map[string]any{"name": "Alice"},
-	})
-	if err != nil {
+	defer invoker.Close()
+
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "prompts/greet", nil))
+	if err := call.Write(bg(), map[string]any{"name": "Alice"}); err != nil {
 		t.Fatal(err)
 	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 || events[0].Error != nil {
-		t.Fatalf("expected 1 successful event, got %d", len(events))
+	v, err := openbindings.Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	resp, ok := events[0].Output.(map[string]any)
+	resp, ok := v.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map response, got %T", events[0].Output)
+		t.Fatalf("expected map response, got %T", v)
 	}
 	if resp["description"] != "A greeting prompt" {
 		t.Errorf("description = %v", resp["description"])
@@ -276,284 +388,304 @@ func TestIntegration_ExecutePrompt(t *testing.T) {
 	}
 }
 
-func TestIntegration_StoredCredentials(t *testing.T) {
-	ts, state := setupMCPServer(t)
+// --- Pre-dispatch failures (fire BEFORE any network side effect) ---
 
-	store := openbindings.NewMemoryStore()
-	ctx := context.Background()
-
-	key := normalizeEndpoint(ts.URL)
-	_ = store.Set(ctx, key, map[string]any{"bearerToken": "stored_tok"})
+func TestIntegration_InvalidRef_NoNetworkIO(t *testing.T) {
+	var requests atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
 
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:    "tools/echo",
-		Input:  map[string]any{"message": "test"},
-		Store:  store,
-	})
-	if err != nil {
-		t.Fatal(err)
+	defer invoker.Close()
+
+	cases := []struct {
+		name string
+		ref  string
+	}{
+		{"no prefix", "bad-ref"},
+		{"empty ref", ""},
+		{"empty name", "tools/"},
+		{"unknown entity type", "widgets/foo"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, tc.ref, nil))
+			vals, err := drainOutputs(t, call)
+			if len(vals) != 0 {
+				t.Fatalf("expected no outputs, got %v", vals)
+			}
+			if codeOf(t, err) != openbindings.ErrCodeInvalidRef {
+				t.Errorf("code = %q, want ERR_INVALID_REF", codeOf(t, err))
+			}
+		})
 	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 || events[0].Error != nil {
-		t.Fatalf("expected 1 successful event")
-	}
-
-	if state.lastAuth != "Bearer stored_tok" {
-		t.Errorf("auth = %q, want Bearer stored_tok", state.lastAuth)
+	if n := requests.Load(); n != 0 {
+		t.Errorf("invalid refs must fail before network I/O; server saw %d requests", n)
 	}
 }
 
-func TestIntegration_InvalidRef(t *testing.T) {
+func TestIntegration_SourceConfigError(t *testing.T) {
+	invoker := NewInvoker()
+	defer invoker.Close()
+
+	for _, tc := range []struct {
+		name     string
+		location string
+	}{
+		{"missing location", ""},
+		{"non-HTTP location", "ftp://mcp.example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			call := invoker.InvokeBinding(bg(), invocationArgs(tc.location, "tools/echo", nil))
+			_, err := drainOutputs(t, call)
+			if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+				t.Errorf("code = %q, want ERR_SOURCE_CONFIG_ERROR", codeOf(t, err))
+			}
+		})
+	}
+}
+
+func TestIntegration_NonObjectToolInput(t *testing.T) {
+	var requests atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	invoker := NewInvoker()
+	defer invoker.Close()
+
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/echo", nil))
+	if err := call.Write(bg(), "not an object"); err != nil {
+		t.Fatal(err)
+	}
+	vals, err := drainOutputs(t, call)
+	if len(vals) != 0 {
+		t.Fatalf("expected no outputs, got %v", vals)
+	}
+	if codeOf(t, err) != openbindings.ErrCodeValidationFailed {
+		t.Errorf("code = %q, want ERR_VALIDATION_FAILED", codeOf(t, err))
+	}
+	if n := requests.Load(); n != 0 {
+		t.Errorf("invalid input must fail before network I/O; server saw %d requests", n)
+	}
+}
+
+// --- Error mapping ---
+
+func TestIntegration_AuthRequired(t *testing.T) {
+	ts, _ := setupMCPServer(t)
+
+	// Front the MCP server with a 401 gate.
+	target, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.FlushInterval = -1 // stream SSE bodies through immediately
+	gated := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(gated.Close)
+
+	invoker := NewInvoker()
+	defer invoker.Close()
+
+	// No credentials: the 401 surfaces as terminal ERR_AUTH_REQUIRED.
+	call := invoker.InvokeBinding(bg(), invocationArgs(gated.URL, "resources/app://status", nil))
+	_, derr := drainOutputs(t, call)
+	if codeOf(t, derr) != openbindings.ErrCodeAuthRequired {
+		t.Errorf("code = %q, want ERR_AUTH_REQUIRED", codeOf(t, derr))
+	}
+
+	// With credentials the same call succeeds.
+	call = invoker.InvokeBinding(bg(), invocationArgs(gated.URL, "resources/app://status",
+		map[string]any{"bearerToken": "tok"}))
+	if _, err := openbindings.Single(shortCtx(t), call.Outputs()); err != nil {
+		t.Fatalf("authorized call failed: %v", err)
+	}
+}
+
+func TestIntegration_UnknownTool_JSONRPCError(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:    "bad-ref",
-	})
-	if err != nil {
+	defer invoker.Close()
+
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/no_such_tool", nil))
+	if err := call.Write(bg(), map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
-
-	events := drainStream(t, ch)
-	if len(events) != 1 || events[0].Error == nil {
-		t.Fatal("expected error event")
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("code = %q, want ERR_EXECUTION_FAILED", codeOf(t, err))
 	}
-	if events[0].Error.Code != openbindings.ErrCodeInvalidRef {
-		t.Errorf("code = %q, want invalid_ref", events[0].Error.Code)
+	var ie *openbindings.InvocationError
+	_ = errors.As(err, &ie)
+	details, ok := ie.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected JSON-RPC details map, got %T", ie.Details)
+	}
+	if _, ok := details["code"]; !ok {
+		t.Errorf("expected JSON-RPC error code in details, got %v", details)
 	}
 }
 
-func keys[V any](m map[string]V) []string {
-	var ks []string
-	for k := range m {
-		ks = append(ks, k)
+func TestIntegration_ToolApplicationError(t *testing.T) {
+	ts, _ := setupMCPServer(t)
+
+	invoker := NewInvoker()
+	defer invoker.Close()
+
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/alwaysFails", nil))
+	if err := call.Write(bg(), map[string]any{}); err != nil {
+		t.Fatal(err)
 	}
-	return ks
+	vals, err := drainOutputs(t, call)
+	if len(vals) != 0 {
+		t.Fatalf("application-level tool error must not emit outputs, got %v", vals)
+	}
+	if codeOf(t, err) != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("code = %q, want ERR_EXECUTION_FAILED", codeOf(t, err))
+	}
+	if err.Error() != "the tool exploded" {
+		t.Errorf("message = %q, want the tool's error text", err.Error())
+	}
 }
 
-func intToString(n int) string {
-	if n == 0 {
-		return "0"
+func TestIntegration_ConnectFailed(t *testing.T) {
+	invoker := NewInvoker()
+	defer invoker.Close()
+
+	// A port that nothing listens on.
+	call := invoker.InvokeBinding(bg(), invocationArgs("http://127.0.0.1:1", "resources/app://status", nil))
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != openbindings.ErrCodeConnectFailed {
+		t.Errorf("code = %q, want ERR_CONNECT_FAILED", codeOf(t, err))
 	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	if neg {
-		digits = append([]byte{'-'}, digits...)
-	}
-	return string(digits)
 }
 
-// TestIntegration_ToolProgressNotifications verifies that the invoker
-// surfaces MCP `notifications/progress` events as intermediate stream events
-// during a long-running tool call, with the final tool result as the last
-// event.
+func TestIntegration_Cancel(t *testing.T) {
+	ts, _ := setupMCPServer(t)
+
+	invoker := NewInvoker()
+	defer invoker.Close()
+
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/slow", nil))
+	if err := call.Write(bg(), map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(150*time.Millisecond, call.Cancel)
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != openbindings.ErrCodeCancelled {
+		t.Errorf("code = %q, want ERR_CANCELLED", codeOf(t, err))
+	}
+}
+
+// --- Progress streaming ---
+
+// TestIntegration_ToolProgressNotifications verifies that the invoker emits
+// MCP `notifications/progress` events as outputs ahead of the final tool
+// result, with the result guaranteed last.
 //
-// Note: the go-mcp library dispatches progress notifications in separate
-// goroutines. In edge cases, a notification goroutine may not be scheduled
-// before CallTool returns and the stream closes. This test therefore checks
-// that at least one progress notification arrives (proving the demux handler
-// works) and that the final result is present, rather than requiring an
-// exact event count.
+// Note: the go-mcp library dispatches progress notifications asynchronously.
+// In edge cases, a notification may not be processed before the tool call
+// returns and the invocation closes, so the exact progress count is not
+// asserted; structure and ordering are.
 func TestIntegration_ToolProgressNotifications(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
 	invoker := NewInvoker()
 	defer invoker.Close()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:   FormatToken,
-			Location: ts.URL,
-		},
-		Ref:   "tools/longRunning",
-		Input: map[string]any{"steps": 3},
-	})
+
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/longRunning", nil))
+	if err := call.Write(bg(), map[string]any{"steps": 3}); err != nil {
+		t.Fatal(err)
+	}
+
+	vals, err := drainOutputs(t, call)
 	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if len(vals) < 1 {
+		t.Fatalf("expected at least the final result output, got %d", len(vals))
 	}
 
-	events := drainStream(t, ch)
-
-	// We expect between 1 and 4 events: 0-3 progress notifications + 1 final
-	// result. The go-mcp library dispatches notifications asynchronously via
-	// the session's demux handler, so some (or all) may not arrive before
-	// CallTool returns and the stream closes. The pooled session's demux
-	// handler is the correct architecture; this test validates that progress
-	// events have the right structure when they do arrive.
-	if len(events) < 1 {
-		t.Fatalf("expected at least 1 stream event (the final result), got %d", len(events))
+	// The final result is always the LAST output; everything before it is a
+	// progress event carrying the progressToken correlation field.
+	final := vals[len(vals)-1]
+	if m, ok := final.(map[string]any); ok {
+		if _, hasToken := m["progressToken"]; hasToken {
+			t.Fatalf("last output must be the tool result, got progress event %v", m)
+		}
 	}
-
-	// Separate progress events from the final result.
-	var progressEvents []openbindings.InvocationOutput
-	var finalEvent *openbindings.InvocationOutput
-	for i := range events {
-		data, ok := events[i].Output.(map[string]any)
-		if ok {
-			if _, hasToken := data["progressToken"]; hasToken {
-				progressEvents = append(progressEvents, events[i])
-				continue
+	progress := vals[:len(vals)-1]
+	t.Logf("received %d progress notifications out of 3 requested", len(progress))
+	for i, ev := range progress {
+		data, ok := ev.(map[string]any)
+		if !ok {
+			t.Fatalf("progress event %d: expected map, got %T", i, ev)
+		}
+		for _, field := range []string{"progressToken", "progress", "total", "message"} {
+			if _, ok := data[field]; !ok {
+				t.Errorf("progress event %d: missing %s field", i, field)
 			}
 		}
-		finalEvent = &events[i]
-	}
-
-	// Progress notifications are best-effort due to async dispatch. Log how
-	// many arrived for debugging but don't fail if none did.
-	t.Logf("received %d progress notifications out of 3 requested", len(progressEvents))
-
-	// Validate progress event structure for any that did arrive.
-	for i, ev := range progressEvents {
-		if ev.Error != nil {
-			t.Fatalf("progress event %d: unexpected error: %+v", i, ev.Error)
-		}
-		data := ev.Output.(map[string]any)
-		if _, ok := data["progress"]; !ok {
-			t.Errorf("progress event %d: missing progress field", i)
-		}
-		if _, ok := data["total"]; !ok {
-			t.Errorf("progress event %d: missing total field", i)
-		}
-		if _, ok := data["message"]; !ok {
-			t.Errorf("progress event %d: missing message field", i)
-		}
-	}
-
-	// Final event should be the tool result.
-	if finalEvent == nil {
-		t.Fatal("expected a final result event (no progressToken field)")
-	}
-	if finalEvent.Error != nil {
-		t.Fatalf("final event: unexpected error: %+v", finalEvent.Error)
 	}
 }
 
-// TestIntegration_ToolNoProgress_StaysSingleEvent verifies that a tool that
-// does not emit progress notifications produces exactly one stream event
-// (the final result), preserving the unary behavior of fast tool calls.
-func TestIntegration_ToolNoProgress_StaysSingleEvent(t *testing.T) {
+// TestIntegration_ToolNoProgress_SingleOutput verifies that a tool that does
+// not emit progress notifications produces exactly one output (the result).
+func TestIntegration_ToolNoProgress_SingleOutput(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
 	invoker := NewInvoker()
 	defer invoker.Close()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:   FormatToken,
-			Location: ts.URL,
-		},
-		Ref:   "tools/echo",
-		Input: map[string]any{"message": "hello"},
-	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
-	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 {
-		t.Fatalf("expected exactly 1 event from no-progress tool, got %d", len(events))
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/echo", nil))
+	if err := call.Write(bg(), map[string]any{"message": "hello"}); err != nil {
+		t.Fatal(err)
 	}
-	if events[0].Error != nil {
-		t.Fatalf("unexpected error: %+v", events[0].Error)
+	vals, err := drainOutputs(t, call)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	if len(vals) != 1 {
+		t.Fatalf("expected exactly 1 output from no-progress tool, got %d", len(vals))
 	}
 }
+
+// --- Session pooling ---
 
 // TestIntegration_SessionPooling verifies that two consecutive tool calls
 // against the same MCP server reuse the same pooled session, producing only
 // one MCP `initialize` handshake instead of two.
-//
-// The test wraps the standard MCP server handler with a request counter that
-// increments on every `initialize` call. After two InvokeBinding calls using
-// the same Invoker, the counter must be 1.
 func TestIntegration_SessionPooling(t *testing.T) {
-	server := gomcp.NewServer(&gomcp.Implementation{
-		Name:    "session-pool-test",
-		Version: "1.0.0",
-	}, nil)
-
-	type echoInput struct {
-		Message string `json:"message"`
-	}
-	gomcp.AddTool(server, &gomcp.Tool{
-		Name:        "echo",
-		Description: "Echoes the input message",
-	}, func(ctx context.Context, req *gomcp.CallToolRequest, args echoInput) (*gomcp.CallToolResult, any, error) {
-		return &gomcp.CallToolResult{
-			Content: []gomcp.Content{
-				&gomcp.TextContent{Text: "echo: " + args.Message},
-			},
-		}, nil, nil
-	})
-
-	// Counter for the number of `initialize` JSON-RPC calls observed.
-	// Wrapping the underlying handler at the HTTP layer lets us see every
-	// distinct request body without disturbing the MCP server's behavior.
-	var initCount atomic.Int32
-	mcpHandler := gomcp.NewStreamableHTTPHandler(func(r *http.Request) *gomcp.Server {
-		return server
-	}, &gomcp.StreamableHTTPOptions{Stateless: true})
-
-	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Inspect the body for initialize calls. We have to copy the body
-		// because http.Request.Body is single-read.
-		if r.Method == http.MethodPost && r.Body != nil {
-			body, _ := io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			if bytes.Contains(body, []byte(`"method":"initialize"`)) {
-				initCount.Add(1)
-			}
-		}
-		mcpHandler.ServeHTTP(w, r)
-	})
-
-	ts := httptest.NewServer(wrapped)
-	defer ts.Close()
+	ts, initCount := setupCountingServer(t)
 
 	invoker := NewInvoker()
 	defer invoker.Close()
-	ctx := context.Background()
 
-	// First call.
-	ch1, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:    "tools/echo",
-		Input:  map[string]any{"message": "first"},
-	})
-	if err != nil {
-		t.Fatalf("first InvokeBinding error: %v", err)
-	}
-	for ev := range ch1 {
-		if ev.Error != nil {
-			t.Fatalf("first call: unexpected error: %+v", ev.Error)
+	for _, msg := range []string{"first", "second"} {
+		call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/echo", nil))
+		if err := call.Write(bg(), map[string]any{"message": msg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := openbindings.Single(shortCtx(t), call.Outputs()); err != nil {
+			t.Fatalf("%s call: %v", msg, err)
 		}
 	}
 
-	// Second call reuses the pooled session.
-	ch2, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:    "tools/echo",
-		Input:  map[string]any{"message": "second"},
-	})
-	if err != nil {
-		t.Fatalf("second InvokeBinding error: %v", err)
-	}
-	for ev := range ch2 {
-		if ev.Error != nil {
-			t.Fatalf("second call: unexpected error: %+v", ev.Error)
-		}
-	}
-
-	got := initCount.Load()
-	if got != 1 {
+	if got := initCount.Load(); got != 1 {
 		t.Errorf("expected 1 MCP initialize handshake (session reuse), got %d", got)
 	}
 }
@@ -561,82 +693,23 @@ func TestIntegration_SessionPooling(t *testing.T) {
 // TestIntegration_SessionPooling_DifferentHeaders verifies that calls with
 // different auth headers get separate pooled sessions.
 func TestIntegration_SessionPooling_DifferentHeaders(t *testing.T) {
-	server := gomcp.NewServer(&gomcp.Implementation{
-		Name:    "session-pool-headers-test",
-		Version: "1.0.0",
-	}, nil)
-
-	type echoInput struct {
-		Message string `json:"message"`
-	}
-	gomcp.AddTool(server, &gomcp.Tool{
-		Name:        "echo",
-		Description: "Echoes the input message",
-	}, func(ctx context.Context, req *gomcp.CallToolRequest, args echoInput) (*gomcp.CallToolResult, any, error) {
-		return &gomcp.CallToolResult{
-			Content: []gomcp.Content{
-				&gomcp.TextContent{Text: "echo: " + args.Message},
-			},
-		}, nil, nil
-	})
-
-	var initCount atomic.Int32
-	mcpHandler := gomcp.NewStreamableHTTPHandler(func(r *http.Request) *gomcp.Server {
-		return server
-	}, &gomcp.StreamableHTTPOptions{Stateless: true})
-
-	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.Body != nil {
-			body, _ := io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			if bytes.Contains(body, []byte(`"method":"initialize"`)) {
-				initCount.Add(1)
-			}
-		}
-		mcpHandler.ServeHTTP(w, r)
-	})
-
-	ts := httptest.NewServer(wrapped)
-	defer ts.Close()
+	ts, initCount := setupCountingServer(t)
 
 	invoker := NewInvoker()
 	defer invoker.Close()
-	ctx := context.Background()
 
-	// First call with token A.
-	ch1, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source:  openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:     "tools/echo",
-		Input:   map[string]any{"message": "first"},
-		Context: map[string]any{"bearerToken": "token_A"},
-	})
-	if err != nil {
-		t.Fatalf("first InvokeBinding error: %v", err)
-	}
-	for ev := range ch1 {
-		if ev.Error != nil {
-			t.Fatalf("first call: unexpected error: %+v", ev.Error)
+	for _, token := range []string{"token_A", "token_B"} {
+		call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/echo",
+			map[string]any{"bearerToken": token}))
+		if err := call.Write(bg(), map[string]any{"message": token}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := openbindings.Single(shortCtx(t), call.Outputs()); err != nil {
+			t.Fatalf("%s call: %v", token, err)
 		}
 	}
 
-	// Second call with token B gets a different session.
-	ch2, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source:  openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:     "tools/echo",
-		Input:   map[string]any{"message": "second"},
-		Context: map[string]any{"bearerToken": "token_B"},
-	})
-	if err != nil {
-		t.Fatalf("second InvokeBinding error: %v", err)
-	}
-	for ev := range ch2 {
-		if ev.Error != nil {
-			t.Fatalf("second call: unexpected error: %+v", ev.Error)
-		}
-	}
-
-	got := initCount.Load()
-	if got != 2 {
+	if got := initCount.Load(); got != 2 {
 		t.Errorf("expected 2 MCP initialize handshakes (different auth headers), got %d", got)
 	}
 }
@@ -645,84 +718,25 @@ func TestIntegration_SessionPooling_DifferentHeaders(t *testing.T) {
 // is evicted after the idle timeout expires, forcing a new session (and
 // initialize handshake) for the next call.
 func TestIntegration_SessionPooling_IdleTimeout(t *testing.T) {
-	server := gomcp.NewServer(&gomcp.Implementation{
-		Name:    "idle-timeout-test",
-		Version: "1.0.0",
-	}, nil)
-
-	type echoInput struct {
-		Message string `json:"message"`
-	}
-	gomcp.AddTool(server, &gomcp.Tool{
-		Name:        "echo",
-		Description: "Echoes the input message",
-	}, func(ctx context.Context, req *gomcp.CallToolRequest, args echoInput) (*gomcp.CallToolResult, any, error) {
-		return &gomcp.CallToolResult{
-			Content: []gomcp.Content{
-				&gomcp.TextContent{Text: "echo: " + args.Message},
-			},
-		}, nil, nil
-	})
-
-	var initCount atomic.Int32
-	mcpHandler := gomcp.NewStreamableHTTPHandler(func(r *http.Request) *gomcp.Server {
-		return server
-	}, &gomcp.StreamableHTTPOptions{Stateless: true})
-
-	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.Body != nil {
-			body, _ := io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			if bytes.Contains(body, []byte(`"method":"initialize"`)) {
-				initCount.Add(1)
-			}
-		}
-		mcpHandler.ServeHTTP(w, r)
-	})
-
-	ts := httptest.NewServer(wrapped)
-	defer ts.Close()
+	ts, initCount := setupCountingServer(t)
 
 	// Use a very short idle timeout so the test doesn't take long.
 	invoker := NewInvoker(WithIdleTimeout(50 * time.Millisecond))
 	defer invoker.Close()
-	ctx := context.Background()
 
-	// First call.
-	ch1, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:    "tools/echo",
-		Input:  map[string]any{"message": "first"},
-	})
-	if err != nil {
-		t.Fatalf("first InvokeBinding error: %v", err)
-	}
-	for ev := range ch1 {
-		if ev.Error != nil {
-			t.Fatalf("first call: unexpected error: %+v", ev.Error)
+	for _, msg := range []string{"first", "second"} {
+		call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/echo", nil))
+		if err := call.Write(bg(), map[string]any{"message": msg}); err != nil {
+			t.Fatal(err)
 		}
-	}
-
-	// Wait for the idle timeout to expire.
-	time.Sleep(100 * time.Millisecond)
-
-	// Second call should need a new session.
-	ch2, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-		Ref:    "tools/echo",
-		Input:  map[string]any{"message": "second"},
-	})
-	if err != nil {
-		t.Fatalf("second InvokeBinding error: %v", err)
-	}
-	for ev := range ch2 {
-		if ev.Error != nil {
-			t.Fatalf("second call: unexpected error: %+v", ev.Error)
+		if _, err := openbindings.Single(shortCtx(t), call.Outputs()); err != nil {
+			t.Fatalf("%s call: %v", msg, err)
 		}
+		// Wait for the idle timeout to expire between calls.
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	got := initCount.Load()
-	if got != 2 {
+	if got := initCount.Load(); got != 2 {
 		t.Errorf("expected 2 MCP initialize handshakes (idle timeout evicted first), got %d", got)
 	}
 }
@@ -730,85 +744,51 @@ func TestIntegration_SessionPooling_IdleTimeout(t *testing.T) {
 // TestIntegration_SessionPooling_ConcurrentCalls verifies that concurrent
 // tool calls to the same server share a single pooled session.
 func TestIntegration_SessionPooling_ConcurrentCalls(t *testing.T) {
-	server := gomcp.NewServer(&gomcp.Implementation{
-		Name:    "concurrent-test",
-		Version: "1.0.0",
-	}, nil)
-
-	type echoInput struct {
-		Message string `json:"message"`
-	}
-	gomcp.AddTool(server, &gomcp.Tool{
-		Name:        "echo",
-		Description: "Echoes the input message",
-	}, func(ctx context.Context, req *gomcp.CallToolRequest, args echoInput) (*gomcp.CallToolResult, any, error) {
-		return &gomcp.CallToolResult{
-			Content: []gomcp.Content{
-				&gomcp.TextContent{Text: "echo: " + args.Message},
-			},
-		}, nil, nil
-	})
-
-	var initCount atomic.Int32
-	mcpHandler := gomcp.NewStreamableHTTPHandler(func(r *http.Request) *gomcp.Server {
-		return server
-	}, &gomcp.StreamableHTTPOptions{Stateless: true})
-
-	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.Body != nil {
-			body, _ := io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			if bytes.Contains(body, []byte(`"method":"initialize"`)) {
-				initCount.Add(1)
-			}
-		}
-		mcpHandler.ServeHTTP(w, r)
-	})
-
-	ts := httptest.NewServer(wrapped)
-	defer ts.Close()
+	ts, initCount := setupCountingServer(t)
 
 	invoker := NewInvoker()
 	defer invoker.Close()
-	ctx := context.Background()
 
-	// Launch 5 concurrent tool calls.
 	const concurrency = 5
 	var wg sync.WaitGroup
-	errors := make(chan error, concurrency)
+	errCh := make(chan error, concurrency)
 
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-				Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: ts.URL},
-				Ref:    "tools/echo",
-				Input:  map[string]any{"message": fmt.Sprintf("hello-%d", idx)},
-			})
-			if err != nil {
-				errors <- fmt.Errorf("goroutine %d InvokeBinding: %w", idx, err)
+			call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/echo", nil))
+			if err := call.Write(bg(), map[string]any{"message": fmt.Sprintf("hello-%d", idx)}); err != nil {
+				errCh <- fmt.Errorf("goroutine %d write: %w", idx, err)
 				return
 			}
-			for ev := range ch {
-				if ev.Error != nil {
-					errors <- fmt.Errorf("goroutine %d: stream error: %s: %s", idx, ev.Error.Code, ev.Error.Message)
-					return
-				}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if _, err := openbindings.Single(ctx, call.Outputs()); err != nil {
+				errCh <- fmt.Errorf("goroutine %d: %w", idx, err)
 			}
 		}(i)
 	}
 
 	wg.Wait()
-	close(errors)
+	close(errCh)
 
-	for err := range errors {
+	for err := range errCh {
 		t.Error(err)
 	}
 
 	// All 5 calls should have shared a single session.
-	got := initCount.Load()
-	if got != 1 {
+	if got := initCount.Load(); got != 1 {
 		t.Errorf("expected 1 MCP initialize handshake for %d concurrent calls, got %d", concurrency, got)
 	}
+}
+
+// --- helpers ---
+
+func keys[V any](m map[string]V) []string {
+	var ks []string
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
 }

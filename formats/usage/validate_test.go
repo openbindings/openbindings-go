@@ -11,8 +11,8 @@ func TestValidate_Default(t *testing.T) {
 			{Name: "name", Args: []Value{{Raw: "Test CLI"}}},
 			{Name: "bin", Args: []Value{{Raw: "testcli"}}},
 			{
-				Name: "cmd",
-				Args: []Value{{Raw: "run"}},
+				Name:  "cmd",
+				Args:  []Value{{Raw: "run"}},
 				Props: map[string]Value{"help": {Raw: "Run something"}},
 			},
 		},
@@ -148,8 +148,8 @@ func TestValidate_DuplicateAlias(t *testing.T) {
 	spec := &Spec{
 		Nodes: []Node{
 			{
-				Name: "cmd",
-				Args: []Value{{Raw: "config"}},
+				Name:  "cmd",
+				Args:  []Value{{Raw: "config"}},
 				Props: map[string]Value{"help": {Raw: "Config"}},
 				Children: []Node{
 					{Name: "alias", Args: []Value{{Raw: "cfg"}, {Raw: "cfg"}}}, // duplicate
@@ -175,8 +175,8 @@ func TestValidate_DuplicateAliasNestedCommand(t *testing.T) {
 				Args: []Value{{Raw: "parent"}},
 				Children: []Node{
 					{
-						Name: "cmd",
-						Args: []Value{{Raw: "child"}},
+						Name:  "cmd",
+						Args:  []Value{{Raw: "child"}},
 						Props: map[string]Value{"help": {Raw: "Child"}},
 						Children: []Node{
 							{Name: "alias", Args: []Value{{Raw: "c"}, {Raw: "c"}}},

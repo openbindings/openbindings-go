@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 
@@ -39,10 +40,11 @@ func cloneEvent(ev *event) *event {
 
 // engine runs a single operation graph invocation.
 type engine struct {
-	graph      *Graph
-	invoker *openbindings.OperationInvoker
-	bindingIn  *openbindings.BindingInvocationInput
+	graph     *Graph
+	invoker   *openbindings.OperationInvoker
+	args      *openbindings.BindingInvocationArgs
 	transform openbindings.TransformEvaluator
+	handle    openbindings.BindingHandle[any, any]
 	origInput any
 	schemas   *schemaCache
 
@@ -57,7 +59,7 @@ type engine struct {
 	done       chan struct{}
 }
 
-func newEngine(g *Graph, invoker *openbindings.OperationInvoker, in *openbindings.BindingInvocationInput, te openbindings.TransformEvaluator, sc *schemaCache) *engine {
+func newEngine(g *Graph, invoker *openbindings.OperationInvoker, args *openbindings.BindingInvocationArgs, te openbindings.TransformEvaluator, sc *schemaCache) *engine {
 	outE := make(map[string][]string)
 	inE := make(map[string][]string)
 	var inputKey string
@@ -71,11 +73,10 @@ func newEngine(g *Graph, invoker *openbindings.OperationInvoker, in *openbinding
 		}
 	}
 	return &engine{
-		graph:      g,
-		invoker: invoker,
-		bindingIn:  in,
-		transform:  te,
-		origInput: in.Input,
+		graph:     g,
+		invoker:   invoker,
+		args:      args,
+		transform: te,
 		schemas:   sc,
 		outEdges:  outE,
 		inEdges:   inE,
@@ -94,27 +95,67 @@ func (eng *engine) decInflight() {
 	}
 }
 
-// run validates and executes the graph, sending output events to out.
-func (eng *engine) run(ctx context.Context, out chan<- openbindings.InvocationOutput) {
-	// Validate before executing.
+// execute drives one graph invocation behind the binding handle: it
+// validates the graph, seeds the initial input, runs the node workers, and
+// settles the handle's terminal (CloseOutput on completion; FireError on
+// terminal failure inside the engine).
+func (eng *engine) execute(ctx context.Context, handle openbindings.BindingHandle[any, any]) {
+	eng.handle = handle
+
+	// Validate before consuming any input, so validation failures surface
+	// without the caller having to write anything.
 	// When Interface is nil (e.g. direct binding invocation via host), skip
 	// operation key validation -- references will fail at runtime if invalid.
 	var opKeys map[string]bool
-	if eng.bindingIn.Interface != nil {
+	if eng.args.Interface != nil {
 		opKeys = make(map[string]bool)
-		for k := range eng.bindingIn.Interface.Operations {
+		for k := range eng.args.Interface.Operations {
 			opKeys[k] = true
 		}
 	}
 	if err := Validate(eng.graph, opKeys); err != nil {
-		out <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
+		handle.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeValidationFailed,
 			Message: err.Error(),
-		}}
+		})
 		return
 	}
 
+	// Seed the graph's initial input. No-input convention: when the call
+	// came through the operation layer (Binding != nil) and the operation
+	// declares no input (InputSchema == nil), close input on entry and seed
+	// nil -- reading would deadlock a caller that never writes.
+	if eng.args.Binding != nil && eng.args.InputSchema == nil {
+		_ = handle.CloseInput()
+	} else {
+		v, err := handle.ReadInput(ctx)
+		if err != nil {
+			if err != io.EOF {
+				return // invocation already terminal (cancelled/errored)
+			}
+			// Input closed with no message: the graph runs with nil input.
+		} else {
+			eng.origInput = v
+			// The graph takes exactly one input.
+			_ = handle.CloseInput()
+		}
+	}
+
+	// runCtx tears down all workers when the invocation terminates (caller
+	// Cancel, abandoned output stream, or upstream ctx cancellation).
+	runCtx, stop := openbindings.DoneContext(ctx, handle.Done())
+	defer stop()
+	eng.run(runCtx)
+
+	// Normal completion. No-op when the engine already fired a terminal
+	// error (exit-node error, event limit) or the invocation was cancelled.
+	handle.CloseOutput()
+}
+
+// run executes the graph, emitting output events through eng.handle.
+func (eng *engine) run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	// Node mailboxes.
 	mailboxes := make(map[string]chan *event)
@@ -240,7 +281,7 @@ func (eng *engine) run(ctx context.Context, out chan<- openbindings.InvocationOu
 						eng.decInflight()
 						return
 					}
-					eng.processNode(ctx, nodeKey, node, ev, out, cancel,
+					eng.processNode(ctx, nodeKey, node, ev, cancel,
 						sendDownstream, sendCompletion, sendError, handleCompletion,
 						bufferStates, combineStates)
 					eng.decInflight()
@@ -270,7 +311,6 @@ func (eng *engine) run(ctx context.Context, out chan<- openbindings.InvocationOu
 func (eng *engine) processNode(
 	ctx context.Context,
 	key string, node *Node, ev *event,
-	out chan<- openbindings.InvocationOutput,
 	cancel context.CancelFunc,
 	sendDownstream func(string, *event),
 	sendCompletion func(string),
@@ -288,10 +328,10 @@ func (eng *engine) processNode(
 	// Check event amplification limit.
 	if eng.eventCount.Add(1) > maxEvents {
 		eng.exitFlag.Store(true)
-		out <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
+		eng.handle.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeEventLimitExceeded,
 			Message: fmt.Sprintf("exceeded maximum event count (%d)", maxEvents),
-		}}
+		})
 		cancel()
 		return
 	}
@@ -302,18 +342,22 @@ func (eng *engine) processNode(
 		sendCompletion(key)
 
 	case "output":
-		out <- openbindings.InvocationOutput{Output: ev.data}
+		if err := eng.handle.EmitOutput(ev.data); err != nil {
+			// The invocation terminated while emitting: abort the engine.
+			eng.exitFlag.Store(true)
+			cancel()
+		}
 
 	case "exit":
 		eng.exitFlag.Store(true)
 		isError := node.Error != nil && *node.Error
 		if isError {
-			out <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
+			eng.handle.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeOperationGraphExit,
 				Message: fmt.Sprintf("%v", ev.data),
-			}}
+			})
 		} else {
-			out <- openbindings.InvocationOutput{Output: ev.data}
+			_ = eng.handle.EmitOutput(ev.data)
 		}
 		cancel()
 
@@ -358,6 +402,8 @@ func (eng *engine) processOperation(
 		lineage[key] = count + 1
 	}
 
+	// opCtx chains the graph's cancellation (and the per-node timeout) into
+	// the sub-operation: tearing down the graph tears down in-flight calls.
 	opCtx := ctx
 	var opCancel context.CancelFunc
 	if node.Timeout != nil {
@@ -365,26 +411,35 @@ func (eng *engine) processOperation(
 		defer opCancel()
 	}
 
-	ch, err := eng.invoker.Invoke(opCtx, &openbindings.OperationInvocationInput{
-		Interface: eng.bindingIn.Interface,
+	call := eng.invoker.Invoke(opCtx, &openbindings.OperationInvocationArgs{
+		Interface: eng.args.Interface,
 		Operation: node.Operation,
-		Input:     ev.data,
-		Context:   eng.bindingIn.Context,
+		Context:   eng.args.Context,
 	})
-	if err != nil {
-		sendError(key, err.Error(), ev.data, ev.lineage, ev.errorDepth)
-		return
+	if ev.data != nil {
+		// A Write failure is either ERR_INPUT_CLOSED (the binding closed its
+		// input deliberately; benign) or the invocation's terminal error,
+		// which the read loop below surfaces. Either way the read loop owns
+		// reporting.
+		_ = call.Write(opCtx, ev.data)
 	}
+	_ = call.Close() // idempotent; safe even when the binding already closed input
 
-	for streamEv := range ch {
-		if eng.exitFlag.Load() {
+	out := call.Outputs()
+	for {
+		v, err := out.Read(opCtx)
+		if err == io.EOF {
 			return
 		}
-		if streamEv.Error != nil {
-			sendError(key, streamEv.Error.Message, ev.data, ev.lineage, ev.errorDepth)
-			continue
+		if err != nil {
+			sendError(key, openbindings.AsInvocationError(err).Error(), ev.data, ev.lineage, ev.errorDepth)
+			return
 		}
-		sendDownstream(key, &event{data: streamEv.Output, source: key, lineage: copyLineage(lineage)})
+		if eng.exitFlag.Load() {
+			out.Stop()
+			return
+		}
+		sendDownstream(key, &event{data: v, source: key, lineage: copyLineage(lineage)})
 	}
 }
 

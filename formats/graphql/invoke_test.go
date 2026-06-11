@@ -318,10 +318,10 @@ func TestBuildQueryWithSchemaQueryExcludesQueryField(t *testing.T) {
 
 func TestQueryFromSchema(t *testing.T) {
 	tests := []struct {
-		name    string
-		schema  map[string]any
-		want    string
-		wantOK  bool
+		name   string
+		schema map[string]any
+		want   string
+		wantOK bool
 	}{
 		{"nil schema", nil, "", false},
 		{"no properties", map[string]any{"type": "object"}, "", false},

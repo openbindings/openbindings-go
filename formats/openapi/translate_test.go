@@ -296,7 +296,7 @@ func TestTranslateSchemaDialect_PassthroughNil(t *testing.T) {
 
 func TestTranslateSchemaDialect_DoesNotMutateInput(t *testing.T) {
 	in := map[string]any{
-		"type":     "object",
+		"type": "object",
 		"properties": map[string]any{
 			"x": map[string]any{"type": "string", "nullable": true},
 		},

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // ---------------------------------------------------------------------------
@@ -126,16 +127,26 @@ func TestBuildJSONPointerRef_RoundTrip(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// resolveServerKey
+// Context key derivation (base URL → normalized context-store key). This is
+// the Key the CONTEXT_REQUIRED challenge carries; auth is negotiated context,
+// not an OBI security field.
 // ---------------------------------------------------------------------------
 
-func TestResolveServerKey_AbsoluteURL(t *testing.T) {
+func contextKey(doc *openapi3.T, location string) (string, error) {
+	base, err := resolveBaseURLWithLocation(doc, nil, location)
+	if err != nil {
+		return "", err
+	}
+	return openbindings.NormalizeContextKey(base), nil
+}
+
+func TestContextKey_AbsoluteURL(t *testing.T) {
 	doc := &openapi3.T{
 		Servers: openapi3.Servers{
 			{URL: "https://api.example.com/v1"},
 		},
 	}
-	key, err := resolveServerKey(doc, "")
+	key, err := contextKey(doc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -144,13 +155,13 @@ func TestResolveServerKey_AbsoluteURL(t *testing.T) {
 	}
 }
 
-func TestResolveServerKey_RelativeURLWithSourceLocation(t *testing.T) {
+func TestContextKey_RelativeURLWithSourceLocation(t *testing.T) {
 	doc := &openapi3.T{
 		Servers: openapi3.Servers{
 			{URL: "/api/v1"},
 		},
 	}
-	key, err := resolveServerKey(doc, "https://example.com/openapi.json")
+	key, err := contextKey(doc, "https://example.com/openapi.json")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -159,11 +170,47 @@ func TestResolveServerKey_RelativeURLWithSourceLocation(t *testing.T) {
 	}
 }
 
-func TestResolveServerKey_NoServers(t *testing.T) {
+func TestContextKey_NoServers(t *testing.T) {
 	doc := &openapi3.T{}
-	_, err := resolveServerKey(doc, "")
+	_, err := contextKey(doc, "")
 	if err == nil {
 		t.Fatal("expected error for empty servers, got nil")
+	}
+}
+
+// TestRequiredContext verifies the security-requirement derivation that drives
+// CONTEXT_REQUIRED: an op needing bearer auth challenges when context lacks a
+// token, is satisfied once a token is present, and never challenges when the
+// op declares no security.
+func TestRequiredContext(t *testing.T) {
+	doc := &openapi3.T{
+		Components: &openapi3.Components{
+			SecuritySchemes: openapi3.SecuritySchemes{
+				"bearerAuth": &openapi3.SecuritySchemeRef{
+					Value: &openapi3.SecurityScheme{Type: "http", Scheme: "bearer"},
+				},
+			},
+		},
+	}
+	op := &openapi3.Operation{
+		Security: openapi3.NewSecurityRequirements().With(openapi3.NewSecurityRequirement().Authenticate("bearerAuth")),
+	}
+
+	if d := requiredContext(doc, op, nil, "https://api.example.com"); d == nil {
+		t.Fatal("expected a challenge when no token is present")
+	} else if len(d.Alternatives) != 1 || d.Alternatives[0].Requirements[0].Type != "auth.bearer" {
+		t.Errorf("unexpected challenge shape: %+v", d)
+	} else if d.Key != "api.example.com" {
+		t.Errorf("challenge key = %q, want api.example.com", d.Key)
+	}
+
+	if d := requiredContext(doc, op, map[string]any{"bearerToken": "tok"}, "https://api.example.com"); d != nil {
+		t.Errorf("expected no challenge when token is present, got %+v", d)
+	}
+
+	noSecOp := &openapi3.Operation{}
+	if d := requiredContext(doc, noSecOp, nil, "https://api.example.com"); d != nil {
+		t.Errorf("expected no challenge for an op without security, got %+v", d)
 	}
 }
 

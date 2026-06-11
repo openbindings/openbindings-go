@@ -4,9 +4,35 @@
 
 ### Changed
 
+- **Migrated to the rewritten invoker core.** `InvokeBinding` now takes
+  `*openbindings.BindingInvocationArgs` and synchronously returns the
+  cardinality-agnostic `openbindings.Invocation[any, any]` handle instead of
+  `(<-chan InvocationOutput, error)`. Input flows through the handle
+  (`Write` one request message; methods whose request message has no fields
+  dispatch without one), outputs flow through `Outputs()` (one output for
+  unary, per-message for server-streaming, with `EmitOutput` backpressure
+  flow-controlling the gRPC stream), and gRPC leading/trailing metadata maps
+  natively onto `Header(ctx)`/`Trailer()`. Error codes use the new SCREAMING
+  wire values; gRPC statuses map to `ERR_AUTH_REQUIRED` (`Unauthenticated`),
+  `ERR_PERMISSION_DENIED`, `ERR_CONNECT_FAILED` (`Unavailable`), and
+  `ERR_TIMEOUT` (`DeadlineExceeded`), with the gRPC code and any status
+  details carried in the error's `Details`. A close-without-write on a method
+  that requires input is `ERR_MISSING_INPUT`; a missing server address is
+  `ERR_SOURCE_CONFIG_ERROR`. Cancelling the handle (or the invocation
+  context) tears down the underlying RPC stream.
+
 - **Renamed binding "executor" terminology to "invoker"** to track the spec 0.2.0 rename in `openbindings-go`. The module's exported types and methods follow the same pattern (`Executor` -> `Invoker`, `ExecuteBinding(...)` -> `InvokeBinding(...)`, etc.). See the root `openbindings-go` CHANGELOG for the full rename table.
 
 - **Migrated to protobuf v2.** Direct dependencies on `github.com/jhump/protoreflect` (v1) and `github.com/golang/protobuf` are gone. The module now consumes `github.com/jhump/protoreflect/v2/grpcdynamic`, `github.com/jhump/protoreflect/v2/grpcreflect`, `google.golang.org/protobuf/types/dynamicpb`, `google.golang.org/protobuf/encoding/protojson`, and `google.golang.org/protobuf/reflect/protoreflect` directly. The reflection client's `ResolveService` shorthand was replaced with `FileContainingSymbol` plus a small in-package walker. Source-info comment extraction moved from per-method `GetSourceInfo()` to file-level `SourceLocations().ByDescriptor(method)`. Behavior is preserved across the change; the bufconn integration suite passes against the same fixtures.
+
+### Removed
+
+- **The store/security/callbacks paths.** Credentials now arrive solely via
+  `BindingInvocationArgs.Context` (`bearerToken`, `apiKey`, `basic`,
+  `headers`); the post-hoc `ResolveSecurity` auth retry and the
+  `ContextStore` enrichment inside the invoker are gone. Credential
+  resolution happens above the binding (operation-layer context
+  negotiation).
 
 ## 0.1.1 — 2026-04-20
 

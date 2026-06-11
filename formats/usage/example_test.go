@@ -50,8 +50,8 @@ func ExampleSpec_FindCommand() {
 	spec := &usage.Spec{
 		Nodes: []usage.Node{
 			{
-				Name: "cmd",
-				Args: []usage.Value{{Raw: "config"}},
+				Name:  "cmd",
+				Args:  []usage.Value{{Raw: "config"}},
 				Props: map[string]usage.Value{"help": {Raw: "Manage config"}},
 				Children: []usage.Node{
 					{

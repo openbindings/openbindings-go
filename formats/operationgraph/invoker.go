@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
-	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -15,10 +14,10 @@ const FormatToken = "openbindings.operation-graph@0.2.0"
 
 // Invoker handles binding invocation for operation graph sources.
 type Invoker struct {
-	invoker *openbindings.OperationInvoker
-	mu         sync.RWMutex
-	docCache   map[string]*Document
-	schemas    *schemaCache
+	invoker  *openbindings.OperationInvoker
+	mu       sync.RWMutex
+	docCache map[string]*Document
+	schemas  *schemaCache
 }
 
 // NewInvoker creates a new operation graph binding invoker.
@@ -26,9 +25,9 @@ type Invoker struct {
 // operation nodes in the graph.
 func NewInvoker(invoker *openbindings.OperationInvoker) *Invoker {
 	return &Invoker{
-		invoker: invoker,
-		docCache:   make(map[string]*Document),
-		schemas:    newSchemaCache(),
+		invoker:  invoker,
+		docCache: make(map[string]*Document),
+		schemas:  newSchemaCache(),
 	}
 }
 
@@ -37,30 +36,34 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "OpenBindings operation graphs"}}
 }
 
-// InvokeBinding invokes an operation graph binding.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
-	doc, err := e.loadDocument(in.Source.Location, in.Source.Content)
+// InvokeBinding invokes an operation graph binding. The handle is returned
+// synchronously; the graph engine runs on its own goroutine. The graph's
+// initial input is the first message written to the handle (or nil when the
+// operation layer declares a no-input operation), and graph events stream
+// out through the handle's output side.
+func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	doc, err := e.loadDocument(args.Source.Location, args.Source.Content)
 	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(
-			time.Now(), openbindings.ErrCodeSourceLoadFailed, err.Error(),
-		)), nil
+		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceLoadFailed,
+			Message: err.Error(),
+		})
 	}
 
-	graph, ok := doc.Graphs[in.Ref]
+	graph, ok := doc.Graphs[args.Ref]
 	if !ok {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(
-			time.Now(), openbindings.ErrCodeRefNotFound,
-			fmt.Sprintf("operation graph %q not found in document", in.Ref),
-		)), nil
+		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeRefNotFound,
+			Message: fmt.Sprintf("operation graph %q not found in document", args.Ref),
+		})
 	}
 
-	out := make(chan openbindings.InvocationOutput)
+	inv := openbindings.NewInvocationImpl[any, any](ctx)
 	go func() {
-		defer close(out)
-		eng := newEngine(graph, e.invoker, in, e.invoker.TransformEvaluator, e.schemas)
-		eng.run(ctx, out)
+		eng := newEngine(graph, e.invoker, args, e.invoker.TransformEvaluator, e.schemas)
+		eng.execute(ctx, inv)
 	}()
-	return out, nil
+	return inv
 }
 
 func (e *Invoker) loadDocument(location string, content any) (*Document, error) {

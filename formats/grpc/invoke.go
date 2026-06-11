@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/jhump/protoreflect/v2/grpcdynamic"
-	"github.com/jhump/protoreflect/v2/grpcreflect"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -22,28 +20,121 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-func doGRPCCall(ctx context.Context, in *openbindings.BindingInvocationInput, conn *grpc.ClientConn, methodDesc protoreflect.MethodDescriptor) *openbindings.InvocationOutput {
-	start := time.Now()
-
-	reqMsg, err := buildRequest(methodDesc, in.Input)
-	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
+// readRequest obtains the single request message for a unary or
+// server-streaming call from the invocation handle.
+//
+// Methods whose request message has no fields are no-input bindings: input is
+// closed on entry (binding contract: the caller never has to Close()) and the
+// empty request is sent without waiting for a write. For all other methods
+// the first written input becomes the request; a close-without-write is a
+// terminal ERR_MISSING_INPUT.
+//
+// The bool result reports whether dispatch should proceed; on false the
+// invocation is already terminal.
+func readRequest(ctx context.Context, inv openbindings.BindingHandle[any, any], methodDesc protoreflect.MethodDescriptor) (proto.Message, bool) {
+	if methodDesc.Input().Fields().Len() == 0 {
+		_ = inv.CloseInput()
+		return dynamicpb.NewMessage(methodDesc.Input()), true
 	}
 
-	rpcCtx := applyGRPCContext(ctx, in.Context)
-	stub := grpcdynamic.NewStub(conn)
-
-	resp, err := stub.InvokeRpc(rpcCtx, methodDesc, reqMsg)
+	raw, err := inv.ReadInput(ctx)
+	if err == io.EOF {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeMissingInput,
+			Message: fmt.Sprintf("gRPC method %q requires an input message", methodDesc.FullName()),
+		})
+		return nil, false
+	}
 	if err != nil {
-		return openbindings.FailedOutput(start, grpcErrorCode(err), err.Error())
+		return nil, false // invocation already terminal (cancelled or errored)
+	}
+	_ = inv.CloseInput() // unary request: one message, close after the first read
+
+	reqMsg, buildErr := buildRequest(methodDesc, raw)
+	if buildErr != nil {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeValidationFailed,
+			Message: buildErr.Error(),
+		})
+		return nil, false
+	}
+	return reqMsg, true
+}
+
+// runUnary dispatches a unary RPC and emits its single response.
+func runUnary(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, reqMsg proto.Message) {
+	var header, trailer metadata.MD
+	resp, err := stub.InvokeRpc(rpcCtx, methodDesc, reqMsg, grpc.Header(&header), grpc.Trailer(&trailer))
+
+	// gRPC metadata maps natively onto the handle's metadata surfaces.
+	_ = inv.SetHeader(toOBMetadata(header))
+	if md := toOBMetadata(trailer); md != nil {
+		inv.SetTrailer(md)
 	}
 
-	output, err := responseToJSON(resp)
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeResponseError, err.Error())
+		inv.FireError(grpcError(err, openbindings.ErrCodeExecutionFailed))
+		return
 	}
 
-	return &openbindings.InvocationOutput{Output: output, Status: 200, DurationMs: time.Since(start).Milliseconds()}
+	output, jerr := responseToJSON(resp)
+	if jerr != nil {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeResponseError,
+			Message: jerr.Error(),
+		})
+		return
+	}
+	if err := inv.EmitOutput(output); err != nil {
+		return // invocation terminated while the emit was parked
+	}
+	inv.CloseOutput()
+}
+
+// runServerStream dispatches a server-streaming RPC and emits each received
+// message. EmitOutput's parking is the backpressure: a slow caller flow-
+// controls the stream via gRPC windowing, and a terminal while parked stops
+// the loop. Stream teardown on caller cancel rides rpcCtx (DoneContext).
+func runServerStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, reqMsg proto.Message) {
+	stream, err := stub.InvokeRpcServerStream(rpcCtx, methodDesc, reqMsg)
+	if err != nil {
+		inv.FireError(grpcError(err, openbindings.ErrCodeExecutionFailed))
+		return
+	}
+
+	// Leading metadata: Header blocks until the server's headers arrive (or
+	// the RPC fails, in which case the recv loop below surfaces the error).
+	if md, herr := stream.Header(); herr == nil {
+		_ = inv.SetHeader(toOBMetadata(md))
+	}
+
+	for {
+		resp, rerr := stream.RecvMsg()
+		if rerr != nil {
+			// Trailing metadata is valid once RecvMsg returns non-nil.
+			if md := toOBMetadata(stream.Trailer()); md != nil {
+				inv.SetTrailer(md)
+			}
+			if rerr == io.EOF {
+				inv.CloseOutput()
+				return
+			}
+			inv.FireError(grpcError(rerr, openbindings.ErrCodeStreamError))
+			return
+		}
+
+		output, jerr := responseToJSON(resp)
+		if jerr != nil {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeResponseError,
+				Message: jerr.Error(),
+			})
+			return
+		}
+		if err := inv.EmitOutput(output); err != nil {
+			return // invocation terminated while the emit was parked
+		}
+	}
 }
 
 // applyGRPCContext attaches binding context credentials and transport-hint
@@ -70,62 +161,17 @@ func applyGRPCContext(ctx context.Context, bindCtx map[string]any) context.Conte
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
-func subscribe(ctx context.Context, in *openbindings.BindingInvocationInput, conn *grpc.ClientConn, refClient *grpcreflect.Client, methodDesc protoreflect.MethodDescriptor) (<-chan openbindings.InvocationOutput, error) {
-	start := time.Now()
-
-	reqMsg, err := buildRequest(methodDesc, in.Input)
-	if err != nil {
-		if refClient != nil {
-			refClient.Reset()
-		}
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
+// toOBMetadata converts gRPC metadata to the handle's Metadata shape (both
+// are map[string][]string). Returns nil for empty metadata.
+func toOBMetadata(md metadata.MD) openbindings.Metadata {
+	if len(md) == 0 {
+		return nil
 	}
-
-	rpcCtx := applyGRPCContext(ctx, in.Context)
-	stub := grpcdynamic.NewStub(conn)
-	stream, err := stub.InvokeRpcServerStream(rpcCtx, methodDesc, reqMsg)
-	if err != nil {
-		if refClient != nil {
-			refClient.Reset()
-		}
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, grpcErrorCode(err), err.Error())), nil
+	out := make(openbindings.Metadata, len(md))
+	for k, vs := range md {
+		out[k] = append([]string(nil), vs...)
 	}
-
-	ch := make(chan openbindings.InvocationOutput, 16)
-	go func() {
-		defer close(ch)
-		defer func() {
-			if refClient != nil {
-				refClient.Reset()
-			}
-		}()
-
-		for {
-			resp, err := stream.RecvMsg()
-			if err != nil {
-				if err == io.EOF || ctx.Err() != nil {
-					return
-				}
-				ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeStreamError,
-					Message: err.Error(),
-				}}
-				return
-			}
-
-			output, err := responseToJSON(resp)
-			if err != nil {
-				ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeResponseError,
-					Message: err.Error(),
-				}}
-				return
-			}
-			ch <- openbindings.InvocationOutput{Output: output}
-		}
-	}()
-
-	return ch, nil
+	return out
 }
 
 func parseRef(ref string) (string, string, error) {
@@ -174,15 +220,60 @@ func responseToJSON(resp proto.Message) (any, error) {
 	return result, nil
 }
 
-// grpcErrorCode maps a gRPC error to a standard error code constant.
-func grpcErrorCode(err error) string {
-	if s, ok := status.FromError(err); ok {
-		switch s.Code() {
-		case codes.Unauthenticated:
-			return openbindings.ErrCodeAuthRequired
-		case codes.PermissionDenied:
-			return openbindings.ErrCodePermissionDenied
+// grpcError maps a gRPC error to a terminal *InvocationError. The gRPC
+// status code (and any status details) ride along in Details; unmapped
+// status codes fall back to fallbackCode.
+func grpcError(err error, fallbackCode string) *openbindings.InvocationError {
+	s, ok := status.FromError(err)
+	if !ok {
+		return &openbindings.InvocationError{Code: fallbackCode, Message: err.Error()}
+	}
+
+	code := fallbackCode
+	switch s.Code() {
+	case codes.Unauthenticated:
+		code = openbindings.ErrCodeAuthRequired
+	case codes.PermissionDenied:
+		code = openbindings.ErrCodePermissionDenied
+	case codes.Unavailable:
+		code = openbindings.ErrCodeConnectFailed
+	case codes.DeadlineExceeded:
+		code = openbindings.ErrCodeTimeout
+	}
+
+	details := map[string]any{"grpcCode": s.Code().String()}
+	if msgs := s.Proto().GetDetails(); len(msgs) > 0 {
+		var ds []any
+		for _, m := range msgs {
+			b, merr := protojson.Marshal(m)
+			if merr != nil {
+				continue
+			}
+			var v any
+			if json.Unmarshal(b, &v) == nil {
+				ds = append(ds, v)
+			}
+		}
+		if len(ds) > 0 {
+			details["grpcDetails"] = ds
 		}
 	}
-	return openbindings.ErrCodeExecutionFailed
+
+	return &openbindings.InvocationError{Code: code, Message: err.Error(), Details: details}
+}
+
+// refResolveError maps a reflection-resolution failure. Transport-level
+// statuses surface as their mapped codes (a dead server is ERR_CONNECT_FAILED,
+// not a missing ref); anything else means the symbol didn't resolve.
+func refResolveError(svcName string, err error) *openbindings.InvocationError {
+	if s, ok := status.FromError(err); ok {
+		switch s.Code() {
+		case codes.Unavailable, codes.DeadlineExceeded, codes.Unauthenticated, codes.PermissionDenied:
+			return grpcError(err, openbindings.ErrCodeConnectFailed)
+		}
+	}
+	return &openbindings.InvocationError{
+		Code:    openbindings.ErrCodeRefNotFound,
+		Message: fmt.Sprintf("resolve service %q: %v", svcName, err),
+	}
 }

@@ -2,18 +2,17 @@
 //
 // The package handles:
 //   - Converting OpenAPI 3.x documents to OpenBindings interfaces
-//   - Invoking operations via HTTP requests
-//   - Describing context requirements via getContextSchema
+//   - Invoking operations via HTTP requests through the Invocation handle
+//   - Deriving context requirements (CONTEXT_REQUIRED negotiation) from the
+//     document's securitySchemes
 package openapi
 
 import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	openbindings "github.com/openbindings/openbindings-go"
@@ -58,6 +57,11 @@ type Invoker struct {
 	mu       sync.RWMutex
 	docCache map[string]*openapi3.T
 }
+
+var (
+	_ openbindings.BindingInvoker  = (*Invoker)(nil)
+	_ openbindings.BindingPreparer = (*Invoker)(nil)
+)
 
 // NewInvoker creates a new OpenAPI binding invoker with a default HTTP
 // client. Use NewInvokerWithClient to inject a custom client (e.g., for
@@ -114,86 +118,105 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "OpenAPI 3.x HTTP APIs"}}
 }
 
-// InvokeBinding invokes an HTTP request based on an OpenAPI binding.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
-	doc, err := e.cachedLoadDocument(in.Source.Location, in.Source.Content)
+// InvokeBinding invokes an HTTP request based on an OpenAPI binding. The
+// Invocation handle is returned synchronously; creation is inert and the
+// HTTP work is scheduled on its own goroutine. Input messages flow through
+// the handle's Write channel. All pre-dispatch failures (bad ref, missing
+// server URL, unresolvable operation, missing context) terminate the handle
+// BEFORE any network side effect.
+func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	go func() {
+		if err := e.run(ctx, args, inv); err != nil {
+			inv.FireError(openbindings.AsInvocationError(err))
+		}
+	}()
+	return inv
+}
+
+func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) error {
+	doc, err := e.cachedLoadDocument(args.Source.Location, args.Source.Content)
 	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeSourceLoadFailed, err.Error())), nil
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceLoadFailed,
+			Message: err.Error(),
+		})
+		return nil
+	}
+	runBinding(ctx, e.client, args, inv, doc)
+	return nil
+}
+
+// PrepareBinding is the side-effect-free preflight (the prepareBinding
+// operation of the openbindings.binding-invoker role): it derives the
+// operation's auth requirements from the document's securitySchemes and
+// reports the context the invocation would require, or nil when it can
+// proceed.
+//
+// It uses the source content or a previously cached document; it never
+// fetches. When the document would have to be fetched to learn its security
+// schemes, it reports no requirement and lets the invocation raise the
+// challenge instead.
+func (e *Invoker) PrepareBinding(_ context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+	doc := e.prepareDoc(args.Source.Location, args.Source.Content)
+	if doc == nil || doc.Paths == nil {
+		return nil, nil
 	}
 
-	enriched := in
-	if in.Store != nil {
-		key, keyErr := resolveServerKey(doc, in.Source.Location)
-		if keyErr == nil && key != "" {
-			if stored, sErr := in.Store.Get(ctx, key); sErr == nil && len(stored) > 0 {
-				cp := *in
-				if len(in.Context) == 0 {
-					cp.Context = stored
-				} else {
-					merged := make(map[string]any, len(stored)+len(in.Context))
-					for k, v := range stored {
-						merged[k] = v
-					}
-					for k, v := range in.Context {
-						merged[k] = v
-					}
-					cp.Context = merged
-				}
-				enriched = &cp
-			}
+	pathTemplate, method, err := parseRef(args.Ref)
+	if err != nil {
+		return nil, nil
+	}
+	pathItem := doc.Paths.Find(pathTemplate)
+	if pathItem == nil {
+		return nil, nil
+	}
+	op := pathItem.GetOperation(strings.ToUpper(method))
+	if op == nil {
+		return nil, nil
+	}
+
+	baseURL, err := resolveBaseURLWithLocation(doc, args.Context, args.Source.Location)
+	if err != nil {
+		// No server URL: the invocation fails with ErrCodeSourceConfigError
+		// before auth matters, so there is no context to report.
+		return nil, nil
+	}
+	return requiredContext(doc, op, args.Context, baseURL), nil
+}
+
+// prepareDoc returns the OpenAPI document without performing network I/O:
+// inline source content is parsed locally (external refs disabled so the
+// parse cannot fetch), and a location-only source is served from the warm
+// document cache. Returns nil when the document is not knowable without I/O.
+func (e *Invoker) prepareDoc(location string, content any) *openapi3.T {
+	if content != nil {
+		data, err := openbindings.ContentToBytes(content)
+		if err != nil {
+			return nil
 		}
-	}
-
-	result, stream := invokeBindingWithDoc(ctx, e.client, enriched, doc)
-	if stream != nil {
-		// SSE response: hand the streaming channel directly to the caller.
-		// Auth retry is not attempted on streaming responses because the
-		// server has already begun emitting events; an auth failure on a
-		// streaming endpoint would surface as a non-2xx status BEFORE the
-		// stream begins, in which case `stream` is nil and we fall through
-		// to the unary code path below.
-		return stream, nil
-	}
-
-	// Auth retry: if the API returned auth_required and we have security methods
-	// and callbacks, resolve credentials and retry once.
-	if result.Error != nil && result.Error.Code == openbindings.ErrCodeAuthRequired &&
-		len(enriched.Security) > 0 && enriched.Callbacks != nil {
-		creds, resolveErr := openbindings.ResolveSecurity(ctx, enriched.Security, enriched.Callbacks, nil)
-		if resolveErr == nil && creds != nil {
-			if enriched == in {
-				cp := *in
-				enriched = &cp
-			}
-			merged := make(map[string]any)
-			for k, v := range enriched.Context {
-				merged[k] = v
-			}
-			for k, v := range creds {
-				merged[k] = v
-			}
-			enriched.Context = merged
-
-			if enriched.Store != nil {
-				storeKey, keyErr := resolveServerKey(doc, enriched.Source.Location)
-				if keyErr == nil && storeKey != "" {
-					_ = enriched.Store.Set(ctx, storeKey, enriched.Context)
-				}
-			}
-
-			retryResult, retryStream := invokeBindingWithDoc(ctx, e.client, enriched, doc)
-			if retryStream != nil {
-				return retryStream, nil
-			}
-			result = retryResult
+		loader := openapi3.NewLoader() // external refs NOT allowed: no I/O
+		doc, err := loader.LoadFromData(data)
+		if err != nil {
+			return nil
 		}
+		return doc
 	}
-
-	return openbindings.SingleEventChannel(result), nil
+	if location == "" {
+		return nil
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.docCache[location]
 }
 
 // Creator handles interface creation from OpenAPI documents.
 type Creator struct{}
+
+var (
+	_ openbindings.InterfaceCreator = (*Creator)(nil)
+	_ openbindings.SourceInspector  = (*Creator)(nil)
+)
 
 // NewCreator creates a new OpenAPI interface creator.
 func NewCreator() *Creator {
@@ -226,24 +249,4 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 		iface.Description = in.Description
 	}
 	return &iface, nil
-}
-
-// resolveServerKey extracts the API identity URL from the OpenAPI doc's servers array
-// and normalizes it to a stable context store key.
-func resolveServerKey(doc *openapi3.T, sourceLocation string) (string, error) {
-	if len(doc.Servers) == 0 || doc.Servers[0].URL == "" {
-		return "", fmt.Errorf("OpenAPI document has no servers array; cannot determine API identity for context lookup")
-	}
-	serverURL := doc.Servers[0].URL
-	if strings.HasPrefix(serverURL, "http://") || strings.HasPrefix(serverURL, "https://") {
-		return openbindings.NormalizeContextKey(strings.TrimRight(serverURL, "/")), nil
-	}
-	if openbindings.IsHTTPURL(sourceLocation) {
-		parsed, err := url.Parse(sourceLocation)
-		if err == nil {
-			origin := parsed.Scheme + "://" + parsed.Host
-			return openbindings.NormalizeContextKey(strings.TrimRight(origin+serverURL, "/")), nil
-		}
-	}
-	return "", fmt.Errorf("OpenAPI server URL %q is relative and source location is not an HTTP URL", serverURL)
 }

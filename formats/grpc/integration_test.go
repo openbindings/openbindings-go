@@ -2,17 +2,23 @@ package grpc
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jhump/protoreflect/v2/grpcreflect"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
 	v1reflectiongrpc "google.golang.org/grpc/reflection/grpc_reflection_v1"
 	v1alphareflectiongrpc "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -21,9 +27,53 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// testServer records the last authorization header it received.
+// testServer records the metadata it received and can demand authentication.
 type testServer struct {
-	lastAuth string
+	mu          sync.Mutex
+	lastAuth    string
+	lastMD      metadata.MD
+	requireAuth bool
+}
+
+func (ts *testServer) capture(ctx context.Context) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.lastMD = md.Copy()
+	if vals := md.Get("authorization"); len(vals) > 0 {
+		ts.lastAuth = vals[0]
+	}
+}
+
+func (ts *testServer) auth() string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.lastAuth
+}
+
+func (ts *testServer) header(key string) []string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.lastMD.Get(key)
+}
+
+func (ts *testServer) setRequireAuth(v bool) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.requireAuth = v
+}
+
+func (ts *testServer) authRejected(ctx context.Context) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if !ts.requireAuth {
+		return false
+	}
+	md, ok := metadata.FromIncomingContext(ctx)
+	return !ok || len(md.Get("authorization")) == 0
 }
 
 func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, error), *testServer) {
@@ -57,6 +107,8 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 			Method: []*descriptorpb.MethodDescriptorProto{
 				{Name: ptr("GetItem"), InputType: ptr(".testpkg.GetItemRequest"), OutputType: ptr(".testpkg.GetItemResponse")},
 				{Name: ptr("ListItems"), InputType: ptr(".testpkg.ListItemsRequest"), OutputType: ptr(".testpkg.Item"), ServerStreaming: ptr(true)},
+				{Name: ptr("WatchItems"), InputType: ptr(".testpkg.ListItemsRequest"), OutputType: ptr(".testpkg.Item"), ServerStreaming: ptr(true)},
+				{Name: ptr("UploadItems"), InputType: ptr(".testpkg.GetItemRequest"), OutputType: ptr(".testpkg.GetItemResponse"), ClientStreaming: ptr(true)},
 			},
 		}},
 	}
@@ -84,11 +136,16 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 		Methods: []grpc.MethodDesc{{
 			MethodName: "GetItem",
 			Handler: func(srv any, ctx context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
-				captureAuth(ctx, ts)
+				ts.capture(ctx)
+				if ts.authRejected(ctx) {
+					return nil, status.Error(codes.Unauthenticated, "authentication required")
+				}
 				req := dynamicpb.NewMessage(reqDesc)
 				if err := dec(req); err != nil {
 					return nil, err
 				}
+				_ = grpc.SetHeader(ctx, metadata.Pairs("x-test-header", "from-server"))
+				grpc.SetTrailer(ctx, metadata.Pairs("x-test-trailer", "bye"))
 				id := req.Get(reqDesc.Fields().ByName("id")).String()
 				resp := dynamicpb.NewMessage(respDesc)
 				resp.Set(respDesc.Fields().ByName("id"), protoreflect.ValueOfString(id))
@@ -96,22 +153,42 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 				return resp, nil
 			},
 		}},
-		Streams: []grpc.StreamDesc{{
-			StreamName:   "ListItems",
-			ServerStreams: true,
-			Handler: func(srv any, stream grpc.ServerStream) error {
-				captureAuth(stream.Context(), ts)
-				for _, pair := range [][2]string{{"1", "first"}, {"2", "second"}} {
+		Streams: []grpc.StreamDesc{
+			{
+				StreamName:    "ListItems",
+				ServerStreams: true,
+				Handler: func(srv any, stream grpc.ServerStream) error {
+					ts.capture(stream.Context())
+					_ = stream.SetHeader(metadata.Pairs("x-stream-header", "sh"))
+					stream.SetTrailer(metadata.Pairs("x-stream-trailer", "st"))
+					for _, pair := range [][2]string{{"1", "first"}, {"2", "second"}} {
+						msg := dynamicpb.NewMessage(itemDesc)
+						msg.Set(itemDesc.Fields().ByName("id"), protoreflect.ValueOfString(pair[0]))
+						msg.Set(itemDesc.Fields().ByName("name"), protoreflect.ValueOfString(pair[1]))
+						if err := stream.SendMsg(msg); err != nil {
+							return err
+						}
+					}
+					return nil
+				},
+			},
+			{
+				StreamName:    "WatchItems",
+				ServerStreams: true,
+				Handler: func(srv any, stream grpc.ServerStream) error {
+					ts.capture(stream.Context())
 					msg := dynamicpb.NewMessage(itemDesc)
-					msg.Set(itemDesc.Fields().ByName("id"), protoreflect.ValueOfString(pair[0]))
-					msg.Set(itemDesc.Fields().ByName("name"), protoreflect.ValueOfString(pair[1]))
+					msg.Set(itemDesc.Fields().ByName("id"), protoreflect.ValueOfString("w1"))
+					msg.Set(itemDesc.Fields().ByName("name"), protoreflect.ValueOfString("watching"))
 					if err := stream.SendMsg(msg); err != nil {
 						return err
 					}
-				}
-				return nil
+					// Block until the client tears the stream down (cancel).
+					<-stream.Context().Done()
+					return stream.Context().Err()
+				},
 			},
-		}},
+		},
 		Metadata: "testpkg/items.proto",
 	}, ts)
 
@@ -128,14 +205,6 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 	}, ts
 }
 
-func captureAuth(ctx context.Context, ts *testServer) {
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if vals := md.Get("authorization"); len(vals) > 0 {
-			ts.lastAuth = vals[0]
-		}
-	}
-}
-
 func dialTestServer(t *testing.T, dialer func(context.Context, string) (net.Conn, error)) *grpc.ClientConn {
 	t.Helper()
 	conn, err := grpc.NewClient("passthrough:///bufconn",
@@ -149,13 +218,52 @@ func dialTestServer(t *testing.T, dialer func(context.Context, string) (net.Conn
 	return conn
 }
 
-func drainStream(t *testing.T, ch <-chan openbindings.InvocationOutput) []openbindings.InvocationOutput {
+// newTestInvoker returns an invoker whose "bufconn" address is wired to the
+// test server's in-memory listener.
+func newTestInvoker(t *testing.T, dialer func(context.Context, string) (net.Conn, error)) *Invoker {
 	t.Helper()
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
+	conn := dialTestServer(t, dialer)
+	invoker := NewInvoker()
+	invoker.conns.Store("bufconn", conn)
+	return invoker
+}
+
+func testCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// drainInvocation reads the output stream to completion, returning the
+// outputs and the terminal error (nil on clean io.EOF close).
+func drainInvocation(t *testing.T, inv openbindings.Invocation[any, any]) ([]any, *openbindings.InvocationError) {
+	t.Helper()
+	ctx := testCtx(t)
+	out := inv.Outputs()
+	var vals []any
+	for {
+		v, err := out.Read(ctx)
+		if err == io.EOF {
+			return vals, nil
+		}
+		if err != nil {
+			var ie *openbindings.InvocationError
+			if errors.As(err, &ie) {
+				return vals, ie
+			}
+			t.Fatalf("unexpected error type %T: %v", err, err)
+		}
+		vals = append(vals, v)
 	}
-	return events
+}
+
+func bufconnArgs(ref string, bindCtx map[string]any) *openbindings.BindingInvocationArgs {
+	return &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{Format: FormatToken, Location: "bufconn"},
+		Ref:     ref,
+		Context: bindCtx,
+	}
 }
 
 // --- Integration Tests ---
@@ -198,14 +306,18 @@ func TestIntegration_CreateInterface_FromReflection(t *testing.T) {
 	if iface.Name != "ItemService" {
 		t.Errorf("name = %q, want %q", iface.Name, "ItemService")
 	}
-	if len(iface.Operations) != 2 {
-		t.Fatalf("expected 2 operations, got %d", len(iface.Operations))
+	// UploadItems is client-streaming and must be skipped by the creator.
+	if len(iface.Operations) != 3 {
+		t.Fatalf("expected 3 operations, got %d", len(iface.Operations))
 	}
 	if _, ok := iface.Operations["GetItem"]; !ok {
 		t.Error("expected operation GetItem")
 	}
 	if _, ok := iface.Operations["ListItems"]; !ok {
 		t.Error("expected operation ListItems")
+	}
+	if _, ok := iface.Operations["WatchItems"]; !ok {
+		t.Error("expected operation WatchItems")
 	}
 	if iface.Sources[DefaultSourceName].Format != FormatToken {
 		t.Errorf("format = %q, want %q", iface.Sources[DefaultSourceName].Format, FormatToken)
@@ -289,39 +401,30 @@ func TestIntegration_CreateInterface_PublicAPI_NoSources(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteUnary(t *testing.T) {
+func TestIntegration_InvokeUnary(t *testing.T) {
 	dialer, ts := setupTestServer(t)
-	conn := dialTestServer(t, dialer)
-
-	invoker := NewInvoker()
+	invoker := newTestInvoker(t, dialer)
 	defer invoker.Close()
-	invoker.conns.Store("bufconn", conn)
 
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source:  openbindings.BindingInvocationSource{Format: FormatToken, Location: "bufconn"},
-		Ref:     "testpkg.ItemService/GetItem",
-		Input:   map[string]any{"id": "42"},
-		Context: map[string]any{"bearerToken": "tok_secret"},
-	})
+	ctx := testCtx(t)
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/GetItem",
+		map[string]any{"bearerToken": "tok_secret"}))
+	if err := inv.Write(ctx, map[string]any{"id": "42"}); err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := openbindings.Single(ctx, inv.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Error != nil {
-		t.Fatalf("unexpected error: %s: %s", events[0].Error.Code, events[0].Error.Message)
+	if got := ts.auth(); got != "Bearer tok_secret" {
+		t.Errorf("auth = %q, want %q", got, "Bearer tok_secret")
 	}
 
-	if ts.lastAuth != "Bearer tok_secret" {
-		t.Errorf("auth = %q, want %q", ts.lastAuth, "Bearer tok_secret")
-	}
-
-	resp, ok := events[0].Output.(map[string]any)
+	resp, ok := v.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map response, got %T", events[0].Output)
+		t.Fatalf("expected map response, got %T", v)
 	}
 	if resp["id"] != "42" {
 		t.Errorf("id = %v, want 42", resp["id"])
@@ -331,102 +434,234 @@ func TestIntegration_ExecuteUnary(t *testing.T) {
 	}
 }
 
-func TestIntegration_ExecuteStreaming(t *testing.T) {
-	dialer, ts := setupTestServer(t)
-	conn := dialTestServer(t, dialer)
-
-	invoker := NewInvoker()
+func TestIntegration_UnaryHeaderTrailer(t *testing.T) {
+	dialer, _ := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
 	defer invoker.Close()
-	invoker.conns.Store("bufconn", conn)
 
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source:  openbindings.BindingInvocationSource{Format: FormatToken, Location: "bufconn"},
-		Ref:     "testpkg.ItemService/ListItems",
-		Context: map[string]any{"bearerToken": "stream_tok"},
-	})
-	if err != nil {
+	ctx := testCtx(t)
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/GetItem", nil))
+	if err := inv.Write(ctx, map[string]any{"id": "7"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openbindings.Single(ctx, inv.Outputs()); err != nil {
 		t.Fatal(err)
 	}
 
-	events := drainStream(t, ch)
-	// Expect exactly 2 data events with clean stream completion (no trailing error).
-	// io.EOF from RecvMsg is the normal end-of-stream signal and should not be
-	// emitted as a stream_error event.
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(events))
+	md, err := inv.Header(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for i, ev := range events {
-		if ev.Error != nil {
-			t.Fatalf("event %d: unexpected error: %s: %s", i, ev.Error.Code, ev.Error.Message)
-		}
+	if got := md["x-test-header"]; len(got) != 1 || got[0] != "from-server" {
+		t.Errorf("header x-test-header = %v, want [from-server]", got)
+	}
+	if got := inv.Trailer()["x-test-trailer"]; len(got) != 1 || got[0] != "bye" {
+		t.Errorf("trailer x-test-trailer = %v, want [bye]", got)
+	}
+}
+
+func TestIntegration_InvokeServerStreaming(t *testing.T) {
+	dialer, ts := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	ctx := testCtx(t)
+	// ListItemsRequest has no fields: the binding closes input on entry and
+	// dispatches the empty request without a Write.
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/ListItems",
+		map[string]any{"bearerToken": "stream_tok"}))
+
+	vals, terr := drainInvocation(t, inv)
+	if terr != nil {
+		t.Fatalf("unexpected terminal error: %s: %s", terr.Code, terr.Message)
+	}
+	if len(vals) != 2 {
+		t.Fatalf("expected 2 outputs, got %d", len(vals))
 	}
 
-	if ts.lastAuth != "Bearer stream_tok" {
-		t.Errorf("auth = %q, want %q", ts.lastAuth, "Bearer stream_tok")
+	if got := ts.auth(); got != "Bearer stream_tok" {
+		t.Errorf("auth = %q, want %q", got, "Bearer stream_tok")
 	}
 
-	first, ok := events[0].Output.(map[string]any)
+	first, ok := vals[0].(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", events[0].Output)
+		t.Fatalf("expected map output, got %T", vals[0])
 	}
 	if first["id"] != "1" || first["name"] != "first" {
 		t.Errorf("first item = %v, want {id:1, name:first}", first)
 	}
-}
 
-func TestIntegration_StoredCredentials(t *testing.T) {
-	dialer, ts := setupTestServer(t)
-	conn := dialTestServer(t, dialer)
-
-	invoker := NewInvoker()
-	defer invoker.Close()
-	invoker.conns.Store("bufconn", conn)
-
-	store := openbindings.NewMemoryStore()
-	ctx := context.Background()
-	_ = store.Set(ctx, "bufconn", map[string]any{"bearerToken": "stored_token"})
-
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: "bufconn"},
-		Ref:    "testpkg.ItemService/GetItem",
-		Input:  map[string]any{"id": "1"},
-		Store:  store,
-	})
+	// Stream metadata maps onto the handle.
+	md, err := inv.Header(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := md["x-stream-header"]; len(got) != 1 || got[0] != "sh" {
+		t.Errorf("header x-stream-header = %v, want [sh]", got)
+	}
+	if got := inv.Trailer()["x-stream-trailer"]; len(got) != 1 || got[0] != "st" {
+		t.Errorf("trailer x-stream-trailer = %v, want [st]", got)
+	}
+}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 || events[0].Error != nil {
-		t.Fatalf("expected 1 successful event, got %d", len(events))
+func TestIntegration_ContextHeadersForwarded(t *testing.T) {
+	dialer, ts := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	ctx := testCtx(t)
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/GetItem",
+		map[string]any{"headers": map[string]any{"X-Custom": "custom-value"}}))
+	if err := inv.Write(ctx, map[string]any{"id": "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openbindings.Single(ctx, inv.Outputs()); err != nil {
+		t.Fatal(err)
 	}
 
-	if ts.lastAuth != "Bearer stored_token" {
-		t.Errorf("auth = %q, want %q", ts.lastAuth, "Bearer stored_token")
+	if got := ts.header("x-custom"); len(got) != 1 || got[0] != "custom-value" {
+		t.Errorf("x-custom = %v, want [custom-value]", got)
+	}
+}
+
+func TestIntegration_Unauthenticated(t *testing.T) {
+	dialer, ts := setupTestServer(t)
+	ts.setRequireAuth(true)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	ctx := testCtx(t)
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/GetItem", nil))
+	if err := inv.Write(ctx, map[string]any{"id": "1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	vals, terr := drainInvocation(t, inv)
+	if len(vals) != 0 || terr == nil {
+		t.Fatalf("expected terminal error, got %d outputs terr=%v", len(vals), terr)
+	}
+	if terr.Code != openbindings.ErrCodeAuthRequired {
+		t.Errorf("code = %q, want ERR_AUTH_REQUIRED", terr.Code)
+	}
+	details, ok := terr.Details.(map[string]any)
+	if !ok || details["grpcCode"] != "Unauthenticated" {
+		t.Errorf("details = %v, want grpcCode Unauthenticated", terr.Details)
+	}
+}
+
+func TestIntegration_MissingInput(t *testing.T) {
+	dialer, _ := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	ctx := testCtx(t)
+	// GetItemRequest has fields, so a close-without-write is ERR_MISSING_INPUT.
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/GetItem", nil))
+	if err := inv.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, terr := drainInvocation(t, inv)
+	if terr == nil || terr.Code != openbindings.ErrCodeMissingInput {
+		t.Fatalf("expected ERR_MISSING_INPUT, got %v", terr)
+	}
+}
+
+func TestIntegration_CancelMidStream(t *testing.T) {
+	dialer, _ := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	ctx := testCtx(t)
+	// WatchItems emits one item then blocks until the stream is torn down.
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/WatchItems", nil))
+
+	out := inv.Outputs()
+	first, err := out.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.(map[string]any)["id"] != "w1" {
+		t.Fatalf("first = %v", first)
+	}
+
+	inv.Cancel()
+	_, err = out.Read(ctx)
+	var ie *openbindings.InvocationError
+	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeCancelled {
+		t.Fatalf("expected ERR_CANCELLED, got %v", err)
 	}
 }
 
 func TestIntegration_InvalidRef(t *testing.T) {
 	dialer, _ := setupTestServer(t)
-	conn := dialTestServer(t, dialer)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
 
+	inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("not-a-valid-ref", nil))
+
+	vals, terr := drainInvocation(t, inv)
+	if len(vals) != 0 || terr == nil {
+		t.Fatal("expected a terminal error and no outputs")
+	}
+	if terr.Code != openbindings.ErrCodeInvalidRef {
+		t.Errorf("code = %q, want ERR_INVALID_REF", terr.Code)
+	}
+}
+
+func TestIntegration_RefNotFound_Method(t *testing.T) {
+	dialer, _ := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("testpkg.ItemService/NoSuchMethod", nil))
+
+	_, terr := drainInvocation(t, inv)
+	if terr == nil || terr.Code != openbindings.ErrCodeRefNotFound {
+		t.Fatalf("expected ERR_REF_NOT_FOUND, got %v", terr)
+	}
+}
+
+func TestIntegration_ClientStreamingUnsupported(t *testing.T) {
+	dialer, _ := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	// The error fires pre-dispatch, before any input is required.
+	inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("testpkg.ItemService/UploadItems", nil))
+
+	_, terr := drainInvocation(t, inv)
+	if terr == nil || terr.Code != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", terr)
+	}
+}
+
+func TestIntegration_MissingLocation(t *testing.T) {
 	invoker := NewInvoker()
 	defer invoker.Close()
-	invoker.conns.Store("bufconn", conn)
 
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: "bufconn"},
-		Ref:    "not-a-valid-ref",
+	inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken},
+		Ref:    "testpkg.ItemService/GetItem",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 || events[0].Error == nil {
-		t.Fatal("expected 1 error event")
+	_, terr := drainInvocation(t, inv)
+	if terr == nil || terr.Code != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR, got %v", terr)
 	}
-	if events[0].Error.Code != openbindings.ErrCodeInvalidRef {
-		t.Errorf("code = %q, want invalid_ref", events[0].Error.Code)
+}
+
+func TestIntegration_CtxCancelBeforeWrite(t *testing.T) {
+	dialer, _ := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/GetItem", nil))
+	cancel()
+
+	_, terr := drainInvocation(t, inv)
+	if terr == nil || terr.Code != openbindings.ErrCodeCancelled {
+		t.Fatalf("expected ERR_CANCELLED, got %v", terr)
 	}
 }

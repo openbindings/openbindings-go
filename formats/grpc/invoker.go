@@ -9,11 +9,10 @@ package grpc
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/jhump/protoreflect/v2/grpcdynamic"
 	"github.com/jhump/protoreflect/v2/grpcreflect"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
@@ -27,6 +26,12 @@ const DefaultSourceName = "grpcServer"
 type Invoker struct {
 	conns sync.Map // address -> *grpc.ClientConn
 }
+
+var (
+	_ openbindings.BindingInvoker   = (*Invoker)(nil)
+	_ openbindings.InterfaceCreator = (*Creator)(nil)
+	_ openbindings.SourceInspector  = (*Creator)(nil)
+)
 
 // NewInvoker creates a new gRPC binding invoker.
 func NewInvoker() *Invoker { return &Invoker{} }
@@ -61,59 +66,59 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "gRPC via server reflection or .proto files"}}
 }
 
-// InvokeBinding invokes a gRPC binding, returning a channel of stream events.
-// For server-streaming RPCs it yields events as they arrive; for unary RPCs it
-// returns a single event.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
-	enriched := in
-	if in.Store != nil {
-		key := normalizeAddress(in.Source.Location)
-		if key != "" {
-			if stored, err := in.Store.Get(ctx, key); err == nil && len(stored) > 0 {
-				cp := *in
-				if len(in.Context) == 0 {
-					cp.Context = stored
-				} else {
-					merged := make(map[string]any, len(stored)+len(in.Context))
-					for k, v := range stored {
-						merged[k] = v
-					}
-					for k, v := range in.Context {
-						merged[k] = v
-					}
-					cp.Context = merged
-				}
-				enriched = &cp
-			}
-		}
-	}
+// InvokeBinding invokes a gRPC binding, returning the invocation handle
+// synchronously. Creation is inert: descriptor resolution and the RPC run on
+// the binding goroutine. Unary methods read one input and emit one output;
+// server-streaming methods read one input and emit per received message.
+// gRPC metadata maps onto the handle's Header/Trailer surfaces.
+func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	go e.run(ctx, args, inv)
+	return inv
+}
 
-	start := time.Now()
+// run resolves the ref to a method descriptor, reads the request from the
+// handle, and dispatches the RPC. All pre-dispatch failures (bad ref,
+// missing target, descriptor load failures) fire BEFORE any RPC is sent.
+func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+	// bctx bounds all gRPC I/O to the invocation's lifetime: caller Cancel()
+	// (or upstream ctx cancellation) tears down reflection and RPC streams.
+	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	defer stop()
 
-	svcName, methodName, err := parseRef(enriched.Ref)
+	svcName, methodName, err := parseRef(args.Ref)
 	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidRef, err.Error())), nil
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeInvalidRef,
+			Message: err.Error(),
+		})
+		return
 	}
 
-	conn, err := e.getConn(ctx, in.Source.Location)
-	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeConnectFailed, err.Error())), nil
+	if strings.TrimSpace(args.Source.Location) == "" {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: "gRPC source requires a location (server address)",
+		})
+		return
 	}
 
-	rpcCtx := applyGRPCContext(ctx, enriched.Context)
+	rpcCtx := applyGRPCContext(bctx, args.Context)
 
 	// Resolve service and method descriptors. If inline content is provided
-	// (e.g., a .proto definition), parse it directly. Otherwise use server reflection.
-	// Note: isProtoFile is NOT checked here because Source.Location is the server
-	// address for invocation. Proto file locations are only used by the Creator.
-	var refClient *grpcreflect.Client
+	// (e.g., a .proto definition), parse it directly — before dialing.
+	// Otherwise use server reflection. Note: isProtoFile is NOT checked here
+	// because Source.Location is the server address for invocation; proto
+	// file locations are only used by the Creator.
 	var svcDesc protoreflect.ServiceDescriptor
-	var methodDesc protoreflect.MethodDescriptor
-
-	if enriched.Source.Content != nil {
-		disc, parseErr := discoverFromProto(rpcCtx, enriched.Source.Location, enriched.Source.Content)
+	if args.Source.Content != nil {
+		disc, parseErr := discoverFromProto(bctx, args.Source.Location, args.Source.Content)
 		if parseErr != nil {
-			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeSourceLoadFailed, parseErr.Error())), nil
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeSourceLoadFailed,
+				Message: parseErr.Error(),
+			})
+			return
 		}
 		for _, svc := range disc.services {
 			if string(svc.FullName()) == svcName {
@@ -122,69 +127,65 @@ func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInv
 			}
 		}
 		if svcDesc == nil {
-			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound,
-				fmt.Sprintf("service %q not found in proto definition", svcName))), nil
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeRefNotFound,
+				Message: fmt.Sprintf("service %q not found in proto definition", svcName),
+			})
+			return
 		}
-		methodDesc = svcDesc.Methods().ByName(protoreflect.Name(methodName))
-	} else {
-		refClient = grpcreflect.NewClientAuto(rpcCtx, conn)
+	}
+
+	conn, err := e.getConn(bctx, args.Source.Location)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeConnectFailed,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	if svcDesc == nil {
+		refClient := grpcreflect.NewClientAuto(rpcCtx, conn)
+		defer refClient.Reset()
 		svcDesc, err = resolveService(refClient, protoreflect.FullName(svcName))
 		if err != nil {
-			refClient.Reset()
-			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound,
-				fmt.Sprintf("resolve service %q: %v", svcName, err))), nil
+			inv.FireError(refResolveError(svcName, err))
+			return
 		}
-		methodDesc = svcDesc.Methods().ByName(protoreflect.Name(methodName))
 	}
 
+	methodDesc := svcDesc.Methods().ByName(protoreflect.Name(methodName))
 	if methodDesc == nil {
-		if refClient != nil {
-			refClient.Reset()
-		}
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound,
-			fmt.Sprintf("method %q not found in service %q", methodName, svcName))), nil
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeRefNotFound,
+			Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
+		})
+		return
 	}
 
+	if methodDesc.IsStreamingClient() {
+		kind := "client-streaming"
+		if methodDesc.IsStreamingServer() {
+			kind = "bidi-streaming"
+		}
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeExecutionFailed,
+			Message: fmt.Sprintf("gRPC method %q is %s; the grpc invoker supports unary and server-streaming methods", methodDesc.FullName(), kind),
+		})
+		return
+	}
+
+	reqMsg, ok := readRequest(bctx, inv, methodDesc)
+	if !ok {
+		return
+	}
+
+	stub := grpcdynamic.NewStub(conn)
 	if methodDesc.IsStreamingServer() {
-		return subscribe(ctx, enriched, conn, refClient, methodDesc)
+		runServerStream(rpcCtx, inv, stub, methodDesc, reqMsg)
+	} else {
+		runUnary(rpcCtx, inv, stub, methodDesc, reqMsg)
 	}
-
-	if refClient != nil {
-		refClient.Reset()
-	}
-	result := doGRPCCall(ctx, enriched, conn, methodDesc)
-
-	// Auth retry: if the RPC returned auth_required and we have security methods
-	// and callbacks, resolve credentials and retry once.
-	if result.Error != nil && result.Error.Code == openbindings.ErrCodeAuthRequired &&
-		len(enriched.Security) > 0 && enriched.Callbacks != nil {
-		creds, resolveErr := openbindings.ResolveSecurity(ctx, enriched.Security, enriched.Callbacks, nil)
-		if resolveErr == nil && creds != nil {
-			if enriched == in {
-				cp := *in
-				enriched = &cp
-			}
-			merged := make(map[string]any)
-			for k, v := range enriched.Context {
-				merged[k] = v
-			}
-			for k, v := range creds {
-				merged[k] = v
-			}
-			enriched.Context = merged
-
-			if enriched.Store != nil {
-				storeKey := normalizeAddress(enriched.Source.Location)
-				if storeKey != "" {
-					_ = enriched.Store.Set(ctx, storeKey, enriched.Context)
-				}
-			}
-
-			result = doGRPCCall(ctx, enriched, conn, methodDesc)
-		}
-	}
-
-	return openbindings.SingleEventChannel(result), nil
 }
 
 // Creator handles interface creation from gRPC servers.
@@ -246,18 +247,4 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 		iface.Description = in.Description
 	}
 	return &iface, nil
-}
-
-// normalizeAddress extracts a stable key from a gRPC address.
-func normalizeAddress(addr string) string {
-	addr = strings.TrimSpace(addr)
-	if addr == "" {
-		return ""
-	}
-	if strings.Contains(addr, "://") {
-		if u, err := url.Parse(addr); err == nil {
-			return openbindings.NormalizeContextKey(u.Host)
-		}
-	}
-	return openbindings.NormalizeContextKey(addr)
 }

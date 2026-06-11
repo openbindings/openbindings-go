@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -57,50 +56,135 @@ func resolveMethod(ctx context.Context, content any, svcName, methodName string)
 	return nil, fmt.Errorf("service %q not found in proto definition", svcName)
 }
 
-// invokeConnect sends a Connect protocol request via HTTP POST.
-// The URL format is: {baseURL}/{service}/{method}
-func invokeConnect(ctx context.Context, client *http.Client, baseURL, svcName, methodName string, input any, headers map[string]string, mi *methodInfo, start time.Time) *openbindings.InvocationOutput {
-	// Build the Connect URL: POST /{service}/{method}
-	connectURL := strings.TrimRight(baseURL, "/") + "/" + svcName + "/" + methodName
+// connectURL builds the Connect request URL: {baseURL}/{service}/{method}.
+func connectURL(baseURL, svcName, methodName string) string {
+	return strings.TrimRight(baseURL, "/") + "/" + svcName + "/" + methodName
+}
 
-	// Marshal input to JSON.
-	var body []byte
-	if input != nil {
-		if mi != nil && mi.method != nil {
-			// Use protobuf-aware marshaling for field name accuracy.
-			msg := dynamicpb.NewMessage(mi.method.Input())
-			inputMap, ok := input.(map[string]any)
-			if !ok {
-				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, fmt.Sprintf("input must be a JSON object, got %T", input))
-			}
-			jsonBytes, err := json.Marshal(inputMap)
-			if err != nil {
-				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
-			}
-			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(jsonBytes, msg); err != nil {
-				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
-			}
-			// Emit proto3 JSON canonical names (camelCase) so field names match
-			// what the creator writes into OBI schemas via field.JSONName().
-			body, err = protojson.Marshal(msg)
-			if err != nil {
-				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
-			}
-		} else {
-			// No proto descriptor; marshal directly as JSON.
-			var err error
-			body, err = json.Marshal(input)
-			if err != nil {
-				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
+// marshalRequestMessage marshals the request message to JSON bytes. With a
+// method descriptor it round-trips through protojson so field names match the
+// proto3 JSON canonical names (camelCase) the creator writes into OBI
+// schemas; without one it marshals the input directly. A nil input dispatches
+// an empty message.
+func marshalRequestMessage(input any, mi *methodInfo) ([]byte, *openbindings.InvocationError) {
+	if input == nil {
+		return []byte("{}"), nil
+	}
+	if mi != nil && mi.method != nil {
+		msg := dynamicpb.NewMessage(mi.method.Input())
+		inputMap, ok := input.(map[string]any)
+		if !ok {
+			return nil, &openbindings.InvocationError{
+				Code:    openbindings.ErrCodeValidationFailed,
+				Message: fmt.Sprintf("input must be a JSON object, got %T", input),
 			}
 		}
-	} else {
-		body = []byte("{}")
+		jsonBytes, err := json.Marshal(inputMap)
+		if err != nil {
+			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		}
+		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(jsonBytes, msg); err != nil {
+			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		}
+		body, err := protojson.Marshal(msg)
+		if err != nil {
+			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		}
+		return body, nil
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+	}
+	return body, nil
+}
+
+// connectCodeToErrCode maps a Connect protocol error code to the standard
+// invocation error codes.
+func connectCodeToErrCode(code string) string {
+	switch code {
+	case "unauthenticated":
+		return openbindings.ErrCodeAuthRequired
+	case "permission_denied":
+		return openbindings.ErrCodePermissionDenied
+	case "unavailable":
+		return openbindings.ErrCodeConnectFailed
+	case "deadline_exceeded":
+		return openbindings.ErrCodeTimeout
+	default:
+		return openbindings.ErrCodeExecutionFailed
+	}
+}
+
+// applyConnectError refines an HTTP-status-derived terminal error with the
+// Connect error payload (a JSON object with `code` and `message` fields) when
+// the body parses as one.
+func applyConnectError(ierr *openbindings.InvocationError, body []byte) {
+	if len(body) == 0 {
+		return
+	}
+	var connectErr struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &connectErr) != nil {
+		return
+	}
+	if connectErr.Code != "" {
+		ierr.Code = connectCodeToErrCode(connectErr.Code)
+	}
+	if connectErr.Message != "" {
+		ierr.Message = connectErr.Message
+	}
+}
+
+// headerMetadata clones HTTP headers into invocation Metadata.
+func headerMetadata(h http.Header) openbindings.Metadata {
+	md := make(openbindings.Metadata, len(h))
+	for k, vs := range h {
+		md[k] = append([]string(nil), vs...)
+	}
+	return md
+}
+
+// unaryTrailerPrefix marks trailing metadata in a Connect unary response:
+// the protocol carries unary trailers as "Trailer-"-prefixed HTTP headers.
+const unaryTrailerPrefix = "Trailer-"
+
+// splitUnaryMetadata separates a unary response's leading headers from its
+// trailing metadata: "Trailer-"-prefixed headers (the Connect unary trailer
+// convention, prefix stripped) plus any HTTP/1.1 trailers (resp.Trailer is
+// populated once the body has been fully read).
+func splitUnaryMetadata(resp *http.Response) (header, trailer openbindings.Metadata) {
+	header = make(openbindings.Metadata, len(resp.Header))
+	trailer = openbindings.Metadata{}
+	for k, vs := range resp.Header {
+		if strings.HasPrefix(k, unaryTrailerPrefix) && len(k) > len(unaryTrailerPrefix) {
+			trailer[k[len(unaryTrailerPrefix):]] = append([]string(nil), vs...)
+			continue
+		}
+		header[k] = append([]string(nil), vs...)
+	}
+	for k, vs := range resp.Trailer {
+		trailer[k] = append(trailer[k], vs...)
+	}
+	return header, trailer
+}
+
+// runUnary sends a Connect protocol unary request (HTTP POST with JSON) and
+// drives the handle: leading headers, one output, trailing metadata, then
+// CloseOutput — or FireError with the mapped terminal error.
+func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[any, any], baseURL, svcName, methodName string, input any, headers map[string]string, mi *methodInfo) {
+	body, ierr := marshalRequestMessage(input, mi)
+	if ierr != nil {
+		inv.FireError(ierr)
+		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, connectURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, connectURL(baseURL, svcName, methodName), bytes.NewReader(body))
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeExecutionFailed, err.Error())
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
+		return
 	}
 
 	// Connect protocol headers.
@@ -112,49 +196,59 @@ func invokeConnect(ctx context.Context, client *http.Client, baseURL, svcName, m
 		req.Header.Set(k, v)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeConnectFailed, err.Error())
+		if ctx.Err() != nil {
+			return // cancelled; the handle is already terminal
+		}
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		return
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeResponseError, err.Error())
+		if ctx.Err() != nil {
+			return
+		}
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
+		return
 	}
 	if int64(len(respBody)) > maxResponseBytes {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeResponseError,
-			fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes))
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeResponseError,
+			Message: fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes),
+		})
+		return
 	}
 
-	duration := time.Since(start).Milliseconds()
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return openbindings.HTTPErrorOutput(start, resp.StatusCode, resp.Status)
+	// Leading metadata precedes the first emit; trailing metadata precedes
+	// CloseOutput/FireError.
+	header, trailer := splitUnaryMetadata(resp)
+	_ = inv.SetHeader(header)
+	if len(trailer) > 0 {
+		inv.SetTrailer(trailer)
 	}
 
 	if resp.StatusCode >= 400 {
-		errOutput := openbindings.HTTPErrorOutput(start, resp.StatusCode, resp.Status)
-		// Try to parse Connect error response.
-		var connectErr struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(respBody, &connectErr) == nil && connectErr.Message != "" {
-			errOutput.Error.Message = connectErr.Message
-		}
-		return errOutput
+		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
+		applyConnectError(ierr, respBody)
+		inv.FireError(ierr)
+		return
 	}
 
-	// Parse response JSON.
 	var output any
 	if len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, &output); err != nil {
-			return openbindings.FailedOutput(start, openbindings.ErrCodeResponseError, err.Error())
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
+			return
 		}
 	}
 
-	return &openbindings.InvocationOutput{Output: output, Status: resp.StatusCode, DurationMs: duration}
+	if err := inv.EmitOutput(output); err != nil {
+		return
+	}
+	inv.CloseOutput()
 }
 
 // buildHTTPHeaders constructs HTTP headers from binding context.

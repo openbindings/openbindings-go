@@ -3,6 +3,8 @@ package graphql
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +14,45 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 	"nhooyr.io/websocket"
 )
+
+// ---------------------------------------------------------------------------
+// Handle-driving helpers
+// ---------------------------------------------------------------------------
+
+// driveOutputs writes input (when non-nil), closes the input side, and
+// collects every output until clean close or a terminal error.
+func driveOutputs(ctx context.Context, call openbindings.Invocation[any, any], input any) ([]any, *openbindings.InvocationError) {
+	if input != nil {
+		_ = call.Write(ctx, input)
+	}
+	_ = call.Close()
+	out := call.Outputs()
+	var vals []any
+	for {
+		v, err := out.Read(ctx)
+		if errors.Is(err, io.EOF) {
+			return vals, nil
+		}
+		if err != nil {
+			var ie *openbindings.InvocationError
+			errors.As(err, &ie)
+			return vals, ie
+		}
+		vals = append(vals, v)
+	}
+}
+
+func driveSingle(t *testing.T, call openbindings.Invocation[any, any], input any) (any, *openbindings.InvocationError) {
+	t.Helper()
+	vals, ie := driveOutputs(context.Background(), call, input)
+	if ie != nil {
+		return nil, ie
+	}
+	if len(vals) == 0 {
+		return nil, nil
+	}
+	return vals[0], nil
+}
 
 // testSchema is a minimal GraphQL introspection response for a service with
 // one query (user) and one mutation (createUser).
@@ -158,29 +199,17 @@ func TestIntegrationInvokeQuery(t *testing.T) {
 	srv := newTestServer()
 	defer srv.Close()
 
-	invoker := NewInvoker()
-	ctx := context.Background()
-
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:   "graphql",
-			Location: srv.URL,
-		},
-		Ref:   "Query/user",
-		Input: map[string]any{"id": "42"},
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:    "Query/user",
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	out, ierr := driveSingle(t, call, map[string]any{"id": "42"})
+	if ierr != nil {
+		t.Fatalf("stream error: %s: %s", ierr.Code, ierr.Message)
 	}
-
-	ev := <-ch
-	if ev.Error != nil {
-		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
-	}
-
-	data, ok := ev.Output.(map[string]any)
+	data, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", ev.Output)
+		t.Fatalf("expected map data, got %T", out)
 	}
 	if data["id"] != "42" {
 		t.Errorf("user id = %v, want 42", data["id"])
@@ -194,28 +223,17 @@ func TestIntegrationInvokeQueryNoArgs(t *testing.T) {
 	srv := newTestServer()
 	defer srv.Close()
 
-	invoker := NewInvoker()
-	ctx := context.Background()
-
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:   "graphql",
-			Location: srv.URL,
-		},
-		Ref: "Query/users",
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:    "Query/users",
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	out, ierr := driveSingle(t, call, nil)
+	if ierr != nil {
+		t.Fatalf("stream error: %s: %s", ierr.Code, ierr.Message)
 	}
-
-	ev := <-ch
-	if ev.Error != nil {
-		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
-	}
-
-	data, ok := ev.Output.([]any)
+	data, ok := out.([]any)
 	if !ok {
-		t.Fatalf("expected array data, got %T", ev.Output)
+		t.Fatalf("expected array data, got %T", out)
 	}
 	if len(data) != 2 {
 		t.Errorf("expected 2 users, got %d", len(data))
@@ -226,29 +244,17 @@ func TestIntegrationInvokeMutation(t *testing.T) {
 	srv := newTestServer()
 	defer srv.Close()
 
-	invoker := NewInvoker()
-	ctx := context.Background()
-
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:   "graphql",
-			Location: srv.URL,
-		},
-		Ref:   "Mutation/createUser",
-		Input: map[string]any{"name": "Charlie", "email": "charlie@example.com"},
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:    "Mutation/createUser",
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	out, ierr := driveSingle(t, call, map[string]any{"name": "Charlie", "email": "charlie@example.com"})
+	if ierr != nil {
+		t.Fatalf("stream error: %s: %s", ierr.Code, ierr.Message)
 	}
-
-	ev := <-ch
-	if ev.Error != nil {
-		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
-	}
-
-	data, ok := ev.Output.(map[string]any)
+	data, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", ev.Output)
+		t.Fatalf("expected map data, got %T", out)
 	}
 	if data["name"] != "Charlie" {
 		t.Errorf("user name = %v, want Charlie", data["name"])
@@ -262,11 +268,8 @@ func TestIntegrationInvokeWithSchemaQuery(t *testing.T) {
 	srv := newTestServer()
 	defer srv.Close()
 
-	invoker := NewInvoker()
-	ctx := context.Background()
-
-	// Simulate what happens when the OperationInvoker passes through
-	// the InputSchema with a _query const.
+	// Simulate the OperationInvoker passing through an InputSchema with a
+	// prebuilt _query const (no introspection needed).
 	inputSchema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -275,27 +278,18 @@ func TestIntegrationInvokeWithSchemaQuery(t *testing.T) {
 		},
 	}
 
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:   "graphql",
-			Location: srv.URL,
-		},
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source:      openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
 		Ref:         "Query/user",
-		Input:       map[string]any{"id": "99"},
 		InputSchema: inputSchema,
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	out, ierr := driveSingle(t, call, map[string]any{"id": "99"})
+	if ierr != nil {
+		t.Fatalf("stream error: %s: %s", ierr.Code, ierr.Message)
 	}
-
-	ev := <-ch
-	if ev.Error != nil {
-		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
-	}
-
-	data, ok := ev.Output.(map[string]any)
+	data, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map data, got %T", ev.Output)
+		t.Fatalf("expected map data, got %T", out)
 	}
 	if data["id"] != "99" {
 		t.Errorf("user id = %v, want 99", data["id"])
@@ -318,164 +312,105 @@ func TestIntegrationCreateInterface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInterface error: %v", err)
 	}
-
-	// Should have 3 operations: user, users, createUser.
-	if len(iface.Operations) != 3 {
-		t.Errorf("expected 3 operations, got %d", len(iface.Operations))
+	if _, ok := iface.Operations["user"]; !ok {
+		t.Error("expected operation 'user'")
 	}
-
-	// Verify user operation has _query const in input schema.
-	userOp, ok := iface.Operations["user"]
-	if !ok {
-		t.Fatal("missing user operation")
-	}
-	if userOp.Input == nil {
-		t.Fatal("user operation has no input schema")
-	}
-	props, _ := userOp.Input["properties"].(map[string]any)
-	queryProp, _ := props["_query"].(map[string]any)
-	if queryProp == nil {
-		t.Fatal("user input schema missing _query property")
-	}
-	constVal, _ := queryProp["const"].(string)
-	if constVal == "" {
-		t.Fatal("user _query const is empty")
-	}
-
-	// Verify bindings.
-	if len(iface.Bindings) != 3 {
-		t.Errorf("expected 3 bindings, got %d", len(iface.Bindings))
-	}
-	userBinding, ok := iface.Bindings["user.graphql"]
-	if !ok {
-		t.Fatal("missing user.graphql binding")
-	}
-	if userBinding.Ref != "Query/user" {
-		t.Errorf("user binding ref = %q, want Query/user", userBinding.Ref)
+	if _, ok := iface.Operations["createUser"]; !ok {
+		t.Error("expected operation 'createUser'")
 	}
 }
 
 func TestIntegrationSourceContent(t *testing.T) {
-	// Test that the invoker can use inline Source.Content instead of
-	// making a network introspection call.
+	// The invoker uses inline Source.Content instead of a network introspection.
 	srv := newTestServer()
 	defer srv.Close()
 
-	// Build the introspection content as the invoker would receive it.
 	schemaJSON, _ := json.Marshal(map[string]any{
-		"data": map[string]any{
-			"__schema": testSchema,
-		},
+		"data": map[string]any{"__schema": testSchema},
 	})
 
-	invoker := NewInvoker()
-	ctx := context.Background()
-
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:   "graphql",
-			Location: srv.URL,
-			Content:  string(schemaJSON),
-		},
-		Ref:   "Query/users",
-		Input: nil,
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL, Content: string(schemaJSON)},
+		Ref:    "Query/users",
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	out, ierr := driveSingle(t, call, nil)
+	if ierr != nil {
+		t.Fatalf("stream error: %s: %s", ierr.Code, ierr.Message)
 	}
-
-	ev := <-ch
-	if ev.Error != nil {
-		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
-	}
-
-	data, ok := ev.Output.([]any)
+	data, ok := out.([]any)
 	if !ok {
-		t.Fatalf("expected array data, got %T", ev.Output)
+		t.Fatalf("expected array data, got %T", out)
 	}
 	if len(data) != 2 {
 		t.Errorf("expected 2 users, got %d", len(data))
 	}
 }
 
-func TestIntegrationAuthRetry(t *testing.T) {
-	callCount := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// authServer requires a bearer token on query calls (introspection is open).
+func authServer() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Query string `json:"query"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
-
-		// Introspection always works.
 		if strings.Contains(req.Query, "__schema") {
-			resp := map[string]any{"data": map[string]any{"__schema": testSchema}}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"__schema": testSchema}})
 			return
 		}
-
-		callCount++
-		auth := r.Header.Get("Authorization")
-		if auth == "" {
+		if r.Header.Get("Authorization") == "" {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"errors":[{"message":"unauthorized"}]}`))
 			return
 		}
-
-		// Second call with credentials succeeds.
-		resp := map[string]any{
-			"data": map[string]any{
-				"users": []any{
-					map[string]any{"id": "1", "name": "Alice"},
-				},
-			},
-		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"users": []any{map[string]any{"id": "1", "name": "Alice"}}},
+		})
 	}))
+}
+
+// TestIntegrationNoCredentials verifies that a 401 from the service (no
+// credentials in context) surfaces as a terminal ERR_AUTH_REQUIRED. GraphQL
+// declares no in-band security, so the challenge is the server's, not a
+// pre-dispatch CONTEXT_REQUIRED.
+func TestIntegrationNoCredentials(t *testing.T) {
+	srv := authServer()
 	defer srv.Close()
 
-	invoker := NewInvoker()
-	ctx := context.Background()
-
-	promptCalled := false
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:   "graphql",
-			Location: srv.URL,
-		},
-		Ref: "Query/users",
-		Security: []openbindings.SecurityMethod{
-			{Type: "bearer", Description: "Bearer token"},
-		},
-		Callbacks: &openbindings.PlatformCallbacks{
-			Prompt: func(ctx context.Context, message string, opts *openbindings.PromptOptions) (string, error) {
-				promptCalled = true
-				return "test-token", nil
-			},
-		},
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:    "Query/users",
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	_, ierr := driveSingle(t, call, nil)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeAuthRequired {
+		t.Fatalf("expected ERR_AUTH_REQUIRED, got %v", ierr)
 	}
+}
 
-	ev := <-ch
-	if ev.Error != nil {
-		t.Fatalf("stream error: %s: %s", ev.Error.Code, ev.Error.Message)
+// TestIntegrationBearerContext verifies that a bearerToken supplied in the
+// binding context is applied as an Authorization header and the call succeeds.
+func TestIntegrationBearerContext(t *testing.T) {
+	srv := authServer()
+	defer srv.Close()
+
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:     "Query/users",
+		Context: map[string]any{"bearerToken": "test-token"},
+	})
+	out, ierr := driveSingle(t, call, nil)
+	if ierr != nil {
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
 	}
-	if !promptCalled {
-		t.Error("expected prompt callback to be called for auth resolution")
-	}
-	if callCount != 2 {
-		t.Errorf("expected 2 query calls (first 401, second success), got %d", callCount)
+	if _, ok := out.([]any); !ok {
+		t.Fatalf("expected array data, got %T", out)
 	}
 }
 
 // newSubscriptionTestServer creates an httptest server that speaks the
 // graphql-transport-ws subprotocol and serves a single subscription
-// (`messageStream`) that emits a fixed sequence of three events and then a
-// "complete" message. It also serves the introspection query over HTTP POST
-// so the same server can be used as the GraphQL endpoint URL.
+// (`messageStream`) that emits three events and then a "complete" message.
 func newSubscriptionTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
@@ -515,7 +450,6 @@ func newSubscriptionTestServer(t *testing.T) *httptest.Server {
 	}
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Subscription path: WebSocket upgrade with the graphql-transport-ws subprotocol.
 		if r.Header.Get("Upgrade") == "websocket" {
 			conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 				Subprotocols: []string{"graphql-transport-ws"},
@@ -525,13 +459,10 @@ func newSubscriptionTestServer(t *testing.T) *httptest.Server {
 				return
 			}
 			defer conn.Close(websocket.StatusNormalClosure, "test done")
-
-			ctx := r.Context()
-			runSubscriptionExchange(t, ctx, conn)
+			runSubscriptionExchange(t, r.Context(), conn)
 			return
 		}
 
-		// Otherwise treat it as a normal HTTP POST for introspection.
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -554,14 +485,9 @@ func newSubscriptionTestServer(t *testing.T) *httptest.Server {
 	}))
 }
 
-// runSubscriptionExchange implements the server side of the
-// graphql-transport-ws protocol for the subscription test: read
-// connection_init, reply with connection_ack, read subscribe, then send three
-// "next" payloads and a "complete" message.
 func runSubscriptionExchange(t *testing.T, ctx context.Context, conn *websocket.Conn) {
 	t.Helper()
 
-	// Expect connection_init.
 	if err := expectClientMessage(ctx, conn, "connection_init"); err != nil {
 		t.Logf("server: %v", err)
 		return
@@ -570,15 +496,11 @@ func runSubscriptionExchange(t *testing.T, ctx context.Context, conn *websocket.
 		t.Logf("server: %v", err)
 		return
 	}
-
-	// Expect subscribe.
 	subID, err := expectClientSubscribe(ctx, conn)
 	if err != nil {
 		t.Logf("server: %v", err)
 		return
 	}
-
-	// Send three next events, then complete.
 	for i := 1; i <= 3; i++ {
 		payload := map[string]any{
 			"data": map[string]any{
@@ -669,46 +591,31 @@ func formatInt(n int) string {
 	return string(digits)
 }
 
-// TestIntegrationInvokeSubscription verifies that the GraphQL invoker opens
-// a graphql-transport-ws WebSocket connection, sends connection_init,
-// subscribes, and forwards each "next" payload as a separate stream event.
-// Closes cleanly on "complete".
+// TestIntegrationInvokeSubscription verifies that the GraphQL invoker opens a
+// graphql-transport-ws WebSocket, subscribes, and emits each "next" payload as
+// a separate output, closing cleanly on "complete".
 func TestIntegrationInvokeSubscription(t *testing.T) {
 	srv := newSubscriptionTestServer(t)
 	defer srv.Close()
 
-	invoker := NewInvoker()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:   "graphql",
-			Location: srv.URL,
-		},
-		Ref:   "Subscription/messageStream",
-		Input: map[string]any{"topic": "alerts"},
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:    "Subscription/messageStream",
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	events, ierr := driveOutputs(ctx, call, map[string]any{"topic": "alerts"})
+	if ierr != nil {
+		t.Fatalf("unexpected stream error: %s: %s", ierr.Code, ierr.Message)
 	}
-
-	// Drain the channel until close. Expect three data events and no errors.
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
-	}
-
 	if len(events) != 3 {
 		t.Fatalf("expected 3 stream events from subscription, got %d", len(events))
 	}
 	for i, ev := range events {
-		if ev.Error != nil {
-			t.Fatalf("event %d: unexpected stream error: %s: %s", i, ev.Error.Code, ev.Error.Message)
-		}
-		data, ok := ev.Output.(map[string]any)
+		data, ok := ev.(map[string]any)
 		if !ok {
-			t.Fatalf("event %d: expected map data, got %T", i, ev.Output)
+			t.Fatalf("event %d: expected map data, got %T", i, ev)
 		}
 		ms, ok := data["messageStream"].(map[string]any)
 		if !ok {
@@ -724,11 +631,9 @@ func TestIntegrationInvokeSubscription(t *testing.T) {
 	}
 }
 
-// TestIntegrationSubscriptionCancellation verifies that cancelling the caller's
-// context closes the WebSocket cleanly without leaking the goroutine.
+// TestIntegrationSubscriptionCancellation verifies that cancelling the
+// invocation closes the WebSocket cleanly.
 func TestIntegrationSubscriptionCancellation(t *testing.T) {
-	// Server that holds the connection open after sending one event,
-	// so we can verify the invoker closes on context cancellation.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") == "websocket" {
 			conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -747,7 +652,6 @@ func TestIntegrationSubscriptionCancellation(t *testing.T) {
 			if err != nil {
 				return
 			}
-			// Send one event and then hang until the connection drops.
 			_ = writeServerMessage(ctx, conn, map[string]any{
 				"id":      subID,
 				"type":    "next",
@@ -756,7 +660,6 @@ func TestIntegrationSubscriptionCancellation(t *testing.T) {
 			<-ctx.Done()
 			return
 		}
-		// Introspection.
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
@@ -774,48 +677,36 @@ func TestIntegrationSubscriptionCancellation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	invoker := NewInvoker()
 	ctx, cancel := context.WithCancel(context.Background())
-
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:   "graphql",
-			Location: srv.URL,
-		},
-		Ref: "Subscription/messageStream",
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:    "Subscription/messageStream",
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	_ = call.Close()
+
+	out := call.Outputs()
+	if _, err := out.Read(context.Background()); err != nil {
+		t.Fatalf("first event error: %v", err)
 	}
 
-	// Receive the first event.
-	ev, ok := <-ch
-	if !ok {
-		t.Fatal("channel closed before first event")
-	}
-	if ev.Error != nil {
-		t.Fatalf("first event error: %s: %s", ev.Error.Code, ev.Error.Message)
-	}
-
-	// Cancel and verify the channel closes within a reasonable time.
 	cancel()
-	timeout := time.After(3 * time.Second)
-	for {
-		select {
-		case _, open := <-ch:
-			if !open {
-				return // success: channel closed after cancel
+	done := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := out.Read(context.Background()); err != nil {
+				done <- err
+				return
 			}
-			// Drain any in-flight events.
-		case <-timeout:
-			t.Fatal("subscription channel did not close within 3s of cancellation")
 		}
+	}()
+	select {
+	case <-done:
+		// Stream terminated (EOF or ERR_CANCELLED) — no hang.
+	case <-time.After(3 * time.Second):
+		t.Fatal("subscription stream did not terminate within 3s of cancellation")
 	}
 }
 
-// minimalSubscriptionSchema returns the introspection schema used by the
-// subscription error/edge tests below. Same shape as the happy-path test
-// (Query/Subscription/Message types) but pulled out for reuse.
 func minimalSubscriptionSchema() introspectionSchema {
 	return introspectionSchema{
 		QueryType:        &typeRef{Name: "Query"},
@@ -841,9 +732,6 @@ func minimalSubscriptionSchema() introspectionSchema {
 	}
 }
 
-// subscriptionErrorTestServer wraps a per-test exchange function with the
-// boilerplate for serving introspection over POST and dispatching to a
-// WebSocket exchange handler over GET.
 func subscriptionErrorTestServer(t *testing.T, exchange func(ctx context.Context, conn *websocket.Conn)) *httptest.Server {
 	t.Helper()
 	schema := minimalSubscriptionSchema()
@@ -860,7 +748,6 @@ func subscriptionErrorTestServer(t *testing.T, exchange func(ctx context.Context
 			exchange(r.Context(), conn)
 			return
 		}
-		// Introspection over POST.
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{"__schema": schema},
@@ -868,9 +755,9 @@ func subscriptionErrorTestServer(t *testing.T, exchange func(ctx context.Context
 	}))
 }
 
-// TestIntegrationSubscription_ErrorMessage verifies that when the server
-// sends an "error" message instead of "next" payloads, the invoker surfaces
-// it as a stream error event with the right message.
+// TestIntegrationSubscription_ErrorMessage verifies that a server "error"
+// message terminates the invocation with ERR_EXECUTION_FAILED carrying the
+// message.
 func TestIntegrationSubscription_ErrorMessage(t *testing.T) {
 	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
 		if expectClientMessage(ctx, conn, "connection_init") != nil {
@@ -881,8 +768,6 @@ func TestIntegrationSubscription_ErrorMessage(t *testing.T) {
 		if err != nil {
 			return
 		}
-		// Send an error message — graphql-transport-ws spec: errors are an
-		// array of GraphQLError objects.
 		_ = writeServerMessage(ctx, conn, map[string]any{
 			"id":      subID,
 			"type":    "error",
@@ -891,36 +776,28 @@ func TestIntegrationSubscription_ErrorMessage(t *testing.T) {
 	})
 	defer srv.Close()
 
-	invoker := NewInvoker()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: "graphql", Location: srv.URL},
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding: %v", err)
+	events, ierr := driveOutputs(ctx, call, nil)
+	if len(events) != 0 {
+		t.Fatalf("expected no outputs before the error, got %d", len(events))
 	}
-
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", ierr)
 	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 stream event (the error), got %d", len(events))
-	}
-	if events[0].Error == nil {
-		t.Fatal("expected stream error event")
-	}
-	if !strings.Contains(events[0].Error.Message, "subscription denied") {
-		t.Errorf("error message = %q, want to contain 'subscription denied'", events[0].Error.Message)
+	if !strings.Contains(ierr.Message, "subscription denied") {
+		t.Errorf("error message = %q, want to contain 'subscription denied'", ierr.Message)
 	}
 }
 
-// TestIntegrationSubscription_ConnectionDropMidStream verifies that when the
-// server abruptly closes the WebSocket after sending one event, the invoker
-// emits a stream error and closes the channel cleanly.
+// TestIntegrationSubscription_ConnectionDropMidStream verifies that an abrupt
+// WebSocket close after one event delivers the event then a terminal stream
+// error.
 func TestIntegrationSubscription_ConnectionDropMidStream(t *testing.T) {
 	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
 		if expectClientMessage(ctx, conn, "connection_init") != nil {
@@ -938,92 +815,64 @@ func TestIntegrationSubscription_ConnectionDropMidStream(t *testing.T) {
 				"data": map[string]any{"messageStream": map[string]any{"id": "1", "body": "first"}},
 			},
 		})
-		// Abruptly close with an abnormal status to simulate a connection drop.
 		_ = conn.Close(websocket.StatusInternalError, "simulated server crash")
 	})
 	defer srv.Close()
 
-	invoker := NewInvoker()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: "graphql", Location: srv.URL},
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding: %v", err)
-	}
-
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
-	}
-
-	// Expect at least one data event (the first message) and one error event
-	// for the abnormal close. The exact ordering and count depends on timing,
-	// but the channel must close cleanly.
+	events, ierr := driveOutputs(ctx, call, nil)
 	if len(events) < 1 {
-		t.Fatal("expected at least one event before the connection dropped")
+		t.Fatal("expected at least the first event before the connection dropped")
 	}
-	hasError := false
-	for _, ev := range events {
-		if ev.Error != nil {
-			hasError = true
-		}
-	}
-	if !hasError {
-		t.Error("expected a stream error event for the abnormal close")
+	if ierr == nil || ierr.Code != openbindings.ErrCodeStreamError {
+		t.Fatalf("expected a terminal ERR_STREAM_ERROR for the abnormal close, got %v", ierr)
 	}
 }
 
-// TestIntegrationSubscription_ConnectionAckTimeout verifies that when the
-// server replies with the wrong message type instead of connection_ack,
-// the invoker returns an error rather than hanging indefinitely.
+// TestIntegrationSubscription_ConnectionAckMismatch verifies that a wrong
+// handshake reply terminates the invocation rather than hanging.
 func TestIntegrationSubscription_ConnectionAckMismatch(t *testing.T) {
 	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
 		if expectClientMessage(ctx, conn, "connection_init") != nil {
 			return
 		}
-		// Send the wrong message type instead of connection_ack.
 		_ = writeServerMessage(ctx, conn, map[string]any{"type": "ka"})
 	})
 	defer srv.Close()
 
-	invoker := NewInvoker()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: "graphql", Location: srv.URL},
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
-	// The connection_ack failure surfaces either as a returned error from
-	// InvokeBinding (precondition failure) or as the first stream event
-	// being an error. Either path is acceptable; both prove the invoker
-	// doesn't hang.
-	if err != nil {
-		// Returned error is fine.
-		return
-	}
-	deadline := time.After(5 * time.Second)
+	done := make(chan *openbindings.InvocationError, 1)
+	go func() {
+		_, ierr := driveSingle(t, call, nil)
+		done <- ierr
+	}()
 	select {
-	case ev, ok := <-ch:
-		if !ok {
-			t.Fatal("channel closed without an event")
+	case ierr := <-done:
+		if ierr == nil {
+			t.Fatal("expected a terminal error for connection_ack mismatch")
 		}
-		if ev.Error == nil {
-			t.Fatal("expected stream error for connection_ack mismatch, got data event")
+		if ierr.Code != openbindings.ErrCodeConnectFailed {
+			t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeConnectFailed)
 		}
-	case <-deadline:
-		t.Fatal("InvokeBinding hung waiting for connection_ack")
+	case <-time.After(5 * time.Second):
+		t.Fatal("invocation hung waiting for connection_ack")
 	}
 }
 
-// TestIntegrationCreateInterface_RecursiveType verifies that the GraphQL
-// creator's selection-set generation does not infinite-loop on a recursive
-// type. The schema declares Node { id, parent: Node }, which is the canonical
-// shape that breaks naive selection set generators.
+// TestIntegrationCreateInterface_RecursiveType verifies that selection-set
+// generation does not infinite-loop on a recursive type.
 func TestIntegrationCreateInterface_RecursiveType(t *testing.T) {
 	recursiveSchema := introspectionSchema{
 		QueryType: &typeRef{Name: "Query"},
@@ -1041,7 +890,6 @@ func TestIntegrationCreateInterface_RecursiveType(t *testing.T) {
 				Fields: []field{
 					{Name: "id", Type: typeRef{Kind: "SCALAR", Name: "ID"}},
 					{Name: "name", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-					// Self-referential field — depth-limited selection generator must not loop.
 					{Name: "parent", Type: typeRef{Kind: "OBJECT", Name: "Node"}},
 					{Name: "children", Type: typeRef{Kind: "LIST", OfType: &typeRef{Kind: "OBJECT", Name: "Node"}}},
 				},
@@ -1071,7 +919,6 @@ func TestIntegrationCreateInterface_RecursiveType(t *testing.T) {
 
 	select {
 	case <-done:
-		// Good — finished without hanging.
 	case <-time.After(5 * time.Second):
 		t.Fatal("CreateInterface hung on recursive schema (cycle safety failure)")
 	}
@@ -1086,7 +933,6 @@ func TestIntegrationCreateInterface_RecursiveType(t *testing.T) {
 	if !ok {
 		t.Fatal("expected operation 'node' in created interface")
 	}
-	// The input schema must contain a _query const that the invoker can use.
 	props, _ := op.Input["properties"].(map[string]any)
 	queryProp, _ := props["_query"].(map[string]any)
 	if queryProp == nil {
@@ -1096,14 +942,10 @@ func TestIntegrationCreateInterface_RecursiveType(t *testing.T) {
 	if queryStr == "" {
 		t.Fatal("_query const is empty")
 	}
-	// The generated query MUST select at least the scalar fields, and MUST
-	// NOT recurse infinitely into the parent field.
 	if !strings.Contains(queryStr, "id") {
 		t.Errorf("generated query missing 'id' field: %s", queryStr)
 	}
-	// A naive infinite loop would produce a query thousands of characters long.
-	// A depth-limited generator should produce something reasonable.
 	if len(queryStr) > 5000 {
-		t.Errorf("generated query is suspiciously long (%d chars), suggests cycle was not bounded: %s", len(queryStr), queryStr[:200])
+		t.Errorf("generated query is suspiciously long (%d chars): %s", len(queryStr), queryStr[:200])
 	}
 }

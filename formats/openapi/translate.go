@@ -49,16 +49,16 @@ var schemaBearingArrayKeys = map[string]bool{
 }
 
 var schemaBearingSingleKeys = map[string]bool{
-	"items":                  true,
-	"additionalProperties":   true,
-	"not":                    true,
-	"if":                     true,
-	"then":                   true,
-	"else":                   true,
-	"propertyNames":          true,
-	"contains":               true,
-	"unevaluatedItems":       true,
-	"unevaluatedProperties":  true,
+	"items":                 true,
+	"additionalProperties":  true,
+	"not":                   true,
+	"if":                    true,
+	"then":                  true,
+	"else":                  true,
+	"propertyNames":         true,
+	"contains":              true,
+	"unevaluatedItems":      true,
+	"unevaluatedProperties": true,
 }
 
 func translateNode(node any) any {

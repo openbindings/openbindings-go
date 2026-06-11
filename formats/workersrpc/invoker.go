@@ -29,15 +29,15 @@
 //     on the target Worker, not a machine-readable spec file), so
 //     there's no source artifact for the creator to derive from.
 //
-// Both `Invoker.InvokeBinding` and `Creator.CreateInterface` return
-// errors with helpful messages directing the caller to the TypeScript
-// runtime if they actually try to dispatch.
+// `Invoker.InvokeBinding` returns an already-errored invocation handle
+// and `Creator.CreateInterface` returns an error, both with helpful
+// messages directing the caller to the TypeScript runtime if they
+// actually try to dispatch.
 package workersrpc
 
 import (
 	"context"
 	"fmt"
-	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -71,18 +71,17 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 	}}
 }
 
-// InvokeBinding always yields an error event: Go cannot dispatch Workers RPC.
-// Use the `WorkersRpcInvoker` from `@openbindings/workers-rpc` from
-// inside a Cloudflare Worker instead.
-func (e *Invoker) InvokeBinding(_ context.Context, _ *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
-	return openbindings.SingleEventChannel(openbindings.FailedOutput(
-		time.Now(),
-		openbindings.ErrCodeSourceConfigError,
-		"workers-rpc bindings cannot be dispatched from Go: "+
-			"these bindings only work from inside a Cloudflare Worker. "+
-			"Use the WorkersRpcInvoker from @openbindings/workers-rpc "+
+// InvokeBinding always returns an already-errored invocation handle:
+// Go cannot dispatch Workers RPC. Use the `WorkersRpcInvoker` from
+// `@openbindings/workers-rpc` from inside a Cloudflare Worker instead.
+func (e *Invoker) InvokeBinding(_ context.Context, _ *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+		Code: openbindings.ErrCodeSourceConfigError,
+		Message: "workers-rpc bindings cannot be dispatched from Go: " +
+			"these bindings only work from inside a Cloudflare Worker. " +
+			"Use the WorkersRpcInvoker from @openbindings/workers-rpc " +
 			"in your Worker entrypoint to make actual RPC calls",
-	)), nil
+	})
 }
 
 // Creator is the Go-side stub for creating an interface from a

@@ -4,7 +4,7 @@
 // The package handles:
 //   - Discovering tools, resources, and prompts from MCP servers
 //   - Converting MCP entities to OpenBindings interfaces
-//   - Executing operations via the MCP JSON-RPC protocol
+//   - Invoking bindings via the MCP JSON-RPC protocol
 //
 // Only the Streamable HTTP transport is supported. Source locations must be
 // HTTP or HTTPS URLs pointing to an MCP-capable endpoint.
@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -95,149 +94,24 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "Model Context Protocol"}}
 }
 
-// InvokeBinding invokes an MCP binding and returns a stream of events. For
-// resource and prompt invocations the channel yields a single event. For tool
-// invocations the channel may yield zero or more `notifications/progress`
-// events as intermediate `Output` events, followed by the final tool result
-// as the last event. See `binding-format-conventions.md` for the OBI
-// invocation model around streaming patterns.
+// InvokeBinding invokes an MCP binding and returns the Invocation handle
+// synchronously; the MCP session work is scheduled on its own goroutine.
 //
-// Auth retry uses a peek-and-forward pattern: the invoker reads the first
-// event from the channel returned by `invoke`. If that event is an
-// auth-required error and security methods + platform callbacks are
-// available, credentials are resolved and the call is retried with a fresh
-// channel. Otherwise the first event is prepended back onto the original
-// stream and forwarded to the caller. This makes the auth retry compatible
-// with both unary and progress-streaming tool calls (where the first event
-// might be either an auth error or a progress notification).
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
-	enriched := in
-	if in.Store != nil {
-		key := normalizeEndpoint(in.Source.Location)
-		if key != "" {
-			if stored, err := in.Store.Get(ctx, key); err == nil && len(stored) > 0 {
-				cp := *in
-				if len(in.Context) == 0 {
-					cp.Context = stored
-				} else {
-					merged := make(map[string]any, len(stored)+len(in.Context))
-					for k, v := range stored {
-						merged[k] = v
-					}
-					for k, v := range in.Context {
-						merged[k] = v
-					}
-					cp.Context = merged
-				}
-				enriched = &cp
-			}
-		}
-	}
-
-	return e.invokeWithAuthRetry(ctx, in, enriched), nil
-}
-
-// invokeWithAuthRetry runs `invoke` against the enriched input, and if the
-// first stream event is an auth_required error, resolves credentials via the
-// platform callbacks and retries the entire call with a fresh stream channel.
+// Tool and prompt arguments arrive as the operation's single input message
+// through the handle's Write channel; resource reads take no input (the
+// binding closes the input side on entry). For tool invocations, any
+// `notifications/progress` events the server sends during the call are
+// emitted as outputs ahead of the final tool result. Pre-dispatch failures
+// (bad ref, missing endpoint, non-object input) terminate the handle before
+// any network side effect.
 //
-// The peek-and-forward pattern works equally well for unary and streaming
-// tool calls: if the first event is a progress notification (not an auth
-// error), it's prepended back onto the original stream and forwarded
-// unchanged. The auth retry is only triggered when the very first event is
-// an auth-required error, which is the only case where retrying is safe.
-//
-// The original `in` is passed alongside `enriched` so the function can
-// detect whether `enriched` is still aliased to `in` (no store-merge
-// happened) and copy on first mutation.
-func (e *Invoker) invokeWithAuthRetry(ctx context.Context, in, enriched *openbindings.BindingInvocationInput) <-chan openbindings.InvocationOutput {
-	headers := buildHTTPHeaders(enriched.Context)
-	stream := invoke(ctx, e.pool, e.clientVersion, enriched.Source.Location, enriched.Ref, enriched.Input, headers)
-
-	// Peek at the first event for auth-retry detection. If the channel
-	// closes immediately (no events), forward an empty closed channel.
-	first, ok := <-stream
-	if !ok {
-		empty := make(chan openbindings.InvocationOutput)
-		close(empty)
-		return empty
-	}
-
-	// Fast path: not an auth error, just forward the stream with the first
-	// event prepended back on.
-	if first.Error == nil || first.Error.Code != openbindings.ErrCodeAuthRequired ||
-		len(enriched.Security) == 0 || enriched.Callbacks == nil {
-		return prependEvent(first, stream)
-	}
-
-	// Auth retry path: the session that produced the auth error may be stale.
-	// Invalidate it so the retry creates a fresh session with new credentials.
-	oldKey := sessionKey(enriched.Source.Location, headers)
-	e.pool.mu.Lock()
-	if s, ok := e.pool.sessions[oldKey]; ok {
-		e.pool.mu.Unlock()
-		e.pool.invalidate(s)
-	} else {
-		e.pool.mu.Unlock()
-	}
-
-	// Resolve credentials interactively and retry once.
-	creds, resolveErr := openbindings.ResolveSecurity(ctx, enriched.Security, enriched.Callbacks, nil)
-	if resolveErr != nil || creds == nil {
-		// Resolution failed; surface the original auth error.
-		return prependEvent(first, stream)
-	}
-
-	// Credentials resolved. Build a new enriched input with the merged
-	// context and persist the credentials in the store for next time.
-	if enriched == in {
-		cp := *in
-		enriched = &cp
-	}
-	merged := make(map[string]any, len(enriched.Context)+len(creds))
-	for k, v := range enriched.Context {
-		merged[k] = v
-	}
-	for k, v := range creds {
-		merged[k] = v
-	}
-	enriched.Context = merged
-
-	if enriched.Store != nil {
-		if storeKey := normalizeEndpoint(enriched.Source.Location); storeKey != "" {
-			_ = enriched.Store.Set(ctx, storeKey, enriched.Context)
-		}
-	}
-
-	// Drain the original stream so its goroutine exits cleanly, then return
-	// a fresh stream from the retried call.
-	drainStreamAsync(stream)
-	headers = buildHTTPHeaders(enriched.Context)
-	return invoke(ctx, e.pool, e.clientVersion, enriched.Source.Location, enriched.Ref, enriched.Input, headers)
-}
-
-// prependEvent returns a new channel that yields `first` followed by every
-// event remaining on `rest`, then closes when `rest` closes.
-func prependEvent(first openbindings.InvocationOutput, rest <-chan openbindings.InvocationOutput) <-chan openbindings.InvocationOutput {
-	out := make(chan openbindings.InvocationOutput, 16)
-	go func() {
-		defer close(out)
-		out <- first
-		for ev := range rest {
-			out <- ev
-		}
-	}()
-	return out
-}
-
-// drainStreamAsync consumes any remaining events on the channel so the
-// producing goroutine isn't blocked on a full buffer. Used when an auth retry
-// abandons the original stream.
-func drainStreamAsync(ch <-chan openbindings.InvocationOutput) {
-	go func() {
-		for range ch {
-		}
-	}()
+// Credentials are applied from args.Context (bearerToken, apiKey, basic,
+// headers, cookies) as HTTP headers; an HTTP 401 from the server surfaces as
+// a terminal ERR_AUTH_REQUIRED.
+func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	go e.run(ctx, args, inv)
+	return inv
 }
 
 // Creator handles interface creation from MCP servers.
@@ -301,8 +175,8 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 	return iface, nil
 }
 
-// buildHTTPHeaders constructs HTTP headers from binding context credentials
-// and execution options for the MCP Streamable HTTP transport.
+// buildHTTPHeaders constructs HTTP headers from invocation context
+// credentials for the MCP Streamable HTTP transport.
 func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 	headers := map[string]string{}
 
@@ -331,18 +205,4 @@ func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 		return nil
 	}
 	return headers
-}
-
-// normalizeEndpoint extracts scheme + host from an MCP endpoint URL
-// and normalizes it to a stable context store key.
-func normalizeEndpoint(endpoint string) string {
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" {
-		return ""
-	}
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" {
-		return openbindings.NormalizeContextKey(endpoint)
-	}
-	return openbindings.NormalizeContextKey(u.Scheme + "://" + u.Host)
 }

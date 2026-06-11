@@ -34,48 +34,47 @@ func parseRef(ref string) (rootType string, fieldName string, err error) {
 	}
 }
 
-// buildQuery constructs a GraphQL query string with variable declarations and
-// a selection set for the given field. It returns the full query string and a
-// variables map built from the input.
-//
-// If the operation's input schema contains a _query property with a const value,
-// that query is used directly. Otherwise, a query is constructed from the
-// introspected schema with an auto-generated selection set.
-func buildQuery(schema *introspectionSchema, rootType, fieldName string, input any, inputSchema map[string]any) (string, map[string]any, error) {
-	// If the input schema provides a pre-built query, use it directly.
-	if q, ok := queryFromSchema(inputSchema); ok {
-		variables := inputToVariablesPassthrough(input)
-		return q, variables, nil
+// resolveField resolves a root-type field from the introspected schema.
+// Errors when the schema has no such root type or the field is missing.
+func resolveField(schema *introspectionSchema, rootType, fieldName string) (*field, error) {
+	typeName := schema.rootTypeName(rootType)
+	if typeName == "" {
+		return nil, fmt.Errorf("schema has no %s type", rootType)
 	}
-
-	// Fall back to introspection-based query construction.
-	return buildQueryFromIntrospection(schema, rootType, fieldName, input)
+	tm := schema.typeMap()
+	rootTypeObj, ok := tm[typeName]
+	if !ok {
+		return nil, fmt.Errorf("type %q not found in schema", typeName)
+	}
+	for i := range rootTypeObj.Fields {
+		if rootTypeObj.Fields[i].Name == fieldName {
+			return &rootTypeObj.Fields[i], nil
+		}
+	}
+	return nil, fmt.Errorf("field %q not found on %s type %q", fieldName, rootType, typeName)
 }
 
 // buildQueryFromIntrospection constructs a query by introspecting the schema
 // and auto-generating a selection set (depth-limited, cycle-safe).
+// buildQuery selects the GraphQL query for a field: a prebuilt `_query` const
+// in the operation's input schema (with passthrough variables) when present,
+// otherwise one synthesized from the introspected field descriptor. The
+// invoker's run loop inlines this choice to skip introspection on the prebuilt
+// path; this wrapper is the single-call form used where a schema is already in
+// hand.
+func buildQuery(schema *introspectionSchema, rootType, fieldName string, input any, inputSchema map[string]any) (string, map[string]any, error) {
+	if q, ok := queryFromSchema(inputSchema); ok {
+		return q, inputToVariablesPassthrough(input), nil
+	}
+	return buildQueryFromIntrospection(schema, rootType, fieldName, input)
+}
+
 func buildQueryFromIntrospection(schema *introspectionSchema, rootType, fieldName string, input any) (string, map[string]any, error) {
-	typeName := schema.rootTypeName(rootType)
-	if typeName == "" {
-		return "", nil, fmt.Errorf("schema has no %s type", rootType)
+	targetField, err := resolveField(schema, rootType, fieldName)
+	if err != nil {
+		return "", nil, err
 	}
-
 	tm := schema.typeMap()
-	rootTypeObj, ok := tm[typeName]
-	if !ok {
-		return "", nil, fmt.Errorf("type %q not found in schema", typeName)
-	}
-
-	var targetField *field
-	for i := range rootTypeObj.Fields {
-		if rootTypeObj.Fields[i].Name == fieldName {
-			targetField = &rootTypeObj.Fields[i]
-			break
-		}
-	}
-	if targetField == nil {
-		return "", nil, fmt.Errorf("field %q not found on %s type %q", fieldName, rootType, typeName)
-	}
 
 	// Build variable declarations and argument list from the field's args.
 	varDecls, argList := buildVariables(targetField.Args)
@@ -284,6 +283,22 @@ func queryFromSchema(schema map[string]any) (string, bool) {
 		return "", false
 	}
 	return constVal, true
+}
+
+// schemaDeclaresVariables reports whether the operation's input schema
+// declares variable properties beyond the _query const. When it doesn't, the
+// operation takes no input and the binding dispatches with empty variables.
+func schemaDeclaresVariables(schema map[string]any) bool {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return false
+	}
+	for k := range props {
+		if k != queryFieldName {
+			return true
+		}
+	}
+	return false
 }
 
 // inputToVariablesPassthrough converts the operation input to a GraphQL

@@ -9,11 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // Connect streaming wire format constants.
@@ -102,51 +99,32 @@ func readConnectEnvelope(r io.Reader, maxPayload int64) (flags byte, payload []b
 	return flags, payload, nil
 }
 
-// invokeConnectStreaming sends a server-streaming Connect RPC and returns a
-// channel that yields one InvocationOutput per data envelope received from the
-// server. The channel is closed when the end-stream envelope is processed,
-// when the underlying connection terminates, or when ctx is cancelled.
+// connectEndStream is the JSON payload of an end-stream envelope.
+type connectEndStream struct {
+	Error *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+	Metadata map[string][]string `json:"metadata,omitempty"`
+}
+
+// runStreaming sends a server-streaming Connect RPC and drives the handle:
+// leading headers from the HTTP response, one EmitOutput per data envelope,
+// trailing metadata from the end-stream envelope, then CloseOutput (clean
+// end) or FireError (end-stream error, stream failure).
 //
 // The Connect streaming wire format is described at:
 // https://connectrpc.com/docs/protocol#streaming-rpcs
 //
-// This function only supports server-streaming. Client-streaming and
-// bidirectional-streaming RPCs are excluded by the OBI invocation model in
-// v0.1 (one input, stream of outputs).
-func invokeConnectStreaming(ctx context.Context, client *http.Client, baseURL, svcName, methodName string, input any, headers map[string]string, mi *methodInfo, start time.Time) (<-chan openbindings.InvocationOutput, error) {
-	connectURL := strings.TrimRight(baseURL, "/") + "/" + svcName + "/" + methodName
-
-	// Marshal the single request message.
-	var msgBytes []byte
-	if input != nil {
-		if mi != nil && mi.method != nil {
-			msg := dynamicpb.NewMessage(mi.method.Input())
-			inputMap, ok := input.(map[string]any)
-			if !ok {
-				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, fmt.Sprintf("input must be a JSON object, got %T", input))), nil
-			}
-			jsonBytes, err := json.Marshal(inputMap)
-			if err != nil {
-				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
-			}
-			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(jsonBytes, msg); err != nil {
-				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
-			}
-			// Emit proto3 JSON canonical names (camelCase) so field names match
-			// what the creator writes into OBI schemas via field.JSONName().
-			msgBytes, err = protojson.Marshal(msg)
-			if err != nil {
-				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
-			}
-		} else {
-			var err error
-			msgBytes, err = json.Marshal(input)
-			if err != nil {
-				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())), nil
-			}
-		}
-	} else {
-		msgBytes = []byte("{}")
+// Only server-streaming is supported. Client-streaming and bidirectional
+// methods are out of the module's scope. ctx is already bound to the
+// invocation's lifetime (DoneContext), so caller Cancel() tears down the
+// in-flight request.
+func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHandle[any, any], baseURL, svcName, methodName string, input any, headers map[string]string, mi *methodInfo) {
+	msgBytes, ierr := marshalRequestMessage(input, mi)
+	if ierr != nil {
+		inv.FireError(ierr)
+		return
 	}
 
 	// Build the framed request body: a single envelope with flags=0 carrying
@@ -154,12 +132,14 @@ func invokeConnectStreaming(ctx context.Context, client *http.Client, baseURL, s
 	// is required from the client side for server-streaming RPCs).
 	var body bytes.Buffer
 	if err := writeConnectEnvelope(&body, 0, msgBytes); err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeExecutionFailed, err.Error())), nil
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
+		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, connectURL, &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, connectURL(baseURL, svcName, methodName), &body)
 	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeExecutionFailed, err.Error())), nil
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
+		return
 	}
 	req.Header.Set("Content-Type", streamingContentType)
 	req.Header.Set("Connect-Protocol-Version", "1")
@@ -168,108 +148,98 @@ func invokeConnectStreaming(ctx context.Context, client *http.Client, baseURL, s
 		req.Header.Set(k, v)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeConnectFailed, err.Error())), nil
+		if ctx.Err() != nil {
+			return // cancelled; the handle is already terminal
+		}
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		return
 	}
+	defer resp.Body.Close()
 
-	// Check for transport-level auth failures BEFORE streaming begins.
-	// Connect streaming returns errors in the end-stream envelope rather
-	// than via HTTP status, but a 401/403 from a proxy or middleware can
-	// still appear at the HTTP layer.
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		resp.Body.Close()
-		return openbindings.SingleEventChannel(openbindings.HTTPErrorOutput(start, resp.StatusCode, resp.Status)), nil
-	}
+	// Transport-level failures surface via HTTP status BEFORE streaming
+	// begins. Connect streaming returns errors in the end-stream envelope
+	// rather than via HTTP status, but a 401/403 from a proxy or middleware
+	// can still appear at the HTTP layer.
 	if resp.StatusCode >= 400 {
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-		resp.Body.Close()
-		out := openbindings.HTTPErrorOutput(start, resp.StatusCode, resp.Status)
-		// Try to parse a Connect error envelope from the body.
-		if len(bodyBytes) > 0 {
-			var connectErr struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			}
-			if json.Unmarshal(bodyBytes, &connectErr) == nil && connectErr.Message != "" {
-				out.Error.Message = connectErr.Message
-			}
-		}
-		return openbindings.SingleEventChannel(out), nil
+		_ = inv.SetHeader(headerMetadata(resp.Header))
+		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
+		applyConnectError(ierr, bodyBytes)
+		inv.FireError(ierr)
+		return
 	}
 
 	// Streaming responses MUST use the streaming content type.
-	gotCT := resp.Header.Get("Content-Type")
-	if !strings.HasPrefix(gotCT, "application/connect+") {
-		resp.Body.Close()
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeResponseError,
-			fmt.Sprintf("expected Content-Type starting with application/connect+, got %q", gotCT))), nil
+	if gotCT := resp.Header.Get("Content-Type"); !strings.HasPrefix(gotCT, "application/connect+") {
+		_ = inv.SetHeader(headerMetadata(resp.Header))
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeResponseError,
+			Message: fmt.Sprintf("expected Content-Type starting with application/connect+, got %q", gotCT),
+		})
+		return
 	}
 
-	ch := make(chan openbindings.InvocationOutput, 16)
-	go func() {
-		defer close(ch)
-		defer resp.Body.Close()
+	// Leading metadata precedes the first emit.
+	_ = inv.SetHeader(headerMetadata(resp.Header))
 
-		// LimitReader at the HTTP body level is too coarse for streaming
-		// (we want to bound each individual envelope, not the total stream
-		// size, since a long-running subscription may legitimately produce
-		// more than maxResponseBytes total). readConnectEnvelope already
-		// enforces a per-envelope cap.
-		reader := resp.Body
-
-		for {
-			if ctx.Err() != nil {
-				return
-			}
-			flags, payload, err := readConnectEnvelope(reader, maxResponseBytes)
-			if err == io.EOF {
-				// Stream ended without an end-stream envelope. This is a
-				// protocol violation, but we treat it as the stream simply
-				// finishing rather than an error event, to remain lenient.
-				return
-			}
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeStreamError,
-					Message: err.Error(),
-				}}
-				return
-			}
-			if flags&connectFlagEndStream != 0 {
-				// End-stream envelope: parse for error/metadata.
-				if len(payload) > 0 {
-					var endStream struct {
-						Error *struct {
-							Code    string `json:"code"`
-							Message string `json:"message"`
-						} `json:"error,omitempty"`
-					}
-					if jerr := json.Unmarshal(payload, &endStream); jerr == nil && endStream.Error != nil {
-						ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-							Code:    openbindings.ErrCodeExecutionFailed,
-							Message: endStream.Error.Message,
-						}}
-					}
-				}
-				return
-			}
-			// Data envelope: decode payload as JSON and emit.
-			var data any
-			if len(payload) > 0 {
-				if err := json.Unmarshal(payload, &data); err != nil {
-					ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-						Code:    openbindings.ErrCodeResponseError,
-						Message: fmt.Sprintf("decode envelope payload: %v", err),
-					}}
-					return
-				}
-			}
-			ch <- openbindings.InvocationOutput{Output: data, Status: resp.StatusCode}
+	// readConnectEnvelope enforces a per-envelope cap rather than bounding the
+	// total stream size: a long-running subscription may legitimately produce
+	// more than maxResponseBytes total.
+	for {
+		flags, payload, err := readConnectEnvelope(resp.Body, maxResponseBytes)
+		if err == io.EOF {
+			// Stream ended without an end-stream envelope. This is a
+			// protocol violation, but we treat it as the stream simply
+			// finishing rather than an error, to remain lenient.
+			inv.CloseOutput()
+			return
 		}
-	}()
-	return ch, nil
+		if err != nil {
+			if ctx.Err() != nil {
+				return // cancelled; the handle is already terminal
+			}
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()})
+			return
+		}
+		if flags&connectFlagEndStream != 0 {
+			// End-stream envelope: trailing metadata, then clean close or
+			// terminal error.
+			var endStream connectEndStream
+			if len(payload) > 0 {
+				_ = json.Unmarshal(payload, &endStream)
+			}
+			if len(endStream.Metadata) > 0 {
+				inv.SetTrailer(openbindings.Metadata(endStream.Metadata))
+			}
+			if endStream.Error != nil {
+				msg := endStream.Error.Message
+				if msg == "" {
+					msg = endStream.Error.Code
+				}
+				inv.FireError(&openbindings.InvocationError{
+					Code:    connectCodeToErrCode(endStream.Error.Code),
+					Message: msg,
+				})
+				return
+			}
+			inv.CloseOutput()
+			return
+		}
+		// Data envelope: decode payload as JSON and emit.
+		var data any
+		if len(payload) > 0 {
+			if err := json.Unmarshal(payload, &data); err != nil {
+				inv.FireError(&openbindings.InvocationError{
+					Code:    openbindings.ErrCodeResponseError,
+					Message: fmt.Sprintf("decode envelope payload: %v", err),
+				})
+				return
+			}
+		}
+		if err := inv.EmitOutput(data); err != nil {
+			return // terminated while emitting; stop reading
+		}
+	}
 }

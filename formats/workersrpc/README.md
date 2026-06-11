@@ -30,7 +30,7 @@ opExec := openbindings.NewOperationInvoker(
 )
 ```
 
-The stub's `Formats()` returns `[{Token: "workers-rpc@^1.0.0", Description: "Cloudflare Workers RPC bindings (Go-side stub; dispatch requires the Workers runtime)"}]`. Any attempt to call `InvokeBinding` or `CreateInterface` returns an error with a message pointing at `@openbindings/workers-rpc`.
+The stub's `Formats()` returns `[{Token: "workers-rpc@^1.0.0", Description: "Cloudflare Workers RPC bindings (Go-side stub; dispatch requires the Workers runtime)"}]`. `InvokeBinding` always returns an already-errored invocation handle (terminal `ERR_SOURCE_CONFIG_ERROR`), and `CreateInterface` returns an error, each with a message pointing at `@openbindings/workers-rpc`.
 
 ## Authoring Workers RPC OBIs
 

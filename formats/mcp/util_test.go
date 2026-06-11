@@ -65,27 +65,6 @@ func TestParseRef_EmptyName(t *testing.T) {
 	}
 }
 
-func TestNormalizeEndpoint_Full(t *testing.T) {
-	got := normalizeEndpoint("https://mcp.example.com/sse")
-	if got != "mcp.example.com" {
-		t.Errorf("got %q, want %q", got, "mcp.example.com")
-	}
-}
-
-func TestNormalizeEndpoint_WithPort(t *testing.T) {
-	got := normalizeEndpoint("http://localhost:8080/mcp")
-	if got != "localhost:8080" {
-		t.Errorf("got %q, want %q", got, "localhost:8080")
-	}
-}
-
-func TestNormalizeEndpoint_Empty(t *testing.T) {
-	got := normalizeEndpoint("")
-	if got != "" {
-		t.Errorf("got %q, want empty", got)
-	}
-}
-
 func TestBuildHTTPHeaders_BearerToken(t *testing.T) {
 	h := buildHTTPHeaders(map[string]any{"bearerToken": "tok_123"})
 	if h["Authorization"] != "Bearer tok_123" {

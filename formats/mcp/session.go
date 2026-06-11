@@ -11,6 +11,7 @@ import (
 	"time"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // defaultIdleTimeout is how long a session stays alive after its last active
@@ -159,7 +160,7 @@ func (p *sessionPool) acquire(ctx context.Context, clientVersion string, url str
 
 // createSession establishes a new MCP session with a demuxing progress handler.
 func (p *sessionPool) createSession(ctx context.Context, clientVersion string, url string, headers map[string]string, key string) (*mcpSession, error) {
-	if !startsWithHTTP(url) {
+	if !openbindings.IsHTTPURL(url) {
 		return nil, fmt.Errorf("MCP source location must be an HTTP or HTTPS URL, got %q", url)
 	}
 
@@ -170,14 +171,15 @@ func (p *sessionPool) createSession(ctx context.Context, clientVersion string, u
 		pool:             p,
 	}
 
+	// The headerTransport is always installed (even with no auth headers) so
+	// per-call response capture works for HTTP error mapping and Invocation
+	// header metadata.
 	transport := &gomcp.StreamableClientTransport{Endpoint: url}
-	if len(headers) > 0 {
-		transport.HTTPClient = &http.Client{
-			Transport: &headerTransport{
-				base:    http.DefaultTransport,
-				headers: headers,
-			},
-		}
+	transport.HTTPClient = &http.Client{
+		Transport: &headerTransport{
+			base:    http.DefaultTransport,
+			headers: headers,
+		},
 	}
 
 	opts := &gomcp.ClientOptions{

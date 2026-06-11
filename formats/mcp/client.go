@@ -134,7 +134,10 @@ func connect(ctx context.Context, clientVersion string, url string, headers map[
 	return session, nil
 }
 
-// headerTransport injects extra HTTP headers into every request.
+// headerTransport injects extra HTTP headers into every request and records
+// POST responses into the per-call *headerCapture carried by the request
+// context (per-call ctx values propagate through the go-mcp SDK's JSON-RPC
+// writes into the HTTP request).
 type headerTransport struct {
 	base    http.RoundTripper
 	headers map[string]string
@@ -147,5 +150,11 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			clone.Header.Set(k, v)
 		}
 	}
-	return t.base.RoundTrip(clone)
+	resp, err := t.base.RoundTrip(clone)
+	if err == nil && req.Method == http.MethodPost {
+		if hc, ok := req.Context().Value(headerCaptureKey{}).(*headerCapture); ok {
+			hc.record(resp)
+		}
+	}
+	return resp, err
 }

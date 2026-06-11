@@ -35,20 +35,48 @@ The `OperationInvoker` routes operations to this invoker based on the OBI's sour
 
 ```go
 invoker := asyncapi.NewInvoker()
-ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-    Source: openbindings.BindingInvocationSource{
+defer invoker.Close()
+
+call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+    Source: openbindings.InvocationSource{
         Format:   "asyncapi@3.0",
         Location: "https://api.example.com/asyncapi.json",
     },
     Ref:     "#/operations/sendMessage",
-    Input:   map[string]any{"text": "hello"},
     Context: map[string]any{"bearerToken": "tok_123"},
 })
-for ev := range ch {
-    if ev.Error != nil {
-        log.Fatal(ev.Error.Message)
+
+// Inputs flow through the handle; a send operation takes one message.
+if err := call.Write(ctx, map[string]any{"text": "hello"}); err != nil {
+    log.Fatal(err)
+}
+
+// Unary send: assert exactly one output.
+out, err := openbindings.Single(ctx, call.Outputs())
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(out)
+```
+
+For a streaming receive, read the output sequence to EOF instead:
+
+```go
+call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+    Source:  source,
+    Ref:     "#/operations/orderUpdates",
+    Context: map[string]any{"bearerToken": "tok_123"},
+})
+outs := call.Outputs()
+for {
+    ev, err := outs.Read(ctx)
+    if err == io.EOF {
+        break // clean close
     }
-    fmt.Println(ev.Output)
+    if err != nil {
+        log.Fatal(err) // terminal *openbindings.InvocationError
+    }
+    fmt.Println(ev)
 }
 ```
 
@@ -84,15 +112,20 @@ JSON Pointer to the operation within the AsyncAPI document: `#/operations/<opera
 - **`location`**: URL or file path to the AsyncAPI JSON/YAML document.
 - **`content`**: Inline AsyncAPI document.
 
+### Context negotiation
+
+The doc's security declarations (operation-level, falling back to server-level) are mapped to requirement families (`auth.bearer`, `auth.basic`, `auth.apiKey`, `auth.oauth2`). When the declared requirements aren't satisfied by the provided context, the invocation terminates with `CONTEXT_REQUIRED` **before any network I/O**; the challenge `key` is the normalized server origin. The invoker also implements `PrepareBinding` (side-effect-free preflight) using inline source content or the warm doc cache — it never fetches.
+
 ### Credential application
 
 Credentials are applied based on the AsyncAPI spec's `securitySchemes`:
 
 - `http` + `bearer` / `httpBearer`: `Authorization: Bearer <token>` from `bearerToken`
 - `http` + `basic` / `userPassword`: `Authorization: Basic <encoded>` from `basic`
-- `apiKey`: Placed in header, query, or cookie as declared, from `apiKey`
+- `apiKey` / `httpApiKey`: Placed in header, query, or cookie as declared, from `apiKey`
+- `oauth2`: `Authorization: Bearer <token>` from `bearerToken` or `accessToken`
 
-For WebSocket connections, bearer tokens are sent in the first message body (browsers cannot set headers on WebSocket upgrades). Query-param apiKeys are appended to the WebSocket URL.
+For WebSocket receive subscriptions, bearer tokens are sent in the first message body (browsers cannot set headers on WebSocket upgrades). Query-param apiKeys are appended to the WebSocket URL.
 
 Falls back to bearer, then basic, then apiKey when no security schemes are defined.
 
@@ -110,7 +143,7 @@ The invoker determines the transport from the AsyncAPI spec's server protocol an
 | Protocol | Receive (subscribe) | Send (publish) |
 |----------|-------------------|----------------|
 | HTTP/HTTPS | SSE streaming | POST (unary) |
-| WS/WSS | WebSocket streaming | WebSocket streaming |
+| WS/WSS | WebSocket subscribe (bidi-capable) | WebSocket publish (client-streaming) |
 
 ## How it works
 
@@ -119,25 +152,16 @@ The invoker determines the transport from the AsyncAPI spec's server protocol an
 1. Loads and caches the AsyncAPI document (JSON or YAML, local or remote)
 2. Parses the ref to extract the operation ID (`#/operations/sendMessage` -> `sendMessage`)
 3. Resolves the server URL and protocol from the spec
-4. Dispatches based on action and protocol:
-   - **receive + http/https**: SSE event stream
-   - **receive + ws/wss**: WebSocket stream
-   - **send + http/https**: HTTP POST (unary)
-   - **send + ws/wss**: WebSocket stream (bidirectional)
+4. Challenges `CONTEXT_REQUIRED` when declared security isn't satisfied (before any I/O)
+5. Dispatches based on action and protocol:
+   - **receive + http/https**: SSE subscribe — each server event is one output
+   - **receive + ws/wss**: WebSocket subscribe — socket frames become outputs; caller inputs are forwarded as control frames (closing input does not end the subscription)
+   - **send + http/https**: unary HTTP POST — the first input is the message body; a 202/204 acknowledgment yields zero outputs
+   - **send + ws/wss**: client-streaming publish — every input is one socket frame; closing input completes the call
 
-### Credential application
+### WebSocket connection pooling
 
-Credentials are applied based on the AsyncAPI spec's security configuration:
-
-- **`http` + `bearer`**: Sets `Authorization: Bearer <token>` from `bearerToken` context field
-- **`http` + `basic`**: Sets `Authorization: Basic <encoded>` from `basic.username`/`basic.password` context fields
-- **`apiKey`**: Places the `apiKey` context field in the header, query param, or cookie as the spec declares
-- **`httpBearer`**: Same as http+bearer
-- **`userPassword`**: Maps to basic auth
-
-When no security schemes are defined, falls back to bearer -> basic -> apiKey in that order.
-
-For WebSocket connections, the bearer token is sent in the first message body (browsers cannot set headers on WebSocket upgrades). Query-param apiKeys are appended to the WebSocket URL.
+Operations on the same channel (same server + address) share one pooled WebSocket connection — load-bearing for the AsyncAPI two-operation pattern where a `receive` subscription and `send` publishes need to land on the same socket so server-side per-connection state is shared. Connections are reference-counted and evicted after a 30s idle timeout; `Invoker.Close()` closes the pool.
 
 ### Interface creation
 
@@ -147,13 +171,6 @@ Converts an AsyncAPI 3.x document into an OBI by:
 - Extracting output schemas from receive operation payloads and reply payloads
 - Generating `#/operations/<id>` refs for each binding
 - Deriving operation keys from operation IDs
-
-## Supported protocols
-
-| Protocol | Receive (subscribe) | Send (publish) |
-|----------|-------------------|----------------|
-| HTTP/HTTPS | SSE streaming | POST (unary) |
-| WS/WSS | WebSocket streaming | WebSocket streaming |
 
 ## License
 

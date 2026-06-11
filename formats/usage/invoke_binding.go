@@ -4,99 +4,146 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/shlex"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-type specLoader func(ctx context.Context, location string, content any) (*Spec, error)
+// run drives the invocation handle: it reads the single flag/arg object the
+// caller writes (or runs the bare command for no-input operations), resolves
+// the binary and argv, executes the CLI, and emits the parsed output.
+//
+// Pre-dispatch failures (unloadable spec, unknown ref, malformed input)
+// terminate the handle before the process is spawned. A non-zero exit is a
+// terminal ERR_EXECUTION_FAILED carrying the exit code and captured output in
+// Details; a missing binary is ERR_SOURCE_CONFIG_ERROR.
+func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+	// Bound the process to the invocation's lifetime: caller Cancel(), an
+	// abandoned output stream, or upstream ctx cancellation kills it.
+	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	defer stop()
 
-func invokeBindingCached(ctx context.Context, input *openbindings.BindingInvocationInput, loader specLoader) *openbindings.InvocationOutput {
-	start := time.Now()
-
-	var binName string
-	var args []string
-
-	binary := metadataBinary(input.Context)
-
-	if binary != "" {
-		binName = binary
-		var err error
-		args, err = buildDirectArgsFromRef(input.Ref, input.Input)
-		if err != nil {
-			return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
-		}
+	// No-input convention: an operation-layer call for an operation that
+	// declares no input (InputSchema == nil) closes input on entry and runs
+	// the bare command. Otherwise read the single flag/arg object; a bare
+	// close (io.EOF) also runs bare (CLI flags are optional).
+	var input any
+	if args.Binding != nil && args.InputSchema == nil {
+		_ = inv.CloseInput()
 	} else {
-		spec, err := loader(ctx, input.Source.Location, input.Source.Content)
-		if err != nil {
-			return openbindings.FailedOutput(start, openbindings.ErrCodeSourceLoadFailed, err.Error())
+		v, rerr := inv.ReadInput(bctx)
+		switch {
+		case rerr == io.EOF:
+			input = nil
+		case rerr != nil:
+			inv.FireError(openbindings.AsInvocationError(rerr))
+			return
+		default:
+			input = v
 		}
-
-		meta := spec.Meta()
-		binName = meta.Bin
-		if binName == "" {
-			binName = meta.Name
-		}
-		if binName == "" {
-			return openbindings.FailedOutput(start, openbindings.ErrCodeSourceConfigError, "usage spec does not define a binary name (bin or name)")
-		}
-
-		ref := strings.TrimSpace(input.Ref)
-		if ref == "" {
-			// Root invocation: no subcommand, use top-level flags and args.
-			rootCmd := rootCommand(spec)
-			if rootCmd == nil {
-				rootCmd = &Command{Flags: spec.Flags(), Args: spec.Args()}
-			}
-			args, err = buildCLIArgs(nil, rootCmd, nil, input.Input)
-		} else {
-			found, err2 := findCommand(spec, ref)
-			if err2 != nil {
-				return openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound, err2.Error())
-			}
-			args, err = buildCLIArgs(found.path, found.cmd, found.inheritedFlags, input.Input)
-		}
-		if err != nil {
-			return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error())
-		}
+		_ = inv.CloseInput()
 	}
 
-	output, status, err := runCLI(ctx, binName, args, input.Context)
-	duration := time.Since(start).Milliseconds()
-
-	if ctx.Err() != nil {
-		return &openbindings.InvocationOutput{
-			DurationMs: duration,
-			Error: &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeCancelled,
-				Message: "operation cancelled",
-			},
-		}
+	binName, cmdArgs, ierr := e.resolveCommand(bctx, args, input)
+	if ierr != nil {
+		inv.FireError(ierr)
+		return
 	}
 
+	output, exitCode, runErr := runCLI(bctx, binName, cmdArgs, args.Context)
+	if bctx.Err() != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeCancelled, Message: "operation cancelled"})
+		return
+	}
+	if runErr != nil {
+		// runCLI returns a non-nil error only for spawn failures (not for a
+		// clean non-zero exit). A missing binary is a configuration error.
+		code := openbindings.ErrCodeExecutionFailed
+		if errors.Is(runErr, exec.ErrNotFound) {
+			code = openbindings.ErrCodeSourceConfigError
+		}
+		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error()})
+		return
+	}
+	if exitCode != 0 {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeExecutionFailed,
+			Message: fmt.Sprintf("command exited with status %d", exitCode),
+			Details: map[string]any{"exitCode": exitCode, "output": output},
+		})
+		return
+	}
+
+	// Surface the success exit code as trailing metadata (parity with the
+	// old Status field) without polluting the bare output value.
+	inv.SetTrailer(openbindings.Metadata{"x-exit-code": {strconv.Itoa(exitCode)}})
+	if err := inv.EmitOutput(output); err != nil {
+		return
+	}
+	inv.CloseOutput()
+}
+
+// resolveCommand determines the binary and argv for an invocation. A
+// "binary" metadata hint dispatches the ref directly; otherwise the usage
+// spec is loaded and the ref resolved to a command. Returns a terminal
+// *InvocationError (never a side effect) on any resolution failure.
+func (e *Invoker) resolveCommand(ctx context.Context, args *openbindings.BindingInvocationArgs, input any) (string, []string, *openbindings.InvocationError) {
+	if binary := metadataBinary(args.Context); binary != "" {
+		cmdArgs, err := buildDirectArgsFromRef(args.Ref, input)
+		if err != nil {
+			return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		}
+		return binary, cmdArgs, nil
+	}
+
+	spec, err := e.cachedLoadSpec(ctx, args.Source.Location, args.Source.Content)
 	if err != nil {
-		return &openbindings.InvocationOutput{
-			Output:     output,
-			Status:     status,
-			DurationMs: duration,
-			Error: &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeExecutionFailed,
-				Message: err.Error(),
-			},
+		return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: err.Error()}
+	}
+
+	meta := spec.Meta()
+	binName := meta.Bin
+	if binName == "" {
+		binName = meta.Name
+	}
+	if binName == "" {
+		return "", nil, &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: "usage spec does not define a binary name (bin or name)",
 		}
 	}
 
-	return &openbindings.InvocationOutput{
-		Output:     output,
-		Status:     status,
-		DurationMs: duration,
+	ref := strings.TrimSpace(args.Ref)
+	if ref == "" {
+		// Root invocation: no subcommand, use top-level flags and args.
+		rootCmd := rootCommand(spec)
+		if rootCmd == nil {
+			rootCmd = &Command{Flags: spec.Flags(), Args: spec.Args()}
+		}
+		cmdArgs, err := buildCLIArgs(nil, rootCmd, nil, input)
+		if err != nil {
+			return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		}
+		return binName, cmdArgs, nil
 	}
+
+	found, err := findCommand(spec, ref)
+	if err != nil {
+		return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: err.Error()}
+	}
+	cmdArgs, err := buildCLIArgs(found.path, found.cmd, found.inheritedFlags, input)
+	if err != nil {
+		return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+	}
+	return binName, cmdArgs, nil
 }
 
 // metadataBinary extracts the "binary" hint from context metadata.

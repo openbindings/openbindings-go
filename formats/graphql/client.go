@@ -24,8 +24,8 @@ type introspectionSchema struct {
 }
 
 type typeRef struct {
-	Name string  `json:"name"`
-	Kind string  `json:"kind"`
+	Name   string   `json:"name"`
+	Kind   string   `json:"kind"`
 	OfType *typeRef `json:"ofType"`
 }
 
@@ -110,7 +110,7 @@ func discover(ctx context.Context, endpointURL string, headers map[string]string
 
 // introspect sends the standard introspection query and parses the result.
 func introspect(ctx context.Context, endpointURL string, headers map[string]string) (*introspectionSchema, error) {
-	data, errors, err := doGraphQLHTTP(ctx, endpointURL, introspectionQuery, nil, headers)
+	data, _, errors, err := doGraphQLHTTP(ctx, endpointURL, introspectionQuery, nil, headers)
 	if err != nil {
 		return nil, fmt.Errorf("introspection: %w", err)
 	}
@@ -139,19 +139,19 @@ func introspect(ctx context.Context, endpointURL string, headers map[string]stri
 
 // doGraphQLHTTP sends a GraphQL query over HTTP POST and returns the parsed
 // data and errors from the response.
-func doGraphQLHTTP(ctx context.Context, endpointURL, query string, variables map[string]any, headers map[string]string) (map[string]any, []graphqlError, error) {
+func doGraphQLHTTP(ctx context.Context, endpointURL, query string, variables map[string]any, headers map[string]string) (map[string]any, http.Header, []graphqlError, error) {
 	body := map[string]any{"query": query}
 	if variables != nil {
 		body["variables"] = variables
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal request: %w", err)
+		return nil, nil, nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(raw))
 	if err != nil {
-		return nil, nil, fmt.Errorf("create request: %w", err)
+		return nil, nil, nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -163,21 +163,21 @@ func doGraphQLHTTP(ctx context.Context, endpointURL, query string, variables map
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("http request: %w", err)
+		return nil, nil, nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return nil, nil, fmt.Errorf("read response: %w", err)
+		return nil, resp.Header, nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, nil, &httpError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		return nil, resp.Header, nil, &httpError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, resp.Header, nil, &httpError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	var result struct {
@@ -185,9 +185,9 @@ func doGraphQLHTTP(ctx context.Context, endpointURL, query string, variables map
 		Errors []graphqlError `json:"errors"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, nil, fmt.Errorf("parse response: %w", err)
+		return nil, resp.Header, nil, fmt.Errorf("parse response: %w", err)
 	}
-	return result.Data, result.Errors, nil
+	return result.Data, resp.Header, result.Errors, nil
 }
 
 type httpError struct {
@@ -199,9 +199,12 @@ func (e *httpError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Body)
 }
 
-// subscribeGraphQL opens a WebSocket connection using the graphql-ws protocol
-// and subscribes to a GraphQL subscription, streaming events to the returned channel.
-func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables map[string]any, headers map[string]string) (<-chan openbindings.InvocationOutput, error) {
+// streamSubscription opens a WebSocket connection using the graphql-ws
+// protocol, subscribes, and drives the invocation handle: each `next` payload
+// is emitted as one output, a `complete` closes the output side, and an
+// `error`/transport failure fires a terminal error. The dial/handshake run
+// under ctx so a cancelled invocation tears the connection down.
+func streamSubscription(ctx context.Context, endpointURL, query string, variables map[string]any, headers map[string]string, inv openbindings.BindingHandle[any, any]) {
 	wsURL := httpToWS(endpointURL)
 
 	wsHeaders := http.Header{}
@@ -214,22 +217,20 @@ func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables 
 		HTTPHeader:   wsHeaders,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("websocket dial: %w", err)
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("websocket dial: %v", err)})
+		return
 	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	// connection_init
 	if err := writeJSON(ctx, conn, map[string]any{"type": "connection_init"}); err != nil {
-		conn.Close(websocket.StatusNormalClosure, "")
-		return nil, fmt.Errorf("connection_init: %w", err)
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("connection_init: %v", err)})
+		return
 	}
-
-	// Wait for connection_ack
 	if err := expectMessage(ctx, conn, "connection_ack"); err != nil {
-		conn.Close(websocket.StatusNormalClosure, "")
-		return nil, fmt.Errorf("connection_ack: %w", err)
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("connection_ack: %v", err)})
+		return
 	}
 
-	// Send subscribe
 	payload := map[string]any{"query": query}
 	if variables != nil {
 		payload["variables"] = variables
@@ -239,85 +240,70 @@ func subscribeGraphQL(ctx context.Context, endpointURL, query string, variables 
 		"type":    "subscribe",
 		"payload": payload,
 	}); err != nil {
-		conn.Close(websocket.StatusNormalClosure, "")
-		return nil, fmt.Errorf("subscribe: %w", err)
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("subscribe: %v", err)})
+		return
 	}
 
-	ch := make(chan openbindings.InvocationOutput, 16)
-	go func() {
-		defer close(ch)
-		defer conn.Close(websocket.StatusNormalClosure, "")
-
-		for {
-			_, raw, err := conn.Read(ctx)
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeStreamError,
-					Message: err.Error(),
-				}}
-				return
+	for {
+		_, raw, err := conn.Read(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return // cancelled; the handle is already terminal
 			}
-
-			var msg struct {
-				Type    string         `json:"type"`
-				ID      string         `json:"id"`
-				Payload json.RawMessage `json:"payload"`
-			}
-			if err := json.Unmarshal(raw, &msg); err != nil {
-				ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeResponseError,
-					Message: fmt.Sprintf("parse ws message: %v", err),
-				}}
-				return
-			}
-
-			switch msg.Type {
-			case "next":
-				var payload struct {
-					Data   any            `json:"data"`
-					Errors []graphqlError `json:"errors"`
-				}
-				if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-					ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-						Code:    openbindings.ErrCodeResponseError,
-						Message: fmt.Sprintf("parse next payload: %v", err),
-					}}
-					return
-				}
-				if len(payload.Errors) > 0 {
-					ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-						Code:    openbindings.ErrCodeExecutionFailed,
-						Message: payload.Errors[0].Message,
-					}}
-					return
-				}
-				ch <- openbindings.InvocationOutput{Output: payload.Data}
-
-			case "error":
-				var errors []graphqlError
-				if err := json.Unmarshal(msg.Payload, &errors); err != nil {
-					ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-						Code:    openbindings.ErrCodeExecutionFailed,
-						Message: string(msg.Payload),
-					}}
-				} else if len(errors) > 0 {
-					ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-						Code:    openbindings.ErrCodeExecutionFailed,
-						Message: errors[0].Message,
-					}}
-				}
-				return
-
-			case "complete":
-				return
-			}
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()})
+			return
 		}
-	}()
 
-	return ch, nil
+		var msg struct {
+			Type    string          `json:"type"`
+			ID      string          `json:"id"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: fmt.Sprintf("parse ws message: %v", err)})
+			return
+		}
+
+		switch msg.Type {
+		case "next":
+			var payload struct {
+				Data   any            `json:"data"`
+				Errors []graphqlError `json:"errors"`
+			}
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: fmt.Sprintf("parse next payload: %v", err)})
+				return
+			}
+			if len(payload.Errors) > 0 {
+				inv.FireError(&openbindings.InvocationError{
+					Code:    openbindings.ErrCodeExecutionFailed,
+					Message: payload.Errors[0].Message,
+					Details: map[string]any{"errors": payload.Errors},
+				})
+				return
+			}
+			if err := inv.EmitOutput(payload.Data); err != nil {
+				return // invocation terminated; stop reading
+			}
+
+		case "error":
+			var errs []graphqlError
+			if err := json.Unmarshal(msg.Payload, &errs); err != nil || len(errs) == 0 {
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: string(msg.Payload)})
+			} else {
+				inv.FireError(&openbindings.InvocationError{
+					Code:    openbindings.ErrCodeExecutionFailed,
+					Message: errs[0].Message,
+					Details: map[string]any{"errors": errs},
+				})
+			}
+			return
+
+		case "complete":
+			inv.CloseOutput()
+			return
+		}
+	}
 }
 
 func writeJSON(ctx context.Context, conn *websocket.Conn, v any) error {

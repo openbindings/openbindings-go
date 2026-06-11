@@ -3,6 +3,7 @@ package openapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,48 @@ import (
 )
 
 const secret = "test-token-123"
+
+// ---------------------------------------------------------------------------
+// Handle-driving helpers
+// ---------------------------------------------------------------------------
+
+// driveOutputs writes input (when non-nil), closes the input side, and
+// collects every output until clean close or a terminal error. The terminal
+// *InvocationError (or nil) is returned alongside the outputs received before
+// it.
+func driveOutputs(ctx context.Context, call openbindings.Invocation[any, any], input any) ([]any, *openbindings.InvocationError) {
+	if input != nil {
+		_ = call.Write(ctx, input)
+	}
+	_ = call.Close()
+	out := call.Outputs()
+	var vals []any
+	for {
+		v, err := out.Read(ctx)
+		if errors.Is(err, io.EOF) {
+			return vals, nil
+		}
+		if err != nil {
+			var ie *openbindings.InvocationError
+			errors.As(err, &ie)
+			return vals, ie
+		}
+		vals = append(vals, v)
+	}
+}
+
+// driveSingle drives a unary invocation to its single output or terminal error.
+func driveSingle(t *testing.T, call openbindings.Invocation[any, any], input any) (any, *openbindings.InvocationError) {
+	t.Helper()
+	vals, ie := driveOutputs(context.Background(), call, input)
+	if ie != nil {
+		return nil, ie
+	}
+	if len(vals) == 0 {
+		return nil, nil
+	}
+	return vals[0], nil
+}
 
 // ---------------------------------------------------------------------------
 // Multipart/form-data integration test
@@ -100,30 +143,20 @@ func TestIntegration_MultipartFormData(t *testing.T) {
 
 	binv := NewInvoker()
 	ctx := context.Background()
-
 	specBytes, _ := json.Marshal(spec)
 
-	ch, _ := binv.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Ref: "#/paths/~1upload/post",
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: string(specBytes),
-		},
-		Input: map[string]any{
-			"file":        []byte("binary-content-here"),
-			"description": "my upload",
-		},
+	call := binv.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Ref:    "#/paths/~1upload/post",
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: string(specBytes)},
 	})
-
-	ev := drainStream(ch)
-	if ev == nil {
-		t.Fatal("expected event, got none")
+	_, ierr := driveSingle(t, call, map[string]any{
+		"file":        []byte("binary-content-here"),
+		"description": "my upload",
+	})
+	if ierr != nil {
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
 	}
-	if ev.Error != nil {
-		t.Fatalf("unexpected error: %s: %s", ev.Error.Code, ev.Error.Message)
-	}
 
-	// Verify the server received multipart data
 	if !strings.Contains(receivedContentType, "multipart/form-data") {
 		t.Errorf("server received Content-Type = %q, want multipart/form-data", receivedContentType)
 	}
@@ -254,15 +287,6 @@ func testHandler(baseURL string) http.HandlerFunc {
 	}
 }
 
-func drainStream(ch <-chan openbindings.InvocationOutput) *openbindings.InvocationOutput {
-	var last *openbindings.InvocationOutput
-	for ev := range ch {
-		ev := ev
-		last = &ev
-	}
-	return last
-}
-
 func setupServer() (*httptest.Server, string) {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -288,33 +312,30 @@ func synthesizeOBI(t *testing.T, specURL string) *openbindings.Interface {
 	return iface
 }
 
-func TestIntegration_NoCredentials401(t *testing.T) {
+// TestIntegration_NoCredentialsChallenge verifies that an operation declaring
+// a security requirement, invoked with no resolvable credentials, terminates
+// with CONTEXT_REQUIRED — raised before any network dispatch — rather than a
+// server-side 401.
+func TestIntegration_NoCredentialsChallenge(t *testing.T) {
 	srv, specURL := setupServer()
 	defer srv.Close()
 
 	store := openbindings.NewMemoryStore()
 	binv := NewInvoker()
-	invoker := openbindings.NewOperationInvoker(binv).WithRuntime(store, nil)
+	invoker := openbindings.NewOperationInvoker(binv).WithRuntime(openbindings.StoreContextResolver(store))
 
 	iface := synthesizeOBI(t, specURL)
 
-	ctx := context.Background()
-	ch, err := invoker.Invoke(ctx, &openbindings.OperationInvocationInput{
+	call := invoker.Invoke(context.Background(), &openbindings.OperationInvocationArgs{
 		Interface: iface,
 		Operation: "listItems",
 	})
-	if err != nil {
-		t.Fatalf("Execute failed: %v", err)
+	_, ierr := driveSingle(t, call, nil)
+	if ierr == nil {
+		t.Fatal("expected a terminal error, got success")
 	}
-	ev := drainStream(ch)
-	if ev == nil {
-		t.Fatal("expected at least one event, got none")
-	}
-	if ev.Error == nil {
-		t.Fatal("expected error event, got data")
-	}
-	if ev.Error.Code != openbindings.ErrCodeAuthRequired {
-		t.Errorf("error code = %q, want %q", ev.Error.Code, openbindings.ErrCodeAuthRequired)
+	if ierr.Code != openbindings.ErrCodeContextRequired {
+		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeContextRequired)
 	}
 }
 
@@ -325,37 +346,23 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 	store := openbindings.NewMemoryStore()
 	ctx := context.Background()
 
-	// Pre-store credentials under the normalized server key
+	// Pre-store credentials under the normalized server key.
 	contextKey := openbindings.NormalizeContextKey(srv.URL)
 	if err := store.Set(ctx, contextKey, map[string]any{"bearerToken": secret}); err != nil {
 		t.Fatalf("store.Set failed: %v", err)
 	}
 
 	binv := NewInvoker()
-	invoker := openbindings.NewOperationInvoker(binv).WithRuntime(store, nil)
+	invoker := openbindings.NewOperationInvoker(binv).WithRuntime(openbindings.StoreContextResolver(store))
 	iface := synthesizeOBI(t, specURL)
 
-	// First call: listItems should succeed
-	ch, err := invoker.Invoke(ctx, &openbindings.OperationInvocationInput{
-		Interface: iface,
-		Operation: "listItems",
-	})
-	if err != nil {
-		t.Fatalf("Execute listItems failed: %v", err)
+	// First call: listItems should succeed via resolve-and-retry.
+	call := invoker.Invoke(ctx, &openbindings.OperationInvocationArgs{Interface: iface, Operation: "listItems"})
+	out, ierr := driveSingle(t, call, nil)
+	if ierr != nil {
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
 	}
-	ev := drainStream(ch)
-	if ev == nil {
-		t.Fatal("expected event, got none")
-	}
-	if ev.Error != nil {
-		t.Fatalf("unexpected error: %s: %s", ev.Error.Code, ev.Error.Message)
-	}
-
-	// Verify the data matches expected items
-	data, err := json.Marshal(ev.Output)
-	if err != nil {
-		t.Fatalf("failed to marshal response data: %v", err)
-	}
+	data, _ := json.Marshal(out)
 	var got []map[string]any
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("failed to unmarshal response as array: %v", err)
@@ -364,40 +371,21 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 		t.Errorf("got %d items, want 2", len(got))
 	}
 
-	// Second call: same operation reuses credentials
-	ch2, err := invoker.Invoke(ctx, &openbindings.OperationInvocationInput{
-		Interface: iface,
-		Operation: "listItems",
-	})
-	if err != nil {
-		t.Fatalf("Execute listItems (2nd) failed: %v", err)
-	}
-	ev2 := drainStream(ch2)
-	if ev2 == nil || ev2.Error != nil {
-		t.Fatal("second listItems call should succeed")
+	// Second call reuses the credential (now via preflight against the warm doc cache).
+	call2 := invoker.Invoke(ctx, &openbindings.OperationInvocationArgs{Interface: iface, Operation: "listItems"})
+	if _, ierr := driveSingle(t, call2, nil); ierr != nil {
+		t.Fatalf("second listItems call should succeed: %v", ierr)
 	}
 
-	// Different operation: getItem with path parameter
-	ch3, err := invoker.Invoke(ctx, &openbindings.OperationInvocationInput{
-		Interface: iface,
-		Operation: "getItem",
-		Input:     map[string]any{"id": 1},
+	// Different operation: getItem with a path parameter.
+	call3 := invoker.Invoke(ctx, &openbindings.OperationInvocationArgs{
+		Interface: iface, Operation: "getItem", Context: nil,
 	})
-	if err != nil {
-		t.Fatalf("Execute getItem failed: %v", err)
+	item3, ierr := driveSingle(t, call3, map[string]any{"id": 1})
+	if ierr != nil {
+		t.Fatalf("getItem unexpected error: %s: %s", ierr.Code, ierr.Message)
 	}
-	ev3 := drainStream(ch3)
-	if ev3 == nil {
-		t.Fatal("expected event for getItem, got none")
-	}
-	if ev3.Error != nil {
-		t.Fatalf("getItem unexpected error: %s: %s", ev3.Error.Code, ev3.Error.Message)
-	}
-
-	itemData, err := json.Marshal(ev3.Output)
-	if err != nil {
-		t.Fatalf("failed to marshal getItem response: %v", err)
-	}
+	itemData, _ := json.Marshal(item3)
 	var item map[string]any
 	if err := json.Unmarshal(itemData, &item); err != nil {
 		t.Fatalf("failed to unmarshal getItem response: %v", err)
@@ -415,7 +403,6 @@ func TestIntegration_IsolatedStoresDontShareCredentials(t *testing.T) {
 	store1 := openbindings.NewMemoryStore()
 	store2 := openbindings.NewMemoryStore()
 
-	// Only store1 has credentials
 	contextKey := openbindings.NormalizeContextKey(srv.URL)
 	if err := store1.Set(ctx, contextKey, map[string]any{"bearerToken": secret}); err != nil {
 		t.Fatalf("store1.Set failed: %v", err)
@@ -423,42 +410,20 @@ func TestIntegration_IsolatedStoresDontShareCredentials(t *testing.T) {
 
 	iface := synthesizeOBI(t, specURL)
 
-	exec1 := NewInvoker()
-	opExec1 := openbindings.NewOperationInvoker(exec1).WithRuntime(store1, nil)
+	opExec1 := openbindings.NewOperationInvoker(NewInvoker()).WithRuntime(openbindings.StoreContextResolver(store1))
+	opExec2 := openbindings.NewOperationInvoker(NewInvoker()).WithRuntime(openbindings.StoreContextResolver(store2))
 
-	exec2 := NewInvoker()
-	opExec2 := openbindings.NewOperationInvoker(exec2).WithRuntime(store2, nil)
-
-	// Invoker 1 should succeed (has credentials)
-	ch1, err := opExec1.Invoke(ctx, &openbindings.OperationInvocationInput{
-		Interface: iface,
-		Operation: "listItems",
-	})
-	if err != nil {
-		t.Fatalf("opExec1 Execute failed: %v", err)
-	}
-	ev1 := drainStream(ch1)
-	if ev1 == nil || ev1.Error != nil {
-		t.Fatal("opExec1 should succeed with stored credentials")
+	// Invoker 1 succeeds (has credentials).
+	call1 := opExec1.Invoke(ctx, &openbindings.OperationInvocationArgs{Interface: iface, Operation: "listItems"})
+	if _, ierr := driveSingle(t, call1, nil); ierr != nil {
+		t.Fatalf("opExec1 should succeed with stored credentials: %v", ierr)
 	}
 
-	// Invoker 2 should get 401 (no credentials)
-	ch2, err := opExec2.Invoke(ctx, &openbindings.OperationInvocationInput{
-		Interface: iface,
-		Operation: "listItems",
-	})
-	if err != nil {
-		t.Fatalf("client2 Execute failed: %v", err)
-	}
-	ev2 := drainStream(ch2)
-	if ev2 == nil {
-		t.Fatal("expected event from client2, got none")
-	}
-	if ev2.Error == nil {
-		t.Fatal("client2 should fail without credentials")
-	}
-	if ev2.Error.Code != openbindings.ErrCodeAuthRequired {
-		t.Errorf("client2 error code = %q, want %q", ev2.Error.Code, openbindings.ErrCodeAuthRequired)
+	// Invoker 2 gets CONTEXT_REQUIRED (no credentials, declined by the empty store).
+	call2 := opExec2.Invoke(ctx, &openbindings.OperationInvocationArgs{Interface: iface, Operation: "listItems"})
+	_, ierr := driveSingle(t, call2, nil)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeContextRequired {
+		t.Fatalf("client2 should fail with CONTEXT_REQUIRED, got %v", ierr)
 	}
 }
 
@@ -466,8 +431,6 @@ func TestIntegration_IsolatedStoresDontShareCredentials(t *testing.T) {
 // Server-Sent Events (SSE) integration tests
 // ---------------------------------------------------------------------------
 
-// sseSpec returns an OpenAPI doc that declares a single endpoint returning
-// `text/event-stream`. The path/method are constants the SSE tests share.
 func sseSpec(serverURL string) string {
 	spec := map[string]any{
 		"openapi": "3.0.3",
@@ -501,17 +464,21 @@ func sseSpec(serverURL string) string {
 	return string(bytes)
 }
 
+func sseCall(srv *httptest.Server) openbindings.Invocation[any, any] {
+	return NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Ref:    "#/paths/~1events/get",
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: sseSpec(srv.URL)},
+	})
+}
+
 func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The invoker must advertise SSE in its Accept header.
 		if accept := r.Header.Get("Accept"); !strings.Contains(accept, "text/event-stream") {
 			t.Errorf("Accept header = %q, expected to contain text/event-stream", accept)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-
-		// Three JSON events plus one with extra metadata fields.
 		_, _ = io.WriteString(w, "data: {\"id\":\"1\",\"msg\":\"first\"}\n\n")
 		if flusher != nil {
 			flusher.Flush()
@@ -531,105 +498,56 @@ func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	binv := NewInvoker()
-	ctx := context.Background()
-
-	ch, err := binv.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Ref: "#/paths/~1events/get",
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: sseSpec(srv.URL),
-		},
-	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	events, ierr := driveOutputs(context.Background(), sseCall(srv), nil)
+	if ierr != nil {
+		t.Fatalf("unexpected stream error: %v", ierr)
 	}
-
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
-	}
-
 	if len(events) != 3 {
 		t.Fatalf("expected 3 SSE events, got %d", len(events))
 	}
 
-	// Event 1: simple data-only payload — emitted as the parsed JSON object directly.
-	first, ok := events[0].Output.(map[string]any)
+	first, ok := events[0].(map[string]any)
+	if !ok || first["id"] != "1" || first["msg"] != "first" {
+		t.Errorf("event 0 = %+v, want id=1 msg=first", events[0])
+	}
+	second, ok := events[1].(map[string]any)
+	if !ok || second["id"] != "2" || second["msg"] != "second" {
+		t.Errorf("event 1 = %+v, want id=2 msg=second", events[1])
+	}
+	third, ok := events[2].(map[string]any)
 	if !ok {
-		t.Fatalf("event 0: expected map data, got %T", events[0].Output)
+		t.Fatalf("event 2: expected wrapped map, got %T", events[2])
 	}
-	if first["id"] != "1" || first["msg"] != "first" {
-		t.Errorf("event 0 data = %+v, want id=1 msg=first", first)
-	}
-
-	// Event 2: simple data-only payload.
-	second, ok := events[1].Output.(map[string]any)
-	if !ok {
-		t.Fatalf("event 1: expected map data, got %T", events[1].Output)
-	}
-	if second["id"] != "2" || second["msg"] != "second" {
-		t.Errorf("event 1 data = %+v, want id=2 msg=second", second)
-	}
-
-	// Event 3: has event name + id, so wrapped in {data, event, id}.
-	third, ok := events[2].Output.(map[string]any)
-	if !ok {
-		t.Fatalf("event 2: expected wrapped map, got %T", events[2].Output)
-	}
-	if third["event"] != "progress" {
-		t.Errorf("event 2 event name = %v, want progress", third["event"])
-	}
-	if third["id"] != "42" {
-		t.Errorf("event 2 id = %v, want 42", third["id"])
+	if third["event"] != "progress" || third["id"] != "42" {
+		t.Errorf("event 2 metadata = %+v, want event=progress id=42", third)
 	}
 	innerData, ok := third["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("event 2 inner data: expected map, got %T", third["data"])
-	}
-	if innerData["msg"] != "third" {
-		t.Errorf("event 2 inner msg = %v, want third", innerData["msg"])
+	if !ok || innerData["msg"] != "third" {
+		t.Errorf("event 2 inner data = %+v, want msg=third", third["data"])
 	}
 }
 
 func TestIntegration_SSEResponse_NotSSE_StaysUnary(t *testing.T) {
-	// Server returns plain JSON (not SSE) — the invoker should fall through
-	// to the unary path and emit a single event.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"only","msg":"hi"}`)
 	}))
 	defer srv.Close()
 
-	binv := NewInvoker()
-	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Ref: "#/paths/~1events/get",
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: sseSpec(srv.URL),
-		},
-	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
-	}
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
+	events, ierr := driveOutputs(context.Background(), sseCall(srv), nil)
+	if ierr != nil {
+		t.Fatalf("unexpected error: %v", ierr)
 	}
 	if len(events) != 1 {
 		t.Fatalf("expected 1 unary event, got %d", len(events))
 	}
-	data, ok := events[0].Output.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map data, got %T", events[0].Output)
-	}
-	if data["msg"] != "hi" {
-		t.Errorf("data msg = %v, want hi", data["msg"])
+	data, ok := events[0].(map[string]any)
+	if !ok || data["msg"] != "hi" {
+		t.Errorf("data = %+v, want msg=hi", events[0])
 	}
 }
 
 func TestIntegration_SSEResponse_MultilineData(t *testing.T) {
-	// Per the SSE spec, multiple `data:` lines for one event are joined with \n.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -637,42 +555,27 @@ func TestIntegration_SSEResponse_MultilineData(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	binv := NewInvoker()
-	ch, _ := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Ref: "#/paths/~1events/get",
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: sseSpec(srv.URL),
-		},
-	})
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
+	events, ierr := driveOutputs(context.Background(), sseCall(srv), nil)
+	if ierr != nil {
+		t.Fatalf("unexpected error: %v", ierr)
 	}
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event from multiline data, got %d", len(events))
 	}
-	// The combined data is plain text (not JSON), so it should pass through as a string.
-	str, ok := events[0].Output.(string)
-	if !ok {
-		t.Fatalf("expected string data, got %T", events[0].Output)
-	}
-	if str != "line one\nline two\nline three" {
-		t.Errorf("data = %q, want \"line one\\nline two\\nline three\"", str)
+	str, ok := events[0].(string)
+	if !ok || str != "line one\nline two\nline three" {
+		t.Errorf("data = %q, want joined multiline", events[0])
 	}
 }
 
-// TestIntegration_SSEResponse_MidStreamClose verifies that when the server
-// abruptly closes the connection after some events, the invoker emits the
-// events received before the close and then closes the channel cleanly.
-// No goroutine leak, no panic, no hung channel.
+// TestIntegration_SSEResponse_MidStreamClose verifies that an abrupt
+// server-side connection drop after some events surfaces the events received
+// before the close and terminates the invocation cleanly (no hang, no leak).
 func TestIntegration_SSEResponse_MidStreamClose(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-
-		// Two complete events, then drop the connection.
 		_, _ = io.WriteString(w, "data: {\"id\":\"1\"}\n\n")
 		if flusher != nil {
 			flusher.Flush()
@@ -681,8 +584,6 @@ func TestIntegration_SSEResponse_MidStreamClose(t *testing.T) {
 		if flusher != nil {
 			flusher.Flush()
 		}
-		// Hijack and close to simulate an abrupt connection drop without
-		// sending the trailing blank line that some servers would.
 		hijacker, ok := w.(http.Hijacker)
 		if !ok {
 			return
@@ -695,53 +596,20 @@ func TestIntegration_SSEResponse_MidStreamClose(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	binv := NewInvoker()
-	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Ref: "#/paths/~1events/get",
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: sseSpec(srv.URL),
-		},
-	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
-	}
-
-	// Drain. The channel must close on its own — no hang.
-	timeout := time.After(3 * time.Second)
-	var events []openbindings.InvocationOutput
-loop:
-	for {
-		select {
-		case ev, open := <-ch:
-			if !open {
-				break loop
-			}
-			events = append(events, ev)
-		case <-timeout:
-			t.Fatal("SSE channel did not close within 3s of mid-stream connection drop")
-		}
-	}
-
-	// We should have received the two events sent before the close.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	events, _ := driveOutputs(ctx, sseCall(srv), nil)
 	if len(events) < 2 {
 		t.Fatalf("expected at least 2 events before drop, got %d", len(events))
 	}
 }
 
-// TestIntegration_SSEResponse_MalformedLines verifies that malformed SSE
-// lines are handled gracefully per the W3C spec, which is lenient: lines
-// without a colon are treated as a field with an empty value, lines starting
-// with a colon are comments and ignored, and unknown field names are dropped.
+// TestIntegration_SSEResponse_MalformedLines verifies that malformed SSE lines
+// are handled leniently per the W3C spec and only valid data events surface.
 func TestIntegration_SSEResponse_MalformedLines(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		// A mix of valid and malformed lines:
-		// - line with no colon (treated as field name with empty value, ignored if not "data")
-		// - comment lines (starting with :)
-		// - unknown field name (silently ignored)
-		// - normal data event after the noise
 		_, _ = io.WriteString(w, ": this is a comment\n")
 		_, _ = io.WriteString(w, "garbage-line-no-colon\n")
 		_, _ = io.WriteString(w, "unknown-field: value\n")
@@ -751,42 +619,25 @@ func TestIntegration_SSEResponse_MalformedLines(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	binv := NewInvoker()
-	ch, err := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Ref: "#/paths/~1events/get",
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: sseSpec(srv.URL),
-		},
-	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	events, ierr := driveOutputs(context.Background(), sseCall(srv), nil)
+	if ierr != nil {
+		t.Fatalf("unexpected error: %v", ierr)
 	}
-
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
-	}
-
-	// Should have exactly two valid data events. Malformed lines are noise.
 	if len(events) != 2 {
 		t.Fatalf("expected 2 valid events from malformed stream, got %d", len(events))
 	}
-	first, _ := events[0].Output.(map[string]any)
+	first, _ := events[0].(map[string]any)
 	if first["id"] != "survivor" {
 		t.Errorf("first event id = %v, want survivor", first["id"])
 	}
 }
 
-// TestNewInvokerWithClient verifies that an Invoker created with a custom
-// HTTP client uses that client for outbound requests, allowing tests and
-// applications to substitute transport behavior without reaching into
-// package-level globals.
+// TestNewInvokerWithClient verifies that an Invoker created with a custom HTTP
+// client uses that client for outbound requests.
 func TestNewInvokerWithClient(t *testing.T) {
 	var requestCount int
 	customTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		requestCount++
-		// Return a canned 200 response without making a real network call.
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -794,39 +645,22 @@ func TestNewInvokerWithClient(t *testing.T) {
 			Request:    req,
 		}, nil
 	})
-	customClient := &http.Client{Transport: customTransport}
+	invoker := NewInvokerWithClient(&http.Client{Transport: customTransport})
 
-	invoker := NewInvokerWithClient(customClient)
-	// sseSpec is convenient because it gives us a valid OpenAPI doc with
-	// one GET /events endpoint; we don't actually care about the URL.
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Ref: "#/paths/~1events/get",
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: sseSpec("http://example.test"),
-		},
+	call := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Ref:    "#/paths/~1events/get",
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: sseSpec("http://example.test")},
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+	out, ierr := driveSingle(t, call, nil)
+	if ierr != nil {
+		t.Fatalf("unexpected error: %v", ierr)
 	}
-
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
-	}
-
 	if requestCount != 1 {
 		t.Errorf("expected custom transport to be called exactly once, got %d", requestCount)
 	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	data, ok := events[0].Output.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map data, got %T", events[0].Output)
-	}
-	if data["custom"] != "client" {
-		t.Errorf("expected response from custom client, got %+v", data)
+	data, ok := out.(map[string]any)
+	if !ok || data["custom"] != "client" {
+		t.Errorf("expected response from custom client, got %+v", out)
 	}
 }
 
@@ -837,58 +671,51 @@ func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // TestIntegration_SSEResponse_Cancellation verifies that cancelling the
-// caller's context closes the SSE channel cleanly without leaking the
-// scanner goroutine. The server holds the connection open after sending
-// one event, simulating a long-running subscription.
+// invocation tears down the SSE stream cleanly; the output stream terminates
+// promptly with ERR_CANCELLED.
 func TestIntegration_SSEResponse_Cancellation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-
 		_, _ = io.WriteString(w, "data: {\"id\":\"first\"}\n\n")
 		if flusher != nil {
 			flusher.Flush()
 		}
-		// Hold the connection open until the client disconnects.
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
 
-	binv := NewInvoker()
 	ctx, cancel := context.WithCancel(context.Background())
-
-	ch, err := binv.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-		Ref: "#/paths/~1events/get",
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: sseSpec(srv.URL),
-		},
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Ref:    "#/paths/~1events/get",
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: sseSpec(srv.URL)},
 	})
+
+	out := call.Outputs()
+	first, err := out.Read(context.Background())
 	if err != nil {
-		t.Fatalf("InvokeBinding error: %v", err)
+		t.Fatalf("first event error: %v", err)
+	}
+	if _, ok := first.(map[string]any); !ok {
+		t.Fatalf("expected first event map, got %T", first)
 	}
 
-	// Receive the first event.
-	ev, ok := <-ch
-	if !ok {
-		t.Fatal("channel closed before first event")
-	}
-	if ev.Error != nil {
-		t.Fatalf("first event error: %s: %s", ev.Error.Code, ev.Error.Message)
-	}
-
-	// Cancel and verify the channel closes within a reasonable time.
 	cancel()
-	timeout := time.After(3 * time.Second)
-	for {
-		select {
-		case _, open := <-ch:
-			if !open {
-				return // success
+	done := make(chan error, 1)
+	go func() {
+		_, err := out.Read(context.Background())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.EOF) {
+			var ie *openbindings.InvocationError
+			if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeCancelled {
+				t.Fatalf("expected ERR_CANCELLED or EOF after cancel, got %v", err)
 			}
-		case <-timeout:
-			t.Fatal("SSE channel did not close within 3s of cancellation")
 		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("SSE stream did not terminate within 3s of cancellation")
 	}
 }

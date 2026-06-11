@@ -24,36 +24,30 @@ func TestInvoker_Formats(t *testing.T) {
 
 func TestInvoker_InvokeBinding_AlwaysFails(t *testing.T) {
 	// Workers RPC dispatch is not possible from Go. The Go invoker stub
-	// must yield a clear, actionable error event on the channel (not return
-	// a Go error) directing the caller to the TypeScript runtime.
+	// must return an already-errored invocation handle (not panic, not
+	// yield outputs) directing the caller to the TypeScript runtime.
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{Format: FormatToken, Location: "workers-rpc://test"},
+	inv := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Location: "workers-rpc://test"},
 		Ref:    "someMethod",
 	})
-	if err != nil {
-		t.Fatalf("InvokeBinding must not return a Go error; got: %v", err)
+	if inv == nil {
+		t.Fatal("InvokeBinding must return a non-nil invocation handle")
 	}
-	if ch == nil {
-		t.Fatal("InvokeBinding must return a non-nil channel")
+	_, err := inv.Outputs().Read(context.Background())
+	if err == nil {
+		t.Fatal("expected a terminal error, got an output")
 	}
-	ev, ok := <-ch
+	terr, ok := err.(*openbindings.InvocationError)
 	if !ok {
-		t.Fatal("channel closed without yielding an event")
+		t.Fatalf("expected a terminal *InvocationError, got %T: %v", err, err)
 	}
-	if ev.Error == nil {
-		t.Fatal("expected an error event, got a data event")
+	if terr.Code != openbindings.ErrCodeSourceConfigError {
+		t.Errorf("error code = %q, want %q", terr.Code, openbindings.ErrCodeSourceConfigError)
 	}
-	if ev.Error.Code != openbindings.ErrCodeSourceConfigError {
-		t.Errorf("error code = %q, want %q", ev.Error.Code, openbindings.ErrCodeSourceConfigError)
-	}
-	msg := ev.Error.Message
+	msg := terr.Message
 	if !strings.Contains(msg, "Cloudflare Worker") || !strings.Contains(msg, "WorkersRpcInvoker") {
 		t.Errorf("error message should mention Cloudflare Worker and WorkersRpcInvoker, got: %s", msg)
-	}
-	// Channel should be closed after the single error event.
-	if _, more := <-ch; more {
-		t.Error("channel should be closed after the error event")
 	}
 }
 

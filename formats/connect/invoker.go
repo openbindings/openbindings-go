@@ -13,10 +13,9 @@ package connect
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -53,77 +52,116 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "Connect (Buf) via HTTP"}}
 }
 
-// InvokeBinding invokes a Connect binding. For unary methods it returns a
-// single stream event. For server-streaming methods (detected via the inline
-// proto descriptor) it returns a multi-event channel that yields one event per
+var _ openbindings.BindingInvoker = (*Invoker)(nil)
+
+// InvokeBinding invokes a Connect binding and returns the invocation handle
+// synchronously; the HTTP work runs on its own goroutine. The single request
+// message flows through the handle's Write channel (unary and
+// server-streaming methods both take exactly one input).
+//
+// For unary methods the invocation yields one output. For server-streaming
+// methods (detected via the inline proto descriptor) it yields one output per
 // server-streamed message and closes when the server's end-stream envelope is
-// received or the caller cancels via ctx.
+// received or the caller cancels.
 //
 // Server-streaming requires the source to provide inline proto `content` so
 // the invoker can determine that the method is streaming. If no proto content
 // is available, the invoker falls back to unary invocation and the binding
 // will fail at runtime if the method is actually streaming.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
-	enriched := enrichContext(ctx, in)
-	start := time.Now()
+//
+// All pre-dispatch failures (bad ref, missing base URL, descriptor failures)
+// terminate the handle before any network side effect.
+func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	go e.run(ctx, args, inv)
+	return inv
+}
 
-	svcName, methodName, err := parseRef(enriched.Ref)
+func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+	// Bound all I/O to the invocation's lifetime: caller Cancel(), an
+	// abandoned output stream, or upstream ctx cancellation tears down any
+	// in-flight HTTP request.
+	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	defer stop()
+
+	// ----- Pre-side-effect failures: fire before any input is consumed and
+	// before any network I/O, so a no-input-consumed retry is safe. -----
+
+	svcName, methodName, err := parseRef(args.Ref)
 	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidRef, err.Error())), nil
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: err.Error()})
+		return
 	}
 
-	// Resolve method descriptor from inline content. The descriptor lets the
-	// invoker distinguish unary from server-streaming methods and lets it use
-	// proto-aware marshaling for accurate field names. If no content is
+	baseURL := strings.TrimSpace(args.Source.Location)
+	if baseURL == "" {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: "Connect source requires a base URL location",
+		})
+		return
+	}
+
+	// Resolve the method descriptor from inline content. The descriptor lets
+	// the invoker distinguish unary from server-streaming methods and lets it
+	// use proto-aware marshaling for accurate field names. If no content is
 	// provided, we fall through as unary with generic JSON marshaling.
 	var methodDesc *methodInfo
-	if enriched.Source.Content != nil {
-		desc, parseErr := resolveMethod(ctx, enriched.Source.Content, svcName, methodName)
+	if args.Source.Content != nil {
+		desc, parseErr := resolveMethod(bctx, args.Source.Content, svcName, methodName)
 		if parseErr != nil {
-			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeSourceLoadFailed, parseErr.Error())), nil
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: parseErr.Error()})
+			return
 		}
 		methodDesc = desc
 	}
 
-	// Server-streaming dispatch.
+	// ----- Input flows through the handle, not the args. Unary and
+	// server-streaming both take exactly one request message. -----
+	input, gotInput, rerr := readFirstInput(bctx, inv)
+	if rerr != nil {
+		// Terminal (cancelled) or ctx error; FireError is an idempotent no-op
+		// when the invocation already terminated.
+		inv.FireError(openbindings.AsInvocationError(rerr))
+		return
+	}
+	if !gotInput && !emptyRequestMessage(methodDesc) {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeMissingInput,
+			Message: fmt.Sprintf("Connect method %s/%s requires an input message", svcName, methodName),
+		})
+		return
+	}
+	_ = inv.CloseInput()
+
+	headers := buildHTTPHeaders(args.Context)
+
 	if methodDesc != nil && methodDesc.method != nil && methodDesc.method.IsStreamingServer() {
-		headers := buildHTTPHeaders(enriched.Context)
-		return invokeConnectStreaming(ctx, e.client, enriched.Source.Location, svcName, methodName, enriched.Input, headers, methodDesc, start)
+		e.runStreaming(bctx, inv, baseURL, svcName, methodName, input, headers, methodDesc)
+		return
 	}
+	e.runUnary(bctx, inv, baseURL, svcName, methodName, input, headers, methodDesc)
+}
 
-	headers := buildHTTPHeaders(enriched.Context)
-	result := invokeConnect(ctx, e.client, enriched.Source.Location, svcName, methodName, enriched.Input, headers, methodDesc, start)
-
-	// Auth retry (unary path only — streaming auth retry is harder because
-	// the server may have already started writing frames before the auth
-	// failure surfaces, and we can't replay the stream).
-	if result.Error != nil && result.Error.Code == openbindings.ErrCodeAuthRequired &&
-		len(enriched.Security) > 0 && enriched.Callbacks != nil {
-		creds, resolveErr := openbindings.ResolveSecurity(ctx, enriched.Security, enriched.Callbacks, nil)
-		if resolveErr == nil && creds != nil {
-			cp := *enriched
-			merged := make(map[string]any)
-			for k, v := range enriched.Context {
-				merged[k] = v
-			}
-			for k, v := range creds {
-				merged[k] = v
-			}
-			cp.Context = merged
-
-			if cp.Store != nil {
-				storeKey := normalizeEndpoint(cp.Source.Location)
-				if storeKey != "" {
-					_ = cp.Store.Set(ctx, storeKey, cp.Context)
-				}
-			}
-
-			headers = buildHTTPHeaders(cp.Context)
-			result = invokeConnect(ctx, e.client, cp.Source.Location, svcName, methodName, cp.Input, headers, methodDesc, start)
-		}
+// readFirstInput reads the single request message from the handle.
+// A bare close (io.EOF) reports gotInput=false with a nil error.
+func readFirstInput(ctx context.Context, inv openbindings.BindingHandle[any, any]) (input any, gotInput bool, err error) {
+	v, err := inv.ReadInput(ctx)
+	if err == io.EOF {
+		return nil, false, nil
 	}
+	if err != nil {
+		return nil, false, err
+	}
+	return v, true, nil
+}
 
-	return openbindings.SingleEventChannel(result), nil
+// emptyRequestMessage reports whether the method's request message is
+// provably empty (zero fields), in which case a bare input close is
+// acceptable and an empty message is dispatched. Without a descriptor the
+// invoker cannot prove emptiness and requires an input.
+func emptyRequestMessage(mi *methodInfo) bool {
+	return mi != nil && mi.method != nil && mi.method.Input().Fields().Len() == 0
 }
 
 // Creator handles interface creation from protobuf definitions for the Connect format.
@@ -167,43 +205,4 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 		iface.Description = in.Description
 	}
 	return &iface, nil
-}
-
-func enrichContext(ctx context.Context, in *openbindings.BindingInvocationInput) *openbindings.BindingInvocationInput {
-	if in.Store == nil {
-		return in
-	}
-	key := normalizeEndpoint(in.Source.Location)
-	if key == "" {
-		return in
-	}
-	stored, err := in.Store.Get(ctx, key)
-	if err != nil || len(stored) == 0 {
-		return in
-	}
-	cp := *in
-	if len(in.Context) == 0 {
-		cp.Context = stored
-	} else {
-		merged := make(map[string]any, len(stored)+len(in.Context))
-		for k, v := range stored {
-			merged[k] = v
-		}
-		for k, v := range in.Context {
-			merged[k] = v
-		}
-		cp.Context = merged
-	}
-	return &cp
-}
-
-func normalizeEndpoint(endpoint string) string {
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" {
-		return ""
-	}
-	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
-		return openbindings.NormalizeContextKey(u.Host)
-	}
-	return openbindings.NormalizeContextKey(endpoint)
 }

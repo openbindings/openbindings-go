@@ -32,20 +32,42 @@ exec := openbindings.NewOperationInvoker(connectbinding.NewInvoker())
 ```go
 invoker := connectbinding.NewInvoker()
 
-ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-    Source: openbindings.BindingInvocationSource{
+inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+    Source: openbindings.InvocationSource{
         Format:   "connect",
         Location: "https://api.example.com",
     },
     Ref:     "mypackage.MyService/GetItem",
-    Input:   map[string]any{"id": "123"},
     Context: map[string]any{"bearerToken": "tok_123"},
 })
-for ev := range ch {
-    if ev.Error != nil {
-        log.Fatal(ev.Error.Message)
+
+// The request message flows through the handle, not the args.
+if err := inv.Write(ctx, map[string]any{"id": "123"}); err != nil {
+    log.Fatal(err)
+}
+_ = inv.Close()
+
+// Unary: assert exactly one output.
+out, err := openbindings.Single[any](ctx, inv.Outputs())
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(out)
+```
+
+For server-streaming methods, read the output stream to its end instead:
+
+```go
+outputs := inv.Outputs()
+for {
+    msg, err := outputs.Read(ctx)
+    if err == io.EOF {
+        break // clean end of stream
     }
-    fmt.Println(ev.Output)
+    if err != nil {
+        log.Fatal(err) // terminal *openbindings.InvocationError
+    }
+    fmt.Println(msg)
 }
 ```
 
@@ -91,7 +113,7 @@ Credentials are applied as HTTP headers:
 - `apiKey`: `Authorization: ApiKey <key>`
 - `basic`: `Authorization: Basic <encoded>`
 
-Invocation options headers and cookies are also forwarded.
+Context `headers` and `cookies` are also forwarded.
 
 ### Connect protocol details
 
@@ -99,18 +121,20 @@ The invoker sends requests as HTTP POST with:
 - `Content-Type: application/json`
 - `Connect-Protocol-Version: 1`
 
-Responses are parsed as JSON. Connect error responses (with `code` and `message` fields) are mapped to standard error codes.
+Responses are parsed as JSON. Connect error responses (with `code` and `message` fields) are mapped to standard error codes: `unauthenticated` → `ERR_AUTH_REQUIRED`, `permission_denied` → `ERR_PERMISSION_DENIED`, `unavailable` → `ERR_CONNECT_FAILED`, `deadline_exceeded` → `ERR_TIMEOUT`, anything else → `ERR_EXECUTION_FAILED`.
+
+Leading metadata (HTTP response headers) is available via the handle's `Header`; trailing metadata (Connect unary `Trailer-`-prefixed headers, or the streaming end-stream envelope's `metadata` field) via `Trailer`.
 
 ### Streaming behavior
 
-The Connect invoker supports two streaming patterns:
+The Connect invoker supports two cardinalities, both taking exactly one request message through the handle's `Write` channel:
 
-- **Unary RPCs** — single request, single response. Each call produces one stream event.
-- **Server-streaming RPCs** — single request, stream of responses. Each server-streamed message is emitted as a separate stream event; the channel closes when the server's end-stream envelope is received or the caller cancels the context.
+- **Unary RPCs** — single request, single response. The invocation yields one output.
+- **Server-streaming RPCs** — single request, stream of responses. Each server-streamed message is emitted as a separate output; the output stream closes when the server's end-stream envelope is received or the caller cancels.
 
 Server-streaming uses the Connect envelope-framed wire format with `Content-Type: application/connect+json` per the [Connect protocol specification](https://connectrpc.com/docs/protocol#streaming-rpcs). Server-streaming dispatch requires inline proto `content` on the source so the invoker can detect that the method is streaming; without proto content the invoker falls back to unary invocation.
 
-The interface creator skips **client-streaming** methods during interface creation (these are structurally inexpressible in the v0.1 OBI invocation model, which accepts a single input value per operation invocation). Server-streaming methods are included.
+The interface creator skips **client-streaming** methods during interface creation (out of the module's cardinality scope: one request message in, one or more outputs out). Server-streaming methods are included.
 
 Compression is not currently supported. Bidirectional streaming is out of scope.
 

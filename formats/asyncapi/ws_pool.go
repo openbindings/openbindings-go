@@ -2,27 +2,48 @@ package asyncapi
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"nhooyr.io/websocket"
 )
+
+// WebSocket connection pool for the AsyncAPI invoker.
+//
+// Multiple operations on the same channel (same server + address) share a
+// single WebSocket connection. This is load-bearing for the AsyncAPI
+// two-operation pattern where a `receive` operation opens a long-lived
+// stream and `send` operations push messages on the same channel: without
+// pooling, each invocation opens a separate socket and the server tracks
+// subscriptions per-socket, so send and receive never share state.
+//
+// The pool is transport-only: it delivers raw frames to subscribed listeners
+// and never interprets payloads. A single reader goroutine per connection
+// broadcasts every incoming frame to all listeners in arrival order.
+//
+// Lifecycle:
+//   - First acquire() for a key dials the WebSocket.
+//   - Subsequent acquire() calls for the same key reuse it.
+//   - Each acquire() increments a ref count; release() decrements.
+//   - When refCount hits 0, an idle timer starts (default 30s).
+//   - If no new acquire() arrives before the timer fires, the socket is
+//     closed and evicted.
 
 // defaultWSIdleTimeout is how long a pooled WebSocket stays alive after its
 // last active operation releases it before the connection is closed and
 // removed from the pool.
 const defaultWSIdleTimeout = 30 * time.Second
 
+// wsListener receives broadcast frames from a pooled connection. onClose is
+// called exactly once when the socket closes: with nil for a clean close and
+// with the read error otherwise.
+type wsListener struct {
+	onFrame func(data []byte)
+	onClose func(err error)
+}
+
 // wsPool manages pooled WebSocket connections keyed by "serverURL|address".
-// Multiple concurrent send operations to the same channel reuse a single
-// WebSocket connection. A connection stays alive as long as any operation
-// holds a reference. When the last operation releases, an idle timer starts;
-// if no new operation arrives before it fires, the connection is closed and
-// evicted.
 type wsPool struct {
 	mu          sync.Mutex
 	conns       map[string]*pooledWS
@@ -30,28 +51,27 @@ type wsPool struct {
 	idleTimeout time.Duration
 }
 
-// pooledWS is a pooled WebSocket connection with reference counting and
-// idle-timer lifecycle management.
+// pooledWS is a pooled WebSocket connection with reference counting,
+// idle-timer lifecycle management, and frame broadcast to listeners.
 type pooledWS struct {
 	conn *websocket.Conn
-
-	// refCount tracks the number of active operations using this connection.
-	// Only manipulated under the pool's mu lock.
-	refCount int32
-
-	// idleTimer fires after the idle timeout to close and evict the connection.
-	// Only set when refCount drops to 0. Cleared when a new operation acquires
-	// the connection. Protected by the pool's mu lock.
-	idleTimer *time.Timer
-
-	// opMu serializes send+reply cycles on the connection. The
-	// nhooyr.io/websocket library requires that only one goroutine reads
-	// and one goroutine writes at a time. For send-with-reply operations
-	// (write then read), the entire cycle must be serialized.
-	opMu sync.Mutex
-
 	key  string
 	pool *wsPool
+
+	// refCount and idleTimer are guarded by the pool's mu.
+	refCount  int
+	idleTimer *time.Timer
+
+	// writeMu serializes frame writes from concurrent operations.
+	writeMu sync.Mutex
+
+	// Listener registry and close state, guarded by lmu.
+	lmu        sync.Mutex
+	listeners  map[int]*wsListener
+	nextID     int
+	closed     bool
+	closeErr   error // nil for a clean close
+	localClose bool  // set before the pool closes the socket itself
 }
 
 func newWSPool() *wsPool {
@@ -71,15 +91,21 @@ func wsPoolKey(serverURL, address string) string {
 // address, creating one if none exists. The returned connection has its ref
 // count incremented; the caller must call release() when done.
 //
+// When l is non-nil it is registered as a frame listener: on a fresh dial it
+// is registered BEFORE the reader goroutine starts, so no frame the server
+// pushes right after the handshake can be lost. The returned remove function
+// unregisters it (no-op when l is nil).
+//
 // If multiple goroutines call acquire for the same key concurrently, only one
 // creates the connection while the others wait.
-func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any) (*pooledWS, error) {
+func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any, l *wsListener) (*pooledWS, func(), error) {
 	key := wsPoolKey(serverURL, address)
 
 	for {
 		p.mu.Lock()
 
-		// Fast path: reuse an existing connection.
+		// Fast path: reuse an existing connection. A subscriber joining an
+		// existing broadcast sees frames from registration on.
 		if pw, ok := p.conns[key]; ok {
 			if pw.idleTimer != nil {
 				pw.idleTimer.Stop()
@@ -87,7 +113,11 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Do
 			}
 			pw.refCount++
 			p.mu.Unlock()
-			return pw, nil
+			remove := func() {}
+			if l != nil {
+				remove = pw.subscribe(l)
+			}
+			return pw, remove, nil
 		}
 
 		// Check if another goroutine is already creating a connection for this
@@ -98,7 +128,7 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Do
 			case <-ch:
 				continue // retry acquire
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return nil, nil, ctx.Err()
 			}
 		}
 
@@ -108,7 +138,7 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Do
 		p.creating[key] = waitCh
 		p.mu.Unlock()
 
-		pw, err := p.createConn(ctx, serverURL, address, key, doc, asyncOp, bindCtx)
+		pw, remove, err := p.createConn(ctx, serverURL, address, key, doc, asyncOp, bindCtx, l)
 
 		p.mu.Lock()
 		delete(p.creating, key)
@@ -116,25 +146,28 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Do
 		if err != nil {
 			p.mu.Unlock()
 			close(waitCh)
-			return nil, err
+			return nil, nil, err
 		}
 
 		pw.refCount = 1
 		p.conns[key] = pw
 		p.mu.Unlock()
 		close(waitCh) // wake all waiters so they can acquire the connection
-		return pw, nil
+		return pw, remove, nil
 	}
 }
 
-// createConn establishes a new WebSocket connection with auth headers applied
-// via applyHTTPContext on the upgrade request.
-func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *Document, asyncOp *Operation, bindCtx map[string]any) (*pooledWS, error) {
+// createConn establishes a new WebSocket connection with auth applied via
+// applyHTTPContext on the upgrade request (headers AND query parameters:
+// spec-driven apiKey credentials placed in the query must reach the dialed
+// URL, because browsers cannot set custom WebSocket upgrade headers), then
+// starts the broadcast reader goroutine.
+func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *Document, asyncOp *Operation, bindCtx map[string]any, l *wsListener) (*pooledWS, func(), error) {
 	wsURL := serverURL + "/" + trimLeadingSlash(address)
 
-	upgradeReq, err := http.NewRequestWithContext(ctx, "GET", wsURL, nil)
+	upgradeReq, err := http.NewRequestWithContext(ctx, http.MethodGet, wsURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("building upgrade request: %w", err)
+		return nil, nil, err
 	}
 	applyHTTPContext(upgradeReq, doc, asyncOp, bindCtx)
 
@@ -142,21 +175,129 @@ func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string,
 		HTTPHeader: upgradeReq.Header,
 	}
 
+	// Dial with the request's reconstructed URL rather than the original
+	// wsURL so query-param credentials appended by applyHTTPContext reach
+	// the server.
 	conn, _, err := websocket.Dial(ctx, upgradeReq.URL.String(), dialOpts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	pw := &pooledWS{
-		conn: conn,
-		key:  key,
-		pool: p,
+		conn:      conn,
+		key:       key,
+		pool:      p,
+		listeners: make(map[int]*wsListener),
 	}
-	return pw, nil
+	remove := func() {}
+	if l != nil {
+		remove = pw.subscribe(l)
+	}
+	go pw.readLoop()
+	return pw, remove, nil
 }
 
-// release decrements the ref count and starts the idle timer if no operations
-// remain active.
+// readLoop is the single reader goroutine for the connection: it broadcasts
+// every frame to the registered listeners in arrival order, and on socket
+// close notifies them exactly once (clean vs error) and removes the
+// connection from the pool.
+func (pw *pooledWS) readLoop() {
+	for {
+		_, msg, err := pw.conn.Read(context.Background())
+		if err != nil {
+			pw.finish(err)
+			return
+		}
+		pw.lmu.Lock()
+		ls := make([]*wsListener, 0, len(pw.listeners))
+		for _, l := range pw.listeners {
+			ls = append(ls, l)
+		}
+		pw.lmu.Unlock()
+		for _, l := range ls {
+			if l.onFrame != nil {
+				l.onFrame(msg)
+			}
+		}
+	}
+}
+
+// finish marks the connection closed, evicts it from the pool, and notifies
+// listeners. A close the pool initiated itself (idle timeout, closeAll) and a
+// remote normal closure are clean; everything else carries the read error.
+func (pw *pooledWS) finish(readErr error) {
+	pw.lmu.Lock()
+	if pw.closed {
+		pw.lmu.Unlock()
+		return
+	}
+	var closeErr error
+	if status := websocket.CloseStatus(readErr); !pw.localClose &&
+		status != websocket.StatusNormalClosure && status != websocket.StatusGoingAway {
+		closeErr = readErr
+	}
+	pw.closed = true
+	pw.closeErr = closeErr
+	ls := make([]*wsListener, 0, len(pw.listeners))
+	for _, l := range pw.listeners {
+		ls = append(ls, l)
+	}
+	pw.listeners = nil
+	pw.lmu.Unlock()
+
+	pw.pool.remove(pw)
+	for _, l := range ls {
+		if l.onClose != nil {
+			l.onClose(closeErr)
+		}
+	}
+}
+
+// subscribe registers a listener for broadcast frames and close notification.
+// If the connection has already closed, onClose fires immediately. Returns a
+// removal function (idempotent).
+func (pw *pooledWS) subscribe(l *wsListener) (remove func()) {
+	pw.lmu.Lock()
+	if pw.closed {
+		err := pw.closeErr
+		pw.lmu.Unlock()
+		if l.onClose != nil {
+			l.onClose(err)
+		}
+		return func() {}
+	}
+	id := pw.nextID
+	pw.nextID++
+	pw.listeners[id] = l
+	pw.lmu.Unlock()
+	return func() {
+		pw.lmu.Lock()
+		if pw.listeners != nil {
+			delete(pw.listeners, id)
+		}
+		pw.lmu.Unlock()
+	}
+}
+
+// send writes one text frame on the shared socket. Writes from concurrent
+// operations are serialized.
+func (pw *pooledWS) send(ctx context.Context, data []byte) error {
+	pw.writeMu.Lock()
+	defer pw.writeMu.Unlock()
+	return pw.conn.Write(ctx, websocket.MessageText, data)
+}
+
+// closeConn closes the underlying socket, marking the close as
+// pool-initiated so listeners observe a clean close.
+func (pw *pooledWS) closeConn(reason string) {
+	pw.lmu.Lock()
+	pw.localClose = true
+	pw.lmu.Unlock()
+	_ = pw.conn.Close(websocket.StatusNormalClosure, reason)
+}
+
+// release decrements the ref count and starts the idle timer if no
+// operations remain active.
 func (pw *pooledWS) release() {
 	pw.pool.mu.Lock()
 	defer pw.pool.mu.Unlock()
@@ -172,20 +313,42 @@ func (pw *pooledWS) release() {
 		timeout = defaultWSIdleTimeout
 	}
 	pw.idleTimer = time.AfterFunc(timeout, func() {
-		pw.pool.evict(pw)
+		pw.pool.evictIdle(pw)
 	})
 }
 
-// evict closes and removes a connection from the pool.
+// evictIdle closes and removes a connection from the pool when it is still
+// unreferenced (an acquire may have raced the timer).
+func (p *wsPool) evictIdle(pw *pooledWS) {
+	p.mu.Lock()
+	if current, ok := p.conns[pw.key]; !ok || current != pw || pw.refCount > 0 {
+		p.mu.Unlock()
+		return
+	}
+	delete(p.conns, pw.key)
+	p.mu.Unlock()
+	pw.closeConn("idle timeout")
+}
+
+// evict closes and removes a broken connection from the pool so the next
+// acquire dials a fresh one.
 func (p *wsPool) evict(pw *pooledWS) {
+	p.remove(pw)
+	pw.closeConn("evicted")
+}
+
+// remove deletes the connection from the pool map (if it is still the
+// current entry for its key) without closing it.
+func (p *wsPool) remove(pw *pooledWS) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
-	// Only evict if the connection is still the one in the map.
 	if current, ok := p.conns[pw.key]; ok && current == pw {
 		delete(p.conns, pw.key)
 	}
-	pw.conn.Close(websocket.StatusNormalClosure, "idle timeout")
+	if pw.idleTimer != nil {
+		pw.idleTimer.Stop()
+		pw.idleTimer = nil
+	}
 }
 
 // closeAll closes all pooled WebSocket connections. Used by Invoker.Close().
@@ -193,112 +356,18 @@ func (p *wsPool) closeAll() {
 	p.mu.Lock()
 	conns := make([]*pooledWS, 0, len(p.conns))
 	for _, pw := range p.conns {
+		if pw.idleTimer != nil {
+			pw.idleTimer.Stop()
+			pw.idleTimer = nil
+		}
 		conns = append(conns, pw)
 	}
 	p.conns = make(map[string]*pooledWS)
 	p.mu.Unlock()
 
 	for _, pw := range conns {
-		if pw.idleTimer != nil {
-			pw.idleTimer.Stop()
-		}
-		pw.conn.Close(websocket.StatusNormalClosure, "pool closed")
+		pw.closeConn("pool closed")
 	}
-}
-
-// sendWS acquires a pooled WebSocket connection (or opens a new one), sends
-// the message, optionally reads one reply, then releases the connection back
-// to the pool.
-//
-// If the operation has a Reply defined, one response message is read and
-// returned as a single stream event. Otherwise the send is fire-and-forget
-// and an empty (immediately closed) channel is returned.
-//
-// The entire send+reply cycle is serialized through the connection's opMu to
-// prevent concurrent read corruption. Multiple goroutines will queue on the
-// mutex while still sharing the same underlying connection.
-func sendWS(ctx context.Context, pool *wsPool, serverURL, address string, input *openbindings.BindingInvocationInput, doc *Document, asyncOp *Operation) (<-chan openbindings.InvocationOutput, error) {
-	pw, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, input.Context)
-	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeConnectFailed, err.Error())), nil
-	}
-
-	// Build the message payload from input fields (no bearerToken in body for
-	// pooled sends; auth is on the upgrade request headers).
-	payload := make(map[string]any)
-	if input.Input != nil {
-		if m, ok := input.Input.(map[string]any); ok {
-			for k, v := range m {
-				payload[k] = v
-			}
-		}
-	}
-
-	msgBytes, marshalErr := json.Marshal(payload)
-	if marshalErr != nil {
-		pw.release()
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeExecutionFailed, marshalErr.Error())), nil
-	}
-
-	wantReply := asyncOp.Reply != nil
-
-	ch := make(chan openbindings.InvocationOutput, 1)
-	go func() {
-		defer close(ch)
-		defer pw.release()
-
-		// Serialize the entire send(+reply) cycle so concurrent callers
-		// don't interleave reads/writes on the same WebSocket.
-		pw.opMu.Lock()
-		defer pw.opMu.Unlock()
-
-		writeErr := pw.conn.Write(ctx, websocket.MessageText, msgBytes)
-		if writeErr != nil {
-			// Connection is broken. Evict it so the next caller gets a fresh one.
-			pool.evict(pw)
-			select {
-			case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeExecutionFailed,
-				Message: writeErr.Error(),
-			}}:
-			case <-ctx.Done():
-			}
-			return
-		}
-
-		if !wantReply {
-			return
-		}
-
-		_, msg, readErr := pw.conn.Read(ctx)
-		if readErr != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			select {
-			case ch <- openbindings.InvocationOutput{Error: &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeStreamError,
-				Message: readErr.Error(),
-			}}:
-			case <-ctx.Done():
-			}
-			return
-		}
-
-		var parsed any
-		if json.Unmarshal(msg, &parsed) == nil {
-			select {
-			case ch <- openbindings.InvocationOutput{Output: parsed}:
-			case <-ctx.Done():
-			}
-		} else {
-			select {
-			case ch <- openbindings.InvocationOutput{Output: string(msg)}:
-			case <-ctx.Done():
-			}
-		}
-	}()
-	return ch, nil
 }
 
 // trimLeadingSlash trims a leading slash from a string if present.

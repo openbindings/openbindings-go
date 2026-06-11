@@ -2,10 +2,13 @@ package usage
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -54,32 +57,54 @@ cmd "echo" {
 `
 }
 
+// invokeUsage drives a usage invocation to completion: writes input (when
+// non-nil), closes the input side, and returns the single output or the
+// terminal error. The binding is unary, so exactly one output (or one
+// terminal) is expected.
+func invokeUsage(t *testing.T, invoker *Invoker, args *openbindings.BindingInvocationArgs, input any) (any, *openbindings.InvocationError) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	call := invoker.InvokeBinding(ctx, args)
+	if input != nil {
+		if err := call.Write(ctx, input); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	_ = call.Close()
+
+	out := call.Outputs()
+	v, err := out.Read(ctx)
+	if errors.Is(err, io.EOF) {
+		return nil, nil // clean close with no output
+	}
+	if err != nil {
+		var ie *openbindings.InvocationError
+		if !errors.As(err, &ie) {
+			t.Fatalf("expected *InvocationError, got %T: %v", err, err)
+		}
+		return nil, ie
+	}
+	if _, err2 := out.Read(ctx); !errors.Is(err2, io.EOF) {
+		t.Fatalf("expected a single output then io.EOF, got %v", err2)
+	}
+	return v, nil
+}
+
 func TestIntegration_JSONOutput(t *testing.T) {
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: testSpec(),
-		},
-		Ref:   "json",
-		Input: map[string]any{"pairs": []any{"name=alice", "role=admin"}},
-	})
-	if err != nil {
-		t.Fatal(err)
+	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
+		Ref:    "json",
+	}, map[string]any{"pairs": []any{"name=alice", "role=admin"}})
+	if ierr != nil {
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
 	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Error != nil {
-		t.Fatalf("unexpected error: %s: %s", events[0].Error.Code, events[0].Error.Message)
-	}
-
-	// JSON output should be parsed into a map (the invoker parses stdout JSON).
-	result, ok := events[0].Output.(map[string]any)
+	result, ok := out.(map[string]any)
 	if !ok {
-		t.Fatalf("expected parsed JSON map, got %T: %v", events[0].Output, events[0].Output)
+		t.Fatalf("expected parsed JSON map, got %T: %v", out, out)
 	}
 	if result["name"] != "alice" {
 		t.Errorf("name = %v, want alice", result["name"])
@@ -91,58 +116,46 @@ func TestIntegration_JSONOutput(t *testing.T) {
 
 func TestIntegration_NonZeroExitCode(t *testing.T) {
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: testSpec(),
-		},
-		Ref:   "fail",
-		Input: map[string]any{"message": []any{"something went wrong"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
+		Ref:    "fail",
+	}, map[string]any{"message": []any{"something went wrong"}})
 
-	events := drainStream(t, ch)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
+	// A non-zero exit is a terminal error carrying the exit code and the
+	// captured output (including stderr) in Details.
+	if out != nil {
+		t.Fatalf("expected no output on non-zero exit, got %v", out)
 	}
-
-	ev := events[0]
-	// Non-zero exit code is returned as Status on the event.
-	// The exit error is handled internally -- the output includes stderr.
-	if ev.Status != 1 {
-		t.Errorf("status = %d, want 1", ev.Status)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", ierr)
 	}
-	output, ok := ev.Output.(map[string]any)
+	details, ok := ierr.Details.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map output, got %T: %v", ev.Output, ev.Output)
+		t.Fatalf("expected map details, got %T", ierr.Details)
 	}
-	stderr, _ := output["stderr"].(string)
-	if stderr == "" {
+	if details["exitCode"] != 1 {
+		t.Errorf("exitCode = %v, want 1", details["exitCode"])
+	}
+	output, ok := details["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map output in details, got %T", details["output"])
+	}
+	if stderr, _ := output["stderr"].(string); stderr == "" {
 		t.Error("expected non-empty stderr from failed command")
 	}
 }
 
 func TestIntegration_MixedOutput(t *testing.T) {
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: testSpec(),
-		},
-		Ref: "mixed",
-	})
-	if err != nil {
-		t.Fatal(err)
+	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
+		Ref:    "mixed",
+	}, nil)
+	if ierr != nil {
+		t.Fatalf("unexpected error: %s", ierr.Message)
 	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 || events[0].Error != nil {
-		t.Fatal("expected 1 successful event")
-	}
-
-	output := events[0].Output.(map[string]any)
+	output := out.(map[string]any)
 	stdout, _ := output["stdout"].(string)
 	stderr, _ := output["stderr"].(string)
 	if stdout == "" {
@@ -155,29 +168,16 @@ func TestIntegration_MixedOutput(t *testing.T) {
 
 func TestIntegration_EchoCommand(t *testing.T) {
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: testSpec(),
-		},
-		Ref:   "echo",
-		Input: map[string]any{"words": []any{"hello", "world"}},
-	})
-	if err != nil {
-		t.Fatal(err)
+	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
+		Ref:    "echo",
+	}, map[string]any{"words": []any{"hello", "world"}})
+	if ierr != nil {
+		t.Fatalf("error: %s: %s", ierr.Code, ierr.Message)
 	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 || events[0].Error != nil {
-		if len(events) > 0 && events[0].Error != nil {
-			t.Fatalf("error: %s: %s", events[0].Error.Code, events[0].Error.Message)
-		}
-		t.Fatal("expected 1 successful event")
-	}
-
-	output := events[0].Output.(map[string]any)
-	stdout, _ := output["stdout"].(string)
-	if stdout != "hello world\n" {
+	output := out.(map[string]any)
+	if stdout, _ := output["stdout"].(string); stdout != "hello world\n" {
 		t.Errorf("stdout = %q, want %q", stdout, "hello world\n")
 	}
 }
@@ -297,62 +297,77 @@ flag "-v --verbose" help="Verbose output"
 arg "<words>..." help="Words to echo"
 `
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: rootSpec,
-		},
-		Ref:   "",
-		Input: map[string]any{"words": []any{"hello", "world"}},
-	})
-	if err != nil {
-		t.Fatal(err)
+	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: rootSpec},
+		Ref:    "",
+	}, map[string]any{"words": []any{"hello", "world"}})
+	if ierr != nil {
+		t.Fatalf("error: %s: %s", ierr.Code, ierr.Message)
 	}
 
-	events := drainStream(t, ch)
-	if len(events) != 1 || events[0].Error != nil {
-		if len(events) > 0 && events[0].Error != nil {
-			t.Fatalf("error: %s: %s", events[0].Error.Code, events[0].Error.Message)
-		}
-		t.Fatal("expected 1 successful event")
-	}
-
-	output := events[0].Output.(map[string]any)
-	stdout, _ := output["stdout"].(string)
-	if stdout != "hello world\n" {
+	output := out.(map[string]any)
+	if stdout, _ := output["stdout"].(string); stdout != "hello world\n" {
 		t.Errorf("stdout = %q, want %q", stdout, "hello world\n")
 	}
 }
 
 func TestIntegration_InvalidRef(t *testing.T) {
 	invoker := NewInvoker()
-	ch, err := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationInput{
-		Source: openbindings.BindingInvocationSource{
-			Format:  FormatToken,
-			Content: testSpec(),
-		},
-		Ref: "nonexistent",
-	})
-	if err != nil {
-		t.Fatal(err)
+	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
+		Ref:    "nonexistent",
+	}, nil)
+	if out != nil {
+		t.Fatalf("expected no output, got %v", out)
 	}
-
-	events := drainStream(t, ch)
-	if len(events) != 1 || events[0].Error == nil {
-		t.Fatal("expected error event")
-	}
-	if events[0].Error.Code != openbindings.ErrCodeRefNotFound {
-		t.Errorf("code = %q, want %q", events[0].Error.Code, openbindings.ErrCodeRefNotFound)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeRefNotFound {
+		t.Fatalf("expected ERR_REF_NOT_FOUND, got %v", ierr)
 	}
 }
 
-func drainStream(t *testing.T, ch <-chan openbindings.InvocationOutput) []openbindings.InvocationOutput {
-	t.Helper()
-	var events []openbindings.InvocationOutput
-	for ev := range ch {
-		events = append(events, ev)
+// TestIntegration_NoInputOperationConvention verifies the operation-layer
+// no-input convention: a binding carrying Binding != nil and InputSchema ==
+// nil runs the bare command without waiting for (or rejecting) a write.
+func TestIntegration_NoInputOperationConvention(t *testing.T) {
+	invoker := NewInvoker()
+	ctx := context.Background()
+	call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
+		Ref:     "mixed",
+		Binding: &openbindings.BindingEntry{Operation: "mixed", Source: "s", Ref: "mixed"},
+		// InputSchema nil → no-input operation; the binding closes input itself.
+	})
+	// The caller writes nothing and does not close; the binding must still run.
+	out, err := openbindings.Single(ctx, call.Outputs())
+	if err != nil {
+		t.Fatalf("no-input convention failed: %v", err)
 	}
-	return events
+	if _, ok := out.(map[string]any); !ok {
+		t.Fatalf("expected map output, got %T", out)
+	}
+}
+
+func TestIntegration_Cancellation(t *testing.T) {
+	// A cancelled context tears down the running process; the handle
+	// terminates with ERR_CANCELLED. Uses the direct-binary metadata path to
+	// run `sleep 10`.
+	invoker := NewInvoker()
+	ctx, cancel := context.WithCancel(context.Background())
+	call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{Format: FormatToken, Content: `bin "sleep"`},
+		Ref:     "10",
+		Context: map[string]any{"metadata": map[string]any{"binary": "sleep"}},
+	})
+	_ = call.Close()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	_, err := call.Outputs().Read(context.Background())
+	var ie *openbindings.InvocationError
+	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeCancelled {
+		t.Fatalf("expected ERR_CANCELLED, got %v", err)
+	}
 }
 
 func mapKeys[V any](m map[string]V) []string {

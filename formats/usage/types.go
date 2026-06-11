@@ -183,12 +183,12 @@ type Arg struct {
 }
 
 type Example struct {
-	Node   Node
-	Code   string
-	Header string
-	Help   string
-	Lang   string
-	Args   []string
+	Node    Node
+	Code    string
+	Header  string
+	Help    string
+	Lang    string
+	Args    []string
 	Unknown []Node
 }
 
@@ -204,9 +204,9 @@ type Mount struct {
 }
 
 type Complete struct {
-	Node        Node
-	Target      string
-	Run         string
+	Node         Node
+	Target       string
+	Run          string
 	Descriptions bool
 }
 

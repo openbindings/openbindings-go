@@ -9,11 +9,13 @@ package graphql
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -23,8 +25,8 @@ const DefaultSourceName = "graphql"
 
 // Invoker handles binding invocation for GraphQL sources.
 type Invoker struct {
-	mu       sync.RWMutex
-	schemas  map[string]*introspectionSchema // endpoint URL -> cached schema
+	mu      sync.RWMutex
+	schemas map[string]*introspectionSchema // endpoint URL -> cached schema
 }
 
 // NewInvoker creates a new GraphQL binding invoker.
@@ -65,149 +67,147 @@ func (e *Invoker) cachedIntrospect(ctx context.Context, endpointURL string, head
 	return schema, nil
 }
 
-// InvokeBinding invokes a GraphQL binding, returning a channel of stream events.
-// For subscriptions it yields events as they arrive; for queries and mutations it
-// returns a single event.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
-	enriched := e.enrichContext(ctx, in)
-	start := time.Now()
+var _ openbindings.BindingInvoker = (*Invoker)(nil)
 
-	rootType, fieldName, err := parseRef(enriched.Ref)
+// InvokeBinding invokes a GraphQL binding and returns the invocation handle
+// synchronously; the work runs on its own goroutine. Queries and mutations
+// yield one output; subscriptions yield one output per event. The variables
+// object flows through the handle's Write channel.
+func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	go e.run(ctx, args, inv)
+	return inv
+}
+
+func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+	// Bound all I/O to the invocation's lifetime.
+	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	defer stop()
+
+	rootType, fieldName, err := parseRef(args.Ref)
 	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidRef, err.Error())), nil
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: err.Error()})
+		return
 	}
 
-	headers := buildHTTPHeaders(enriched.Context)
+	headers := buildHTTPHeaders(args.Context)
 
-	// If inline content is provided, parse it as an introspection result
-	// instead of making a network introspection call.
-	var schema *introspectionSchema
-	if enriched.Source.Content != nil {
-		s, err := parseIntrospectionContent(enriched.Source.Content)
-		if err != nil {
-			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeSourceLoadFailed,
-				fmt.Sprintf("parse inline GraphQL content: %v", err))), nil
-		}
-		schema = s
+	// Input is the GraphQL variables object. An operation-layer call for an
+	// operation that declares no input (InputSchema == nil) closes input on
+	// entry; otherwise read the single variables object the caller writes.
+	var input any
+	if args.Binding != nil && args.InputSchema == nil {
+		_ = inv.CloseInput()
 	} else {
-		s, err := e.cachedIntrospect(ctx, enriched.Source.Location, headers)
-		if err != nil {
-			if isAuthError(err) {
-				return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeAuthRequired, err.Error())), nil
-			}
-			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeSourceLoadFailed, err.Error())), nil
+		v, rerr := inv.ReadInput(bctx)
+		switch {
+		case errors.Is(rerr, io.EOF):
+			// No variables written; dispatch with empty variables.
+		case rerr != nil:
+			inv.FireError(openbindings.AsInvocationError(rerr))
+			return
+		default:
+			input = v
 		}
-		schema = s
+		_ = inv.CloseInput()
 	}
 
-	query, variables, err := buildQuery(schema, rootType, fieldName, enriched.Input, enriched.InputSchema)
-	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound, err.Error())), nil
+	// Build the query. A prebuilt `_query` const in the operation's input
+	// schema skips introspection entirely; otherwise introspect (or parse
+	// inline content) and synthesize the query from the field descriptor.
+	var query string
+	var variables map[string]any
+	if q, ok := queryFromSchema(args.InputSchema); ok {
+		query = q
+		variables = inputToVariablesPassthrough(input)
+	} else {
+		schema, ierr := e.resolveSchema(bctx, args, headers)
+		if ierr != nil {
+			inv.FireError(ierr)
+			return
+		}
+		q, vars, berr := buildQueryFromIntrospection(schema, rootType, fieldName, input)
+		if berr != nil {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: berr.Error()})
+			return
+		}
+		query, variables = q, vars
 	}
 
 	if rootType == "Subscription" {
-		ch, err := subscribeGraphQL(ctx, enriched.Source.Location, query, variables, headers)
-		if err != nil {
-			return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeConnectFailed, err.Error())), nil
-		}
-		return ch, nil
+		streamSubscription(bctx, args.Source.Location, query, variables, headers, inv)
+		return
 	}
 
-	result := invokeGraphQL(ctx, enriched.Source.Location, query, variables, fieldName, headers, start)
-
-	// Auth retry: if the call returned auth_required and we have security
-	// methods and callbacks, resolve credentials and retry once.
-	if result.Error != nil && result.Error.Code == openbindings.ErrCodeAuthRequired &&
-		len(enriched.Security) > 0 && enriched.Callbacks != nil {
-		creds, resolveErr := openbindings.ResolveSecurity(ctx, enriched.Security, enriched.Callbacks, nil)
-		if resolveErr == nil && creds != nil {
-			cp := *enriched
-			enriched = &cp
-			merged := make(map[string]any)
-			for k, v := range enriched.Context {
-				merged[k] = v
-			}
-			for k, v := range creds {
-				merged[k] = v
-			}
-			enriched.Context = merged
-
-			if enriched.Store != nil {
-				storeKey := normalizeEndpoint(enriched.Source.Location)
-				if storeKey != "" {
-					_ = enriched.Store.Set(ctx, storeKey, enriched.Context)
-				}
-			}
-
-			headers = buildHTTPHeaders(enriched.Context)
-			result = invokeGraphQL(ctx, enriched.Source.Location, query, variables, fieldName, headers, start)
-		}
-	}
-
-	return openbindings.SingleEventChannel(result), nil
-}
-
-// enrichContext merges stored context with the incoming binding invocation input.
-func (e *Invoker) enrichContext(ctx context.Context, in *openbindings.BindingInvocationInput) *openbindings.BindingInvocationInput {
-	if in.Store == nil {
-		return in
-	}
-	key := normalizeEndpoint(in.Source.Location)
-	if key == "" {
-		return in
-	}
-	stored, err := in.Store.Get(ctx, key)
-	if err != nil || len(stored) == 0 {
-		return in
-	}
-	cp := *in
-	if len(in.Context) == 0 {
-		cp.Context = stored
-	} else {
-		merged := make(map[string]any, len(stored)+len(in.Context))
-		for k, v := range stored {
-			merged[k] = v
-		}
-		for k, v := range in.Context {
-			merged[k] = v
-		}
-		cp.Context = merged
-	}
-	return &cp
-}
-
-// invokeGraphQL sends a query/mutation over HTTP and returns the result.
-func invokeGraphQL(ctx context.Context, endpointURL, query string, variables map[string]any, fieldName string, headers map[string]string, start time.Time) *openbindings.InvocationOutput {
-	data, gqlErrors, err := doGraphQLHTTP(ctx, endpointURL, query, variables, headers)
+	// Query / mutation: unary HTTP dispatch.
+	data, respHeaders, gqlErrors, err := doGraphQLHTTP(bctx, args.Source.Location, query, variables, headers)
 	if err != nil {
-		if he, ok := err.(*httpError); ok {
-			return openbindings.HTTPErrorOutput(start, he.StatusCode, he.Error())
+		if bctx.Err() != nil {
+			return
 		}
-		return openbindings.FailedOutput(start, openbindings.ErrCodeExecutionFailed, err.Error())
+		if he, ok := err.(*httpError); ok {
+			inv.FireError(openbindings.HTTPError(he.StatusCode, fmt.Sprintf("HTTP %d", he.StatusCode)))
+			return
+		}
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
+		return
 	}
+
+	_ = inv.SetHeader(toMetadata(respHeaders))
 
 	if len(gqlErrors) > 0 {
 		msgs := make([]string, len(gqlErrors))
-		for i, e := range gqlErrors {
-			msgs[i] = e.Message
+		for i, ge := range gqlErrors {
+			msgs[i] = ge.Message
 		}
-		return &openbindings.InvocationOutput{
-			Status:     200,
-			DurationMs: time.Since(start).Milliseconds(),
-			Error: &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeExecutionFailed,
-				Message: strings.Join(msgs, "; "),
-			},
-		}
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeExecutionFailed,
+			Message: strings.Join(msgs, "; "),
+			Details: map[string]any{"errors": gqlErrors},
+		})
+		return
 	}
 
-	// Extract the field-specific data from the response.
 	var output any
 	if data != nil {
 		output = data[fieldName]
 	}
+	if err := inv.EmitOutput(output); err != nil {
+		return
+	}
+	inv.CloseOutput()
+}
 
-	return &openbindings.InvocationOutput{Output: output, Status: 200, DurationMs: time.Since(start).Milliseconds()}
+// resolveSchema returns the introspection schema for the binding, from inline
+// source content or via a (cached) network introspection.
+func (e *Invoker) resolveSchema(ctx context.Context, args *openbindings.BindingInvocationArgs, headers map[string]string) (*introspectionSchema, *openbindings.InvocationError) {
+	if args.Source.Content != nil {
+		s, err := parseIntrospectionContent(args.Source.Content)
+		if err != nil {
+			return nil, &openbindings.InvocationError{
+				Code:    openbindings.ErrCodeSourceLoadFailed,
+				Message: fmt.Sprintf("parse inline GraphQL content: %v", err),
+			}
+		}
+		return s, nil
+	}
+	s, err := e.cachedIntrospect(ctx, args.Source.Location, headers)
+	if err != nil {
+		if isAuthError(err) {
+			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeAuthRequired, Message: err.Error()}
+		}
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: err.Error()}
+	}
+	return s, nil
+}
+
+// toMetadata clones HTTP response headers into invocation Metadata.
+func toMetadata(h http.Header) openbindings.Metadata {
+	md := make(openbindings.Metadata, len(h))
+	for k, vs := range h {
+		md[k] = append([]string(nil), vs...)
+	}
+	return md
 }
 
 // Creator handles interface creation from GraphQL endpoints.

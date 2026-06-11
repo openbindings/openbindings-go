@@ -2,7 +2,6 @@ package usage
 
 import (
 	"context"
-	"strings"
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -21,6 +20,8 @@ type Invoker struct {
 func NewInvoker() *Invoker {
 	return &Invoker{}
 }
+
+var _ openbindings.BindingInvoker = (*Invoker)(nil)
 
 // cachedLoadSpec loads a usage spec, caching by location within a process.
 // When content is provided, the cache is bypassed and updated with the fresh parse.
@@ -47,57 +48,16 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "CLI tools via usage-spec KDL"}}
 }
 
-// InvokeBinding invokes a CLI command based on a usage-spec binding,
-// returning a single-event channel with the command's output.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
-	enriched := in
-	if in.Store != nil {
-		key := resolveUsageKey(ctx, in.Source.Location, in.Source.Content, e.cachedLoadSpec)
-		if key != "" {
-			if stored, err := in.Store.Get(ctx, key); err == nil && len(stored) > 0 {
-				cp := *in
-				if len(in.Context) == 0 {
-					cp.Context = stored
-				} else {
-					merged := make(map[string]any, len(stored)+len(in.Context))
-					for k, v := range stored {
-						merged[k] = v
-					}
-					for k, v := range in.Context {
-						merged[k] = v
-					}
-					cp.Context = merged
-				}
-				enriched = &cp
-			}
-		}
-	}
-
-	return openbindings.SingleEventChannel(invokeBindingCached(ctx, enriched, e.cachedLoadSpec)), nil
-}
-
-func resolveUsageKey(ctx context.Context, location string, content any, loader func(context.Context, string, any) (*Spec, error)) string {
-	spec, err := loader(ctx, location, content)
-	if err != nil {
-		return ""
-	}
-	meta := spec.Meta()
-	binName := meta.Bin
-	if binName == "" {
-		binName = meta.Name
-	}
-	if binName == "" {
-		if strings.HasPrefix(location, "exec:") {
-			binName = strings.TrimPrefix(location, "exec:")
-			if idx := strings.IndexByte(binName, ' '); idx > 0 {
-				binName = binName[:idx]
-			}
-		}
-	}
-	if binName == "" {
-		return ""
-	}
-	return "exec:" + binName
+// InvokeBinding runs a CLI command for a usage-spec binding and returns the
+// invocation handle synchronously; the process runs on its own goroutine.
+// The command's flag/arg object flows through the handle's Write channel; the
+// process output is emitted as one output. Credentials/configuration travel
+// as environment variables in the binding context (the well-known
+// "environment" field), not as a separate security mechanism.
+func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	go e.run(ctx, args, inv)
+	return inv
 }
 
 // Creator handles interface creation from usage specs.

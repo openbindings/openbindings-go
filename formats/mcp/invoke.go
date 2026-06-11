@@ -3,10 +3,15 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
-	"time"
+	"sync"
+	"sync/atomic"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -17,68 +22,311 @@ const (
 	refPrefixPrompts   = "prompts/"
 )
 
-// invoke dispatches an MCP binding to the appropriate entity-type handler
-// and returns a stream of events. Tool calls return a multi-event channel
-// that yields one event per `notifications/progress` notification followed by
-// the final tool result. Resources and prompts return a single-event channel.
-//
-// Returns a channel rather than an *InvocationOutput so the streaming tool path
-// can surface progress notifications as intermediate events. The previous
-// behavior (one event per call) is preserved for resources and prompts.
-func invoke(ctx context.Context, pool *sessionPool, clientVersion string, url string, ref string, input any, headers map[string]string) <-chan openbindings.InvocationOutput {
-	start := time.Now()
+// nextProgressToken provides a unique progress token per tool invocation.
+// MCP servers correlate notifications/progress messages back to the request
+// that originated the token.
+var nextProgressToken atomic.Int64
 
-	entityType, name, err := parseRef(ref)
+// run drives one MCP binding invocation against the handle. Pre-dispatch
+// failures (bad ref, missing or non-HTTP endpoint, non-object input) fire
+// BEFORE any network I/O. Tools and prompts read the operation's single
+// arguments object from the handle's input channel; resource reads take no
+// input (the input side closes on entry).
+func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+	// --- Pre-dispatch validation: no network I/O has happened yet. ---
+	entityType, name, err := parseRef(args.Ref)
 	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidRef, err.Error()))
+		inv.FireError(&openbindings.InvocationError{
+			Code: openbindings.ErrCodeInvalidRef, Message: err.Error(),
+		})
+		return
 	}
 
+	location := strings.TrimSpace(args.Source.Location)
+	if location == "" {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: "MCP source requires a location (endpoint URL)",
+		})
+		return
+	}
+	if !openbindings.IsHTTPURL(location) {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: fmt.Sprintf("MCP source location must be an HTTP or HTTPS URL, got %q", location),
+		})
+		return
+	}
+
+	// bctx bounds the underlying MCP I/O to the invocation's lifetime:
+	// caller Cancel() (or upstream ctx cancellation) tears down in-flight
+	// JSON-RPC calls.
+	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	defer stop()
+
+	// --- Collect input from the handle. ---
+	// Tools and prompts take one named-arguments object; resource reads take
+	// no input. Close input as early as possible so callers never have to.
+	var toolArgs map[string]any
+	var promptArgs map[string]string
+	switch entityType {
+	case "resources":
+		_ = inv.CloseInput()
+	default:
+		first, err := inv.ReadInput(bctx)
+		_ = inv.CloseInput()
+		if err != nil && err != io.EOF {
+			// Terminal error or cancellation: the invocation is already
+			// settled (or settling); nothing to fire.
+			return
+		}
+		if entityType == "tools" {
+			m, ok := openbindings.ToStringAnyMap(first)
+			if first != nil && !ok {
+				inv.FireError(&openbindings.InvocationError{
+					Code:    openbindings.ErrCodeValidationFailed,
+					Message: fmt.Sprintf("MCP tool input must be an object, got %T", first),
+				})
+				return
+			}
+			// MCP servers expect an object for arguments, never null.
+			// Defensive shallow copy keeps the invoker contract ("never
+			// mutate caller input") even when the third-party MCP SDK passes
+			// args by reference.
+			toolArgs = map[string]any{}
+			for k, v := range m {
+				toolArgs[k] = v
+			}
+		} else {
+			pa, perr := toStringStringMap(first)
+			if perr != nil {
+				inv.FireError(&openbindings.InvocationError{
+					Code:    openbindings.ErrCodeValidationFailed,
+					Message: fmt.Sprintf("MCP prompt arguments must be an object: %v", perr),
+				})
+				return
+			}
+			promptArgs = pa
+		}
+	}
+
+	// --- Connect: the MCP initialize handshake is the first network I/O. ---
+	// The header capture rides the per-call context into the HTTP transport
+	// and records the latest POST response (status + headers), giving us real
+	// HTTP metadata the go-mcp SDK's stringly-typed errors don't carry.
+	hc := &headerCapture{}
+	callCtx := context.WithValue(bctx, headerCaptureKey{}, hc)
+	headers := buildHTTPHeaders(args.Context)
+
+	session, err := e.pool.acquire(callCtx, e.clientVersion, location, headers)
+	if err != nil {
+		inv.FireError(mapMCPError(err, hc, openbindings.ErrCodeConnectFailed))
+		return
+	}
+	defer session.release()
+
+	// SetHeader must precede the first emit and may only happen once. The
+	// snapshot at first-emit time is the entity call's POST response (the
+	// capture overwrites the handshake's).
+	var headerOnce sync.Once
+	setHeader := func() {
+		headerOnce.Do(func() { _ = inv.SetHeader(hc.snapshot()) })
+	}
+
+	// --- Dispatch. ---
+	var derr *openbindings.InvocationError
+	var suspect bool
 	switch entityType {
 	case "tools":
-		// Validate and shallow-copy the input map up front, then dispatch to
-		// the streaming tool path. Argument validation lives here (rather
-		// than inside invokeToolStreaming) so it stays testable in
-		// isolation and so invalid-input errors are emitted as a clean
-		// single-event stream.
-		args, ok := openbindings.ToStringAnyMap(input)
-		if input != nil && !ok {
-			return openbindings.SingleEventChannel(&openbindings.InvocationOutput{
-				Status: 1,
-				Error: &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeInvalidInput,
-					Message: fmt.Sprintf("tool input must be an object, got %T", input),
-				},
-				DurationMs: time.Since(start).Milliseconds(),
-			})
-		}
-		// MCP servers expect an object for arguments, never null. Defensive
-		// shallow copy keeps the invoker contract ("never mutate caller
-		// input") even when the third-party MCP SDK passes args by reference.
-		if args == nil {
-			args = map[string]any{}
-		} else {
-			cp := make(map[string]any, len(args))
-			for k, v := range args {
-				cp[k] = v
-			}
-			args = cp
-		}
-		return invokeToolStreaming(ctx, pool, clientVersion, url, name, args, headers)
-
+		derr, suspect = runTool(callCtx, session, name, toolArgs, inv, hc, setHeader)
 	case "resources":
-		out := invokeResource(ctx, pool, clientVersion, url, name, headers)
-		out.DurationMs = time.Since(start).Milliseconds()
-		return openbindings.SingleEventChannel(out)
-
-	case "prompts":
-		out := invokePrompt(ctx, pool, clientVersion, url, name, input, headers)
-		out.DurationMs = time.Since(start).Milliseconds()
-		return openbindings.SingleEventChannel(out)
-
-	default:
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(start, openbindings.ErrCodeInvalidRef, fmt.Sprintf("unsupported MCP entity type %q", entityType)))
+		derr, suspect = runResource(callCtx, session, name, inv, hc, setHeader)
+	default: // prompts
+		derr, suspect = runPrompt(callCtx, session, name, promptArgs, inv, hc, setHeader)
+	}
+	if derr != nil {
+		// A transport- or HTTP-level failure may have poisoned the pooled
+		// session (the go-mcp client fails its connection on non-transient
+		// errors); evict it so the next invocation gets a fresh handshake.
+		// JSON-RPC errors, application-level tool errors, and cancellations
+		// leave the session healthy.
+		if suspect {
+			e.pool.invalidate(session)
+		}
+		inv.FireError(derr)
 	}
 }
+
+// sessionSuspect reports whether an error from the go-mcp SDK may have left
+// the pooled session unusable. Structured JSON-RPC errors mean the server
+// replied normally; cancellation is caller-driven. Anything else (HTTP error
+// responses, transport breakage) is suspect.
+func sessionSuspect(err error) bool {
+	if serverJSONRPCError(err) != nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return true
+}
+
+// transportSentinels are the go-mcp SDK's LOCAL jsonrpc2 sentinel errors
+// (implementation-defined codes that never come from the server): rejected
+// by transport, client closing, server closing. jsonrpc.Error.Is compares
+// by code, so errors.Is matches them anywhere in a wrapped chain.
+var transportSentinels = []*jsonrpc.Error{
+	{Code: -32005}, // rejected by transport (write/dial failures)
+	{Code: -32003}, // client is closing
+	{Code: -32004}, // server is closing
+}
+
+// serverJSONRPCError returns the JSON-RPC error the SERVER replied with, or
+// nil. Both server replies and local transport failures carry a
+// *jsonrpc.Error in their chain, so the SDK's local sentinels are excluded
+// by code first.
+func serverJSONRPCError(err error) *jsonrpc.Error {
+	for _, s := range transportSentinels {
+		if errors.Is(err, s) {
+			return nil
+		}
+	}
+	var werr *jsonrpc.Error
+	if errors.As(err, &werr) {
+		return werr
+	}
+	return nil
+}
+
+// runTool calls an MCP tool. Progress notifications stream as outputs ahead
+// of the final result — multiple outputs are first-class on the handle.
+func runTool(
+	ctx context.Context,
+	session *mcpSession,
+	toolName string,
+	toolArgs map[string]any,
+	inv *openbindings.InvocationImpl[any, any],
+	hc *headerCapture,
+	setHeader func(),
+) (*openbindings.InvocationError, bool) {
+	// Each call gets a fresh progress token so the server can correlate
+	// notifications to this specific invocation.
+	progressToken := fmt.Sprintf("ob-progress-%d", nextProgressToken.Add(1))
+
+	// emitMu serializes progress emits against the final-result emit: after
+	// CallTool returns we unregister the handler and take the mutex, so the
+	// result is guaranteed to be the last output. EmitOutput's parking IS the
+	// backpressure (no side buffer); it returns the terminal error if the
+	// invocation ends while parked, which stops the handler cleanly.
+	var emitMu sync.Mutex
+	session.registerProgress(progressToken, func(_ context.Context, req *gomcp.ProgressNotificationClientRequest) {
+		if req == nil || req.Params == nil {
+			return
+		}
+		emitMu.Lock()
+		defer emitMu.Unlock()
+		setHeader()
+		p := req.Params
+		_ = inv.EmitOutput(map[string]any{
+			"progressToken": p.ProgressToken,
+			"progress":      p.Progress,
+			"total":         p.Total,
+			"message":       p.Message,
+		})
+	})
+	defer session.unregisterProgress(progressToken)
+
+	// Note: Meta must be pre-initialized so SetProgressToken's mutation is
+	// visible. The upstream gomcp helper allocates a local map when Meta is
+	// nil but never writes it back to the params struct, so a nil Meta
+	// silently swallows the token.
+	params := &gomcp.CallToolParams{
+		Name:      toolName,
+		Arguments: toolArgs,
+		Meta:      gomcp.Meta{},
+	}
+	params.SetProgressToken(progressToken)
+
+	result, callErr := session.session.CallTool(ctx, params)
+
+	session.unregisterProgress(progressToken)
+	emitMu.Lock()
+	defer emitMu.Unlock()
+
+	if callErr != nil {
+		return mapMCPError(callErr, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(callErr)
+	}
+	if result.IsError {
+		// Application-level tool failure (CallToolResult.isError). The
+		// session is healthy: the server replied normally.
+		msg := contentText(result.Content)
+		if msg == "" {
+			msg = fmt.Sprintf("MCP tool %q reported an error", toolName)
+		}
+		return &openbindings.InvocationError{
+			Code: openbindings.ErrCodeExecutionFailed, Message: msg,
+		}, false
+	}
+
+	setHeader()
+	if err := inv.EmitOutput(toolResultValue(result)); err != nil {
+		return nil, false // invocation terminated while parked; already settled
+	}
+	inv.CloseOutput()
+	return nil, false
+}
+
+// runResource reads an MCP resource. Resource reads take no input.
+func runResource(
+	ctx context.Context,
+	session *mcpSession,
+	uri string,
+	inv *openbindings.InvocationImpl[any, any],
+	hc *headerCapture,
+	setHeader func(),
+) (*openbindings.InvocationError, bool) {
+	result, err := session.session.ReadResource(ctx, &gomcp.ReadResourceParams{URI: uri})
+	if err != nil {
+		return mapMCPError(err, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(err)
+	}
+
+	setHeader()
+	if err := inv.EmitOutput(resourceValue(result)); err != nil {
+		return nil, false
+	}
+	inv.CloseOutput()
+	return nil, false
+}
+
+// runPrompt gets an MCP prompt.
+func runPrompt(
+	ctx context.Context,
+	session *mcpSession,
+	promptName string,
+	promptArgs map[string]string,
+	inv *openbindings.InvocationImpl[any, any],
+	hc *headerCapture,
+	setHeader func(),
+) (*openbindings.InvocationError, bool) {
+	result, err := session.session.GetPrompt(ctx, &gomcp.GetPromptParams{
+		Name:      promptName,
+		Arguments: promptArgs,
+	})
+	if err != nil {
+		return mapMCPError(err, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(err)
+	}
+
+	setHeader()
+	if err := inv.EmitOutput(promptValue(result)); err != nil {
+		return nil, false
+	}
+	inv.CloseOutput()
+	return nil, false
+}
+
+// ---------------------------------------------------------------------------
+// Ref parsing
+// ---------------------------------------------------------------------------
 
 // parseRef extracts the entity type and name from an MCP ref.
 // Returns (entityType, name, error).
@@ -108,75 +356,124 @@ func parseRef(ref string) (entityType string, name string, err error) {
 		ref, refPrefixTools, refPrefixResources, refPrefixPrompts)
 }
 
-func invokeResource(ctx context.Context, pool *sessionPool, clientVersion string, url string, uri string, headers map[string]string) *openbindings.InvocationOutput {
-	result, err := readResourcePooled(ctx, pool, clientVersion, url, uri, headers)
-	if err != nil {
-		return &openbindings.InvocationOutput{
-			Status: 1,
-			Error: &openbindings.InvocationError{
-				Code:    mcpErrorCode(err),
-				Message: err.Error(),
-			},
+// ---------------------------------------------------------------------------
+// Error mapping
+// ---------------------------------------------------------------------------
+
+// mapMCPError converts an error from the go-mcp SDK into a terminal
+// *InvocationError. JSON-RPC errors carry the MCP error code/data in
+// Details (ERR_EXECUTION_FAILED); HTTP error responses map via the captured
+// status code (401 → ERR_AUTH_REQUIRED, 403 → ERR_PERMISSION_DENIED);
+// cancellation maps to ERR_CANCELLED; anything else falls back to the
+// phase's code (ERR_CONNECT_FAILED during the initialize handshake,
+// ERR_EXECUTION_FAILED during dispatch).
+func mapMCPError(err error, hc *headerCapture, fallback string) *openbindings.InvocationError {
+	var ie *openbindings.InvocationError
+	if errors.As(err, &ie) {
+		return ie
+	}
+
+	// JSON-RPC error: the server replied with a structured error.
+	if werr := serverJSONRPCError(err); werr != nil {
+		details := map[string]any{"code": werr.Code}
+		if len(werr.Data) > 0 {
+			var data any
+			if json.Unmarshal(werr.Data, &data) == nil {
+				details["data"] = data
+			}
+		}
+		return &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeExecutionFailed,
+			Message: err.Error(),
+			Details: details,
 		}
 	}
 
-	return readResourceResultToOutput(result)
+	// HTTP error response: the capture saw the failing POST's status.
+	if status, statusText := hc.lastStatus(); status >= 400 {
+		return openbindings.HTTPError(status, statusText)
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return &openbindings.InvocationError{
+			Code: openbindings.ErrCodeCancelled, Message: err.Error(),
+		}
+	}
+
+	return &openbindings.InvocationError{Code: fallback, Message: err.Error()}
 }
 
-func invokePrompt(ctx context.Context, pool *sessionPool, clientVersion string, url string, promptName string, input any, headers map[string]string) *openbindings.InvocationOutput {
-	args, err := toStringStringMap(input)
-	if err != nil {
-		return &openbindings.InvocationOutput{
-			Status: 1,
-			Error: &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeInvalidInput,
-				Message: fmt.Sprintf("prompt arguments must be an object with string values: %v", err),
-			},
-		}
-	}
+// ---------------------------------------------------------------------------
+// HTTP response capture
+// ---------------------------------------------------------------------------
 
-	result, err := getPromptPooled(ctx, pool, clientVersion, url, promptName, args, headers)
-	if err != nil {
-		return &openbindings.InvocationOutput{
-			Status: 1,
-			Error: &openbindings.InvocationError{
-				Code:    mcpErrorCode(err),
-				Message: err.Error(),
-			},
-		}
-	}
+// headerCaptureKey keys a *headerCapture in a per-call context. The
+// header-injecting transport records each POST response into the capture,
+// because per-call ctx values propagate through the go-mcp SDK's JSON-RPC
+// writes into the HTTP request.
+type headerCaptureKey struct{}
 
-	return getPromptResultToOutput(result)
+// headerCapture records the latest POST response observed for one call:
+// status (for HTTP error mapping) and headers (for Invocation metadata).
+type headerCapture struct {
+	mu         sync.Mutex
+	statusCode int
+	status     string
+	header     openbindings.Metadata
 }
 
-func callToolResultToOutput(result *gomcp.CallToolResult) *openbindings.InvocationOutput {
-	// IsError is an application-level tool error, not a transport error.
-	// Status is always 200 for a successful MCP call; the caller can inspect
-	// the output or Error field to distinguish application-level failures.
+func (hc *headerCapture) record(resp *http.Response) {
+	md := make(openbindings.Metadata, len(resp.Header))
+	for k, vs := range resp.Header {
+		md[k] = append([]string(nil), vs...)
+	}
+	hc.mu.Lock()
+	hc.statusCode = resp.StatusCode
+	hc.status = resp.Status
+	hc.header = md
+	hc.mu.Unlock()
+}
 
-	// Prefer structured content if available.
+func (hc *headerCapture) snapshot() openbindings.Metadata {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	if hc.header == nil {
+		return openbindings.Metadata{}
+	}
+	return hc.header
+}
+
+func (hc *headerCapture) lastStatus() (int, string) {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	return hc.statusCode, hc.status
+}
+
+// ---------------------------------------------------------------------------
+// Result conversion
+// ---------------------------------------------------------------------------
+
+// toolResultValue converts a CallToolResult into the output value. Prefers
+// structured content when available; otherwise extracts the content array.
+func toolResultValue(result *gomcp.CallToolResult) any {
 	if result.StructuredContent != nil {
 		switch sc := result.StructuredContent.(type) {
 		case json.RawMessage:
 			var structured any
 			if json.Unmarshal(sc, &structured) == nil {
-				return &openbindings.InvocationOutput{Output: structured, Status: 200}
+				return structured
 			}
 		default:
-			return &openbindings.InvocationOutput{Output: sc, Status: 200}
+			return sc
 		}
 	}
-
-	output := extractContent(result.Content)
-	return &openbindings.InvocationOutput{
-		Output: output,
-		Status: 200,
-	}
+	return extractContent(result.Content)
 }
 
-func readResourceResultToOutput(result *gomcp.ReadResourceResult) *openbindings.InvocationOutput {
+// resourceValue converts a ReadResourceResult into the output value.
+func resourceValue(result *gomcp.ReadResourceResult) any {
 	if len(result.Contents) == 0 {
-		return &openbindings.InvocationOutput{Status: 200}
+		return nil
 	}
 
 	if len(result.Contents) == 1 {
@@ -184,11 +481,11 @@ func readResourceResultToOutput(result *gomcp.ReadResourceResult) *openbindings.
 		if c.Text != "" {
 			var parsed any
 			if json.Unmarshal([]byte(c.Text), &parsed) == nil {
-				return &openbindings.InvocationOutput{Output: parsed, Status: 200}
+				return parsed
 			}
-			return &openbindings.InvocationOutput{Output: c.Text, Status: 200}
+			return c.Text
 		}
-		return &openbindings.InvocationOutput{Output: map[string]any{"uri": c.URI, "mimeType": c.MIMEType}, Status: 200}
+		return map[string]any{"uri": c.URI, "mimeType": c.MIMEType}
 	}
 
 	var items []any
@@ -199,10 +496,11 @@ func readResourceResultToOutput(result *gomcp.ReadResourceResult) *openbindings.
 			"text":     c.Text,
 		})
 	}
-	return &openbindings.InvocationOutput{Output: items, Status: 200}
+	return items
 }
 
-func getPromptResultToOutput(result *gomcp.GetPromptResult) *openbindings.InvocationOutput {
+// promptValue converts a GetPromptResult into the output value.
+func promptValue(result *gomcp.GetPromptResult) map[string]any {
 	var messages []any
 	for _, msg := range result.Messages {
 		if msg == nil {
@@ -223,8 +521,7 @@ func getPromptResultToOutput(result *gomcp.GetPromptResult) *openbindings.Invoca
 	if result.Description != "" {
 		output["description"] = result.Description
 	}
-
-	return &openbindings.InvocationOutput{Output: output, Status: 200}
+	return output
 }
 
 func extractContent(content []gomcp.Content) any {
@@ -264,6 +561,17 @@ func extractContent(content []gomcp.Content) any {
 	return items
 }
 
+// contentText joins the text items of a content array, for error messages.
+func contentText(content []gomcp.Content) string {
+	var texts []string
+	for _, c := range content {
+		if tc, ok := c.(*gomcp.TextContent); ok && tc.Text != "" {
+			texts = append(texts, tc.Text)
+		}
+	}
+	return strings.Join(texts, "\n")
+}
+
 func contentToMap(c gomcp.Content) map[string]any {
 	switch v := c.(type) {
 	case *gomcp.TextContent:
@@ -295,28 +603,6 @@ func contentToMap(c gomcp.Content) map[string]any {
 		return m
 	default:
 		return map[string]any{"type": "unknown"}
-	}
-}
-
-// mcpErrorCode maps an MCP error to a standard error code constant.
-func mcpErrorCode(err error) string {
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "401") || strings.Contains(msg, "unauthorized"):
-		return openbindings.ErrCodeAuthRequired
-	case strings.Contains(msg, "403") || strings.Contains(msg, "forbidden"):
-		return openbindings.ErrCodePermissionDenied
-	case strings.Contains(msg, "404") || strings.Contains(msg, "not found"):
-		return openbindings.ErrCodeRefNotFound
-	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host") ||
-		strings.Contains(msg, "dial tcp"):
-		return openbindings.ErrCodeConnectFailed
-	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded"):
-		return openbindings.ErrCodeTimeout
-	case strings.Contains(msg, "context canceled"):
-		return openbindings.ErrCodeCancelled
-	default:
-		return openbindings.ErrCodeExecutionFailed
 	}
 }
 

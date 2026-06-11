@@ -33,23 +33,33 @@ The invoker declares `mcp@2025-11-25` -- it handles MCP servers implementing the
 
 ```go
 invoker := mcpbinding.NewInvoker()
+defer invoker.Close()
 
-ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-    Source: openbindings.BindingInvocationSource{
+call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+    Source: openbindings.InvocationSource{
         Format:   "mcp@2025-11-25",
         Location: "https://mcp.example.com/sse",
     },
     Ref:     "tools/get_weather",
-    Input:   map[string]any{"city": "Seattle"},
     Context: map[string]any{"bearerToken": "tok_123"},
 })
-for ev := range ch {
-    if ev.Error != nil {
-        log.Fatal(ev.Error.Message)
-    }
-    fmt.Println(ev.Output)
+
+// Tool and prompt arguments are the operation's single input message.
+if err := call.Write(ctx, map[string]any{"city": "Seattle"}); err != nil {
+    log.Fatal(err)
 }
+
+// Tools that emit progress notifications yield multiple outputs (progress
+// events first, the result last); use Single when you expect exactly one.
+out, err := openbindings.Single(ctx, call.Outputs())
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(out)
 ```
+
+Resource reads (`resources/<uri>`) take no input: skip the `Write` and read
+outputs directly.
 
 ### Create an interface from an MCP server
 
@@ -88,12 +98,13 @@ These are non-normative conventions specific to the `mcp` binding format.
 
 ### Credential application
 
-Credentials are applied as HTTP headers:
+Credentials from the invocation context are applied as HTTP headers:
 
 - `bearerToken`: `Authorization: Bearer <token>`
 - `apiKey`: `Authorization: ApiKey <key>`
+- `basic`: `Authorization: Basic <base64(user:pass)>`
 
-Invocation options headers and cookies are forwarded. No security metadata in MCP; auth retry handles 401 at runtime.
+Context `headers` and `cookies` are forwarded. No security metadata in MCP; an HTTP 401 surfaces as a terminal `ERR_AUTH_REQUIRED` and context resolution happens above the binding.
 
 ### Entity type mapping
 
@@ -116,14 +127,19 @@ Invocation options headers and cookies are forwarded. No security metadata in MC
 
 ### Invocation flow
 
-1. Parses the ref to determine entity type: `tools/`, `resources/`, or `prompts/`
-2. Opens a new MCP session via Streamable HTTP transport (JSON-RPC over HTTP)
-3. Applies credentials from the context as HTTP headers (bearer, apiKey)
-4. Calls the appropriate MCP method (`tools/call`, `resources/read`, or `prompts/get`)
-5. Converts the MCP response to an OpenBindings stream event
-6. Closes the session
+`InvokeBinding` returns the `Invocation` handle synchronously; the MCP work runs on its own goroutine:
 
-Each invocation creates a fresh MCP session. MCP sessions are stateful -- they begin with capability negotiation, support bidirectional notifications, and have a formal shutdown lifecycle. Reusing sessions across independent `InvokeBinding` calls would conflate these session semantics, so each call gets its own session. Go's default HTTP transport pools the underlying TCP connections.
+1. Parses the ref to determine entity type: `tools/`, `resources/`, or `prompts/` (a bad ref or missing/non-HTTP endpoint terminates the handle before any network I/O)
+2. Reads the operation's single input message from the handle (tools and prompts); resource reads take no input and close the input side on entry
+3. Acquires a pooled MCP session (Streamable HTTP transport, JSON-RPC over HTTP), applying credentials from the context as HTTP headers
+4. Calls the appropriate MCP method (`tools/call`, `resources/read`, or `prompts/get`)
+5. Emits any `notifications/progress` events as outputs as they arrive, then the final result, then closes the output side
+
+The call's HTTP response headers surface as the invocation's leading metadata (`Header`). Errors map to terminal invocation errors: JSON-RPC errors → `ERR_EXECUTION_FAILED` with the `{code, data}` in details, HTTP 401/403 → `ERR_AUTH_REQUIRED`/`ERR_PERMISSION_DENIED`, connection failures → `ERR_CONNECT_FAILED`.
+
+### Session pooling
+
+The invoker pools MCP sessions by server URL + auth headers. Multiple `InvokeBinding` calls against the same server share one session (one `initialize` handshake). A session stays alive while any invocation uses it, then idles for 30 seconds (configurable via `WithIdleTimeout`) before closing. Call `Invoker.Close` to shut down all pooled sessions.
 
 ### Credential application
 
@@ -131,8 +147,9 @@ Credentials are applied as HTTP headers in priority order:
 
 - **bearer**: Sets `Authorization: Bearer <token>` from `bearerToken` context field
 - **apiKey**: Sets `Authorization: ApiKey <key>` from `apiKey` context field
+- **basic**: Sets `Authorization: Basic <credentials>` from the `basic` context field
 
-Invocation options headers are also forwarded to the MCP transport.
+Context `headers` and `cookies` are also forwarded to the MCP transport.
 
 ### Interface creation
 

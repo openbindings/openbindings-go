@@ -4,10 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sort"
-	"strings"
 	"sync"
-	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -35,6 +32,11 @@ type Invoker struct {
 	docCache   map[string]*Document
 	wsPool     *wsPool
 }
+
+var (
+	_ openbindings.BindingInvoker  = (*Invoker)(nil)
+	_ openbindings.BindingPreparer = (*Invoker)(nil)
+)
 
 // NewInvoker creates a new AsyncAPI binding invoker.
 func NewInvoker() *Invoker {
@@ -76,121 +78,88 @@ func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, conte
 	return doc, nil
 }
 
-func resolveServerKey(doc *Document) string {
-	serverNames := make([]string, 0, len(doc.Servers))
-	for name := range doc.Servers {
-		serverNames = append(serverNames, name)
-	}
-	sort.Strings(serverNames)
-
-	for _, name := range serverNames {
-		server := doc.Servers[name]
-		proto := strings.ToLower(server.Protocol)
-		switch proto {
-		case "http", "https", "ws", "wss":
-			u := proto + "://" + server.Host
-			if server.PathName != "" {
-				u += server.PathName
-			}
-			return openbindings.NormalizeContextKey(strings.TrimRight(u, "/"))
-		}
-	}
-	return ""
-}
-
 // Formats returns the source formats supported by the AsyncAPI invoker.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "AsyncAPI 3.x event-driven APIs"}}
 }
 
-// InvokeBinding invokes an AsyncAPI binding, returning a channel of stream events.
-// For send actions it performs a unary HTTP POST; for receive actions it subscribes
-// via SSE or WebSocket depending on the server protocol.
-func (e *Invoker) InvokeBinding(ctx context.Context, in *openbindings.BindingInvocationInput) (<-chan openbindings.InvocationOutput, error) {
-	doc, err := e.cachedLoadDocument(ctx, in.Source.Location, in.Source.Content)
+// InvokeBinding invokes an AsyncAPI binding, returning the invocation handle
+// synchronously. Creation is inert: the binding's work runs on its own
+// goroutine and every pre-dispatch failure (bad ref, missing server,
+// CONTEXT_REQUIRED) is raised before any observable side effect.
+//
+// Channel-to-handle mapping:
+//   - send + http/https: unary POST (first input -> body, response -> output)
+//   - send + ws/wss: client-streaming publish (each input -> one frame)
+//   - receive + http/https: SSE subscribe (server events -> outputs)
+//   - receive + ws/wss: WebSocket subscribe, bidi-capable (frames -> outputs,
+//     caller inputs -> control frames)
+func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	go func() {
+		// Bound all underlying I/O to the invocation's lifetime.
+		bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+		defer stop()
+
+		doc, err := e.cachedLoadDocument(bctx, args.Source.Location, args.Source.Content)
+		if err != nil {
+			if bctx.Err() != nil {
+				return // cancellation is already terminal
+			}
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: err.Error()})
+			return
+		}
+		runBinding(bctx, e.httpClient, e.wsPool, args, inv, doc)
+	}()
+	return inv
+}
+
+// PrepareBinding is the side-effect-free preflight: it reports the context
+// this binding would require, or nil when the binding can proceed (or the
+// answer is not knowable without network I/O). Only inline source content
+// and the warm doc cache are consulted; nothing is fetched.
+func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+	var doc *Document
+	if args.Source.Content != nil {
+		// loadDocument performs no I/O when content is inline.
+		d, err := loadDocument(ctx, e.httpClient, args.Source.Location, args.Source.Content)
+		if err != nil {
+			return nil, nil
+		}
+		doc = d
+	} else if args.Source.Location != "" {
+		e.mu.RLock()
+		doc = e.docCache[args.Source.Location]
+		e.mu.RUnlock()
+	}
+	if doc == nil {
+		return nil, nil
+	}
+
+	opID, err := parseRef(args.Ref)
 	if err != nil {
-		return openbindings.SingleEventChannel(openbindings.FailedOutput(time.Now(), openbindings.ErrCodeSourceLoadFailed, err.Error())), nil
+		return nil, nil
 	}
-
-	enriched := in
-	if in.Store != nil {
-		key := resolveServerKey(doc)
-		if key != "" {
-			if stored, sErr := in.Store.Get(ctx, key); sErr == nil && len(stored) > 0 {
-				cp := *in
-				if len(in.Context) == 0 {
-					cp.Context = stored
-				} else {
-					merged := make(map[string]any, len(stored)+len(in.Context))
-					for k, v := range stored {
-						merged[k] = v
-					}
-					for k, v := range in.Context {
-						merged[k] = v
-					}
-					cp.Context = merged
-				}
-				enriched = &cp
-			}
-		}
+	asyncOp, ok := doc.Operations[opID]
+	if !ok {
+		return nil, nil
 	}
-
-	// Determine action from the AsyncAPI doc to choose unary vs streaming path.
-	opID, parseErr := parseRef(enriched.Ref)
-	if parseErr == nil {
-		if asyncOp, ok := doc.Operations[opID]; ok {
-			if asyncOp.Action == "receive" {
-				return subscribeBindingWithDoc(ctx, e.httpClient, enriched, doc, e.wsPool)
-			}
-			if asyncOp.Action == "send" {
-				_, protocol, _ := resolveServer(doc, enriched.Context)
-				if protocol == "ws" || protocol == "wss" {
-					return subscribeBindingWithDoc(ctx, e.httpClient, enriched, doc, e.wsPool)
-				}
-			}
-		}
+	serverURL, _, err := resolveServer(doc, args.Context)
+	if err != nil {
+		return nil, nil
 	}
-
-	// Unary path — wrap the InvocationOutput as a single-event channel.
-	result := invokeBindingWithDoc(ctx, e.httpClient, enriched, doc)
-
-	// Auth retry: if the API returned auth_required and we have security methods
-	// and callbacks, resolve credentials and retry once.
-	if result.Error != nil && result.Error.Code == openbindings.ErrCodeAuthRequired &&
-		len(enriched.Security) > 0 && enriched.Callbacks != nil {
-		creds, resolveErr := openbindings.ResolveSecurity(ctx, enriched.Security, enriched.Callbacks, nil)
-		if resolveErr == nil && creds != nil {
-			if enriched == in {
-				cp := *in
-				enriched = &cp
-			}
-			merged := make(map[string]any)
-			for k, v := range enriched.Context {
-				merged[k] = v
-			}
-			for k, v := range creds {
-				merged[k] = v
-			}
-			enriched.Context = merged
-
-			if enriched.Store != nil {
-				storeKey := resolveServerKey(doc)
-				if storeKey != "" {
-					_ = enriched.Store.Set(ctx, storeKey, enriched.Context)
-				}
-			}
-
-			result = invokeBindingWithDoc(ctx, e.httpClient, enriched, doc)
-		}
-	}
-
-	return openbindings.SingleEventChannel(result), nil
+	return requiredContext(doc, &asyncOp, serverURL, args.Context), nil
 }
 
 // Creator handles interface creation from AsyncAPI documents.
 type Creator struct {
 	httpClient *http.Client
 }
+
+var (
+	_ openbindings.InterfaceCreator = (*Creator)(nil)
+	_ openbindings.SourceInspector  = (*Creator)(nil)
+)
 
 // NewCreator creates a new AsyncAPI interface creator.
 func NewCreator() *Creator {

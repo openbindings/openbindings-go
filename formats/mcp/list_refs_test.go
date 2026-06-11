@@ -21,10 +21,10 @@ func TestInspectSource_BasicRefs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Server has: echo (tool), longRunning (tool), status (resource),
-	// greet (prompt) = 4 refs.
-	if len(result.Targets) != 4 {
-		t.Fatalf("expected 4 refs, got %d", len(result.Targets))
+	// Server has: echo, alwaysFails, slow, longRunning (tools),
+	// status (resource), greet (prompt) = 6 refs.
+	if len(result.Targets) != 6 {
+		t.Fatalf("expected 6 refs, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")

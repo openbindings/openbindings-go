@@ -3,9 +3,14 @@ package grpc
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"testing"
 
+	openbindings "github.com/openbindings/openbindings-go"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestParseRef_Valid(t *testing.T) {
@@ -62,31 +67,92 @@ func TestParseRef_LeadingSlash(t *testing.T) {
 	}
 }
 
-func TestNormalizeAddress_PlainHostPort(t *testing.T) {
-	got := normalizeAddress("api.example.com:443")
-	if got != "api.example.com:443" {
-		t.Errorf("got %q, want %q", got, "api.example.com:443")
+func TestGRPCError_StatusMapping(t *testing.T) {
+	// Wire values pinned as literals: consumers switch on these strings.
+	cases := []struct {
+		grpcCode codes.Code
+		want     string
+	}{
+		{codes.Unauthenticated, "ERR_AUTH_REQUIRED"},
+		{codes.PermissionDenied, "ERR_PERMISSION_DENIED"},
+		{codes.Unavailable, "ERR_CONNECT_FAILED"},
+		{codes.DeadlineExceeded, "ERR_TIMEOUT"},
+		{codes.Internal, "ERR_EXECUTION_FAILED"},
+		{codes.NotFound, "ERR_EXECUTION_FAILED"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.grpcCode.String(), func(t *testing.T) {
+			err := status.Error(tc.grpcCode, "boom")
+			ie := grpcError(err, openbindings.ErrCodeExecutionFailed)
+			if ie.Code != tc.want {
+				t.Errorf("code = %q, want %q", ie.Code, tc.want)
+			}
+			details, ok := ie.Details.(map[string]any)
+			if !ok || details["grpcCode"] != tc.grpcCode.String() {
+				t.Errorf("details = %v, want grpcCode %q", ie.Details, tc.grpcCode.String())
+			}
+		})
 	}
 }
 
-func TestNormalizeAddress_WithScheme(t *testing.T) {
-	got := normalizeAddress("https://api.example.com:443")
-	if got != "api.example.com:443" {
-		t.Errorf("got %q, want %q", got, "api.example.com:443")
+func TestGRPCError_FallbackCode(t *testing.T) {
+	err := status.Error(codes.Internal, "mid-stream")
+	if ie := grpcError(err, openbindings.ErrCodeStreamError); ie.Code != "ERR_STREAM_ERROR" {
+		t.Errorf("code = %q, want ERR_STREAM_ERROR", ie.Code)
 	}
 }
 
-func TestNormalizeAddress_Empty(t *testing.T) {
-	got := normalizeAddress("")
-	if got != "" {
-		t.Errorf("got %q, want empty", got)
+func TestGRPCError_NonStatusError(t *testing.T) {
+	ie := grpcError(errors.New("plain failure"), openbindings.ErrCodeExecutionFailed)
+	if ie.Code != "ERR_EXECUTION_FAILED" {
+		t.Errorf("code = %q, want ERR_EXECUTION_FAILED", ie.Code)
+	}
+	if ie.Message != "plain failure" {
+		t.Errorf("message = %q", ie.Message)
 	}
 }
 
-func TestNormalizeAddress_Whitespace(t *testing.T) {
-	got := normalizeAddress("  api.example.com:443  ")
-	if got != "api.example.com:443" {
-		t.Errorf("got %q, want %q", got, "api.example.com:443")
+func TestGRPCError_StatusDetails(t *testing.T) {
+	st, err := status.New(codes.PermissionDenied, "nope").WithDetails(wrapperspb.String("extra"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ie := grpcError(st.Err(), openbindings.ErrCodeExecutionFailed)
+	details, ok := ie.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("details = %T", ie.Details)
+	}
+	ds, ok := details["grpcDetails"].([]any)
+	if !ok || len(ds) != 1 {
+		t.Fatalf("grpcDetails = %v", details["grpcDetails"])
+	}
+}
+
+func TestRefResolveError_TransportVsNotFound(t *testing.T) {
+	if ie := refResolveError("pkg.Svc", status.Error(codes.Unavailable, "down")); ie.Code != "ERR_CONNECT_FAILED" {
+		t.Errorf("unavailable: code = %q, want ERR_CONNECT_FAILED", ie.Code)
+	}
+	if ie := refResolveError("pkg.Svc", errors.New("symbol not found")); ie.Code != "ERR_REF_NOT_FOUND" {
+		t.Errorf("not found: code = %q, want ERR_REF_NOT_FOUND", ie.Code)
+	}
+}
+
+func TestToOBMetadata(t *testing.T) {
+	if got := toOBMetadata(nil); got != nil {
+		t.Errorf("nil md: got %v, want nil", got)
+	}
+	if got := toOBMetadata(metadata.MD{}); got != nil {
+		t.Errorf("empty md: got %v, want nil", got)
+	}
+	src := metadata.Pairs("x-a", "1", "x-a", "2", "x-b", "3")
+	got := toOBMetadata(src)
+	if len(got["x-a"]) != 2 || got["x-a"][0] != "1" || got["x-a"][1] != "2" || got["x-b"][0] != "3" {
+		t.Errorf("got %v", got)
+	}
+	// Values are copied, not aliased.
+	got["x-a"][0] = "mutated"
+	if src.Get("x-a")[0] != "1" {
+		t.Error("toOBMetadata aliased the source slice")
 	}
 }
 

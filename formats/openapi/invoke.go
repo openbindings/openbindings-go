@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	openbindings "github.com/openbindings/openbindings-go"
@@ -56,47 +55,77 @@ func classifyHTTPError(ctx context.Context, err error) string {
 	return openbindings.ErrCodeExecutionFailed
 }
 
-// invokeBindingWithDoc invokes one OpenAPI binding. It returns either a
-// completed *InvocationOutput (the unary case) OR a stream channel (for
-// `text/event-stream` responses). Exactly one of the two return values is
-// non-nil. The caller dispatches based on which is set.
-//
-// The dual return shape avoids forcing every unary code path through a
-// channel allocation while still allowing SSE responses to surface as a
-// natural multi-event stream.
-func invokeBindingWithDoc(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *openapi3.T) (*openbindings.InvocationOutput, <-chan openbindings.InvocationOutput) {
-	start := time.Now()
+// runBinding invokes one OpenAPI binding, driving the invocation handle.
+// All pre-dispatch failures (bad ref, missing server URL, unresolvable
+// operation, missing context) terminate the handle before any network side
+// effect; the response is then emitted as one output (or a stream of outputs
+// for a `text/event-stream` response).
+func runBinding(ctx context.Context, client *http.Client, args *openbindings.BindingInvocationArgs, inv openbindings.BindingHandle[any, any], doc *openapi3.T) {
+	// Bound all HTTP I/O to the invocation's lifetime: caller Cancel(), an
+	// abandoned output stream, or upstream ctx cancellation tears down the
+	// in-flight request or SSE stream.
+	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	defer stop()
 
-	pathTemplate, method, err := parseRef(input.Ref)
+	// ----- Pre-side-effect resolution. -----
+
+	pathTemplate, method, err := parseRef(args.Ref)
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidRef, err.Error()), nil
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: err.Error()})
+		return
 	}
 
-	baseURL, err := resolveBaseURLWithLocation(doc, input.Context, input.Source.Location)
+	baseURL, err := resolveBaseURLWithLocation(doc, args.Context, args.Source.Location)
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeSourceConfigError, err.Error()), nil
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		return
 	}
 
 	if doc.Paths == nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeSourceConfigError, "OpenAPI document has no paths defined"), nil
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "OpenAPI document has no paths defined"})
+		return
 	}
 	pathItem := doc.Paths.Find(pathTemplate)
 	if pathItem == nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound, fmt.Sprintf("path %q not in OpenAPI doc", pathTemplate)), nil
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: fmt.Sprintf("path %q not in OpenAPI doc", pathTemplate)})
+		return
 	}
 	op := pathItem.GetOperation(strings.ToUpper(method))
 	if op == nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeRefNotFound, fmt.Sprintf("method %q not in path %q", method, pathTemplate)), nil
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: fmt.Sprintf("method %q not in path %q", method, pathTemplate)})
+		return
 	}
 
-	return doHTTPRequest(ctx, client, input, doc, op, pathItem, pathTemplate, method, baseURL, start)
-}
+	// CONTEXT_REQUIRED is raised before any input is consumed and before any
+	// network I/O, so a no-input-consumed retry (after the operation layer
+	// resolves context) is safe.
+	if details := requiredContext(doc, op, args.Context, baseURL); details != nil {
+		inv.FireError(openbindings.NewContextRequiredError(
+			"OpenAPI operation requires authentication context", details))
+		return
+	}
 
-func doHTTPRequest(ctx context.Context, client *http.Client, input *openbindings.BindingInvocationInput, doc *openapi3.T, op *openapi3.Operation, pathItem *openapi3.PathItem, pathTemplate, method, baseURL string, start time.Time) (*openbindings.InvocationOutput, <-chan openbindings.InvocationOutput) {
+	// ----- Input flows through the handle, not the args. An operation with
+	// no parameters and no request body takes no input. -----
 	allParams := mergeParameters(pathItem.Parameters, op.Parameters)
-	inputMap, _ := openbindings.ToStringAnyMap(input.Input)
-	if inputMap == nil {
-		inputMap = map[string]any{}
+	inputMap := map[string]any{}
+	if len(allParams) == 0 && !hasRequestBody(op) {
+		_ = inv.CloseInput()
+	} else {
+		v, rerr := inv.ReadInput(bctx)
+		switch {
+		case errors.Is(rerr, io.EOF):
+			// Bare close: parameters and body are optional unless the server
+			// rejects the request. Proceed with an empty input.
+		case rerr != nil:
+			inv.FireError(openbindings.AsInvocationError(rerr))
+			return
+		default:
+			if m, ok := openbindings.ToStringAnyMap(v); ok {
+				inputMap = m
+			}
+		}
+		_ = inv.CloseInput()
 	}
 
 	resolvedPath, queryParams, headerParams, bodyFields := classifyInput(allParams, inputMap, pathTemplate)
@@ -116,23 +145,26 @@ func doHTTPRequest(ctx context.Context, client *http.Client, input *openbindings
 		if isMultipartFormData(op) {
 			buf, ct, err := buildMultipartBody(op, bodyFields)
 			if err != nil {
-				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error()), nil
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+				return
 			}
 			bodyReader = buf
 			contentType = ct
 		} else {
 			bodyBytes, err := json.Marshal(bodyFields)
 			if err != nil {
-				return openbindings.FailedOutput(start, openbindings.ErrCodeInvalidInput, err.Error()), nil
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+				return
 			}
 			bodyReader = bytes.NewReader(bodyBytes)
 			contentType = "application/json"
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, strings.ToUpper(method), reqURL, bodyReader)
+	req, err := http.NewRequestWithContext(bctx, strings.ToUpper(method), reqURL, bodyReader)
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeExecutionFailed, err.Error()), nil
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
+		return
 	}
 
 	if contentType != "" {
@@ -146,32 +178,45 @@ func doHTTPRequest(ctx context.Context, client *http.Client, input *openbindings
 		req.Header.Set(k, fmt.Sprintf("%v", v))
 	}
 
-	applyHTTPContext(req, doc, op, input.Context)
+	applyHTTPContext(req, doc, op, args.Context)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return openbindings.FailedOutput(start, classifyHTTPError(ctx, err), err.Error()), nil
+		if bctx.Err() != nil {
+			return // cancelled; the handle is already terminal
+		}
+		inv.FireError(&openbindings.InvocationError{Code: classifyHTTPError(bctx, err), Message: err.Error()})
+		return
 	}
+
+	// Leading metadata precedes the first emit.
+	_ = inv.SetHeader(headerMetadata(resp.Header))
 
 	// SSE dispatch: a 2xx response with text/event-stream content type is a
 	// streaming response. Hand the (still-open) response to the SSE streamer
-	// which takes ownership of closing the body.
+	// which takes ownership of closing the body and the terminal transition.
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 && isSSEContentType(resp.Header.Get("Content-Type")) {
-		return nil, streamSSEResponse(ctx, resp, start)
+		streamSSE(bctx, resp, inv)
+		return
 	}
 
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeResponseError, err.Error()), nil
+		if bctx.Err() != nil {
+			return
+		}
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
+		return
 	}
 	if len(respBody) > maxResponseBytes {
-		return openbindings.FailedOutput(start, openbindings.ErrCodeResponseError,
-			fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes)), nil
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeResponseError,
+			Message: fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes),
+		})
+		return
 	}
-
-	duration := time.Since(start).Milliseconds()
 
 	var output any
 	if len(respBody) > 0 {
@@ -189,16 +234,115 @@ func doHTTPRequest(ctx context.Context, client *http.Client, input *openbindings
 	}
 
 	if resp.StatusCode >= 400 {
-		errOutput := openbindings.HTTPErrorOutput(start, resp.StatusCode, resp.Status)
-		errOutput.Output = output
-		return errOutput, nil
+		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
+		// Surface the response body in Details so callers can inspect the
+		// error payload, without conflating it with a successful output.
+		if d, ok := ierr.Details.(map[string]any); ok && output != nil {
+			d["body"] = output
+		}
+		inv.FireError(ierr)
+		return
 	}
 
-	return &openbindings.InvocationOutput{
-		Output:     output,
-		Status:     resp.StatusCode,
-		DurationMs: duration,
-	}, nil
+	if err := inv.EmitOutput(output); err != nil {
+		return
+	}
+	inv.CloseOutput()
+}
+
+// headerMetadata clones HTTP response headers into invocation Metadata.
+func headerMetadata(h http.Header) openbindings.Metadata {
+	md := make(openbindings.Metadata, len(h))
+	for k, vs := range h {
+		md[k] = append([]string(nil), vs...)
+	}
+	return md
+}
+
+// requiredContext derives the operation's authentication requirements from
+// the document's securitySchemes and the operation-level (falling back to
+// document-level) security requirements. It returns a ContextRequiredDetails
+// when the call needs context the caller has not supplied, or nil when the
+// operation needs no authentication, allows anonymous access, or the present
+// context already satisfies a requirement.
+//
+// OpenAPI `security` is a disjunction (OR) of requirement objects, each a
+// conjunction (AND) of scheme names — exactly the alternatives/requirements
+// shape of ContextRequiredDetails.
+func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string) *openbindings.ContextRequiredDetails {
+	var requirements *openapi3.SecurityRequirements
+	if op != nil && op.Security != nil {
+		requirements = op.Security
+	} else {
+		requirements = &doc.Security
+	}
+	if requirements == nil || len(*requirements) == 0 {
+		return nil // no authentication required
+	}
+	if doc.Components == nil || doc.Components.SecuritySchemes == nil {
+		return nil
+	}
+
+	var alternatives []openbindings.ContextAlternative
+	for _, secReq := range *requirements {
+		if len(secReq) == 0 {
+			// An empty requirement object means anonymous access is allowed;
+			// no challenge is warranted for the whole operation.
+			return nil
+		}
+		var reqs []openbindings.ContextRequirement
+		expressible := true
+		for schemeName := range secReq {
+			ref, ok := doc.Components.SecuritySchemes[schemeName]
+			if !ok || ref.Value == nil {
+				expressible = false
+				break
+			}
+			reqType := schemeToRequirementType(ref.Value)
+			if reqType == "" {
+				expressible = false
+				break
+			}
+			reqs = append(reqs, openbindings.ContextRequirement{Type: reqType})
+		}
+		if expressible && len(reqs) > 0 {
+			alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: reqs})
+		}
+	}
+	if len(alternatives) == 0 {
+		return nil
+	}
+
+	details := &openbindings.ContextRequiredDetails{
+		Key:          openbindings.NormalizeContextKey(baseURL),
+		Alternatives: alternatives,
+	}
+	// Already satisfiable from the supplied context: no challenge needed.
+	if openbindings.ContextSatisfies(bindCtx, details) {
+		return nil
+	}
+	return details
+}
+
+// schemeToRequirementType maps an OpenAPI security scheme to the standard
+// context requirement family. Returns "" for schemes the SDK cannot express
+// as a context requirement (so the alternative is skipped).
+func schemeToRequirementType(s *openapi3.SecurityScheme) string {
+	switch s.Type {
+	case "http":
+		switch strings.ToLower(s.Scheme) {
+		case "basic":
+			return "auth.basic"
+		default:
+			return "auth.bearer"
+		}
+	case "apiKey":
+		return "auth.apiKey"
+	case "oauth2", "openIdConnect":
+		return "auth.oauth2"
+	default:
+		return ""
+	}
 }
 
 func parseRef(ref string) (path string, method string, err error) {
