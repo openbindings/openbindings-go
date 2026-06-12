@@ -6,4 +6,7 @@ toolchain go1.24.1
 
 require github.com/openbindings/openbindings-go v0.2.0
 
-require github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+require (
+	github.com/blues/jsonata-go v1.5.4
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+)

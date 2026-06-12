@@ -3,6 +3,7 @@ package operationgraph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -12,22 +13,25 @@ import (
 )
 
 const (
-	// maxEvents is the maximum number of data events processed per graph invocation.
-	// Protects against unbounded event amplification from map nodes in cycles.
+	// maxEvents bounds data events per graph invocation (the spec's
+	// SHOULD-level amplification backstop; map-in-cycle is the primary
+	// vector).
 	maxEvents int64 = 100_000
 
-	// maxErrorDepth is the maximum depth of onError routing chains.
-	// Protects against unbounded error processing cascades.
+	// maxErrorDepth bounds onError routing chains as defense in depth. The
+	// normative bound is lineage: error events inherit it and onError routes
+	// count as cycle edges (OG-V-09/OG-V-10).
 	maxErrorDepth = 32
 )
 
-// event is an internal event flowing through the graph.
+// event is one value flowing through the graph.
 type event struct {
 	data       any
-	source     string         // node key that produced this event (for combine)
-	lineage    map[string]int // node key -> iteration count (for maxIterations)
-	complete   bool           // true = completion marker, not a data event
-	errorDepth int            // tracks onError chain depth
+	source     string         // node key that produced this event (combine keys on it)
+	root       int            // lineage root (index into engine.rootValues); noRoot = $input undefined
+	lineage    map[string]int // per-each-node invocation counts for maxIterations
+	complete   bool           // completion marker, not a data event
+	errorDepth int            // onError chain depth (defense-in-depth cap)
 }
 
 func cloneEvent(ev *event) *event {
@@ -35,7 +39,61 @@ func cloneEvent(ev *event) *event {
 	for k, v := range ev.lineage {
 		lin[k] = v
 	}
-	return &event{data: ev.data, source: ev.source, lineage: lin, errorDepth: ev.errorDepth}
+	return &event{data: ev.data, source: ev.source, root: ev.root, lineage: lin, errorDepth: ev.errorDepth}
+}
+
+func copyLineage(m map[string]int) map[string]int {
+	cp := make(map[string]int, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return cp
+}
+
+// conduitState is an operation node's held invocation: one per graph
+// invocation, created inert and driven by the first arriving event (or by
+// incoming completion — the no-input case).
+type conduitState struct {
+	mu        sync.Mutex
+	started   bool
+	accepting bool
+	call      openbindings.Invocation[any, any]
+	cancel    context.CancelFunc
+	timeout   bool // a deadline context was attached (timeout field present)
+	opCtx     context.Context
+	lineage   map[string]int
+	roots     rootTracker
+}
+
+func newConduitState() *conduitState {
+	return &conduitState{accepting: true, lineage: map[string]int{}}
+}
+
+func (c *conduitState) isAccepting() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.accepting
+}
+
+func (c *conduitState) setNonAccepting() {
+	c.mu.Lock()
+	c.accepting = false
+	c.mu.Unlock()
+}
+
+// mergeEvent folds a written event into the conduit's merged lineage/root
+// (the invocation's outputs follow from every event written into it).
+func (c *conduitState) mergeEvent(ev *event) {
+	c.mu.Lock()
+	mergeMaxInto(c.lineage, ev.lineage)
+	c.roots.add(ev.root)
+	c.mu.Unlock()
+}
+
+func (c *conduitState) merged() (map[string]int, int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return copyLineage(c.lineage), c.roots.merged()
 }
 
 // engine runs a single operation graph invocation.
@@ -45,18 +103,30 @@ type engine struct {
 	args      *openbindings.BindingInvocationArgs
 	transform openbindings.TransformEvaluator
 	handle    openbindings.BindingHandle[any, any]
-	origInput any
 	schemas   *schemaCache
 
 	outEdges map[string][]string
 	inEdges  map[string][]string
 	inputKey string
 
+	rootMu     sync.Mutex
+	rootValues []any
+
+	conduits map[string]*conduitState
+
 	exitFlag   atomic.Bool
 	inflight   atomic.Int64
 	eventCount atomic.Int64
-	doneOnce   sync.Once
-	done       chan struct{}
+	// idle receives a (coalesced) notification each time inflight reaches
+	// zero: true quiescence, since the input pump holds a token while the
+	// caller's input side is open and every live inner invocation holds one.
+	idle chan struct{}
+
+	// completionSent dedupes per-edge completion delivery, so the
+	// quiescence pass (which resolves cyclic and error-route completion)
+	// and natural completion propagation never double-count an edge.
+	completionMu   sync.Mutex
+	completionSent map[string]map[string]bool
 }
 
 func newEngine(g *Graph, invoker *openbindings.OperationInvoker, args *openbindings.BindingInvocationArgs, te openbindings.TransformEvaluator, sc *schemaCache) *engine {
@@ -67,79 +137,74 @@ func newEngine(g *Graph, invoker *openbindings.OperationInvoker, args *openbindi
 		outE[e.From] = append(outE[e.From], e.To)
 		inE[e.To] = append(inE[e.To], e.From)
 	}
+	conduits := make(map[string]*conduitState)
 	for k, n := range g.Nodes {
-		if n.Type == "input" {
+		switch n.Type {
+		case "input":
 			inputKey = k
+		case "operation":
+			conduits[k] = newConduitState()
 		}
 	}
 	return &engine{
-		graph:     g,
-		invoker:   invoker,
-		args:      args,
-		transform: te,
-		schemas:   sc,
-		outEdges:  outE,
-		inEdges:   inE,
-		inputKey:  inputKey,
-		done:      make(chan struct{}),
+		graph:          g,
+		invoker:        invoker,
+		args:           args,
+		transform:      te,
+		schemas:        sc,
+		outEdges:       outE,
+		inEdges:        inE,
+		inputKey:       inputKey,
+		conduits:       conduits,
+		idle:           make(chan struct{}, 1),
+		completionSent: make(map[string]map[string]bool),
 	}
 }
 
-func (eng *engine) incInflight() {
-	eng.inflight.Add(1)
-}
+func (eng *engine) incInflight() { eng.inflight.Add(1) }
 
 func (eng *engine) decInflight() {
 	if eng.inflight.Add(-1) == 0 {
-		eng.doneOnce.Do(func() { close(eng.done) })
+		select {
+		case eng.idle <- struct{}{}:
+		default:
+		}
 	}
 }
 
-// execute drives one graph invocation behind the binding handle: it
-// validates the graph, seeds the initial input, runs the node workers, and
-// settles the handle's terminal (CloseOutput on completion; FireError on
-// terminal failure inside the engine).
+func (eng *engine) addRoot(v any) int {
+	eng.rootMu.Lock()
+	defer eng.rootMu.Unlock()
+	eng.rootValues = append(eng.rootValues, v)
+	return len(eng.rootValues) - 1
+}
+
+func (eng *engine) rootValue(root int) (any, bool) {
+	if root == noRoot {
+		return nil, false
+	}
+	eng.rootMu.Lock()
+	defer eng.rootMu.Unlock()
+	return eng.rootValues[root], true
+}
+
+// errValue is the in-graph `error` value for a failure originating in an
+// inner invocation: the inner terminal error surfaced verbatim. The
+// InvocationError's code is its routable identity.
+func errValue(err error) any {
+	if ie := openbindings.AsInvocationError(err); ie != nil {
+		return ie.Code
+	}
+	return fmt.Sprintf("%v", err)
+}
+
+// execute drives one graph invocation behind the binding handle: it pumps
+// caller writes through the graph, runs the node workers, and settles the
+// handle's terminal (CloseOutput on completion; FireError on terminal
+// failure inside the engine). The graph is validated by the invoker before
+// execute is reached.
 func (eng *engine) execute(ctx context.Context, handle openbindings.BindingHandle[any, any]) {
 	eng.handle = handle
-
-	// Validate before consuming any input, so validation failures surface
-	// without the caller having to write anything.
-	// When Interface is nil (e.g. direct binding invocation via host), skip
-	// operation key validation -- references will fail at runtime if invalid.
-	var opKeys map[string]bool
-	if eng.args.Interface != nil {
-		opKeys = make(map[string]bool)
-		for k := range eng.args.Interface.Operations {
-			opKeys[k] = true
-		}
-	}
-	if err := Validate(eng.graph, opKeys); err != nil {
-		handle.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeValidationFailed,
-			Message: err.Error(),
-		})
-		return
-	}
-
-	// Seed the graph's initial input. No-input convention: when the call
-	// came through the operation layer (Binding != nil) and the operation
-	// declares no input (InputSchema == nil), close input on entry and seed
-	// nil -- reading would deadlock a caller that never writes.
-	if eng.args.Binding != nil && eng.args.InputSchema == nil {
-		_ = handle.CloseInput()
-	} else {
-		v, err := handle.ReadInput(ctx)
-		if err != nil {
-			if err != io.EOF {
-				return // invocation already terminal (cancelled/errored)
-			}
-			// Input closed with no message: the graph runs with nil input.
-		} else {
-			eng.origInput = v
-			// The graph takes exactly one input.
-			_ = handle.CloseInput()
-		}
-	}
 
 	// runCtx tears down all workers when the invocation terminates (caller
 	// Cancel, abandoned output stream, or upstream ctx cancellation).
@@ -148,11 +213,11 @@ func (eng *engine) execute(ctx context.Context, handle openbindings.BindingHandl
 	eng.run(runCtx)
 
 	// Normal completion. No-op when the engine already fired a terminal
-	// error (exit-node error, event limit) or the invocation was cancelled.
+	// error (exit-node error, unhandled conduit terminal, event limit) or
+	// the invocation was cancelled.
 	handle.CloseOutput()
 }
 
-// run executes the graph, emitting output events through eng.handle.
 func (eng *engine) run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -163,7 +228,6 @@ func (eng *engine) run(ctx context.Context) {
 		mailboxes[key] = make(chan *event, 256)
 	}
 
-	// Buffer and combine state.
 	bufferStates := make(map[string]*bufferState)
 	combineStates := make(map[string]*combineState)
 	for key, node := range eng.graph.Nodes {
@@ -183,7 +247,6 @@ func (eng *engine) run(ctx context.Context) {
 		}
 	}
 
-	// sendToNode sends an event to a node's mailbox, incrementing in-flight first.
 	sendToNode := func(toKey string, ev *event) {
 		eng.incInflight()
 		select {
@@ -193,7 +256,6 @@ func (eng *engine) run(ctx context.Context) {
 		}
 	}
 
-	// sendDownstream fans out an event to all downstream nodes.
 	sendDownstream := func(fromKey string, ev *event) {
 		for _, toKey := range eng.outEdges[fromKey] {
 			if eng.exitFlag.Load() {
@@ -205,63 +267,215 @@ func (eng *engine) run(ctx context.Context) {
 		}
 	}
 
-	// sendCompletion sends completion markers to all downstream nodes via mailboxes.
-	// Using mailboxes ensures FIFO ordering: all data events from this source
-	// arrive before the completion marker at the downstream node.
+	// Completion markers travel through the same mailboxes as data so FIFO
+	// ordering preserves "all data first, then complete" per edge. Delivery
+	// is per-edge-once: the quiescence pass and natural propagation share
+	// the same dedup, so an edge's completion is never counted twice.
+	deliverCompletion := func(fromKey, toKey string) bool {
+		eng.completionMu.Lock()
+		if eng.completionSent[fromKey][toKey] {
+			eng.completionMu.Unlock()
+			return false
+		}
+		if eng.completionSent[fromKey] == nil {
+			eng.completionSent[fromKey] = make(map[string]bool)
+		}
+		eng.completionSent[fromKey][toKey] = true
+		eng.completionMu.Unlock()
+		sendToNode(toKey, &event{source: fromKey, complete: true})
+		return true
+	}
+
 	sendCompletion := func(fromKey string) {
 		for _, toKey := range eng.outEdges[fromKey] {
 			if eng.exitFlag.Load() {
 				return
 			}
-			sendToNode(toKey, &event{source: fromKey, complete: true})
+			deliverCompletion(fromKey, toKey)
 		}
 	}
 
-	// sendError routes an error to the onError target or drops it silently.
-	// Preserves the failing event's lineage for correct maxIterations in error paths.
-	sendError := func(nodeKey, errMsg string, input any, lineage map[string]int, errorDepth int) {
+	// sendPerEventError routes a per-event failure ({error, event}) to the
+	// node's onError target, or drops it. The error event inherits the
+	// failing event's lineage and root.
+	sendPerEventError := func(nodeKey string, errVal any, ev *event, lineage map[string]int) {
 		node := eng.graph.Nodes[nodeKey]
 		if node.OnError == "" {
 			return
 		}
-		if errorDepth >= maxErrorDepth {
-			return // drop to prevent unbounded error chains
+		if ev.errorDepth >= maxErrorDepth {
+			return
 		}
 		sendToNode(node.OnError, &event{
-			data:       map[string]any{"error": errMsg, "input": input},
+			data:       map[string]any{"error": errVal, "event": ev.data},
 			source:     nodeKey,
+			root:       ev.root,
 			lineage:    copyLineage(lineage),
-			errorDepth: errorDepth + 1,
+			errorDepth: ev.errorDepth + 1,
 		})
 	}
 
+	// Back-closure: close the caller-facing input side once every node the
+	// input node feeds is a non-accepting operation conduit. Built-in
+	// consumers keep closure caller-owned (non-acceptance is defined for
+	// operation nodes only).
+	backClosure := func() {
+		consumers := eng.outEdges[eng.inputKey]
+		if len(consumers) == 0 {
+			return
+		}
+		for _, k := range consumers {
+			node := eng.graph.Nodes[k]
+			if node.Type != "operation" {
+				return
+			}
+			if eng.conduits[k].isAccepting() {
+				return
+			}
+		}
+		_ = eng.handle.CloseInput()
+	}
+
+	// startConduit lazily drives an operation node's held invocation and
+	// spawns its watcher (input closed from below) and output pump. The
+	// output pump owns the node's downstream completion and its terminal
+	// error handling: routed per onError when set, fatal to the graph when
+	// not (the identity law's terminal-status clause).
+	startConduit := func(key string, node *Node) {
+		c := eng.conduits[key]
+		c.mu.Lock()
+		if c.started {
+			c.mu.Unlock()
+			return
+		}
+		c.started = true
+		opCtx := ctx
+		if node.Timeout != nil {
+			opCtx, c.cancel = context.WithTimeout(ctx, msToDuration(*node.Timeout))
+			c.timeout = true
+		}
+		c.opCtx = opCtx
+		call := eng.invoker.Invoke(opCtx, &openbindings.OperationInvocationArgs{
+			Interface: eng.args.Interface,
+			Operation: node.Operation,
+			Context:   eng.args.Context,
+		})
+		c.call = call
+		c.mu.Unlock()
+
+		// Acceptance watcher: the inner binding closing its input from below
+		// (or any terminal transition) makes the node non-accepting and may
+		// back-close the graph's own input side.
+		go func() {
+			select {
+			case <-call.InputClosed():
+			case <-ctx.Done():
+				return
+			}
+			c.setNonAccepting()
+			backClosure()
+		}()
+
+		// Output pump. Holds an inflight token: the graph is not complete
+		// while an inner invocation is in flight.
+		eng.incInflight()
+		go func() {
+			defer eng.decInflight()
+			defer func() {
+				if c.cancel != nil {
+					c.cancel()
+				}
+			}()
+			out := call.Outputs()
+			for {
+				v, err := out.Read(opCtx)
+				if err == io.EOF {
+					sendCompletion(key)
+					return
+				}
+				if err != nil {
+					c.setNonAccepting()
+					backClosure()
+					ie := openbindings.AsInvocationError(err)
+					if c.timeout && opCtx.Err() == context.DeadlineExceeded {
+						ie = &openbindings.InvocationError{Code: TimeoutExceeded, Message: fmt.Sprintf("operation %q exceeded its %dms budget", node.Operation, *node.Timeout)}
+						call.Cancel()
+					}
+					if ie.Code == openbindings.ErrCodeCancelled && ctx.Err() != nil {
+						return // the graph itself is tearing down
+					}
+					if node.OnError != "" {
+						// Opt-in handling: an error event without an `event`
+						// member (the failure belongs to the invocation as a
+						// whole), carrying the merged lineage of everything
+						// written into it. The node completes; the graph
+						// continues.
+						lineage, root := c.merged()
+						sendToNode(node.OnError, &event{
+							data:    map[string]any{"error": errValue(ie)},
+							source:  key,
+							root:    root,
+							lineage: lineage,
+						})
+						sendCompletion(key)
+						return
+					}
+					// Fatal default: the graph invocation terminates with the
+					// inner terminal error, verbatim.
+					eng.exitFlag.Store(true)
+					eng.handle.FireError(ie)
+					cancel()
+					return
+				}
+				if eng.exitFlag.Load() {
+					out.Stop()
+					return
+				}
+				lineage, root := c.merged()
+				sendDownstream(key, &event{data: v, source: key, root: root, lineage: lineage})
+			}
+		}()
+	}
+
 	// handleCompletion processes a completion marker arriving at a node.
-	// When all of a node's upstream sources have completed, it flushes
-	// buffer/combine state and propagates completion downstream.
-	handleCompletion := func(key string, node *Node) {
+	handleCompletion := func(key string, node *Node, ev *event) {
+		// The input node's completion marker comes from the pump through its
+		// own mailbox (so it can never overtake buffered writes); forward it.
+		if node.Type == "input" {
+			sendCompletion(key)
+			return
+		}
+		// combine consumes per-source completion before the all-complete
+		// transition (completion can be what makes it ready).
+		if node.Type == "combine" {
+			if snap := combineStates[key].sourceComplete(ev.source); snap != nil {
+				sendDownstream(key, &event{data: snap.data, source: key, root: snap.root, lineage: snap.lineage})
+			}
+		}
 		counter, ok := completedSources[key]
 		if !ok {
 			return
 		}
-		newCount := int(counter.Add(1))
-		if newCount < len(eng.inEdges[key]) {
-			return // not all upstream sources complete yet
+		if int(counter.Add(1)) < len(eng.inEdges[key]) {
+			return
 		}
-		// All upstream sources complete.
+		// All incoming edges complete.
 		switch node.Type {
+		case "operation":
+			// Close the held invocation's input side; the output pump sends
+			// this node's completion when the invocation's outputs finish.
+			startConduit(key, node)
+			_ = eng.conduits[key].call.Close()
+			return
 		case "buffer":
-			if batch := bufferStates[key].flush(); batch != nil {
-				sendDownstream(key, &event{data: batch, source: key, lineage: make(map[string]int)})
-			}
-		case "combine":
-			if result, ok := combineStates[key].complete(); ok {
-				sendDownstream(key, &event{data: result, source: key, lineage: make(map[string]int)})
+			if b := bufferStates[key].flush(); b != nil {
+				sendDownstream(key, &event{data: b.data, source: key, root: b.root, lineage: b.lineage})
 			}
 		}
 		sendCompletion(key)
 	}
 
-	// Start a worker goroutine per node.
+	// Worker per node.
 	var wg sync.WaitGroup
 	for key := range eng.graph.Nodes {
 		nodeKey := key
@@ -273,16 +487,14 @@ func (eng *engine) run(ctx context.Context) {
 				select {
 				case <-ctx.Done():
 					return
-				case ev, ok := <-mailboxes[nodeKey]:
-					if !ok {
-						return
-					}
+				case ev := <-mailboxes[nodeKey]:
 					if eng.exitFlag.Load() {
 						eng.decInflight()
 						return
 					}
 					eng.processNode(ctx, nodeKey, node, ev, cancel,
-						sendDownstream, sendCompletion, sendError, handleCompletion,
+						sendDownstream, sendCompletion, sendPerEventError,
+						handleCompletion, startConduit, backClosure,
 						bufferStates, combineStates)
 					eng.decInflight()
 				}
@@ -290,42 +502,78 @@ func (eng *engine) run(ctx context.Context) {
 		}()
 	}
 
-	// Inject initial event.
+	// Input pump: every caller write becomes one event at the input node, in
+	// write order, each rooting a lineage. The pump's inflight token keeps
+	// the graph alive while the caller's input side is open; back-closure
+	// (or the caller's Close) ends the pump via ReadInput's EOF.
 	eng.incInflight()
-	mailboxes[eng.inputKey] <- &event{data: eng.origInput, lineage: make(map[string]int)}
+	go func() {
+		defer eng.decInflight()
+		// End-of-input travels through the input node's mailbox like any
+		// event, so FIFO ordering guarantees it never overtakes a write.
+		defer sendToNode(eng.inputKey, &event{complete: true})
+		for {
+			v, err := eng.handle.ReadInput(ctx)
+			if err != nil {
+				return // io.EOF (input side closed) or terminal
+			}
+			rid := eng.addRoot(v)
+			sendToNode(eng.inputKey, &event{data: v, root: rid, lineage: map[string]int{}})
+		}
+	}()
 
-	// Wait for completion or cancellation.
-	select {
-	case <-eng.done:
-	case <-ctx.Done():
+	// Quiescence loop. The pump's token (input side open) and every live
+	// inner invocation's token keep inflight above zero, so a zero crossing
+	// means no event can ever flow again. Any edge whose completion has not
+	// been delivered by then is starved by a cycle (circular completion
+	// dependency) or feeds from an error route; injecting those completions
+	// is the spec's implementation-defined drain detection. The injected
+	// markers may flush buffers and complete combines, producing new work;
+	// loop until a zero crossing injects nothing.
+	for {
+		select {
+		case <-eng.idle:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil || eng.exitFlag.Load() {
+			break
+		}
+		if eng.inflight.Load() != 0 {
+			continue // stale notification; new work appeared
+		}
+		injected := false
+		for _, e := range eng.graph.Edges {
+			if deliverCompletion(e.From, e.To) {
+				injected = true
+			}
+		}
+		if !injected {
+			break
+		}
 	}
-
-	// Cancel context to stop all workers, then wait for them to exit.
-	// Do not close mailbox channels directly -- goroutines may still be
-	// sending to them. Context cancellation is the safe shutdown signal.
 	cancel()
 	wg.Wait()
 }
 
-// processNode handles a single event arriving at a node.
 func (eng *engine) processNode(
 	ctx context.Context,
 	key string, node *Node, ev *event,
 	cancel context.CancelFunc,
 	sendDownstream func(string, *event),
 	sendCompletion func(string),
-	sendError func(string, string, any, map[string]int, int),
-	handleCompletion func(string, *Node),
+	sendPerEventError func(string, any, *event, map[string]int),
+	handleCompletion func(string, *Node, *event),
+	startConduit func(string, *Node),
+	backClosure func(),
 	bufferStates map[string]*bufferState,
 	combineStates map[string]*combineState,
 ) {
-	// Handle completion markers.
 	if ev.complete {
-		handleCompletion(key, node)
+		handleCompletion(key, node, ev)
 		return
 	}
 
-	// Check event amplification limit.
+	// Amplification backstop.
 	if eng.eventCount.Add(1) > maxEvents {
 		eng.exitFlag.Store(true)
 		eng.handle.FireError(&openbindings.InvocationError{
@@ -339,78 +587,98 @@ func (eng *engine) processNode(
 	switch node.Type {
 	case "input":
 		sendDownstream(key, ev)
-		sendCompletion(key)
 
 	case "output":
 		if err := eng.handle.EmitOutput(ev.data); err != nil {
-			// The invocation terminated while emitting: abort the engine.
 			eng.exitFlag.Store(true)
 			cancel()
 		}
 
 	case "exit":
 		eng.exitFlag.Store(true)
-		isError := node.Error != nil && *node.Error
-		if isError {
+		if node.Error != nil && *node.Error {
 			eng.handle.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeOperationGraphExit,
-				Message: fmt.Sprintf("%v", ev.data),
+				Message: "operation graph exit",
+				Details: ev.data,
 			})
 		} else if err := eng.handle.EmitOutput(ev.data); err != nil {
-			// The invocation terminated while emitting the exit value. The
-			// exit flag is already set and the cancel() below tears the engine
-			// down; observing the error keeps parity with the output node
-			// rather than silently discarding it with `_ =`.
-			_ = err
+			_ = err // the cancel below tears the engine down either way
 		}
 		cancel()
 
 	case "operation":
-		eng.processOperation(ctx, key, node, ev, sendDownstream, sendError)
+		eng.processConduitEvent(ctx, key, node, ev, startConduit, sendPerEventError, backClosure)
+
+	case "each":
+		eng.processEach(ctx, key, node, ev, sendDownstream, sendPerEventError)
 
 	case "filter":
-		eng.processFilter(key, node, ev, sendDownstream, sendError)
+		eng.processFilter(key, node, ev, sendDownstream, sendPerEventError)
 
 	case "transform":
-		eng.processTransform(key, node, ev, sendDownstream, sendError)
+		eng.processTransform(key, node, ev, sendDownstream, sendPerEventError)
 
 	case "map":
-		eng.processMap(key, node, ev, sendDownstream, sendError)
+		eng.processMap(key, node, ev, sendDownstream, sendPerEventError)
 
 	case "buffer":
-		bs := bufferStates[key]
-		for _, batch := range bs.add(ev) {
-			sendDownstream(key, &event{data: batch, source: key, lineage: make(map[string]int)})
+		if b := bufferStates[key].add(ev); b != nil {
+			sendDownstream(key, &event{data: b.data, source: key, root: b.root, lineage: b.lineage})
 		}
 
 	case "combine":
-		cs := combineStates[key]
-		if result, ok := cs.add(ev); ok {
-			sendDownstream(key, &event{data: result, source: key, lineage: make(map[string]int)})
+		if snap := combineStates[key].add(ev); snap != nil {
+			sendDownstream(key, &event{data: snap.data, source: key, root: snap.root, lineage: snap.lineage})
 		}
 	}
 }
 
-func (eng *engine) processOperation(
+// processConduitEvent writes one arriving event into the conduit's held
+// invocation, or rejects it (WRITE_REJECTED) when the node is non-accepting.
+func (eng *engine) processConduitEvent(
+	ctx context.Context, key string, node *Node, ev *event,
+	startConduit func(string, *Node),
+	sendPerEventError func(string, any, *event, map[string]int),
+	backClosure func(),
+) {
+	c := eng.conduits[key]
+	if !c.isAccepting() {
+		sendPerEventError(key, WriteRejected, ev, ev.lineage)
+		return
+	}
+	startConduit(key, node)
+	c.mergeEvent(ev)
+	if err := c.call.Write(c.opCtx, ev.data); err != nil {
+		ie := openbindings.AsInvocationError(err)
+		if ie.Code == openbindings.ErrCodeInputClosed {
+			// The write raced the inner binding closing its input from below.
+			c.setNonAccepting()
+			backClosure()
+			sendPerEventError(key, WriteRejected, ev, ev.lineage)
+		}
+		// Terminal failures surface through the output pump, which owns
+		// reporting; nothing further to do here.
+	}
+}
+
+// processEach opens one invocation per arriving event, writing the event as
+// its only input. maxIterations bounds invocations per event lineage.
+func (eng *engine) processEach(
 	ctx context.Context, key string, node *Node, ev *event,
 	sendDownstream func(string, *event),
-	sendError func(string, string, any, map[string]int, int),
+	sendPerEventError func(string, any, *event, map[string]int),
 ) {
-	// Check maxIterations. Copy lineage before mutating.
 	lineage := copyLineage(ev.lineage)
-	if node.MaxIterations != nil {
-		count := lineage[key]
-		if count >= *node.MaxIterations {
-			return // safety bound, not an error
-		}
-		lineage[key] = count + 1
+	if node.MaxIterations != nil && lineage[key] >= *node.MaxIterations {
+		return // safety bound: the event is dropped, not errored
 	}
+	lineage[key]++
 
-	// opCtx chains the graph's cancellation (and the per-node timeout) into
-	// the sub-operation: tearing down the graph tears down in-flight calls.
 	opCtx := ctx
+	hasTimeout := node.Timeout != nil
 	var opCancel context.CancelFunc
-	if node.Timeout != nil {
+	if hasTimeout {
 		opCtx, opCancel = context.WithTimeout(ctx, msToDuration(*node.Timeout))
 		defer opCancel()
 	}
@@ -420,14 +688,10 @@ func (eng *engine) processOperation(
 		Operation: node.Operation,
 		Context:   eng.args.Context,
 	})
-	if ev.data != nil {
-		// A Write failure is either ERR_INPUT_CLOSED (the binding closed its
-		// input deliberately; benign) or the invocation's terminal error,
-		// which the read loop below surfaces. Either way the read loop owns
-		// reporting.
-		_ = call.Write(opCtx, ev.data)
-	}
-	_ = call.Close() // idempotent; safe even when the binding already closed input
+	// One write, then close: each fixes the graph's contribution at one
+	// write per session. Write/Close failures surface via the read loop.
+	_ = call.Write(opCtx, ev.data)
+	_ = call.Close()
 
 	out := call.Outputs()
 	for {
@@ -436,26 +700,34 @@ func (eng *engine) processOperation(
 			return
 		}
 		if err != nil {
-			sendError(key, openbindings.AsInvocationError(err).Error(), ev.data, ev.lineage, ev.errorDepth)
+			ie := openbindings.AsInvocationError(err)
+			if hasTimeout && opCtx.Err() == context.DeadlineExceeded {
+				ie = &openbindings.InvocationError{Code: TimeoutExceeded, Message: fmt.Sprintf("operation %q exceeded its %dms budget", node.Operation, *node.Timeout)}
+				call.Cancel()
+			}
+			if ie.Code == openbindings.ErrCodeCancelled && ctx.Err() != nil {
+				return // graph teardown, not a node failure
+			}
+			sendPerEventError(key, errValue(ie), ev, lineage)
 			return
 		}
 		if eng.exitFlag.Load() {
 			out.Stop()
 			return
 		}
-		sendDownstream(key, &event{data: v, source: key, lineage: copyLineage(lineage)})
+		sendDownstream(key, &event{data: v, source: key, root: ev.root, lineage: copyLineage(lineage)})
 	}
 }
 
 func (eng *engine) processFilter(
 	key string, node *Node, ev *event,
 	sendDownstream func(string, *event),
-	sendError func(string, string, any, map[string]int, int),
+	sendPerEventError func(string, any, *event, map[string]int),
 ) {
 	if node.Schema != nil {
 		passes, err := eng.schemas.match(node.Schema, ev.data)
 		if err != nil {
-			sendError(key, err.Error(), ev.data, ev.lineage, ev.errorDepth)
+			sendPerEventError(key, err.Error(), ev, ev.lineage)
 			return
 		}
 		if passes {
@@ -463,81 +735,81 @@ func (eng *engine) processFilter(
 		}
 		return
 	}
-	if node.Transform != nil {
-		if eng.transform == nil {
-			sendError(key, "no transform evaluator available", ev.data, ev.lineage, ev.errorDepth)
-			return
-		}
-		result, err := eng.evaluateTransform(*node.Transform, ev.data)
-		if err != nil {
-			sendError(key, err.Error(), ev.data, ev.lineage, ev.errorDepth)
-			return
-		}
-		if isTruthy(result) {
-			sendDownstream(key, ev)
-		}
+	result, failed := eng.evalOrFail(key, *node.Transform, ev, sendPerEventError)
+	if failed {
+		return
+	}
+	if isTruthy(result) {
+		sendDownstream(key, ev)
 	}
 }
 
 func (eng *engine) processTransform(
 	key string, node *Node, ev *event,
 	sendDownstream func(string, *event),
-	sendError func(string, string, any, map[string]int, int),
+	sendPerEventError func(string, any, *event, map[string]int),
 ) {
-	if eng.transform == nil {
-		sendError(key, "no transform evaluator available", ev.data, ev.lineage, ev.errorDepth)
+	result, failed := eng.evalOrFail(key, *node.Transform, ev, sendPerEventError)
+	if failed {
 		return
 	}
-	result, err := eng.evaluateTransform(*node.Transform, ev.data)
-	if err != nil {
-		sendError(key, err.Error(), ev.data, ev.lineage, ev.errorDepth)
-		return
-	}
-	sendDownstream(key, &event{data: result, source: key, lineage: copyLineage(ev.lineage)})
+	sendDownstream(key, &event{data: result, source: key, root: ev.root, lineage: copyLineage(ev.lineage)})
 }
 
 func (eng *engine) processMap(
 	key string, node *Node, ev *event,
 	sendDownstream func(string, *event),
-	sendError func(string, string, any, map[string]int, int),
+	sendPerEventError func(string, any, *event, map[string]int),
 ) {
-	if eng.transform == nil {
-		sendError(key, "no transform evaluator available", ev.data, ev.lineage, ev.errorDepth)
-		return
-	}
-	result, err := eng.evaluateTransform(*node.Transform, ev.data)
-	if err != nil {
-		sendError(key, err.Error(), ev.data, ev.lineage, ev.errorDepth)
+	result, failed := eng.evalOrFail(key, *node.Transform, ev, sendPerEventError)
+	if failed {
 		return
 	}
 	arr, ok := toSlice(result)
 	if !ok {
-		sendError(key, openbindings.ErrCodeMapNotArray, ev.data, ev.lineage, ev.errorDepth)
+		sendPerEventError(key, MapNotArray, ev, ev.lineage)
 		return
 	}
 	for _, item := range arr {
 		if eng.exitFlag.Load() {
 			return
 		}
-		sendDownstream(key, &event{data: item, source: key, lineage: copyLineage(ev.lineage)})
+		sendDownstream(key, &event{data: item, source: key, root: ev.root, lineage: copyLineage(ev.lineage)})
 	}
 }
 
-func (eng *engine) evaluateTransform(expression string, data any) (any, error) {
+// evalOrFail evaluates a node expression with the event as $ and the
+// lineage's root input as $input. An undefined result fails the node with
+// TRANSFORM_UNDEFINED; other evaluation failures fail it with their message.
+// failed=true means a per-event error was already routed (or dropped).
+func (eng *engine) evalOrFail(
+	key, expression string, ev *event,
+	sendPerEventError func(string, any, *event, map[string]int),
+) (any, bool) {
+	if eng.transform == nil {
+		sendPerEventError(key, "no transform evaluator available", ev, ev.lineage)
+		return nil, true
+	}
+	var result any
+	var err error
 	if eb, ok := eng.transform.(openbindings.TransformEvaluatorWithBindings); ok {
-		return eb.EvaluateWithBindings(expression, data, map[string]any{
-			"input": eng.origInput,
-		})
+		bindings := map[string]any{}
+		if rv, defined := eng.rootValue(ev.root); defined {
+			bindings["input"] = rv
+		}
+		result, err = eb.EvaluateWithBindings(expression, ev.data, bindings)
+	} else {
+		result, err = eng.transform.Evaluate(expression, ev.data)
 	}
-	return eng.transform.Evaluate(expression, data)
-}
-
-func copyLineage(m map[string]int) map[string]int {
-	cp := make(map[string]int, len(m))
-	for k, v := range m {
-		cp[k] = v
+	if err != nil {
+		if errors.Is(err, openbindings.ErrTransformUndefined) {
+			sendPerEventError(key, TransformUndefined, ev, ev.lineage)
+		} else {
+			sendPerEventError(key, err.Error(), ev, ev.lineage)
+		}
+		return nil, true
 	}
-	return cp
+	return result, false
 }
 
 func isTruthy(v any) bool {

@@ -317,12 +317,12 @@ func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string
 				expressible = false
 				break
 			}
-			reqType := schemeToRequirementType(ref.Value)
-			if reqType == "" {
+			req, ok := schemeToRequirement(ref.Value, baseURL)
+			if !ok {
 				expressible = false
 				break
 			}
-			reqs = append(reqs, openbindings.ContextRequirement{Type: reqType})
+			reqs = append(reqs, req)
 		}
 		if expressible && len(reqs) > 0 {
 			alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: reqs})
@@ -343,29 +343,106 @@ func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string
 	return details
 }
 
-// schemeToRequirementType maps an OpenAPI security scheme to the standard
-// context requirement family. Returns "" for schemes the SDK cannot express
-// as a context requirement (so the alternative is skipped).
-func schemeToRequirementType(s *openapi3.SecurityScheme) string {
+// schemeToRequirement maps an OpenAPI security scheme to the standard context
+// requirement family, carrying the family-specific fields a resolver needs to
+// act without out-of-band knowledge (notably oauth2 flow endpoints). The bool
+// is false for schemes the SDK cannot express (so the alternative is skipped).
+func schemeToRequirement(s *openapi3.SecurityScheme, baseURL string) (openbindings.ContextRequirement, bool) {
 	switch s.Type {
 	case "http":
 		switch strings.ToLower(s.Scheme) {
 		case "basic":
-			return "auth.basic"
+			return openbindings.ContextRequirement{Type: "auth.basic"}, true
 		case "bearer":
-			return "auth.bearer"
+			return openbindings.ContextRequirement{Type: "auth.bearer"}, true
 		default:
 			// digest, negotiate, etc.: not expressible as a context
 			// requirement, so the whole alternative is skipped (TS parity).
-			return ""
+			return openbindings.ContextRequirement{}, false
 		}
 	case "apiKey":
-		return "auth.apiKey"
-	case "oauth2", "openIdConnect":
-		return "auth.oauth2"
+		return openbindings.ContextRequirement{Type: "auth.apiKey"}, true
+	case "oauth2":
+		return oauth2Requirement(s, baseURL), true
+	case "openIdConnect":
+		// OpenID Connect resolves to an OAuth2 access token; the discovery URL
+		// lets a resolver fetch the authorize/token endpoints.
+		req := openbindings.ContextRequirement{Type: "auth.oauth2"}
+		if s.OpenIdConnectUrl != "" {
+			req.Extra = map[string]any{"openIdConnectUrl": absolutizeURL(s.OpenIdConnectUrl, baseURL)}
+		}
+		return req, true
 	default:
-		return ""
+		return openbindings.ContextRequirement{}, false
 	}
+}
+
+// oauth2Requirement builds an auth.oauth2 requirement carrying the flow's
+// authorize/token URLs and scopes under the role's convention field names
+// (authorizeUrl, tokenUrl, scopes). It prefers the authorization-code flow —
+// the only interactive, PKCE-capable flow — then implicit, then any flow with
+// an authorization endpoint. Relative URLs are resolved against the base URL.
+func oauth2Requirement(s *openapi3.SecurityScheme, baseURL string) openbindings.ContextRequirement {
+	req := openbindings.ContextRequirement{Type: "auth.oauth2"}
+	if s.Flows == nil {
+		return req
+	}
+	flow := s.Flows.AuthorizationCode
+	if flow == nil {
+		flow = s.Flows.Implicit
+	}
+	if flow == nil {
+		// Password and clientCredentials flows carry only a tokenUrl in
+		// OpenAPI 3.x (authorizationUrl is undefined for them), so select on
+		// TokenURL — the endpoint they actually have. Selecting on
+		// AuthorizationURL here would never match, leaving these schemes with a
+		// bare auth.oauth2 requirement (no tokenUrl/scopes).
+		for _, f := range []*openapi3.OAuthFlow{s.Flows.Password, s.Flows.ClientCredentials} {
+			if f != nil && f.TokenURL != "" {
+				flow = f
+				break
+			}
+		}
+	}
+	if flow == nil {
+		return req
+	}
+	extra := map[string]any{}
+	if flow.AuthorizationURL != "" {
+		extra["authorizeUrl"] = absolutizeURL(flow.AuthorizationURL, baseURL)
+	}
+	if flow.TokenURL != "" {
+		extra["tokenUrl"] = absolutizeURL(flow.TokenURL, baseURL)
+	}
+	if len(flow.Scopes) > 0 {
+		scopes := make([]string, 0, len(flow.Scopes))
+		for k := range flow.Scopes {
+			scopes = append(scopes, k)
+		}
+		sort.Strings(scopes)
+		extra["scopes"] = scopes
+	}
+	if len(extra) > 0 {
+		req.Extra = extra
+	}
+	return req
+}
+
+// absolutizeURL resolves a possibly-relative URL against the server base;
+// absolute URLs pass through unchanged.
+func absolutizeURL(ref, baseURL string) string {
+	u, err := url.Parse(ref)
+	if err != nil {
+		return ref
+	}
+	if u.IsAbs() {
+		return ref
+	}
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return ref
+	}
+	return base.ResolveReference(u).String()
 }
 
 func parseRef(ref string) (path string, method string, err error) {

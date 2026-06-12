@@ -2,83 +2,133 @@ package operationgraph
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
-// Validate checks the well-formedness rules defined in the operation graph spec.
-// operationKeys is the set of valid operation keys from the containing OBI.
-func Validate(g *Graph, operationKeys map[string]bool) error {
+// GraphValidationIssue is one validation failure. Rule is the stable
+// identifier from the format spec's Validation rules section (OG-V-##) when
+// the failure maps to a numbered rule; per-type field-whitelist failures
+// (the schema's structural enforcement) carry no rule unless they realize
+// OG-V-17. NodeKeys names the offending node(s) when the failure is
+// attributable — a graph editor can highlight them directly. The shape
+// mirrors the TS SDK's GraphValidationIssue.
+type GraphValidationIssue struct {
+	Rule     string   `json:"rule,omitempty"`
+	Message  string   `json:"message"`
+	NodeKeys []string `json:"nodeKeys,omitempty"`
+}
+
+// FormatIssue renders an issue the way the throwing Validate reports it.
+func FormatIssue(i GraphValidationIssue) string {
+	if i.Rule != "" {
+		return i.Rule + ": " + i.Message
+	}
+	return i.Message
+}
+
+// ValidateGraph enforces the format spec's validation rules OG-V-01 through
+// OG-V-17 on one graph definition, plus the per-type field whitelists the
+// format's JSON Schema expresses structurally (which is how OG-V-17 and the
+// each/operation field split are caught without a separate schema pass).
+// It returns structured issues (empty = valid).
+//
+// operationKeys is the set of operation keys the containing OBI declares;
+// when nil, the OG-V-11 reference check is skipped (references then fail at
+// invocation time).
+func ValidateGraph(g *Graph, operationKeys map[string]bool) []GraphValidationIssue {
 	if g == nil {
-		return fmt.Errorf("graph is nil")
+		return []GraphValidationIssue{{Message: "graph is nil"}}
 	}
 	if len(g.Nodes) == 0 {
-		return fmt.Errorf("graph has no nodes")
+		return []GraphValidationIssue{{Message: "graph has no nodes"}}
 	}
 
-	var errs []string
+	var issues []GraphValidationIssue
+	addIssue := func(rule, message string, nodeKeys ...string) {
+		issues = append(issues, GraphValidationIssue{Rule: rule, Message: message, NodeKeys: nodeKeys})
+	}
 
-	// Rule 1 & 2: exactly one input and one output node.
-	var inputKey, outputKey string
-	inputCount, outputCount := 0, 0
-	for key, node := range g.Nodes {
-		switch node.Type {
+	// OG-V-01: version field present and SemVer 2.0.0.
+	if g.Version == "" {
+		addIssue("OG-V-01", "graph must declare an openbindings.operation-graph version field")
+	} else if !semverRe.MatchString(g.Version) {
+		addIssue("OG-V-01", fmt.Sprintf("version %q is not a SemVer 2.0.0 string", g.Version))
+	}
+
+	// OG-V-02 / OG-V-03: exactly one input and one output node.
+	var inputKeys, outputKeys []string
+	for _, key := range sortedKeys(g.Nodes) {
+		switch g.Nodes[key].Type {
 		case "input":
-			inputCount++
-			inputKey = key
+			inputKeys = append(inputKeys, key)
 		case "output":
-			outputCount++
-			outputKey = key
+			outputKeys = append(outputKeys, key)
 		}
 	}
-	if inputCount != 1 {
-		errs = append(errs, fmt.Sprintf("expected exactly 1 input node, found %d", inputCount))
+	var inputKey, outputKey string
+	if len(inputKeys) == 1 {
+		inputKey = inputKeys[0]
 	}
-	if outputCount != 1 {
-		errs = append(errs, fmt.Sprintf("expected exactly 1 output node, found %d", outputCount))
+	if len(outputKeys) == 1 {
+		outputKey = outputKeys[0]
+	}
+	if len(inputKeys) != 1 {
+		addIssue("OG-V-02", fmt.Sprintf("expected exactly 1 input node, found %d", len(inputKeys)), inputKeys...)
+	}
+	if len(outputKeys) != 1 {
+		addIssue("OG-V-03", fmt.Sprintf("expected exactly 1 output node, found %d", len(outputKeys)), outputKeys...)
 	}
 
-	// Build adjacency lists and incoming edge counts.
-	outEdges := make(map[string][]string) // from -> [to]
-	inEdges := make(map[string][]string)  // to -> [from]
+	// Build adjacency. OG-V-07 (valid endpoints) and OG-V-08 (no duplicates)
+	// check the raw edge list.
+	outEdges := make(map[string][]string)
+	inEdges := make(map[string][]string)
 	edgeSeen := make(map[string]bool)
 	for _, e := range g.Edges {
-		// Rule 6: edges reference valid node keys.
 		if _, ok := g.Nodes[e.From]; !ok {
-			errs = append(errs, fmt.Sprintf("edge references unknown node %q in from", e.From))
+			addIssue("OG-V-07", fmt.Sprintf("edge references unknown node %q in from", e.From), existingKeys(g, e.To)...)
 		}
 		if _, ok := g.Nodes[e.To]; !ok {
-			errs = append(errs, fmt.Sprintf("edge references unknown node %q in to", e.To))
+			addIssue("OG-V-07", fmt.Sprintf("edge references unknown node %q in to", e.To), existingKeys(g, e.From)...)
 		}
-		// Rule 7: no duplicate edges.
 		edgeKey := e.From + " -> " + e.To
 		if edgeSeen[edgeKey] {
-			errs = append(errs, fmt.Sprintf("duplicate edge: %s", edgeKey))
+			addIssue("OG-V-08", "duplicate edge: "+edgeKey, existingKeys(g, e.From, e.To)...)
 		}
 		edgeSeen[edgeKey] = true
-
 		outEdges[e.From] = append(outEdges[e.From], e.To)
 		inEdges[e.To] = append(inEdges[e.To], e.From)
 	}
 
-	// Rule 3: input has no incoming edges.
+	// OG-V-04 / OG-V-05: boundary edge constraints.
 	if inputKey != "" && len(inEdges[inputKey]) > 0 {
-		errs = append(errs, "input node must not have incoming edges")
+		addIssue("OG-V-04", "input node must not have incoming edges", inputKey)
 	}
-
-	// Rule 4: output has no outgoing edges.
 	if outputKey != "" && len(outEdges[outputKey]) > 0 {
-		errs = append(errs, "output node must not have outgoing edges")
+		addIssue("OG-V-05", "output node must not have outgoing edges", outputKey)
 	}
 
-	// Rule 14: exit nodes have no outgoing edges.
+	// OG-V-16: exit nodes have no outgoing edges.
 	for key, node := range g.Nodes {
 		if node.Type == "exit" && len(outEdges[key]) > 0 {
-			errs = append(errs, fmt.Sprintf("exit node %q must not have outgoing edges", key))
+			addIssue("OG-V-16", fmt.Sprintf("exit node %q must not have outgoing edges", key), key)
 		}
 	}
 
-	// Rule 5: every node reachable from input via edges or onError references.
+	// succ is the control adjacency: data edges plus onError references.
+	// Both OG-V-06 (reachability) and OG-V-09/OG-V-10 (cycles) follow it.
+	succ := make(map[string][]string, len(g.Nodes))
+	for key, node := range g.Nodes {
+		succ[key] = append(succ[key], outEdges[key]...)
+		if node.OnError != "" {
+			succ[key] = append(succ[key], node.OnError)
+		}
+	}
+
+	// OG-V-06: every node reachable from input.
 	if inputKey != "" {
 		reachable := make(map[string]bool)
 		var walk func(string)
@@ -87,113 +137,255 @@ func Validate(g *Graph, operationKeys map[string]bool) error {
 				return
 			}
 			reachable[key] = true
-			for _, to := range outEdges[key] {
-				walk(to)
-			}
-			// Transitive via onError.
-			if node, ok := g.Nodes[key]; ok && node.OnError != "" {
-				walk(node.OnError)
+			for _, next := range succ[key] {
+				if _, ok := g.Nodes[next]; ok {
+					walk(next)
+				}
 			}
 		}
 		walk(inputKey)
-		for key := range g.Nodes {
+		for _, key := range sortedKeys(g.Nodes) {
 			if !reachable[key] {
-				errs = append(errs, fmt.Sprintf("node %q is not reachable from input", key))
+				addIssue("OG-V-06", fmt.Sprintf("node %q is not reachable from input", key), key)
 			}
 		}
 	}
 
-	// Rule 8: every cycle must contain at least one operation node with maxIterations.
-	cycles := findCycles(g)
-	for _, cycle := range cycles {
+	// OG-V-09 / OG-V-10: cycle rules over the control adjacency.
+	for _, cycle := range findCycles(g.Nodes, succ) {
 		sort.Strings(cycle)
-		hasGuard := false
+		hasBoundedEach := false
 		for _, key := range cycle {
 			node := g.Nodes[key]
-			if node.Type == "operation" && node.MaxIterations != nil {
-				hasGuard = true
-				break
+			if node.Type == "each" && node.MaxIterations != nil {
+				hasBoundedEach = true
+			}
+			if node.Type == "operation" {
+				addIssue("OG-V-10", fmt.Sprintf("operation node %q must not participate in a cycle [%s]", key, strings.Join(cycle, " -> ")), key)
 			}
 		}
-		if !hasGuard {
-			errs = append(errs, fmt.Sprintf("cycle [%s] must contain at least one operation node with maxIterations", strings.Join(cycle, " -> ")))
+		if !hasBoundedEach {
+			addIssue("OG-V-09", fmt.Sprintf("cycle [%s] must contain at least one each node with maxIterations", strings.Join(cycle, " -> ")), cycle...)
 		}
 	}
 
-	// Per-node validation.
-	for key, node := range g.Nodes {
-		// Rule 12: valid type.
-		switch node.Type {
-		case "input", "output", "operation", "buffer", "filter", "transform", "map", "combine", "exit":
-			// ok
-		default:
-			errs = append(errs, fmt.Sprintf("node %q has unsupported type %q", key, node.Type))
+	// Per-node rules: OG-V-11 .. OG-V-15, OG-V-17, plus per-type field
+	// whitelists (the schema's structural enforcement).
+	for _, key := range sortedKeys(g.Nodes) {
+		node := g.Nodes[key]
+
+		// OG-V-14: defined node types only.
+		fields, known := nodeFieldRules[node.Type]
+		if !known {
+			addIssue("OG-V-14", fmt.Sprintf("node %q has unsupported type %q", key, node.Type), key)
+			continue
 		}
 
-		// Rule 9: operation nodes reference valid operations.
-		if node.Type == "operation" {
-			if node.Operation == "" {
-				errs = append(errs, fmt.Sprintf("operation node %q missing operation field", key))
-			} else if operationKeys != nil && !operationKeys[node.Operation] {
-				errs = append(errs, fmt.Sprintf("operation node %q references unknown operation %q", key, node.Operation))
+		// Per-type field whitelist (schema-enforced in the format's JSON
+		// Schema; OG-V-17 falls out of the boundary nodes' empty whitelists).
+		for _, f := range presentFields(node) {
+			if !fields.allowed[f] {
+				rule := ""
+				if f == "onError" && (node.Type == "input" || node.Type == "output") {
+					rule = "OG-V-17"
+				}
+				addIssue(rule, fmt.Sprintf("node %q (%s) does not permit field %q", key, node.Type, f), key)
+			}
+		}
+		for _, f := range fields.required {
+			if !hasField(node, f) {
+				addIssue("", fmt.Sprintf("%s node %q missing %s field", node.Type, key, f), key)
 			}
 		}
 
-		// Rule 10: filter mutual exclusivity.
+		// OG-V-11: operation and each references resolve in the containing OBI.
+		if (node.Type == "operation" || node.Type == "each") && node.Operation != "" {
+			if operationKeys != nil && !operationKeys[node.Operation] {
+				addIssue("OG-V-11", fmt.Sprintf("%s node %q references unknown operation %q", node.Type, key, node.Operation), key)
+			}
+		}
+
+		// OG-V-12: filter mutual exclusivity (exactly one of schema/transform).
 		if node.Type == "filter" {
 			hasSchema := node.Schema != nil
 			hasTransform := node.Transform != nil
-			if !hasSchema && !hasTransform {
-				errs = append(errs, fmt.Sprintf("filter node %q must have schema or transform", key))
-			}
-			if hasSchema && hasTransform {
-				errs = append(errs, fmt.Sprintf("filter node %q must have exactly one of schema or transform", key))
+			if hasSchema == hasTransform {
+				addIssue("OG-V-12", fmt.Sprintf("filter node %q must have exactly one of schema or transform", key), key)
 			}
 		}
 
-		// Rule 11: buffer mutual exclusivity.
+		// OG-V-13: buffer until/through mutual exclusivity.
 		if node.Type == "buffer" && node.Until != nil && node.Through != nil {
-			errs = append(errs, fmt.Sprintf("buffer node %q must not have both until and through", key))
+			addIssue("OG-V-13", fmt.Sprintf("buffer node %q must not have both until and through", key), key)
 		}
 
-		// Rule 13: onError references valid node.
+		// OG-V-15: onError references an existing node.
 		if node.OnError != "" {
 			if _, ok := g.Nodes[node.OnError]; !ok {
-				errs = append(errs, fmt.Sprintf("node %q onError references unknown node %q", key, node.OnError))
+				addIssue("OG-V-15", fmt.Sprintf("node %q onError references unknown node %q", key, node.OnError), key)
 			}
-		}
-
-		// transform and map nodes require a transform field.
-		if (node.Type == "transform" || node.Type == "map") && node.Transform == nil {
-			errs = append(errs, fmt.Sprintf("%s node %q missing transform field", node.Type, key))
 		}
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("validation errors:\n  %s", strings.Join(errs, "\n  "))
+	return issues
+}
+
+// Validate is the throwing (error-returning) form of ValidateGraph: the
+// OG-T-01 gate used by the invoker. It joins every issue, one per line.
+func Validate(g *Graph, operationKeys map[string]bool) error {
+	issues := ValidateGraph(g, operationKeys)
+	if len(issues) == 0 {
+		return nil
+	}
+	if len(issues) == 1 && issues[0].Rule == "" && issues[0].NodeKeys == nil {
+		// Shape preconditions ("graph is nil", "graph has no nodes") return
+		// bare, matching the historical behavior.
+		return fmt.Errorf("%s", issues[0].Message)
+	}
+	lines := make([]string, len(issues))
+	for i, issue := range issues {
+		lines[i] = FormatIssue(issue)
+	}
+	return fmt.Errorf("validation errors:\n  %s", strings.Join(lines, "\n  "))
+}
+
+// existingKeys filters node keys to those present in the graph (issue
+// attribution never points at nonexistent nodes).
+func existingKeys(g *Graph, keys ...string) []string {
+	var out []string
+	for _, k := range keys {
+		if _, ok := g.Nodes[k]; ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// semverRe is the SemVer 2.0.0 pattern (the same pattern the format schema
+// carries).
+var semverRe = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
+
+// The format version this implementation supports. OG-T-02 (mirroring the
+// core spec's OBI-T-04): refuse a higher major version, and a higher minor
+// version while the format is pre-1.0.
+const (
+	supportedMajor = 0
+	supportedMinor = 2
+)
+
+// checkVersion applies OG-T-02 to a graph's declared format version.
+func checkVersion(version string) error {
+	m := semverRe.FindStringSubmatch(version)
+	if m == nil {
+		return fmt.Errorf("version %q is not a SemVer 2.0.0 string", version)
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	if major > supportedMajor || (supportedMajor == 0 && major == 0 && minor > supportedMinor) {
+		return fmt.Errorf("OG-T-02: graph declares openbindings.operation-graph %s; this implementation supports up to %d.%d.x", version, supportedMajor, supportedMinor)
 	}
 	return nil
 }
 
-// findCycles returns all strongly connected components with more than one node,
-// using Tarjan's algorithm.
-func findCycles(g *Graph) [][]string {
-	outEdges := make(map[string][]string)
-	for _, e := range g.Edges {
-		outEdges[e.From] = append(outEdges[e.From], e.To)
+// fieldRules is a node type's permitted and required fields, mirroring the
+// format schema's per-type whitelists.
+type fieldRules struct {
+	allowed  map[string]bool
+	required []string
+}
+
+func rules(required []string, allowed ...string) fieldRules {
+	m := make(map[string]bool, len(allowed)+len(required))
+	for _, f := range allowed {
+		m[f] = true
 	}
+	for _, f := range required {
+		m[f] = true
+	}
+	return fieldRules{allowed: m, required: required}
+}
 
-	var (
-		index    int
-		stack    []string
-		onStack  = make(map[string]bool)
-		indices  = make(map[string]int)
-		lowlinks = make(map[string]int)
-		visited  = make(map[string]bool)
-		result   [][]string
-	)
+var nodeFieldRules = map[string]fieldRules{
+	"input":     rules(nil),
+	"output":    rules(nil),
+	"operation": rules([]string{"operation"}, "timeout", "onError"),
+	"each":      rules([]string{"operation"}, "maxIterations", "timeout", "onError"),
+	"transform": rules([]string{"transform"}, "onError"),
+	"filter":    rules(nil, "schema", "transform", "onError"),
+	"map":       rules([]string{"transform"}, "onError"),
+	"buffer":    rules(nil, "limit", "until", "through", "onError"),
+	"combine":   rules(nil, "onError"),
+	"exit":      rules(nil, "error", "onError"),
+}
 
-	var strongConnect func(string)
+// presentFields lists which spec fields are present on a node (the flat Node
+// struct can represent every field; presence is what the whitelist judges).
+func presentFields(n *Node) []string {
+	var out []string
+	if n.OnError != "" {
+		out = append(out, "onError")
+	}
+	if n.Operation != "" {
+		out = append(out, "operation")
+	}
+	if n.MaxIterations != nil {
+		out = append(out, "maxIterations")
+	}
+	if n.Timeout != nil {
+		out = append(out, "timeout")
+	}
+	if n.Limit != nil {
+		out = append(out, "limit")
+	}
+	if n.Until != nil {
+		out = append(out, "until")
+	}
+	if n.Through != nil {
+		out = append(out, "through")
+	}
+	if n.Schema != nil {
+		out = append(out, "schema")
+	}
+	if n.Transform != nil {
+		out = append(out, "transform")
+	}
+	if n.Error != nil {
+		out = append(out, "error")
+	}
+	return out
+}
+
+func hasField(n *Node, field string) bool {
+	for _, f := range presentFields(n) {
+		if f == field {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// findCycles returns all strongly connected components with more than one
+// node, plus single-node SCCs with a self-loop, over the given adjacency
+// (data edges plus onError references). Tarjan's algorithm.
+func findCycles(nodes map[string]*Node, succ map[string][]string) [][]string {
+	index := 0
+	stack := []string{}
+	onStack := map[string]bool{}
+	indices := map[string]int{}
+	lowlinks := map[string]int{}
+	visited := map[string]bool{}
+	var result [][]string
+
+	var strongConnect func(v string)
 	strongConnect = func(v string) {
 		indices[v] = index
 		lowlinks[v] = index
@@ -202,16 +394,17 @@ func findCycles(g *Graph) [][]string {
 		stack = append(stack, v)
 		onStack[v] = true
 
-		for _, w := range outEdges[v] {
+		for _, w := range succ[v] {
+			if _, ok := nodes[w]; !ok {
+				continue // dangling reference; OG-V-07/OG-V-15 report it
+			}
 			if !visited[w] {
 				strongConnect(w)
 				if lowlinks[w] < lowlinks[v] {
 					lowlinks[v] = lowlinks[w]
 				}
-			} else if onStack[w] {
-				if indices[w] < lowlinks[v] {
-					lowlinks[v] = indices[w]
-				}
+			} else if onStack[w] && indices[w] < lowlinks[v] {
+				lowlinks[v] = indices[w]
 			}
 		}
 
@@ -228,10 +421,8 @@ func findCycles(g *Graph) [][]string {
 			}
 			if len(scc) > 1 {
 				result = append(result, scc)
-			}
-			// Also detect self-loops.
-			if len(scc) == 1 {
-				for _, to := range outEdges[scc[0]] {
+			} else if len(scc) == 1 {
+				for _, to := range succ[scc[0]] {
 					if to == scc[0] {
 						result = append(result, scc)
 						break
@@ -241,7 +432,7 @@ func findCycles(g *Graph) [][]string {
 		}
 	}
 
-	for key := range g.Nodes {
+	for _, key := range sortedKeys(nodes) {
 		if !visited[key] {
 			strongConnect(key)
 		}

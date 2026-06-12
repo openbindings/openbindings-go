@@ -167,6 +167,13 @@ type Invocation[I, O any] interface {
 	// a second call PANICS with ErrCodeAlreadyConsumed (a second consumer is
 	// a programming bug, like a concurrent map write).
 	Outputs() OutputStream[O]
+	// InputClosed returns a channel that is closed once the invocation's
+	// input side has closed — by the caller's Close, by the binding from
+	// below (a unary binding after its first read), or by a terminal
+	// transition. Consumers that pipe a stream into the invocation (e.g.
+	// operation-graph conduits) watch it to learn acceptance has ended
+	// without having to probe with a failing Write.
+	InputClosed() <-chan struct{}
 	Cancel()
 	// Header returns leading metadata; blocks until the binding sets it, or
 	// until the first output / terminal, whichever is first. Empty for
@@ -415,6 +422,10 @@ func (i *InvocationImpl[I, O]) terminalOrClosedErr() *InvocationError {
 // side. For abrupt termination use Cancel.
 func (i *InvocationImpl[I, O]) Close() error { return i.CloseInput() }
 
+// InputClosed returns a channel closed once the input side has closed (by
+// the caller, by the binding from below, or by a terminal transition).
+func (i *InvocationImpl[I, O]) InputClosed() <-chan struct{} { return i.inputClosedCh }
+
 // Cancel aborts the invocation. Idempotent; a no-op once terminal (it never
 // overwrites a real terminal error with ERR_CANCELLED — load-bearing for
 // Single's Stop-after-error path).
@@ -647,9 +658,13 @@ func (i *InvocationImpl[I, O]) SetTrailer(md Metadata) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.state != stateOpen {
-		// A binding bug ("must precede CloseOutput/FireError"): fail loudly,
-		// mirroring the TS SDK's throw, instead of silently dropping metadata.
-		panic("openbindings: SetTrailer must precede CloseOutput/FireError")
+		// Terminal state is reachable at any time via caller/upstream
+		// cancellation, so a binding may legally set trailers on a goroutine
+		// after the RPC has already settled. Per the documented contract
+		// ("Late sets (after terminal) are dropped"), this is a no-op rather
+		// than a panic — panicking here would crash the process on a benign
+		// cancellation race.
+		return
 	}
 	i.trailerMD = copyMetadata(md)
 }
@@ -801,6 +816,8 @@ func (t *TypedInvocation[I, O]) Write(ctx context.Context, input I) error {
 
 func (t *TypedInvocation[I, O]) Close() error { return t.inner.Close() }
 func (t *TypedInvocation[I, O]) Cancel()      { t.inner.Cancel() }
+
+func (t *TypedInvocation[I, O]) InputClosed() <-chan struct{} { return t.inner.InputClosed() }
 
 func (t *TypedInvocation[I, O]) Header(ctx context.Context) (Metadata, error) {
 	return t.inner.Header(ctx)

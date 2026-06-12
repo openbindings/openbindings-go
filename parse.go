@@ -39,6 +39,25 @@ func ParseDocument(data []byte) (*Interface, error) {
 		return nil, fmt.Errorf("parse document: %w", err)
 	}
 
+	// OBI-T-04 (spec §11.1): refuse to PARSE a document declaring a higher
+	// major version (pre-1.0: higher minor) than this SDK's MaxTested. This
+	// must hold on every entry point (ParseDocument, ValidateDocument,
+	// FetchInterface), not only Interface.Validate. The schema pattern above
+	// already rejects a malformed-version string, so a bad version surfaces as
+	// a schema error first; here the value is well-formed SemVer. The error is
+	// emitted identically to Interface.Validate so the diagnostic is the same
+	// regardless of entry point. Because ParseDocument fails first, callers
+	// that go on to Interface.Validate never double-report.
+	if higher, err := IsHigherMajorOrPre1MinorThanMaxTested(iface.OpenBindings); err != nil {
+		return nil, &ValidationError{
+			Problems: []string{fmt.Sprintf("openbindings: %v (OBI-T-04)", err)},
+		}
+	} else if higher {
+		return nil, &ValidationError{
+			Problems: []string{fmt.Sprintf("openbindings: %q exceeds this SDK's MaxTestedVersion %q (OBI-T-04)", iface.OpenBindings, MaxTestedVersion)},
+		}
+	}
+
 	return &iface, nil
 }
 

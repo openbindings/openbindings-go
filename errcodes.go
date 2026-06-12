@@ -146,10 +146,18 @@ const (
 	ErrCodeEventLimitExceeded = "ERR_EVENT_LIMIT_EXCEEDED"
 
 	// ErrCodeOperationGraphExit indicates that an exit node terminated the
-	// graph execution with an error.
+	// graph execution with an error. Details carries the event that reached
+	// the exit node (the spec's error detail).
 	ErrCodeOperationGraphExit = "ERR_OPERATION_GRAPH_EXIT"
 
-	// ErrCodeMapNotArray indicates that a map node's transform did not
-	// produce an array value as required.
-	ErrCodeMapNotArray = "ERR_MAP_NOT_ARRAY"
+	// ErrCodeUnsupportedFormatVersion indicates a binding source declares a
+	// format version the invoker refuses (e.g. the operation-graph OG-T-02
+	// rule mirroring OBI-T-04: higher major, or higher minor while pre-1.0).
+	ErrCodeUnsupportedFormatVersion = "ERR_UNSUPPORTED_FORMAT_VERSION"
+
+	// Per-node failure identifiers inside an operation graph (TIMEOUT_EXCEEDED,
+	// WRITE_REJECTED, MAP_NOT_ARRAY, TRANSFORM_UNDEFINED) are defined by the
+	// operation-graph format specification and live in the
+	// formats/operationgraph package, not here: they are format error
+	// identifiers, not invoker codes.
 )

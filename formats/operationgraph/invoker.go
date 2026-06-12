@@ -3,6 +3,7 @@ package operationgraph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,18 +22,18 @@ const FormatToken = "openbindings.operation-graph@0.2.0"
 type Invoker struct {
 	invoker  *openbindings.OperationInvoker
 	mu       sync.RWMutex
-	docCache map[string]*Document
+	docCache map[string]any
 	schemas  *schemaCache
 	client   *http.Client
 }
 
 // NewInvoker creates a new operation graph binding invoker.
 // The OperationInvoker is used to invoke sub-operations referenced by
-// operation nodes in the graph.
+// operation and each nodes in the graph.
 func NewInvoker(invoker *openbindings.OperationInvoker) *Invoker {
 	return &Invoker{
 		invoker:  invoker,
-		docCache: make(map[string]*Document),
+		docCache: make(map[string]any),
 		schemas:  newSchemaCache(),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
@@ -55,10 +56,14 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 }
 
 // InvokeBinding invokes an operation graph binding. The handle is returned
-// synchronously; the graph engine runs on its own goroutine. The graph's
-// initial input is the first message written to the handle (or nil when the
-// operation layer declares a no-input operation), and graph events stream
-// out through the handle's output side.
+// synchronously; the graph engine runs on its own goroutine. Caller writes
+// stream in through the handle's input side (each write becomes one event at
+// the graph's input node, rooting a lineage) and graph events stream out
+// through the output side.
+//
+// Pre-flight failures (source load, ref resolution, version refusal per
+// OG-T-02, validation per OG-T-01) surface as an already-errored handle
+// without consuming any caller input.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
 	doc, err := e.loadDocument(args.Source.Location, args.Source.Content)
 	if err != nil {
@@ -68,11 +73,54 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 		})
 	}
 
-	graph, ok := doc.Graphs[args.Ref]
-	if !ok {
+	// The ref is a REQUIRED JSON Pointer fragment addressing the graph
+	// definition within the (otherwise unconstrained) host document.
+	target, err := resolveRef(doc, args.Ref)
+	if err != nil {
+		code := openbindings.ErrCodeRefNotFound
+		var re *refError
+		if errors.As(err, &re) && re.invalid {
+			code = openbindings.ErrCodeInvalidRef
+		}
 		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("operation graph %q not found in document", args.Ref),
+			Code:    code,
+			Message: err.Error(),
+		})
+	}
+	graph, err := graphFromValue(target)
+	if err != nil {
+		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeValidationFailed,
+			Message: fmt.Sprintf("ref %q: %v", args.Ref, err),
+		})
+	}
+
+	// OG-T-02: refuse graphs declaring a format version this implementation
+	// does not support. The graph's own field governs (the source format
+	// token is advisory).
+	if graph.Version != "" && semverRe.MatchString(graph.Version) {
+		if err := checkVersion(graph.Version); err != nil {
+			return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeUnsupportedFormatVersion,
+				Message: err.Error(),
+			})
+		}
+	}
+
+	// OG-T-01: validate before acting; fail the binding rather than execute
+	// an invalid graph. When Interface is absent (direct binding invocation)
+	// the OG-V-11 reference check is skipped; bad references fail at runtime.
+	var opKeys map[string]bool
+	if args.Interface != nil {
+		opKeys = make(map[string]bool, len(args.Interface.Operations))
+		for k := range args.Interface.Operations {
+			opKeys[k] = true
+		}
+	}
+	if err := Validate(graph, opKeys); err != nil {
+		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeValidationFailed,
+			Message: err.Error(),
 		})
 	}
 
@@ -84,7 +132,10 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 	return inv
 }
 
-func (e *Invoker) loadDocument(location string, content any) (*Document, error) {
+// loadDocument loads and parses an operation graph source document into a
+// generic JSON value (the host document's shape is unconstrained by the
+// format). Parsed documents are cached by location when content is absent.
+func (e *Invoker) loadDocument(location string, content any) (any, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
 		if doc, ok := e.docCache[location]; ok {
@@ -102,12 +153,6 @@ func (e *Invoker) loadDocument(location string, content any) (*Document, error) 
 		data = []byte(v)
 	case json.RawMessage:
 		data = []byte(v)
-	case map[string]any:
-		var err error
-		data, err = json.Marshal(v)
-		if err != nil {
-			return nil, fmt.Errorf("marshal inline content: %w", err)
-		}
 	default:
 		if content != nil {
 			var err error
@@ -129,9 +174,9 @@ func (e *Invoker) loadDocument(location string, content any) (*Document, error) 
 		}
 	}
 
-	doc, err := ParseDocument(data)
-	if err != nil {
-		return nil, fmt.Errorf("parse operation graph: %w", err)
+	var doc any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("parse operation graph document: %w", err)
 	}
 
 	if location != "" {

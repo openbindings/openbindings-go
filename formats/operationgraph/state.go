@@ -14,121 +14,215 @@ func msToDuration(ms int) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-// bufferState tracks accumulated events for a buffer node.
+// noRoot marks an event whose lineage root is undefined: it descends from a
+// merge whose contributors disagree on a root (or had none), so $input is
+// unbound during expression evaluation.
+const noRoot = -1
+
+// rootTracker accumulates the merged lineage root across contributing
+// events: defined if and only if every contributor shares one root.
+type rootTracker struct {
+	set      bool
+	root     int
+	conflict bool
+}
+
+func (rt *rootTracker) add(root int) {
+	if !rt.set {
+		rt.set = true
+		rt.root = root
+		return
+	}
+	if rt.root != root {
+		rt.conflict = true
+	}
+}
+
+func (rt *rootTracker) merged() int {
+	if !rt.set || rt.conflict || rt.root == noRoot {
+		return noRoot
+	}
+	return rt.root
+}
+
+// mergeMaxInto merges src into dst taking the element-wise maximum (the
+// spec's lineage merge rule: a merge never lowers a count).
+func mergeMaxInto(dst map[string]int, src map[string]int) {
+	for k, v := range src {
+		if v > dst[k] {
+			dst[k] = v
+		}
+	}
+}
+
+// batch is one merge-node emission (a buffer flush's array or a combine
+// snapshot's object) plus the merged lineage and root of its contributors.
+type batch struct {
+	data    any
+	lineage map[string]int
+	root    int
+}
+
+// bufferState tracks accumulated events for a buffer node: one accumulator
+// instance per graph invocation, accumulating across lineages.
 type bufferState struct {
 	mu      sync.Mutex
 	node    *Node
-	acc     []any
 	schemas *schemaCache
+	acc     []any
+	lineage map[string]int
+	roots   rootTracker
 }
 
 func newBufferState(node *Node, sc *schemaCache) *bufferState {
-	return &bufferState{node: node, schemas: sc}
+	return &bufferState{node: node, schemas: sc, lineage: map[string]int{}}
 }
 
-// add processes an incoming event and returns any batches to flush.
-func (bs *bufferState) add(ev *event) []any {
+// add processes one incoming event per the spec's flush precedence: the
+// event is added, then limit is evaluated, then until/through — so an event
+// that both reaches the limit and matches until/through flushes as part of
+// the batch. An until-matched event is excluded and dropped (its lineage
+// does not merge into the batch).
+func (bs *bufferState) add(ev *event) *batch {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
-	if bs.node.Until != nil {
-		if matches, _ := bs.schemas.match(bs.node.Until, ev.data); matches {
-			if len(bs.acc) == 0 {
-				return nil
-			}
-			batch := make([]any, len(bs.acc))
-			copy(batch, bs.acc)
-			bs.acc = bs.acc[:0]
-			return []any{batch}
+	limitHit := bs.node.Limit != nil && len(bs.acc)+1 >= *bs.node.Limit
+	switch {
+	case limitHit:
+		bs.retain(ev)
+		return bs.takeBatch()
+	case bs.node.Until != nil && bs.matches(bs.node.Until, ev.data):
+		if len(bs.acc) == 0 {
+			return nil
 		}
-	}
-
-	if bs.node.Through != nil {
-		bs.acc = append(bs.acc, ev.data)
-		if matches, _ := bs.schemas.match(bs.node.Through, ev.data); matches {
-			batch := make([]any, len(bs.acc))
-			copy(batch, bs.acc)
-			bs.acc = bs.acc[:0]
-			return []any{batch}
-		}
+		return bs.takeBatch()
+	case bs.node.Through != nil && bs.matches(bs.node.Through, ev.data):
+		bs.retain(ev)
+		return bs.takeBatch()
+	default:
+		bs.retain(ev)
 		return nil
 	}
-
-	bs.acc = append(bs.acc, ev.data)
-
-	if bs.node.Limit != nil && len(bs.acc) >= *bs.node.Limit {
-		batch := make([]any, len(bs.acc))
-		copy(batch, bs.acc)
-		bs.acc = bs.acc[:0]
-		return []any{batch}
-	}
-
-	return nil
 }
 
-// flush returns the remaining accumulated events on completion.
-func (bs *bufferState) flush() any {
+// flush returns any remaining partial batch on completion (nil when empty —
+// a buffer that accumulated nothing emits nothing, not an empty array).
+func (bs *bufferState) flush() *batch {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	if len(bs.acc) == 0 {
 		return nil
 	}
-	batch := make([]any, len(bs.acc))
-	copy(batch, bs.acc)
-	bs.acc = bs.acc[:0]
-	return batch
+	return bs.takeBatch()
 }
 
-// combineState tracks the latest event from each source for a combine node.
-// Emits a combined object every time any source produces a new event.
+func (bs *bufferState) retain(ev *event) {
+	bs.acc = append(bs.acc, ev.data)
+	mergeMaxInto(bs.lineage, ev.lineage)
+	bs.roots.add(ev.root)
+}
+
+func (bs *bufferState) takeBatch() *batch {
+	b := &batch{data: bs.acc, lineage: bs.lineage, root: bs.roots.merged()}
+	bs.acc = nil
+	bs.lineage = map[string]int{}
+	bs.roots = rootTracker{}
+	return b
+}
+
+func (bs *bufferState) matches(schema *json.RawMessage, data any) bool {
+	ok, _ := bs.schemas.match(schema, data)
+	return ok
+}
+
+// combineState implements the spec's readiness rule: a combine node emits
+// nothing until every incoming source has produced at least one event or
+// completed; it then emits a combined object, and again on every subsequent
+// event from a still-active source. A source that completed without
+// producing contributes null. One instance per graph invocation.
 type combineState struct {
-	mu       sync.Mutex
-	expected map[string]bool
-	latest   map[string]any  // latest event per source (nil if not yet received)
-	has      map[string]bool // whether a source has produced at least one event
+	mu        sync.Mutex
+	sources   []string
+	latest    map[string]any
+	lineages  map[string]map[string]int
+	roots     map[string]int
+	produced  map[string]bool
+	completed map[string]bool
+	ready     bool
 }
 
 func newCombineState(sources []string) *combineState {
-	expected := make(map[string]bool, len(sources))
-	for _, s := range sources {
-		expected[s] = true
-	}
 	return &combineState{
-		expected: expected,
-		latest:   make(map[string]any),
-		has:      make(map[string]bool),
+		sources:   sources,
+		latest:    make(map[string]any),
+		lineages:  make(map[string]map[string]int),
+		roots:     make(map[string]int),
+		produced:  make(map[string]bool),
+		completed: make(map[string]bool),
 	}
 }
 
-// add records a new event from a source and returns the combined snapshot to emit.
-func (cs *combineState) add(ev *event) (map[string]any, bool) {
+// add records an event from a source. It returns a snapshot to emit when the
+// node is ready (every source produced-or-completed), nil otherwise.
+func (cs *combineState) add(ev *event) *batch {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.latest[ev.source] = ev.data
-	cs.has[ev.source] = true
-	return cs.snapshot(), true
+	cs.lineages[ev.source] = ev.lineage
+	cs.roots[ev.source] = ev.root
+	cs.produced[ev.source] = true
+	cs.refreshReady()
+	if !cs.ready {
+		return nil
+	}
+	return cs.snapshot()
 }
 
-// complete is called when all upstream sources are done. Nothing to emit;
-// the combine node's completion is handled by the engine's completion propagation.
-func (cs *combineState) complete() (map[string]any, bool) {
-	return nil, false
+// sourceComplete records one source's completion. When that completion is
+// what makes the node ready, it returns the one readiness-triggered snapshot
+// to emit (null for every source that completed without producing).
+func (cs *combineState) sourceComplete(source string) *batch {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.completed[source] = true
+	if cs.ready {
+		return nil
+	}
+	cs.refreshReady()
+	if !cs.ready {
+		return nil
+	}
+	return cs.snapshot()
 }
 
-func (cs *combineState) snapshot() map[string]any {
-	result := make(map[string]any, len(cs.expected))
-	for source := range cs.expected {
-		if cs.has[source] {
-			result[source] = cs.latest[source]
-		} else {
-			result[source] = nil
+func (cs *combineState) refreshReady() {
+	for _, s := range cs.sources {
+		if !cs.produced[s] && !cs.completed[s] {
+			return
 		}
 	}
-	return result
+	cs.ready = true
 }
 
-// schemaCache is a per-Invoker cache of compiled JSON schemas.
-// Storing it on the Invoker avoids mutable package-level state.
+func (cs *combineState) snapshot() *batch {
+	obj := make(map[string]any, len(cs.sources))
+	lineage := map[string]int{}
+	roots := rootTracker{}
+	for _, s := range cs.sources {
+		if cs.produced[s] {
+			obj[s] = cs.latest[s]
+			mergeMaxInto(lineage, cs.lineages[s])
+			roots.add(cs.roots[s])
+		} else {
+			obj[s] = nil
+		}
+	}
+	return &batch{data: obj, lineage: lineage, root: roots.merged()}
+}
+
+// schemaCache is a per-Invoker cache of compiled JSON schemas shared by
+// filter and buffer schema matching.
 type schemaCache struct {
 	mu      sync.RWMutex
 	schemas map[string]*jsonschema.Schema
@@ -138,8 +232,8 @@ func newSchemaCache() *schemaCache {
 	return &schemaCache{schemas: make(map[string]*jsonschema.Schema)}
 }
 
-// match validates data against a JSON Schema, compiling and caching on first use.
-// Compiled schemas are keyed by their raw JSON representation.
+// match validates data against a JSON Schema, compiling and caching on first
+// use. Compiled schemas are keyed by their raw JSON representation.
 func (sc *schemaCache) match(schema *json.RawMessage, data any) (bool, error) {
 	key := string(*schema)
 
@@ -150,16 +244,16 @@ func (sc *schemaCache) match(schema *json.RawMessage, data any) (bool, error) {
 	if !ok {
 		var schemaDoc any
 		if err := json.Unmarshal(*schema, &schemaDoc); err != nil {
-			return false, fmt.Errorf("compile filter schema: %w", err)
+			return false, fmt.Errorf("compile embedded schema: %w", err)
 		}
 		compiler := jsonschema.NewCompiler()
-		if err := compiler.AddResource("filter.json", schemaDoc); err != nil {
-			return false, fmt.Errorf("compile filter schema: %w", err)
+		if err := compiler.AddResource("embedded.json", schemaDoc); err != nil {
+			return false, fmt.Errorf("compile embedded schema: %w", err)
 		}
 		var err error
-		compiled, err = compiler.Compile("filter.json")
+		compiled, err = compiler.Compile("embedded.json")
 		if err != nil {
-			return false, fmt.Errorf("compile filter schema: %w", err)
+			return false, fmt.Errorf("compile embedded schema: %w", err)
 		}
 		sc.mu.Lock()
 		sc.schemas[key] = compiled
@@ -167,7 +261,7 @@ func (sc *schemaCache) match(schema *json.RawMessage, data any) (bool, error) {
 	}
 
 	if err := compiled.Validate(data); err != nil {
-		return false, nil // validation failed = event doesn't match
+		return false, nil // validation failure = the event does not match
 	}
 	return true, nil
 }

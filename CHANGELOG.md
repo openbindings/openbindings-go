@@ -112,7 +112,24 @@
   `ContextEnvironment`/`ContextMetadata` read them. `BindingInvocationInput`
   no longer carries a separate `Options` field.
 
+### Fixed
+
+- **Schema validation failure rendering.** `splitSchemaError` and
+  `collectValidationFailures` formatted jsonschema/v6 `ErrorKind` leaves with
+  `%v`, printing the raw struct (`&{[customer]}` for a missing required
+  property) instead of the kind's localized message (`missing property
+  'customer'`). The garbage text also flowed into
+  `ValidationFailureDetails.Failures[].Message` — the wire-crossing details
+  payload consumers render per-field, where the TS SDK already produced
+  readable messages. Leaves now render via `ErrorKind.LocalizedString`.
+
 ### Added
+
+- **`Invocation.InputClosed()`** — a channel closed once the invocation's input side has closed: by the caller's `Close`, by the binding from below (a unary binding after its first read), or by a terminal transition. Lets consumers that pipe a stream into an invocation (the operation-graph conduit) observe non-acceptance without probing with a failing `Write`. Implemented by `InvocationImpl` and forwarded by `TypedInvocation`.
+
+- **`ErrTransformUndefined`** sentinel — evaluators return it (possibly wrapped) when an expression yields no result, since Go's `any` cannot distinguish JSONata's undefined from JSON null. The operation-graph engine maps it to the spec's `TRANSFORM_UNDEFINED` node failure; null flows downstream normally.
+
+- **`ErrCodeUnsupportedFormatVersion`** (`ERR_UNSUPPORTED_FORMAT_VERSION`) for format-version refusal (e.g. operation-graph OG-T-02 mirroring OBI-T-04). `ErrCodeMapNotArray` is removed: per-node graph failure identifiers (`TIMEOUT_EXCEEDED`, `WRITE_REJECTED`, `MAP_NOT_ARRAY`, `TRANSFORM_UNDEFINED`) are format error identifiers and live in `formats/operationgraph`.
 
 - **URI helpers** `CanonicalizeLocation` and `ResolveRef` per spec §10 (Location Equality) and §12 (Reference Resolution). `CanonicalizeLocation` lifts bare absolute paths to `file://`, lowercases scheme and host, IDN-punycodes via `golang.org/x/net/idna`, strips the default port and fragment, removes dot-segments, and normalizes percent-encoding of unreserved characters; reassembly is manual to preserve encoded reserved characters (e.g., `%2F`) that `url.URL.String()` would otherwise discard. `ResolveRef` is a thin wrapper over `url.URL.ResolveReference` with the spec-required guards for empty/non-absolute bases.
 

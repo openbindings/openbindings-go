@@ -29,6 +29,14 @@ type TransformEvaluator interface {
 	Evaluate(expression string, data any) (any, error)
 }
 
+// ErrTransformUndefined is the sentinel evaluators return (possibly wrapped)
+// when an expression evaluates to no result — JSONata's "undefined", which
+// Go's any cannot distinguish from JSON null. Consumers that must tell the
+// two apart (the operation-graph engine fails a node with TRANSFORM_UNDEFINED
+// on an undefined result, while null flows downstream) detect it with
+// errors.Is.
+var ErrTransformUndefined = errors.New("transform produced no result (undefined)")
+
 // TransformEvaluatorWithBindings extends TransformEvaluator with support for
 // additional named bindings (e.g., $input in operation graph transforms).
 // Invokers that need extra context check for this interface via type assertion.
@@ -170,6 +178,17 @@ func (e *OperationInvoker) Invoke(ctx context.Context, args *OperationInvocation
 			return NewErroredInvocation[any, any](&InvocationError{
 				Code:    ErrCodeBindingNotFound,
 				Message: fmt.Sprintf("binding %q is not defined on this interface", args.BindingKey),
+			})
+		}
+		// The explicit binding must belong to the resolved operation. Without
+		// this guard a mismatched op/binding pair would validate input/output
+		// against the resolved operation's contract while invoking a different
+		// operation's binding.
+		if b.Operation != opKey {
+			return NewErroredInvocation[any, any](&InvocationError{
+				Code: ErrCodeBindingNotFound,
+				Message: fmt.Sprintf("binding %q targets operation %q, not the resolved operation %q",
+					args.BindingKey, b.Operation, opKey),
 			})
 		}
 		bindingKey = args.BindingKey

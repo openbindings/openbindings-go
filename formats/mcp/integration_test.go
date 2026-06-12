@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -620,11 +621,16 @@ func TestIntegration_ToolProgressNotifications(t *testing.T) {
 		t.Fatalf("expected at least the final result output, got %d", len(vals))
 	}
 
-	// The final result is always the LAST output; everything before it is a
-	// progress event carrying the progressToken correlation field.
+	// The final result is always the LAST output. Progress events precede it.
+	// A progress event is the map shape the invoker emits: {progress, total?,
+	// message?}. The internal progressToken is correlation plumbing and is
+	// deliberately NOT part of the output (TS parity), so the final tool result
+	// (a non-progress value) is reliably distinguished by the absence of a
+	// "progress" key. go-mcp dispatches notifications asynchronously, so the
+	// exact count is not asserted; the shape of whatever arrives is.
 	final := vals[len(vals)-1]
 	if m, ok := final.(map[string]any); ok {
-		if _, hasToken := m["progressToken"]; hasToken {
+		if _, isProgress := m["progress"]; isProgress {
 			t.Fatalf("last output must be the tool result, got progress event %v", m)
 		}
 	}
@@ -635,9 +641,26 @@ func TestIntegration_ToolProgressNotifications(t *testing.T) {
 		if !ok {
 			t.Fatalf("progress event %d: expected map, got %T", i, ev)
 		}
-		for _, field := range []string{"progressToken", "progress", "total", "message"} {
-			if _, ok := data[field]; !ok {
-				t.Errorf("progress event %d: missing %s field", i, field)
+		// progress is REQUIRED on every progress event.
+		if _, ok := data["progress"]; !ok {
+			t.Errorf("progress event %d: missing required progress field: %v", i, data)
+		}
+		// progressToken is correlation plumbing, NOT part of the output.
+		if _, hasToken := data["progressToken"]; hasToken {
+			t.Errorf("progress event %d: must NOT carry progressToken, got %v", i, data)
+		}
+		// total/message are present only when the notification provided them.
+		// The test server's longRunning tool always sends both (total=3,
+		// message="step N"), so when present they must carry those values; but
+		// the shape never requires their presence.
+		if total, ok := data["total"]; ok {
+			if tf, isNum := total.(float64); !isNum || tf != 3 {
+				t.Errorf("progress event %d: total = %v, want 3", i, total)
+			}
+		}
+		if msg, ok := data["message"]; ok {
+			if ms, isStr := msg.(string); !isStr || !strings.HasPrefix(ms, "step ") {
+				t.Errorf("progress event %d: message = %v, want \"step N\"", i, msg)
 			}
 		}
 	}

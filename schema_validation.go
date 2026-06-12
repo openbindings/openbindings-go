@@ -7,7 +7,20 @@ import (
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
+
+// kindPrinter renders jsonschema/v6 ErrorKind values. The kinds implement
+// LocalizedString(*message.Printer), not String(), so formatting them with
+// %v would print the raw struct (e.g. `&{[customer]}` for a missing
+// required property) — and that text flows into ValidationFailure.Message,
+// a wire-crossing details payload consumers render per-field.
+var kindPrinter = message.NewPrinter(language.English)
+
+func kindString(k jsonschema.ErrorKind) string {
+	return k.LocalizedString(kindPrinter)
+}
 
 // openbindingsSchemaJSON is the OBI document schema (openbindings.schema.json),
 // embedded at build time. Synced from the spec repo via scripts/sync-schema.sh.
@@ -264,7 +277,7 @@ func flattenValidationFailures(ve *jsonschema.ValidationError) []ValidationFailu
 		}
 		return []ValidationFailure{{
 			Path:    path,
-			Message: fmt.Sprintf("%v", ve.ErrorKind),
+			Message: kindString(ve.ErrorKind),
 		}}
 	}
 	var out []ValidationFailure
@@ -294,5 +307,5 @@ func summarizeValidationError(ve *jsonschema.ValidationError) string {
 	if len(ve.InstanceLocation) > 0 {
 		loc = "/" + strings.Join(ve.InstanceLocation, "/") + ": "
 	}
-	return loc + fmt.Sprintf("%v", ve.ErrorKind)
+	return loc + kindString(ve.ErrorKind)
 }

@@ -737,15 +737,26 @@ func TestConcurrentOutputReadersPanic(t *testing.T) { // SS, BD
 	_, _ = out.Read(bg())
 }
 
-func TestSetTrailerAfterTerminalPanics(t *testing.T) {
+func TestSetTrailerAfterTerminalIsDropped(t *testing.T) {
+	// Terminal state is reachable via a benign cancellation race, so a late
+	// SetTrailer must be silently dropped (per the documented contract),
+	// not panic — panicking would crash the process.
 	inv := NewInvocationImpl[any, any](bg())
+	inv.SetTrailer(Metadata{"early": {"true"}})
 	inv.CloseOutput()
 	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("late SetTrailer must fail loudly (TS parity)")
+		if r := recover(); r != nil {
+			t.Fatalf("late SetTrailer must be dropped, not panic, got %v", r)
 		}
 	}()
 	inv.SetTrailer(Metadata{"late": {"true"}})
+	md := inv.Trailer()
+	if len(md["late"]) != 0 {
+		t.Fatalf("late SetTrailer must be dropped, got %v", md)
+	}
+	if len(md["early"]) != 1 {
+		t.Fatalf("pre-terminal trailer must be retained, got %v", md)
+	}
 }
 
 func TestMetadataReturnsAreIsolated(t *testing.T) {

@@ -234,9 +234,107 @@ func TestSchemeToRequirementType(t *testing.T) {
 		{&openapi3.SecurityScheme{Type: "mutualTLS"}, ""},
 	}
 	for _, tc := range cases {
-		if got := schemeToRequirementType(tc.scheme); got != tc.want {
-			t.Errorf("schemeToRequirementType(%s/%s) = %q, want %q", tc.scheme.Type, tc.scheme.Scheme, got, tc.want)
+		req, ok := schemeToRequirement(tc.scheme, "https://api.example.com")
+		got := ""
+		if ok {
+			got = req.Type
 		}
+		if got != tc.want {
+			t.Errorf("schemeToRequirement(%s/%s) = %q, want %q", tc.scheme.Type, tc.scheme.Scheme, got, tc.want)
+		}
+	}
+}
+
+// TestOAuth2Requirement_CarriesFlowFields verifies an oauth2 authorization-code
+// scheme carries the flow's authorize/token URLs (relative ones absolutized)
+// and scopes into the requirement's Extra fields, so a resolver can drive the
+// flow without out-of-band knowledge.
+func TestOAuth2Requirement_CarriesFlowFields(t *testing.T) {
+	scheme := &openapi3.SecurityScheme{
+		Type: "oauth2",
+		Flows: &openapi3.OAuthFlows{
+			AuthorizationCode: &openapi3.OAuthFlow{
+				AuthorizationURL: "/oauth/authorize", // relative -> absolutized
+				TokenURL:         "https://auth.example.com/oauth/token",
+				Scopes:           map[string]string{"read": "Read", "write": "Write"},
+			},
+		},
+	}
+	req, ok := schemeToRequirement(scheme, "https://api.example.com")
+	if !ok || req.Type != "auth.oauth2" {
+		t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+	}
+	if got := req.Extra["authorizeUrl"]; got != "https://api.example.com/oauth/authorize" {
+		t.Errorf("authorizeUrl = %v, want absolutized host URL", got)
+	}
+	if got := req.Extra["tokenUrl"]; got != "https://auth.example.com/oauth/token" {
+		t.Errorf("tokenUrl = %v", got)
+	}
+	scopes, _ := req.Extra["scopes"].([]string)
+	if len(scopes) != 2 || scopes[0] != "read" || scopes[1] != "write" {
+		t.Errorf("scopes = %v, want [read write]", req.Extra["scopes"])
+	}
+
+	// openIdConnect carries its discovery URL.
+	oidc := &openapi3.SecurityScheme{Type: "openIdConnect", OpenIdConnectUrl: "https://auth.example.com/.well-known/openid-configuration"}
+	r2, _ := schemeToRequirement(oidc, "https://api.example.com")
+	if r2.Extra["openIdConnectUrl"] != "https://auth.example.com/.well-known/openid-configuration" {
+		t.Errorf("openIdConnectUrl not carried: %+v", r2.Extra)
+	}
+}
+
+// TestOAuth2Requirement_ClientCredentialsOnly verifies that a scheme offering
+// only the clientCredentials flow (no authorizationCode/implicit) still carries
+// its tokenUrl and scopes. clientCredentials flows define only a tokenUrl in
+// OpenAPI 3.x, so the fallback must select on TokenURL, not AuthorizationURL.
+func TestOAuth2Requirement_ClientCredentialsOnly(t *testing.T) {
+	scheme := &openapi3.SecurityScheme{
+		Type: "oauth2",
+		Flows: &openapi3.OAuthFlows{
+			ClientCredentials: &openapi3.OAuthFlow{
+				TokenURL: "/oauth/token", // relative -> absolutized
+				Scopes:   map[string]string{"read": "Read", "write": "Write"},
+			},
+		},
+	}
+	req, ok := schemeToRequirement(scheme, "https://api.example.com")
+	if !ok || req.Type != "auth.oauth2" {
+		t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+	}
+	if got := req.Extra["tokenUrl"]; got != "https://api.example.com/oauth/token" {
+		t.Errorf("tokenUrl = %v, want absolutized host URL", got)
+	}
+	if _, present := req.Extra["authorizeUrl"]; present {
+		t.Errorf("clientCredentials flow has no authorizeUrl, got %v", req.Extra["authorizeUrl"])
+	}
+	scopes, _ := req.Extra["scopes"].([]string)
+	if len(scopes) != 2 || scopes[0] != "read" || scopes[1] != "write" {
+		t.Errorf("scopes = %v, want [read write]", req.Extra["scopes"])
+	}
+}
+
+// TestOAuth2Requirement_PasswordOnly verifies the password flow (also tokenUrl-only)
+// likewise carries its tokenUrl through the fallback selection.
+func TestOAuth2Requirement_PasswordOnly(t *testing.T) {
+	scheme := &openapi3.SecurityScheme{
+		Type: "oauth2",
+		Flows: &openapi3.OAuthFlows{
+			Password: &openapi3.OAuthFlow{
+				TokenURL: "https://auth.example.com/oauth/token",
+				Scopes:   map[string]string{"profile": "Profile"},
+			},
+		},
+	}
+	req, ok := schemeToRequirement(scheme, "https://api.example.com")
+	if !ok || req.Type != "auth.oauth2" {
+		t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+	}
+	if got := req.Extra["tokenUrl"]; got != "https://auth.example.com/oauth/token" {
+		t.Errorf("tokenUrl = %v", got)
+	}
+	scopes, _ := req.Extra["scopes"].([]string)
+	if len(scopes) != 1 || scopes[0] != "profile" {
+		t.Errorf("scopes = %v, want [profile]", req.Extra["scopes"])
 	}
 }
 
