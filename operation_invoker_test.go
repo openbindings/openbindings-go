@@ -18,7 +18,7 @@ import (
 // ---------------------------------------------------------------------------
 
 var bearerDetails = &ContextRequiredDetails{
-	Key:          "api.example.com",
+	Target:       "api.example.com",
 	Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.bearer"}}}},
 }
 
@@ -611,8 +611,8 @@ func TestOpResolveAndRetryReplaysInput(t *testing.T) { // U — read ≠ consume
 		rmu.Lock()
 		resolverCalls++
 		rmu.Unlock()
-		if details.Key != "api.example.com" {
-			return nil, fmt.Errorf("wrong key: %s", details.Key)
+		if details.Target != "api.example.com" {
+			return nil, fmt.Errorf("wrong target: %s", details.Target)
 		}
 		return map[string]any{"bearerToken": "tok-123"}, nil
 	}

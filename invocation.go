@@ -95,9 +95,10 @@ type ContextAlternative struct {
 // terminal error, per the openbindings.binding-invoker role. Alternatives is
 // disjunctive: satisfying any one alternative suffices.
 type ContextRequiredDetails struct {
-	// Key is the stable context identity (typically a normalized target
-	// origin). Store-backed resolvers use it as a cache key; others ignore it.
-	Key          string               `json:"key"`
+	// Target is the target the binding addresses (e.g. its endpoint URL or
+	// host); the runtime/resolver derives a storage key from it — the invoker
+	// does not key or store.
+	Target       string               `json:"target"`
 	Alternatives []ContextAlternative `json:"alternatives"`
 }
 
@@ -125,7 +126,7 @@ func ContextRequiredFrom(err *InvocationError) *ContextRequiredDetails {
 			return nil
 		}
 		var details ContextRequiredDetails
-		if json.Unmarshal(b, &details) != nil || details.Key == "" {
+		if json.Unmarshal(b, &details) != nil || details.Target == "" {
 			return nil
 		}
 		return &details

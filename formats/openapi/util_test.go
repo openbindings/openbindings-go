@@ -200,8 +200,8 @@ func TestRequiredContext(t *testing.T) {
 		t.Fatal("expected a challenge when no token is present")
 	} else if len(d.Alternatives) != 1 || d.Alternatives[0].Requirements[0].Type != "auth.bearer" {
 		t.Errorf("unexpected challenge shape: %+v", d)
-	} else if d.Key != "api.example.com" {
-		t.Errorf("challenge key = %q, want api.example.com", d.Key)
+	} else if d.Target != "https://api.example.com" {
+		t.Errorf("challenge target = %q, want https://api.example.com", d.Target)
 	}
 
 	if d := requiredContext(doc, op, map[string]any{"bearerToken": "tok"}, "https://api.example.com"); d != nil {

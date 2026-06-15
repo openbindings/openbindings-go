@@ -273,7 +273,7 @@ func requiredContext(doc *Document, asyncOp *Operation, serverURL string, ctx ma
 	}
 
 	details := &openbindings.ContextRequiredDetails{
-		Key:          openbindings.NormalizeEndpoint(serverURL),
+		Target:       serverURL,
 		Alternatives: alternatives,
 	}
 	if openbindings.ContextSatisfies(ctx, details) {

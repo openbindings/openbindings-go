@@ -670,7 +670,7 @@ func TestTypedInvocationMismatch(t *testing.T) {
 func TestContextRequiredIsJustATerminalCode(t *testing.T) {
 	inv := NewInvocationImpl[any, any](bg())
 	details := &ContextRequiredDetails{
-		Key:          "api.example.com",
+		Target:       "api.example.com",
 		Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.bearer"}}}},
 	}
 	inv.FireError(NewContextRequiredError("bearer token required", details))
@@ -810,12 +810,12 @@ func TestContextRequiredFromDecodesMapDetails(t *testing.T) {
 		Code:    ErrCodeContextRequired,
 		Message: "bearer required",
 		Details: map[string]any{
-			"key":          "api.example.com",
+			"target":       "api.example.com",
 			"alternatives": []any{map[string]any{"requirements": []any{map[string]any{"type": "auth.bearer"}}}},
 		},
 	}
 	d := ContextRequiredFrom(err)
-	if d == nil || d.Key != "api.example.com" || len(d.Alternatives) != 1 ||
+	if d == nil || d.Target != "api.example.com" || len(d.Alternatives) != 1 ||
 		d.Alternatives[0].Requirements[0].Type != "auth.bearer" {
 		t.Fatalf("map-shaped details not decoded: %+v", d)
 	}

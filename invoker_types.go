@@ -345,9 +345,9 @@ func extractStringMap(ctx map[string]any, key string) map[string]string {
 // NormalizeEndpoint normalizes a remote endpoint URL to a stable context key:
 // it URL-parses the input (lowercasing the host, stripping userinfo) and
 // returns NormalizeContextKey over the host[:port], falling back to
-// NormalizeContextKey(raw) for non-URL strings. Format invokers use this to
-// derive CONTEXT_REQUIRED challenge keys — it matches the TypeScript SDK's
-// normalizeEndpoint so challenge keys are identical across languages.
+// NormalizeContextKey(raw) for non-URL strings. The store-backed resolver uses
+// this to derive a storage key from a challenge's target — it matches the
+// TypeScript SDK's normalizeEndpoint so keys are identical across languages.
 func NormalizeEndpoint(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if u, err := url.Parse(raw); err == nil && u.Host != "" {

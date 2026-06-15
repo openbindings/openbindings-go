@@ -812,6 +812,10 @@ func (eng *engine) evalOrFail(
 	return result, false
 }
 
+// isTruthy implements JSONata 2.0's boolean cast ($boolean) for filter
+// expression results: empty composites are false, and an array is true only
+// if some member casts to true. (Undefined never reaches here: it fails the
+// node with TRANSFORM_UNDEFINED per the Transforms rule.)
 func isTruthy(v any) bool {
 	if v == nil {
 		return false
@@ -825,6 +829,15 @@ func isTruthy(v any) bool {
 		return val != ""
 	case int:
 		return val != 0
+	case []any:
+		for _, m := range val {
+			if isTruthy(m) {
+				return true
+			}
+		}
+		return false
+	case map[string]any:
+		return len(val) > 0
 	default:
 		return true
 	}

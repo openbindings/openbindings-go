@@ -19,6 +19,29 @@ import (
 
 const testSecret = "test-token-123"
 
+// testStore is a minimal in-memory ContextStore for exercising the
+// store-backed resolver. The SDK no longer ships a built-in store; consuming
+// tools own storage, so tests supply their own.
+type testStore map[string]map[string]any
+
+func (s testStore) Get(_ context.Context, key string) (map[string]any, error) {
+	return s[key], nil
+}
+
+func (s testStore) Set(_ context.Context, key string, value map[string]any) error {
+	if value == nil {
+		delete(s, key)
+		return nil
+	}
+	s[key] = value
+	return nil
+}
+
+func (s testStore) Delete(_ context.Context, key string) error {
+	delete(s, key)
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Handle-driving helpers
 // ---------------------------------------------------------------------------
@@ -192,9 +215,8 @@ func TestContextRequiredBeforeAnyIO(t *testing.T) {
 	if details == nil {
 		t.Fatalf("expected CONTEXT_REQUIRED with details, got %v", err)
 	}
-	wantKey := strings.TrimPrefix(srv.URL, "http://")
-	if details.Key != wantKey {
-		t.Errorf("Key = %q, want %q", details.Key, wantKey)
+	if details.Target != srv.URL {
+		t.Errorf("Target = %q, want %q", details.Target, srv.URL)
 	}
 	if len(details.Alternatives) != 1 || details.Alternatives[0].Requirements[0].Type != "auth.bearer" {
 		t.Errorf("alternatives = %+v, want one auth.bearer requirement", details.Alternatives)
@@ -575,9 +597,8 @@ func TestPrepareBindingReportsBearerRequirement(t *testing.T) {
 	if details == nil {
 		t.Fatal("expected details")
 	}
-	wantKey := strings.TrimPrefix(srv.URL, "http://")
-	if details.Key != wantKey {
-		t.Errorf("Key = %q, want %q", details.Key, wantKey)
+	if details.Target != srv.URL {
+		t.Errorf("Target = %q, want %q", details.Target, srv.URL)
 	}
 	if len(details.Alternatives) != 1 || details.Alternatives[0].Requirements[0].Type != "auth.bearer" {
 		t.Errorf("alternatives = %+v", details.Alternatives)
@@ -661,7 +682,7 @@ func TestOperationInvokerResolvesChallengeFromStore(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	store := openbindings.NewMemoryStore()
+	store := testStore{}
 	host := strings.TrimPrefix(srv.URL, "http://")
 	if err := store.Set(bg(), host, map[string]any{"bearerToken": testSecret}); err != nil {
 		t.Fatal(err)

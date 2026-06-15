@@ -333,7 +333,7 @@ func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string
 	}
 
 	details := &openbindings.ContextRequiredDetails{
-		Key:          openbindings.NormalizeEndpoint(baseURL),
+		Target:       baseURL,
 		Alternatives: alternatives,
 	}
 	// Already satisfiable from the supplied context: no challenge needed.

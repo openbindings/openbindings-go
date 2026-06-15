@@ -19,6 +19,29 @@ import (
 
 const secret = "test-token-123"
 
+// testStore is a minimal in-memory ContextStore for exercising the
+// store-backed resolver. The SDK no longer ships a built-in store; consuming
+// tools own storage, so tests supply their own.
+type testStore map[string]map[string]any
+
+func (s testStore) Get(_ context.Context, key string) (map[string]any, error) {
+	return s[key], nil
+}
+
+func (s testStore) Set(_ context.Context, key string, value map[string]any) error {
+	if value == nil {
+		delete(s, key)
+		return nil
+	}
+	s[key] = value
+	return nil
+}
+
+func (s testStore) Delete(_ context.Context, key string) error {
+	delete(s, key)
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Handle-driving helpers
 // ---------------------------------------------------------------------------
@@ -321,7 +344,7 @@ func TestIntegration_NoCredentialsChallenge(t *testing.T) {
 	srv, specURL := setupServer()
 	defer srv.Close()
 
-	store := openbindings.NewMemoryStore()
+	store := testStore{}
 	binv := NewInvoker()
 	invoker := openbindings.NewOperationInvoker(binv).WithRuntime(openbindings.StoreContextResolver(store))
 
@@ -344,7 +367,7 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 	srv, specURL := setupServer()
 	defer srv.Close()
 
-	store := openbindings.NewMemoryStore()
+	store := testStore{}
 	ctx := context.Background()
 
 	// Pre-store credentials under the normalized server key.
@@ -401,8 +424,8 @@ func TestIntegration_IsolatedStoresDontShareCredentials(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
-	store1 := openbindings.NewMemoryStore()
-	store2 := openbindings.NewMemoryStore()
+	store1 := testStore{}
+	store2 := testStore{}
 
 	contextKey := openbindings.NormalizeContextKey(srv.URL)
 	if err := store1.Set(ctx, contextKey, map[string]any{"bearerToken": secret}); err != nil {

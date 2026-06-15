@@ -103,8 +103,8 @@ func TestRequiredContext_BearerRequirement(t *testing.T) {
 	if details == nil {
 		t.Fatal("expected CONTEXT_REQUIRED details, got nil")
 	}
-	if details.Key != "api.example.com" {
-		t.Errorf("Key = %q, want api.example.com", details.Key)
+	if details.Target != "https://api.example.com" {
+		t.Errorf("Target = %q, want https://api.example.com", details.Target)
 	}
 	if len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 {
 		t.Fatalf("alternatives = %+v", details.Alternatives)

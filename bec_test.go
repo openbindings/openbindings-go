@@ -9,54 +9,37 @@ import (
 	"testing"
 )
 
+// testStore is a minimal in-memory ContextStore for exercising the
+// store-backed resolver. Storage backing is the consuming tool's job, so the
+// SDK ships only the ContextStore interface; tests supply their own.
+type testStore map[string]map[string]any
+
+func (s testStore) Get(_ context.Context, key string) (map[string]any, error) {
+	return s[key], nil
+}
+
+func (s testStore) Set(_ context.Context, key string, value map[string]any) error {
+	if value == nil {
+		delete(s, key)
+		return nil
+	}
+	s[key] = value
+	return nil
+}
+
+func (s testStore) Delete(_ context.Context, key string) error {
+	delete(s, key)
+	return nil
+}
+
+// bearerOrAPIKey carries a raw target URL; the resolver normalizes it to the
+// "api.example.com" store key.
 var bearerOrAPIKey = &ContextRequiredDetails{
-	Key: "api.example.com",
+	Target: "https://api.example.com/v1/users",
 	Alternatives: []ContextAlternative{
 		{Requirements: []ContextRequirement{{Type: "auth.bearer"}}},
 		{Requirements: []ContextRequirement{{Type: "auth.apiKey"}}},
 	},
-}
-
-func TestMemoryStoreBasics(t *testing.T) {
-	store := NewMemoryStore()
-	ctx := context.Background()
-
-	if v, err := store.Get(ctx, "missing"); err != nil || v != nil {
-		t.Fatalf("expected nil for missing key, got %v err=%v", v, err)
-	}
-
-	if err := store.Set(ctx, "k1", map[string]any{"bearerToken": "abc"}); err != nil {
-		t.Fatal(err)
-	}
-	v, err := store.Get(ctx, "k1")
-	if err != nil || v["bearerToken"] != "abc" {
-		t.Fatalf("got %v err=%v", v, err)
-	}
-
-	if err := store.Delete(ctx, "k1"); err != nil {
-		t.Fatal(err)
-	}
-	if v, _ := store.Get(ctx, "k1"); v != nil {
-		t.Fatalf("expected delete, got %v", v)
-	}
-}
-
-func TestMemoryStoreDeepCopyIsolation(t *testing.T) {
-	store := NewMemoryStore()
-	ctx := context.Background()
-	in := map[string]any{"nested": map[string]any{"value": "original"}}
-	if err := store.Set(ctx, "k1", in); err != nil {
-		t.Fatal(err)
-	}
-	in["nested"].(map[string]any)["value"] = "mutated-input"
-
-	got, _ := store.Get(ctx, "k1")
-	got["nested"].(map[string]any)["value"] = "mutated-output"
-
-	fresh, _ := store.Get(ctx, "k1")
-	if fresh["nested"].(map[string]any)["value"] != "original" {
-		t.Fatalf("store not isolated: %v", fresh)
-	}
 }
 
 func TestContextSatisfies(t *testing.T) {
@@ -71,7 +54,7 @@ func TestContextSatisfies(t *testing.T) {
 
 	t.Run("all requirements within an alternative (conjunctive)", func(t *testing.T) {
 		details := &ContextRequiredDetails{
-			Key: "k",
+			Target: "k",
 			Alternatives: []ContextAlternative{
 				{Requirements: []ContextRequirement{{Type: "auth.basic"}, {Type: "config.value"}}},
 			},
@@ -99,7 +82,7 @@ func TestContextSatisfies(t *testing.T) {
 
 	t.Run("standard families map to well-known fields", func(t *testing.T) {
 		details := &ContextRequiredDetails{
-			Key:          "k",
+			Target:       "k",
 			Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.oauth2"}}}},
 		}
 		if !ContextSatisfies(map[string]any{"accessToken": "a"}, details) {
@@ -111,9 +94,9 @@ func TestContextSatisfies(t *testing.T) {
 func TestStoreContextResolver(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("returns stored context that satisfies", func(t *testing.T) {
-		store := NewMemoryStore()
-		_ = store.Set(ctx, "api.example.com", map[string]any{"bearerToken": "stored-tok"})
+	t.Run("normalizes the target into the store key", func(t *testing.T) {
+		// Stored under the normalized host; the raw target carries a URL.
+		store := testStore{"api.example.com": {"bearerToken": "stored-tok"}}
 		resolve := StoreContextResolver(store)
 		got, err := resolve(ctx, bearerOrAPIKey)
 		if err != nil || ContextBearerToken(got) != "stored-tok" {
@@ -122,7 +105,7 @@ func TestStoreContextResolver(t *testing.T) {
 	})
 
 	t.Run("declines when nothing stored", func(t *testing.T) {
-		resolve := StoreContextResolver(NewMemoryStore())
+		resolve := StoreContextResolver(testStore{})
 		got, err := resolve(ctx, bearerOrAPIKey)
 		if err != nil || got != nil {
 			t.Fatalf("expected decline, got %v err=%v", got, err)
@@ -130,8 +113,7 @@ func TestStoreContextResolver(t *testing.T) {
 	})
 
 	t.Run("declines when stored context is insufficient", func(t *testing.T) {
-		store := NewMemoryStore()
-		_ = store.Set(ctx, "api.example.com", map[string]any{"unrelated": "field"})
+		store := testStore{"api.example.com": {"unrelated": "field"}}
 		resolve := StoreContextResolver(store)
 		got, err := resolve(ctx, bearerOrAPIKey)
 		if err != nil || got != nil {
@@ -143,8 +125,7 @@ func TestStoreContextResolver(t *testing.T) {
 func TestStoreResolverDrivesRetryEndToEnd(t *testing.T) {
 	// Composition test: binding challenges, the store-backed resolver
 	// supplies the stored credential, the operation invoker replays.
-	store := NewMemoryStore()
-	_ = store.Set(context.Background(), "api.example.com", map[string]any{"bearerToken": "stored"})
+	store := testStore{"api.example.com": {"bearerToken": "stored"}}
 
 	mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
 	op := newOpInvoker(mock, StoreContextResolver(store))
