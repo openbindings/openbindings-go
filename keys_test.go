@@ -13,7 +13,7 @@ func TestSanitizeKey(t *testing.T) {
 		{"_private", "private"},
 		{"", "unnamed"},
 		{"***", "unnamed"},
-		// OBI-D-04 requires ^[A-Za-z_]: digit-leading sanitized keys are
+		// OBI-D-03 requires ^[A-Za-z_]: digit-leading sanitized keys are
 		// prefixed with an underscore.
 		{"2fa.enable", "_2fa.enable"},
 		{"42", "_42"},
@@ -33,7 +33,7 @@ func TestSanitizeKey_ResultMatchesIdentPattern(t *testing.T) {
 	for _, in := range []string{"2fa", "9", ".x", "-x", "a b", "GET /v1", "ünïcode", "", "_-_"} {
 		got := SanitizeKey(in)
 		if !identPattern.MatchString(got) {
-			t.Errorf("SanitizeKey(%q) = %q does not match OBI-D-04 identifier pattern", in, got)
+			t.Errorf("SanitizeKey(%q) = %q does not match OBI-D-03 identifier pattern", in, got)
 		}
 	}
 }

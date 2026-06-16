@@ -54,7 +54,7 @@ var (
 // OperationExample represents an example input/output pair for an operation.
 //
 // JSON null is a meaningful example value, distinct from an absent field
-// (OBI-D-12 validates an explicit null against the operation's schema; an
+// (OBI-D-11 validates an explicit null against the operation's schema; an
 // absent field is not validated). Because Go's `any` cannot distinguish the
 // two, InputPresent/OutputPresent record field presence: UnmarshalJSON
 // populates them, and MarshalJSON re-emits an explicit null for a present

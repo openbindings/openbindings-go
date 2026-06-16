@@ -65,6 +65,27 @@ func IsHigherMajorOrPre1MinorThanMaxTested(v string) (bool, error) {
 	return false, nil
 }
 
+// IsUnsupportedPrerelease reports whether v carries a pre-release identifier
+// that this SDK does not declare support for. Per OBI-T-04 and §11.1, a tool
+// MUST NOT accept a prerelease unless it declares support for that specific
+// prerelease; "declares support" means the prerelease falls within this SDK's
+// supported range [MinSupportedVersion, MaxTestedVersion]. A prerelease sorts
+// below its release, so against a non-prerelease MaxTestedVersion no prerelease
+// is in range. Non-prerelease versions and build metadata are never flagged.
+//
+// Returns an error if v cannot be parsed as a SemVer 2.0.0 string.
+func IsUnsupportedPrerelease(v string) (bool, error) {
+	parsed, err := parseSemverStrict(v)
+	if err != nil {
+		return false, err
+	}
+	if len(parsed.preRelease) == 0 {
+		return false, nil
+	}
+	inRange := compareSemver(parsed, minSupportedSemver) >= 0 && compareSemver(parsed, maxTestedSemver) <= 0
+	return !inRange, nil
+}
+
 // semver represents a parsed Semantic Versioning 2.0.0 value.
 //
 // Build metadata is ignored for precedence comparison per SemVer 2.0.0 §10.

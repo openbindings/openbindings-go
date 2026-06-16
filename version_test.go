@@ -85,6 +85,36 @@ func TestIsHigherMajorOrPre1MinorThanMaxTested(t *testing.T) {
 	}
 }
 
+func TestIsUnsupportedPrerelease(t *testing.T) {
+	// MinSupportedVersion == MaxTestedVersion == "0.2.0": no prerelease is in range.
+	tests := []struct {
+		name    string
+		version string
+		want    bool
+		wantErr bool
+	}{
+		{name: "release version is not a prerelease", version: "0.2.0", want: false},
+		{name: "patch release is not a prerelease", version: "0.2.1", want: false},
+		{name: "build metadata is not a prerelease", version: "0.2.0+build.1", want: false},
+		{name: "prerelease of supported version is unsupported", version: "0.2.0-rc.1", want: true},
+		{name: "prerelease of a higher version is unsupported", version: "0.3.0-rc.1", want: true},
+		{name: "invalid", version: "not-a-version", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := IsUnsupportedPrerelease(tt.version)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("IsUnsupportedPrerelease(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("IsUnsupportedPrerelease(%q) = %v, want %v", tt.version, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsValidSemver(t *testing.T) {
 	cases := []struct {
 		in   string

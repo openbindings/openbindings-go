@@ -45,7 +45,7 @@ func TestResolveOperation_NotFound(t *testing.T) {
 func TestResolveOperation_KeyAndAliasEqualStanding(t *testing.T) {
 	// A name that is one operation's native key, and a different name that is
 	// another operation's alias, both resolve to their own operation. Key
-	// matches are not privileged: OBI-D-05 guarantees a name belongs to one op.
+	// matches are not privileged: OBI-D-04 guarantees a name belongs to one op.
 	iface := &Interface{
 		Operations: map[string]Operation{
 			"nativeThing": {Description: "native"},

@@ -71,12 +71,12 @@ func validateAgainstOBISchema(errs *[]string, i Interface) {
 	}
 }
 
-// validateExamplesAgainstOpSchemas reports OBI-D-12 violations: every
+// validateExamplesAgainstOpSchemas reports OBI-D-11 violations: every
 // example's provided input/output (including an explicit JSON null) must
 // validate against its operation's input/output schema, when the respective
 // schema is specified.
 //
-// Verification is capability-relative (cf. the spec's §8 / OBI-D-14
+// Verification is capability-relative (cf. the spec's §8 / OBI-D-13
 // discussion): when a schema's $refs point outside the document, this
 // validator cannot resolve them and abstains from example validation for
 // that operation rather than failing the document.
@@ -96,7 +96,7 @@ func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 		if op.Input != nil && !defsExternal && !schemaHasExternalRef(op.Input) {
 			compiled, err := compileExampleSchema(op.Input, defs)
 			if err != nil {
-				*errs = append(*errs, fmt.Sprintf("operations[%q].input: cannot compile schema: %v (OBI-D-12)", opKey, err))
+				*errs = append(*errs, fmt.Sprintf("operations[%q].input: cannot compile schema: %v (OBI-D-11)", opKey, err))
 			} else {
 				inputSchema = compiled
 			}
@@ -104,7 +104,7 @@ func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 		if op.Output != nil && !defsExternal && !schemaHasExternalRef(op.Output) {
 			compiled, err := compileExampleSchema(op.Output, defs)
 			if err != nil {
-				*errs = append(*errs, fmt.Sprintf("operations[%q].output: cannot compile schema: %v (OBI-D-12)", opKey, err))
+				*errs = append(*errs, fmt.Sprintf("operations[%q].output: cannot compile schema: %v (OBI-D-11)", opKey, err))
 			} else {
 				outputSchema = compiled
 			}
@@ -113,14 +113,14 @@ func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 			if ex.HasInput() && inputSchema != nil {
 				if verr := inputSchema.Validate(ex.Input); verr != nil {
 					for _, line := range splitSchemaError(verr) {
-						*errs = append(*errs, fmt.Sprintf("operations[%q].examples[%q].input: %s (OBI-D-12)", opKey, exKey, line))
+						*errs = append(*errs, fmt.Sprintf("operations[%q].examples[%q].input: %s (OBI-D-11)", opKey, exKey, line))
 					}
 				}
 			}
 			if ex.HasOutput() && outputSchema != nil {
 				if verr := outputSchema.Validate(ex.Output); verr != nil {
 					for _, line := range splitSchemaError(verr) {
-						*errs = append(*errs, fmt.Sprintf("operations[%q].examples[%q].output: %s (OBI-D-12)", opKey, exKey, line))
+						*errs = append(*errs, fmt.Sprintf("operations[%q].examples[%q].output: %s (OBI-D-11)", opKey, exKey, line))
 					}
 				}
 			}

@@ -126,14 +126,14 @@ func ExampleOperation() {
 func ExampleSource() {
 	bs := openbindings.Source{
 		Format:   "openapi@3.1",
-		Location: "./openapi.yaml",
+		Location: "https://api.example.com/openapi.yaml",
 	}
 
 	fmt.Println(bs.Format)
 	fmt.Println(bs.Location)
 	// Output:
 	// openapi@3.1
-	// ./openapi.yaml
+	// https://api.example.com/openapi.yaml
 }
 
 func Example_canonicaljson() {
@@ -171,7 +171,7 @@ func ExampleTransform() {
 			"toStripeInput": "{ charge_amount: amount * 100 }",
 		},
 		Sources: map[string]openbindings.Source{
-			"stripe": {Format: "openapi@3.1", Location: "./stripe.json"},
+			"stripe": {Format: "openapi@3.1", Location: "https://api.example.com/stripe.json"},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
 			"processPayment.stripe": {

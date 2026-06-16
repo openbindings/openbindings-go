@@ -84,8 +84,8 @@ func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_16(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for invalid semver")
 	}
-	if !containsProblem(err, `openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-13)`) {
-		t.Fatalf("expected OBI-D-13 problem, got %v", err)
+	if !containsProblem(err, `openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-12)`) {
+		t.Fatalf("expected OBI-D-12 problem, got %v", err)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestInterfaceValidate_UnknownFields_StrictMode_CatchesNestedTypedObjects(t 
 		Sources: map[string]Source{
 			"src": {
 				Format:   "openapi@3.1",
-				Location: "./api.json",
+				Location: "https://api.example.com/api.json",
 				LosslessFields: LosslessFields{
 					Unknown: map[string]json.RawMessage{
 						"unknownField": json.RawMessage(`{"value":"unknownFieldValue"}`),
@@ -168,7 +168,7 @@ func TestInterfaceValidate_StrictMode_CatchesInlineTransformUnknownFields(t *tes
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {Format: "openapi@3.1", Location: "./api.json"},
+			"api": {Format: "openapi@3.1", Location: "https://api.example.com/api.json"},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {
@@ -228,7 +228,7 @@ func TestInterfaceValidate_OpenBindingsVersionErrorMessageIsStable(t *testing.T)
 	if err.Error() == "" || err.Error() == "invalid interface" {
 		t.Fatalf("expected detailed error, got %q", err.Error())
 	}
-	if want := `openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-13)`; !containsProblem(err, want) {
+	if want := `openbindings: "0.1" is not a valid SemVer 2.0.0 string (OBI-D-12)`; !containsProblem(err, want) {
 		t.Fatalf("expected problem %q, got %q", want, err.Error())
 	}
 }
@@ -270,7 +270,7 @@ func TestInterfaceValidate_SourceAcceptsBothLocationAndContent(t *testing.T) {
 		Sources: map[string]Source{
 			"both": {
 				Format:   "openapi@3.1",
-				Location: "./api.json",
+				Location: "https://api.example.com/api.json",
 				Content:  map[string]any{"openapi": "3.1.0"},
 			},
 		},
@@ -304,7 +304,7 @@ func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {Format: "openapi@3.1", Location: "./api.json"},
+			"api": {Format: "openapi@3.1", Location: "https://api.example.com/api.json"},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {
@@ -320,7 +320,7 @@ func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, `bindings["op.api"].inputTransform.$ref: references unknown transform "nonexistent" (OBI-D-11)`) {
+	if !containsProblem(err, `bindings["op.api"].inputTransform.$ref: references unknown transform "nonexistent" (OBI-D-10)`) {
 		t.Fatalf("expected transform ref error, got %v", err)
 	}
 }
@@ -332,7 +332,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {Format: "openapi@3.1", Location: "./api.json"},
+			"api": {Format: "openapi@3.1", Location: "https://api.example.com/api.json"},
 		},
 		Bindings: map[string]BindingEntry{
 			"nonexistent.api": {
@@ -345,7 +345,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, `bindings["nonexistent.api"].operation: references unknown operation "nonexistent" (OBI-D-09)`) {
+	if !containsProblem(err, `bindings["nonexistent.api"].operation: references unknown operation "nonexistent" (OBI-D-08)`) {
 		t.Fatalf("expected operation ref error, got %v", err)
 	}
 }
@@ -367,7 +367,7 @@ func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !containsProblem(err, `bindings["op.nonexistent"].source: references unknown source "nonexistent" (OBI-D-10)`) {
+	if !containsProblem(err, `bindings["op.nonexistent"].source: references unknown source "nonexistent" (OBI-D-09)`) {
 		t.Fatalf("expected source ref error, got %v", err)
 	}
 }
@@ -381,7 +381,7 @@ func TestInterfaceValidate_EmptyInlineTransformAccepted(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {Format: "openapi@3.1", Location: "./api.json"},
+			"api": {Format: "openapi@3.1", Location: "https://api.example.com/api.json"},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {
@@ -406,7 +406,7 @@ func TestInterfaceValidate_ValidInterfaceWithTransforms(t *testing.T) {
 			"toApi": "{ amount: total * 100 }",
 		},
 		Sources: map[string]Source{
-			"stripe": {Format: "openapi@3.1", Location: "./stripe.json"},
+			"stripe": {Format: "openapi@3.1", Location: "https://api.example.com/stripe.json"},
 		},
 		Bindings: map[string]BindingEntry{
 			"pay.stripe": {
@@ -483,10 +483,10 @@ func TestInterfaceValidate_ExampleValidation_InvalidInputFails(t *testing.T) {
 		t.Fatalf("expected error for invalid example input")
 	}
 	if !containsProblemSubstring(err, `operations["greet"].examples["bad"].input:`) {
-		t.Fatalf("expected OBI-D-12 input problem, got %v", err)
+		t.Fatalf("expected OBI-D-11 input problem, got %v", err)
 	}
-	if !containsProblemSubstring(err, "OBI-D-12") {
-		t.Fatalf("expected OBI-D-12 tag, got %v", err)
+	if !containsProblemSubstring(err, "OBI-D-11") {
+		t.Fatalf("expected OBI-D-11 tag, got %v", err)
 	}
 }
 
@@ -506,10 +506,10 @@ func TestInterfaceValidate_ExampleValidation_InvalidOutputFails(t *testing.T) {
 		t.Fatalf("expected error for invalid example output")
 	}
 	if !containsProblemSubstring(err, `operations["greet"].examples["bad"].output:`) {
-		t.Fatalf("expected OBI-D-12 output problem, got %v", err)
+		t.Fatalf("expected OBI-D-11 output problem, got %v", err)
 	}
-	if !containsProblemSubstring(err, "OBI-D-12") {
-		t.Fatalf("expected OBI-D-12 tag, got %v", err)
+	if !containsProblemSubstring(err, "OBI-D-11") {
+		t.Fatalf("expected OBI-D-11 tag, got %v", err)
 	}
 }
 
@@ -524,7 +524,7 @@ func TestInterfaceValidate_ExampleValidation_RunsByDefault(t *testing.T) {
 		},
 	)
 	if err := i.Validate(); err == nil {
-		t.Fatalf("expected error because OBI-D-12 is always enforced")
+		t.Fatalf("expected error because OBI-D-11 is always enforced")
 	}
 }
 
@@ -623,7 +623,7 @@ func TestParseDocument_TransformRefWithExtensionKeyValidates_OBI_T_03(t *testing
 		"openbindings": "0.2.0",
 		"operations": {"op": {}},
 		"transforms": {"t": "$.payload"},
-		"sources": {"api": {"format": "openapi@3.1", "location": "./api.json"}},
+		"sources": {"api": {"format": "openapi@3.1", "location": "https://api.example.com/api.json"}},
 		"bindings": {
 			"op.api": {
 				"operation": "op",
@@ -657,7 +657,7 @@ func TestParseDocument_RejectsInvalidUTF8_OBI_D_01(t *testing.T) {
 }
 
 func TestInterfaceValidate_ExampleValidation_ExplicitNullIsValidated(t *testing.T) {
-	// OBI-D-12: an explicit JSON null is a provided example value distinct
+	// OBI-D-11: an explicit JSON null is a provided example value distinct
 	// from an absent field, and must validate against the schema.
 	doc := []byte(`{
 		"openbindings": "0.2.0",
@@ -679,8 +679,8 @@ func TestInterfaceValidate_ExampleValidation_ExplicitNullIsValidated(t *testing.
 	if !containsProblemSubstring(err, `operations["greet"].examples["nullCase"].input:`) {
 		t.Fatalf("expected null example input problem, got %v", err)
 	}
-	if !containsProblemSubstring(err, "OBI-D-12") {
-		t.Fatalf("expected OBI-D-12 tag, got %v", err)
+	if !containsProblemSubstring(err, "OBI-D-11") {
+		t.Fatalf("expected OBI-D-11 tag, got %v", err)
 	}
 }
 
@@ -763,7 +763,7 @@ func TestInterfaceValidate_ExampleValidation_InternalRefStillValidated(t *testin
 	if err == nil {
 		t.Fatalf("expected internal-ref example validation to fail")
 	}
-	if !containsProblemSubstring(err, "OBI-D-12") {
-		t.Fatalf("expected OBI-D-12 tag, got %v", err)
+	if !containsProblemSubstring(err, "OBI-D-11") {
+		t.Fatalf("expected OBI-D-11 tag, got %v", err)
 	}
 }
