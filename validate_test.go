@@ -297,6 +297,56 @@ func TestInterfaceValidate_EmptyTransformExpressionAccepted(t *testing.T) {
 	}
 }
 
+func TestInterfaceValidate_SourceLocationFormatDefinedAddress(t *testing.T) {
+	// OBI-D-05: a sources[*].location may be a format-defined absolute address
+	// (e.g. a gRPC host:port), not only a URI. These need no base URI and must
+	// not be rejected as relative references, including IP-literal and IPv6
+	// hosts that net/url cannot parse as a URI.
+	for _, addr := range []string{
+		"grpc.example.com:443",
+		"localhost:50051",
+		"10.0.0.1:443",
+		"[::1]:443",
+		"dns:///grpc.example.com:443",
+		"https://api.example.com/openapi.json",
+	} {
+		t.Run(addr, func(t *testing.T) {
+			i := Interface{
+				OpenBindings: "0.1.0",
+				Operations:   map[string]Operation{},
+				Sources: map[string]Source{
+					"svc": {Format: "grpc@1.0", Location: addr},
+				},
+			}
+			if err := i.Validate(); err != nil {
+				t.Fatalf("location %q should be accepted, got %v", addr, err)
+			}
+		})
+	}
+}
+
+func TestInterfaceValidate_SourceLocationRelativeRejected(t *testing.T) {
+	// OBI-D-05: a relative reference needs a base URI and is not allowed.
+	for _, loc := range []string{"./openapi.json", "openapi.json", "../api/openapi.json", "/abs/openapi.json"} {
+		t.Run(loc, func(t *testing.T) {
+			i := Interface{
+				OpenBindings: "0.1.0",
+				Operations:   map[string]Operation{},
+				Sources: map[string]Source{
+					"api": {Format: "openapi@3.1", Location: loc},
+				},
+			}
+			err := i.Validate()
+			if err == nil {
+				t.Fatalf("relative location %q should be rejected", loc)
+			}
+			if !strings.Contains(err.Error(), "not a relative reference (OBI-D-05)") {
+				t.Fatalf("expected OBI-D-05 relative-reference error for %q, got %v", loc, err)
+			}
+		})
+	}
+}
+
 func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.1.0",

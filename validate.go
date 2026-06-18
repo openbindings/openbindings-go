@@ -179,10 +179,7 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		// OBI-D-05: sources[*].location must be a well-formed, absolute reference
 		// (absolute URI or a format-defined absolute address; never relative).
 		if hasLocation {
-			validateURIRef(&errs, fmt.Sprintf("sources[%q].location", k), src.Location)
-			if !referenceIsAbsolute(src.Location) {
-				errs = append(errs, fmt.Sprintf("sources[%q].location: %q must be an absolute URI or a format-defined absolute address, not a relative reference (OBI-D-05)", k, src.Location))
-			}
+			validateLocation(&errs, fmt.Sprintf("sources[%q].location", k), src.Location)
 		}
 		if o.rejectUnknownTypedFields {
 			appendUnknownFieldProblems(&errs, fmt.Sprintf("sources[%q]", k), src.Unknown)
@@ -335,38 +332,123 @@ func validateURIRef(errs *[]string, prefix, raw string) {
 	if raw == "" {
 		return
 	}
-	for i := 0; i < len(raw); i++ {
-		c := raw[i]
-		if c == '%' {
-			if i+2 >= len(raw) || !isHex(raw[i+1]) || !isHex(raw[i+2]) {
-				*errs = append(*errs, fmt.Sprintf("%s: %q contains malformed percent-encoding (OBI-D-05)", prefix, raw))
-				return
-			}
-			i += 2
-			continue
-		}
-		if !uriRefAllowedChars[c] {
-			*errs = append(*errs, fmt.Sprintf("%s: %q contains character %q not allowed in a URI reference (OBI-D-05)", prefix, raw, c))
-			return
-		}
+	if !screenURIChars(errs, prefix, raw) {
+		return
 	}
 	if _, err := url.Parse(raw); err != nil {
 		*errs = append(*errs, fmt.Sprintf("%s: %q is not a well-formed URI reference (OBI-D-05)", prefix, raw))
 	}
 }
 
+// screenURIChars reports whether raw contains only characters permitted in a
+// URI reference per RFC 3986, with well-formed percent-encoding. On the first
+// violation it appends an error and returns false. net/url's parser is too
+// permissive (it accepts whitespace, backticks, and angle brackets), so this
+// screen runs before any structural parse.
+func screenURIChars(errs *[]string, prefix, raw string) bool {
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if c == '%' {
+			if i+2 >= len(raw) || !isHex(raw[i+1]) || !isHex(raw[i+2]) {
+				*errs = append(*errs, fmt.Sprintf("%s: %q contains malformed percent-encoding (OBI-D-05)", prefix, raw))
+				return false
+			}
+			i += 2
+			continue
+		}
+		if !uriRefAllowedChars[c] {
+			*errs = append(*errs, fmt.Sprintf("%s: %q contains character %q not allowed in a URI reference (OBI-D-05)", prefix, raw, c))
+			return false
+		}
+	}
+	return true
+}
+
 func isHex(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
-// referenceIsAbsolute reports whether raw is an absolute reference for OBI-D-05
-// purposes: an absolute URI (has a scheme) or a format-defined absolute address
-// (e.g. a gRPC host:port, which parses with a scheme). Same-document fragments
-// and relative-path references are not absolute.
+// referenceIsAbsolute reports whether raw is an absolute URI (has a scheme).
+// Used for schema $ref/$id, which are always URI-form: a same-document fragment
+// or an absolute URI. Source locations use validateLocation instead, which also
+// admits non-scheme format-defined absolute addresses such as a gRPC host:port.
 func referenceIsAbsolute(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.IsAbs()
 }
+
+// validateLocation checks OBI-D-05 for a sources[*].location: it MUST be an
+// absolute URI or a format-defined absolute address (e.g. a gRPC host:port),
+// never a relative reference. The character screen applies to every location;
+// the strict RFC 3986 structural parse applies only to URI-form locations
+// (those carrying a URI scheme). A scheme-less format-defined absolute address
+// (an IP-literal host:port like 10.0.0.1:443 or [::1]:443) is exempt from RFC
+// 3986 well-formedness: its syntax is the binding format's concern, not OBI's
+// (OBI-D-05, §10). referenceIsAbsolute is deliberately not reused here: it
+// treats a location as absolute only when net/url infers a scheme, so it would
+// admit a hostname:port (host misread as scheme) yet reject an IP-literal one.
+func validateLocation(errs *[]string, prefix, raw string) {
+	if raw == "" {
+		return
+	}
+	if isRelativeReference(raw) {
+		*errs = append(*errs, fmt.Sprintf("%s: %q must be an absolute URI or a format-defined absolute address, not a relative reference (OBI-D-05)", prefix, raw))
+		return
+	}
+	if !screenURIChars(errs, prefix, raw) {
+		return
+	}
+	if hasURIScheme(raw) {
+		if _, err := url.Parse(raw); err != nil {
+			*errs = append(*errs, fmt.Sprintf("%s: %q is not a well-formed URI reference (OBI-D-05)", prefix, raw))
+		}
+	}
+}
+
+// isRelativeReference reports whether raw is a relative reference per RFC 3986
+// §4.2: one with no scheme and no authority, needing a base URI to resolve
+// (./x, ../x, x.json, /abs/path, //host/path). The discriminator is whether a
+// ':' appears before the first '/', '?', or '#'; a relative reference has none.
+// Both absolute URIs (https://...) and format-defined absolute addresses
+// (grpc.example.com:443, 10.0.0.1:443, [::1]:443) are therefore non-relative.
+func isRelativeReference(raw string) bool {
+	for i := 0; i < len(raw); i++ {
+		switch raw[i] {
+		case ':':
+			return false
+		case '/', '?', '#':
+			return true
+		}
+	}
+	return true
+}
+
+// hasURIScheme reports whether raw begins with an RFC 3986 scheme followed by
+// ':' (ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"). URI-form locations get
+// the strict structural parse; a scheme-less format-defined absolute address
+// (an IP-literal host:port) does not, and is left to its format to interpret.
+func hasURIScheme(raw string) bool {
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if c == ':' {
+			return i > 0
+		}
+		if i == 0 {
+			if !isAlpha(c) {
+				return false
+			}
+			continue
+		}
+		if !isAlpha(c) && !isDigit(c) && c != '+' && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return false
+}
+
+func isAlpha(c byte) bool { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') }
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 const draft202012URI = "https://json-schema.org/draft/2020-12/schema"
 
