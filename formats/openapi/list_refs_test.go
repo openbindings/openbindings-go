@@ -191,6 +191,52 @@ func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
 	}
 }
 
+func TestInspectSource_KeysMatchCreateInterface(t *testing.T) {
+	// Inspect and create from the same content, so each suggested
+	// operationKey must equal the key create actually assigns for that ref.
+	// /health has no operationId, exercising the path-derived key path.
+	content := `{
+  "openapi": "3.0.3",
+  "info": {"title": "Test API", "version": "1.0.0"},
+  "paths": {
+    "/users": {
+      "get":  {"operationId": "listUsers",  "responses": {"200": {"description": "OK"}}},
+      "post": {"operationId": "createUser", "responses": {"200": {"description": "OK"}}}
+    },
+    "/health": {
+      "get": {"responses": {"200": {"description": "OK"}}}
+    }
+  }
+}`
+
+	doc, err := loadDocument("", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iface := convertDocToInterface(doc, "")
+
+	// Map each ref to the operation key CreateInterface assigned it.
+	createKeyByRef := map[string]string{}
+	for _, b := range iface.Bindings {
+		createKeyByRef[b.Ref] = b.Operation
+	}
+
+	result, err := NewCreator().InspectSource(context.Background(), &openbindings.Source{Content: content})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, target := range result.Targets {
+		if target.OperationKey == "" {
+			t.Errorf("InspectSource target %q has no suggested operationKey", target.Ref)
+			continue
+		}
+		if want := createKeyByRef[target.Ref]; target.OperationKey != want {
+			t.Errorf("InspectSource operationKey for ref %q = %q, want %q (CreateInterface's key)", target.Ref, target.OperationKey, want)
+		}
+	}
+}
+
 func TestInspectSource_NoPaths(t *testing.T) {
 	content := `{
   "openapi": "3.0.3",

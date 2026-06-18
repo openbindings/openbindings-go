@@ -22,13 +22,21 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 
 	var targets []openbindings.BindableTarget
 
+	// Suggest the same operation keys CreateInterface assigns (create.go: a
+	// SanitizeKey'd name with collision resolution against the entity kind,
+	// sharing one usedKeys map across tools/resources/templates/prompts), so an
+	// inspection previews exactly what create names.
+	usedKeys := map[string]string{}
+
 	sort.Slice(disc.Tools, func(i, j int) bool { return disc.Tools[i].Name < disc.Tools[j].Name })
 	for _, tool := range disc.Tools {
 		desc := tool.Description
 		if desc == "" {
 			desc = tool.Title
 		}
-		targets = append(targets, bindableTarget(refPrefixTools+tool.Name, desc))
+		opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(tool.Name), "tool", usedKeys)
+		usedKeys[opKey] = "tool"
+		targets = append(targets, bindableTarget(refPrefixTools+tool.Name, opKey, desc))
 	}
 
 	sort.Slice(disc.Resources, func(i, j int) bool { return disc.Resources[i].Name < disc.Resources[j].Name })
@@ -37,7 +45,9 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		if desc == "" {
 			desc = resource.Title
 		}
-		targets = append(targets, bindableTarget(refPrefixResources+resource.URI, desc))
+		opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(resource.Name), "resource", usedKeys)
+		usedKeys[opKey] = "resource"
+		targets = append(targets, bindableTarget(refPrefixResources+resource.URI, opKey, desc))
 	}
 
 	sort.Slice(disc.ResourceTemplates, func(i, j int) bool { return disc.ResourceTemplates[i].Name < disc.ResourceTemplates[j].Name })
@@ -46,7 +56,9 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		if desc == "" {
 			desc = tmpl.Title
 		}
-		targets = append(targets, bindableTarget(refPrefixResources+tmpl.URITemplate, desc))
+		opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(tmpl.Name), "resource_template", usedKeys)
+		usedKeys[opKey] = "resource_template"
+		targets = append(targets, bindableTarget(refPrefixResources+tmpl.URITemplate, opKey, desc))
 	}
 
 	sort.Slice(disc.Prompts, func(i, j int) bool { return disc.Prompts[i].Name < disc.Prompts[j].Name })
@@ -55,14 +67,16 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		if desc == "" {
 			desc = prompt.Title
 		}
-		targets = append(targets, bindableTarget(refPrefixPrompts+prompt.Name, desc))
+		opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(prompt.Name), "prompt", usedKeys)
+		usedKeys[opKey] = "prompt"
+		targets = append(targets, bindableTarget(refPrefixPrompts+prompt.Name, opKey, desc))
 	}
 
 	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref}
+func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

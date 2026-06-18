@@ -23,19 +23,25 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 	}
 	sort.Strings(opIDs)
 
+	// Suggest the same operation key CreateInterface assigns (create.go: same
+	// sorted iteration and SanitizeKey + UniqueKey de-duplication), so an
+	// inspection previews exactly what create names.
+	usedKeys := map[string]bool{}
 	for _, opID := range opIDs {
 		asyncOp := doc.Operations[opID]
 		ref := "#/operations/" + opID
+		opKey := openbindings.UniqueKey(openbindings.SanitizeKey(opID), usedKeys)
+		usedKeys[opKey] = true
 		desc := operationDescription(asyncOp)
 
-		targets = append(targets, bindableTarget(ref, desc))
+		targets = append(targets, bindableTarget(ref, opKey, desc))
 	}
 
 	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref}
+func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

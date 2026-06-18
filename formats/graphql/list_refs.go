@@ -34,6 +34,10 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		{"Subscription", disc.schema.rootTypeName("Subscription")},
 	}
 
+	// Suggest the same operation key CreateInterface assigns (create.go: a
+	// SanitizeKey'd field name with collision resolution against the root type),
+	// so an inspection previews exactly what create names.
+	usedKeys := map[string]string{}
 	for _, rt := range rootTypes {
 		if rt.typeName == "" {
 			continue
@@ -53,15 +57,18 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 			if strings.HasPrefix(f.Name, "__") {
 				continue
 			}
-			targets = append(targets, bindableTarget(rt.label+"/"+f.Name, f.Description))
+			ref := rt.label + "/" + f.Name
+			opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(f.Name), strings.ToLower(rt.label), usedKeys)
+			usedKeys[opKey] = ref
+			targets = append(targets, bindableTarget(ref, opKey, f.Description))
 		}
 	}
 
 	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref}
+func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

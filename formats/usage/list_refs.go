@@ -21,18 +21,20 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 
 	meta := spec.Meta()
 
-	// Root command (single-command CLIs like grep, curl).
+	// Root command (single-command CLIs like grep, curl). create keys the root
+	// operation by the binary name; mirror that here.
 	if rootCmd := rootCommand(spec); rootCmd != nil {
 		bin := meta.Bin
 		if bin == "" {
 			bin = meta.Name
 		}
 		if bin != "" {
-			targets = append(targets, bindableTarget(bin, meta.About))
+			targets = append(targets, bindableTarget(bin, bin, meta.About))
 		}
 	}
 
-	// Subcommands.
+	// Subcommands. Suggest the same operation key CreateInterface assigns
+	// (create_interface.go: the dotted command path, or an explicit opKey prop).
 	walkWithGlobals(spec, func(path []string, cmd Command, _ []Flag) {
 		if len(path) == 0 {
 			return
@@ -40,15 +42,21 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		if cmd.SubcommandRequired {
 			return
 		}
-		targets = append(targets, bindableTarget(strings.Join(path, " "), cmd.Help))
+		opKey := strings.Join(path, ".")
+		if override, ok := cmd.Node.Props["opKey"]; ok {
+			if s := override.String(); s != "" {
+				opKey = s
+			}
+		}
+		targets = append(targets, bindableTarget(strings.Join(path, " "), opKey, cmd.Help))
 	})
 
 	sort.Slice(targets, func(i, j int) bool { return targets[i].Ref < targets[j].Ref })
 	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref}
+func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

@@ -29,6 +29,7 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 	}
 	sort.Strings(pathKeys)
 
+	usedKeys := make(map[string]bool)
 	for _, path := range pathKeys {
 		pathItem := doc.Paths.Find(path)
 		if pathItem == nil {
@@ -40,18 +41,24 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 				continue
 			}
 
+			// Suggest the same operation key CreateInterface would assign for
+			// this target. The iteration order and usedKeys de-duplication here
+			// match create's, so inspection previews exactly what create names.
+			opKey := deriveOperationKey(op, path, method, usedKeys)
+			usedKeys[opKey] = true
+
 			ref := buildJSONPointerRef(path, method)
 			desc := operationDescription(op)
 
-			targets = append(targets, bindableTarget(ref, desc))
+			targets = append(targets, bindableTarget(ref, opKey, desc))
 		}
 	}
 
 	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref}
+func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

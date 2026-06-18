@@ -36,6 +36,10 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
 	})
 
+	// Suggest the same operation key CreateInterface assigns (create.go: same
+	// SanitizeKey + collision resolution against the service name), so an
+	// inspection previews exactly what create names.
+	usedKeys := map[string]string{}
 	for _, svc := range disc.services {
 		methods := serviceMethodsSorted(svc)
 		for _, method := range methods {
@@ -43,16 +47,18 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 				continue
 			}
 			fqn := string(svc.FullName()) + "/" + string(method.Name())
+			opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(string(method.Name())), string(svc.Name()), usedKeys)
+			usedKeys[opKey] = fqn
 			desc := commentToDescription(method)
-			targets = append(targets, bindableTarget(fqn, desc))
+			targets = append(targets, bindableTarget(fqn, opKey, desc))
 		}
 	}
 
 	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref}
+func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
+	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}
