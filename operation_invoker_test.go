@@ -297,15 +297,15 @@ func opTestInterface() *Interface {
 		},
 		Bindings: map[string]BindingEntry{
 			"ping.main":    {Operation: "ping", Source: "mock", Ref: "ping"},
-			"getUser.main": {Operation: "getUser", Source: "mock", Ref: "getUser", Priority: pf(1)},
-			"getUser.bad":  {Operation: "getUser", Source: "mock", Ref: "badUser", Priority: pf(99)},
+			"getUser.main": {Operation: "getUser", Source: "mock", Ref: "getUser", Preference: pf(99)},
+			"getUser.bad":  {Operation: "getUser", Source: "mock", Ref: "badUser", Preference: pf(1)},
 			"echo.transformed": {
 				Operation: "echo", Source: "mock", Ref: "echoInput",
 				InputTransform: &TransformOrRef{Inline: "idToUserId"},
 			},
-			"watchOrders.main": {Operation: "watchOrders", Source: "mock", Ref: "watchOrders", Priority: pf(1)},
+			"watchOrders.main": {Operation: "watchOrders", Source: "mock", Ref: "watchOrders", Preference: pf(99)},
 			"watchOrders.challenge": {
-				Operation: "watchOrders", Source: "mock", Ref: "watchThenChallenge", Priority: pf(99),
+				Operation: "watchOrders", Source: "mock", Ref: "watchThenChallenge", Preference: pf(1),
 			},
 			"watchTyped.main":   {Operation: "watchTyped", Source: "mock", Ref: "streamBadSecond"},
 			"chat.main":         {Operation: "chat", Source: "mock", Ref: "chat"},

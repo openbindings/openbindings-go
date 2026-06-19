@@ -38,10 +38,10 @@ var (
 		"description", "input", "output",
 	)
 	knownSourceSet = knownSet(
-		"format", "location", "content", "description", "priority",
+		"format", "location", "content", "description", "preference",
 	)
 	knownBindingEntrySet = knownSet(
-		"operation", "source", "ref", "priority", "description", "deprecated",
+		"operation", "source", "ref", "preference", "description", "deprecated",
 		"inputTransform", "outputTransform",
 	)
 	knownInterfaceSet = knownSet(
@@ -225,7 +225,7 @@ type Source struct {
 	Location    string   `json:"location,omitempty"`
 	Content     any      `json:"content,omitempty"`
 	Description string   `json:"description,omitempty"`
-	Priority    *float64 `json:"priority,omitempty"`
+	Preference  *float64 `json:"preference,omitempty"`
 
 	LosslessFields
 }
@@ -235,7 +235,7 @@ type sourceWire struct {
 	Location    string   `json:"location,omitempty"`
 	Content     any      `json:"content,omitempty"`
 	Description string   `json:"description,omitempty"`
-	Priority    *float64 `json:"priority,omitempty"`
+	Preference  *float64 `json:"preference,omitempty"`
 }
 
 func (s *Source) UnmarshalJSON(b []byte) error {
@@ -254,7 +254,7 @@ func (s *Source) UnmarshalJSON(b []byte) error {
 		Location:    w.Location,
 		Content:     w.Content,
 		Description: w.Description,
-		Priority:    w.Priority,
+		Preference:  w.Preference,
 	}
 
 	s.Extensions, s.Unknown = splitLossless(raw, knownSourceSet)
@@ -267,7 +267,7 @@ func (s Source) MarshalJSON() ([]byte, error) {
 		Location:    s.Location,
 		Content:     s.Content,
 		Description: s.Description,
-		Priority:    s.Priority,
+		Preference:  s.Preference,
 	}
 	return marshalLossless(s.Unknown, s.Extensions, w)
 }
@@ -351,7 +351,7 @@ type BindingEntry struct {
 	Operation   string   `json:"operation"`
 	Source      string   `json:"source"`
 	Ref         string   `json:"ref,omitempty"`
-	Priority    *float64 `json:"priority,omitempty"`
+	Preference  *float64 `json:"preference,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Deprecated  bool     `json:"deprecated,omitempty"`
 
@@ -367,7 +367,7 @@ type bindingEntryWire struct {
 	Operation   string   `json:"operation"`
 	Source      string   `json:"source"`
 	Ref         string   `json:"ref,omitempty"`
-	Priority    *float64 `json:"priority,omitempty"`
+	Preference  *float64 `json:"preference,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Deprecated  bool     `json:"deprecated,omitempty"`
 
@@ -390,7 +390,7 @@ func (be *BindingEntry) UnmarshalJSON(b []byte) error {
 		Operation:       w.Operation,
 		Source:          w.Source,
 		Ref:             w.Ref,
-		Priority:        w.Priority,
+		Preference:      w.Preference,
 		Description:     w.Description,
 		Deprecated:      w.Deprecated,
 		InputTransform:  w.InputTransform,
@@ -406,7 +406,7 @@ func (be BindingEntry) MarshalJSON() ([]byte, error) {
 		Operation:       be.Operation,
 		Source:          be.Source,
 		Ref:             be.Ref,
-		Priority:        be.Priority,
+		Preference:      be.Preference,
 		Description:     be.Description,
 		Deprecated:      be.Deprecated,
 		InputTransform:  be.InputTransform,

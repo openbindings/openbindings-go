@@ -666,8 +666,9 @@ func wireError(err error) *InvocationError {
 
 // DefaultBindingSelector picks the best binding for an operation. Non-deprecated
 // bindings are preferred over deprecated ones. Within the same deprecation status,
-// lower priority values win (binding priority overrides source priority). Ties
-// are broken alphabetically by key.
+// higher preference values win (binding preference overrides source preference; an
+// absent preference is the neutral baseline of 0). Ties are broken alphabetically
+// by key.
 //
 // Returns ErrBindingNotFound if no binding matches the operation.
 func DefaultBindingSelector(iface *Interface, opKey string) (string, *BindingEntry, error) {
@@ -684,7 +685,7 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 
 	var bestKey string
 	var best *BindingEntry
-	bestPri := math.MaxFloat64
+	bestPref := math.Inf(-1)
 	bestDeprecated := true
 
 	for k, b := range iface.Bindings {
@@ -700,21 +701,22 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 			}
 		}
 
-		// Binding priority overrides source priority.
-		bPri := math.MaxFloat64
-		if b.Priority != nil {
-			bPri = *b.Priority
-		} else if src, ok := iface.Sources[b.Source]; ok && src.Priority != nil {
-			bPri = *src.Priority
+		// Binding preference overrides source preference; absent on both is
+		// the neutral baseline of 0.
+		bPref := 0.0
+		if b.Preference != nil {
+			bPref = *b.Preference
+		} else if src, ok := iface.Sources[b.Source]; ok && src.Preference != nil {
+			bPref = *src.Preference
 		}
 
 		betterDeprecation := bestDeprecated && !b.Deprecated
 		sameTier := b.Deprecated == bestDeprecated
-		if best == nil || betterDeprecation || (sameTier && bPri < bestPri) || (sameTier && bPri == bestPri && k < bestKey) {
+		if best == nil || betterDeprecation || (sameTier && bPref > bestPref) || (sameTier && bPref == bestPref && k < bestKey) {
 			bestKey = k
 			entry := b
 			best = &entry
-			bestPri = bPri
+			bestPref = bPref
 			bestDeprecated = b.Deprecated
 		}
 	}
