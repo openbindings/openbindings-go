@@ -51,6 +51,11 @@ type TransformEvaluatorWithBindings interface {
 // context store, reads an env var, prompts a keychain, or returns a
 // hardcoded value is the resolver's business — invisible to the invoker and
 // to bindings.
+//
+// A CONTEXT_REQUIRED challenge is a scope, not a hint. A resolver MUST return
+// only the context that satisfies the selected alternative — the credentials it
+// names plus non-secret configuration — and MUST NOT return other stored
+// credentials. ScopeContext is the reference reduction.
 type ContextResolver func(ctx context.Context, details *ContextRequiredDetails) (map[string]any, error)
 
 // OperationInvoker is the operation-layer invoker: it resolves an OBI
