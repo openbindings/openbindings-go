@@ -4,8 +4,20 @@
 
 ### Changed
 
+- **Operations are invoked through signatures.** Added `OperationSignature[I, O]`
+  (an inert `{Key}` carrying its input/output types as phantom parameters),
+  `NewOperationSignature[I, O](key)`, the variadic functional options `InvokeOption`
+  (`WithContext`, `WithBindingKey`), and the public free function
+  `Invoke(ctx, invoker, obi, sig, ...InvokeOption) *TypedInvocation[I, O]`. The interface is a
+  runtime argument, never part of the signature, so a signature is
+  provider-agnostic; `[any, any]` is the dynamic flavor. The previous
+  `(*OperationInvoker).Invoke(ctx, *OperationInvocationArgs)` method and the exported
+  `OperationInvocationArgs` type are removed — the engine logic lives directly in the
+  free `Invoke`, the single public invocation verb (no separate dispatch method and no
+  args carrier).
+
 - **Invocation is now a cardinality-agnostic handle.** `BindingInvoker.InvokeBinding`
-  and `OperationInvoker.Invoke` return an `Invocation[I, O]` synchronously
+  and the free `Invoke` return an `Invocation[I, O]` synchronously
   instead of `(<-chan InvocationOutput, error)`: the caller writes input
   messages (`Write`/`Close`), acquires the output sequence (`Outputs()
   OutputStream[O]`, read to `io.EOF` / terminal), and observes lifecycle via
@@ -28,8 +40,9 @@
   - `BindingInvocationInput`/`BindingInvocationSource` → `BindingInvocationArgs`/
     `InvocationSource` (`{Source, Ref, Binding, Context, Interface, InputSchema}`;
     no `Input`, no `Security`, no `Store`, no `Callbacks`);
-    `OperationInvocationInput` → `OperationInvocationArgs` (input flows through
-    the handle). `SingleEventChannel`, `FailedOutput`, and `HTTPErrorOutput`
+    `OperationInvocationInput` is removed — input flows through the handle, and
+    invocation goes through the free `Invoke` + `OperationSignature`.
+    `SingleEventChannel`, `FailedOutput`, and `HTTPErrorOutput`
     are removed (`HTTPError`/`HTTPErrorCode` replace the HTTP helpers).
   - OBI-T-07 failures are terminal AND reject the offending `Write` with the
     same `*InvocationError`; OBI-T-08 failures are terminal and the invalid
@@ -65,7 +78,7 @@
 
 - **Renamed binding "executor" terminology to "invoker" / "invoke"** to align with the OpenBindings spec 0.2.0 rename. Pre-1.0 hard rename, no deprecated aliases. Both layers — the per-format component and the orchestrator — use the `Invoker` noun, with the verb `Invoke` shared across them.
   - Types: `BindingExecutor` → `BindingInvoker`; `OperationExecutor` → `OperationInvoker`; per-format `*.Executor` → `*.Invoker` (e.g., `openapi.Executor` → `openapi.Invoker`); `BindingExecutionInput`/`BindingExecutionSource` → `BindingInvocationInput`/`BindingInvocationSource`; `OperationExecutionInput` → `OperationInvocationInput`; `ExecuteOutput`/`ExecuteError`/`ExecutionOptions` → `InvocationOutput`/`InvocationError`/`InvocationOptions`.
-  - Methods: `BindingExecutor.ExecuteBinding(...)` → `BindingInvoker.InvokeBinding(...)`; `OperationExecutor.ExecuteOperation(...)` → `OperationInvoker.Invoke(...)`; `OperationExecutor.AddBindingExecutor(...)` → `OperationInvoker.AddBindingInvoker(...)`; `InterfaceClient.Execute(...)`/`ExecuteWithOptions(...)` → `InterfaceClient.Invoke(...)`/`InvokeWithOptions(...)`.
+  - Methods: `BindingExecutor.ExecuteBinding(...)` → `BindingInvoker.InvokeBinding(...)`; `OperationExecutor.ExecuteOperation(...)` → the free `Invoke(...)`; `OperationExecutor.AddBindingExecutor(...)` → `OperationInvoker.AddBindingInvoker(...)`; `InterfaceClient.Execute(...)`/`ExecuteWithOptions(...)` → `InterfaceClient.Invoke(...)`/`InvokeWithOptions(...)`.
   - Constructors: `NewOperationExecutor` → `NewOperationInvoker`; per-format `NewExecutor` → `NewInvoker`.
   - Helpers: `CombineExecutors` → `CombineInvokers`; `ErrNoExecutor` → `ErrNoInvoker`.
   - File renames: `executor.go` → `binding_invoker.go`, `operation_executor.go` → `operation_invoker.go`, `executor_types.go` → `invoker_types.go`; per-format `executor.go` → `invoker.go`, `execute.go` → `invoke.go`.
@@ -74,7 +87,7 @@
 
 - **Validation options trimmed.** `WithExampleValidation` and `WithRequireSupportedVersion` removed: example schema validation (OBI-D-15) and the supported-version check (OBI-T-04) are now unconditional in `Validate()`. `WithRejectUnknownTypedFields` is the only remaining option.
 
-- **OBI-T-07 / OBI-T-08 nil guards tightened.** `OperationInvoker.Invoke` and the streaming output path now validate input/output against the operation's schema whenever the schema is specified, including when the value is `nil`. Previously these checks silently skipped on `nil`, which let invalid omissions slip past the contract.
+- **OBI-T-07 / OBI-T-08 nil guards tightened.** `Invoke` and the streaming output path now validate input/output against the operation's schema whenever the schema is specified, including when the value is `nil`. Previously these checks silently skipped on `nil`, which let invalid omissions slip past the contract.
 
 - **Combiner format-token lookup** prefers exact token equality before falling back to range matching, so a source pinned to `openapi@3.1` no longer accidentally selects an invoker advertising `openapi@^3.0.0` when an exact entry is registered.
 
@@ -103,8 +116,8 @@
   `WithContextStore`, `WithPlatformCallbacks`, and `WithDefaultContext`
   options are gone. Generated typed invokers (from `ob codegen`) wrap an
   `*OperationInvoker` directly and take the OBI per method call. Direct
-  callers use `OperationInvoker.Invoke(ctx, &OperationInvocationArgs{...})`
-  and configure runtime via `OperationInvoker.WithRuntime(resolver)`.
+  callers use the free `Invoke(ctx, invoker, obi, sig, opts)` and configure
+  runtime via `OperationInvoker.WithRuntime(resolver)`.
 
 - **`InvocationOptions`.** Folded into `BindingContext`. Transport fields
   (`headers`, `cookies`, `environment`, `metadata`) are well-known keys

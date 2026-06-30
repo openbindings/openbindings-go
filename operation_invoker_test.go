@@ -332,7 +332,7 @@ func drainOutputs(t *testing.T, call Invocation[any, any]) ([]any, error) {
 
 func TestOpInvokeNoInputViaSingle(t *testing.T) { // NI
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "ping"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("ping"))
 	v, err := Single(shortCtx(t), call.Outputs())
 	if err != nil {
 		t.Fatal(err)
@@ -344,7 +344,7 @@ func TestOpInvokeNoInputViaSingle(t *testing.T) { // NI
 
 func TestOpAliasResolution(t *testing.T) { // OBI-T-12
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "fetchUser"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("fetchUser"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -360,16 +360,19 @@ func TestOpAliasResolution(t *testing.T) { // OBI-T-12
 func TestOpWiringErrorsAreErroredHandles(t *testing.T) {
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
 	cases := []struct {
-		name string
-		args *OperationInvocationArgs
-		code string
+		name       string
+		iface      *Interface
+		operation  string
+		bindingKey string
+		code       string
 	}{
-		{"unknown operation", &OperationInvocationArgs{Interface: opTestInterface(), Operation: "nope"}, ErrCodeOperationNotFound},
-		{"unknown bindingKey", &OperationInvocationArgs{Interface: opTestInterface(), Operation: "ping", BindingKey: "nope"}, ErrCodeBindingNotFound},
+		{"nil interface", nil, "ping", "", ErrCodeValidationFailed},
+		{"unknown operation", opTestInterface(), "nope", "", ErrCodeOperationNotFound},
+		{"unknown bindingKey", opTestInterface(), "ping", "nope", ErrCodeBindingNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			call := op.Invoke(bg(), tc.args)
+			call := Invoke(bg(), op, tc.iface, NewOperationSignature[any, any](tc.operation), WithBindingKey(tc.bindingKey))
 			_, err := drainOutputs(t, call)
 			if codeOf(t, err) != tc.code {
 				t.Fatalf("expected %s, got %v", tc.code, err)
@@ -380,7 +383,7 @@ func TestOpWiringErrorsAreErroredHandles(t *testing.T) {
 	t.Run("unknown source", func(t *testing.T) {
 		iface := opTestInterface()
 		delete(iface.Sources, "mock")
-		call := op.Invoke(bg(), &OperationInvocationArgs{Interface: iface, Operation: "ping", BindingKey: "ping.main"})
+		call := Invoke(bg(), op, iface, NewOperationSignature[any, any]("ping"), WithBindingKey("ping.main"))
 		_, err := drainOutputs(t, call)
 		if codeOf(t, err) != ErrCodeUnknownSource {
 			t.Fatalf("expected ERR_UNKNOWN_SOURCE, got %v", err)
@@ -392,7 +395,7 @@ func TestOpWiringErrorsAreErroredHandles(t *testing.T) {
 		src := iface.Sources["mock"]
 		src.Format = "absent@1.0"
 		iface.Sources["mock"] = src
-		call := op.Invoke(bg(), &OperationInvocationArgs{Interface: iface, Operation: "ping", BindingKey: "ping.main"})
+		call := Invoke(bg(), op, iface, NewOperationSignature[any, any]("ping"), WithBindingKey("ping.main"))
 		_, err := drainOutputs(t, call)
 		if codeOf(t, err) != ErrCodeBindingNotFound {
 			t.Fatalf("expected ERR_BINDING_NOT_FOUND, got %v", err)
@@ -406,7 +409,7 @@ func TestOpWiringErrorsAreErroredHandles(t *testing.T) {
 
 func TestOpServerStreaming(t *testing.T) { // SS
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "watchOrders"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("watchOrders"))
 	if err := call.Write(bg(), map[string]any{"accountId": "a1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +421,7 @@ func TestOpServerStreaming(t *testing.T) { // SS
 
 func TestOpClientStreaming(t *testing.T) { // CS
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "uploadChunks"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("uploadChunks"))
 	for _, c := range []string{"a", "b", "c"} {
 		if err := call.Write(bg(), map[string]any{"chunk": c}); err != nil {
 			t.Fatal(err)
@@ -438,7 +441,7 @@ func TestOpClientStreaming(t *testing.T) { // CS
 
 func TestOpBidi(t *testing.T) { // BD
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "chat"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("chat"))
 	go func() {
 		for _, text := range []string{"hi", "there"} {
 			if err := call.Write(bg(), map[string]any{"text": text}); err != nil {
@@ -459,7 +462,7 @@ func TestOpBidi(t *testing.T) { // BD
 func TestOpCancelPropagatesToBinding(t *testing.T) {
 	mock := &mockBindingInvoker{}
 	op := newOpInvoker(mock, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "chat"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("chat"))
 	if err := call.Write(bg(), map[string]any{"text": "hello"}); err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +485,7 @@ func TestOpCancelPropagatesToBinding(t *testing.T) {
 func TestOpT07InvalidWriteRejectsAndTerminates(t *testing.T) {
 	mock := &mockBindingInvoker{}
 	op := newOpInvoker(mock, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	err := call.Write(bg(), map[string]any{"id": 42})
 	if codeOf(t, err) != ErrCodeValidationFailed {
 		t.Fatalf("expected write rejection, got %v", err)
@@ -507,7 +510,7 @@ func TestOpT07ValidatesBeforeTransform(t *testing.T) {
 	iface.Operations["echo"] = echo
 	mock := &mockBindingInvoker{}
 	op := newOpInvoker(mock, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: iface, Operation: "echo"})
+	call := Invoke(bg(), op, iface, NewOperationSignature[any, any]("echo"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil { // validates PRE-transform shape
 		t.Fatal(err)
 	}
@@ -526,7 +529,7 @@ func TestOpInputTransformFailureIsTerminal(t *testing.T) {
 	b.InputTransform = &TransformOrRef{Inline: "boom"}
 	iface.Bindings["echo.transformed"] = b
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: iface, Operation: "echo"})
+	call := Invoke(bg(), op, iface, NewOperationSignature[any, any]("echo"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -542,9 +545,7 @@ func TestOpInputTransformFailureIsTerminal(t *testing.T) {
 
 func TestOpT08InvalidOutputNotEmitted(t *testing.T) {
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{
-		Interface: opTestInterface(), Operation: "getUser", BindingKey: "getUser.bad",
-	})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"), WithBindingKey("getUser.bad"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +560,7 @@ func TestOpT08InvalidOutputNotEmitted(t *testing.T) {
 
 func TestOpT08PerItemForStreaming(t *testing.T) { // SS
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "watchTyped"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("watchTyped"))
 	vals, err := drainOutputs(t, call)
 	if len(vals) != 1 || vals[0].(map[string]any)["n"] != float64(1) {
 		t.Fatalf("valid prefix must be delivered, got %v", vals)
@@ -575,7 +576,7 @@ func TestOpT08ValidatesAfterTransform(t *testing.T) {
 	b.OutputTransform = &TransformOrRef{Inline: "breakShape"}
 	iface.Bindings["watchTyped.main"] = b
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: iface, Operation: "watchTyped"})
+	call := Invoke(bg(), op, iface, NewOperationSignature[any, any]("watchTyped"))
 	vals, err := drainOutputs(t, call)
 	if len(vals) != 0 {
 		t.Fatalf("transform broke the shape; nothing should emit, got %v", vals)
@@ -592,7 +593,7 @@ func TestOpT08ValidatesAfterTransform(t *testing.T) {
 func TestOpContextRequiredSurfacesWithoutResolver(t *testing.T) {
 	mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
 	op := newOpInvoker(mock, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +618,7 @@ func TestOpResolveAndRetryReplaysInput(t *testing.T) { // U — read ≠ consume
 		return map[string]any{"bearerToken": "tok-123"}, nil
 	}
 	op := newOpInvoker(mock, resolver)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil { // written ONCE
 		t.Fatal(err)
 	}
@@ -656,7 +657,7 @@ func TestOpResolverDeclineSurfaces(t *testing.T) {
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		return nil, nil
 	})
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +675,7 @@ func TestOpRetryRoundsAreCapped(t *testing.T) {
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
 		return map[string]any{"bearerToken": "never-enough"}, nil
 	})
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -694,9 +695,7 @@ func TestOpMidStreamChallengeSurfaces(t *testing.T) { // SS — no retry after p
 		resolverCalled = true
 		return map[string]any{"bearerToken": "tok"}, nil
 	})
-	call := op.Invoke(bg(), &OperationInvocationArgs{
-		Interface: opTestInterface(), Operation: "watchOrders", BindingKey: "watchOrders.challenge",
-	})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("watchOrders"), WithBindingKey("watchOrders.challenge"))
 	vals, err := drainOutputs(t, call)
 	if len(vals) != 1 {
 		t.Fatalf("the delivered prefix must survive, got %v", vals)
@@ -719,7 +718,7 @@ func TestOpPreflightCollapsesChallenge(t *testing.T) { // CS-friendly path
 		resolverCalls++
 		return map[string]any{"bearerToken": "tok-pre"}, nil
 	})
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -741,7 +740,7 @@ func TestOpPreflightCollapsesChallenge(t *testing.T) { // CS-friendly path
 func TestOpPreflightWithoutResolverSurfaces(t *testing.T) {
 	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 	op := newOpInvoker(mock, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	_, err := drainOutputs(t, call)
 	if codeOf(t, err) != ErrCodeContextRequired {
 		t.Fatalf("expected CONTEXT_REQUIRED, got %v", err)
@@ -757,7 +756,7 @@ func TestOpPreflightWithoutResolverSurfaces(t *testing.T) {
 
 func TestOpMetadataPassThrough(t *testing.T) {
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "ping"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("ping"))
 	vals, err := drainOutputs(t, call)
 	if err != nil || len(vals) != 1 {
 		t.Fatalf("got %v err=%v", vals, err)

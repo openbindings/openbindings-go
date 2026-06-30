@@ -708,10 +708,8 @@ func TestOperationInvokerResolvesChallengeFromStore(t *testing.T) {
 		},
 	}
 
-	call := op.Invoke(bg(), &openbindings.OperationInvocationArgs{
-		Interface: iface,
-		Operation: "sendMessage",
-	})
+	call := openbindings.Invoke(bg(), op, iface,
+		openbindings.NewOperationSignature[any, any]("sendMessage"))
 	if err := call.Write(bg(), map[string]any{"text": "negotiated"}); err != nil {
 		t.Fatal(err)
 	}

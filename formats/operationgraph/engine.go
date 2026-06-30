@@ -355,11 +355,12 @@ func (eng *engine) run(ctx context.Context) {
 			c.timeout = true
 		}
 		c.opCtx = opCtx
-		call := eng.invoker.Invoke(opCtx, &openbindings.OperationInvocationArgs{
-			Interface: eng.args.Interface,
-			Operation: node.Operation,
-			Context:   eng.args.Context,
-		})
+		// Graph data is always generic JSON (input pump, transform/map/filter
+		// results, sub-op outputs are all maps/slices/primitives), so the [any,
+		// any] handle's JSON normalization on Write is a no-op here.
+		call := openbindings.Invoke(opCtx, eng.invoker, eng.args.Interface,
+			openbindings.NewOperationSignature[any, any](node.Operation),
+			openbindings.WithContext(eng.args.Context))
 		c.call = call
 		c.mu.Unlock()
 
@@ -683,11 +684,9 @@ func (eng *engine) processEach(
 		defer opCancel()
 	}
 
-	call := eng.invoker.Invoke(opCtx, &openbindings.OperationInvocationArgs{
-		Interface: eng.args.Interface,
-		Operation: node.Operation,
-		Context:   eng.args.Context,
-	})
+	call := openbindings.Invoke(opCtx, eng.invoker, eng.args.Interface,
+		openbindings.NewOperationSignature[any, any](node.Operation),
+		openbindings.WithContext(eng.args.Context))
 	// One write, then close: each fixes the graph's contribution at one
 	// write per session. Write/Close failures surface via the read loop.
 	_ = call.Write(opCtx, ev.data)

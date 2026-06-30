@@ -350,10 +350,8 @@ func TestIntegration_NoCredentialsChallenge(t *testing.T) {
 
 	iface := synthesizeOBI(t, specURL)
 
-	call := invoker.Invoke(context.Background(), &openbindings.OperationInvocationArgs{
-		Interface: iface,
-		Operation: "listItems",
-	})
+	call := openbindings.Invoke(context.Background(), invoker, iface,
+		openbindings.NewOperationSignature[any, any]("listItems"))
 	_, ierr := driveSingle(t, call, nil)
 	if ierr == nil {
 		t.Fatal("expected a terminal error, got success")
@@ -381,7 +379,7 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 	iface := synthesizeOBI(t, specURL)
 
 	// First call: listItems should succeed via resolve-and-retry.
-	call := invoker.Invoke(ctx, &openbindings.OperationInvocationArgs{Interface: iface, Operation: "listItems"})
+	call := openbindings.Invoke(ctx, invoker, iface, openbindings.NewOperationSignature[any, any]("listItems"))
 	out, ierr := driveSingle(t, call, nil)
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
@@ -396,15 +394,14 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 	}
 
 	// Second call reuses the credential (now via preflight against the warm doc cache).
-	call2 := invoker.Invoke(ctx, &openbindings.OperationInvocationArgs{Interface: iface, Operation: "listItems"})
+	call2 := openbindings.Invoke(ctx, invoker, iface, openbindings.NewOperationSignature[any, any]("listItems"))
 	if _, ierr := driveSingle(t, call2, nil); ierr != nil {
 		t.Fatalf("second listItems call should succeed: %v", ierr)
 	}
 
 	// Different operation: getItem with a path parameter.
-	call3 := invoker.Invoke(ctx, &openbindings.OperationInvocationArgs{
-		Interface: iface, Operation: "getItem", Context: nil,
-	})
+	call3 := openbindings.Invoke(ctx, invoker, iface,
+		openbindings.NewOperationSignature[any, any]("getItem"))
 	item3, ierr := driveSingle(t, call3, map[string]any{"id": 1})
 	if ierr != nil {
 		t.Fatalf("getItem unexpected error: %s: %s", ierr.Code, ierr.Message)
@@ -438,13 +435,13 @@ func TestIntegration_IsolatedStoresDontShareCredentials(t *testing.T) {
 	opExec2 := openbindings.NewOperationInvoker(NewInvoker()).WithRuntime(openbindings.StoreContextResolver(store2))
 
 	// Invoker 1 succeeds (has credentials).
-	call1 := opExec1.Invoke(ctx, &openbindings.OperationInvocationArgs{Interface: iface, Operation: "listItems"})
+	call1 := openbindings.Invoke(ctx, opExec1, iface, openbindings.NewOperationSignature[any, any]("listItems"))
 	if _, ierr := driveSingle(t, call1, nil); ierr != nil {
 		t.Fatalf("opExec1 should succeed with stored credentials: %v", ierr)
 	}
 
 	// Invoker 2 gets CONTEXT_REQUIRED (no credentials, declined by the empty store).
-	call2 := opExec2.Invoke(ctx, &openbindings.OperationInvocationArgs{Interface: iface, Operation: "listItems"})
+	call2 := openbindings.Invoke(ctx, opExec2, iface, openbindings.NewOperationSignature[any, any]("listItems"))
 	_, ierr := driveSingle(t, call2, nil)
 	if ierr == nil || ierr.Code != openbindings.ErrCodeContextRequired {
 		t.Fatalf("client2 should fail with CONTEXT_REQUIRED, got %v", ierr)

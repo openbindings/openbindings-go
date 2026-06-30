@@ -129,7 +129,7 @@ func TestStoreResolverDrivesRetryEndToEnd(t *testing.T) {
 
 	mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
 	op := newOpInvoker(mock, StoreContextResolver(store))
-	call := op.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "getUser"})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestWithRuntimeSwapsResolver(t *testing.T) {
 		t.Fatal("WithRuntime must not mutate the original")
 	}
 	// Shared registry still routes.
-	call := scoped.Invoke(bg(), &OperationInvocationArgs{Interface: opTestInterface(), Operation: "ping"})
+	call := Invoke(bg(), scoped, opTestInterface(), NewOperationSignature[any, any]("ping"))
 	if _, err := Single(shortCtx(t), call.Outputs()); err != nil {
 		t.Fatal(err)
 	}

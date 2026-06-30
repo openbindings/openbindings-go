@@ -797,7 +797,10 @@ func NewTypedInvocation[I, O any](inner Invocation[any, any]) *TypedInvocation[I
 func (t *TypedInvocation[I, O]) Write(ctx context.Context, input I) error {
 	// Encode at the typed boundary, symmetric with the output decode:
 	// OBI-T-07 validation and format invokers operate on generic JSON values
-	// (maps/slices/primitives), not Go structs.
+	// (maps/slices/primitives), not Go structs. For the untyped flavor (I = any)
+	// this normalizes the value through JSON (e.g. int -> float64), so a caller
+	// driving an [any, any] handle must hand it generic-JSON-shaped input; a
+	// non-JSON-encodable value is rejected here rather than reaching the binding.
 	b, err := json.Marshal(input)
 	if err != nil {
 		return &InvocationError{

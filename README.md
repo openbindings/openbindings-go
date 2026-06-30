@@ -96,9 +96,10 @@ import (
     openapi "github.com/openbindings/openbindings-go/formats/openapi"
 )
 
-// Wire up an invoker with the format(s) you need.
+// Wire up an invoker with the format(s) you need, plus a context resolver for
+// any credentials the bindings negotiate at call time.
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker()).
-    WithRuntime(openbindings.NewMemoryStore(), nil)
+    WithRuntime(openbindings.StoreContextResolver(openbindings.NewMemoryStore()))
 
 // Resolve an OBI from a URL (well-known discovery + creator synthesis).
 fetched, err := openbindings.FetchInterface(ctx, "https://api.example.com",
@@ -108,24 +109,22 @@ if err != nil {
 }
 iface := &fetched.Interface
 
-// Invoke. Every operation returns a stream — unary calls produce one event.
-ch, err := opInv.Invoke(ctx, &openbindings.OperationInvocationInput{
-    Interface: iface,
-    Operation: "listItems",
-    Input:     map[string]any{"limit": 10},
-})
+// Invoke. One cardinality-agnostic handle serves every operation; a unary call
+// writes one input and reads one output. Options are rarely needed — the common
+// call passes none.
+call := openbindings.Invoke(ctx, opInv, iface,
+    openbindings.NewOperationSignature[any, any]("listItems"))
+if err := call.Write(ctx, map[string]any{"limit": 10}); err != nil {
+    log.Fatal(err)
+}
+out, err := openbindings.Single(ctx, call.Outputs())
 if err != nil {
     log.Fatal(err)
 }
-for ev := range ch {
-    if ev.Error != nil {
-        log.Fatal(ev.Error.Message)
-    }
-    fmt.Println(ev.Output)
-}
+fmt.Println(out)
 ```
 
-For typed methods per operation, run `ob codegen <obi> --lang go` to produce a `<Name>Invoker` struct that wraps an `OperationInvoker` and provides one method per operation.
+For compile-time-typed operations, run `ob codegen <obi> --lang go` to generate an `OperationSignatures` namespace — one typed `OperationSignature[In, Out]` per operation — that you pass to this same `Invoke` for fully-typed input and output.
 
 ### Check compatibility
 
@@ -145,10 +144,8 @@ bidirectional bindings — cardinality is a property of the selected binding,
 never of the call signature:
 
 ```go
-call := opInv.Invoke(ctx, &openbindings.OperationInvocationArgs{
-    Interface: iface,
-    Operation: "listItems",
-})
+sig := openbindings.NewOperationSignature[any, any]("listItems")
+call := openbindings.Invoke(ctx, opInv, iface, sig)
 if err := call.Write(ctx, input); err != nil { /* handle */ } // unary: binding closes input after one read
 out := call.Outputs()
 for {
@@ -163,7 +160,7 @@ For an operation you are confident yields exactly one output, the one blessed
 terminal is `openbindings.Single`:
 
 ```go
-call := opInv.Invoke(ctx, &openbindings.OperationInvocationArgs{Interface: iface, Operation: "getItem"})
+call := openbindings.Invoke(ctx, opInv, iface, openbindings.NewOperationSignature[any, any]("getItem"))
 _ = call.Write(ctx, map[string]any{"id": "item_1"})
 item, err := openbindings.Single(ctx, call.Outputs())
 ```

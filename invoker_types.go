@@ -94,19 +94,6 @@ type BindingInvocationArgs struct {
 	InputSchema JSONSchema `json:"-"`
 }
 
-// OperationInvocationArgs are the arguments for invoking an OBI operation.
-// The invoker resolves the operation name (OBI-T-12), selects a binding
-// (OBI-T-09), and returns an Invocation handle; input messages flow through
-// the handle.
-type OperationInvocationArgs struct {
-	Interface *Interface     `json:"interface"`
-	Operation string         `json:"operation"`
-	Context   map[string]any `json:"context,omitempty"`
-	// BindingKey, when set, bypasses the binding selector and uses this
-	// binding key directly.
-	BindingKey string `json:"bindingKey,omitempty"`
-}
-
 // CreateSource describes a binding source for interface creation.
 type CreateSource struct {
 	Format         string `json:"format"`
