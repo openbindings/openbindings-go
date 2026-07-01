@@ -150,6 +150,115 @@ func (e *OperationInvoker) PrepareBinding(ctx context.Context, args *BindingInvo
 	return e.invoker.prepareBinding(ctx, args)
 }
 
+// resolveBinding is the shared operation-layer resolution behind Invoke and
+// PrepareOperation: it resolves operation against obi's flat key+alias namespace
+// (OBI-T-12), selects a binding (OBI-T-09) or uses the caller-pinned bindingKey,
+// and looks up its source. A wiring failure returns a typed *InvocationError so
+// each caller can surface it its own way (an errored handle for Invoke, a
+// returned error for PrepareOperation).
+func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindingKey string) (
+	op *Operation, bindingKey string, binding *BindingEntry, source *Source, ierr *InvocationError,
+) {
+	if obi == nil {
+		return nil, "", nil, nil, &InvocationError{Code: ErrCodeValidationFailed, Message: ErrNilInterface.Error()}
+	}
+
+	// OBI-T-12: resolve against the flat key+aliases namespace. Bindings are
+	// selected by the resolved canonical key, not the name the caller used.
+	opKey, opVal, ok := ResolveOperation(obi, operation)
+	if !ok {
+		return nil, "", nil, nil, &InvocationError{
+			Code: ErrCodeOperationNotFound,
+			Message: fmt.Sprintf("%v: %s; searched operation identifiers (keys and aliases): [%s]",
+				ErrOperationNotFound, operation, strings.Join(AllOperationIdentifiers(obi), ", ")),
+		}
+	}
+	op = &opVal
+
+	// A pinned bindingKey narrows selection to one binding OF the resolved
+	// operation; it never replaces the operation. Addressing a binding *without*
+	// an operation (the contract's binding-alone form, which derives the
+	// operation) is a wire/dynamic concern — a caller with only a key does
+	// obi.Bindings[key].Operation and passes it here — so the native API stays
+	// operation-keyed.
+	if pinnedBindingKey != "" {
+		b, ok := obi.Bindings[pinnedBindingKey]
+		if !ok {
+			return nil, "", nil, nil, &InvocationError{
+				Code:    ErrCodeBindingNotFound,
+				Message: fmt.Sprintf("binding %q is not defined on this interface", pinnedBindingKey),
+			}
+		}
+		// The explicit binding must belong to the resolved operation. Without
+		// this guard a mismatched op/binding pair would validate input/output
+		// against the resolved operation's contract while invoking a different
+		// operation's binding.
+		if b.Operation != opKey {
+			return nil, "", nil, nil, &InvocationError{
+				Code: ErrCodeBindingNotFound,
+				Message: fmt.Sprintf("binding %q targets operation %q, not the resolved operation %q",
+					pinnedBindingKey, b.Operation, opKey),
+			}
+		}
+		bindingKey = pinnedBindingKey
+		binding = &b
+	} else {
+		selector := e.BindingSelector
+		if selector == nil {
+			selector = func(iface *Interface, opKey string) (string, *BindingEntry, error) {
+				return selectBinding(iface, opKey, e.availableFormats())
+			}
+		}
+		var err error
+		bindingKey, binding, err = selector(obi, opKey)
+		if err != nil {
+			return nil, "", nil, nil, &InvocationError{Code: ErrCodeBindingNotFound, Message: err.Error()}
+		}
+	}
+
+	src, ok := obi.Sources[binding.Source]
+	if !ok {
+		return nil, "", nil, nil, &InvocationError{
+			Code:    ErrCodeUnknownSource,
+			Message: fmt.Sprintf("%v: binding %q references %q", ErrUnknownSource, bindingKey, binding.Source),
+		}
+	}
+	return op, bindingKey, binding, &src, nil
+}
+
+// PrepareOperation is the operation-layer side-effect-free preflight (the
+// operation-invoker role prepareOperation), the by-reference counterpart to
+// PrepareBinding. It resolves operation against obi to a concrete binding
+// (OBI-T-12 + OBI-T-09 selection, or a WithBindingKey-pinned binding) and
+// reports that binding's context requirements without invoking or causing any
+// side effect. A nil result means requirements could not be determined without
+// invoking (the always-satisfiable answer); WithContext narrows the result to
+// what that context leaves unsatisfied. It composes ResolveOperation, binding
+// selection, and PrepareBinding so callers preflight by operation without
+// resolving a binding themselves.
+func (e *OperationInvoker) PrepareOperation(ctx context.Context, obi *Interface, operation string, opts ...InvokeOption) (*ContextRequiredDetails, error) {
+	var cfg invokeConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	op, _, binding, source, ierr := e.resolveBinding(obi, operation, cfg.bindingKey)
+	if ierr != nil {
+		return nil, ierr
+	}
+	return e.PrepareBinding(ctx, &BindingInvocationArgs{
+		Source: InvocationSource{
+			Format:   source.Format,
+			Location: source.Location,
+			Content:  source.Content,
+		},
+		Ref:         binding.Ref,
+		Binding:     binding,
+		Context:     cfg.context,
+		Interface:   obi,
+		InputSchema: op.Input,
+	})
+}
+
 // run drives the binding-layer invocation(s) behind one caller-facing
 // handle: an input pump forwarding (transformed) caller inputs, an output
 // loop forwarding (transformed, T-08-validated) binding outputs, and the

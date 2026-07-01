@@ -3,7 +3,6 @@ package openbindings
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 // OperationSignature is the typed identity of an operation: its key, plus its
@@ -98,77 +97,16 @@ func Invoke[I, O any](
 		opt(&cfg)
 	}
 
-	// Wiring failures resolve to an already-errored typed handle so the caller
-	// drives one uniform shape whether setup or the binding failed. OBI-T-12
-	// (operation resolution) and OBI-T-09 (binding selection) happen here; the
-	// handle is inert until driven, and no I/O runs until then.
+	// Wiring failures (OBI-T-12 resolution, OBI-T-09 selection, unknown source)
+	// resolve to an already-errored typed handle so the caller drives one uniform
+	// shape whether setup or the binding failed; the handle is inert until driven.
 	fail := func(e *InvocationError) *TypedInvocation[I, O] {
 		return NewTypedInvocation[I, O](NewErroredInvocation[any, any](e))
 	}
 
-	if obi == nil {
-		return fail(&InvocationError{
-			Code: ErrCodeValidationFailed, Message: ErrNilInterface.Error(),
-		})
-	}
-
-	// OBI-T-12: resolve against the flat key+aliases namespace. Bindings are
-	// selected by the resolved canonical key, not the name the caller used.
-	opKey, opVal, ok := ResolveOperation(obi, sig.key)
-	op := &opVal
-	if !ok {
-		return fail(&InvocationError{
-			Code: ErrCodeOperationNotFound,
-			Message: fmt.Sprintf("%v: %s; searched operation identifiers (keys and aliases): [%s]",
-				ErrOperationNotFound, sig.key, strings.Join(AllOperationIdentifiers(obi), ", ")),
-		})
-	}
-
-	var bindingKey string
-	var binding *BindingEntry
-	if cfg.bindingKey != "" {
-		b, ok := obi.Bindings[cfg.bindingKey]
-		if !ok {
-			return fail(&InvocationError{
-				Code:    ErrCodeBindingNotFound,
-				Message: fmt.Sprintf("binding %q is not defined on this interface", cfg.bindingKey),
-			})
-		}
-		// The explicit binding must belong to the resolved operation. Without
-		// this guard a mismatched op/binding pair would validate input/output
-		// against the resolved operation's contract while invoking a different
-		// operation's binding.
-		if b.Operation != opKey {
-			return fail(&InvocationError{
-				Code: ErrCodeBindingNotFound,
-				Message: fmt.Sprintf("binding %q targets operation %q, not the resolved operation %q",
-					cfg.bindingKey, b.Operation, opKey),
-			})
-		}
-		bindingKey = cfg.bindingKey
-		binding = &b
-	} else {
-		selector := invoker.BindingSelector
-		if selector == nil {
-			selector = func(iface *Interface, opKey string) (string, *BindingEntry, error) {
-				return selectBinding(iface, opKey, invoker.availableFormats())
-			}
-		}
-		var err error
-		bindingKey, binding, err = selector(obi, opKey)
-		if err != nil {
-			return fail(&InvocationError{
-				Code: ErrCodeBindingNotFound, Message: err.Error(),
-			})
-		}
-	}
-
-	source, ok := obi.Sources[binding.Source]
-	if !ok {
-		return fail(&InvocationError{
-			Code:    ErrCodeUnknownSource,
-			Message: fmt.Sprintf("%v: binding %q references %q", ErrUnknownSource, bindingKey, binding.Source),
-		})
+	op, bindingKey, binding, source, ierr := invoker.resolveBinding(obi, sig.key, cfg.bindingKey)
+	if ierr != nil {
+		return fail(ierr)
 	}
 
 	caller := NewInvocationImpl[any, any](ctx)
@@ -185,7 +123,7 @@ func Invoke[I, O any](
 				})
 			}
 		}()
-		invoker.run(ctx, caller, obi, op, binding, bindingKey, &source, cfg.context)
+		invoker.run(ctx, caller, obi, op, binding, bindingKey, source, cfg.context)
 	}()
 
 	return NewTypedInvocation[I, O](caller)

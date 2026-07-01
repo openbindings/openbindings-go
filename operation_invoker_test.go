@@ -754,6 +754,73 @@ func TestOpPreflightWithoutResolverSurfaces(t *testing.T) {
 // Metadata pass-through
 // ---------------------------------------------------------------------------
 
+func TestPrepareOperation(t *testing.T) {
+	// Reports the resolved binding's requirements without invoking (no attempt).
+	t.Run("reports requirements without invoking", func(t *testing.T) {
+		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		op := newOpInvoker(mock, nil)
+		details, err := op.PrepareOperation(bg(), opTestInterface(), "getUser")
+		if err != nil {
+			t.Fatalf("PrepareOperation: %v", err)
+		}
+		if details == nil || details.Target != "api.example.com" {
+			t.Fatalf("expected bearer requirement, got %+v", details)
+		}
+		if attempts, prepares, _, _ := mock.snapshot(); attempts != 0 || prepares != 1 {
+			t.Fatalf("expected 1 preflight and 0 invocations, got prepares=%d attempts=%d", prepares, attempts)
+		}
+	})
+
+	// Supplied context narrows the result to what remains unsatisfied.
+	t.Run("WithContext narrows to satisfied", func(t *testing.T) {
+		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		op := newOpInvoker(mock, nil)
+		details, err := op.PrepareOperation(bg(), opTestInterface(), "getUser",
+			WithContext(map[string]any{"bearerToken": "tok"}))
+		if err != nil {
+			t.Fatalf("PrepareOperation: %v", err)
+		}
+		if details != nil {
+			t.Fatalf("bearer supplied; expected no remaining requirements, got %+v", details)
+		}
+	})
+
+	// A binding whose format exposes no static preparer reports nil (the
+	// always-satisfiable answer), same as PrepareBinding.
+	t.Run("no preparer yields nil", func(t *testing.T) {
+		op := newOpInvoker(&mockBindingInvoker{}, nil)
+		details, err := op.PrepareOperation(bg(), opTestInterface(), "getUser")
+		if err != nil || details != nil {
+			t.Fatalf("expected (nil, nil), got (%+v, %v)", details, err)
+		}
+	})
+
+	// Shares Invoke's resolution: alias-aware (OBI-T-12) + WithBindingKey pinning.
+	t.Run("alias and pinned binding", func(t *testing.T) {
+		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		op := newOpInvoker(mock, nil)
+		details, err := op.PrepareOperation(bg(), opTestInterface(), "fetchUser", // alias of getUser
+			WithBindingKey("getUser.main"))
+		if err != nil {
+			t.Fatalf("PrepareOperation(alias, pinned): %v", err)
+		}
+		if details == nil {
+			t.Fatal("expected requirements for the pinned binding")
+		}
+	})
+
+	// Wiring failures return an error, never a panic.
+	t.Run("wiring failures return errors", func(t *testing.T) {
+		op := newOpInvoker(&mockBindingInvoker{}, nil)
+		if _, err := op.PrepareOperation(bg(), opTestInterface(), "nope"); err == nil {
+			t.Fatal("expected error for unknown operation")
+		}
+		if _, err := op.PrepareOperation(bg(), nil, "getUser"); err == nil {
+			t.Fatal("expected error for nil interface")
+		}
+	})
+}
+
 func TestOpMetadataPassThrough(t *testing.T) {
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("ping"))
