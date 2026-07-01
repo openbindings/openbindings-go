@@ -11,7 +11,7 @@ import (
 
 // InspectSource returns all bindable targets (space-separated command paths)
 // from a usage spec.
-func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	spec, err := loadSpec(ctx, source.Location, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load usage spec: %w", err)
@@ -33,8 +33,8 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		}
 	}
 
-	// Subcommands. Suggest the same operation key CreateInterface assigns
-	// (create_interface.go: the dotted command path, or an explicit opKey prop).
+	// Subcommands. Suggest the same operation key SynthesizeInterface assigns
+	// (synthesize_interface.go: the dotted command path, or an explicit opKey prop).
 	walkWithGlobals(spec, func(path []string, cmd Command, _ []Flag) {
 		if len(path) == 0 {
 			return

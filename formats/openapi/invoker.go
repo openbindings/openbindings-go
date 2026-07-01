@@ -210,26 +210,26 @@ func (e *Invoker) prepareDoc(location string, content any) *openapi3.T {
 	return e.docCache[location]
 }
 
-// Creator handles interface creation from OpenAPI documents.
-type Creator struct{}
+// Synthesizer handles interface creation from OpenAPI documents.
+type Synthesizer struct{}
 
 var (
-	_ openbindings.InterfaceCreator = (*Creator)(nil)
-	_ openbindings.SourceInspector  = (*Creator)(nil)
+	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+	_ openbindings.SourceInspector      = (*Synthesizer)(nil)
 )
 
-// NewCreator creates a new OpenAPI interface creator.
-func NewCreator() *Creator {
-	return &Creator{}
+// NewSynthesizer creates a new OpenAPI interface synthesizer.
+func NewSynthesizer() *Synthesizer {
+	return &Synthesizer{}
 }
 
-// Formats returns the format tokens this creator supports.
-func (c *Creator) Formats() []openbindings.FormatInfo {
+// Formats returns the format tokens this synthesizer supports.
+func (c *Synthesizer) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "OpenAPI 3.x HTTP APIs"}}
 }
 
-// CreateInterface converts an OpenAPI document to an OpenBindings interface.
-func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateInput) (*openbindings.Interface, error) {
+// SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}

@@ -14,7 +14,7 @@ import "context"
 // Wiring failures knowable synchronously (e.g. an unloadable ref) surface as
 // an already-errored handle, never as a panic.
 //
-// A concrete invoker may also implement InterfaceCreator, SourceInspector,
+// A concrete invoker may also implement InterfaceSynthesizer, SourceInspector,
 // or BindingPreparer; check via type assertion.
 type BindingInvoker interface {
 	Formats() []FormatInfo
@@ -32,11 +32,11 @@ type BindingPreparer interface {
 	PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error)
 }
 
-// InterfaceCreator creates OpenBindings interfaces from format-specific sources.
+// InterfaceSynthesizer creates OpenBindings interfaces from format-specific sources.
 // Independent of BindingInvoker — an implementation may provide one, the other, or both.
-type InterfaceCreator interface {
+type InterfaceSynthesizer interface {
 	Formats() []FormatInfo
-	CreateInterface(ctx context.Context, in *CreateInput) (*Interface, error)
+	SynthesizeInterface(ctx context.Context, in *SynthesizeInput) (*Interface, error)
 }
 
 // SourceInspector inspects format-specific sources and returns bindable

@@ -256,12 +256,12 @@ func codeOf(t *testing.T, err error) string {
 
 // --- Integration Tests ---
 
-func TestIntegration_CreateInterface(t *testing.T) {
+func TestIntegration_SynthesizeInterface(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
-	creator := NewCreator()
-	iface, err := creator.CreateInterface(context.Background(), &openbindings.CreateInput{
-		Sources: []openbindings.CreateSource{{
+	synthesizer := NewSynthesizer()
+	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
 			Format:   FormatToken,
 			Location: ts.URL,
 		}},

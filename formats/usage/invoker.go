@@ -60,21 +60,21 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 	return inv
 }
 
-// Creator handles interface creation from usage specs.
-type Creator struct{}
+// Synthesizer handles interface creation from usage specs.
+type Synthesizer struct{}
 
-// NewCreator creates a new usage interface creator.
-func NewCreator() *Creator {
-	return &Creator{}
+// NewSynthesizer creates a new usage interface synthesizer.
+func NewSynthesizer() *Synthesizer {
+	return &Synthesizer{}
 }
 
-// Formats returns the source formats supported by the usage creator.
-func (c *Creator) Formats() []openbindings.FormatInfo {
+// Formats returns the source formats supported by the usage synthesizer.
+func (c *Synthesizer) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "CLI tools via usage-spec KDL"}}
 }
 
-// CreateInterface converts a usage spec to an OpenBindings interface.
-func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateInput) (*openbindings.Interface, error) {
+// SynthesizeInterface converts a usage spec to an OpenBindings interface.
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}

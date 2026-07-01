@@ -13,8 +13,8 @@ import (
 func TestInspectSource_BasicRefs(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Location: ts.URL,
 	})
 	if err != nil {
@@ -34,8 +34,8 @@ func TestInspectSource_BasicRefs(t *testing.T) {
 func TestInspectSource_RefFormat(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Location: ts.URL,
 	})
 	if err != nil {
@@ -59,13 +59,13 @@ func TestInspectSource_RefFormat(t *testing.T) {
 	}
 }
 
-func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
+func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 	ctx := context.Background()
 
-	creator := NewCreator()
-	iface, err := creator.CreateInterface(ctx, &openbindings.CreateInput{
-		Sources: []openbindings.CreateSource{{
+	synthesizer := NewSynthesizer()
+	iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
 			Format:   FormatToken,
 			Location: ts.URL,
 		}},
@@ -79,7 +79,7 @@ func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
 		createRefs[b.Ref] = true
 	}
 
-	result, err := creator.InspectSource(ctx, &openbindings.Source{
+	result, err := synthesizer.InspectSource(ctx, &openbindings.Source{
 		Location: ts.URL,
 	})
 	if err != nil {
@@ -88,19 +88,19 @@ func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
 
 	for _, ref := range result.Targets {
 		if !createRefs[ref.Ref] {
-			t.Errorf("InspectSource ref %q not in CreateInterface bindings", ref.Ref)
+			t.Errorf("InspectSource ref %q not in SynthesizeInterface bindings", ref.Ref)
 		}
 	}
 	if len(result.Targets) != len(createRefs) {
-		t.Errorf("ref count mismatch: InspectSource=%d, CreateInterface=%d", len(result.Targets), len(createRefs))
+		t.Errorf("ref count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createRefs))
 	}
 }
 
 func TestInspectSource_Descriptions(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Location: ts.URL,
 	})
 	if err != nil {
@@ -126,8 +126,8 @@ func TestInspectSource_Descriptions(t *testing.T) {
 }
 
 func TestInspectSource_EmptyLocation(t *testing.T) {
-	creator := NewCreator()
-	_, err := creator.InspectSource(context.Background(), &openbindings.Source{})
+	synthesizer := NewSynthesizer()
+	_, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{})
 	if err == nil {
 		t.Error("expected error for empty source location")
 	}

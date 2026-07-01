@@ -323,10 +323,10 @@ func setupServer() (*httptest.Server, string) {
 // synthesizeOBI creates an OBI from the OpenAPI spec served at specURL.
 func synthesizeOBI(t *testing.T, specURL string) *openbindings.Interface {
 	t.Helper()
-	creator := NewCreator()
+	synthesizer := NewSynthesizer()
 	ctx := context.Background()
-	iface, err := creator.CreateInterface(ctx, &openbindings.CreateInput{
-		Sources: []openbindings.CreateSource{
+	iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{
 			{Format: FormatToken, Location: specURL},
 		},
 	})

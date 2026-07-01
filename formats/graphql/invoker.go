@@ -243,19 +243,19 @@ func toMetadata(h http.Header) openbindings.Metadata {
 	return md
 }
 
-// Creator handles interface creation from GraphQL endpoints.
-type Creator struct{}
+// Synthesizer handles interface creation from GraphQL endpoints.
+type Synthesizer struct{}
 
-// NewCreator creates a new GraphQL interface creator.
-func NewCreator() *Creator { return &Creator{} }
+// NewSynthesizer creates a new GraphQL interface synthesizer.
+func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
 
-// Formats returns the source formats supported by the GraphQL creator.
-func (c *Creator) Formats() []openbindings.FormatInfo {
+// Formats returns the source formats supported by the GraphQL synthesizer.
+func (c *Synthesizer) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "GraphQL APIs"}}
 }
 
-// CreateInterface introspects a GraphQL endpoint and converts to an OpenBindings interface.
-func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateInput) (*openbindings.Interface, error) {
+// SynthesizeInterface introspects a GraphQL endpoint and converts to an OpenBindings interface.
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}

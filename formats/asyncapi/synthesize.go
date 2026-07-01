@@ -19,7 +19,7 @@ const FormatToken = "asyncapi@^3.0.0"
 // DefaultSourceName is the key used in the interface's Sources map for the AsyncAPI source.
 const DefaultSourceName = "asyncapi"
 
-func createInterfaceWithDoc(_ context.Context, in *openbindings.CreateInput, doc *Document) (*openbindings.Interface, error) {
+func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeInput, doc *Document) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}

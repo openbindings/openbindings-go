@@ -276,8 +276,8 @@ func TestResolveRefs_NoComponents(t *testing.T) {
 	}
 }
 
-func TestResolveRefs_EndToEnd_CreateInterface(t *testing.T) {
-	// Verify that $ref resolution works end-to-end through createInterfaceWithDoc.
+func TestResolveRefs_EndToEnd_SynthesizeInterface(t *testing.T) {
+	// Verify that $ref resolution works end-to-end through synthesizeInterfaceWithDoc.
 	// The message in the operation uses a $ref to a component message,
 	// whose payload uses a $ref to a component schema.
 	doc := &Document{
@@ -324,10 +324,10 @@ func TestResolveRefs_EndToEnd_CreateInterface(t *testing.T) {
 	}
 
 	// resolveRefs is called by loadDocument, but since we're using
-	// createInterfaceWithDoc directly, call it manually.
+	// synthesizeInterfaceWithDoc directly, call it manually.
 	resolveRefs(doc)
 
-	iface := testCreateInterface(t, doc, "")
+	iface := testSynthesizeInterface(t, doc, "")
 
 	op, ok := iface.Operations["receiveEvent"]
 	if !ok {

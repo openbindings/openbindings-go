@@ -28,9 +28,9 @@ type Invoker struct {
 }
 
 var (
-	_ openbindings.BindingInvoker   = (*Invoker)(nil)
-	_ openbindings.InterfaceCreator = (*Creator)(nil)
-	_ openbindings.SourceInspector  = (*Creator)(nil)
+	_ openbindings.BindingInvoker       = (*Invoker)(nil)
+	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+	_ openbindings.SourceInspector      = (*Synthesizer)(nil)
 )
 
 // NewInvoker creates a new gRPC binding invoker.
@@ -109,7 +109,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// (e.g., a .proto definition), parse it directly — before dialing.
 	// Otherwise use server reflection. Note: isProtoFile is NOT checked here
 	// because Source.Location is the server address for invocation; proto
-	// file locations are only used by the Creator.
+	// file locations are only used by the Synthesizer.
 	var svcDesc protoreflect.ServiceDescriptor
 	if args.Source.Content != nil {
 		disc, parseErr := discoverFromProto(bctx, args.Source.Location, args.Source.Content)
@@ -189,22 +189,22 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 }
 
-// Creator handles interface creation from gRPC servers.
-type Creator struct{}
+// Synthesizer handles interface creation from gRPC servers.
+type Synthesizer struct{}
 
-// NewCreator creates a new gRPC interface creator.
-func NewCreator() *Creator { return &Creator{} }
+// NewSynthesizer creates a new gRPC interface synthesizer.
+func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
 
-// Formats returns the source formats supported by the gRPC creator.
-func (c *Creator) Formats() []openbindings.FormatInfo {
+// Formats returns the source formats supported by the gRPC synthesizer.
+func (c *Synthesizer) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "gRPC via server reflection or .proto files"}}
 }
 
-// CreateInterface discovers gRPC services and converts to an OpenBindings interface.
+// SynthesizeInterface discovers gRPC services and converts to an OpenBindings interface.
 // Supports two discovery modes:
 //   - Live server reflection (default): connects to the address and introspects via gRPC reflection
 //   - Proto file: parses a .proto file when the location ends in .proto or inline content is provided
-func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateInput) (*openbindings.Interface, error) {
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}

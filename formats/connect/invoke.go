@@ -63,7 +63,7 @@ func connectURL(baseURL, svcName, methodName string) string {
 
 // marshalRequestMessage marshals the request message to JSON bytes. With a
 // method descriptor it round-trips through protojson so field names match the
-// proto3 JSON canonical names (camelCase) the creator writes into OBI
+// proto3 JSON canonical names (camelCase) the synthesizer writes into OBI
 // schemas; without one it marshals the input directly. A nil input dispatches
 // an empty message.
 func marshalRequestMessage(input any, mi *methodInfo) ([]byte, *openbindings.InvocationError) {

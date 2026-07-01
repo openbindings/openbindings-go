@@ -10,7 +10,7 @@ import (
 
 // InspectSource returns all bindable targets (package.Service/Method) from a
 // gRPC source. Supports both proto file parsing and live server reflection.
-func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	var disc *discovery
 	var err error
 
@@ -36,7 +36,7 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
 	})
 
-	// Suggest the same operation key CreateInterface assigns (create.go: same
+	// Suggest the same operation key SynthesizeInterface assigns (create.go: same
 	// SanitizeKey + collision resolution against the service name), so an
 	// inspection previews exactly what create names.
 	usedKeys := map[string]string{}

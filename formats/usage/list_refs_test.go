@@ -14,8 +14,8 @@ cmd "greet" help="Say hello"
 cmd "farewell" help="Say goodbye"
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -39,8 +39,8 @@ cmd "config" {
 }
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -73,8 +73,8 @@ flag "-i --ignore-case" help="Ignore case"
 arg "<pattern>" help="Search pattern"
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -111,8 +111,8 @@ cmd "alpha" help="A"
 cmd "mike" help="M"
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -133,7 +133,7 @@ cmd "mike" help="M"
 	}
 }
 
-func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
+func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	content := `
 name "mycli"
 cmd "greet" help="Say hello"
@@ -151,8 +151,8 @@ cmd "farewell" help="Say goodbye"
 		createRefs[b.Ref] = true
 	}
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -161,11 +161,11 @@ cmd "farewell" help="Say goodbye"
 
 	for _, ref := range result.Targets {
 		if !createRefs[ref.Ref] {
-			t.Errorf("InspectSource ref %q not in CreateInterface bindings", ref.Ref)
+			t.Errorf("InspectSource ref %q not in SynthesizeInterface bindings", ref.Ref)
 		}
 	}
 	if len(result.Targets) != len(createRefs) {
-		t.Errorf("ref count mismatch: InspectSource=%d, CreateInterface=%d", len(result.Targets), len(createRefs))
+		t.Errorf("ref count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createRefs))
 	}
 }
 
@@ -178,8 +178,8 @@ cmd "config" subcommand_required=#true {
 }
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -211,8 +211,8 @@ cmd "config" subcommand_required=#true {
 func TestInspectSource_EmptySpec(t *testing.T) {
 	content := `name "mycli"`
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -225,8 +225,8 @@ func TestInspectSource_EmptySpec(t *testing.T) {
 }
 
 func TestInspectSource_NilContent(t *testing.T) {
-	creator := NewCreator()
-	_, err := creator.InspectSource(context.Background(), &openbindings.Source{})
+	synthesizer := NewSynthesizer()
+	_, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{})
 	if err == nil {
 		t.Error("expected error for empty source")
 	}

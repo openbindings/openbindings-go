@@ -67,7 +67,7 @@ func TestFetchInterface_WellKnownDiscovery(t *testing.T) {
 	}
 }
 
-func TestFetchInterface_ErrorWhenNoOBIAndNoCreators(t *testing.T) {
+func TestFetchInterface_ErrorWhenNoOBIAndNoSynthesizers(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -78,7 +78,7 @@ func TestFetchInterface_ErrorWhenNoOBIAndNoCreators(t *testing.T) {
 
 	_, err := FetchInterface(context.Background(), srv.URL)
 	if err == nil {
-		t.Error("expected error when no OBI is available and no creators are supplied")
+		t.Error("expected error when no OBI is available and no synthesizers are supplied")
 	}
 }
 
@@ -97,6 +97,6 @@ func TestFetchInterface_HTTPError(t *testing.T) {
 
 	_, err := FetchInterface(context.Background(), srv.URL)
 	if err == nil {
-		t.Error("expected error from 500 response with no creators to fall back to")
+		t.Error("expected error from 500 response with no synthesizers to fall back to")
 	}
 }

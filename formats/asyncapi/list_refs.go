@@ -9,7 +9,7 @@ import (
 )
 
 // InspectSource returns all bindable targets (operation IDs) from an AsyncAPI document.
-func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	doc, err := loadDocument(ctx, c.httpClient, source.Location, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load AsyncAPI document: %w", err)
@@ -23,7 +23,7 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 	}
 	sort.Strings(opIDs)
 
-	// Suggest the same operation key CreateInterface assigns (create.go: same
+	// Suggest the same operation key SynthesizeInterface assigns (create.go: same
 	// sorted iteration and SanitizeKey + UniqueKey de-duplication), so an
 	// inspection previews exactly what create names.
 	usedKeys := map[string]bool{}

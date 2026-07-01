@@ -711,9 +711,9 @@ func TestConvertToInterface_OneofMultipleGroupsFallsBackToProperties(t *testing.
 		},
 	}
 
-	var warnings []openbindings.CreatorWarning
+	var warnings []openbindings.SynthesizerWarning
 	disc := buildTestDiscovery(t, file)
-	iface, err := convertToInterface(disc, "localhost:50051", func(w openbindings.CreatorWarning) {
+	iface, err := convertToInterface(disc, "localhost:50051", func(w openbindings.SynthesizerWarning) {
 		warnings = append(warnings, w)
 	})
 	if err != nil {

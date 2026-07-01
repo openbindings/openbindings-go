@@ -296,21 +296,21 @@ func TestIntegrationInvokeWithSchemaQuery(t *testing.T) {
 	}
 }
 
-func TestIntegrationCreateInterface(t *testing.T) {
+func TestIntegrationSynthesizeInterface(t *testing.T) {
 	srv := newTestServer()
 	defer srv.Close()
 
-	creator := NewCreator()
+	synthesizer := NewSynthesizer()
 	ctx := context.Background()
 
-	iface, err := creator.CreateInterface(ctx, &openbindings.CreateInput{
-		Sources: []openbindings.CreateSource{{
+	iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
 			Format:   "graphql",
 			Location: srv.URL,
 		}},
 	})
 	if err != nil {
-		t.Fatalf("CreateInterface error: %v", err)
+		t.Fatalf("SynthesizeInterface error: %v", err)
 	}
 	if _, ok := iface.Operations["user"]; !ok {
 		t.Error("expected operation 'user'")
@@ -871,9 +871,9 @@ func TestIntegrationSubscription_ConnectionAckMismatch(t *testing.T) {
 	}
 }
 
-// TestIntegrationCreateInterface_RecursiveType verifies that selection-set
+// TestIntegrationSynthesizeInterface_RecursiveType verifies that selection-set
 // generation does not infinite-loop on a recursive type.
-func TestIntegrationCreateInterface_RecursiveType(t *testing.T) {
+func TestIntegrationSynthesizeInterface_RecursiveType(t *testing.T) {
 	recursiveSchema := introspectionSchema{
 		QueryType: &typeRef{Name: "Query"},
 		Types: []fullType{
@@ -905,29 +905,29 @@ func TestIntegrationCreateInterface_RecursiveType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	creator := NewCreator()
+	synthesizer := NewSynthesizer()
 	done := make(chan struct{})
 	var iface *openbindings.Interface
 	var createErr error
 
 	go func() {
 		defer close(done)
-		iface, createErr = creator.CreateInterface(context.Background(), &openbindings.CreateInput{
-			Sources: []openbindings.CreateSource{{Format: "graphql", Location: srv.URL}},
+		iface, createErr = synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+			Sources: []openbindings.SynthesizeSource{{Format: "graphql", Location: srv.URL}},
 		})
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("CreateInterface hung on recursive schema (cycle safety failure)")
+		t.Fatal("SynthesizeInterface hung on recursive schema (cycle safety failure)")
 	}
 
 	if createErr != nil {
-		t.Fatalf("CreateInterface: %v", createErr)
+		t.Fatalf("SynthesizeInterface: %v", createErr)
 	}
 	if iface == nil {
-		t.Fatal("CreateInterface returned nil interface")
+		t.Fatal("SynthesizeInterface returned nil interface")
 	}
 	op, ok := iface.Operations["node"]
 	if !ok {

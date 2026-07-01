@@ -12,7 +12,7 @@
 // Workers runtime is a JavaScript/WASM environment; Go programs (the
 // `ob` CLI, server-side tooling, codegen) live outside the runtime
 // and have no way to invoke a sibling Worker's RPC method. The Go
-// implementations of `Invoker` and `Creator` here exist solely to:
+// implementations of `Invoker` and `Synthesizer` here exist solely to:
 //
 //  1. Make the format token recognized by `ob`. Without this package,
 //     `ob create`, `ob sync`, and `ob diff` would reject any OBI that
@@ -27,10 +27,10 @@
 //  3. Allow hand-authored OBIs to validate. A workers-rpc OBI is
 //     usually authored by hand (the contract IS the TypeScript class
 //     on the target Worker, not a machine-readable spec file), so
-//     there's no source artifact for the creator to derive from.
+//     there's no source artifact for the synthesizer to derive from.
 //
 // `Invoker.InvokeBinding` returns an already-errored invocation handle
-// and `Creator.CreateInterface` returns an error, both with helpful
+// and `Synthesizer.SynthesizeInterface` returns an error, both with helpful
 // messages directing the caller to the TypeScript runtime if they
 // actually try to dispatch.
 package workersrpc
@@ -84,31 +84,31 @@ func (e *Invoker) InvokeBinding(_ context.Context, _ *openbindings.BindingInvoca
 	})
 }
 
-// Creator is the Go-side stub for creating an interface from a
+// Synthesizer is the Go-side stub for creating an interface from a
 // workers-rpc source. Workers RPC sources are hand-authored — the
 // contract is the TypeScript class on the target Worker, not a
 // machine-readable spec — so there's nothing to "create" from. This
 // stub returns a clear error directing users to write the OBI manually.
-type Creator struct{}
+type Synthesizer struct{}
 
-// NewCreator creates a new workers-rpc creator stub.
-func NewCreator() *Creator {
-	return &Creator{}
+// NewSynthesizer creates a new workers-rpc synthesizer stub.
+func NewSynthesizer() *Synthesizer {
+	return &Synthesizer{}
 }
 
-// Formats returns the format tokens this creator recognizes.
-func (c *Creator) Formats() []openbindings.FormatInfo {
+// Formats returns the format tokens this synthesizer recognizes.
+func (c *Synthesizer) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{
 		Token:       FormatToken,
 		Description: "Cloudflare Workers RPC bindings (hand-authored; no source synthesis)",
 	}}
 }
 
-// CreateInterface returns an error explaining that workers-rpc OBIs are
+// SynthesizeInterface returns an error explaining that workers-rpc OBIs are
 // hand-authored. There's no source artifact to derive operations from
 // because the contract is the WorkerEntrypoint class on the target
 // Worker — its method signatures live in TypeScript, not in a spec file.
-func (c *Creator) CreateInterface(_ context.Context, _ *openbindings.CreateInput) (*openbindings.Interface, error) {
+func (c *Synthesizer) SynthesizeInterface(_ context.Context, _ *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	return nil, fmt.Errorf(
 		"workers-rpc interfaces are hand-authored: declare operations " +
 			"and bindings directly in your OBI's `operations` and `bindings` " +

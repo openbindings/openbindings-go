@@ -51,8 +51,8 @@ func TestInvoker_InvokeBinding_AlwaysFails(t *testing.T) {
 	}
 }
 
-func TestCreator_Formats(t *testing.T) {
-	c := NewCreator()
+func TestSynthesizer_Formats(t *testing.T) {
+	c := NewSynthesizer()
 	formats := c.Formats()
 	if len(formats) != 1 {
 		t.Fatalf("expected exactly 1 format, got %d", len(formats))
@@ -62,12 +62,12 @@ func TestCreator_Formats(t *testing.T) {
 	}
 }
 
-func TestCreator_CreateInterface_AlwaysFails(t *testing.T) {
+func TestSynthesizer_SynthesizeInterface_AlwaysFails(t *testing.T) {
 	// Workers RPC OBIs are hand-authored — there's no source artifact to
-	// synthesize from. The creator stub must return a clear error.
-	c := NewCreator()
-	_, err := c.CreateInterface(context.Background(), &openbindings.CreateInput{
-		Sources: []openbindings.CreateSource{
+	// synthesize from. The synthesizer stub must return a clear error.
+	c := NewSynthesizer()
+	_, err := c.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{
 			{Format: FormatToken, Location: "workers-rpc://test"},
 		},
 	})

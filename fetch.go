@@ -14,7 +14,7 @@ import (
 type FetchedInterface struct {
 	Interface *Interface
 	// Synthesized is true when the OBI was synthesized from a non-OBI
-	// source (e.g. an OpenAPI document) via a creator.
+	// source (e.g. an OpenAPI document) via a synthesizer.
 	Synthesized bool
 }
 
@@ -22,8 +22,8 @@ type FetchedInterface struct {
 type FetchOption func(*fetchOptions)
 
 type fetchOptions struct {
-	client   *http.Client
-	creators []InterfaceCreator
+	client       *http.Client
+	synthesizers []InterfaceSynthesizer
 }
 
 // WithFetchHTTPClient sets a custom HTTP client for the fetch.
@@ -31,17 +31,17 @@ func WithFetchHTTPClient(c *http.Client) FetchOption {
 	return func(o *fetchOptions) { o.client = c }
 }
 
-// WithCreators provides creators for synthesizing OBIs from non-OBI
+// WithSynthesizers provides synthesizers for synthesizing OBIs from non-OBI
 // sources (OpenAPI, AsyncAPI, etc.). When the URL doesn't serve an
-// OBI directly and well-known discovery fails, each creator is tried
+// OBI directly and well-known discovery fails, each synthesizer is tried
 // in turn.
-func WithCreators(creators ...InterfaceCreator) FetchOption {
-	return func(o *fetchOptions) { o.creators = creators }
+func WithSynthesizers(synthesizers ...InterfaceSynthesizer) FetchOption {
+	return func(o *fetchOptions) { o.synthesizers = synthesizers }
 }
 
 // FetchInterface resolves an OBI from a URL. For HTTP URLs, it tries
 // a direct fetch first, then well-known discovery at
-// /.well-known/openbindings. If neither yields an OBI and creators are
+// /.well-known/openbindings. If neither yields an OBI and synthesizers are
 // supplied, it synthesizes from the URL's content (e.g. an OpenAPI doc).
 //
 // Returns an error if the OBI cannot be acquired.
@@ -71,15 +71,15 @@ func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*F
 		}
 	}
 
-	if len(o.creators) == 0 {
-		return nil, fmt.Errorf("no OBI available at %s and no creators supplied for synthesis", sanitizeURL(target))
+	if len(o.synthesizers) == 0 {
+		return nil, fmt.Errorf("no OBI available at %s and no synthesizers supplied for synthesis", sanitizeURL(target))
 	}
 
-	combined := CombineCreators(o.creators...)
+	combined := CombineSynthesizers(o.synthesizers...)
 	var lastErr error
 	for _, fi := range combined.Formats() {
-		iface, err := combined.CreateInterface(ctx, &CreateInput{
-			Sources: []CreateSource{{Format: fi.Token, Location: target}},
+		iface, err := combined.SynthesizeInterface(ctx, &SynthesizeInput{
+			Sources: []SynthesizeSource{{Format: fi.Token, Location: target}},
 		})
 		if err != nil {
 			lastErr = err
@@ -93,7 +93,7 @@ func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*F
 	if lastErr != nil {
 		return nil, lastErr
 	}
-	return nil, fmt.Errorf("no creator could synthesize an interface from %s", sanitizeURL(target))
+	return nil, fmt.Errorf("no synthesizer could synthesize an interface from %s", sanitizeURL(target))
 }
 
 // tryFetchOBI attempts to fetch and parse a URL as an OBI document.

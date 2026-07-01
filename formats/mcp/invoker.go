@@ -114,24 +114,24 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 	return inv
 }
 
-// Creator handles interface creation from MCP servers.
-type Creator struct {
+// Synthesizer handles interface creation from MCP servers.
+type Synthesizer struct {
 	clientVersion string
 }
 
-// CreatorOption configures a Creator.
-type CreatorOption func(*Creator)
+// SynthesizerOption configures a Synthesizer.
+type SynthesizerOption func(*Synthesizer)
 
-// WithCreatorClientVersion sets the client version reported to MCP servers.
-func WithCreatorClientVersion(v string) CreatorOption {
-	return func(c *Creator) {
+// WithSynthesizerClientVersion sets the client version reported to MCP servers.
+func WithSynthesizerClientVersion(v string) SynthesizerOption {
+	return func(c *Synthesizer) {
 		c.clientVersion = v
 	}
 }
 
-// NewCreator creates a new MCP interface creator.
-func NewCreator(opts ...CreatorOption) *Creator {
-	c := &Creator{
+// NewSynthesizer creates a new MCP interface synthesizer.
+func NewSynthesizer(opts ...SynthesizerOption) *Synthesizer {
+	c := &Synthesizer{
 		clientVersion: "0.0.0",
 	}
 	for _, opt := range opts {
@@ -140,13 +140,13 @@ func NewCreator(opts ...CreatorOption) *Creator {
 	return c
 }
 
-// Formats returns the source formats supported by the MCP creator.
-func (c *Creator) Formats() []openbindings.FormatInfo {
+// Formats returns the source formats supported by the MCP synthesizer.
+func (c *Synthesizer) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "Model Context Protocol"}}
 }
 
-// CreateInterface discovers an MCP server's capabilities and converts to an OpenBindings interface.
-func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateInput) (*openbindings.Interface, error) {
+// SynthesizeInterface discovers an MCP server's capabilities and converts to an OpenBindings interface.
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}

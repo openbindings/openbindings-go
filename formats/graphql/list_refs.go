@@ -11,7 +11,7 @@ import (
 
 // InspectSource introspects a GraphQL endpoint and returns all bindable
 // refs (Query/Mutation/Subscription fields).
-func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	endpoint := source.Location
 	if endpoint == "" {
 		return nil, fmt.Errorf("GraphQL source requires a location (endpoint URL)")
@@ -34,7 +34,7 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		{"Subscription", disc.schema.rootTypeName("Subscription")},
 	}
 
-	// Suggest the same operation key CreateInterface assigns (create.go: a
+	// Suggest the same operation key SynthesizeInterface assigns (create.go: a
 	// SanitizeKey'd field name with collision resolution against the root type),
 	// so an inspection previews exactly what create names.
 	usedKeys := map[string]string{}

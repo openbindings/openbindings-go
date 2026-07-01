@@ -21,8 +21,8 @@ service TestService {
 }
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {
@@ -51,8 +51,8 @@ service TestService {
 }
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {
@@ -75,7 +75,7 @@ service TestService {
 	}
 }
 
-func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
+func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	disc := buildTestDiscovery(t, simpleServiceFile("testpkg", "TestService",
 		unaryMethod("GetItem"),
 		unaryMethod("ListItems"),
@@ -104,8 +104,8 @@ service TestService {
 }
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {
@@ -114,11 +114,11 @@ service TestService {
 
 	for _, ref := range result.Targets {
 		if !createRefs[ref.Ref] {
-			t.Errorf("InspectSource ref %q not in CreateInterface bindings", ref.Ref)
+			t.Errorf("InspectSource ref %q not in SynthesizeInterface bindings", ref.Ref)
 		}
 	}
 	if len(result.Targets) != len(createRefs) {
-		t.Errorf("ref count mismatch: InspectSource=%d, CreateInterface=%d", len(result.Targets), len(createRefs))
+		t.Errorf("ref count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createRefs))
 	}
 }
 
@@ -136,8 +136,8 @@ service TestService {
 }
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {
@@ -165,8 +165,8 @@ service TestService {
 }
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {
@@ -182,8 +182,8 @@ service TestService {
 }
 
 func TestInspectSource_EmptySource(t *testing.T) {
-	creator := NewCreator()
-	_, err := creator.InspectSource(context.Background(), &openbindings.Source{})
+	synthesizer := NewSynthesizer()
+	_, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{})
 	if err == nil {
 		t.Error("expected error for empty source")
 	}
@@ -204,8 +204,8 @@ service TestService {
 }
 `
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: protoContent,
 	})
 	if err != nil {

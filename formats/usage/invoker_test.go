@@ -13,16 +13,16 @@ func TestFormats(t *testing.T) {
 		t.Errorf("Formats() = %v, want [{Token: %q}]", formats, FormatToken)
 	}
 
-	c := NewCreator()
+	c := NewSynthesizer()
 	formats = c.Formats()
 	if len(formats) != 1 || formats[0].Token != FormatToken {
-		t.Errorf("Creator.Formats() = %v, want [{Token: %q}]", formats, FormatToken)
+		t.Errorf("Synthesizer.Formats() = %v, want [{Token: %q}]", formats, FormatToken)
 	}
 }
 
-func TestCreator_NoSources(t *testing.T) {
-	c := NewCreator()
-	_, err := c.CreateInterface(nil, &openbindings.CreateInput{})
+func TestSynthesizer_NoSources(t *testing.T) {
+	c := NewSynthesizer()
+	_, err := c.SynthesizeInterface(nil, &openbindings.SynthesizeInput{})
 	if err != openbindings.ErrNoSources {
 		t.Errorf("err = %v, want ErrNoSources", err)
 	}

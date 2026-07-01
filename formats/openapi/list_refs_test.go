@@ -39,8 +39,8 @@ func TestInspectSource_BasicRefs(t *testing.T) {
   }
 }`
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -75,8 +75,8 @@ func TestInspectSource_JSONPointerFormat(t *testing.T) {
   }
 }`
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -118,8 +118,8 @@ func TestInspectSource_DescriptionFromSummary(t *testing.T) {
   }
 }`
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -143,11 +143,11 @@ func TestInspectSource_DescriptionFromSummary(t *testing.T) {
 	}
 }
 
-func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
+func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	doc := minimalDoc()
 	iface := convertDocToInterface(doc, "")
 
-	// Collect binding refs from CreateInterface.
+	// Collect binding refs from SynthesizeInterface.
 	createRefs := map[string]bool{}
 	for _, b := range iface.Bindings {
 		createRefs[b.Ref] = true
@@ -173,8 +173,8 @@ func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
   }
 }`
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -183,15 +183,15 @@ func TestInspectSource_RefsMatchCreateInterface(t *testing.T) {
 
 	for _, ref := range result.Targets {
 		if !createRefs[ref.Ref] {
-			t.Errorf("InspectSource ref %q not found in CreateInterface bindings", ref.Ref)
+			t.Errorf("InspectSource ref %q not found in SynthesizeInterface bindings", ref.Ref)
 		}
 	}
 	if len(result.Targets) != len(createRefs) {
-		t.Errorf("ref count mismatch: InspectSource=%d, CreateInterface=%d", len(result.Targets), len(createRefs))
+		t.Errorf("ref count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createRefs))
 	}
 }
 
-func TestInspectSource_KeysMatchCreateInterface(t *testing.T) {
+func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 	// Inspect and create from the same content, so each suggested
 	// operationKey must equal the key create actually assigns for that ref.
 	// /health has no operationId, exercising the path-derived key path.
@@ -215,13 +215,13 @@ func TestInspectSource_KeysMatchCreateInterface(t *testing.T) {
 	}
 	iface := convertDocToInterface(doc, "")
 
-	// Map each ref to the operation key CreateInterface assigned it.
+	// Map each ref to the operation key SynthesizeInterface assigned it.
 	createKeyByRef := map[string]string{}
 	for _, b := range iface.Bindings {
 		createKeyByRef[b.Ref] = b.Operation
 	}
 
-	result, err := NewCreator().InspectSource(context.Background(), &openbindings.Source{Content: content})
+	result, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{Content: content})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestInspectSource_KeysMatchCreateInterface(t *testing.T) {
 			continue
 		}
 		if want := createKeyByRef[target.Ref]; target.OperationKey != want {
-			t.Errorf("InspectSource operationKey for ref %q = %q, want %q (CreateInterface's key)", target.Ref, target.OperationKey, want)
+			t.Errorf("InspectSource operationKey for ref %q = %q, want %q (SynthesizeInterface's key)", target.Ref, target.OperationKey, want)
 		}
 	}
 }
@@ -243,8 +243,8 @@ func TestInspectSource_NoPaths(t *testing.T) {
   "info": {"title": "Empty", "version": "1.0.0"}
 }`
 
-	creator := NewCreator()
-	result, err := creator.InspectSource(context.Background(), &openbindings.Source{
+	synthesizer := NewSynthesizer()
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: content,
 	})
 	if err != nil {
@@ -260,8 +260,8 @@ func TestInspectSource_NoPaths(t *testing.T) {
 }
 
 func TestInspectSource_NilContent(t *testing.T) {
-	creator := NewCreator()
-	_, err := creator.InspectSource(context.Background(), &openbindings.Source{})
+	synthesizer := NewSynthesizer()
+	_, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{})
 	if err == nil {
 		t.Error("expected error for empty source")
 	}

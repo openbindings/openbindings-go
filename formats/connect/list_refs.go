@@ -10,7 +10,7 @@ import (
 
 // InspectSource returns all bindable targets (package.Service/Method) from a
 // Connect source by parsing the proto definition.
-func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	if source.Location == "" && source.Content == nil {
 		return nil, fmt.Errorf("Connect source requires a location or content")
 	}
@@ -26,7 +26,7 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
 	})
 
-	// Suggest the same operation key CreateInterface assigns (create.go: same
+	// Suggest the same operation key SynthesizeInterface assigns (create.go: same
 	// SanitizeKey + collision resolution against the service name), so an
 	// inspection previews exactly what create names.
 	usedKeys := map[string]string{}

@@ -10,7 +10,7 @@ import (
 
 // InspectSource connects to an MCP server and returns all bindable targets
 // (tools, resources, resource templates, and prompts).
-func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	if source.Location == "" {
 		return nil, fmt.Errorf("MCP source requires a location (server URL)")
 	}
@@ -22,7 +22,7 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 
 	var targets []openbindings.BindableTarget
 
-	// Suggest the same operation keys CreateInterface assigns (create.go: a
+	// Suggest the same operation keys SynthesizeInterface assigns (create.go: a
 	// SanitizeKey'd name with collision resolution against the entity kind,
 	// sharing one usedKeys map across tools/resources/templates/prompts), so an
 	// inspection previews exactly what create names.

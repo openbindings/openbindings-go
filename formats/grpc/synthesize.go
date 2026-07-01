@@ -8,7 +8,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func convertToInterface(disc *discovery, sourceLocation string, onWarning func(openbindings.CreatorWarning)) (openbindings.Interface, error) {
+func convertToInterface(disc *discovery, sourceLocation string, onWarning func(openbindings.SynthesizerWarning)) (openbindings.Interface, error) {
 	if disc == nil {
 		return openbindings.Interface{}, fmt.Errorf("nil discovery result")
 	}
@@ -135,11 +135,11 @@ func trimComment(s string) string {
 // walk methods stay focused on structural translation.
 type schemaWalker struct {
 	visited   map[string]bool
-	onWarning func(openbindings.CreatorWarning)
+	onWarning func(openbindings.SynthesizerWarning)
 	path      string
 }
 
-func newSchemaWalker(onWarning func(openbindings.CreatorWarning), path string) *schemaWalker {
+func newSchemaWalker(onWarning func(openbindings.SynthesizerWarning), path string) *schemaWalker {
 	return &schemaWalker{
 		visited:   make(map[string]bool),
 		onWarning: onWarning,
@@ -151,7 +151,7 @@ func (w *schemaWalker) warn(code, message string, details map[string]any) {
 	if w.onWarning == nil {
 		return
 	}
-	w.onWarning(openbindings.CreatorWarning{
+	w.onWarning(openbindings.SynthesizerWarning{
 		Code:    code,
 		Message: message,
 		Path:    w.path,

@@ -33,20 +33,20 @@ func CombineInvokers(invokers ...BindingInvoker) BindingInvoker {
 	return c
 }
 
-// CombineCreators returns a single InterfaceCreator that routes to the
-// appropriate inner creator based on the source format token.
-func CombineCreators(creators ...InterfaceCreator) InterfaceCreator {
-	c := &combinedCreator{}
-	for _, cr := range creators {
+// CombineSynthesizers returns a single InterfaceSynthesizer that routes to the
+// appropriate inner synthesizer based on the source format token.
+func CombineSynthesizers(synthesizers ...InterfaceSynthesizer) InterfaceSynthesizer {
+	c := &combinedSynthesizer{}
+	for _, cr := range synthesizers {
 		for _, fi := range cr.Formats() {
 			vr, err := formattoken.ParseRange(fi.Token)
 			if err != nil {
 				continue
 			}
-			c.entries = append(c.entries, combinedCreatorEntry{
-				vr:      vr,
-				creator: cr,
-				info:    fi,
+			c.entries = append(c.entries, combinedSynthesizerEntry{
+				vr:          vr,
+				synthesizer: cr,
+				info:        fi,
 			})
 			name := strings.ToLower(vr.Name)
 			c.byName = appendToMap(c.byName, name, len(c.entries)-1)
@@ -140,49 +140,49 @@ func (c *combinedInvoker) findInvoker(sourceFormat string) BindingInvoker {
 }
 
 // ---------------------------------------------------------------------------
-// combinedCreator
+// combinedSynthesizer
 // ---------------------------------------------------------------------------
 
-var _ SourceInspector = (*combinedCreator)(nil)
+var _ SourceInspector = (*combinedSynthesizer)(nil)
 
-type combinedCreatorEntry struct {
-	vr      formattoken.VersionRange
-	creator InterfaceCreator
-	info    FormatInfo
+type combinedSynthesizerEntry struct {
+	vr          formattoken.VersionRange
+	synthesizer InterfaceSynthesizer
+	info        FormatInfo
 }
 
-type combinedCreator struct {
-	entries []combinedCreatorEntry
+type combinedSynthesizer struct {
+	entries []combinedSynthesizerEntry
 	byName  map[string][]int // name -> indices into entries
 	formats []FormatInfo
 }
 
-func (c *combinedCreator) Formats() []FormatInfo {
+func (c *combinedSynthesizer) Formats() []FormatInfo {
 	cp := make([]FormatInfo, len(c.formats))
 	copy(cp, c.formats)
 	return cp
 }
 
-func (c *combinedCreator) CreateInterface(ctx context.Context, in *CreateInput) (*Interface, error) {
+func (c *combinedSynthesizer) SynthesizeInterface(ctx context.Context, in *SynthesizeInput) (*Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, ErrNoSources
 	}
-	cr := c.findCreator(in.Sources[0].Format)
+	cr := c.findSynthesizer(in.Sources[0].Format)
 	if cr == nil {
-		return nil, fmt.Errorf("%w: %s", ErrNoCreator, in.Sources[0].Format)
+		return nil, fmt.Errorf("%w: %s", ErrNoSynthesizer, in.Sources[0].Format)
 	}
-	return cr.CreateInterface(ctx, in)
+	return cr.SynthesizeInterface(ctx, in)
 }
 
 // InspectSource implements SourceInspector by routing to the first underlying
-// creator that matches the source format and implements SourceInspector.
-func (c *combinedCreator) InspectSource(ctx context.Context, source *Source) (*SourceInspection, error) {
+// synthesizer that matches the source format and implements SourceInspector.
+func (c *combinedSynthesizer) InspectSource(ctx context.Context, source *Source) (*SourceInspection, error) {
 	if source == nil {
 		return nil, ErrNoSources
 	}
-	cr := c.findCreator(source.Format)
+	cr := c.findSynthesizer(source.Format)
 	if cr == nil {
-		return nil, fmt.Errorf("%w: %s", ErrNoCreator, source.Format)
+		return nil, fmt.Errorf("%w: %s", ErrNoSynthesizer, source.Format)
 	}
 	inspector, ok := cr.(SourceInspector)
 	if !ok {
@@ -191,13 +191,13 @@ func (c *combinedCreator) InspectSource(ctx context.Context, source *Source) (*S
 	return inspector.InspectSource(ctx, source)
 }
 
-func (c *combinedCreator) findCreator(sourceFormat string) InterfaceCreator {
+func (c *combinedSynthesizer) findSynthesizer(sourceFormat string) InterfaceSynthesizer {
 	name := formatName(sourceFormat)
 	indices := c.byName[name]
 	for _, idx := range indices {
 		entry := &c.entries[idx]
 		if entry.info.Token == sourceFormat || formattoken.Matches(entry.vr, sourceFormat) {
-			return entry.creator
+			return entry.synthesizer
 		}
 	}
 	return nil

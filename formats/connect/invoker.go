@@ -175,20 +175,20 @@ func emptyRequestMessage(mi *methodInfo) bool {
 	return mi != nil && mi.method != nil && mi.method.Input().Fields().Len() == 0
 }
 
-// Creator handles interface creation from protobuf definitions for the Connect format.
-type Creator struct{}
+// Synthesizer handles interface creation from protobuf definitions for the Connect format.
+type Synthesizer struct{}
 
-// NewCreator creates a new Connect interface creator.
-func NewCreator() *Creator { return &Creator{} }
+// NewSynthesizer creates a new Connect interface synthesizer.
+func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
 
-// Formats returns the source formats supported by the Connect creator.
-func (c *Creator) Formats() []openbindings.FormatInfo {
+// Formats returns the source formats supported by the Connect synthesizer.
+func (c *Synthesizer) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "Connect (Buf) via HTTP"}}
 }
 
-// CreateInterface parses a .proto file or inline content and converts to an
+// SynthesizeInterface parses a .proto file or inline content and converts to an
 // OpenBindings interface with Connect bindings.
-func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateInput) (*openbindings.Interface, error) {
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}

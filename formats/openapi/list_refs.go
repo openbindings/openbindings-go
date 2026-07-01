@@ -11,7 +11,7 @@ import (
 
 // InspectSource returns all bindable targets (path+method combinations) from
 // an OpenAPI document. Each ref is a JSON Pointer into the paths object.
-func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	doc, err := loadDocument(source.Location, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
@@ -41,7 +41,7 @@ func (c *Creator) InspectSource(ctx context.Context, source *openbindings.Source
 				continue
 			}
 
-			// Suggest the same operation key CreateInterface would assign for
+			// Suggest the same operation key SynthesizeInterface would assign for
 			// this target. The iteration order and usedKeys de-duplication here
 			// match create's, so inspection previews exactly what create names.
 			opKey := deriveOperationKey(op, path, method, usedKeys)

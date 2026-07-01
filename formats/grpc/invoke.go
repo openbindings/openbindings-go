@@ -210,7 +210,7 @@ func buildRequest(method protoreflect.MethodDescriptor, input any) (proto.Messag
 
 func responseToJSON(resp proto.Message) (any, error) {
 	// Emit proto3 JSON canonical names (camelCase) so response field names
-	// match what the creator writes into OBI schemas via field.JSONName().
+	// match what the synthesizer writes into OBI schemas via field.JSONName().
 	// UseProtoNames: true would emit snake_case and desync from the OBI contract.
 	jsonBytes, err := protojson.Marshal(resp)
 	if err != nil {

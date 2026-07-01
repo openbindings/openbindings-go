@@ -151,30 +151,30 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.Binding
 	return requiredContext(doc, &asyncOp, serverURL, args.Context), nil
 }
 
-// Creator handles interface creation from AsyncAPI documents.
-type Creator struct {
+// Synthesizer handles interface creation from AsyncAPI documents.
+type Synthesizer struct {
 	httpClient *http.Client
 }
 
 var (
-	_ openbindings.InterfaceCreator = (*Creator)(nil)
-	_ openbindings.SourceInspector  = (*Creator)(nil)
+	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+	_ openbindings.SourceInspector      = (*Synthesizer)(nil)
 )
 
-// NewCreator creates a new AsyncAPI interface creator.
-func NewCreator() *Creator {
-	return &Creator{
+// NewSynthesizer creates a new AsyncAPI interface synthesizer.
+func NewSynthesizer() *Synthesizer {
+	return &Synthesizer{
 		httpClient: newDefaultHTTPClient(),
 	}
 }
 
-// Formats returns the source formats supported by the AsyncAPI creator.
-func (c *Creator) Formats() []openbindings.FormatInfo {
+// Formats returns the source formats supported by the AsyncAPI synthesizer.
+func (c *Synthesizer) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{{Token: FormatToken, Description: "AsyncAPI 3.x event-driven APIs"}}
 }
 
-// CreateInterface converts an AsyncAPI document to an OpenBindings interface.
-func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateInput) (*openbindings.Interface, error) {
+// SynthesizeInterface converts an AsyncAPI document to an OpenBindings interface.
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}
@@ -183,5 +183,5 @@ func (c *Creator) CreateInterface(ctx context.Context, in *openbindings.CreateIn
 	if err != nil {
 		return nil, err
 	}
-	return createInterfaceWithDoc(ctx, in, doc)
+	return synthesizeInterfaceWithDoc(ctx, in, doc)
 }

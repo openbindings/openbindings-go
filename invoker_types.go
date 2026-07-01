@@ -94,8 +94,8 @@ type BindingInvocationArgs struct {
 	InputSchema JSONSchema `json:"-"`
 }
 
-// CreateSource describes a binding source for interface creation.
-type CreateSource struct {
+// SynthesizeSource describes a binding source for interface creation.
+type SynthesizeSource struct {
 	Format         string `json:"format"`
 	Name           string `json:"name,omitempty"`
 	Location       string `json:"location,omitempty"`
@@ -105,27 +105,27 @@ type CreateSource struct {
 	Description    string `json:"description,omitempty"`
 }
 
-// CreateInput is the input for creating an OpenBindings interface from format-specific sources.
-type CreateInput struct {
-	OpenBindingsVersion string         `json:"openbindingsVersion,omitempty"`
-	Sources             []CreateSource `json:"sources,omitempty"`
-	Name                string         `json:"name,omitempty"`
-	Version             string         `json:"version,omitempty"`
-	Description         string         `json:"description,omitempty"`
+// SynthesizeInput is the input for creating an OpenBindings interface from format-specific sources.
+type SynthesizeInput struct {
+	OpenBindingsVersion string             `json:"openbindingsVersion,omitempty"`
+	Sources             []SynthesizeSource `json:"sources,omitempty"`
+	Name                string             `json:"name,omitempty"`
+	Version             string             `json:"version,omitempty"`
+	Description         string             `json:"description,omitempty"`
 
-	// OnWarning, when set, is invoked by creators that encounter non-fatal
+	// OnWarning, when set, is invoked by synthesizers that encounter non-fatal
 	// limitations during interface construction (e.g., a source-side feature
-	// the schema profile cannot fully express). The creator still produces
+	// the schema profile cannot fully express). The synthesizer still produces
 	// a valid Interface; the warning surfaces what was lost or approximated.
 	// nil is acceptable and means warnings are dropped silently.
-	OnWarning func(CreatorWarning) `json:"-"`
+	OnWarning func(SynthesizerWarning) `json:"-"`
 }
 
-// CreatorWarning describes a non-fatal limitation encountered while building
+// SynthesizerWarning describes a non-fatal limitation encountered while building
 // an Interface. Warnings do not block creation; the returned Interface is
 // still valid and usable. Consumers may surface warnings in tooling output
 // (CLI, registry publish checks, CI) to inform users about lossy conversions.
-type CreatorWarning struct {
+type SynthesizerWarning struct {
 	// Code is a stable machine-readable identifier for programmatic handling.
 	// Format-specific codes should be namespaced with the format token as a
 	// prefix (e.g., "grpc.multi_group_oneof").

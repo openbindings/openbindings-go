@@ -23,8 +23,8 @@ var (
 	// ErrNoInvoker is returned when no invoker matches the requested format.
 	ErrNoInvoker = errors.New("openbindings: no invoker for format")
 
-	// ErrNoCreator is returned when no creator matches the requested format.
-	ErrNoCreator = errors.New("openbindings: no creator for format")
+	// ErrNoSynthesizer is returned when no synthesizer matches the requested format.
+	ErrNoSynthesizer = errors.New("openbindings: no synthesizer for format")
 
 	// ErrOperationNotFound is returned when the requested operation does not exist in the OBI.
 	ErrOperationNotFound = errors.New("openbindings: operation not found")

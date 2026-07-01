@@ -182,7 +182,7 @@ func TestIntegration_EchoCommand(t *testing.T) {
 	}
 }
 
-func TestIntegration_CreateInterface(t *testing.T) {
+func TestIntegration_SynthesizeInterface(t *testing.T) {
 	spec := `
 name "mycli"
 version "1.0.0"
@@ -205,9 +205,9 @@ cmd "config" subcommand_required=#true {
     }
 }
 `
-	creator := NewCreator()
-	iface, err := creator.CreateInterface(context.Background(), &openbindings.CreateInput{
-		Sources: []openbindings.CreateSource{{
+	synthesizer := NewSynthesizer()
+	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
 			Format:  FormatToken,
 			Content: spec,
 		}},

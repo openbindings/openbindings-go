@@ -268,12 +268,12 @@ func bufconnArgs(ref string, bindCtx map[string]any) *openbindings.BindingInvoca
 
 // --- Integration Tests ---
 
-// TestIntegration_CreateInterface_FromReflection exercises the live-server
+// TestIntegration_SynthesizeInterface_FromReflection exercises the live-server
 // reflection path by manually building a discovery from a reflection client.
 // It covers the internal convertToInterface code path against a real reflection
-// stream. The public Creator.CreateInterface API is exercised separately by
-// TestIntegration_CreateInterface_PublicAPI below.
-func TestIntegration_CreateInterface_FromReflection(t *testing.T) {
+// stream. The public Synthesizer.SynthesizeInterface API is exercised separately by
+// TestIntegration_SynthesizeInterface_PublicAPI below.
+func TestIntegration_SynthesizeInterface_FromReflection(t *testing.T) {
 	dialer, _ := setupTestServer(t)
 	conn := dialTestServer(t, dialer)
 	ctx := context.Background()
@@ -306,7 +306,7 @@ func TestIntegration_CreateInterface_FromReflection(t *testing.T) {
 	if iface.Name != "ItemService" {
 		t.Errorf("name = %q, want %q", iface.Name, "ItemService")
 	}
-	// UploadItems is client-streaming and must be skipped by the creator.
+	// UploadItems is client-streaming and must be skipped by the synthesizer.
 	if len(iface.Operations) != 3 {
 		t.Fatalf("expected 3 operations, got %d", len(iface.Operations))
 	}
@@ -324,10 +324,10 @@ func TestIntegration_CreateInterface_FromReflection(t *testing.T) {
 	}
 }
 
-// TestIntegration_CreateInterface_PublicAPI exercises the Creator.CreateInterface
+// TestIntegration_SynthesizeInterface_PublicAPI exercises the Synthesizer.SynthesizeInterface
 // public method end-to-end via the inline proto content path. This is the API
 // that consumers actually call.
-func TestIntegration_CreateInterface_PublicAPI(t *testing.T) {
+func TestIntegration_SynthesizeInterface_PublicAPI(t *testing.T) {
 	const proto = `
 syntax = "proto3";
 package testpkg;
@@ -344,14 +344,14 @@ service ItemService {
 }
 `
 
-	creator := NewCreator()
-	iface, err := creator.CreateInterface(context.Background(), &openbindings.CreateInput{
-		Sources: []openbindings.CreateSource{
+	synthesizer := NewSynthesizer()
+	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{
 			{Format: FormatToken, Location: "localhost:50051", Content: proto},
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateInterface error: %v", err)
+		t.Fatalf("SynthesizeInterface error: %v", err)
 	}
 
 	// Operations exist with stable names.
@@ -391,11 +391,11 @@ service ItemService {
 	}
 }
 
-// TestIntegration_CreateInterface_PublicAPI_NoSources verifies the public API
+// TestIntegration_SynthesizeInterface_PublicAPI_NoSources verifies the public API
 // rejects empty source lists.
-func TestIntegration_CreateInterface_PublicAPI_NoSources(t *testing.T) {
-	creator := NewCreator()
-	_, err := creator.CreateInterface(context.Background(), &openbindings.CreateInput{})
+func TestIntegration_SynthesizeInterface_PublicAPI_NoSources(t *testing.T) {
+	synthesizer := NewSynthesizer()
+	_, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{})
 	if err == nil {
 		t.Fatal("expected error for empty sources")
 	}
