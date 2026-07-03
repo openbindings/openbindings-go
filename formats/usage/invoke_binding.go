@@ -498,7 +498,16 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 
 	if exitCode == 0 && len(stdoutStr) > 0 {
 		trimmed := strings.TrimSpace(stdoutStr)
-		if openbindings.MaybeJSON(trimmed) {
+		// Bare-parse machine-shaped stdout: objects and arrays by shape, plus
+		// the JSON literals and strings a contract-shaped output can be (an
+		// operation whose output is `null` — a kv-store get miss, a no-output
+		// op — must round-trip as null, not as a {stdout: "null"} wrapper).
+		// Bare numbers stay wrapped: a human lane printing "42" is far more
+		// plausible than a number-typed operation output on this transport.
+		bareParse := openbindings.MaybeJSON(trimmed) ||
+			trimmed == "null" || trimmed == "true" || trimmed == "false" ||
+			strings.HasPrefix(trimmed, `"`)
+		if bareParse {
 			var parsed any
 			if json.Unmarshal([]byte(trimmed), &parsed) == nil {
 				if stderrStr != "" {
