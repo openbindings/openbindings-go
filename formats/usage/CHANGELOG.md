@@ -8,17 +8,31 @@ proposal). The format's conventions — now versioned independently of the
 authority — gain transport members and a defined value grammar:
 
 - **`x-usage` binding member.** `delivery` routes a transport-input field off
-  argv: `"stdin"` (value on child stdin, `-` in its argv slot) or `"file"`
-  (value materialized to a temp file, path in its slot); strings write raw,
-  other values as compact JSON; at most one stdin field. `stdout` declares
-  zero-exit stdout: `"json"` (strict parse, numbers included, empty = `null`,
-  parse failure = terminal error) or `"text"` (the raw string is the output
-  value). Members are read from the selected binding entry
-  (`BindingInvocationArgs.Binding`); absent members preserve prior behavior.
+  argv: `"stdin"` (value on child stdin, `-` in its argv slot when the field
+  maps to a flag/arg, nothing emitted when it maps to none — the no-operand
+  filter class) or `"file"` (value materialized to a temp file, path in its
+  slot); strings write raw, other values as compact JSON; a present-but-null
+  routed field is a no-op like the argv null rule; at most one declared
+  stdin field (static rule); routed values are capped at 10 MiB. `stdout`
+  declares zero-exit stdout: `"json"` (strict parse, numbers included,
+  empty/whitespace-only = `null`, parse failure = terminal error) or
+  `"text"` (stdout with trailing newlines stripped — command-substitution
+  semantics). `exit` classifies success codes (`{"ok": [0, 1]}` for the
+  diff(1) class; default `[0]`). Members are read from the selected binding
+  entry (`BindingInvocationArgs.Binding`); absent members preserve prior
+  behavior.
+- **Version-skew rules.** Parsing of `x-usage` is fail-closed: unknown
+  members and unknown mode values are invocation errors, never ignored. A
+  tool implementing the format without `x-usage` support must treat
+  bindings carrying it as unactionable (OBI-T-09 exclusion), not invoke
+  with the member ignored. The package exports `ConventionsVersion`.
 - **Breaking — stderr leaves the output value.** The `{data, stderr}`
   envelope is gone, and the heuristic `{stdout}` wrap no longer carries a
   `stderr` member: captured stderr rides trailing metadata (`x-stderr`,
-  alongside `x-exit-code`). Non-zero-exit error details are unchanged.
+  bounded to 64 KiB with an `x-stderr-truncated` marker, alongside
+  `x-exit-code`). stderr capture overflow no longer fails a successful
+  invocation (truncate and mark; stdout overflow remains fatal).
+  Non-ok-exit error details are unchanged.
 - **Breaking — canonical JSON argv encoding.** Non-string values render onto
   argv as compact JSON: objects/arrays no longer print as Go `map[k:v]`, and
   large floats no longer render in exponent form.

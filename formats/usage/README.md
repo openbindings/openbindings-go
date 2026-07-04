@@ -68,12 +68,34 @@ These are the conventions of the `usage` binding format — the rules a tool
 needs beyond the [Usage spec](https://usage.jdx.dev/) itself to synthesize
 interfaces from, and invoke bindings against, usage-described CLIs. The
 format token versions the *artifact* (the Usage spec version a source
-document is written in); these conventions carry their own version.
+document is written in); these conventions carry their own version. In this
+section, MUST/SHOULD/MAY carry their RFC 2119 meanings and bind any
+implementation of the format, not just this SDK.
 
 **Conventions version: 2.** Version 2 adds binding transport members
-(`x-usage`: field delivery routing, declared stdout modes), fixes the argv
-value grammar to canonical JSON, and moves stderr out of the output value
-(breaking; see CHANGELOG).
+(`x-usage`: field delivery routing, declared stdout modes, exit
+classification), fixes the argv value grammar to canonical JSON, and moves
+stderr out of the output value (breaking; see CHANGELOG). This package
+exports its level as `usage.ConventionsVersion`.
+
+**Version skew.** Three rules make conventions levels detectable without a
+per-binding version stamp:
+
+1. **Fail closed.** A tool implementing these conventions MUST treat an
+   `x-usage` member containing member names or mode values it does not
+   recognize as an invocation error, never ignore them. Presence of
+   `x-usage` is the declaration; unknown vocabulary inside it means the
+   binding was authored against a later conventions level.
+2. **Unactionable, not ignorable.** A tool that handles the usage format
+   but does not implement `x-usage` at all MUST treat a binding carrying it
+   as one it cannot act on (excluded from binding selection per OBI-T-09),
+   rather than invoking with the member ignored. (Tools predating these
+   conventions cannot be reached by this rule; no third-party
+   implementation of the usage binding format predates conventions 2, so
+   that exposure window is empty.)
+3. **No reinterpretation.** A future conventions level MUST NOT change the
+   meaning of documents valid under an earlier level; new behavior is keyed
+   to the presence of new members or mode values, so rule 1 catches it.
 
 ### Format token
 
@@ -96,12 +118,13 @@ The ref mirrors how the command would be invoked on the command line (without th
 
 ### Binding members (`x-usage`)
 
-A binding entry MAY carry an `x-usage` extension member declaring how the
-transport-input fields physically reach the process, and what the command's
-stdout is. Shape adaptation (field renames, format forcing) stays in the
-spec-level `inputTransform`; `x-usage` members are written against the
-post-transform object, because the transform's output *is* the transport's
-input.
+A binding entry MAY carry an `x-usage` extension member declaring the
+binding author's per-command elections: how each transport-input field
+physically reaches the process, what the command's stdout is, and which
+exit codes are success. Shape adaptation (field renames, format forcing)
+stays in the spec-level `inputTransform`; `x-usage` members are written
+against the post-transform object, because the transform's output *is* the
+transport's input.
 
 ```json
 "compare.usage": {
@@ -110,24 +133,55 @@ input.
   "ref": "diff",
   "x-usage": {
     "delivery": { "baseline": "stdin", "comparison": "file" },
-    "stdout": "json"
+    "stdout": "json",
+    "exit": { "ok": [0, 1] }
   }
 }
 ```
 
-- **`delivery`** maps a transport-input field name to `"stdin"` or `"file"`;
-  unlisted fields ride argv. The field keeps its normal flag/arg mapping —
-  delivery only substitutes the token in its slot: `-` for stdin, an
-  absolute temp-file path for file, with the real bytes carried out of band.
-  At most one field may ride stdin. A string value is written raw (it
-  already is the document text); any other value is written as compact JSON.
-  Temp files are named `<field>.json` for JSON-encoded values and `<field>`
-  for raw strings, live in a private directory, and are removed once the
-  process exits. A listed field absent from the input is a no-op.
-- **`stdout`** declares zero-exit stdout: `"json"` (one strict JSON value,
-  numbers included; empty stdout is `null`; a parse failure is a terminal
-  `ERR_EXECUTION_FAILED`, never a silent wrap) or `"text"` (the raw string
-  is the output value). Absent means the heuristic below.
+**`delivery`** maps a transport-input field name to `"stdin"` or `"file"`;
+unlisted fields ride argv.
+
+- The field keeps its normal flag/arg mapping; delivery substitutes the
+  token in its slot — `-` for stdin, an absolute temp-file path for file —
+  with the real bytes carried out of band. A stdin-routed field that maps
+  to **no** flag or arg of the command is consumed by delivery itself:
+  bytes to stdin, nothing emitted on argv (the no-operand filter class:
+  `pbcopy`, `sort`). A file-routed field MUST map to a flag or arg; its
+  path has to land somewhere.
+- A binding MUST NOT declare more than one field with `"stdin"` delivery;
+  tools MUST reject such a binding at invocation regardless of which fields
+  the input carries (the rule is static).
+- Byte encoding: a string value is written raw (it already is the document
+  text); any other value is written as its compact JSON serialization. A
+  listed field that is absent from the input, or present with JSON `null`,
+  is a no-op (matching the argv grammar's null rule).
+- Temp files: the path passed MUST be absolute; files MUST live in a
+  private per-invocation directory that is removed once the process exits
+  (note: removal cannot be guaranteed if the invoking process itself dies
+  first — see Security); a JSON-encoded value's file name MUST end in
+  `.json` and a raw string's MUST NOT (children sniff by extension); the
+  base name is otherwise implementation-chosen (SHOULD derive from the
+  field name). A routed value larger than 10 MiB is refused before spawn.
+
+**`stdout`** declares what zero-exit stdout *is*:
+
+- `"json"`: one strict JSON value, numbers included. Surrounding whitespace
+  is stripped before parsing; empty or whitespace-only stdout decodes as
+  `null`; anything else that fails to parse is a terminal
+  `ERR_EXECUTION_FAILED`, never a silent wrap.
+- `"text"`: the output value is stdout with trailing newline characters
+  (`\n`, `\r`) stripped — command-substitution semantics: the final newline
+  is line-termination framing, not payload. Interior newlines are
+  preserved.
+- Absent: the heuristic below.
+
+**`exit`** classifies exit codes: `{"ok": [0, 1]}` lists the codes that are
+successful completions (stdout decodes normally; the actual code rides the
+`x-exit-code` trailer). Absent means `[0]`. This exists for the diff(1)
+class, where exit 1 means "differences found" — a result, not a failure.
+Any exit code outside the ok-set is a terminal `ERR_EXECUTION_FAILED`
+carrying `{exitCode, output: {stdout, stderr}}` in details.
 
 ### Value grammar
 
@@ -138,17 +192,83 @@ form when declared, else nothing; `count` flags repeat by value). Arrays
 repeat a flag per item or spread across a variadic arg, items per the same
 rules. `null` fields are omitted.
 
-Zero-exit stdout without a declared `stdout` mode decodes heuristically:
-objects and arrays by shape, plus JSON strings and the literals
-`null`/`true`/`false`, bare-parse; anything else (bare numbers, prose) wraps
-as `{"stdout": <text>}`. Bindings that mean JSON declare it.
+Argv assembly: flags are emitted first, in lexicographic field-name order
+(long names get `--`, single-character names get `-`); positional args
+follow in the command's declared arg order, with `--` inserted before the
+first arg that declares `double_dash`. Field names MUST match the command's
+flag or arg names exactly (an arg matches by its clean name — `file` for
+`<file>...`); an input field matching neither is an error, except a
+slotless stdin-routed field as above.
+
+Limits note: argv tokens are subject to OS ceilings (per-argument
+~128 KiB on Linux, ~1 MiB total on macOS). Document-valued fields SHOULD
+declare `delivery` rather than ride argv as JSON tokens.
+
+The zero-exit stdout **heuristic** (no declared `stdout` mode) is this
+algorithm:
+
+1. Trim surrounding whitespace from the captured stdout.
+2. The trimmed text *triggers* bare parsing when it starts with `{` and
+   ends with `}`, starts with `[` and ends with `]`, equals `null`, `true`,
+   or `false` exactly, or starts with a double quote.
+3. On a trigger, strict-JSON-parse the trimmed text; success yields the
+   parsed value.
+4. No trigger, or a triggered parse that fails, yields
+   `{"stdout": <the original, untrimmed text>}`. The fallback is silent by
+   design on the undeclared lane — in contrast to `"json"` mode, where a
+   parse failure is an error.
+
+Bare numbers therefore wrap under the heuristic; bindings that mean JSON
+declare it.
 
 ### Diagnostics
 
-stderr and the exit code are diagnostics, never part of the output value:
-on the zero-exit path they ride trailing metadata as `x-stderr` and
-`x-exit-code`. A non-zero exit is a terminal `ERR_EXECUTION_FAILED` carrying
-`{exitCode, output: {stdout, stderr}}` in details.
+stderr and the exit code are diagnostics, never part of the output value.
+On the success path (a declared-ok exit) they ride trailing metadata:
+
+- `x-exit-code`: always present; the exit code as a base-10 decimal string,
+  a single entry.
+- `x-stderr`: the captured stderr bytes as a single entry, omitted when
+  stderr is empty; truncated to 64 KiB.
+- `x-stderr-truncated`: present with the single entry `"true"` when
+  `x-stderr` was truncated (by the 64 KiB trailer bound or the capture cap
+  below).
+
+Capture bounds: stdout and stderr are each captured up to 10 MiB. stdout
+overflow is a terminal error (a truncated document cannot be decoded);
+stderr overflow is NOT — diagnostics volume never fails a successful
+invocation; the capture is truncated and marked. Any transport that
+carries these trailers across a header-framed protocol (HTTP, gRPC) MUST
+encode them byte-safely (JSON string or base64); raw child bytes are not
+header-safe.
+
+A non-ok exit is a terminal `ERR_EXECUTION_FAILED` carrying
+`{exitCode, output: {stdout, stderr}}` in details, with the full captured
+streams (up to the capture caps).
+
+### Security
+
+- **Trust model.** A binding author is a code author: `x-usage` directs
+  where caller data is written (disk, stdin) and how output is
+  interpreted. Treat bindings from untrusted documents accordingly. When a
+  binding-invocation lane carries binding extension members from a remote
+  caller, they are caller-asserted, not verified against any interface.
+- **Sensitive values.** Fields whose values may be sensitive (credentials,
+  context payloads) SHOULD declare `"stdin"`, not `"file"`: stdin never
+  touches persistent storage, while a temp file leaves residue if the
+  invoking process dies before cleanup (and may land in filesystem
+  backups or snapshots).
+- **Reserved tokens.** The grammar emits `-` and file paths into argv
+  slots. String values that are exactly `-` or begin with `-` in operand
+  position can collide with CLI option parsing; content-carrying string
+  fields SHOULD be delivery-routed rather than passed as argv tokens.
+
+### Non-portable tool features
+
+Direct-binary dispatch (a `binary` hint in context metadata that skips the
+usage spec and renders every input field as a flag on a shlex-split ref) is
+a feature of this SDK, not part of the format conventions; implementations
+are not required to provide it.
 
 ### Credential application
 

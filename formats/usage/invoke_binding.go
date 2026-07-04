@@ -67,7 +67,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 	defer cleanup()
 
-	binName, cmdArgs, ierr := e.resolveCommand(bctx, args, input)
+	binName, cmdArgs, ierr := e.resolveCommand(bctx, args, input, ext.stdinField())
 	if ierr != nil {
 		inv.FireError(ierr)
 		return
@@ -91,7 +91,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error()})
 		return
 	}
-	if res.exitCode != 0 {
+	if !ext.exitOK(res.exitCode) {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeExecutionFailed,
 			Message: fmt.Sprintf("command exited with status %d", res.exitCode),
@@ -108,10 +108,21 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	// Diagnostics ride trailing metadata, never the output value: the exit
 	// code (parity with the old Status field) and captured stderr (a filter
-	// command's human summary; conventions v2).
+	// command's human summary; conventions v2). The trailer is header-shaped
+	// metadata, so stderr is bounded: truncated to maxStderrTrailerBytes with
+	// an explicit marker (which also fires when the capture itself overflowed).
 	trailer := openbindings.Metadata{"x-exit-code": {strconv.Itoa(res.exitCode)}}
 	if res.stderr != "" {
-		trailer["x-stderr"] = []string{res.stderr}
+		stderrOut := res.stderr
+		truncated := res.stderrTruncated
+		if len(stderrOut) > maxStderrTrailerBytes {
+			stderrOut = stderrOut[:maxStderrTrailerBytes]
+			truncated = true
+		}
+		trailer["x-stderr"] = []string{stderrOut}
+		if truncated {
+			trailer["x-stderr-truncated"] = []string{"true"}
+		}
 	}
 	inv.SetTrailer(trailer)
 	if err := inv.EmitOutput(output); err != nil {
@@ -124,7 +135,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 // "binary" metadata hint dispatches the ref directly; otherwise the usage
 // spec is loaded and the ref resolved to a command. Returns a terminal
 // *InvocationError (never a side effect) on any resolution failure.
-func (e *Invoker) resolveCommand(ctx context.Context, args *openbindings.BindingInvocationArgs, input any) (string, []string, *openbindings.InvocationError) {
+func (e *Invoker) resolveCommand(ctx context.Context, args *openbindings.BindingInvocationArgs, input any, stdinField string) (string, []string, *openbindings.InvocationError) {
 	if binary := metadataBinary(args.Context); binary != "" {
 		cmdArgs, err := buildDirectArgsFromRef(args.Ref, input)
 		if err != nil {
@@ -157,7 +168,7 @@ func (e *Invoker) resolveCommand(ctx context.Context, args *openbindings.Binding
 		if rootCmd == nil {
 			rootCmd = &Command{Flags: spec.Flags(), Args: spec.Args()}
 		}
-		cmdArgs, err := buildCLIArgs(nil, rootCmd, nil, input)
+		cmdArgs, err := buildCLIArgs(nil, rootCmd, nil, input, stdinField)
 		if err != nil {
 			return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
 		}
@@ -168,7 +179,7 @@ func (e *Invoker) resolveCommand(ctx context.Context, args *openbindings.Binding
 	if err != nil {
 		return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: err.Error()}
 	}
-	cmdArgs, err := buildCLIArgs(found.path, found.cmd, found.inheritedFlags, input)
+	cmdArgs, err := buildCLIArgs(found.path, found.cmd, found.inheritedFlags, input, stdinField)
 	if err != nil {
 		return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
 	}
@@ -334,7 +345,7 @@ func commandMatchesName(cmd Command, target string) bool {
 	return false
 }
 
-func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input any) ([]string, error) {
+func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input any, stdinField string) ([]string, error) {
 	var args []string
 	args = append(args, cmdPath...)
 
@@ -426,6 +437,13 @@ func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input
 
 	for key := range inputMap {
 		if !processed[key] {
+			// A stdin-routed field that maps to no flag or arg is consumed by
+			// delivery itself: bytes to stdin, nothing on argv (the no-operand
+			// filter class — pbcopy, sort). Only stdin has this out-of-band
+			// channel; a file-routed field must land its path somewhere.
+			if key == stdinField {
+				continue
+			}
 			return nil, fmt.Errorf("unknown field %q: not defined as a flag or arg in the usage spec for this command", key)
 		}
 	}
@@ -512,6 +530,11 @@ type cliResult struct {
 	stdout   string
 	stderr   string
 	exitCode int
+	// stderrTruncated records that the stderr capture overflowed its cap.
+	// Diagnostics volume never fails a successful invocation (truncate, mark,
+	// carry on); only stdout overflow is fatal, because a truncated document
+	// cannot be decoded.
+	stderrTruncated bool
 }
 
 func runCLI(ctx context.Context, binName string, args []string, bindCtx map[string]any, stdin []byte) (*cliResult, error) {
@@ -543,11 +566,16 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 		}
 	}
 
-	if stdout.overflow || stderr.overflow {
+	if stdout.overflow {
 		return nil, fmt.Errorf("command %q output exceeded %d bytes", binName, maxCLIOutputBytes)
 	}
 
-	return &cliResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}, nil
+	return &cliResult{
+		stdout:          stdout.String(),
+		stderr:          stderr.String(),
+		exitCode:        exitCode,
+		stderrTruncated: stderr.overflow,
+	}, nil
 }
 
 // decodeStdout maps zero-exit stdout to the output value per the binding's
@@ -575,8 +603,12 @@ func decodeStdout(stdoutStr, mode string) (any, *openbindings.InvocationError) {
 		return parsed, nil
 
 	case stdoutText:
-		// Declared text lane: the raw string IS the output value.
-		return stdoutStr, nil
+		// Declared text lane: the output value is stdout with trailing
+		// newlines stripped, exactly as command substitution $(...) reads a
+		// command's text output — the final newline is line-termination
+		// framing, not payload ("git rev-parse HEAD" means the hash, not
+		// hash-plus-newline). Interior newlines are preserved.
+		return strings.TrimRight(stdoutStr, "\r\n"), nil
 
 	default:
 		// Undeclared: the conservative heuristic. Bare-parse machine-shaped
@@ -646,6 +678,11 @@ func resolveCommandArtifact(ctx context.Context, location string) (string, error
 // maxCLIOutputBytes bounds stdout/stderr captured from a spawned command, so a
 // runaway process cannot exhaust memory.
 const maxCLIOutputBytes = 10 << 20 // 10 MiB
+
+// maxStderrTrailerBytes bounds the x-stderr trailer value. Trailing metadata
+// is header-shaped and may cross header-framed transports; the full capture
+// (up to maxCLIOutputBytes) still travels in non-success error details.
+const maxStderrTrailerBytes = 64 << 10 // 64 KiB
 
 // cappedBuffer stops growing past limit and records the overflow, rather than
 // letting an unbounded child fill memory. It always reports a full write so the

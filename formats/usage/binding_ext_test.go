@@ -57,7 +57,7 @@ func TestParseBindingExt(t *testing.T) {
 	})
 	t.Run("two stdin fields are rejected", func(t *testing.T) {
 		be := bindingWithExt(t, "x", `{"delivery":{"a":"stdin","b":"stdin"}}`)
-		if _, err := parseBindingExt(be); err == nil || !strings.Contains(err.Error(), "one stdin") {
+		if _, err := parseBindingExt(be); err == nil || !strings.Contains(err.Error(), "stdin") {
 			t.Fatalf("expected the one-stdin error, got %v", err)
 		}
 	})
@@ -158,7 +158,8 @@ func TestDecodeStdout(t *testing.T) {
 		{"json object parses", `{"a":1}` + "\n", stdoutJSON, map[string]any{"a": float64(1)}, false},
 		{"json empty is null", "", stdoutJSON, nil, false},
 		{"json prose errors", "all good\n", stdoutJSON, nil, true},
-		{"text is the raw string", "all good\n", stdoutText, "all good\n", false},
+		{"text strips trailing newlines", "all good\n", stdoutText, "all good", false},
+		{"text preserves interior newlines", "a\nb\n\n", stdoutText, "a\nb", false},
 		{"heuristic wraps numbers", "42\n", "", map[string]any{"stdout": "42\n"}, false},
 		{"heuristic bare-parses null", "null\n", "", nil, false},
 	}
@@ -310,8 +311,8 @@ func TestIntegration_StdoutText(t *testing.T) {
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s", ierr.Message)
 	}
-	if out != "all good\n" {
-		t.Errorf("output = %#v, want the raw stdout string", out)
+	if out != "all good" {
+		t.Errorf("output = %#v, want stdout with the trailing newline stripped", out)
 	}
 	if got := trailer["x-stderr"]; len(got) != 1 || got[0] != "checked 3 things\n" {
 		t.Errorf("x-stderr trailer = %q", got)
@@ -328,6 +329,94 @@ func TestIntegration_InvalidExtIsValidationError(t *testing.T) {
 	}, map[string]any{"doc": "x", "tag": "y"})
 	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
+	}
+}
+
+func TestParseBindingExt_UnknownMemberFailsClosed(t *testing.T) {
+	be := bindingWithExt(t, "x", `{"delivery":{"doc":"stdin"},"shiny":"new"}`)
+	if _, err := parseBindingExt(be); err == nil {
+		t.Fatal("expected an error for an unknown x-usage member (fail closed)")
+	}
+}
+
+func TestApplyDelivery_NullRoutedFieldIsAbsent(t *testing.T) {
+	ext := &bindingExt{Delivery: map[string]string{"doc": deliveryStdin}}
+	out, stdin, cleanup, err := applyDelivery(map[string]any{"doc": nil, "tag": "x"}, ext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if stdin != nil {
+		t.Fatalf("null must route nowhere, got stdin %q", stdin)
+	}
+	m := out.(map[string]any)
+	if _, present := m["doc"]; present {
+		t.Fatalf("null routed field must vanish from the input, got %#v", m)
+	}
+}
+
+func TestApplyDelivery_CapEnforced(t *testing.T) {
+	ext := &bindingExt{Delivery: map[string]string{"doc": deliveryStdin}}
+	big := strings.Repeat("x", maxDeliveryBytes+1)
+	_, _, cleanup, err := applyDelivery(map[string]any{"doc": big}, ext)
+	defer cleanup()
+	if err == nil || !strings.Contains(err.Error(), "delivery cap") {
+		t.Fatalf("expected the delivery-cap error, got %v", err)
+	}
+}
+
+func TestIntegration_StdinDeliveryNoSlot(t *testing.T) {
+	// A stdin-routed field that maps to no flag or arg is consumed by
+	// delivery itself: bytes to stdin, nothing on argv (the pbcopy class).
+	invoker := NewInvoker()
+	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+		Source:      openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
+		Ref:         "drink",
+		Binding:     bindingWithExt(t, "drink", `{"delivery":{"doc":"stdin"},"stdout":"json"}`),
+		InputSchema: objSchema,
+	}, map[string]any{"doc": map[string]any{"a": float64(1)}})
+	if ierr != nil {
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+	}
+	m := out.(map[string]any)
+	if m["stdin"] != `{"a":1}` {
+		t.Errorf("stdin = %q, want the document JSON", m["stdin"])
+	}
+	if args, _ := m["args"].([]any); len(args) != 0 {
+		t.Errorf("argv = %v, want no tokens for a slotless stdin field", args)
+	}
+}
+
+func TestIntegration_ExitOKClassification(t *testing.T) {
+	invoker := NewInvoker()
+
+	// diff(1)-style: exit 1 declared as success completes with output and
+	// the real code in the trailer.
+	out, trailer, ierr := invokeUsageWithTrailer(t, invoker, &openbindings.BindingInvocationArgs{
+		Source:      openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
+		Ref:         "fail",
+		Binding:     bindingWithExt(t, "fail", `{"exit":{"ok":[0,1]}}`),
+		InputSchema: objSchema,
+	}, map[string]any{"message": []any{"differences found"}})
+	if ierr != nil {
+		t.Fatalf("declared-ok exit 1 must succeed, got %s: %s", ierr.Code, ierr.Message)
+	}
+	if m, _ := out.(map[string]any); m == nil || m["stdout"] != "" {
+		t.Errorf("output = %#v, want the empty-stdout wrap", out)
+	}
+	if got := trailer["x-exit-code"]; len(got) != 1 || got[0] != "1" {
+		t.Errorf(`x-exit-code = %q, want ["1"]`, got)
+	}
+
+	// Undeclared exit 1 remains a terminal error.
+	_, ierr = invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+		Source:      openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
+		Ref:         "fail",
+		Binding:     bindingWithExt(t, "fail", `{}`),
+		InputSchema: objSchema,
+	}, map[string]any{"message": []any{"boom"}})
+	if ierr == nil || ierr.Code != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("undeclared exit 1 must fail, got %v", ierr)
 	}
 }
 

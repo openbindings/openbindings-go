@@ -76,6 +76,16 @@ func main() {
 		out, _ := json.Marshal(map[string]any{"path": rest[0], "content": string(data)})
 		fmt.Println(string(out))
 
+	case "drink":
+		// Read stdin only; takes no args. Exercises slotless stdin delivery.
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "read stdin:", err)
+			os.Exit(1)
+		}
+		out, _ := json.Marshal(map[string]any{"stdin": string(data), "args": rest})
+		fmt.Println(string(out))
+
 	case "num":
 		// A bare number on stdout: wraps under the heuristic, parses under
 		// a declared JSON lane.

@@ -63,6 +63,9 @@ cmd "readfile" {
     help "Emit a file's path and content as JSON"
     arg "<doc>" help="File path"
 }
+cmd "drink" {
+    help "Read stdin, no args"
+}
 cmd "num" {
     help "Print a bare number"
 }
