@@ -52,13 +52,31 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		_ = inv.CloseInput()
 	}
 
+	// The binding's transport members (x-usage): field delivery routing and
+	// the declared stdout mode. Delivery substitutes routed field values
+	// ("-" / temp-file path) before argv mapping, so placement is untouched.
+	ext, extErr := parseBindingExt(args.Binding)
+	if extErr != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: extErr.Error()})
+		return
+	}
+	input, stdin, cleanup, derr := applyDelivery(input, ext)
+	if derr != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: derr.Error()})
+		return
+	}
+	defer cleanup()
+
 	binName, cmdArgs, ierr := e.resolveCommand(bctx, args, input)
 	if ierr != nil {
 		inv.FireError(ierr)
 		return
 	}
 
-	output, exitCode, runErr := runCLI(bctx, binName, cmdArgs, args.Context)
+	res, runErr := runCLI(bctx, binName, cmdArgs, args.Context, stdin)
+	// Materialized files only need to outlive the process; the deferred call
+	// (idempotent) covers the error paths above.
+	cleanup()
 	if bctx.Err() != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeCancelled, Message: "operation cancelled"})
 		return
@@ -73,18 +91,29 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error()})
 		return
 	}
-	if exitCode != 0 {
+	if res.exitCode != 0 {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: fmt.Sprintf("command exited with status %d", exitCode),
-			Details: map[string]any{"exitCode": exitCode, "output": output},
+			Message: fmt.Sprintf("command exited with status %d", res.exitCode),
+			Details: map[string]any{"exitCode": res.exitCode, "output": wrapText(res.stdout, res.stderr)},
 		})
 		return
 	}
 
-	// Surface the success exit code as trailing metadata (parity with the
-	// old Status field) without polluting the bare output value.
-	inv.SetTrailer(openbindings.Metadata{"x-exit-code": {strconv.Itoa(exitCode)}})
+	output, oerr := decodeStdout(res.stdout, ext.Stdout)
+	if oerr != nil {
+		inv.FireError(oerr)
+		return
+	}
+
+	// Diagnostics ride trailing metadata, never the output value: the exit
+	// code (parity with the old Status field) and captured stderr (a filter
+	// command's human summary; conventions v2).
+	trailer := openbindings.Metadata{"x-exit-code": {strconv.Itoa(res.exitCode)}}
+	if res.stderr != "" {
+		trailer["x-stderr"] = []string{res.stderr}
+	}
+	inv.SetTrailer(trailer)
 	if err := inv.EmitOutput(output); err != nil {
 		return
 	}
@@ -383,7 +412,7 @@ func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input
 		switch v := value.(type) {
 		case []any:
 			for _, item := range v {
-				args = append(args, fmt.Sprintf("%v", item))
+				args = append(args, argvToken(item))
 			}
 		case []string:
 			args = append(args, v...)
@@ -391,7 +420,7 @@ func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input
 			args = append(args, v)
 		case nil:
 		default:
-			args = append(args, fmt.Sprintf("%v", v))
+			args = append(args, argvToken(v))
 		}
 	}
 
@@ -446,25 +475,50 @@ func formatFlagWithDef(name string, value any, flagDef Flag) ([]string, error) {
 		return nil, nil
 	case string:
 		return []string{flagName, v}, nil
-	case float64:
-		return []string{flagName, fmt.Sprintf("%v", v)}, nil
-	case int, int64:
-		return []string{flagName, fmt.Sprintf("%d", v)}, nil
 	case []any:
 		var args []string
 		for _, item := range v {
-			args = append(args, flagName, fmt.Sprintf("%v", item))
+			args = append(args, flagName, argvToken(item))
 		}
 		return args, nil
 	case nil:
 		return nil, nil
 	default:
-		return []string{flagName, fmt.Sprintf("%v", v)}, nil
+		return []string{flagName, argvToken(v)}, nil
 	}
 }
 
-func runCLI(ctx context.Context, binName string, args []string, bindCtx map[string]any) (any, int, error) {
+// argvToken renders one non-string value as one argv token: canonical
+// compact JSON (conventions v2 value grammar). Strings pass verbatim and are
+// handled before this; JSON canonicalization replaces Go's %v (which printed
+// objects as map[k:v] and large floats in exponent form).
+func argvToken(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		// Values arrive from JSON, so this is unreachable for wire inputs;
+		// fall back to %v rather than panic for hand-constructed ones.
+		return fmt.Sprintf("%v", v)
+	}
+	return string(data)
+}
+
+// cliResult is a completed process's raw capture; decoding stdout into an
+// output value is a separate step (decodeStdout) driven by the binding's
+// declared stdout mode.
+type cliResult struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+func runCLI(ctx context.Context, binName string, args []string, bindCtx map[string]any, stdin []byte) (*cliResult, error) {
 	cmd := exec.CommandContext(ctx, binName, args...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	if env := openbindings.ContextEnvironment(bindCtx); len(env) > 0 {
 		cmd.Env = os.Environ()
@@ -485,50 +539,77 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
-			return nil, 1, err
+			return nil, err
 		}
 	}
 
 	if stdout.overflow || stderr.overflow {
-		return nil, 1, fmt.Errorf("command %q output exceeded %d bytes", binName, maxCLIOutputBytes)
+		return nil, fmt.Errorf("command %q output exceeded %d bytes", binName, maxCLIOutputBytes)
 	}
 
-	stdoutStr := stdout.String()
-	stderrStr := stderr.String()
+	return &cliResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}, nil
+}
 
-	if exitCode == 0 && len(stdoutStr) > 0 {
+// decodeStdout maps zero-exit stdout to the output value per the binding's
+// declared stdout mode (conventions v2). stderr never participates: it is
+// diagnostics and rides the x-stderr trailer.
+func decodeStdout(stdoutStr, mode string) (any, *openbindings.InvocationError) {
+	switch mode {
+	case stdoutJSON:
+		// Declared machine lane: stdout is one JSON value, numbers included.
+		// Empty stdout is a null output (a command with nothing to say);
+		// anything else that fails to parse is the command failing to honor
+		// its machine lane — an error, never a silent wrap.
 		trimmed := strings.TrimSpace(stdoutStr)
-		// Bare-parse machine-shaped stdout: objects and arrays by shape, plus
-		// the JSON literals and strings a contract-shaped output can be (an
-		// operation whose output is `null` — a kv-store get miss, a no-output
-		// op — must round-trip as null, not as a {stdout: "null"} wrapper).
-		// Bare numbers stay wrapped: a human lane printing "42" is far more
-		// plausible than a number-typed operation output on this transport.
-		bareParse := openbindings.MaybeJSON(trimmed) ||
-			trimmed == "null" || trimmed == "true" || trimmed == "false" ||
-			strings.HasPrefix(trimmed, `"`)
-		if bareParse {
-			var parsed any
-			if json.Unmarshal([]byte(trimmed), &parsed) == nil {
-				if stderrStr != "" {
-					return map[string]any{
-						"data":   parsed,
-						"stderr": stderrStr,
-					}, 0, nil
-				}
-				return parsed, 0, nil
+		if trimmed == "" {
+			return nil, nil
+		}
+		var parsed any
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+			return nil, &openbindings.InvocationError{
+				Code:    openbindings.ErrCodeExecutionFailed,
+				Message: fmt.Sprintf("binding declares JSON stdout, but the command's stdout is not valid JSON: %v", err),
+				Details: map[string]any{"stdout": stdoutStr},
 			}
 		}
-	}
+		return parsed, nil
 
-	output := map[string]any{
-		"stdout": stdoutStr,
+	case stdoutText:
+		// Declared text lane: the raw string IS the output value.
+		return stdoutStr, nil
+
+	default:
+		// Undeclared: the conservative heuristic. Bare-parse machine-shaped
+		// stdout — objects and arrays by shape, plus the JSON literals and
+		// strings a contract-shaped output can be (an operation whose output
+		// is `null` — a kv-store get miss, a no-output op — must round-trip
+		// as null, not as a {stdout: "null"} wrapper). Bare numbers stay
+		// wrapped: a human lane printing "42" is far more plausible than a
+		// number-typed operation output on an undeclared lane; bindings that
+		// mean it declare stdout "json".
+		if len(stdoutStr) > 0 {
+			trimmed := strings.TrimSpace(stdoutStr)
+			bareParse := openbindings.MaybeJSON(trimmed) ||
+				trimmed == "null" || trimmed == "true" || trimmed == "false" ||
+				strings.HasPrefix(trimmed, `"`)
+			if bareParse {
+				var parsed any
+				if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+					return parsed, nil
+				}
+			}
+		}
+		return map[string]any{"stdout": stdoutStr}, nil
 	}
+}
+
+// wrapText is the raw-capture record used in non-zero-exit error details.
+func wrapText(stdoutStr, stderrStr string) map[string]any {
+	output := map[string]any{"stdout": stdoutStr}
 	if stderrStr != "" {
 		output["stderr"] = stderrStr
 	}
-
-	return output, exitCode, nil
+	return output
 }
 
 func resolveCommandArtifact(ctx context.Context, location string) (string, error) {

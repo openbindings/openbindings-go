@@ -64,7 +64,16 @@ iface, err := creator.CreateInterface(ctx, &openbindings.CreateInput{
 
 ## Conventions
 
-These are non-normative conventions specific to the `usage` binding format.
+These are the conventions of the `usage` binding format — the rules a tool
+needs beyond the [Usage spec](https://usage.jdx.dev/) itself to synthesize
+interfaces from, and invoke bindings against, usage-described CLIs. The
+format token versions the *artifact* (the Usage spec version a source
+document is written in); these conventions carry their own version.
+
+**Conventions version: 2.** Version 2 adds binding transport members
+(`x-usage`: field delivery routing, declared stdout modes), fixes the argv
+value grammar to canonical JSON, and moves stderr out of the output value
+(breaking; see CHANGELOG).
 
 ### Format token
 
@@ -85,6 +94,62 @@ The ref mirrors how the command would be invoked on the command line (without th
 - **`location`**: Path to the usage-spec KDL file (e.g., `mycli.usage.kdl`). Also supports `exec:<binary>` to extract the usage spec from the binary at runtime.
 - **`content`**: Inline usage-spec KDL content (string).
 
+### Binding members (`x-usage`)
+
+A binding entry MAY carry an `x-usage` extension member declaring how the
+transport-input fields physically reach the process, and what the command's
+stdout is. Shape adaptation (field renames, format forcing) stays in the
+spec-level `inputTransform`; `x-usage` members are written against the
+post-transform object, because the transform's output *is* the transport's
+input.
+
+```json
+"compare.usage": {
+  "operation": "compare",
+  "source": "cli",
+  "ref": "diff",
+  "x-usage": {
+    "delivery": { "baseline": "stdin", "comparison": "file" },
+    "stdout": "json"
+  }
+}
+```
+
+- **`delivery`** maps a transport-input field name to `"stdin"` or `"file"`;
+  unlisted fields ride argv. The field keeps its normal flag/arg mapping —
+  delivery only substitutes the token in its slot: `-` for stdin, an
+  absolute temp-file path for file, with the real bytes carried out of band.
+  At most one field may ride stdin. A string value is written raw (it
+  already is the document text); any other value is written as compact JSON.
+  Temp files are named `<field>.json` for JSON-encoded values and `<field>`
+  for raw strings, live in a private directory, and are removed once the
+  process exits. A listed field absent from the input is a no-op.
+- **`stdout`** declares zero-exit stdout: `"json"` (one strict JSON value,
+  numbers included; empty stdout is `null`; a parse failure is a terminal
+  `ERR_EXECUTION_FAILED`, never a silent wrap) or `"text"` (the raw string
+  is the output value). Absent means the heuristic below.
+
+### Value grammar
+
+Input fields render onto argv as: strings verbatim; every other value as its
+compact canonical JSON (`1000000`, `{"k":"v"}`). Booleans on flags use
+presence semantics (`true` emits the flag; `false` emits the flag's `negate`
+form when declared, else nothing; `count` flags repeat by value). Arrays
+repeat a flag per item or spread across a variadic arg, items per the same
+rules. `null` fields are omitted.
+
+Zero-exit stdout without a declared `stdout` mode decodes heuristically:
+objects and arrays by shape, plus JSON strings and the literals
+`null`/`true`/`false`, bare-parse; anything else (bare numbers, prose) wraps
+as `{"stdout": <text>}`. Bindings that mean JSON declare it.
+
+### Diagnostics
+
+stderr and the exit code are diagnostics, never part of the output value:
+on the zero-exit path they ride trailing metadata as `x-stderr` and
+`x-exit-code`. A non-zero exit is a terminal `ERR_EXECUTION_FAILED` carrying
+`{exitCode, output: {stdout, stderr}}` in details.
+
 ### Credential application
 
 Usage-spec bindings execute local CLI binaries, not network services. There are no HTTP headers. Credentials and configuration are supplied through the `environment` key in the `BindingContext` and surfaced to the child process as environment variables.
@@ -103,10 +168,10 @@ Usage-spec bindings execute local CLI binaries, not network services. There are 
 
 1. Loads and caches the usage-spec KDL document (from file, inline content, or `exec:` artifact)
 2. Finds the command matching the ref (space-separated path, e.g. `config set`)
-3. Builds CLI arguments from the OBI input: flags are mapped by name, positional args by order
-4. Executes the binary via `os/exec` with the constructed arguments
-5. Parses stdout as JSON if possible, otherwise returns raw stdout/stderr
-6. Returns the result as a single stream event with exit code as status
+3. Applies the binding's `x-usage` delivery routing (stdin piping, temp-file materialization), then builds CLI arguments from the input: flags are mapped by name, positional args by order
+4. Executes the binary via `os/exec` with the constructed arguments (and routed stdin)
+5. Decodes stdout per the binding's declared `stdout` mode (strict JSON, raw text, or the heuristic)
+6. Emits the value as one output, with the exit code and captured stderr as `x-exit-code`/`x-stderr` trailing metadata
 
 ### Credential application
 

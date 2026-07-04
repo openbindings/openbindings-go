@@ -54,6 +54,21 @@ cmd "echo" {
     help "Echo args"
     arg "<words>..." help="Words to echo"
 }
+cmd "slurp" {
+    help "Echo stdin and args as JSON"
+    flag "--tag <value>" help="An argv-delivered field"
+    arg "<doc>" help="Document locator"
+}
+cmd "readfile" {
+    help "Emit a file's path and content as JSON"
+    arg "<doc>" help="File path"
+}
+cmd "num" {
+    help "Print a bare number"
+}
+cmd "prose" {
+    help "Print human text on stdout, an aside on stderr"
+}
 `
 }
 
@@ -62,6 +77,14 @@ cmd "echo" {
 // terminal error. The binding is unary, so exactly one output (or one
 // terminal) is expected.
 func invokeUsage(t *testing.T, invoker *Invoker, args *openbindings.BindingInvocationArgs, input any) (any, *openbindings.InvocationError) {
+	t.Helper()
+	out, _, ierr := invokeUsageWithTrailer(t, invoker, args, input)
+	return out, ierr
+}
+
+// invokeUsageWithTrailer is invokeUsage plus the invocation's trailing
+// metadata (x-exit-code, x-stderr), valid once the handle terminates.
+func invokeUsageWithTrailer(t *testing.T, invoker *Invoker, args *openbindings.BindingInvocationArgs, input any) (any, openbindings.Metadata, *openbindings.InvocationError) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -77,19 +100,19 @@ func invokeUsage(t *testing.T, invoker *Invoker, args *openbindings.BindingInvoc
 	out := call.Outputs()
 	v, err := out.Read(ctx)
 	if errors.Is(err, io.EOF) {
-		return nil, nil // clean close with no output
+		return nil, call.Trailer(), nil // clean close with no output
 	}
 	if err != nil {
 		var ie *openbindings.InvocationError
 		if !errors.As(err, &ie) {
 			t.Fatalf("expected *InvocationError, got %T: %v", err, err)
 		}
-		return nil, ie
+		return nil, call.Trailer(), ie
 	}
 	if _, err2 := out.Read(ctx); !errors.Is(err2, io.EOF) {
 		t.Fatalf("expected a single output then io.EOF, got %v", err2)
 	}
-	return v, nil
+	return v, call.Trailer(), nil
 }
 
 func TestIntegration_JSONOutput(t *testing.T) {
@@ -146,8 +169,10 @@ func TestIntegration_NonZeroExitCode(t *testing.T) {
 }
 
 func TestIntegration_MixedOutput(t *testing.T) {
+	// stderr is diagnostics, never part of the output value (conventions v2):
+	// it rides the x-stderr trailer, and the heuristic wrap carries stdout only.
 	invoker := NewInvoker()
-	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+	out, trailer, ierr := invokeUsageWithTrailer(t, invoker, &openbindings.BindingInvocationArgs{
 		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
 		Ref:    "mixed",
 	}, nil)
@@ -156,13 +181,14 @@ func TestIntegration_MixedOutput(t *testing.T) {
 	}
 
 	output := out.(map[string]any)
-	stdout, _ := output["stdout"].(string)
-	stderr, _ := output["stderr"].(string)
-	if stdout == "" {
+	if stdout, _ := output["stdout"].(string); stdout == "" {
 		t.Error("expected non-empty stdout")
 	}
-	if stderr == "" {
-		t.Error("expected non-empty stderr")
+	if _, present := output["stderr"]; present {
+		t.Errorf("stderr leaked into the output value: %#v", output)
+	}
+	if got := trailer["x-stderr"]; len(got) != 1 || got[0] != "stderr line\n" {
+		t.Errorf("x-stderr trailer = %q, want [%q]", got, "stderr line\n")
 	}
 }
 
