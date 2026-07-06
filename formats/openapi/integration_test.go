@@ -691,6 +691,41 @@ func sseCall(srv *httptest.Server) openbindings.Invocation[any, any] {
 	})
 }
 
+// sseCallHooked drives the same op with the documented consumer pattern
+// for JSON SSE streams: an OutputDecoder that parses each event's data and
+// reconstructs the framing wrap from the per-unit Meta (x-sse-event/id).
+func sseCallHooked(srv *httptest.Server) openbindings.Invocation[any, any] {
+	op := openbindings.NewOperationInvoker(NewInvoker())
+	op.OutputDecoder = func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+		var data any
+		if err := json.Unmarshal(raw.Body, &data); err != nil {
+			return nil, err
+		}
+		ev, id := "", ""
+		if vs := raw.Meta["x-sse-event"]; len(vs) > 0 {
+			ev = vs[0]
+		}
+		if vs := raw.Meta["x-sse-id"]; len(vs) > 0 {
+			id = vs[0]
+		}
+		if ev == "" && id == "" {
+			return data, nil
+		}
+		wrapped := map[string]any{"data": data}
+		if ev != "" {
+			wrapped["event"] = ev
+		}
+		if id != "" {
+			wrapped["id"] = id
+		}
+		return wrapped, nil
+	}
+	return op.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Ref:    "#/paths/~1events/get",
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: sseSpec(srv.URL)},
+	})
+}
+
 func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if accept := r.Header.Get("Accept"); !strings.Contains(accept, "text/event-stream") {
@@ -718,7 +753,7 @@ func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	events, ierr := driveOutputs(context.Background(), sseCall(srv), nil)
+	events, ierr := driveOutputs(context.Background(), sseCallHooked(srv), nil)
 	if ierr != nil {
 		t.Fatalf("unexpected stream error: %v", ierr)
 	}
@@ -839,7 +874,7 @@ func TestIntegration_SSEResponse_MalformedLines(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	events, ierr := driveOutputs(context.Background(), sseCall(srv), nil)
+	events, ierr := driveOutputs(context.Background(), sseCallHooked(srv), nil)
 	if ierr != nil {
 		t.Fatalf("unexpected error: %v", ierr)
 	}
@@ -917,8 +952,10 @@ func TestIntegration_SSEResponse_Cancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first event error: %v", err)
 	}
-	if _, ok := first.(map[string]any); !ok {
-		t.Fatalf("expected first event map, got %T", first)
+	// Text lane under the header rule: the event arrives as its data
+	// string (decode behavior is covered by the StreamsEvents tests).
+	if fs, ok := first.(string); !ok || fs == "" {
+		t.Fatalf("expected first event data string, got %T %v", first, first)
 	}
 
 	cancel()

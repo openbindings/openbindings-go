@@ -245,13 +245,13 @@ func TestWSPool_SendAndReceiveShareConnection(t *testing.T) {
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
 		upgrades.Add(1)
 		// Announce, then echo every frame back as a data event.
-		_ = writeWSJSON(ctx, conn, map[string]any{"data": map[string]any{"hello": true}})
+		_ = writeWSJSON(ctx, conn, map[string]any{"hello": true})
 		for {
 			msg, err := readWSJSON(ctx, conn)
 			if err != nil {
 				return
 			}
-			_ = writeWSJSON(ctx, conn, map[string]any{"data": msg})
+			_ = writeWSJSON(ctx, conn, msg)
 		}
 	})
 

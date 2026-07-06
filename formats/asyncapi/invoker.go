@@ -185,3 +185,33 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	}
 	return synthesizeInterfaceWithDoc(ctx, in, doc)
 }
+
+// BuiltinHooks exposes the asyncapi builtin decoder to the seam's
+// cross-format dispatch. Per the consultation matrix, asyncapi consults
+// the DECODE axis only (per delivery unit; a WS frame has no scalar
+// completion status, so the classifier is never consulted and none is
+// exposed — openbindings.BuiltinClassify on this format is loud).
+// The dispatch decoder resolves the declared message contentType from the
+// per-unit Meta's content-type where present, else text — hook bodies
+// wanting the document-declared type should decline to the builtin the
+// in-flow lane supplies.
+func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.ResultClassifier) {
+	decode := func(site openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+		ct := ""
+		if vs := raw.Meta["content-type"]; len(vs) > 0 {
+			ct = vs[0]
+		}
+		return builtinDecodeFor(ct)(site, raw)
+	}
+	return decode, nil
+}
+
+// PlanContributions: decode is a spec answer (the declared message
+// contentType, else the text assumption); classify and route are not
+// consulted on this format.
+func (e *Invoker) PlanContributions(_ *openbindings.BindingInvocationArgs) (*openbindings.BindingPlan, error) {
+	return &openbindings.BindingPlan{
+		Decode:   openbindings.PlanAxis{Chain: []string{"spec/content-type"}},
+		Classify: openbindings.PlanAxis{Chain: []string{"not-consulted"}},
+	}, nil
+}

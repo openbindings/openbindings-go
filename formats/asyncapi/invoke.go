@@ -389,14 +389,13 @@ func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address st
 		return
 	}
 
-	var output any
-	trimmed := strings.TrimSpace(string(respBody))
-	if openbindings.MaybeJSON(trimmed) {
-		if json.Unmarshal(respBody, &output) != nil {
-			output = string(respBody)
-		}
-	} else {
-		output = string(respBody)
+	status := resp.StatusCode
+	raw := openbindings.RawResult{Status: &status, Body: respBody, Meta: headerMetadata(resp.Header)}
+	output, derr := args.Hooks.DecodeOutput(siteFor(args, serverURL), raw,
+		builtinDecodeFor(declaredContentType(doc, asyncOp)))
+	if derr != nil {
+		h.FireError(openbindings.AsInvocationError(derr))
+		return
 	}
 
 	if h.EmitOutput(output) != nil {
@@ -467,8 +466,12 @@ func runSSEReceive(ctx context.Context, client *http.Client, serverURL, address 
 		if line == "" {
 			eventBytes = 0
 			if len(dataLines) > 0 {
-				ev := parseSSEPayload(dataLines)
+				ev, derr := decodeSSEEvent(args, siteFor(args, serverURL), doc, asyncOp, resp, dataLines)
 				dataLines = dataLines[:0]
+				if derr != nil {
+					h.FireError(openbindings.AsInvocationError(derr))
+					return
+				}
 				if h.EmitOutput(ev) != nil {
 					return // invocation terminated while the emit was parked
 				}
@@ -477,7 +480,12 @@ func runSSEReceive(ctx context.Context, client *http.Client, serverURL, address 
 	}
 
 	if len(dataLines) > 0 {
-		if h.EmitOutput(parseSSEPayload(dataLines)) != nil {
+		ev, derr := decodeSSEEvent(args, siteFor(args, serverURL), doc, asyncOp, resp, dataLines)
+		if derr != nil {
+			h.FireError(openbindings.AsInvocationError(derr))
+			return
+		}
+		if h.EmitOutput(ev) != nil {
 			return
 		}
 	}
@@ -495,33 +503,16 @@ func runSSEReceive(ctx context.Context, client *http.Client, serverURL, address 
 // WebSocket frames
 // ---------------------------------------------------------------------------
 
-// parseWSFrame interprets one socket frame. `{"error": ...}` frames are
-// terminal stream errors; `{"data": ...}` frames unwrap to the payload;
-// everything else passes through (raw string when not JSON).
-func parseWSFrame(raw []byte) (out any, terminal *openbindings.InvocationError) {
-	var parsed any
-	if json.Unmarshal(raw, &parsed) != nil {
-		return string(raw), nil
-	}
-	if obj, ok := parsed.(map[string]any); ok {
-		if errVal, hasErr := obj["error"]; hasErr && errVal != nil {
-			msg := "server reported an error"
-			if em, ok := errVal.(map[string]any); ok {
-				if m, ok := em["message"].(string); ok && m != "" {
-					msg = m
-				}
-			}
-			return nil, &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeStreamError,
-				Message: msg,
-				Details: map[string]any{"error": errVal},
-			}
-		}
-		if dataVal, hasData := obj["data"]; hasData {
-			return dataVal, nil
-		}
-	}
-	return parsed, nil
+// decodeWSFrame decodes one socket frame through the consultation seam:
+// Status is NIL (a WS frame has no scalar completion status — never
+// fabricated); the builtin follows the DECLARED message contentType. The
+// former `{"error"}`/`{"data"}` convention unwrapping left the builtin —
+// it is the hook channel's business now (a returned decode error is
+// terminal, which is exactly the override channel for error-frame
+// conventions).
+func decodeWSFrame(args *openbindings.BindingInvocationArgs, site openbindings.InvokeSite, contentType string, frame []byte) (any, error) {
+	raw := openbindings.RawResult{Body: frame}
+	return args.Hooks.DecodeOutput(site, raw, builtinDecodeFor(contentType))
 }
 
 // ---------------------------------------------------------------------------
@@ -601,9 +592,11 @@ func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, 
 			}
 			return
 		}
-		out, terminal := parseWSFrame(frame)
-		if terminal != nil {
-			h.FireError(terminal)
+		out, derr := decodeWSFrame(args, siteFor(args, serverURL), declaredContentType(doc, asyncOp), frame)
+		if derr != nil {
+			// A decode error mid-stream is terminal; already-emitted
+			// outputs stand (drain-before-terminal).
+			h.FireError(openbindings.AsInvocationError(derr))
 			return
 		}
 		if h.EmitOutput(out) != nil {
@@ -757,13 +750,18 @@ func runWSSend(ctx context.Context, pool *wsPool, serverURL, address string, doc
 // Utilities
 // ---------------------------------------------------------------------------
 
-func parseSSEPayload(dataLines []string) any {
-	raw := strings.Join(dataLines, "\n")
-	var parsed any
-	if json.Unmarshal([]byte(raw), &parsed) == nil {
-		return parsed
+// decodeSSEEvent decodes one SSE event through the consultation seam: the
+// builtin follows the DECLARED message contentType (never payload
+// sniffing); Status carries the initial response's status on every unit
+// (real and invocation-scoped, never fabricated).
+func decodeSSEEvent(args *openbindings.BindingInvocationArgs, site openbindings.InvokeSite, doc *Document, asyncOp *Operation, resp *http.Response, dataLines []string) (any, error) {
+	status := resp.StatusCode
+	raw := openbindings.RawResult{
+		Status: &status,
+		Body:   []byte(strings.Join(dataLines, "\n")),
+		Meta:   headerMetadata(resp.Header),
 	}
-	return raw
+	return args.Hooks.DecodeOutput(site, raw, builtinDecodeFor(declaredContentType(doc, asyncOp)))
 }
 
 // headerMetadata converts HTTP response headers to invocation metadata.
@@ -789,12 +787,9 @@ func httpStatusError(resp *http.Response) *openbindings.InvocationError {
 	if len(body) > maxResponseBytes {
 		details["body"] = fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes)
 	} else {
-		var parsed any
-		if openbindings.MaybeJSON(strings.TrimSpace(string(body))) && json.Unmarshal(body, &parsed) == nil {
-			details["body"] = parsed
-		} else {
-			details["body"] = string(body)
-		}
+		// The raw capture, verbatim: error details carry bytes-as-text,
+		// never a sniffed parse (payload-independence, §6).
+		details["body"] = string(body)
 	}
 	ie.Details = details
 	return ie
@@ -956,4 +951,82 @@ func applyCredentialsFallback(req *http.Request, bindCtx map[string]any) {
 	} else if key := openbindings.ContextAPIKey(bindCtx); key != "" {
 		req.Header.Set("Authorization", "ApiKey "+key)
 	}
+}
+
+// declaredContentType returns the operation's declared message contentType
+// (the AsyncAPI document's answer to the decode question), falling back to
+// the document default, else "" (the text lane). This is the SPEC answer;
+// it never reads payload bytes.
+func declaredContentType(doc *Document, asyncOp *Operation) string {
+	if asyncOp == nil {
+		return ""
+	}
+	for _, ref := range asyncOp.Messages {
+		if m := resolveMessageRef(doc, ref); m != nil && m.ContentType != "" {
+			return m.ContentType
+		}
+	}
+	if asyncOp.Reply != nil {
+		for _, ref := range asyncOp.Reply.Messages {
+			if m := resolveMessageRef(doc, ref); m != nil && m.ContentType != "" {
+				return m.ContentType
+			}
+		}
+	}
+	return ""
+}
+
+// builtinDecodeFor is the asyncapi builtin decoder: strict JSON when the
+// DECLARED message contentType is application/json or a +json suffix
+// (a declared-JSON payload that fails to parse is a lying producer — a
+// loud terminal, never a silent string), text otherwise. The
+// `{"error":...}`/`{"data":...}` convention unwrapping LEFT the builtin
+// (round-4 unification): a consumer whose stream speaks it attaches an
+// OutputDecoder — a returned error is terminal, which IS the override
+// channel for error-frame conventions.
+func builtinDecodeFor(contentType string) openbindings.OutputDecoder {
+	isJSON := isJSONContentType(contentType)
+	return func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+		if len(raw.Body) == 0 {
+			return nil, nil
+		}
+		if isJSON {
+			var parsed any
+			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
+				return nil, &openbindings.InvocationError{
+					Code:    openbindings.ErrCodeResponseError,
+					Message: fmt.Sprintf("message declares %q but the payload is not valid JSON: %v", contentType, err),
+				}
+			}
+			return parsed, nil
+		}
+		return string(raw.Body), nil
+	}
+}
+
+// isJSONContentType mirrors the openapi rule: application/json or any
+// +json structured-suffix type; absent/unparseable → NOT JSON. Never
+// sniffed.
+func isJSONContentType(contentType string) bool {
+	mt := strings.ToLower(strings.TrimSpace(contentType))
+	if i := strings.Index(mt, ";"); i >= 0 {
+		mt = strings.TrimSpace(mt[:i])
+	}
+	return mt == "application/json" || strings.HasSuffix(mt, "+json")
+}
+
+// siteFor completes the core-stamped site with the format-known Target
+// (the resolved server URL).
+func siteFor(args *openbindings.BindingInvocationArgs, serverURL string) openbindings.InvokeSite {
+	var site openbindings.InvokeSite
+	if args.Site != nil {
+		site = *args.Site
+	} else {
+		site.Format = args.Source.Format
+		site.Ref = args.Ref
+	}
+	if site.Target == "" {
+		site.Target = serverURL
+	}
+	return site
 }

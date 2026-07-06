@@ -250,3 +250,29 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	}
 	return &iface, nil
 }
+
+// BuiltinHooks exposes the openapi builtins to the consultation seam's
+// cross-format dispatch (openbindings.BuiltinDecode/BuiltinClassify): the
+// decoder follows the delivery unit's declared Content-Type header (read
+// from raw.Meta — wire framing, never payload sniffing); the classifier
+// is the 2xx convention floor.
+func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.ResultClassifier) {
+	decode := func(site openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+		ct := ""
+		if vs := raw.Meta["Content-Type"]; len(vs) > 0 {
+			ct = vs[0]
+		}
+		return decodeByContentType(ct)(site, raw)
+	}
+	return decode, BuiltinClassify
+}
+
+// PlanContributions reports the openapi axis chain leaves: both §6 rules
+// are spec/wire answers, and routing is spec-covered (in:/requestBody) —
+// the FieldRouter is consulted but decline-only in v1.
+func (e *Invoker) PlanContributions(_ *openbindings.BindingInvocationArgs) (*openbindings.BindingPlan, error) {
+	return &openbindings.BindingPlan{
+		Decode:   openbindings.PlanAxis{Chain: []string{"header/content-type"}},
+		Classify: openbindings.PlanAxis{Chain: []string{"assumption/2xx"}},
+	}, nil
+}

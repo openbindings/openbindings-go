@@ -3,7 +3,6 @@ package openapi
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,14 +40,20 @@ func isSSEContentType(contentType string) bool {
 //
 //   - `data:` lines accumulate; multiple data lines for one event are joined
 //     with a literal newline (per the spec)
-//   - `event:`, `id:`, `retry:` fields are parsed and, when present, wrap the
-//     payload in an object so the consumer can access both
+//   - `event:`, `id:`, `retry:` fields are FRAMING: they ride the per-unit
+//     Meta (x-sse-event / x-sse-id / x-sse-retry), never the output value
+//     (the pre-hooks builtin wrapped them into the payload; that wrap left
+//     the builtin with the de-sniffing pass — hooks own any re-shaping)
 //   - Comment lines (starting with `:`) are ignored
 //   - Blank lines dispatch the accumulated event
 //
-// If a data payload parses as JSON, the parsed value is emitted; otherwise the
-// raw string is emitted.
-func streamSSE(ctx context.Context, resp *http.Response, inv openbindings.BindingHandle[any, any]) {
+// Decode runs per delivery unit (event) through the consultation seam. The
+// builtin lane follows the response's Content-Type header — text/event-stream,
+// hence text — never payload sniffing; JSON event payloads are an
+// OutputDecoder case (the triage row teaches it). Status carries the initial
+// response's status on every unit (it is real and invocation-scoped, never
+// fabricated); classification ran once, at dispatch.
+func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.BindingInvocationArgs, site openbindings.InvokeSite, inv openbindings.BindingHandle[any, any]) {
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -65,30 +70,41 @@ func streamSSE(ctx context.Context, resp *http.Response, inv openbindings.Bindin
 	// dispatch emits the accumulated event. It returns false when the emit
 	// fails (the invocation terminated while parked), signalling the caller
 	// to stop reading the body.
+	status := resp.StatusCode
+	invocationMeta := headerMetadata(resp.Header)
 	dispatch := func() bool {
 		if len(dataLines) == 0 && eventName == "" && eventID == "" {
 			return true
 		}
 		rawData := strings.Join(dataLines, "\n")
-		var data any = rawData
-		if openbindings.MaybeJSON(strings.TrimSpace(rawData)) {
-			var parsed any
-			if json.Unmarshal([]byte(rawData), &parsed) == nil {
-				data = parsed
-			}
+
+		// Per-unit Meta: invocation-scoped headers merged with this
+		// event's framing fields.
+		meta := make(openbindings.Metadata, len(invocationMeta)+3)
+		for k, v := range invocationMeta {
+			meta[k] = v
 		}
-		if eventName != "" || eventID != "" || retryMs != 0 {
-			wrapped := map[string]any{"data": data}
-			if eventName != "" {
-				wrapped["event"] = eventName
-			}
-			if eventID != "" {
-				wrapped["id"] = eventID
-			}
-			if retryMs != 0 {
-				wrapped["retry"] = retryMs
-			}
-			data = wrapped
+		if eventName != "" {
+			meta["x-sse-event"] = []string{eventName}
+		}
+		if eventID != "" {
+			meta["x-sse-id"] = []string{eventID}
+		}
+		if retryMs != 0 {
+			meta["x-sse-retry"] = []string{strconv.Itoa(retryMs)}
+		}
+
+		raw := openbindings.RawResult{
+			Status: &status,
+			Body:   []byte(rawData),
+			Meta:   meta,
+		}
+		data, derr := args.Hooks.DecodeOutput(site, raw, decodeByContentType(resp.Header.Get("Content-Type")))
+		if derr != nil {
+			// A decode error mid-stream is terminal; already-emitted
+			// outputs stand (drain-before-terminal).
+			inv.FireError(openbindings.AsInvocationError(derr))
+			return false
 		}
 
 		eventName = ""

@@ -109,18 +109,23 @@ func makeAsyncAPISpec(baseURL string) *Document {
 			"sendMessage": {
 				Action:   "send",
 				Channel:  ChannelRef{Ref: "#/channels/messages"},
+				Messages: []MessageRef{{Ref: "#/components/messages/json"}},
 				Security: []map[string][]string{{"bearer": {}}},
 			},
-			"sendOpenMessage": {Action: "send", Channel: ChannelRef{Ref: "#/channels/messages"}},
-			"sendAck":         {Action: "send", Channel: ChannelRef{Ref: "#/channels/ack"}},
+			"sendOpenMessage": {Action: "send", Channel: ChannelRef{Ref: "#/channels/messages"}, Messages: []MessageRef{{Ref: "#/components/messages/json"}}},
+			"sendAck":         {Action: "send", Channel: ChannelRef{Ref: "#/channels/ack"}, Messages: []MessageRef{{Ref: "#/components/messages/json"}}},
 			"receiveEvents": {
 				Action:   "receive",
 				Channel:  ChannelRef{Ref: "#/channels/events"},
+				Messages: []MessageRef{{Ref: "#/components/messages/json"}},
 				Security: []map[string][]string{{"bearer": {}}},
 			},
-			"receiveStream": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/stream"}},
+			"receiveStream": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/stream"}, Messages: []MessageRef{{Ref: "#/components/messages/json"}}},
 		},
 		Components: &Components{
+			Messages: map[string]Message{
+				"json": {Name: "json", ContentType: "application/json"},
+			},
 			SecuritySchemes: map[string]SecurityScheme{
 				"bearer": {Type: "http", Scheme: "bearer"},
 			},
@@ -304,8 +309,9 @@ func TestServer401MapsToAuthRequired(t *testing.T) {
 	if details["status"] != 401 {
 		t.Errorf("details.status = %v, want 401", details["status"])
 	}
-	body, _ := details["body"].(map[string]any)
-	if body["error"] != "unauthorized" {
+	// Error details carry the raw capture verbatim (bytes-as-text, never a
+	// sniffed parse — payload-independence).
+	if body, _ := details["body"].(string); !strings.Contains(body, "unauthorized") {
 		t.Errorf("details.body = %v", details["body"])
 	}
 }
@@ -740,15 +746,16 @@ func makeWSAsyncAPISpec(httpURL string, scheme *SecurityScheme) *Document {
 			"stream": {Address: "/ws"},
 		},
 		Operations: map[string]Operation{
-			"subscribe": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/stream"}},
-			"publish":   {Action: "send", Channel: ChannelRef{Ref: "#/channels/stream"}},
+			"subscribe": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/stream"}, Messages: []MessageRef{{Ref: "#/components/messages/json"}}},
+			"publish":   {Action: "send", Channel: ChannelRef{Ref: "#/channels/stream"}, Messages: []MessageRef{{Ref: "#/components/messages/json"}}},
+		},
+		Components: &Components{
+			Messages: map[string]Message{"json": {Name: "json", ContentType: "application/json"}},
 		},
 	}
 	if scheme != nil {
 		server.Security = []map[string][]string{{"auth": {}}}
-		doc.Components = &Components{
-			SecuritySchemes: map[string]SecurityScheme{"auth": *scheme},
-		}
+		doc.Components.SecuritySchemes = map[string]SecurityScheme{"auth": *scheme}
 	}
 	doc.Servers = map[string]Server{"wsServer": server}
 	return doc
@@ -864,7 +871,7 @@ func TestWebSocketBearerFirstFrameRequiresDeclaredScheme(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if err := writeWSJSON(ctx, conn, map[string]any{"data": msg}); err != nil {
+			if err := writeWSJSON(ctx, conn, msg); err != nil {
 				return
 			}
 		}
@@ -1060,11 +1067,43 @@ func TestWebSocketServerErrorFrame(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	// The {"data"}/{"error"} convention left the builtin (round-4
+	// unification): a consumer whose stream speaks it attaches an
+	// OutputDecoder — a returned error is terminal, which IS the override
+	// channel for error-frame conventions.
+	conventionDecoder := func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+		var parsed map[string]any
+		if err := json.Unmarshal(raw.Body, &parsed); err != nil {
+			return nil, err
+		}
+		if errVal, has := parsed["error"]; has && errVal != nil {
+			msg := "server reported an error"
+			if em, ok := errVal.(map[string]any); ok {
+				if m, ok := em["message"].(string); ok && m != "" {
+					msg = m
+				}
+			}
+			return nil, &openbindings.InvocationError{
+				Code:    openbindings.ErrCodeStreamError,
+				Message: msg,
+				Details: map[string]any{"error": errVal},
+			}
+		}
+		if dataVal, has := parsed["data"]; has {
+			return dataVal, nil
+		}
+		return parsed, nil
+	}
+	args := &openbindings.BindingInvocationArgs{
 		Source:  wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "tok"},
-	})
+	}
+	// Hooks ride the args on the binding-layer path (what the operation
+	// invoker's fill does for embedders).
+	hooked := openbindings.NewOperationInvoker(binv)
+	hooked.OutputDecoder = conventionDecoder
+	call := hooked.InvokeBinding(bg(), args)
 	vals, err := drainOutputs(t, call)
 	if len(vals) != 1 {
 		t.Fatalf("the {data} frame before the error must be delivered, got %v", vals)

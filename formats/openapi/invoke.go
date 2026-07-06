@@ -215,7 +215,9 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	// streaming response. Hand the (still-open) response to the SSE streamer
 	// which takes ownership of closing the body and the terminal transition.
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 && isSSEContentType(resp.Header.Get("Content-Type")) {
-		streamSSE(bctx, resp, inv)
+		// Classification for the stream path runs once, here, at dispatch,
+		// on the initial response status (2xx gate above).
+		streamSSE(bctx, resp, args, siteFor(args, baseURL), inv)
 		return
 	}
 
@@ -237,29 +239,41 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 
-	var output any
-	if len(respBody) > 0 {
-		trimmed := strings.TrimSpace(string(respBody))
-		if openbindings.MaybeJSON(trimmed) {
-			var parsed any
-			if json.Unmarshal(respBody, &parsed) == nil {
-				output = parsed
-			} else {
-				output = string(respBody)
-			}
-		} else {
-			output = string(respBody)
-		}
+	// Classify, then decode — both through the consultation seam
+	// (per-invocation hook → invoker-level hook → the format builtins
+	// below). §6's pinned rules, content-independent throughout:
+	// classify = success iff status ∈ 2xx (declared `responses` never
+	// change classification — they enrich failure details); decode = the
+	// response's Content-Type HEADER decides the lane (wire framing, not
+	// payload sniffing): JSON for application/json and +json suffixes,
+	// text otherwise, absent/unparseable header → text.
+	status := resp.StatusCode
+	raw := openbindings.RawResult{
+		Status: &status,
+		Body:   respBody,
+		Meta:   headerMetadata(resp.Header),
 	}
+	site := siteFor(args, baseURL)
 
-	if resp.StatusCode >= 400 {
+	ok, cerr := args.Hooks.Classify(site, raw, BuiltinClassify)
+	if cerr != nil {
+		inv.FireError(openbindings.AsInvocationError(cerr))
+		return
+	}
+	if !ok {
+		// The format's NATIVE failure: hooks change the verdict, never
+		// the error vocabulary. The raw body rides Details for callers.
 		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
-		// Surface the response body in Details so callers can inspect the
-		// error payload, without conflating it with a successful output.
-		if d, ok := ierr.Details.(map[string]any); ok && output != nil {
-			d["body"] = output
+		if d, okd := ierr.Details.(map[string]any); okd && len(respBody) > 0 {
+			d["body"] = string(respBody)
 		}
 		inv.FireError(ierr)
+		return
+	}
+
+	output, derr := args.Hooks.DecodeOutput(site, raw, decodeByContentType(resp.Header.Get("Content-Type")))
+	if derr != nil {
+		inv.FireError(openbindings.AsInvocationError(derr))
 		return
 	}
 
@@ -267,6 +281,67 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 	inv.CloseOutput()
+}
+
+// BuiltinClassify is the openapi builtin result classifier: success iff
+// the HTTP status is 2xx (the convention floor; declared responses
+// refine failure DETAILS only, never classification).
+func BuiltinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (bool, error) {
+	return raw.Status != nil && *raw.Status >= 200 && *raw.Status < 300, nil
+}
+
+// decodeByContentType returns the builtin decoder for one response's
+// declared Content-Type header: strict JSON for application/json and
+// +json suffixes (a declared-JSON body that fails to parse is a lying
+// server — a loud ErrCodeResponseError, never a silent string); text
+// otherwise; an empty body is a nil output.
+func decodeByContentType(contentType string) openbindings.OutputDecoder {
+	isJSON := isJSONContentType(contentType)
+	return func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+		if len(raw.Body) == 0 {
+			return nil, nil
+		}
+		if isJSON {
+			var parsed any
+			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
+				return nil, &openbindings.InvocationError{
+					Code:    openbindings.ErrCodeResponseError,
+					Message: fmt.Sprintf("response declares %q but the body is not valid JSON: %v", contentType, err),
+				}
+			}
+			return parsed, nil
+		}
+		return string(raw.Body), nil
+	}
+}
+
+// isJSONContentType reports whether a Content-Type header declares a JSON
+// body: application/json or any +json structured-suffix type. Absent or
+// unparseable headers are NOT JSON (the text lane) — never sniffed.
+func isJSONContentType(contentType string) bool {
+	mt := strings.ToLower(strings.TrimSpace(contentType))
+	if i := strings.Index(mt, ";"); i >= 0 {
+		mt = strings.TrimSpace(mt[:i])
+	}
+	return mt == "application/json" || strings.HasSuffix(mt, "+json")
+}
+
+// siteFor completes the core-stamped site with the format-known Target
+// (the resolved base URL) before consultation; a nil args.Site (direct
+// format-package call) gets a minimal unstamped-equivalent site whose
+// Builtin* dispatch stays loud.
+func siteFor(args *openbindings.BindingInvocationArgs, baseURL string) openbindings.InvokeSite {
+	var site openbindings.InvokeSite
+	if args.Site != nil {
+		site = *args.Site
+	} else {
+		site.Format = args.Source.Format
+		site.Ref = args.Ref
+	}
+	if site.Target == "" {
+		site.Target = baseURL
+	}
+	return site
 }
 
 // headerMetadata clones HTTP response headers into invocation Metadata.
