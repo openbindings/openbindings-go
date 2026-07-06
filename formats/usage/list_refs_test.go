@@ -48,9 +48,9 @@ cmd "config" {
 	}
 
 	wantRefs := map[string]bool{
-		"config set": false,
-		"config get": false,
-		"config":     false,
+		"#/units/config.set": false,
+		"#/units/config.get": false,
+		"#/units/config":     false,
 	}
 	for _, ref := range result.Targets {
 		if _, ok := wantRefs[ref.Ref]; ok {
@@ -87,7 +87,7 @@ arg "<pattern>" help="Search pattern"
 
 	found := false
 	for _, ref := range result.Targets {
-		if ref.Ref == "grep" {
+		if ref.Ref == "#/units/grep" {
 			found = true
 			var description string
 			if ref.Operation != nil {
@@ -99,7 +99,7 @@ arg "<pattern>" help="Search pattern"
 		}
 	}
 	if !found {
-		t.Error("expected root command ref 'grep'")
+		t.Error("expected root command ref '#/units/grep'")
 	}
 }
 
@@ -122,14 +122,14 @@ cmd "mike" help="M"
 	if len(result.Targets) != 3 {
 		t.Fatalf("expected 3 refs, got %d", len(result.Targets))
 	}
-	if result.Targets[0].Ref != "alpha" {
-		t.Errorf("first ref = %q, want alpha", result.Targets[0].Ref)
+	if result.Targets[0].Ref != "#/units/alpha" {
+		t.Errorf("first ref = %q, want #/units/alpha", result.Targets[0].Ref)
 	}
-	if result.Targets[1].Ref != "mike" {
-		t.Errorf("second ref = %q, want mike", result.Targets[1].Ref)
+	if result.Targets[1].Ref != "#/units/mike" {
+		t.Errorf("second ref = %q, want #/units/mike", result.Targets[1].Ref)
 	}
-	if result.Targets[2].Ref != "zulu" {
-		t.Errorf("third ref = %q, want zulu", result.Targets[2].Ref)
+	if result.Targets[2].Ref != "#/units/zulu" {
+		t.Errorf("third ref = %q, want #/units/zulu", result.Targets[2].Ref)
 	}
 }
 
@@ -140,8 +140,7 @@ cmd "greet" help="Say hello"
 cmd "farewell" help="Say goodbye"
 `
 
-	spec := mustParse(t, content)
-	iface, err := convertToInterfaceWithSpec(spec, "cli.kdl")
+	iface, err := synthesizeFromArtifactText(content)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,14 +186,14 @@ cmd "config" subcommand_required=#true {
 	}
 
 	for _, ref := range result.Targets {
-		if ref.Ref == "config" {
-			t.Error("did not expect ref 'config' (subcommand_required)")
+		if ref.Ref == "#/units/config" {
+			t.Error("did not expect ref '#/units/config' (subcommand_required)")
 		}
 	}
 
 	wantRefs := map[string]bool{
-		"config get": false,
-		"config set": false,
+		"#/units/config.get": false,
+		"#/units/config.set": false,
 	}
 	for _, ref := range result.Targets {
 		if _, ok := wantRefs[ref.Ref]; ok {

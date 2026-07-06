@@ -52,24 +52,51 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		_ = inv.CloseInput()
 	}
 
-	// The binding's transport members (x-usage): field delivery routing and
-	// the declared stdout mode. Delivery substitutes routed field values
-	// ("-" / temp-file path) before argv mapping, so placement is untouched.
-	ext, extErr := parseBindingExt(args.Binding)
-	if extErr != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: extErr.Error()})
+	// Direct-binary dispatch (context-metadata hint): SDK-only feature, no
+	// wrapper loaded, ref is a command string, no unit and so no delivery.
+	if binary := metadataBinary(args.Context); binary != "" {
+		e.runDirect(bctx, args, inv, binary, input)
 		return
 	}
-	input, stdin, cleanup, derr := applyDelivery(input, ext)
+
+	// Resolve the wrapper unit: the complete invocation recipe.
+	w, lerr := e.cachedLoadWrapper(bctx, args.Source.Location, args.Source.Content)
+	if lerr != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: lerr.Error()})
+		return
+	}
+	unit, unitName, rerr := w.resolveUnitRef(args.Ref)
+	if rerr != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: rerr.Error()})
+		return
+	}
+	// Per-unit validation (§10): failure makes THIS binding unactionable.
+	cmd, inherited, cmdPath, verr := w.validateUnit(unit, unitName)
+	if verr != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: verr.Error()})
+		return
+	}
+
+	input, stdin, cleanup, derr := applyDelivery(input, unit)
 	if derr != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: derr.Error()})
+		// Pre-spawn value refusals (the delivery cap) are validation failures.
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: derr.Error()})
 		return
 	}
 	defer cleanup()
 
-	binName, cmdArgs, ierr := e.resolveCommand(bctx, args, input, ext.stdinField())
-	if ierr != nil {
-		inv.FireError(ierr)
+	meta := w.kdl.Meta()
+	binName := meta.Bin
+	if binName == "" {
+		binName = meta.Name
+	}
+	if binName == "" {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "usage artifact does not define a binary name (bin or name)"})
+		return
+	}
+	cmdArgs, aerr := buildCLIArgs(cmdPath, cmd, inherited, input)
+	if aerr != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: aerr.Error()})
 		return
 	}
 
@@ -91,7 +118,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error()})
 		return
 	}
-	if !ext.exitOK(res.exitCode) {
+	if !unit.exitOK(res.exitCode) {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeExecutionFailed,
 			Message: fmt.Sprintf("command exited with status %d", res.exitCode),
@@ -100,23 +127,34 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	output, oerr := decodeStdout(res.stdout, ext.Stdout)
-	if oerr != nil {
-		inv.FireError(oerr)
-		return
+	// exit.values maps a declared-ok code to a literal output (§7); the unit
+	// parser guarantees stdout "none" in that case.
+	output, hasLit := unit.exitValue(res.exitCode)
+	if !hasLit {
+		var oerr *openbindings.InvocationError
+		output, oerr = decodeStdout(res.stdout, unit.Stdout)
+		if oerr != nil {
+			inv.FireError(oerr)
+			return
+		}
 	}
 
-	// Diagnostics ride trailing metadata, never the output value: the exit
-	// code (parity with the old Status field) and captured stderr (a filter
-	// command's human summary; conventions v2). The trailer is header-shaped
-	// metadata, so stderr is bounded: truncated to maxStderrTrailerBytes with
-	// an explicit marker (which also fires when the capture itself overflowed).
+	emitWithDiagnostics(inv, output, res)
+}
+
+// emitWithDiagnostics stamps the diagnostics trailer and emits the output.
+// Diagnostics ride trailing metadata, never the output value: the exit code
+// and captured stderr (a filter command's human summary). The trailer is
+// header-shaped, so stderr is bounded: the LAST maxStderrTrailerBytes (tails
+// carry the operative lines), with an explicit truncation marker that also
+// fires when the capture itself overflowed.
+func emitWithDiagnostics(inv *openbindings.InvocationImpl[any, any], output any, res *cliResult) {
 	trailer := openbindings.Metadata{"x-exit-code": {strconv.Itoa(res.exitCode)}}
 	if res.stderr != "" {
 		stderrOut := res.stderr
 		truncated := res.stderrTruncated
 		if len(stderrOut) > maxStderrTrailerBytes {
-			stderrOut = stderrOut[:maxStderrTrailerBytes]
+			stderrOut = stderrOut[len(stderrOut)-maxStderrTrailerBytes:]
 			truncated = true
 		}
 		trailer["x-stderr"] = []string{stderrOut}
@@ -131,59 +169,58 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	inv.CloseOutput()
 }
 
-// resolveCommand determines the binary and argv for an invocation. A
-// "binary" metadata hint dispatches the ref directly; otherwise the usage
-// spec is loaded and the ref resolved to a command. Returns a terminal
-// *InvocationError (never a side effect) on any resolution failure.
-func (e *Invoker) resolveCommand(ctx context.Context, args *openbindings.BindingInvocationArgs, input any, stdinField string) (string, []string, *openbindings.InvocationError) {
-	if binary := metadataBinary(args.Context); binary != "" {
-		cmdArgs, err := buildDirectArgsFromRef(args.Ref, input)
-		if err != nil {
-			return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
-		}
-		return binary, cmdArgs, nil
-	}
-
-	spec, err := e.cachedLoadSpec(ctx, args.Source.Location, args.Source.Content)
+// runDirect is the direct-binary dispatch path (SDK-only feature, outside
+// the format conventions): the ref is shlex-split as a command, every input
+// field rides argv as a flag, output decodes under the default text mode.
+func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any], binary string, input any) {
+	cmdArgs, err := buildDirectArgsFromRef(args.Ref, input)
 	if err != nil {
-		return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: err.Error()}
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+		return
 	}
-
-	meta := spec.Meta()
-	binName := meta.Bin
-	if binName == "" {
-		binName = meta.Name
+	res, runErr := runCLI(ctx, binary, cmdArgs, args.Context, nil)
+	if ctx.Err() != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeCancelled, Message: "operation cancelled"})
+		return
 	}
-	if binName == "" {
-		return "", nil, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: "usage spec does not define a binary name (bin or name)",
+	if runErr != nil {
+		code := openbindings.ErrCodeExecutionFailed
+		if errors.Is(runErr, exec.ErrNotFound) {
+			code = openbindings.ErrCodeSourceConfigError
 		}
+		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error()})
+		return
 	}
-
-	ref := strings.TrimSpace(args.Ref)
-	if ref == "" {
-		// Root invocation: no subcommand, use top-level flags and args.
-		rootCmd := rootCommand(spec)
-		if rootCmd == nil {
-			rootCmd = &Command{Flags: spec.Flags(), Args: spec.Args()}
-		}
-		cmdArgs, err := buildCLIArgs(nil, rootCmd, nil, input, stdinField)
-		if err != nil {
-			return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
-		}
-		return binName, cmdArgs, nil
+	if res.exitCode != 0 {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeExecutionFailed,
+			Message: fmt.Sprintf("command exited with status %d", res.exitCode),
+			Details: map[string]any{"exitCode": res.exitCode, "output": wrapText(res.stdout, res.stderr)},
+		})
+		return
 	}
+	output, oerr := decodeStdout(res.stdout, "")
+	if oerr != nil {
+		inv.FireError(oerr)
+		return
+	}
+	emitWithDiagnostics(inv, output, res)
+}
 
-	found, err := findCommand(spec, ref)
+// loadWrapper loads an openbindings.usage document from inline content (the
+// JSON-object source form, or text) or an absolute location.
+func loadWrapper(_ context.Context, location string, content any) (*Wrapper, error) {
+	if content != nil {
+		return ParseWrapper(content)
+	}
+	if location == "" {
+		return nil, fmt.Errorf("source must have location or content")
+	}
+	data, err := os.ReadFile(location)
 	if err != nil {
-		return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: err.Error()}
+		return nil, fmt.Errorf("read openbindings.usage document: %w", err)
 	}
-	cmdArgs, err := buildCLIArgs(found.path, found.cmd, found.inheritedFlags, input, stdinField)
-	if err != nil {
-		return "", nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
-	}
-	return binName, cmdArgs, nil
+	return ParseWrapper(data)
 }
 
 // metadataBinary extracts the "binary" hint from context metadata.
@@ -229,50 +266,6 @@ func buildDirectArgsFromRef(ref string, input any) ([]string, error) {
 	return args, nil
 }
 
-func loadSpec(ctx context.Context, location string, content any) (*Spec, error) {
-	// Prefer inline content when provided — avoids redundant disk reads when
-	// callers (e.g. Sync) already have fresh bytes.
-	if content != nil {
-		switch c := content.(type) {
-		case string:
-			spec, err := ParseKDL([]byte(c))
-			if err != nil {
-				return nil, fmt.Errorf("parse usage content: %w", err)
-			}
-			return spec, nil
-		case []byte:
-			spec, err := ParseKDL(c)
-			if err != nil {
-				return nil, fmt.Errorf("parse usage content: %w", err)
-			}
-			return spec, nil
-		default:
-			return nil, fmt.Errorf("unsupported content type %T (expected string or []byte)", content)
-		}
-	}
-
-	if location != "" {
-		if strings.HasPrefix(location, "exec:") {
-			resolved, err := resolveCommandArtifact(ctx, location)
-			if err != nil {
-				return nil, fmt.Errorf("resolve cmd artifact: %w", err)
-			}
-			spec, err := ParseKDL([]byte(resolved))
-			if err != nil {
-				return nil, fmt.Errorf("parse usage content from exec: %w", err)
-			}
-			return spec, nil
-		}
-
-		spec, err := ParseFile(location)
-		if err != nil {
-			return nil, fmt.Errorf("parse usage spec: %w", err)
-		}
-		return spec, nil
-	}
-
-	return nil, fmt.Errorf("source must have location or content")
-}
 
 type findCommandResult struct {
 	path           []string
@@ -345,7 +338,7 @@ func commandMatchesName(cmd Command, target string) bool {
 	return false
 }
 
-func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input any, stdinField string) ([]string, error) {
+func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input any) ([]string, error) {
 	var args []string
 	args = append(args, cmdPath...)
 
@@ -437,13 +430,6 @@ func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input
 
 	for key := range inputMap {
 		if !processed[key] {
-			// A stdin-routed field that maps to no flag or arg is consumed by
-			// delivery itself: bytes to stdin, nothing on argv (the no-operand
-			// filter class — pbcopy, sort). Only stdin has this out-of-band
-			// channel; a file-routed field must land its path somewhere.
-			if key == stdinField {
-				continue
-			}
 			return nil, fmt.Errorf("unknown field %q: not defined as a flag or arg in the usage spec for this command", key)
 		}
 	}
@@ -551,7 +537,7 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 	}
 
 	stdout := &cappedBuffer{limit: maxCLIOutputBytes}
-	stderr := &cappedBuffer{limit: maxCLIOutputBytes}
+	stderr := &tailBuffer{limit: maxCLIOutputBytes}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
@@ -574,13 +560,14 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 		stdout:          stdout.String(),
 		stderr:          stderr.String(),
 		exitCode:        exitCode,
-		stderrTruncated: stderr.overflow,
+		stderrTruncated: stderr.truncated,
 	}, nil
 }
 
-// decodeStdout maps zero-exit stdout to the output value per the binding's
-// declared stdout mode (conventions v2). stderr never participates: it is
-// diagnostics and rides the x-stderr trailer.
+// decodeStdout maps a declared-ok exit's stdout to the output value per the
+// unit's stdout mode (openbindings.usage.md §6). There is no heuristic: an
+// undeclared lane means "text", a declaration in itself. stderr never
+// participates: it is diagnostics and rides the x-stderr trailer.
 func decodeStdout(stdoutStr, mode string) (any, *openbindings.InvocationError) {
 	switch mode {
 	case stdoutJSON:
@@ -602,36 +589,18 @@ func decodeStdout(stdoutStr, mode string) (any, *openbindings.InvocationError) {
 		}
 		return parsed, nil
 
-	case stdoutText:
-		// Declared text lane: the output value is stdout with trailing
-		// newlines stripped, exactly as command substitution $(...) reads a
-		// command's text output — the final newline is line-termination
-		// framing, not payload ("git rev-parse HEAD" means the hash, not
-		// hash-plus-newline). Interior newlines are preserved.
-		return strings.TrimRight(stdoutStr, "\r\n"), nil
+	case stdoutNone:
+		// Declared no-output lane: stdout is not consulted; exit.values may
+		// supply the output upstream, else null.
+		return nil, nil
 
-	default:
-		// Undeclared: the conservative heuristic. Bare-parse machine-shaped
-		// stdout — objects and arrays by shape, plus the JSON literals and
-		// strings a contract-shaped output can be (an operation whose output
-		// is `null` — a kv-store get miss, a no-output op — must round-trip
-		// as null, not as a {stdout: "null"} wrapper). Bare numbers stay
-		// wrapped: a human lane printing "42" is far more plausible than a
-		// number-typed operation output on an undeclared lane; bindings that
-		// mean it declare stdout "json".
-		if len(stdoutStr) > 0 {
-			trimmed := strings.TrimSpace(stdoutStr)
-			bareParse := openbindings.MaybeJSON(trimmed) ||
-				trimmed == "null" || trimmed == "true" || trimmed == "false" ||
-				strings.HasPrefix(trimmed, `"`)
-			if bareParse {
-				var parsed any
-				if json.Unmarshal([]byte(trimmed), &parsed) == nil {
-					return parsed, nil
-				}
-			}
-		}
-		return map[string]any{"stdout": stdoutStr}, nil
+	default: // "text", and the absent-mode default (a declaration, not a guess)
+		// The output value is stdout with trailing newlines stripped, exactly
+		// as command substitution $(...) reads a command's text output — the
+		// final newline is line-termination framing, not payload
+		// ("git rev-parse HEAD" means the hash, not hash-plus-newline).
+		// Interior newlines are preserved.
+		return strings.TrimRight(stdoutStr, "\r\n"), nil
 	}
 }
 
@@ -714,3 +683,25 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 
 func (c *cappedBuffer) String() string { return c.buf.String() }
 func (c *cappedBuffer) Len() int       { return c.buf.Len() }
+
+// tailBuffer keeps the MOST RECENT limit bytes: stderr is diagnostics whose
+// operative lines (errors, summaries) print last, and whose volume never
+// fails a successful invocation — old bytes are discarded as they stream.
+type tailBuffer struct {
+	buf       []byte
+	limit     int
+	truncated bool
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.limit {
+		t.truncated = true
+		// Copy down rather than re-slice so the discarded prefix is freed.
+		keep := t.buf[len(t.buf)-t.limit:]
+		t.buf = append(t.buf[:0], keep...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string { return string(t.buf) }

@@ -1,11 +1,14 @@
 package usage
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"github.com/openbindings/openbindings-go/formattoken"
 )
 
 const (
@@ -16,24 +19,114 @@ const (
 	schemaTypeObject  = "object"
 )
 
-// convertToInterfaceWithSpec builds an interface from a pre-loaded spec.
-func convertToInterfaceWithSpec(spec *Spec, location string) (openbindings.Interface, error) {
-	fromTok := formattoken.FormatToken{Name: "usage", Version: MaxTestedVersion}
-	return buildInterfaceFromSpec(spec, location, fromTok.String(), openbindings.MaxTestedVersion)
+// wrapperForSource resolves any usage-family source to a Wrapper: a wrapper
+// document loads directly; a bare kdl artifact is wrapped with trivial units
+// (§11 naming) — derivation input, never an invocation source. Returns the
+// wrapper, the JSON-object content to embed when the source must be inlined
+// (nil when the wrapper has its own location), and that location.
+func wrapperForSource(ctx context.Context, format, location string, content any) (*Wrapper, map[string]any, string, error) {
+	if strings.HasPrefix(format, "openbindings.usage") {
+		w, err := loadWrapper(ctx, location, content)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		var embed map[string]any
+		if content != nil {
+			switch c := content.(type) {
+			case map[string]any:
+				embed = c
+			default:
+				b, merr := json.Marshal(content)
+				if merr != nil {
+					return nil, nil, "", fmt.Errorf("openbindings.usage content: %w", merr)
+				}
+				if err := json.Unmarshal(b, &embed); err != nil {
+					return nil, nil, "", fmt.Errorf("openbindings.usage content: %w", err)
+				}
+			}
+			return w, embed, "", nil
+		}
+		return w, nil, location, nil
+	}
+
+	// Bare artifact: wrap it.
+	text, err := loadArtifactText(ctx, location, content)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	spec, err := ParseKDL([]byte(text))
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("parse usage content: %w", err)
+	}
+	trivial := TrivialWrapper(text, spec)
+	w, err := ParseWrapper(trivial)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("wrap usage artifact: %w", err)
+	}
+	return w, trivial, "", nil
 }
 
-func buildInterfaceFromSpec(spec *Spec, location, formatStr, obVersion string) (openbindings.Interface, error) {
+// synthesizeFromArtifactText wraps bare kdl text with trivial units and
+// synthesizes — the bare-artifact path of SynthesizeInterface, exported to
+// tests as the old convertToInterfaceWithSpec entry.
+func synthesizeFromArtifactText(text string) (openbindings.Interface, error) {
+	spec, err := ParseKDL([]byte(text))
+	if err != nil {
+		return openbindings.Interface{}, fmt.Errorf("parse usage content: %w", err)
+	}
+	trivial := TrivialWrapper(text, spec)
+	w, err := ParseWrapper(trivial)
+	if err != nil {
+		return openbindings.Interface{}, err
+	}
+	return buildInterfaceFromWrapper(w, trivial, "")
+}
+
+// loadArtifactText reads a bare kdl artifact's text from inline content, a
+// file path, or an exec: locator.
+func loadArtifactText(ctx context.Context, location string, content any) (string, error) {
+	if content != nil {
+		switch c := content.(type) {
+		case string:
+			return c, nil
+		case []byte:
+			return string(c), nil
+		default:
+			return "", fmt.Errorf("unsupported content type %T (expected string or []byte)", content)
+		}
+	}
+	if location == "" {
+		return "", fmt.Errorf("source must have location or content")
+	}
+	if strings.HasPrefix(location, "exec:") {
+		return resolveCommandArtifact(ctx, location)
+	}
+	data, err := os.ReadFile(location)
+	if err != nil {
+		return "", fmt.Errorf("read usage spec: %w", err)
+	}
+	return string(data), nil
+}
+
+// buildInterfaceFromWrapper synthesizes an interface from a wrapper's units:
+// one operation per unit, bound by unit ref. The emitted source is the
+// wrapper itself (its location, or its embedded JSON-object content).
+func buildInterfaceFromWrapper(w *Wrapper, wrapperContent map[string]any, location string) (openbindings.Interface, error) {
+	spec, err := w.loadArtifact()
+	if err != nil {
+		return openbindings.Interface{}, err
+	}
 	meta := spec.Meta()
 
-	sourceEntry := openbindings.Source{
-		Format: formatStr,
-	}
+	sourceEntry := openbindings.Source{Format: WrapperToken}
 	if location != "" {
 		sourceEntry.Location = location
+	} else {
+		sourceEntry.Content = wrapperContent
 	}
 
 	iface := openbindings.Interface{
-		OpenBindings: obVersion,
+		OpenBindings: openbindings.MaxTestedVersion,
 		Name:         meta.Name,
 		Version:      meta.Version,
 		Description:  meta.About,
@@ -41,105 +134,56 @@ func buildInterfaceFromSpec(spec *Spec, location, formatStr, obVersion string) (
 		Sources: map[string]openbindings.Source{
 			DefaultSourceName: sourceEntry,
 		},
+		Bindings: map[string]openbindings.BindingEntry{},
 	}
 
-	bindings := map[string]openbindings.BindingEntry{}
-	var dupes []string
-	var schemaErr error
-
-	// Synthesize a root operation if the spec has top-level args or non-global flags.
-	// This covers single-command CLIs (grep, curl, jq) that have no subcommands.
-	if rootCmd := rootCommand(spec); rootCmd != nil {
-		opKey := meta.Bin
-		if opKey == "" {
-			opKey = meta.Name
-		}
-		if opKey != "" {
-			op := openbindings.Operation{
-				Description: meta.About,
-			}
-			inputSchema, err := generateInputSchema(*rootCmd, nil)
-			if err != nil {
-				return openbindings.Interface{}, err
-			}
-			if inputSchema != nil {
-				op.Input = inputSchema
-			}
-			iface.Operations[opKey] = op
-			bindings[opKey+"."+DefaultSourceName] = openbindings.BindingEntry{
-				Operation: opKey,
-				Source:    DefaultSourceName,
-				// Empty ref signals "root invocation" to the invoker
-				// (see invoke_binding.go: ref == "" branch). Setting
-				// it to opKey would make the invoker try to resolve
-				// the binary name as a subcommand path and fail.
-				Ref: "",
-			}
-		}
+	names := make([]string, 0, len(w.Units))
+	for name := range w.Units {
+		names = append(names, name)
 	}
+	sort.Strings(names)
 
-	walkWithGlobals(spec, func(path []string, cmd Command, inheritedGlobals []Flag) {
-		if schemaErr != nil {
-			return
+	for _, name := range names {
+		unit := w.Units[name]
+		cmd, inherited, path, verr := w.validateUnit(unit, name)
+		if verr != nil {
+			return openbindings.Interface{}, verr
 		}
-		if len(path) == 0 {
-			return
-		}
-		if cmd.SubcommandRequired {
-			return
-		}
-		opKey := strings.Join(path, ".")
-		if override, ok := cmd.Node.Props["opKey"]; ok {
-			if s := override.String(); s != "" {
-				opKey = s
+
+		op := openbindings.Operation{Description: unit.Description}
+		if op.Description == "" {
+			if strings.TrimSpace(unit.Command) == "" {
+				op.Description = meta.About
+			} else {
+				op.Description = cmd.Help
 			}
 		}
-		if _, exists := iface.Operations[opKey]; exists {
-			dupes = append(dupes, opKey)
-			return
-		}
-
-		op := openbindings.Operation{
-			Description: cmd.Help,
-		}
-
 		if len(path) > 1 {
 			op.Tags = make([]string, len(path)-1)
 			copy(op.Tags, path[:len(path)-1])
 		}
-
 		for _, alias := range cmd.Aliases {
-			for _, name := range alias.Names {
+			for _, an := range alias.Names {
 				if !alias.Hide {
-					op.Aliases = append(op.Aliases, name)
+					op.Aliases = append(op.Aliases, an)
 				}
 			}
 		}
-
-		inputSchema, err := generateInputSchema(cmd, inheritedGlobals)
-		if err != nil {
-			schemaErr = err
-			return
+		inputSchema, serr := generateInputSchema(*cmd, inherited)
+		if serr != nil {
+			return openbindings.Interface{}, serr
 		}
 		if inputSchema != nil {
 			op.Input = inputSchema
 		}
 
-		iface.Operations[opKey] = op
-		bindingKey := opKey + "." + DefaultSourceName
-		bindings[bindingKey] = openbindings.BindingEntry{
-			Operation: opKey,
+		iface.Operations[name] = op
+		iface.Bindings[name+"."+DefaultSourceName] = openbindings.BindingEntry{
+			Operation: name,
 			Source:    DefaultSourceName,
-			Ref:       strings.Join(path, " "),
+			Ref:       UnitRef(name),
 		}
-	})
-	if schemaErr != nil {
-		return openbindings.Interface{}, schemaErr
 	}
-	if len(dupes) > 0 {
-		return openbindings.Interface{}, fmt.Errorf("duplicate command paths: %s", strings.Join(dupes, ", "))
-	}
-	iface.Bindings = bindings
 
 	return iface, nil
 }

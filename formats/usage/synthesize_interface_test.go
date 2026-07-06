@@ -14,13 +14,12 @@ func mustParse(t *testing.T, kdl string) *Spec {
 }
 
 func TestConvertToInterface_CopiesMetadata(t *testing.T) {
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 version "1.2.3"
 about "A test CLI"
 cmd "greet" help="Say hello"
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "cli.kdl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,12 +35,11 @@ cmd "greet" help="Say hello"
 }
 
 func TestConvertToInterface_CreatesOperations(t *testing.T) {
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 cmd "greet" help="Say hello"
 cmd "farewell" help="Say goodbye"
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "cli.kdl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,11 +55,10 @@ cmd "farewell" help="Say goodbye"
 }
 
 func TestConvertToInterface_BindingRefs(t *testing.T) {
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 cmd "greet" help="Say hello"
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "cli.kdl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +67,8 @@ cmd "greet" help="Say hello"
 	if !ok {
 		t.Fatalf("expected binding %q", key)
 	}
-	if binding.Ref != "greet" {
-		t.Errorf("ref = %q, want greet", binding.Ref)
+	if binding.Ref != "#/units/greet" {
+		t.Errorf("ref = %q, want #/units/greet", binding.Ref)
 	}
 	if binding.Operation != "greet" {
 		t.Errorf("operation = %q, want greet", binding.Operation)
@@ -79,13 +76,12 @@ cmd "greet" help="Say hello"
 }
 
 func TestConvertToInterface_SubcommandRefs(t *testing.T) {
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 cmd "config" {
     cmd "set" help="Set a value"
 }
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,20 +91,19 @@ cmd "config" {
 		t.Error("expected operation 'config.set'")
 	}
 	binding := iface.Bindings["config.set."+DefaultSourceName]
-	if binding.Ref != "config set" {
-		t.Errorf("ref = %q, want 'config set'", binding.Ref)
+	if binding.Ref != "#/units/config.set" {
+		t.Errorf("ref = %q, want '#/units/config.set'", binding.Ref)
 	}
 }
 
 func TestConvertToInterface_FlagSchema(t *testing.T) {
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 cmd "greet" help="Say hello" {
     flag "--name <value>" help="Who to greet" required=#true
     flag "--verbose" help="Enable verbose output"
 }
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,13 +144,12 @@ cmd "greet" help="Say hello" {
 }
 
 func TestConvertToInterface_ArgSchema(t *testing.T) {
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 cmd "greet" help="Say hello" {
     arg "<name>" help="Who to greet"
 }
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,30 +173,32 @@ cmd "greet" help="Say hello" {
 }
 
 func TestConvertToInterface_SourceEntry(t *testing.T) {
-	spec := mustParse(t, `name "mycli"`)
-	iface, err := convertToInterfaceWithSpec(spec, "/path/to/cli.kdl")
+	iface, err := synthesizeFromArtifactText(`name "mycli"`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := iface.Sources[DefaultSourceName]
-	if src.Location != "/path/to/cli.kdl" {
-		t.Errorf("location = %q, want /path/to/cli.kdl", src.Location)
+	// A bare artifact synthesizes to an embedded wrapper source: the wrapper
+	// has no location of its own, and the kdl lives inside it verbatim.
+	if src.Location != "" {
+		t.Errorf("location = %q, want empty (embedded wrapper)", src.Location)
 	}
-	// Format should include the version
-	if src.Format == "" {
-		t.Error("expected non-empty format")
+	if src.Format != WrapperToken {
+		t.Errorf("format = %q, want %q", src.Format, WrapperToken)
+	}
+	if src.Content == nil {
+		t.Error("expected embedded wrapper content")
 	}
 }
 
 func TestConvertToInterface_SkipsSubcommandRequired(t *testing.T) {
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 cmd "config" subcommand_required=#true {
     cmd "get" help="Get a value"
     cmd "set" help="Set a value"
 }
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,13 +214,12 @@ cmd "config" subcommand_required=#true {
 }
 
 func TestConvertToInterface_TopLevelGlobalFlags(t *testing.T) {
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 flag "-v --verbose" global=#true help="Enable verbose output"
 cmd "deploy" help="Deploy the app"
 cmd "status" help="Show status"
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +240,7 @@ cmd "status" help="Show status"
 
 func TestConvertToInterface_RootOperation(t *testing.T) {
 	// Single-command CLI with no subcommands should produce a root operation.
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "grep"
 bin "grep"
 about "Search for patterns"
@@ -254,7 +249,6 @@ flag "-r --recursive" help="Recursive search"
 arg "<pattern>" help="Search pattern"
 arg "[file]..." help="Files to search"
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "cli.kdl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,22 +283,21 @@ arg "[file]..." help="Files to search"
 		t.Errorf("expected 'pattern' in required, got %v", req)
 	}
 
-	// Binding should have empty ref for root invocation.
+	// The root operation binds via its unit; the unit's command is empty.
 	binding := iface.Bindings["grep."+DefaultSourceName]
-	if binding.Ref != "" {
-		t.Errorf("root binding ref = %q, want empty", binding.Ref)
+	if binding.Ref != "#/units/grep" {
+		t.Errorf("root binding ref = %q, want #/units/grep", binding.Ref)
 	}
 }
 
 func TestConvertToInterface_RootNotSynthesizedWhenOnlyGlobals(t *testing.T) {
 	// If the root level only has global flags and subcommands, no root operation.
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 bin "mycli"
 flag "-v --verbose" global=#true
 cmd "deploy" help="Deploy the app"
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,13 +311,12 @@ cmd "deploy" help="Deploy the app"
 
 func TestConvertToInterface_RootAndSubcommands(t *testing.T) {
 	// CLI with both root-level args and subcommands.
-	spec := mustParse(t, `
+	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 bin "mycli"
 arg "[file]" help="Default file"
 cmd "init" help="Initialize"
 `)
-	iface, err := convertToInterfaceWithSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
 	}

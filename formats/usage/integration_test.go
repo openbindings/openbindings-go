@@ -36,8 +36,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// testSpec returns a usage-spec KDL string for the test CLI binary.
-func testSpec() string {
+// testSpecKDL returns the usage-spec KDL text for the test CLI binary — the
+// pristine artifact the test wrappers embed.
+func testSpecKDL() string {
 	return `bin "` + testBinary + `"
 cmd "json" {
     help "Output JSON"
@@ -73,6 +74,47 @@ cmd "prose" {
     help "Print human text on stdout, an aside on stderr"
 }
 `
+}
+
+// unitDef builds a unit map: version + command + extra members.
+func unitDef(command string, extra map[string]any) map[string]any {
+	m := map[string]any{unitVersionKey: WrapperVersion, "command": command}
+	for k, v := range extra {
+		m[k] = v
+	}
+	return m
+}
+
+// testDoc builds a wrapper document (JSON-object content form) around the
+// test CLI's kdl with the given units.
+func testDoc(units map[string]any) map[string]any {
+	return map[string]any{
+		"spec": map[string]any{
+			"format":  "usage@" + MaxTestedVersion,
+			"content": testSpecKDL(),
+		},
+		"units": units,
+	}
+}
+
+// testUnits is the canonical unit set for the fixture CLI.
+func testUnits() map[string]any {
+	return map[string]any{
+		"json":     unitDef("json", map[string]any{"stdout": "json"}),
+		"fail":     unitDef("fail", nil),
+		"mixed":    unitDef("mixed", nil),
+		"echo":     unitDef("echo", nil),
+		"slurp":    unitDef("slurp", map[string]any{"delivery": map[string]any{"doc": "stdin-dash"}, "stdout": "json"}),
+		"readfile": unitDef("readfile", map[string]any{"delivery": map[string]any{"doc": "file"}, "stdout": "json"}),
+		"drink":    unitDef("drink", map[string]any{"delivery": map[string]any{"doc": "stdin"}, "stdout": "json"}),
+		"num":      unitDef("num", nil),
+		"prose":    unitDef("prose", nil),
+	}
+}
+
+// testSource wraps the canonical fixture into an invocation source.
+func testSource() openbindings.InvocationSource {
+	return openbindings.InvocationSource{Format: WrapperToken, Content: testDoc(testUnits())}
 }
 
 // invokeUsage drives a usage invocation to completion: writes input (when
@@ -121,8 +163,8 @@ func invokeUsageWithTrailer(t *testing.T, invoker *Invoker, args *openbindings.B
 func TestIntegration_JSONOutput(t *testing.T) {
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
-		Ref:    "json",
+		Source: testSource(),
+		Ref:    "#/units/json",
 	}, map[string]any{"pairs": []any{"name=alice", "role=admin"}})
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
@@ -143,14 +185,14 @@ func TestIntegration_JSONOutput(t *testing.T) {
 func TestIntegration_NonZeroExitCode(t *testing.T) {
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
-		Ref:    "fail",
+		Source: testSource(),
+		Ref:    "#/units/fail",
 	}, map[string]any{"message": []any{"something went wrong"}})
 
-	// A non-zero exit is a terminal error carrying the exit code and the
+	// A non-ok exit is a terminal error carrying the exit code and the
 	// captured output (including stderr) in Details.
 	if out != nil {
-		t.Fatalf("expected no output on non-zero exit, got %v", out)
+		t.Fatalf("expected no output on non-ok exit, got %v", out)
 	}
 	if ierr == nil || ierr.Code != openbindings.ErrCodeExecutionFailed {
 		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", ierr)
@@ -172,23 +214,19 @@ func TestIntegration_NonZeroExitCode(t *testing.T) {
 }
 
 func TestIntegration_MixedOutput(t *testing.T) {
-	// stderr is diagnostics, never part of the output value (conventions v2):
-	// it rides the x-stderr trailer, and the heuristic wrap carries stdout only.
+	// Default lane is text (a declaration, not a guess): the output value is
+	// stdout with the trailing newline stripped; stderr is diagnostics and
+	// rides the x-stderr trailer, never the output value.
 	invoker := NewInvoker()
 	out, trailer, ierr := invokeUsageWithTrailer(t, invoker, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
-		Ref:    "mixed",
+		Source: testSource(),
+		Ref:    "#/units/mixed",
 	}, nil)
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s", ierr.Message)
 	}
-
-	output := out.(map[string]any)
-	if stdout, _ := output["stdout"].(string); stdout == "" {
-		t.Error("expected non-empty stdout")
-	}
-	if _, present := output["stderr"]; present {
-		t.Errorf("stderr leaked into the output value: %#v", output)
+	if out != "stdout line" {
+		t.Errorf("output = %#v, want the text-mode string", out)
 	}
 	if got := trailer["x-stderr"]; len(got) != 1 || got[0] != "stderr line\n" {
 		t.Errorf("x-stderr trailer = %q, want [%q]", got, "stderr line\n")
@@ -198,16 +236,14 @@ func TestIntegration_MixedOutput(t *testing.T) {
 func TestIntegration_EchoCommand(t *testing.T) {
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
-		Ref:    "echo",
+		Source: testSource(),
+		Ref:    "#/units/echo",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
 		t.Fatalf("error: %s: %s", ierr.Code, ierr.Message)
 	}
-
-	output := out.(map[string]any)
-	if stdout, _ := output["stdout"].(string); stdout != "hello world\n" {
-		t.Errorf("stdout = %q, want %q", stdout, "hello world\n")
+	if out != "hello world" {
+		t.Errorf("output = %#v, want %q", out, "hello world")
 	}
 }
 
@@ -237,7 +273,7 @@ cmd "config" subcommand_required=#true {
 	synthesizer := NewSynthesizer()
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			Format:  FormatToken,
+			Format:  "usage@" + MaxTestedVersion,
 			Content: spec,
 		}},
 	})
@@ -277,14 +313,34 @@ cmd "config" subcommand_required=#true {
 		t.Error("expected 'message' arg in greet input")
 	}
 
+	// The emitted source is a wrapper embedding the pristine kdl; bindings
+	// point at units.
+	src := iface.Sources[DefaultSourceName]
+	if src.Format != WrapperToken {
+		t.Errorf("source format = %q, want %q", src.Format, WrapperToken)
+	}
+	if src.Content == nil {
+		t.Fatal("expected embedded wrapper content")
+	}
 	binding := iface.Bindings["config.get."+DefaultSourceName]
-	if binding.Ref != "config get" {
-		t.Errorf("config.get ref = %q, want 'config get'", binding.Ref)
+	if binding.Ref != "#/units/config.get" {
+		t.Errorf("config.get ref = %q, want '#/units/config.get'", binding.Ref)
+	}
+
+	// Synthesize-then-invoke coherence: the emitted source must load as a
+	// wrapper whose units resolve.
+	w, perr := ParseWrapper(src.Content)
+	if perr != nil {
+		t.Fatalf("emitted source does not parse as a wrapper: %v", perr)
+	}
+	if _, _, err := w.resolveUnitRef(binding.Ref); err != nil {
+		t.Fatalf("emitted binding ref does not resolve: %v", err)
 	}
 }
 
 func TestIntegration_AliasOnParentCommand(t *testing.T) {
-	// Verify that aliases on parent commands are matched when resolving refs.
+	// Verify that aliases on parent commands are matched when resolving
+	// unit command paths.
 	spec := `
 bin "testcli"
 cmd "configuration" {
@@ -320,37 +376,41 @@ cmd "configuration" {
 }
 
 func TestIntegration_RootCommand(t *testing.T) {
-	// Test executing with an empty ref (root invocation).
-	rootSpec := `bin "` + testBinary + `"
+	// A unit with an empty command targets the root invocation.
+	rootKDL := `bin "` + testBinary + `"
 flag "-v --verbose" help="Verbose output"
 arg "<words>..." help="Words to echo"
 `
+	doc := map[string]any{
+		"spec":  map[string]any{"format": "usage@" + MaxTestedVersion, "content": rootKDL},
+		"units": map[string]any{"root": unitDef("", nil)},
+	}
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: rootSpec},
-		Ref:    "",
+		Source: openbindings.InvocationSource{Format: WrapperToken, Content: doc},
+		Ref:    "#/units/root",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
 		t.Fatalf("error: %s: %s", ierr.Code, ierr.Message)
 	}
-
-	output := out.(map[string]any)
-	if stdout, _ := output["stdout"].(string); stdout != "hello world\n" {
-		t.Errorf("stdout = %q, want %q", stdout, "hello world\n")
+	if out != "hello world" {
+		t.Errorf("output = %#v, want %q", out, "hello world")
 	}
 }
 
 func TestIntegration_InvalidRef(t *testing.T) {
 	invoker := NewInvoker()
-	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
-		Ref:    "nonexistent",
-	}, nil)
-	if out != nil {
-		t.Fatalf("expected no output, got %v", out)
-	}
-	if ierr == nil || ierr.Code != openbindings.ErrCodeRefNotFound {
-		t.Fatalf("expected ERR_REF_NOT_FOUND, got %v", ierr)
+	for _, ref := range []string{"nonexistent", "#/units/nonexistent", "#/spec", "#"} {
+		out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+			Source: testSource(),
+			Ref:    ref,
+		}, nil)
+		if out != nil {
+			t.Fatalf("ref %q: expected no output, got %v", ref, out)
+		}
+		if ierr == nil || ierr.Code != openbindings.ErrCodeRefNotFound {
+			t.Fatalf("ref %q: expected ERR_REF_NOT_FOUND, got %v", ref, ierr)
+		}
 	}
 }
 
@@ -361,9 +421,9 @@ func TestIntegration_NoInputOperationConvention(t *testing.T) {
 	invoker := NewInvoker()
 	ctx := context.Background()
 	call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: FormatToken, Content: testSpec()},
-		Ref:     "mixed",
-		Binding: &openbindings.BindingEntry{Operation: "mixed", Source: "s", Ref: "mixed"},
+		Source:  testSource(),
+		Ref:     "#/units/mixed",
+		Binding: &openbindings.BindingEntry{Operation: "mixed", Source: "s", Ref: "#/units/mixed"},
 		// InputSchema nil → no-input operation; the binding closes input itself.
 	})
 	// The caller writes nothing and does not close; the binding must still run.
@@ -371,19 +431,19 @@ func TestIntegration_NoInputOperationConvention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no-input convention failed: %v", err)
 	}
-	if _, ok := out.(map[string]any); !ok {
-		t.Fatalf("expected map output, got %T", out)
+	if out != "stdout line" {
+		t.Fatalf("expected text output, got %#v", out)
 	}
 }
 
 func TestIntegration_Cancellation(t *testing.T) {
 	// A cancelled context tears down the running process; the handle
 	// terminates with ERR_CANCELLED. Uses the direct-binary metadata path to
-	// run `sleep 10`.
+	// run `sleep 10` (no wrapper is loaded on that path).
 	invoker := NewInvoker()
 	ctx, cancel := context.WithCancel(context.Background())
 	call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: FormatToken, Content: `bin "sleep"`},
+		Source:  openbindings.InvocationSource{Format: WrapperToken},
 		Ref:     "10",
 		Context: map[string]any{"metadata": map[string]any{"binary": "sleep"}},
 	})

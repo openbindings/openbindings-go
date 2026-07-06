@@ -2,6 +2,34 @@
 
 ## 0.2.0 (working draft)
 
+**The openbindings.usage binding-unit format** (ratified 2026-07-06;
+authority: the companion spec at spec/formats/usage/openbindings.usage.md).
+The format's source is now a JSON wrapper document embedding a pristine jdx
+usage.kdl plus per-command invocation units {command, delivery, stdout,
+exit}; OBI binding entries carry only {operation, source, ref} with refs as
+JSON Pointers (#/units/<name>). This supersedes both the pre-design
+heuristic transport and the interim x-usage extension member (which never
+shipped). Highlights:
+
+- Invoker claims `openbindings.usage@^0.1.0`; bare `usage@2.x` artifacts
+  are derivation input only (the synthesizer wraps them with trivial,
+  deterministically named units).
+- Delivery modes `stdin-dash` / `stdin` (slotless) / `file`, with static
+  load-time validation against the artifact (value-taking-slot arity,
+  choices, slotless-means-no-slot; per-unit failure granularity).
+- Stdout modes `json` / `text` (default; trailing newlines stripped) /
+  `none` — the shape-sniffing heuristic and its {"stdout": ...} wrap are
+  REMOVED.
+- Exit classification `{"ok": [0, 1]}` with fail-closed edges (non-empty,
+  0-255, signal death never ok) and `values` literals for status-only CLIs
+  (requires stdout "none").
+- spec.format declares the artifact version (checked at load); spec.hash is
+  required (and verified) in location-only mode; fail-closed unknown-member
+  policy at every level, x- members ignored, description allowed.
+- Diagnostics: x-stderr trailer now carries the LAST 64 KiB (tail), with
+  x-stderr-truncated; stderr capture is a tail ring that never fails a
+  successful invocation; the delivery cap refuses as a validation failure.
+
 **Binding conventions v2** (design: the wire-conformance loop's transport
 proposal). The format's conventions — now versioned independently of the
 `usage@` artifact token, with the README's Conventions section as the

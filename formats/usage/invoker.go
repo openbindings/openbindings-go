@@ -7,13 +7,12 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-const FormatToken = "usage@^2.0.0"
-
 const DefaultSourceName = "usage"
 
-// Invoker handles binding invocation for usage-spec KDL sources.
+// Invoker handles binding invocation for openbindings.usage wrapper
+// documents (spec/formats/usage/openbindings.usage.md).
 type Invoker struct {
-	specCache sync.Map // map[string]*Spec
+	wrapperCache sync.Map // map[string]*Wrapper
 }
 
 // NewInvoker creates a new usage binding invoker.
@@ -23,29 +22,29 @@ func NewInvoker() *Invoker {
 
 var _ openbindings.BindingInvoker = (*Invoker)(nil)
 
-// cachedLoadSpec loads a usage spec, caching by location within a process.
-// When content is provided, the cache is bypassed and updated with the fresh parse.
-func (e *Invoker) cachedLoadSpec(ctx context.Context, location string, content any) (*Spec, error) {
+// cachedLoadWrapper loads a wrapper document, caching by location within a
+// process. When content is provided, the cache is bypassed and updated.
+func (e *Invoker) cachedLoadWrapper(ctx context.Context, location string, content any) (*Wrapper, error) {
 	if location != "" && content == nil {
-		if cached, ok := e.specCache.Load(location); ok {
-			return cached.(*Spec), nil
+		if cached, ok := e.wrapperCache.Load(location); ok {
+			return cached.(*Wrapper), nil
 		}
 	}
 
-	spec, err := loadSpec(ctx, location, content)
+	w, err := loadWrapper(ctx, location, content)
 	if err != nil {
 		return nil, err
 	}
 
 	if location != "" {
-		e.specCache.Store(location, spec)
+		e.wrapperCache.Store(location, w)
 	}
-	return spec, nil
+	return w, nil
 }
 
 // Formats returns the source formats supported by the usage invoker.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "CLI tools via usage-spec KDL"}}
+	return []openbindings.FormatInfo{{Token: WrapperRange, Description: "CLI tools via openbindings.usage binding documents"}}
 }
 
 // InvokeBinding runs a CLI command for a usage-spec binding and returns the
@@ -68,24 +67,31 @@ func NewSynthesizer() *Synthesizer {
 	return &Synthesizer{}
 }
 
-// Formats returns the source formats supported by the usage synthesizer.
+// Formats returns the source formats supported by the usage synthesizer:
+// bare jdx usage-spec artifacts (derivation input) and wrapper documents.
 func (c *Synthesizer) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "CLI tools via usage-spec KDL"}}
+	return []openbindings.FormatInfo{
+		{Token: ArtifactRange, Description: "CLI tools via usage-spec KDL (derivation input; synthesis emits an openbindings.usage source)"},
+		{Token: WrapperRange, Description: "CLI tools via openbindings.usage binding documents"},
+	}
 }
 
-// SynthesizeInterface converts a usage spec to an OpenBindings interface.
+// SynthesizeInterface converts a usage source to an OpenBindings interface.
+// A bare kdl artifact is wrapped (trivial units, §11 naming) so the emitted
+// OBI's source is always an openbindings.usage document; a wrapper source
+// synthesizes from its units directly.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}
 	src := in.Sources[0]
 
-	spec, err := loadSpec(ctx, src.Location, src.Content)
+	w, wrapperContent, location, err := wrapperForSource(ctx, src.Format, src.Location, src.Content)
 	if err != nil {
 		return nil, err
 	}
 
-	iface, err := convertToInterfaceWithSpec(spec, src.Location)
+	iface, err := buildInterfaceFromWrapper(w, wrapperContent, location)
 	if err != nil {
 		return nil, err
 	}
