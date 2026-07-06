@@ -27,13 +27,6 @@ func ToStringAnyMap(v any) (map[string]any, bool) {
 	return m, ok
 }
 
-// MaybeJSON returns true if the trimmed string looks like a JSON object or array.
-func MaybeJSON(s string) bool {
-	s = strings.TrimSpace(s)
-	return (strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) ||
-		(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]"))
-}
-
 // DetectFormatVersion extracts a normalized major.minor version from a full
 // version string (e.g. "3.1.0" → "3.1").
 func DetectFormatVersion(version string) string {

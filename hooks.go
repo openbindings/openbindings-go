@@ -170,6 +170,22 @@ type BuiltinHooksProvider interface {
 type InvokeHooks struct {
 	perInvocation hookSlots
 	invokerLevel  hookSlots
+	// decodeDecidedBy records the tier that produced the most recent
+	// decode ("hook" or "builtin") — tier-blind on purpose (the failure
+	// paths are tier-precise; success provenance is not). Read by core's
+	// contract-decided teaching (a T-08 failure against a floor-stamped
+	// schema after a hook decode names the schema election, not the
+	// hook). Hooks run on a single binding goroutine per invocation.
+	decodeDecidedBy string
+}
+
+// DecodeDecidedBy reports which tier produced the most recent decode:
+// "hook", "builtin", or "" (no decode yet).
+func (h *InvokeHooks) DecodeDecidedBy() string {
+	if h == nil {
+		return "builtin"
+	}
+	return h.decodeDecidedBy
 }
 
 type hookSlots struct {
@@ -258,12 +274,16 @@ func (h *InvokeHooks) DecodeOutput(site InvokeSite, raw RawResult, builtin Outpu
 		}
 		v, derr := runDecodeHook(t.name, t.fn, site, raw)
 		if derr == nil {
+			h.decodeDecidedBy = "hook"
 			return v, nil
 		}
 		if errors.Is(derr, ErrUseDefault) {
 			continue
 		}
 		return nil, derr
+	}
+	if h != nil {
+		h.decodeDecidedBy = "builtin"
 	}
 	if builtin == nil {
 		return nil, &InvocationError{
@@ -447,3 +467,51 @@ func stampSite(site *InvokeSite, formatInvoker BindingInvoker) {
 	}
 }
 
+
+// FloorStamped reports whether a derived output schema carries the
+// synthesis floor-stamp ({"type":"string","x-ob":{"floor":...}}) — the
+// declaration the diagnostics key on. Content-independent: it reads the
+// contract, never payload bytes.
+func FloorStamped(schema JSONSchema) bool {
+	if schema == nil {
+		return false
+	}
+	xob, _ := schema["x-ob"].(map[string]any)
+	if xob == nil {
+		return false
+	}
+	_, has := xob["floor"]
+	return has
+}
+
+// NonDiscriminatingOutput reports whether an output contract cannot catch
+// a wrong decode lane: absent, empty, boolean-true, or admitting bare
+// strings. Content-independent contract inspection (the §4.5.3 warning's
+// trigger arms).
+func NonDiscriminatingOutput(schema JSONSchema) bool {
+	if schema == nil || len(schema) == 0 {
+		return true
+	}
+	if FloorStamped(schema) {
+		return true
+	}
+	switch t := schema["type"].(type) {
+	case string:
+		return t == "string"
+	case []any:
+		for _, v := range t {
+			if v == "string" {
+				return true
+			}
+		}
+	case nil:
+		// No type constraint at the top level and no combinator that
+		// obviously excludes strings: treat as non-discriminating unless
+		// a combinator is present (a oneOf/anyOf/allOf is at least TRYING
+		// to discriminate; honest-but-cheap).
+		if schema["oneOf"] == nil && schema["anyOf"] == nil && schema["allOf"] == nil && schema["$ref"] == nil {
+			return true
+		}
+	}
+	return false
+}

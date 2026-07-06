@@ -500,6 +500,7 @@ func (e *OperationInvoker) run(
 			innerCtx, caller, inner, binding, bindingKey, iface,
 			compiledOutput, closeRetryWindow, forwardHeader,
 			func() bool { retryMu.Lock(); defer retryMu.Unlock(); return retryEligible },
+			hooks, op.Output,
 		)
 		var retryDetails *ContextRequiredDetails
 		if retryChallenge != nil {
@@ -623,6 +624,8 @@ func (e *OperationInvoker) runOutputs(
 	closeRetryWindow func(),
 	forwardHeader func(Invocation[any, any]),
 	retryEligible func() bool,
+	hooks *InvokeHooks,
+	outputSchema JSONSchema,
 ) (surface, retryChallenge *InvocationError) {
 	out := inner.Outputs()
 	for {
@@ -659,9 +662,17 @@ func (e *OperationInvoker) runOutputs(
 			if verr := compiledOutput.Validate(data); verr != nil {
 				inner.Cancel()
 				lines := splitSchemaError(verr)
+				msg := fmt.Sprintf("openbindings: output validation failed for %q: %s", bindingKey, strings.Join(lines, "; "))
+				// Contract-decided teaching (the diagnostics contract): a
+				// hook-decoded value failing against a floor-stamped
+				// derived schema means the CONTRACT still declares the
+				// floor — the remedy is the schema election, not the hook.
+				if FloorStamped(outputSchema) && hooks.DecodeDecidedBy() == "hook" {
+					msg += " — the synthesized schema still declares the floor's string; elect the real output schema (`ob operation output-schema`)"
+				}
 				return &InvocationError{
 					Code:    ErrCodeValidationFailed,
-					Message: fmt.Sprintf("openbindings: output validation failed for %q: %s", bindingKey, strings.Join(lines, "; ")),
+					Message: msg,
 					Details: ValidationFailureDetails{Failures: collectValidationFailures(verr)},
 				}, nil
 			}
@@ -857,4 +868,70 @@ func applyTransformRef(eval TransformEvaluator, transforms map[string]Transform,
 	}
 
 	return eval.Evaluate(expr, data)
+}
+
+
+// PlanOperation is the side-effect-free invocation plan (the diagnostics
+// contract's probe): per axis (route per-field), the CONSULTATION CHAIN —
+// which tiers would be asked, in order, and the format's leaf answer —
+// never a predicted outcome (hooks are opaque and decline on data that
+// does not exist at plan time). Per-invocation opts are visible to it.
+// Process-local: it reports THIS process's configuration.
+func (e *OperationInvoker) PlanOperation(ctx context.Context, obi *Interface, operation string, opts ...InvokeOption) (*InvocationPlan, error) {
+	var cfg invokeConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	_, bindingKey, binding, source, ierr := e.resolveBinding(obi, operation, cfg.bindingKey)
+	if ierr != nil {
+		return nil, ierr
+	}
+
+	plan := &InvocationPlan{
+		Operation:  binding.Operation,
+		BindingKey: bindingKey,
+		Format:     source.Format,
+		Ref:        binding.Ref,
+	}
+
+	// The format's contribution: axis leaves + per-field route answers.
+	var contrib *BindingPlan
+	if inv := e.invoker.findInvoker(source.Format); inv != nil {
+		if p, ok := inv.(BuiltinHooksProvider); ok {
+			args := &BindingInvocationArgs{
+				Source: InvocationSource{Format: source.Format, Location: source.Location},
+				Ref:    binding.Ref,
+			}
+			if source.Content != nil {
+				args.Source.Content = source.Content
+			}
+			if c, err := p.PlanContributions(args); err == nil {
+				contrib = c
+			}
+		}
+	}
+	if contrib == nil {
+		contrib = &BindingPlan{}
+	}
+
+	hookAttached := func(perInv, invoker bool) bool { return perInv || invoker }
+	chain := func(leaf PlanAxis, attached bool) PlanAxis {
+		axis := PlanAxis{Detail: leaf.Detail}
+		if attached && (len(leaf.Chain) == 0 || leaf.Chain[0] != "not-consulted") {
+			axis.Chain = append(axis.Chain, "hook")
+		}
+		axis.Chain = append(axis.Chain, leaf.Chain...)
+		return axis
+	}
+
+	plan.Decode = chain(contrib.Decode, hookAttached(cfg.hooks.decode != nil, e.OutputDecoder != nil))
+	plan.Classify = chain(contrib.Classify, hookAttached(cfg.hooks.classify != nil, e.ResultClassifier != nil))
+	if len(contrib.Route) > 0 {
+		plan.Route = make(map[string]PlanAxis, len(contrib.Route))
+		routeHooked := hookAttached(cfg.hooks.route != nil, e.FieldRouter != nil)
+		for field, leaf := range contrib.Route {
+			plan.Route[field] = chain(leaf, routeHooked)
+		}
+	}
+	return plan, nil
 }
