@@ -2,6 +2,10 @@ package usage
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -9,10 +13,17 @@ import (
 
 const DefaultSourceName = "usage"
 
-// Invoker handles binding invocation for openbindings.usage wrapper
-// documents (spec/formats/usage/openbindings.usage.md).
+// FormatRange is the bare jdx usage token range this invoker claims: the
+// artifact IS the source (no wrapper — specification + configuration =
+// complete invocation; the artifact's gaps are consumer hooks).
+const FormatRange = "usage@^2.0.0"
+
+// Invoker handles binding invocation for bare jdx usage artifacts
+// (usage.kdl): refs are space-separated command paths; the wire questions
+// the artifact cannot answer (routing, decode, classify) are answered by
+// documented assumptions overridable through the consumer hook seam.
 type Invoker struct {
-	wrapperCache sync.Map // map[string]*Wrapper
+	specCache sync.Map // map[string]*Spec
 }
 
 // NewInvoker creates a new usage binding invoker.
@@ -21,30 +32,77 @@ func NewInvoker() *Invoker {
 }
 
 var _ openbindings.BindingInvoker = (*Invoker)(nil)
+var _ openbindings.BuiltinHooksProvider = (*Invoker)(nil)
 
-// cachedLoadWrapper loads a wrapper document, caching by location within a
-// process. When content is provided, the cache is bypassed and updated.
-func (e *Invoker) cachedLoadWrapper(ctx context.Context, location string, content any) (*Wrapper, error) {
+// cachedLoadSpec loads and parses a bare usage artifact — inline content,
+// an ABSOLUTE file location, or an exec: locator (the emitted spec of a
+// binary) — caching by location within a process. The artifact's declared
+// min_usage_version is checked against this implementation's supported
+// range (dropping that check would be silent).
+func (e *Invoker) cachedLoadSpec(ctx context.Context, location string, content any) (*Spec, error) {
 	if location != "" && content == nil {
-		if cached, ok := e.wrapperCache.Load(location); ok {
-			return cached.(*Wrapper), nil
+		if cached, ok := e.specCache.Load(location); ok {
+			return cached.(*Spec), nil
 		}
 	}
 
-	w, err := loadWrapper(ctx, location, content)
+	text, err := artifactText(ctx, location, content)
 	if err != nil {
 		return nil, err
 	}
+	spec, err := ParseKDL([]byte(text))
+	if err != nil {
+		return nil, fmt.Errorf("parse usage artifact: %w", err)
+	}
+	if min := spec.Meta().MinUsageVersion; min != "" {
+		ok, verr := IsSupportedVersion(min)
+		if verr != nil {
+			return nil, fmt.Errorf("artifact min_usage_version %q: %w", min, verr)
+		}
+		if !ok {
+			return nil, fmt.Errorf("artifact declares min_usage_version %q, outside the accepted range %s-%s", min, MinSupportedVersion, MaxTestedVersion)
+		}
+	}
 
 	if location != "" {
-		e.wrapperCache.Store(location, w)
+		e.specCache.Store(location, spec)
 	}
-	return w, nil
+	return spec, nil
+}
+
+// artifactText resolves the artifact bytes: inline content verbatim;
+// exec: locators run the binary (its emitted spec); file locations MUST
+// be absolute (never resolved against a carriage base).
+func artifactText(ctx context.Context, location string, content any) (string, error) {
+	if content != nil {
+		switch c := content.(type) {
+		case string:
+			return c, nil
+		case []byte:
+			return string(c), nil
+		default:
+			return "", fmt.Errorf("usage source content must be the artifact text, got %T", content)
+		}
+	}
+	if location == "" {
+		return "", fmt.Errorf("source must have location or content")
+	}
+	if strings.HasPrefix(location, "exec:") {
+		return resolveCommandArtifact(ctx, location)
+	}
+	if !filepath.IsAbs(location) && !strings.Contains(location, "://") {
+		return "", fmt.Errorf("usage location %q must be absolute (never resolved against a carriage base)", location)
+	}
+	data, err := os.ReadFile(location)
+	if err != nil {
+		return "", fmt.Errorf("read usage artifact: %w", err)
+	}
+	return string(data), nil
 }
 
 // Formats returns the source formats supported by the usage invoker.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: WrapperRange, Description: "CLI tools via openbindings.usage binding documents"}}
+	return []openbindings.FormatInfo{{Token: FormatRange, Description: "CLI tools described by jdx usage specs"}}
 }
 
 // InvokeBinding runs a CLI command for a usage-spec binding and returns the
@@ -68,30 +126,42 @@ func NewSynthesizer() *Synthesizer {
 }
 
 // Formats returns the source formats supported by the usage synthesizer:
-// bare jdx usage-spec artifacts (derivation input) and wrapper documents.
+// bare jdx usage-spec artifacts.
 func (c *Synthesizer) Formats() []openbindings.FormatInfo {
 	return []openbindings.FormatInfo{
-		{Token: ArtifactRange, Description: "CLI tools via usage-spec KDL (derivation input; synthesis emits an openbindings.usage source)"},
-		{Token: WrapperRange, Description: "CLI tools via openbindings.usage binding documents"},
+		{Token: FormatRange, Description: "CLI tools described by jdx usage specs"},
 	}
 }
 
-// SynthesizeInterface converts a usage source to an OpenBindings interface.
-// A bare kdl artifact is wrapped (trivial units, §11 naming) so the emitted
-// OBI's source is always an openbindings.usage document; a wrapper source
-// synthesizes from its units directly.
+// SynthesizeInterface converts a bare jdx usage source to an OpenBindings
+// interface: one operation per bindable command, command-path refs, input
+// schemas from flags/args, and FLOOR-TRUE output schemas ({"type":
+// "string"} with an in-schema x-ob floor-stamp — the text assumption
+// always yields a string, so the derived contract never lies; the stamp
+// keys the diagnostics and self-clears when a real schema is elected).
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}
 	src := in.Sources[0]
 
-	w, wrapperContent, location, err := wrapperForSource(ctx, src.Format, src.Location, src.Content)
+	text, err := loadArtifactText(ctx, src.Location, src.Content)
 	if err != nil {
 		return nil, err
 	}
+	spec, err := ParseKDL([]byte(text))
+	if err != nil {
+		return nil, fmt.Errorf("parse usage content: %w", err)
+	}
 
-	iface, err := buildInterfaceFromWrapper(w, wrapperContent, location)
+	sourceEntry := openbindings.Source{Format: src.Format}
+	if src.Location != "" {
+		sourceEntry.Location = src.Location
+	} else {
+		sourceEntry.Content = text
+	}
+
+	iface, err := buildInterfaceFromSpec(spec, sourceEntry)
 	if err != nil {
 		return nil, err
 	}

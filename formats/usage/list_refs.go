@@ -4,37 +4,40 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// InspectSource returns all bindable targets from a usage source: unit refs
-// (#/units/<name>) for a wrapper document, or the units a bare kdl would
-// gain on wrapping (§11 naming) so inspection shows targets as they will be
-// bound.
+// InspectSource returns all bindable targets from a bare usage source:
+// command-path refs (the format's own grammar), one per bindable command,
+// exactly as synthesis would bind them.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
-	w, _, _, err := wrapperForSource(ctx, source.Format, source.Location, source.Content)
+	text, err := loadArtifactText(ctx, source.Location, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load usage source: %w", err)
 	}
-	spec, err := w.loadArtifact()
+	spec, err := ParseKDL([]byte(text))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse usage content: %w", err)
 	}
+	meta := spec.Meta()
 
 	var targets []openbindings.BindableTarget
-	for name, u := range w.Units {
-		description := u.Description
-		if description == "" {
-			if strings.TrimSpace(u.Command) == "" {
-				description = spec.Meta().About
-			} else if found, ferr := findCommand(spec, u.Command); ferr == nil {
-				description = found.cmd.Help
-			}
+	if rc := rootCommand(spec); rc != nil {
+		rootName := meta.Bin
+		if rootName == "" {
+			rootName = meta.Name
 		}
-		targets = append(targets, bindableTarget(UnitRef(name), name, description))
+		if rootName != "" {
+			targets = append(targets, bindableTarget("", rootName, meta.About))
+		}
 	}
+	walkWithGlobals(spec, func(path []string, cmd Command, _ []Flag) {
+		if len(path) == 0 || cmd.SubcommandRequired {
+			return
+		}
+		targets = append(targets, bindableTarget(commandRef(path), operationName(path), cmd.Help))
+	})
 
 	sort.Slice(targets, func(i, j int) bool { return targets[i].Ref < targets[j].Ref })
 	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil

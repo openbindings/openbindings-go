@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -76,52 +77,50 @@ cmd "prose" {
 `
 }
 
-// unitDef builds a unit map: version + command + extra members.
-func unitDef(command string, extra map[string]any) map[string]any {
-	m := map[string]any{unitVersionKey: WrapperVersion, "command": command}
-	for k, v := range extra {
-		m[k] = v
-	}
-	return m
-}
-
-// testDoc builds a wrapper document (JSON-object content form) around the
-// test CLI's kdl with the given units.
-func testDoc(units map[string]any) map[string]any {
-	return map[string]any{
-		"spec": map[string]any{
-			"format":  "usage@" + MaxTestedVersion,
-			"content": testSpecKDL(),
-		},
-		"units": units,
-	}
-}
-
-// testUnits is the canonical unit set for the fixture CLI.
-func testUnits() map[string]any {
-	return map[string]any{
-		"json":     unitDef("json", map[string]any{"stdout": "json"}),
-		"fail":     unitDef("fail", nil),
-		"mixed":    unitDef("mixed", nil),
-		"echo":     unitDef("echo", nil),
-		"slurp":    unitDef("slurp", map[string]any{"delivery": map[string]any{"doc": "stdin-dash"}, "stdout": "json"}),
-		"readfile": unitDef("readfile", map[string]any{"delivery": map[string]any{"doc": "file"}, "stdout": "json"}),
-		"drink":    unitDef("drink", map[string]any{"delivery": map[string]any{"doc": "stdin"}, "stdout": "json"}),
-		"num":      unitDef("num", nil),
-		"prose":    unitDef("prose", nil),
-	}
-}
-
-// testSource wraps the canonical fixture into an invocation source.
+// testSource is the bare-kdl fixture source: the artifact IS the source.
 func testSource() openbindings.InvocationSource {
-	return openbindings.InvocationSource{Format: WrapperToken, Content: testDoc(testUnits())}
+	return openbindings.InvocationSource{Format: "usage@" + MaxTestedVersion, Content: testSpecKDL()}
+}
+
+// driver abstracts the two entry points tests exercise: the format
+// invoker directly (builtins only) and an OperationInvoker wrapping it
+// (the embedder pattern — invoker-level hooks reach the binding-layer
+// path via fillBindingArgs).
+type driver interface {
+	InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any]
+}
+
+// hooked wraps the fixture invoker with invoker-level hooks — the
+// consumer configuration that replaced wrapper-unit elections.
+func hooked(configure func(op *openbindings.OperationInvoker)) driver {
+	op := openbindings.NewOperationInvoker(NewInvoker())
+	if configure != nil {
+		configure(op)
+	}
+	return op
+}
+
+// jsonHooked is the machine-lane consumer: decode stdout as strict JSON.
+func jsonHooked() driver {
+	return hooked(func(op *openbindings.OperationInvoker) {
+		op.OutputDecoder = func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+			var v any
+			if len(raw.Body) == 0 {
+				return nil, nil
+			}
+			if err := json.Unmarshal(raw.Body, &v); err != nil {
+				return nil, err
+			}
+			return v, nil
+		}
+	})
 }
 
 // invokeUsage drives a usage invocation to completion: writes input (when
 // non-nil), closes the input side, and returns the single output or the
 // terminal error. The binding is unary, so exactly one output (or one
 // terminal) is expected.
-func invokeUsage(t *testing.T, invoker *Invoker, args *openbindings.BindingInvocationArgs, input any) (any, *openbindings.InvocationError) {
+func invokeUsage(t *testing.T, invoker driver, args *openbindings.BindingInvocationArgs, input any) (any, *openbindings.InvocationError) {
 	t.Helper()
 	out, _, ierr := invokeUsageWithTrailer(t, invoker, args, input)
 	return out, ierr
@@ -129,7 +128,7 @@ func invokeUsage(t *testing.T, invoker *Invoker, args *openbindings.BindingInvoc
 
 // invokeUsageWithTrailer is invokeUsage plus the invocation's trailing
 // metadata (x-exit-code, x-stderr), valid once the handle terminates.
-func invokeUsageWithTrailer(t *testing.T, invoker *Invoker, args *openbindings.BindingInvocationArgs, input any) (any, openbindings.Metadata, *openbindings.InvocationError) {
+func invokeUsageWithTrailer(t *testing.T, invoker driver, args *openbindings.BindingInvocationArgs, input any) (any, openbindings.Metadata, *openbindings.InvocationError) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -161,10 +160,9 @@ func invokeUsageWithTrailer(t *testing.T, invoker *Invoker, args *openbindings.B
 }
 
 func TestIntegration_JSONOutput(t *testing.T) {
-	invoker := NewInvoker()
-	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+	out, ierr := invokeUsage(t, jsonHooked(), &openbindings.BindingInvocationArgs{
 		Source: testSource(),
-		Ref:    "#/units/json",
+		Ref:    "json",
 	}, map[string]any{"pairs": []any{"name=alice", "role=admin"}})
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
@@ -186,7 +184,7 @@ func TestIntegration_NonZeroExitCode(t *testing.T) {
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
 		Source: testSource(),
-		Ref:    "#/units/fail",
+		Ref:    "fail",
 	}, map[string]any{"message": []any{"something went wrong"}})
 
 	// A non-ok exit is a terminal error carrying the exit code and the
@@ -220,7 +218,7 @@ func TestIntegration_MixedOutput(t *testing.T) {
 	invoker := NewInvoker()
 	out, trailer, ierr := invokeUsageWithTrailer(t, invoker, &openbindings.BindingInvocationArgs{
 		Source: testSource(),
-		Ref:    "#/units/mixed",
+		Ref:    "mixed",
 	}, nil)
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s", ierr.Message)
@@ -237,7 +235,7 @@ func TestIntegration_EchoCommand(t *testing.T) {
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
 		Source: testSource(),
-		Ref:    "#/units/echo",
+		Ref:    "echo",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
 		t.Fatalf("error: %s: %s", ierr.Code, ierr.Message)
@@ -313,27 +311,33 @@ cmd "config" subcommand_required=#true {
 		t.Error("expected 'message' arg in greet input")
 	}
 
-	// The emitted source is a wrapper embedding the pristine kdl; bindings
-	// point at units.
+	// The emitted source is the PRISTINE bare artifact; bindings carry
+	// command-path refs (the format's own grammar).
 	src := iface.Sources[DefaultSourceName]
-	if src.Format != WrapperToken {
-		t.Errorf("source format = %q, want %q", src.Format, WrapperToken)
+	if src.Format != "usage@"+MaxTestedVersion {
+		t.Errorf("source format = %q, want the bare usage token", src.Format)
 	}
-	if src.Content == nil {
-		t.Fatal("expected embedded wrapper content")
+	if src.Content != spec {
+		t.Fatal("expected the pristine kdl text as embedded content")
 	}
 	binding := iface.Bindings["config.get."+DefaultSourceName]
-	if binding.Ref != "#/units/config.get" {
-		t.Errorf("config.get ref = %q, want '#/units/config.get'", binding.Ref)
+	if binding.Ref != "config get" {
+		t.Errorf("config.get ref = %q, want 'config get'", binding.Ref)
 	}
 
-	// Synthesize-then-invoke coherence: the emitted source must load as a
-	// wrapper whose units resolve.
-	w, perr := ParseWrapper(src.Content)
-	if perr != nil {
-		t.Fatalf("emitted source does not parse as a wrapper: %v", perr)
+	// FLOOR-TRUE derived outputs: {"type":"string"} with the in-schema
+	// x-ob floor-stamp the diagnostics key on.
+	out := iface.Operations["config.get"].Output
+	if out == nil || out["type"] != "string" {
+		t.Fatalf("expected floor-true string output schema, got %v", out)
 	}
-	if _, _, err := w.resolveUnitRef(binding.Ref); err != nil {
+	if xob, _ := out["x-ob"].(map[string]any); xob == nil || xob["floor"] != "text" {
+		t.Fatalf("expected the x-ob floor-stamp, got %v", out["x-ob"])
+	}
+
+	// Synthesize-then-invoke coherence: the emitted ref resolves in the
+	// emitted artifact.
+	if _, err := findCommand(mustParse(t, spec), binding.Ref); err != nil {
 		t.Fatalf("emitted binding ref does not resolve: %v", err)
 	}
 }
@@ -381,14 +385,10 @@ func TestIntegration_RootCommand(t *testing.T) {
 flag "-v --verbose" help="Verbose output"
 arg "<words>..." help="Words to echo"
 `
-	doc := map[string]any{
-		"spec":  map[string]any{"format": "usage@" + MaxTestedVersion, "content": rootKDL},
-		"units": map[string]any{"root": unitDef("", nil)},
-	}
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: WrapperToken, Content: doc},
-		Ref:    "#/units/root",
+		Source: openbindings.InvocationSource{Format: "usage@" + MaxTestedVersion, Content: rootKDL},
+		Ref:    "",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
 		t.Fatalf("error: %s: %s", ierr.Code, ierr.Message)
@@ -400,7 +400,7 @@ arg "<words>..." help="Words to echo"
 
 func TestIntegration_InvalidRef(t *testing.T) {
 	invoker := NewInvoker()
-	for _, ref := range []string{"nonexistent", "#/units/nonexistent", "#/spec", "#"} {
+	for _, ref := range []string{"nonexistent", "no such command", "json bogus"} {
 		out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
 			Source: testSource(),
 			Ref:    ref,
@@ -422,8 +422,8 @@ func TestIntegration_NoInputOperationConvention(t *testing.T) {
 	ctx := context.Background()
 	call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
 		Source:  testSource(),
-		Ref:     "#/units/mixed",
-		Binding: &openbindings.BindingEntry{Operation: "mixed", Source: "s", Ref: "#/units/mixed"},
+		Ref:     "mixed",
+		Binding: &openbindings.BindingEntry{Operation: "mixed", Source: "s", Ref: "mixed"},
 		// InputSchema nil → no-input operation; the binding closes input itself.
 	})
 	// The caller writes nothing and does not close; the binding must still run.
@@ -443,7 +443,7 @@ func TestIntegration_Cancellation(t *testing.T) {
 	invoker := NewInvoker()
 	ctx, cancel := context.WithCancel(context.Background())
 	call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: WrapperToken},
+		Source:  openbindings.InvocationSource{Format: "usage@" + MaxTestedVersion},
 		Ref:     "10",
 		Context: map[string]any{"metadata": map[string]any{"binary": "sleep"}},
 	})

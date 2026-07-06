@@ -67,8 +67,8 @@ cmd "greet" help="Say hello"
 	if !ok {
 		t.Fatalf("expected binding %q", key)
 	}
-	if binding.Ref != "#/units/greet" {
-		t.Errorf("ref = %q, want #/units/greet", binding.Ref)
+	if binding.Ref != "greet" {
+		t.Errorf("ref = %q, want greet", binding.Ref)
 	}
 	if binding.Operation != "greet" {
 		t.Errorf("operation = %q, want greet", binding.Operation)
@@ -91,8 +91,8 @@ cmd "config" {
 		t.Error("expected operation 'config.set'")
 	}
 	binding := iface.Bindings["config.set."+DefaultSourceName]
-	if binding.Ref != "#/units/config.set" {
-		t.Errorf("ref = %q, want '#/units/config.set'", binding.Ref)
+	if binding.Ref != "config set" {
+		t.Errorf("ref = %q, want 'config set'", binding.Ref)
 	}
 }
 
@@ -178,16 +178,16 @@ func TestConvertToInterface_SourceEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := iface.Sources[DefaultSourceName]
-	// A bare artifact synthesizes to an embedded wrapper source: the wrapper
-	// has no location of its own, and the kdl lives inside it verbatim.
+	// A bare artifact synthesizes to a PRISTINE embedded source: the kdl
+	// text verbatim, under the bare usage token.
 	if src.Location != "" {
-		t.Errorf("location = %q, want empty (embedded wrapper)", src.Location)
+		t.Errorf("location = %q, want empty (embedded artifact)", src.Location)
 	}
-	if src.Format != WrapperToken {
-		t.Errorf("format = %q, want %q", src.Format, WrapperToken)
+	if src.Format != "usage@"+MaxTestedVersion {
+		t.Errorf("format = %q, want the bare usage token", src.Format)
 	}
-	if src.Content == nil {
-		t.Error("expected embedded wrapper content")
+	if src.Content != `name "mycli"` {
+		t.Errorf("expected the pristine kdl text, got %v", src.Content)
 	}
 }
 
@@ -285,8 +285,8 @@ arg "[file]..." help="Files to search"
 
 	// The root operation binds via its unit; the unit's command is empty.
 	binding := iface.Bindings["grep."+DefaultSourceName]
-	if binding.Ref != "#/units/grep" {
-		t.Errorf("root binding ref = %q, want #/units/grep", binding.Ref)
+	if binding.Ref != "" {
+		t.Errorf("root binding ref = %q, want \"\" (the root command)", binding.Ref)
 	}
 }
 

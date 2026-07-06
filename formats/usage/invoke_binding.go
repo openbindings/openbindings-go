@@ -53,39 +53,45 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 
 	// Direct-binary dispatch (context-metadata hint): SDK-only feature, no
-	// wrapper loaded, ref is a command string, no unit and so no delivery.
+	// spec loaded, ref is a command string. Hooks are NOT consulted on
+	// this lane in v1 (stated, not implied).
 	if binary := metadataBinary(args.Context); binary != "" {
 		e.runDirect(bctx, args, inv, binary, input)
 		return
 	}
 
-	// Resolve the wrapper unit: the complete invocation recipe.
-	w, lerr := e.cachedLoadWrapper(bctx, args.Source.Location, args.Source.Content)
+	// Load the bare jdx usage artifact (content, absolute location, or an
+	// exec: locator) — the RESTORED pre-wrapper loader, min_usage_version
+	// check kept.
+	spec, lerr := e.cachedLoadSpec(bctx, args.Source.Location, args.Source.Content)
 	if lerr != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: lerr.Error()})
 		return
 	}
-	unit, unitName, rerr := w.resolveUnitRef(args.Ref)
-	if rerr != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: rerr.Error()})
-		return
-	}
-	// Per-unit validation (§10): failure makes THIS binding unactionable.
-	cmd, inherited, cmdPath, verr := w.validateUnit(unit, unitName)
-	if verr != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: verr.Error()})
-		return
+
+	// The ref is the format's own grammar: a space-separated command path
+	// into the artifact ("context set"; empty = the root command).
+	var cmd *Command
+	var inherited []Flag
+	var cmdPath []string
+	if strings.TrimSpace(args.Ref) == "" {
+		rc := rootCommand(spec)
+		if rc == nil {
+			rc = &Command{Flags: spec.Flags(), Args: spec.Args()}
+		}
+		cmd = rc
+	} else {
+		found, ferr := findCommand(spec, args.Ref)
+		if ferr != nil {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: ferr.Error()})
+			return
+		}
+		cmd = found.cmd
+		inherited = found.inheritedFlags
+		cmdPath = found.path
 	}
 
-	input, stdin, cleanup, derr := applyDelivery(input, unit)
-	if derr != nil {
-		// Pre-spawn value refusals (the delivery cap) are validation failures.
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: derr.Error()})
-		return
-	}
-	defer cleanup()
-
-	meta := w.kdl.Meta()
+	meta := spec.Meta()
 	binName := meta.Bin
 	if binName == "" {
 		binName = meta.Name
@@ -94,23 +100,44 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "usage artifact does not define a binary name (bin or name)"})
 		return
 	}
-	cmdArgs, aerr := buildCLIArgs(cmdPath, cmd, inherited, input)
+
+	// Complete the site: Target is GUARANTEED on this lane (the kdl's
+	// bin/name — consumers' site guards depend on it).
+	site := siteFor(args, binName)
+
+	// Route every input field through the seam (specification +
+	// configuration: routing is a wire question the usage artifact cannot
+	// answer; the assumption is argv, the consumer's FieldRouter overrides
+	// per field). Enforcement replaces the wrapper's load-time validation.
+	routed, rierr := routeFields(site, args.Hooks, cmd, inherited, input)
+	if rierr != nil {
+		inv.FireError(rierr)
+		return
+	}
+	defer routed.cleanup()
+
+	var argvInput any
+	if input != nil {
+		argvInput = routed.fields
+	}
+	cmdArgs, aerr := buildCLIArgs(cmdPath, cmd, inherited, argvInput)
 	if aerr != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: aerr.Error()})
 		return
 	}
 
-	res, runErr := runCLI(bctx, binName, cmdArgs, args.Context, stdin)
+	res, runErr := runCLI(bctx, binName, cmdArgs, args.Context, routed.stdin)
 	// Materialized files only need to outlive the process; the deferred call
 	// (idempotent) covers the error paths above.
-	cleanup()
+	routed.cleanup()
 	if bctx.Err() != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeCancelled, Message: "operation cancelled"})
 		return
 	}
 	if runErr != nil {
-		// runCLI returns a non-nil error only for spawn failures (not for a
-		// clean non-zero exit). A missing binary is a configuration error.
+		// Consultation preconditions: spawn failure, cap overflow, and
+		// cancellation never consult classify/decode (no completed
+		// transport exchange). A missing binary is a configuration error.
 		code := openbindings.ErrCodeExecutionFailed
 		if errors.Is(runErr, exec.ErrNotFound) {
 			code = openbindings.ErrCodeSourceConfigError
@@ -118,7 +145,29 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error()})
 		return
 	}
-	if !unit.exitOK(res.exitCode) {
+
+	// One delivery unit: the completed process. Meta carries the FULL
+	// stderr capture (tail-capping applies only to the trailer) and the
+	// per-field routing record (x-ob-route provenance).
+	exitCode := res.exitCode
+	raw := openbindings.RawResult{
+		Status: &exitCode,
+		Body:   []byte(res.stdout),
+		Meta:   resultMeta(res, routed.record),
+	}
+
+	// Classify through the seam: the assumption is exit 0; consumers'
+	// classifiers widen it (diff-class) or read the code as the output
+	// (grep-class, via a decode hook).
+	ok, cerr := args.Hooks.Classify(site, raw, builtinClassify)
+	if cerr != nil {
+		inv.FireError(openbindings.AsInvocationError(cerr))
+		return
+	}
+	if !ok {
+		// The format's NATIVE failure: hooks change the verdict, never the
+		// error vocabulary. Provenance: the deciding layer is named per
+		// the diagnostics contract.
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeExecutionFailed,
 			Message: fmt.Sprintf("command exited with status %d", res.exitCode),
@@ -127,19 +176,106 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	// exit.values maps a declared-ok code to a literal output (§7); the unit
-	// parser guarantees stdout "none" in that case.
-	output, hasLit := unit.exitValue(res.exitCode)
-	if !hasLit {
-		var oerr *openbindings.InvocationError
-		output, oerr = decodeStdout(res.stdout, unit.Stdout)
-		if oerr != nil {
-			inv.FireError(oerr)
-			return
-		}
+	output, derr := args.Hooks.DecodeOutput(site, raw, builtinDecodeText)
+	if derr != nil {
+		inv.FireError(openbindings.AsInvocationError(derr))
+		return
 	}
 
 	emitWithDiagnostics(inv, output, res)
+}
+
+// siteFor completes the core-stamped site with the format-known Target
+// (the artifact's binary name). A nil args.Site (direct format-package
+// call) gets a minimal site whose Builtin* dispatch stays loud.
+func siteFor(args *openbindings.BindingInvocationArgs, binName string) openbindings.InvokeSite {
+	var site openbindings.InvokeSite
+	if args.Site != nil {
+		site = *args.Site
+	} else {
+		site.Format = args.Source.Format
+		site.Ref = args.Ref
+	}
+	if site.Target == "" {
+		site.Target = binName
+	}
+	return site
+}
+
+// builtinClassify is the exec builtin: success iff exit 0 (the
+// documented assumption; the artifact cannot declare exit meanings).
+func builtinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (bool, error) {
+	return raw.Status != nil && *raw.Status == 0, nil
+}
+
+// builtinDecodeText is the exec builtin: the output value is stdout with
+// trailing newlines stripped, exactly as command substitution $(...)
+// reads a command's text output — content-independent, lossless,
+// recoverable. Machine lanes are a consumer decode hook (or a future
+// artifact-native declaration).
+func builtinDecodeText(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+	return strings.TrimRight(string(raw.Body), "\r\n"), nil
+}
+
+// resultMeta assembles the per-unit Meta: the exit code, the FULL stderr
+// capture, and the per-field routing record.
+func resultMeta(res *cliResult, record map[string]string) openbindings.Metadata {
+	meta := openbindings.Metadata{
+		"x-exit-code": {strconv.Itoa(res.exitCode)},
+	}
+	if res.stderr != "" {
+		meta["x-stderr"] = []string{res.stderr}
+	}
+	for field, route := range record {
+		meta["x-ob-route"] = append(meta["x-ob-route"], field+"="+route)
+	}
+	return meta
+}
+
+// BuiltinHooks exposes the exec builtins to the seam's cross-format
+// dispatch: text decode and exit-0 classification (both documented
+// assumptions — usage is a surface grammar with no invocation-contract
+// vocabulary; the assumptions shrink if jdx grows one).
+func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.ResultClassifier) {
+	return builtinDecodeText, builtinClassify
+}
+
+// PlanContributions reports the exec chain leaves: every axis is a
+// documented assumption (nothing here is spec-covered — the honest
+// signal of the format's completeness), with per-field route answers
+// enumerated from the artifact where it is loadable.
+func (e *Invoker) PlanContributions(args *openbindings.BindingInvocationArgs) (*openbindings.BindingPlan, error) {
+	plan := &openbindings.BindingPlan{
+		Decode:   openbindings.PlanAxis{Chain: []string{"assumption/text"}},
+		Classify: openbindings.PlanAxis{Chain: []string{"assumption/exit-0"}},
+	}
+	spec, err := e.cachedLoadSpec(context.Background(), args.Source.Location, args.Source.Content)
+	if err != nil {
+		return plan, nil // axes stand; per-field routes need the artifact
+	}
+	var cmd *Command
+	var inherited []Flag
+	if strings.TrimSpace(args.Ref) == "" {
+		if rc := rootCommand(spec); rc != nil {
+			cmd = rc
+		}
+	} else if found, ferr := findCommand(spec, args.Ref); ferr == nil {
+		cmd = found.cmd
+		inherited = found.inheritedFlags
+	}
+	if cmd == nil {
+		return plan, nil
+	}
+	plan.Route = map[string]openbindings.PlanAxis{}
+	for _, f := range cmd.AllFlags(inherited) {
+		if name := f.PrimaryName(); name != "" {
+			plan.Route[name] = openbindings.PlanAxis{Chain: []string{"assumption/argv"}}
+		}
+	}
+	for _, a := range cmd.Args {
+		plan.Route[a.CleanName()] = openbindings.PlanAxis{Chain: []string{"assumption/argv"}}
+	}
+	return plan, nil
 }
 
 // emitWithDiagnostics stamps the diagnostics trailer and emits the output.
@@ -199,28 +335,8 @@ func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvoc
 		})
 		return
 	}
-	output, oerr := decodeStdout(res.stdout, "")
-	if oerr != nil {
-		inv.FireError(oerr)
-		return
-	}
+	output := strings.TrimRight(res.stdout, "\r\n") // the text assumption
 	emitWithDiagnostics(inv, output, res)
-}
-
-// loadWrapper loads an openbindings.usage document from inline content (the
-// JSON-object source form, or text) or an absolute location.
-func loadWrapper(_ context.Context, location string, content any) (*Wrapper, error) {
-	if content != nil {
-		return ParseWrapper(content)
-	}
-	if location == "" {
-		return nil, fmt.Errorf("source must have location or content")
-	}
-	data, err := os.ReadFile(location)
-	if err != nil {
-		return nil, fmt.Errorf("read openbindings.usage document: %w", err)
-	}
-	return ParseWrapper(data)
 }
 
 // metadataBinary extracts the "binary" hint from context metadata.
@@ -265,7 +381,6 @@ func buildDirectArgsFromRef(ref string, input any) ([]string, error) {
 
 	return args, nil
 }
-
 
 type findCommandResult struct {
 	path           []string
@@ -562,46 +677,6 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 		exitCode:        exitCode,
 		stderrTruncated: stderr.truncated,
 	}, nil
-}
-
-// decodeStdout maps a declared-ok exit's stdout to the output value per the
-// unit's stdout mode (openbindings.usage.md §6). There is no heuristic: an
-// undeclared lane means "text", a declaration in itself. stderr never
-// participates: it is diagnostics and rides the x-stderr trailer.
-func decodeStdout(stdoutStr, mode string) (any, *openbindings.InvocationError) {
-	switch mode {
-	case stdoutJSON:
-		// Declared machine lane: stdout is one JSON value, numbers included.
-		// Empty stdout is a null output (a command with nothing to say);
-		// anything else that fails to parse is the command failing to honor
-		// its machine lane — an error, never a silent wrap.
-		trimmed := strings.TrimSpace(stdoutStr)
-		if trimmed == "" {
-			return nil, nil
-		}
-		var parsed any
-		if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
-			return nil, &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeExecutionFailed,
-				Message: fmt.Sprintf("binding declares JSON stdout, but the command's stdout is not valid JSON: %v", err),
-				Details: map[string]any{"stdout": stdoutStr},
-			}
-		}
-		return parsed, nil
-
-	case stdoutNone:
-		// Declared no-output lane: stdout is not consulted; exit.values may
-		// supply the output upstream, else null.
-		return nil, nil
-
-	default: // "text", and the absent-mode default (a declaration, not a guess)
-		// The output value is stdout with trailing newlines stripped, exactly
-		// as command substitution $(...) reads a command's text output — the
-		// final newline is line-termination framing, not payload
-		// ("git rev-parse HEAD" means the hash, not hash-plus-newline).
-		// Interior newlines are preserved.
-		return strings.TrimRight(stdoutStr, "\r\n"), nil
-	}
 }
 
 // wrapText is the raw-capture record used in non-zero-exit error details.

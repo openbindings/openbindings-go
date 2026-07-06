@@ -9,14 +9,14 @@ import (
 func TestFormats(t *testing.T) {
 	e := NewInvoker()
 	formats := e.Formats()
-	if len(formats) != 1 || formats[0].Token != WrapperRange {
-		t.Errorf("Formats() = %v, want [{Token: %q}]", formats, WrapperRange)
+	if len(formats) != 1 || formats[0].Token != FormatRange {
+		t.Errorf("Formats() = %v, want [{Token: %q}]", formats, FormatRange)
 	}
 
 	c := NewSynthesizer()
 	formats = c.Formats()
-	if len(formats) != 2 || formats[0].Token != ArtifactRange || formats[1].Token != WrapperRange {
-		t.Errorf("Synthesizer.Formats() = %v, want artifact + wrapper tokens", formats)
+	if len(formats) != 1 || formats[0].Token != FormatRange {
+		t.Errorf("Synthesizer.Formats() = %v, want the bare usage token", formats)
 	}
 }
 

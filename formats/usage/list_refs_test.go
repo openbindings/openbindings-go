@@ -48,9 +48,9 @@ cmd "config" {
 	}
 
 	wantRefs := map[string]bool{
-		"#/units/config.set": false,
-		"#/units/config.get": false,
-		"#/units/config":     false,
+		"config set": false,
+		"config get": false,
+		"config":     false,
 	}
 	for _, ref := range result.Targets {
 		if _, ok := wantRefs[ref.Ref]; ok {
@@ -87,7 +87,7 @@ arg "<pattern>" help="Search pattern"
 
 	found := false
 	for _, ref := range result.Targets {
-		if ref.Ref == "#/units/grep" {
+		if ref.Ref == "" { // the root command
 			found = true
 			var description string
 			if ref.Operation != nil {
@@ -122,14 +122,14 @@ cmd "mike" help="M"
 	if len(result.Targets) != 3 {
 		t.Fatalf("expected 3 refs, got %d", len(result.Targets))
 	}
-	if result.Targets[0].Ref != "#/units/alpha" {
-		t.Errorf("first ref = %q, want #/units/alpha", result.Targets[0].Ref)
+	if result.Targets[0].Ref != "alpha" {
+		t.Errorf("first ref = %q, want alpha", result.Targets[0].Ref)
 	}
-	if result.Targets[1].Ref != "#/units/mike" {
-		t.Errorf("second ref = %q, want #/units/mike", result.Targets[1].Ref)
+	if result.Targets[1].Ref != "mike" {
+		t.Errorf("second ref = %q, want mike", result.Targets[1].Ref)
 	}
-	if result.Targets[2].Ref != "#/units/zulu" {
-		t.Errorf("third ref = %q, want #/units/zulu", result.Targets[2].Ref)
+	if result.Targets[2].Ref != "zulu" {
+		t.Errorf("third ref = %q, want zulu", result.Targets[2].Ref)
 	}
 }
 
@@ -192,8 +192,8 @@ cmd "config" subcommand_required=#true {
 	}
 
 	wantRefs := map[string]bool{
-		"#/units/config.get": false,
-		"#/units/config.set": false,
+		"config get": false,
+		"config set": false,
 	}
 	for _, ref := range result.Targets {
 		if _, ok := wantRefs[ref.Ref]; ok {
