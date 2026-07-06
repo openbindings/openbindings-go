@@ -51,6 +51,7 @@ type InvokeOption func(*invokeConfig)
 type invokeConfig struct {
 	context    map[string]any
 	bindingKey string
+	hooks      hookSlots
 }
 
 // WithContext supplies a per-call OB invocation-context override (auth/credentials
@@ -65,6 +66,23 @@ func WithContext(values map[string]any) InvokeOption {
 // directly. The binding must belong to the resolved operation.
 func WithBindingKey(key string) InvokeOption {
 	return func(c *invokeConfig) { c.bindingKey = key }
+}
+
+// WithOutputDecoder attaches a per-invocation decode hook (the highest
+// precedence tier; decline with ErrUseDefault to fall through).
+func WithOutputDecoder(fn OutputDecoder) InvokeOption {
+	return func(c *invokeConfig) { c.hooks.decode = fn }
+}
+
+// WithResultClassifier attaches a per-invocation classify hook.
+func WithResultClassifier(fn ResultClassifier) InvokeOption {
+	return func(c *invokeConfig) { c.hooks.classify = fn }
+}
+
+// WithFieldRouter attaches a per-invocation field-routing hook (decline
+// with "").
+func WithFieldRouter(fn FieldRouter) InvokeOption {
+	return func(c *invokeConfig) { c.hooks.route = fn }
 }
 
 // Invoke runs sig against obi using invoker, returning a typed invocation handle.
@@ -123,7 +141,7 @@ func Invoke[I, O any](
 				})
 			}
 		}()
-		invoker.run(ctx, caller, obi, op, binding, bindingKey, source, cfg.context)
+		invoker.run(ctx, caller, obi, op, binding, bindingKey, source, cfg.context, sig.key, invoker.snapshotHooks(cfg.hooks))
 	}()
 
 	return NewTypedInvocation[I, O](caller)

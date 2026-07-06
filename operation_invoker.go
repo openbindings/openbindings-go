@@ -87,6 +87,14 @@ type OperationInvoker struct {
 	// bindings. When nil, or when it declines, the challenge surfaces to the
 	// caller as an ordinary terminal *InvocationError.
 	ContextResolver ContextResolver
+	// OutputDecoder, ResultClassifier, and FieldRouter are invoker-level
+	// consumer hooks (the middle precedence tier), consulted by format
+	// invokers through the seam. Set before concurrent use, like the other
+	// fields. Protocol-specific handling lives INSIDE the hook body
+	// (switch on site.FormatName()); decline to fall through.
+	OutputDecoder    OutputDecoder
+	ResultClassifier ResultClassifier
+	FieldRouter      FieldRouter
 
 	invoker *combinedInvoker
 }
@@ -112,16 +120,11 @@ func (e *OperationInvoker) AddBindingInvoker(invoker BindingInvoker) {
 // original but has an independent resolver. A nil argument inherits the
 // original's resolver.
 func (e *OperationInvoker) WithRuntime(resolver ContextResolver) *OperationInvoker {
-	cp := &OperationInvoker{
-		BindingSelector:    e.BindingSelector,
-		TransformEvaluator: e.TransformEvaluator,
-		ContextResolver:    resolver,
-		invoker:            e.invoker,
+	cp := *e // struct copy: hook fields and future fields ride automatically
+	if resolver != nil {
+		cp.ContextResolver = resolver
 	}
-	if cp.ContextResolver == nil {
-		cp.ContextResolver = e.ContextResolver
-	}
-	return cp
+	return &cp
 }
 
 // Formats returns all formats registered with this invoker.
@@ -141,7 +144,49 @@ func (e *OperationInvoker) availableFormats() map[string]bool {
 // BindingInvoker by source format, without operation-layer validation,
 // transforms, or context negotiation.
 func (e *OperationInvoker) InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any] {
+	e.fillBindingArgs(args)
 	return e.invoker.InvokeBinding(ctx, args)
+}
+
+// snapshotHooks resolves the effective hook carrier for one Invoke: both
+// tiers captured once at entry (immunity to later field mutation);
+// precedence applies at consultation time by decline-chaining.
+func (e *OperationInvoker) snapshotHooks(perInv hookSlots) *InvokeHooks {
+	return newInvokeHooks(perInv, hookSlots{
+		decode:   e.OutputDecoder,
+		classify: e.ResultClassifier,
+		route:    e.FieldRouter,
+	})
+}
+
+// fillBindingArgs completes a binding-layer call's args with the seam
+// carrier and a stamped site when the caller supplied none — the
+// in-process binding-layer path (delegate lane), which is what makes an
+// embedder's invoker-level hook table reach delegate-dispatched
+// invocations. Direct callers who want different hooks pass their own.
+func (e *OperationInvoker) fillBindingArgs(args *BindingInvocationArgs) {
+	if args == nil {
+		return
+	}
+	if args.Hooks == nil {
+		args.Hooks = e.snapshotHooks(hookSlots{})
+	}
+	if args.Site == nil {
+		site := &InvokeSite{
+			Format: args.Source.Format,
+			Ref:    args.Ref,
+		}
+		if args.Binding != nil {
+			site.Operation = args.Binding.Operation
+			site.InvokedAs = args.Binding.Operation
+		}
+		if inv := e.invoker.findInvoker(args.Source.Format); inv != nil {
+			stampSite(site, inv)
+		} else {
+			site.seamStamped = true
+		}
+		args.Site = site
+	}
 }
 
 // PrepareBinding is the side-effect-free preflight for a resolved binding
@@ -272,6 +317,8 @@ func (e *OperationInvoker) run(
 	bindingKey string,
 	source *Source,
 	initialContext map[string]any,
+	invokedAs string,
+	hooks *InvokeHooks,
 ) {
 	if (binding.InputTransform != nil || binding.OutputTransform != nil) && e.TransformEvaluator == nil {
 		caller.FireError(&InvocationError{
@@ -312,6 +359,20 @@ func (e *OperationInvoker) run(
 		if source.Content != nil {
 			a.Source.Content = source.Content
 		}
+		a.Hooks = hooks
+		site := &InvokeSite{
+			Operation:  binding.Operation,
+			InvokedAs:  invokedAs,
+			BindingKey: bindingKey,
+			Format:     source.Format,
+			Ref:        binding.Ref,
+		}
+		if inv := e.invoker.findInvoker(source.Format); inv != nil {
+			stampSite(site, inv)
+		} else {
+			site.seamStamped = true
+		}
+		a.Site = site
 		return a
 	}
 	mergeResolved := func(resolved map[string]any) {

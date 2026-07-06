@@ -92,6 +92,17 @@ type BindingInvocationArgs struct {
 	// operation invoker. Enables format-specific invokers to read schema
 	// metadata (e.g., const values).
 	InputSchema JSONSchema `json:"-"`
+	// Hooks is the consumer-hook consultation seam, populated by the
+	// operation invoker from its per-Invoke snapshot (per-invocation over
+	// invoker-level; nil = builtins only). Process-local — never wire.
+	// OperationInvoker.InvokeBinding fills it from invoker-level fields
+	// when nil (the in-process binding-layer path).
+	Hooks *InvokeHooks `json:"-"`
+	// Site identifies this consultation site (canonical operation key,
+	// binding, format, ref), constructed and builtin-stamped by the
+	// operation invoker; the FORMAT completes Target on its copy before
+	// consulting hooks. Process-local — never wire.
+	Site *InvokeSite `json:"-"`
 }
 
 // SynthesizeSource describes a binding source for interface creation.
