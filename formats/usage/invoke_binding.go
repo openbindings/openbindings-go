@@ -182,7 +182,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	emitWithDiagnostics(inv, output, res)
+	emitWithDiagnostics(inv, output, res, args.Hooks, routed.record)
 }
 
 // siteFor completes the core-stamped site with the format-known Target
@@ -279,13 +279,30 @@ func (e *Invoker) PlanContributions(args *openbindings.BindingInvocationArgs) (*
 }
 
 // emitWithDiagnostics stamps the diagnostics trailer and emits the output.
+// The trailer carries the §4.5.2 success stamps — x-ob-decode
+// ("assumption/text" | "hook"), x-ob-classify ("assumption/exit-0" |
+// "hook"), and the provenance-qualified per-field x-ob-route — plus the
+// exec carrier facts (x-exit-code, tail-capped x-stderr). Tier-blind on
+// purpose: failure paths are tier-precise; success provenance is not.
 // Diagnostics ride trailing metadata, never the output value: the exit code
 // and captured stderr (a filter command's human summary). The trailer is
 // header-shaped, so stderr is bounded: the LAST maxStderrTrailerBytes (tails
 // carry the operative lines), with an explicit truncation marker that also
 // fires when the capture itself overflowed.
-func emitWithDiagnostics(inv *openbindings.InvocationImpl[any, any], output any, res *cliResult) {
+func emitWithDiagnostics(inv *openbindings.InvocationImpl[any, any], output any, res *cliResult, hooks *openbindings.InvokeHooks, record map[string]string) {
 	trailer := openbindings.Metadata{"x-exit-code": {strconv.Itoa(res.exitCode)}}
+	decodeStamp, classifyStamp := "assumption/text", "assumption/exit-0"
+	if hooks.DecodeDecidedBy() == "hook" {
+		decodeStamp = "hook"
+	}
+	if hooks.ClassifyDecidedBy() == "hook" {
+		classifyStamp = "hook"
+	}
+	trailer["x-ob-decode"] = []string{decodeStamp}
+	trailer["x-ob-classify"] = []string{classifyStamp}
+	for field, route := range record {
+		trailer["x-ob-route"] = append(trailer["x-ob-route"], field+"="+route)
+	}
 	if res.stderr != "" {
 		stderrOut := res.stderr
 		truncated := res.stderrTruncated
@@ -336,7 +353,9 @@ func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvoc
 		return
 	}
 	output := strings.TrimRight(res.stdout, "\r\n") // the text assumption
-	emitWithDiagnostics(inv, output, res)
+	// Direct-binary dispatch consults no hooks (stated in run); a nil
+	// carrier stamps the assumptions, which is what actually decided.
+	emitWithDiagnostics(inv, output, res, nil, nil)
 }
 
 // metadataBinary extracts the "binary" hint from context metadata.

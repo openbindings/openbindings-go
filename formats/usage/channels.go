@@ -38,12 +38,15 @@ const maxRouteBytes = maxCLIOutputBytes
 // the argv-facing field map (with `-`/path substitutions applied), the
 // stdin payload (nil when no field rides stdin), a cleanup for any
 // materialized temp files, and the per-field routing record (for
-// x-ob-route provenance and tests).
+// x-ob-route provenance and tests). Record values are §4.5.2
+// provenance-qualified: "assumption/argv" when the chain declined to the
+// default, "hook/<token>" when a hook elected the channel (tier-blind on
+// purpose — success provenance is).
 type routedInput struct {
 	fields  map[string]any
 	stdin   []byte
 	cleanup func()
-	record  map[string]string // field -> effective channel token
+	record  map[string]string // field -> provenance-qualified channel
 }
 
 // routeFields consults the FieldRouter chain for every input field and
@@ -91,8 +94,12 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		if rerr != nil {
 			return fail(openbindings.AsInvocationError(rerr))
 		}
-		if route == "" || route == RouteArgv {
-			out.record[field] = RouteArgv
+		if route == "" {
+			out.record[field] = "assumption/" + RouteArgv
+			continue
+		}
+		if route == RouteArgv {
+			out.record[field] = "hook/" + RouteArgv
 			continue
 		}
 		switch route {
@@ -142,7 +149,7 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		value, present := fields[field]
 		if !present || value == nil {
 			delete(fields, field)
-			out.record[field] = route
+			out.record[field] = "hook/" + route
 			continue
 		}
 		data, isString := routeBytes(value)
@@ -194,7 +201,7 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 			}
 			fields[field] = path
 		}
-		out.record[field] = route
+		out.record[field] = "hook/" + route
 	}
 	return out, nil
 }

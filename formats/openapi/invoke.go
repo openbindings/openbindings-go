@@ -277,10 +277,31 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 
+	// §4.5.2 success stamps: decode provenance is header/content-type when
+	// the builtin (the Content-Type lane) decided, hook when overridden;
+	// classify is always assumption/2xx unless a hook widened it.
+	inv.SetTrailer(decodeClassifyTrailer(args.Hooks, "header/content-type"))
 	if err := inv.EmitOutput(output); err != nil {
 		return
 	}
 	inv.CloseOutput()
+}
+
+// decodeClassifyTrailer builds the §4.5.2 x-ob-decode/x-ob-classify
+// success stamps for an HTTP-lane invoker, given the axis's builtin
+// provenance token. A hook decision on either axis stamps "hook".
+func decodeClassifyTrailer(hooks *openbindings.InvokeHooks, builtinDecode string) openbindings.Metadata {
+	decode, classify := builtinDecode, "assumption/2xx"
+	if hooks.DecodeDecidedBy() == "hook" {
+		decode = "hook"
+	}
+	if hooks.ClassifyDecidedBy() == "hook" {
+		classify = "hook"
+	}
+	return openbindings.Metadata{
+		"x-ob-decode":   {decode},
+		"x-ob-classify": {classify},
+	}
 }
 
 // BuiltinClassify is the openapi builtin result classifier: success iff

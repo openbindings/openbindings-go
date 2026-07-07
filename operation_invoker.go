@@ -159,6 +159,18 @@ func (e *OperationInvoker) snapshotHooks(perInv hookSlots) *InvokeHooks {
 	})
 }
 
+// SnapshotHooks composes per-invocation hooks over this invoker's
+// invoker-level hooks into the seam carrier a direct binding-layer call
+// passes as BindingInvocationArgs.Hooks — the same both-tier snapshot
+// Invoke takes at entry. Nil axes simply decline down the chain (per-
+// invocation → invoker-level → builtin). This is how an embedder that
+// drives the binding layer itself (fillBindingArgs's "direct callers who
+// want different hooks pass their own") attaches per-invocation
+// elections whose declines still reach its invoker-level table.
+func (e *OperationInvoker) SnapshotHooks(decode OutputDecoder, classify ResultClassifier, route FieldRouter) *InvokeHooks {
+	return e.snapshotHooks(hookSlots{decode: decode, classify: classify, route: route})
+}
+
 // fillBindingArgs completes a binding-layer call's args with the seam
 // carrier and a stamped site when the caller supplied none — the
 // in-process binding-layer path (delegate lane), which is what makes an
@@ -452,13 +464,30 @@ func (e *OperationInvoker) run(
 			_ = caller.SetHeader(md)
 		}
 	}
-	forwardTrailer := func(inner Invocation[any, any]) {
+	forwardTrailer := func(inner Invocation[any, any], success bool) {
 		// Every call site cancels (or has observed the terminal of) the
 		// inner first; the recover guards foreign Invocation impls whose
 		// Trailer panics on a not-yet-settled terminal race.
 		defer func() { _ = recover() }()
-		if t := inner.Trailer(); len(t) > 0 {
-			caller.SetTrailer(t)
+		merged := Metadata{}
+		for k, v := range inner.Trailer() {
+			merged[k] = v
+		}
+		// §4.5.3: the unvalidated-assumption warning rides the trailer on
+		// SUCCESS only (failures carry tier-precise provenance already),
+		// keyed on the format's own decode stamp — only an assumption
+		// lane can trigger it.
+		if success {
+			stamp := ""
+			if v := merged["x-ob-decode"]; len(v) > 0 {
+				stamp = v[0]
+			}
+			if w := AssumptionWarning(stamp, op.Output); w != "" {
+				merged["x-ob-warning"] = append(merged["x-ob-warning"], w)
+			}
+		}
+		if len(merged) > 0 {
+			caller.SetTrailer(merged)
 		}
 	}
 
@@ -531,7 +560,7 @@ func (e *OperationInvoker) run(
 		// no-op on the clean-close and already-errored paths).
 		inner.Cancel()
 		forwardHeader(inner)
-		forwardTrailer(inner)
+		forwardTrailer(inner, surface == nil)
 		if surface != nil {
 			caller.FireError(surface)
 		} else {

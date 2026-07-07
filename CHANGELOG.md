@@ -4,6 +4,45 @@
 
 ### Changed
 
+- **The consumer hook seam (specification + configuration = complete
+  invocation).** New core types `OutputDecoder`, `ResultClassifier`, and
+  `FieldRouter` — generic callbacks consulted by every format invoker for the
+  wire questions a source artifact cannot answer (how output bytes decode,
+  which completion statuses are success, which channel an input field rides).
+  Consultation decline-chains per axis: per-invocation options
+  (`WithOutputDecoder`/`WithResultClassifier`/`WithFieldRouter`) → invoker-level
+  fields (`OperationInvoker.OutputDecoder` etc.) → the format built-in, with
+  `ErrUseDefault` as the uniform decline. Hooks see an `InvokeSite` (canonical
+  operation key, format, ref, target) and a `RawResult` (status, body, meta);
+  failures carry tier provenance. `SnapshotHooks` exposes the both-tier
+  snapshot to direct binding-layer callers; `WithRuntime` carries hook fields.
+  Diagnostics ride invocation metadata: `x-ob-decode`/`x-ob-classify`/
+  `x-ob-route` success stamps, the unvalidated-assumption warning
+  (`x-ob-warning`), and the `PlanOperation` probe reporting each axis's
+  consultation chain without invoking.
+
+- **BREAKING: content-independent decode/classify in the openapi and asyncapi
+  invokers (de-sniffed).** openapi now decodes by the response's Content-Type
+  HEADER (strict JSON for `application/json`/`+json` — a declared-JSON body
+  that fails to parse is a loud `ERR_RESPONSE_ERROR` — text otherwise) and
+  classifies success as 2xx; asyncapi decodes by the operation's declared
+  message `contentType` and no longer unwraps `{error}`/`{data}` convention
+  envelopes in the builtin (attach an `OutputDecoder` for convention lanes).
+  The `MaybeJSON` helper (payload sniffing) is REMOVED from the core surface;
+  error details carry the raw capture, never a parsed value.
+
+- **BREAKING: the usage invoker consumes bare jdx artifacts.** The
+  `openbindings.usage` wrapper format is deleted; the artifact IS the source
+  (`usage@^2.0.0`), refs are space-separated command paths, and the exec
+  assumptions are documented and hook-overridable: stdout decodes as text
+  (command-substitution semantics; the JSON heuristic is gone), exit 0 is
+  success, fields ride argv. Channel constants (`RouteArgv`, `RouteStdinDash`,
+  `RouteStdin`, `RouteFile`) name the `FieldRouter` value space with loud
+  argv-assembly refusals; `HookTable` compiles per-CLI elections
+  (JSON lanes, ok-exits, routes) into guarded hooks. Synthesis emits
+  floor-true `{"type":"string"}` output schemas carrying an in-schema
+  `x-ob.floor` stamp that keys the diagnostics and clears on election.
+
 - **Operations are invoked through signatures.** Added `OperationSignature[I, O]`
   (an inert `{Key}` carrying its input/output types as phantom parameters),
   `NewOperationSignature[I, O](key)`, the variadic functional options `InvokeOption`

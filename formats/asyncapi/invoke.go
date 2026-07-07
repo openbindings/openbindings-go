@@ -398,6 +398,11 @@ func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address st
 		return
 	}
 
+	// §4.5.2 success stamps: decode is spec/content-type (the message's
+	// declared contentType decides the lane), hook when overridden;
+	// classify is not-consulted (asyncapi runs no result classifier — the
+	// HTTP 4xx guard above is transport, not a format verdict).
+	h.SetTrailer(decodeTrailer(args.Hooks, "spec/content-type"))
 	if h.EmitOutput(output) != nil {
 		return // invocation terminated while the emit was parked
 	}
@@ -1001,6 +1006,20 @@ func builtinDecodeFor(contentType string) openbindings.OutputDecoder {
 			return parsed, nil
 		}
 		return string(raw.Body), nil
+	}
+}
+
+// decodeTrailer builds the §4.5.2 x-ob-decode stamp (and the fixed
+// x-ob-classify not-consulted stamp — asyncapi runs no classifier) for a
+// successful message decode, given the builtin decode provenance token.
+func decodeTrailer(hooks *openbindings.InvokeHooks, builtinDecode string) openbindings.Metadata {
+	decode := builtinDecode
+	if hooks.DecodeDecidedBy() == "hook" {
+		decode = "hook"
+	}
+	return openbindings.Metadata{
+		"x-ob-decode":   {decode},
+		"x-ob-classify": {"not-consulted"},
 	}
 }
 

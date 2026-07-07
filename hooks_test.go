@@ -198,3 +198,58 @@ func TestSnapshotImmunity(t *testing.T) {
 		t.Fatalf("snapshot must be immune to later mutation, got %v", v)
 	}
 }
+
+// SnapshotHooks composes per-invocation axes over the invoker level: a
+// per-invocation decoder wins, and a nil per-invocation axis declines to
+// the invoker-level one (the direct-binding-caller affordance).
+func TestSnapshotHooks_ComposesTiers(t *testing.T) {
+	inv := NewOperationInvoker()
+	inv.OutputDecoder = func(InvokeSite, RawResult) (any, error) { return "invoker", nil }
+	inv.ResultClassifier = func(InvokeSite, RawResult) (bool, error) { return true, nil }
+
+	// Per-invocation decode overrides; classify axis (nil) declines to invoker.
+	h := inv.SnapshotHooks(
+		func(InvokeSite, RawResult) (any, error) { return "per-inv", nil },
+		nil, nil,
+	)
+	if v, _ := h.DecodeOutput(testSite(), RawResult{}, nil); v != "per-inv" {
+		t.Fatalf("per-invocation decode must win, got %v", v)
+	}
+	if h.DecodeDecidedBy() != "hook" {
+		t.Fatalf("decode decidedBy = %q, want hook", h.DecodeDecidedBy())
+	}
+	ok, _ := h.Classify(testSite(), RawResult{Status: intp(0)}, nil)
+	if !ok {
+		t.Fatal("nil per-invocation classify must decline to the invoker-level classifier")
+	}
+	if h.ClassifyDecidedBy() != "hook" {
+		t.Fatalf("classify decidedBy = %q, want hook", h.ClassifyDecidedBy())
+	}
+}
+
+// The §4.5.3 warning fires only when an ASSUMPTION lane decoded (the
+// format's x-ob-decode stamp) AND the contract cannot catch a wrong lane;
+// a hook decode, a wire-framed lane, an absent stamp (no decode ran), or a
+// discriminating schema silences it.
+func TestAssumptionWarning(t *testing.T) {
+	floor := JSONSchema{"type": "string", "x-ob": map[string]any{"floor": "text"}}
+	if w := AssumptionWarning("assumption/text", floor); w == "" || !strings.Contains(w, "floor-stamped") {
+		t.Fatalf("floor-stamped + assumption decode must warn, got %q", w)
+	}
+	if w := AssumptionWarning("assumption/text", nil); !strings.Contains(w, "no output schema") {
+		t.Fatalf("no schema + assumption decode must warn, got %q", w)
+	}
+	typed := JSONSchema{"type": "object", "required": []any{"id"}}
+	if w := AssumptionWarning("assumption/text", typed); w != "" {
+		t.Fatalf("a discriminating schema must not warn, got %q", w)
+	}
+	if w := AssumptionWarning("hook", floor); w != "" {
+		t.Fatalf("a hook decode must silence the warning, got %q", w)
+	}
+	if w := AssumptionWarning("header/content-type", nil); w != "" {
+		t.Fatalf("a wire-framed lane is not an assumption, got %q", w)
+	}
+	if w := AssumptionWarning("", nil); w != "" {
+		t.Fatalf("no stamp means no decode ran — must not warn, got %q", w)
+	}
+}

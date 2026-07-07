@@ -3,6 +3,7 @@ package openbindings
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // The consumer hook surface: specification + configuration = complete
@@ -177,6 +178,9 @@ type InvokeHooks struct {
 	// schema after a hook decode names the schema election, not the
 	// hook). Hooks run on a single binding goroutine per invocation.
 	decodeDecidedBy string
+	// classifyDecidedBy mirrors decodeDecidedBy for the classify axis —
+	// read by the §4.5.2 success stamps (x-ob-classify).
+	classifyDecidedBy string
 }
 
 // DecodeDecidedBy reports which tier produced the most recent decode:
@@ -186,6 +190,15 @@ func (h *InvokeHooks) DecodeDecidedBy() string {
 		return "builtin"
 	}
 	return h.decodeDecidedBy
+}
+
+// ClassifyDecidedBy reports which tier produced the most recent
+// classification: "hook", "builtin", or "" (no classification yet).
+func (h *InvokeHooks) ClassifyDecidedBy() string {
+	if h == nil {
+		return "builtin"
+	}
+	return h.classifyDecidedBy
 }
 
 type hookSlots struct {
@@ -342,12 +355,16 @@ func (h *InvokeHooks) Classify(site InvokeSite, raw RawResult, builtin ResultCla
 		}
 		v, cerr := runClassifyHook(t.name, t.fn, site, raw)
 		if cerr == nil {
+			h.classifyDecidedBy = "hook"
 			return v, nil
 		}
 		if errors.Is(cerr, ErrUseDefault) {
 			continue
 		}
 		return false, cerr
+	}
+	if h != nil {
+		h.classifyDecidedBy = "builtin"
 	}
 	if builtin == nil {
 		return false, &InvocationError{
@@ -482,6 +499,35 @@ func FloorStamped(schema JSONSchema) bool {
 	}
 	_, has := xob["floor"]
 	return has
+}
+
+// AssumptionWarning composes the §4.5.3 unvalidated/undiscriminating-
+// assumption warning: it fires when an ASSUMPTION decoded the output
+// (decodeStamp is the format's §4.5.2 x-ob-decode trailer stamp —
+// "assumption/<detail>" means the documented default ran; "hook",
+// "header/...", "spec/...", or absent mean it did not) AND the output
+// contract cannot catch a wrong lane (no schema, a non-discriminating
+// schema, or a floor-stamped schema). Format-generic text; "" means no
+// warning. Content-independent — it reads provenance and the contract,
+// never payload bytes. Keying on the stamp rather than the hook carrier
+// keeps it honest: a format that consults no decode axis emits no stamp
+// and can never be accused of a decode it did not run.
+func AssumptionWarning(decodeStamp string, outputSchema JSONSchema) string {
+	if !strings.HasPrefix(decodeStamp, "assumption/") {
+		return ""
+	}
+	var reason string
+	switch {
+	case FloorStamped(outputSchema):
+		reason = "floor-stamped output schema"
+	case outputSchema == nil || len(outputSchema) == 0:
+		reason = "no output schema"
+	case NonDiscriminatingOutput(outputSchema):
+		reason = "non-discriminating output schema"
+	default:
+		return ""
+	}
+	return fmt.Sprintf("the built-in default decoded the output and the output contract cannot catch a wrong lane (%s); a wrong decode assumption would pass silently — set an OutputDecoder or elect the real output schema", reason)
 }
 
 // NonDiscriminatingOutput reports whether an output contract cannot catch
