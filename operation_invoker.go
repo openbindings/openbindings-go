@@ -127,7 +127,10 @@ func (e *OperationInvoker) WithRuntime(resolver ContextResolver) *OperationInvok
 	return &cp
 }
 
-// Formats returns all formats registered with this invoker.
+// Formats returns all formats registered with this invoker. It is an
+// aggregation convenience over the registered binding invokers; the
+// operation-invoker role itself carries no listFormats operation (its
+// format reach is dynamic, e.g. via delegates).
 func (e *OperationInvoker) Formats() []FormatInfo {
 	return e.invoker.Formats()
 }

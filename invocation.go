@@ -40,7 +40,7 @@ type Metadata map[string][]string
 type ContextRequirement struct {
 	Type string `json:"type"`
 	// Durable reports whether resolved context MAY be cached under the
-	// challenge's Key. nil means true; non-durable context MUST be
+	// target-derived key. nil means true; non-durable context MUST be
 	// re-satisfied per call.
 	Durable     *bool          `json:"durable,omitempty"`
 	Description string         `json:"description,omitempty"`
