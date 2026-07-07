@@ -22,10 +22,10 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 
 	var targets []openbindings.BindableTarget
 
-	// Suggest the same operation keys SynthesizeInterface assigns (create.go: a
+	// Suggest the same operation keys SynthesizeInterface assigns (synthesize.go: a
 	// SanitizeKey'd name with collision resolution against the entity kind,
 	// sharing one usedKeys map across tools/resources/templates/prompts), so an
-	// inspection previews exactly what create names.
+	// inspection previews exactly what synthesis names.
 	usedKeys := map[string]string{}
 
 	sort.Slice(disc.Tools, func(i, j int) bool { return disc.Tools[i].Name < disc.Tools[j].Name })

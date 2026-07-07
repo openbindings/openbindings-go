@@ -34,9 +34,9 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		{"Subscription", disc.schema.rootTypeName("Subscription")},
 	}
 
-	// Suggest the same operation key SynthesizeInterface assigns (create.go: a
+	// Suggest the same operation key SynthesizeInterface assigns (synthesize.go: a
 	// SanitizeKey'd field name with collision resolution against the root type),
-	// so an inspection previews exactly what create names.
+	// so an inspection previews exactly what synthesis names.
 	usedKeys := map[string]string{}
 	for _, rt := range rootTypes {
 		if rt.typeName == "" {

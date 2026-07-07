@@ -43,7 +43,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 
 			// Suggest the same operation key SynthesizeInterface would assign for
 			// this target. The iteration order and usedKeys de-duplication here
-			// match create's, so inspection previews exactly what create names.
+			// match create's, so inspection previews exactly what synthesis names.
 			opKey := deriveOperationKey(op, path, method, usedKeys)
 			usedKeys[opKey] = true
 

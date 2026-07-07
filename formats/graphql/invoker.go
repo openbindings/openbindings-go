@@ -243,7 +243,7 @@ func toMetadata(h http.Header) openbindings.Metadata {
 	return md
 }
 
-// Synthesizer handles interface creation from GraphQL endpoints.
+// Synthesizer handles interface synthesis from GraphQL endpoints.
 type Synthesizer struct{}
 
 // NewSynthesizer creates a new GraphQL interface synthesizer.

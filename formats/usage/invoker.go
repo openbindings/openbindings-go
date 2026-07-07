@@ -127,7 +127,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 	return inv
 }
 
-// Synthesizer handles interface creation from usage specs.
+// Synthesizer handles interface synthesis from usage specs.
 type Synthesizer struct{}
 
 // NewSynthesizer creates a new usage interface synthesizer.

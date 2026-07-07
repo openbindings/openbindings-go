@@ -151,7 +151,7 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.Binding
 	return requiredContext(doc, &asyncOp, serverURL, args.Context), nil
 }
 
-// Synthesizer handles interface creation from AsyncAPI documents.
+// Synthesizer handles interface synthesis from AsyncAPI documents.
 type Synthesizer struct {
 	httpClient *http.Client
 }

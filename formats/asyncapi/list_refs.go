@@ -23,9 +23,9 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	}
 	sort.Strings(opIDs)
 
-	// Suggest the same operation key SynthesizeInterface assigns (create.go: same
+	// Suggest the same operation key SynthesizeInterface assigns (synthesize.go: same
 	// sorted iteration and SanitizeKey + UniqueKey de-duplication), so an
-	// inspection previews exactly what create names.
+	// inspection previews exactly what synthesis names.
 	usedKeys := map[string]bool{}
 	for _, opID := range opIDs {
 		asyncOp := doc.Operations[opID]

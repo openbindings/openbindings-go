@@ -32,8 +32,10 @@ type BindingPreparer interface {
 	PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error)
 }
 
-// InterfaceSynthesizer creates OpenBindings interfaces from format-specific sources.
+// InterfaceSynthesizer synthesizes OpenBindings interfaces from format-specific sources.
 // Independent of BindingInvoker — an implementation may provide one, the other, or both.
+// Synthesizers load sources fresh on every call; parsed-artifact caching belongs
+// to invokers (authoring wants freshness).
 type InterfaceSynthesizer interface {
 	Formats() []FormatInfo
 	SynthesizeInterface(ctx context.Context, in *SynthesizeInput) (*Interface, error)

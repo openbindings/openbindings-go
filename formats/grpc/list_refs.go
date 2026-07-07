@@ -36,9 +36,9 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
 	})
 
-	// Suggest the same operation key SynthesizeInterface assigns (create.go: same
+	// Suggest the same operation key SynthesizeInterface assigns (synthesize.go: same
 	// SanitizeKey + collision resolution against the service name), so an
-	// inspection previews exactly what create names.
+	// inspection previews exactly what synthesis names.
 	usedKeys := map[string]string{}
 	for _, svc := range disc.services {
 		methods := serviceMethodsSorted(svc)

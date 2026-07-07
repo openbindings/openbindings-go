@@ -210,7 +210,7 @@ func (e *Invoker) prepareDoc(location string, content any) *openapi3.T {
 	return e.docCache[location]
 }
 
-// Synthesizer handles interface creation from OpenAPI documents.
+// Synthesizer handles interface synthesis from OpenAPI documents.
 type Synthesizer struct{}
 
 var (

@@ -105,7 +105,7 @@ type BindingInvocationArgs struct {
 	Site *InvokeSite `json:"-"`
 }
 
-// SynthesizeSource describes a binding source for interface creation.
+// SynthesizeSource describes a binding source for interface synthesis.
 type SynthesizeSource struct {
 	Format         string `json:"format"`
 	Name           string `json:"name,omitempty"`
@@ -116,7 +116,7 @@ type SynthesizeSource struct {
 	Description    string `json:"description,omitempty"`
 }
 
-// SynthesizeInput is the input for creating an OpenBindings interface from format-specific sources.
+// SynthesizeInput is the input for synthesizing an OpenBindings interface from format-specific sources.
 type SynthesizeInput struct {
 	OpenBindingsVersion string             `json:"openbindingsVersion,omitempty"`
 	Sources             []SynthesizeSource `json:"sources,omitempty"`
@@ -133,7 +133,7 @@ type SynthesizeInput struct {
 }
 
 // SynthesizerWarning describes a non-fatal limitation encountered while building
-// an Interface. Warnings do not block creation; the returned Interface is
+// an Interface. Warnings do not block synthesis; the returned Interface is
 // still valid and usable. Consumers may surface warnings in tooling output
 // (CLI, registry publish checks, CI) to inform users about lossy conversions.
 type SynthesizerWarning struct {

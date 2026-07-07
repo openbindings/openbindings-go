@@ -189,7 +189,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 }
 
-// Synthesizer handles interface creation from gRPC servers.
+// Synthesizer handles interface synthesis from gRPC servers.
 type Synthesizer struct{}
 
 // NewSynthesizer creates a new gRPC interface synthesizer.

@@ -175,7 +175,7 @@ func emptyRequestMessage(mi *methodInfo) bool {
 	return mi != nil && mi.method != nil && mi.method.Input().Fields().Len() == 0
 }
 
-// Synthesizer handles interface creation from protobuf definitions for the Connect format.
+// Synthesizer handles interface synthesis from protobuf definitions for the Connect format.
 type Synthesizer struct{}
 
 // NewSynthesizer creates a new Connect interface synthesizer.

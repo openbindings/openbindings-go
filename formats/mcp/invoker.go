@@ -114,7 +114,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 	return inv
 }
 
-// Synthesizer handles interface creation from MCP servers.
+// Synthesizer handles interface synthesis from MCP servers.
 type Synthesizer struct {
 	clientVersion string
 }
