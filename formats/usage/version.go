@@ -7,10 +7,14 @@ import (
 	"strings"
 )
 
-// Supported Usage spec versions for this SDK.
+// Supported Usage versions for this SDK. Usage version numbers track the
+// jdx usage TOOL (which is what an artifact's min_usage_version pins), not
+// a separately-versioned KDL vocabulary — the vocabulary is unchanged
+// across the 2.x → 3.x tool line per the spec docs, which is why one
+// parser serves both.
 const (
 	MinSupportedVersion = "2.0.0"
-	MaxTestedVersion    = "2.13.1"
+	MaxTestedVersion    = "3.5.3"
 )
 
 // Parsed constants, validated at init time.

@@ -54,15 +54,17 @@ func TestValidate_RequireBin(t *testing.T) {
 }
 
 func TestValidate_RequireSupportedVersion(t *testing.T) {
+	// 3.x is inside the supported range (tool majors 2 and 3); a version
+	// beyond MaxTestedVersion refuses.
 	spec := &Spec{
 		Nodes: []Node{
-			{Name: "min_usage_version", Args: []Value{{Raw: "3.0.0"}}},
+			{Name: "min_usage_version", Args: []Value{{Raw: "99.0.0"}}},
 		},
 	}
 
 	err := spec.Validate(WithRequireSupportedVersion())
 	if err == nil {
-		t.Error("expected error with WithRequireSupportedVersion")
+		t.Fatal("expected error with WithRequireSupportedVersion")
 	}
 	if !strings.Contains(err.Error(), "unsupported version") {
 		t.Errorf("expected unsupported version error, got: %v", err)

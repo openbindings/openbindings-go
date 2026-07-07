@@ -13,10 +13,12 @@ import (
 
 const DefaultSourceName = "usage"
 
-// FormatRange is the bare jdx usage token range this invoker claims: the
-// artifact IS the source (no wrapper — specification + configuration =
-// complete invocation; the artifact's gaps are consumer hooks).
-const FormatRange = "usage@^2.0.0"
+// FormatRanges are the bare jdx usage token ranges this invoker claims —
+// one caret range per supported tool major (the token grammar has no
+// compound ranges): the artifact IS the source (no wrapper —
+// specification + configuration = complete invocation; the artifact's
+// gaps are consumer hooks).
+var FormatRanges = []string{"usage@^2.0.0", "usage@^3.0.0"}
 
 // Invoker handles binding invocation for bare jdx usage artifacts
 // (usage.kdl): refs are space-separated command paths; the wire questions
@@ -102,7 +104,15 @@ func artifactText(ctx context.Context, location string, content any) (string, er
 
 // Formats returns the source formats supported by the usage invoker.
 func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatRange, Description: "CLI tools described by jdx usage specs"}}
+	return usageFormatInfos()
+}
+
+func usageFormatInfos() []openbindings.FormatInfo {
+	infos := make([]openbindings.FormatInfo, len(FormatRanges))
+	for i, token := range FormatRanges {
+		infos[i] = openbindings.FormatInfo{Token: token, Description: "CLI tools described by jdx usage specs"}
+	}
+	return infos
 }
 
 // InvokeBinding runs a CLI command for a usage-spec binding and returns the
@@ -128,9 +138,7 @@ func NewSynthesizer() *Synthesizer {
 // Formats returns the source formats supported by the usage synthesizer:
 // bare jdx usage-spec artifacts.
 func (c *Synthesizer) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{
-		{Token: FormatRange, Description: "CLI tools described by jdx usage specs"},
-	}
+	return usageFormatInfos()
 }
 
 // SynthesizeInterface converts a bare jdx usage source to an OpenBindings
