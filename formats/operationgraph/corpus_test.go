@@ -51,10 +51,16 @@ type execFixture struct {
 	Graph      json.RawMessage    `json:"graph"`
 	Writes     []any              `json:"writes"`
 	Expected   struct {
-		Output      []any  `json:"output"`
-		Ordering    string `json:"ordering"`
-		Error       bool   `json:"error"`
-		ErrorDetail any    `json:"errorDetail"`
+		Output   []any  `json:"output"`
+		Ordering string `json:"ordering"`
+		// ArrayOrdering: "set" compares ARRAY-VALUED output events as
+		// multisets (element order inside the array is implementation-
+		// defined — a buffer fed by concurrent each invocations), while
+		// the event stream itself still honors Ordering. See the corpus
+		// README ("which `ordering` alone cannot express").
+		ArrayOrdering string `json:"arrayOrdering"`
+		Error         bool   `json:"error"`
+		ErrorDetail   any    `json:"errorDetail"`
 	} `json:"expected"`
 }
 
@@ -242,6 +248,25 @@ func canon(v any) string {
 	return string(b)
 }
 
+// sortArraysCanonically normalizes array-valued output events for
+// arrayOrdering:set comparison: each top-level array event's elements are
+// sorted by canonical encoding (multiset semantics), leaving the event
+// stream's own order untouched.
+func sortArraysCanonically(events []any) []any {
+	out := make([]any, len(events))
+	for i, ev := range events {
+		arr, ok := ev.([]any)
+		if !ok {
+			out[i] = ev
+			continue
+		}
+		sorted := append([]any(nil), arr...)
+		sort.Slice(sorted, func(a, b int) bool { return canon(sorted[a]) < canon(sorted[b]) })
+		out[i] = sorted
+	}
+	return out
+}
+
 func multisetEqual(a, b []any) bool {
 	if len(a) != len(b) {
 		return false
@@ -406,6 +431,10 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 		expected = []any{}
 	}
 	fx.Expected.Output = expected
+	if fx.Expected.ArrayOrdering == "set" {
+		outputs = sortArraysCanonically(outputs)
+		fx.Expected.Output = sortArraysCanonically(fx.Expected.Output)
+	}
 	if fx.Expected.Ordering == "set" {
 		if !multisetEqual(outputs, fx.Expected.Output) {
 			t.Fatalf("output multiset mismatch\n  got:    %s\n  expect: %s", canon(outputs), canon(fx.Expected.Output))

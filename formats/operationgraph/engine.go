@@ -161,6 +161,59 @@ func newEngine(g *Graph, invoker *openbindings.OperationInvoker, args *openbindi
 	}
 }
 
+// workQueue is the engine's single global FIFO of (node, event) work
+// items, drained by ONE dispatcher. Global FIFO is what makes the spec's
+// exit-preemption promise structural: a completion marker is always
+// enqueued behind the data events produced before it (per producing
+// goroutine), and the dispatcher processes strictly in enqueue order, so
+// at every generation of the cascade the descendants of earlier data stay
+// ahead of the descendants of later completion — a completion-triggered
+// buffer flush can never overtake an in-flight exit-bound event, on any
+// path. Unbounded on purpose: the dispatcher is both consumer and
+// (transitively) producer, so a bounded queue would self-deadlock;
+// amplification is bounded by maxEvents and caller input by the pump's
+// token gate.
+type workQueue struct {
+	mu    sync.Mutex
+	head  int
+	items []queuedEvent
+	wake  chan struct{} // coalesced not-empty notification
+}
+
+type queuedEvent struct {
+	to string
+	ev *event
+}
+
+func newWorkQueue() *workQueue {
+	return &workQueue{wake: make(chan struct{}, 1)}
+}
+
+func (q *workQueue) push(to string, ev *event) {
+	q.mu.Lock()
+	q.items = append(q.items, queuedEvent{to: to, ev: ev})
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (q *workQueue) pop() (queuedEvent, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.head == len(q.items) {
+		// Reset rather than grow forever; the backing array is reused.
+		q.head = 0
+		q.items = q.items[:0]
+		return queuedEvent{}, false
+	}
+	item := q.items[q.head]
+	q.items[q.head] = queuedEvent{} // release the event for GC
+	q.head++
+	return item, true
+}
+
 func (eng *engine) incInflight() { eng.inflight.Add(1) }
 
 func (eng *engine) decInflight() {
@@ -222,11 +275,23 @@ func (eng *engine) run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Node mailboxes.
-	mailboxes := make(map[string]chan *event)
-	for key := range eng.graph.Nodes {
-		mailboxes[key] = make(chan *event, 256)
+	// The global work queue (see workQueue): one dispatcher, global FIFO.
+	queue := newWorkQueue()
+
+	// Per-each-node spawn tracking: an each node's downstream completion is
+	// deferred until its concurrently-running spawns finish (per-edge order:
+	// a node's completion follows every output its data produced).
+	eachWaits := make(map[string]*sync.WaitGroup)
+	for key, node := range eng.graph.Nodes {
+		if node.Type == "each" {
+			eachWaits[key] = &sync.WaitGroup{}
+		}
 	}
+
+	// Caller-write backpressure: the pump holds a token per unprocessed
+	// input event (the old per-mailbox cap, applied at the graph's rim —
+	// graph-internal amplification is bounded by maxEvents instead).
+	inputTokens := make(chan struct{}, 256)
 
 	bufferStates := make(map[string]*bufferState)
 	combineStates := make(map[string]*combineState)
@@ -247,13 +312,12 @@ func (eng *engine) run(ctx context.Context) {
 		}
 	}
 
+	// Enqueue never blocks (the dispatcher is transitively a producer);
+	// inflight counts EXTERNAL producers only (the input pump, conduit
+	// output pumps, each spawns and their completion waiters) — queued work
+	// is visible to the dispatcher directly.
 	sendToNode := func(toKey string, ev *event) {
-		eng.incInflight()
-		select {
-		case mailboxes[toKey] <- ev:
-		case <-ctx.Done():
-			eng.decInflight()
-		}
+		queue.push(toKey, ev)
 	}
 
 	sendDownstream := func(fromKey string, ev *event) {
@@ -267,10 +331,12 @@ func (eng *engine) run(ctx context.Context) {
 		}
 	}
 
-	// Completion markers travel through the same mailboxes as data so FIFO
-	// ordering preserves "all data first, then complete" per edge. Delivery
-	// is per-edge-once: the quiescence pass and natural propagation share
-	// the same dedup, so an edge's completion is never counted twice.
+	// Completion markers travel through the same queue as data, so global
+	// FIFO preserves "all data first, then complete" per edge — and, because
+	// the dispatcher is single, across paths (the exit-preemption theorem;
+	// see workQueue). Delivery is per-edge-once: the quiescence pass and
+	// natural propagation share the same dedup, so an edge's completion is
+	// never counted twice.
 	deliverCompletion := func(fromKey, toKey string) bool {
 		eng.completionMu.Lock()
 		if eng.completionSent[fromKey][toKey] {
@@ -468,6 +534,21 @@ func (eng *engine) run(ctx context.Context) {
 			startConduit(key, node)
 			_ = eng.conduits[key].call.Close()
 			return
+		case "each":
+			// Spawns run concurrently; the node's completion must follow
+			// every output they will produce. All spawns for this node were
+			// registered before this marker was processed (global FIFO put
+			// their data events ahead of it), so the waiter's count is
+			// final. The waiter holds an inflight token: the graph is not
+			// quiescent while spawns are outstanding.
+			wg := eachWaits[key]
+			eng.incInflight()
+			go func() {
+				defer eng.decInflight()
+				wg.Wait()
+				sendCompletion(key)
+			}()
+			return
 		case "buffer":
 			if b := bufferStates[key].flush(); b != nil {
 				sendDownstream(key, &event{data: b.data, source: key, root: b.root, lineage: b.lineage})
@@ -476,84 +557,107 @@ func (eng *engine) run(ctx context.Context) {
 		sendCompletion(key)
 	}
 
-	// Worker per node.
-	var wg sync.WaitGroup
-	for key := range eng.graph.Nodes {
-		nodeKey := key
-		node := eng.graph.Nodes[nodeKey]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case ev := <-mailboxes[nodeKey]:
-					if eng.exitFlag.Load() {
-						eng.decInflight()
-						return
-					}
-					eng.processNode(ctx, nodeKey, node, ev, cancel,
-						sendDownstream, sendCompletion, sendPerEventError,
-						handleCompletion, startConduit, backClosure,
-						bufferStates, combineStates)
-					eng.decInflight()
-				}
-			}
-		}()
-	}
-
 	// Input pump: every caller write becomes one event at the input node, in
 	// write order, each rooting a lineage. The pump's inflight token keeps
 	// the graph alive while the caller's input side is open; back-closure
-	// (or the caller's Close) ends the pump via ReadInput's EOF.
+	// (or the caller's Close) ends the pump via ReadInput's EOF. The token
+	// gate bounds unprocessed caller input (the dispatcher releases a slot
+	// per input event it processes).
 	eng.incInflight()
 	go func() {
 		defer eng.decInflight()
-		// End-of-input travels through the input node's mailbox like any
-		// event, so FIFO ordering guarantees it never overtakes a write.
+		// End-of-input travels through the queue like any event, so FIFO
+		// ordering guarantees it never overtakes a write.
 		defer sendToNode(eng.inputKey, &event{complete: true})
 		for {
 			v, err := eng.handle.ReadInput(ctx)
 			if err != nil {
 				return // io.EOF (input side closed) or terminal
 			}
+			select {
+			case inputTokens <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			rid := eng.addRoot(v)
 			sendToNode(eng.inputKey, &event{data: v, root: rid, lineage: map[string]int{}})
 		}
 	}()
 
-	// Quiescence loop. The pump's token (input side open) and every live
-	// inner invocation's token keep inflight above zero, so a zero crossing
-	// means no event can ever flow again. Any edge whose completion has not
-	// been delivered by then is starved by a cycle (circular completion
-	// dependency) or feeds from an error route; injecting those completions
-	// is the spec's implementation-defined drain detection. The injected
-	// markers may flush buffers and complete combines, producing new work;
-	// loop until a zero crossing injects nothing.
+	// spawnEach runs one each-invocation per arriving event on its own
+	// goroutine — the spec's concurrency point ("interleaving across
+	// concurrent each invocations' outputs" is implementation-defined).
+	// Each spawn holds an inflight token and registers on the node's
+	// waiter, which defers the node's downstream completion until every
+	// spawn has emitted (per-edge order: completion follows the data).
+	spawnEach := func(key string, node *Node, ev *event) {
+		wg := eachWaits[key]
+		wg.Add(1)
+		eng.incInflight()
+		go func() {
+			defer eng.decInflight()
+			defer wg.Done()
+			eng.processEach(ctx, key, node, ev, sendDownstream, sendPerEventError)
+		}()
+	}
+
+	// The dispatcher: ONE loop drains the global queue in FIFO order —
+	// every node's bookkeeping (filters, transforms, buffers, completion
+	// counters) runs here, serially, which is what makes cross-path
+	// ordering deterministic where the spec pins it (an exit always
+	// preempts the end-of-stream flush; see workQueue). Concurrency lives
+	// where the spec puts it: operation conduits and each spawns run on
+	// their own goroutines and feed the queue externally, so their output
+	// interleaving stays implementation-defined.
+	//
+	// When the queue is empty, quiescence is judged by the external tokens
+	// (pump, conduit pumps, each spawns/waiters): a zero crossing with an
+	// empty queue means no event can ever flow again. Any edge whose
+	// completion has not been delivered by then is starved by a cycle
+	// (circular completion dependency) or feeds from an error route;
+	// injecting those completions is the spec's implementation-defined
+	// drain detection. Injected markers may flush buffers and complete
+	// combines, producing new work; loop until a drain injects nothing.
 	for {
-		select {
-		case <-eng.idle:
-		case <-ctx.Done():
-		}
 		if ctx.Err() != nil || eng.exitFlag.Load() {
-			break
+			break // remaining queued work is the exit's discarded in-flight
 		}
-		if eng.inflight.Load() != 0 {
-			continue // stale notification; new work appeared
-		}
-		injected := false
-		for _, e := range eng.graph.Edges {
-			if deliverCompletion(e.From, e.To) {
-				injected = true
+		item, ok := queue.pop()
+		if !ok {
+			if eng.inflight.Load() == 0 {
+				// External producers enqueue before releasing their token
+				// (same goroutine), so at a zero crossing one more pop sees
+				// everything; only then is an empty queue conclusive.
+				if item, ok = queue.pop(); !ok {
+					injected := false
+					for _, e := range eng.graph.Edges {
+						if deliverCompletion(e.From, e.To) {
+							injected = true
+						}
+					}
+					if !injected {
+						break
+					}
+					continue
+				}
+			} else {
+				select {
+				case <-queue.wake:
+				case <-eng.idle:
+				case <-ctx.Done():
+				}
+				continue
 			}
 		}
-		if !injected {
-			break
+		if item.to == eng.inputKey && !item.ev.complete {
+			<-inputTokens // release the pump's backpressure slot
 		}
+		eng.processNode(ctx, item.to, eng.graph.Nodes[item.to], item.ev, cancel,
+			sendDownstream, sendCompletion, sendPerEventError,
+			handleCompletion, startConduit, backClosure, spawnEach,
+			bufferStates, combineStates)
 	}
 	cancel()
-	wg.Wait()
 }
 
 func (eng *engine) processNode(
@@ -566,6 +670,7 @@ func (eng *engine) processNode(
 	handleCompletion func(string, *Node, *event),
 	startConduit func(string, *Node),
 	backClosure func(),
+	spawnEach func(string, *Node, *event),
 	bufferStates map[string]*bufferState,
 	combineStates map[string]*combineState,
 ) {
@@ -612,7 +717,7 @@ func (eng *engine) processNode(
 		eng.processConduitEvent(ctx, key, node, ev, startConduit, sendPerEventError, backClosure)
 
 	case "each":
-		eng.processEach(ctx, key, node, ev, sendDownstream, sendPerEventError)
+		spawnEach(key, node, ev)
 
 	case "filter":
 		eng.processFilter(key, node, ev, sendDownstream, sendPerEventError)
