@@ -34,7 +34,10 @@ func CombineInvokers(invokers ...BindingInvoker) BindingInvoker {
 }
 
 // CombineSynthesizers returns a single InterfaceSynthesizer that routes to the
-// appropriate inner synthesizer based on the source format token.
+// appropriate inner synthesizer based on the source format token. The returned
+// value also implements SourceInspector (assert to use), routing InspectSource
+// to inner synthesizers that inspect — the counterpart of the TS SDK's
+// separate combineSourceInspectors.
 func CombineSynthesizers(synthesizers ...InterfaceSynthesizer) InterfaceSynthesizer {
 	c := &combinedSynthesizer{}
 	for _, cr := range synthesizers {
