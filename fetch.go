@@ -10,6 +10,11 @@ import (
 	"strings"
 )
 
+// maxFetchBytes caps how much of a fetched interface document is read
+// (1 MiB — matched byte-for-byte by the TS SDK). Exceeding it is a loud
+// error, never a truncation.
+const maxFetchBytes = 1 << 20
+
 // FetchedInterface is the result of FetchInterface.
 type FetchedInterface struct {
 	Interface *Interface
@@ -117,9 +122,15 @@ func tryFetchOBI(ctx context.Context, client *http.Client, target string) (*Inte
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// Cap the fetch at maxFetchBytes, LOUDLY: read one byte past the cap so
+	// an oversized document is a clear size error, never a silent truncation
+	// that surfaces as a confusing parse failure.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxFetchBytes {
+		return nil, fmt.Errorf("interface document exceeds the %d-byte fetch cap", maxFetchBytes)
 	}
 
 	var raw map[string]any
