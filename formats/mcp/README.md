@@ -1,10 +1,10 @@
-# mcp-go
+# formats/mcp
 
-MCP (Model Context Protocol) binding invoker and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
+MCP (Model Context Protocol) binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
 
 This package enables OpenBindings to invoke operations against MCP servers and synthesize OBI documents from them. It connects to MCP servers via the Streamable HTTP transport, discovers tools, resources, and prompts, and executes them through the MCP JSON-RPC protocol.
 
-See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how invokers and creators fit into the OpenBindings architecture.
+See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 
 ## Install
 
@@ -24,7 +24,7 @@ import (
     mcpbinding "github.com/openbindings/openbindings-go/formats/mcp"
 )
 
-exec := openbindings.NewOperationInvoker(mcpbinding.NewInvoker())
+opInv := openbindings.NewOperationInvoker(mcpbinding.NewInvoker())
 ```
 
 The invoker declares `mcp@2025-11-25` -- it handles MCP servers implementing the 2025-11-25 spec revision.
@@ -61,12 +61,12 @@ fmt.Println(out)
 Resource reads (`resources/<uri>`) take no input: skip the `Write` and read
 outputs directly.
 
-### Create an interface from an MCP server
+### Synthesize an interface from an MCP server
 
 ```go
-creator := mcpbinding.NewCreator()
-iface, err := creator.CreateInterface(ctx, &openbindings.CreateInput{
-    Sources: []openbindings.CreateSource{{
+synth := mcpbinding.NewSynthesizer()
+iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
+    Sources: []openbindings.SynthesizeSource{{
         Format:   "mcp@2025-11-25",
         Location: "https://mcp.example.com/sse",
     }},
@@ -115,7 +115,7 @@ Context `headers` and `cookies` are forwarded. No security metadata in MCP; an H
 | **Resource template** | `resources/<template>` | Fixed URI template (const) | Resource content |
 | **Prompt** | `prompts/<name>` | Prompt arguments (string-typed) | `{messages: [...]}` |
 
-### Interface creation
+### Interface synthesis
 
 - Each MCP entity type discovered via capability negotiation
 - Tools, resources, resource templates, and prompts sorted alphabetically
@@ -151,7 +151,7 @@ Credentials are applied as HTTP headers in priority order:
 
 Context `headers` and `cookies` are also forwarded to the MCP transport.
 
-### Interface creation
+### Interface synthesis
 
 Connects to an MCP server and discovers capabilities by:
 

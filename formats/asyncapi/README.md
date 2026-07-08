@@ -1,10 +1,10 @@
-# asyncapi-go
+# formats/asyncapi
 
-AsyncAPI 3.x binding invoker and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
+AsyncAPI 3.x binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
 
 This package enables OpenBindings to invoke operations against AsyncAPI specs and synthesize OBI documents from them. It supports HTTP/SSE for event streaming, HTTP POST for sending messages, and WebSocket for bidirectional communication. Credentials are applied via the spec's security schemes.
 
-See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how invokers and creators fit into the OpenBindings architecture.
+See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 
 ## Install
 
@@ -24,7 +24,7 @@ import (
     asyncapi "github.com/openbindings/openbindings-go/formats/asyncapi"
 )
 
-exec := openbindings.NewOperationInvoker(asyncapi.NewInvoker())
+opInv := openbindings.NewOperationInvoker(asyncapi.NewInvoker())
 ```
 
 The invoker declares `asyncapi@^3.0.0` — it handles any AsyncAPI 3.x spec.
@@ -39,7 +39,7 @@ defer invoker.Close()
 
 call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        Format:   "asyncapi@3.0",
+        Format:   "asyncapi@3.0.0",
         Location: "https://api.example.com/asyncapi.json",
     },
     Ref:     "#/operations/sendMessage",
@@ -80,13 +80,13 @@ for {
 }
 ```
 
-### Create an interface from an AsyncAPI spec
+### Synthesize an interface from an AsyncAPI spec
 
 ```go
-creator := asyncapi.NewCreator()
-iface, err := creator.CreateInterface(ctx, &openbindings.CreateInput{
-    Sources: []openbindings.CreateSource{{
-        Format:   "asyncapi@3.0",
+synth := asyncapi.NewSynthesizer()
+iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
+    Sources: []openbindings.SynthesizeSource{{
+        Format:   "asyncapi@3.0.0",
         Location: "https://api.example.com/asyncapi.json",
     }},
 })
@@ -129,7 +129,7 @@ For WebSocket receive subscriptions, bearer tokens are sent in the first message
 
 Falls back to bearer, then basic, then apiKey when no security schemes are defined.
 
-### Interface creation
+### Interface synthesis
 
 - Operations iterated alphabetically for deterministic output
 - Input schemas from send operation payloads
@@ -163,7 +163,7 @@ The invoker determines the transport from the AsyncAPI spec's server protocol an
 
 Operations on the same channel (same server + address) share one pooled WebSocket connection — load-bearing for the AsyncAPI two-operation pattern where a `receive` subscription and `send` publishes need to land on the same socket so server-side per-connection state is shared. Connections are reference-counted and evicted after a 30s idle timeout; `Invoker.Close()` closes the pool.
 
-### Interface creation
+### Interface synthesis
 
 Converts an AsyncAPI 3.x document into an OBI by:
 - Iterating operations sorted alphabetically for deterministic output

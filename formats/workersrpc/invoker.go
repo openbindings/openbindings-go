@@ -15,12 +15,13 @@
 // implementations of `Invoker` and `Synthesizer` here exist solely to:
 //
 //  1. Make the format token recognized by `ob`. Without this package,
-//     `ob create`, `ob sync`, and `ob diff` would reject any OBI that
-//     declared a workers-rpc source as "unknown format".
-//  2. Allow `ob codegen` to generate clients for workers-rpc bindings.
-//     The TypeScript codegen produces a typed client class that takes
-//     a `BindingInvoker[]` at construction; consumers wire in the
-//     real `WorkersRpcInvoker` from `@openbindings/workers-rpc` at
+//     `ob synthesize`, `ob validate`, and `ob diff` would reject any OBI
+//     that declared a workers-rpc source as "unknown format".
+//  2. Allow `ob codegen` to emit typed operation signatures for
+//     workers-rpc bindings. The generated code is protocol-agnostic
+//     (an `OperationSignatures` namespace passed to a generic invoke);
+//     consumers wire the real `WorkersRpcInvoker` from
+//     `@openbindings/workers-rpc` into their `OperationInvoker` at
 //     runtime, inside the Worker. Codegen itself only needs to know
 //     the format token + the operation/binding shapes; it does not
 //     need to dispatch.

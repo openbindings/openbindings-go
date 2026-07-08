@@ -1,10 +1,10 @@
-# grpc-go
+# formats/grpc
 
-gRPC binding invoker and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
+gRPC binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
 
 This package enables OpenBindings to invoke operations against gRPC servers and synthesize OBI documents from them. It discovers services via gRPC server reflection, constructs dynamic protobuf requests, applies credentials as gRPC metadata, and yields results through the SDK's cardinality-agnostic `Invocation` handle.
 
-See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how invokers and creators fit into the OpenBindings architecture.
+See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 
 ## Install
 
@@ -24,7 +24,7 @@ import (
     grpcbinding "github.com/openbindings/openbindings-go/formats/grpc"
 )
 
-exec := openbindings.NewOperationInvoker(grpcbinding.NewInvoker())
+opInv := openbindings.NewOperationInvoker(grpcbinding.NewInvoker())
 ```
 
 The invoker declares `grpc` -- it handles gRPC servers via reflection and `.proto` files.
@@ -83,12 +83,12 @@ for {
 
 gRPC leading/trailing metadata maps onto the handle: `inv.Header(ctx)` returns the server's header metadata, and `inv.Trailer()` (valid after the invocation terminates) returns trailing metadata.
 
-### Create an interface from a gRPC server
+### Synthesize an interface from a gRPC server
 
 ```go
-creator := grpcbinding.NewCreator()
-iface, err := creator.CreateInterface(ctx, &openbindings.CreateInput{
-    Sources: []openbindings.CreateSource{{
+synth := grpcbinding.NewSynthesizer()
+iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
+    Sources: []openbindings.SynthesizeSource{{
         Format:   "grpc",
         Location: "api.example.com:443",
     }},
@@ -134,7 +134,7 @@ This invoker can discover and execute against [Connect](https://connectrpc.com) 
 
 The resulting OBI will have `format: "grpc"`, reflecting the gRPC access path. It does not capture the Connect protocol as a separate binding. If you need Connect-native access (HTTP/1.1, JSON payloads), that would require a dedicated `connect` format.
 
-### Interface creation
+### Interface synthesis
 
 - Services discovered via gRPC server reflection or `.proto` file parsing
 - Infrastructure services filtered out (`grpc.reflection.*`, `grpc.health.*`)
@@ -170,7 +170,7 @@ Credentials are applied as gRPC metadata in priority order:
 
 The context's `headers` map is also forwarded as gRPC metadata.
 
-### Interface creation
+### Interface synthesis
 
 Converts a live gRPC server into an OBI by:
 

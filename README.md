@@ -1,12 +1,12 @@
 # openbindings-go
 
-Go monorepo for the [OpenBindings](https://openbindings.com) Go ecosystem. Parse, validate, resolve, and invoke OpenBindings interfaces from Go, plus protocol-specific binding invokers and the `ob` CLI.
+Go monorepo for the [OpenBindings](https://openbindings.com) Go ecosystem: the core SDK plus protocol-specific binding invokers, each as its own Go module. Parse, validate, resolve, and invoke OpenBindings interfaces from Go.
 
-OpenBindings is an open standard: one interface, limitless bindings. An OBI (OpenBindings Interface) document describes what operations a service offers and how to reach them, independent of protocol. See the [spec](https://github.com/openbindings/spec) and [guides](https://github.com/openbindings/spec/tree/main/guides) for details.
+OpenBindings is an open standard: one interface, limitless bindings. An OBI (OpenBindings Interface) document describes what operations a service offers and how to reach them, independent of protocol. See the [spec](https://github.com/openbindings/spec) and [openbindings.com](https://openbindings.com) for details.
 
-**Spec version:** implements OpenBindings 0.2. Exact range is exported as `openbindings.MinSupportedVersion` / `openbindings.MaxTestedVersion`; check programmatically via `openbindings.IsSupportedVersion(version)`.
+**Spec version:** implements OpenBindings 0.2. The exact range is exported as `openbindings.MinSupportedVersion` / `openbindings.MaxTestedVersion`; check programmatically via `openbindings.IsSupportedVersion(version)`.
 
-**Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through OBI-D-13 and OBI-T-04. OBI-D-02 (document validates against `openbindings.schema.json`) and OBI-D-12 (examples validate against their operation's input/output schemas) are enforced via [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema). The schema is embedded at build time (synced via `scripts/sync-schema.sh`). In this monorepo, run `go test ./...` from the root module with the spec repo checked out at `./spec` or `../spec` to exercise the core conformance corpus.
+**Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through OBI-D-13 and OBI-T-04. OBI-D-02 (document validates against `openbindings.schema.json`) and OBI-D-12 (examples validate against their operation's input/output schemas) are enforced via [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema). The schema is embedded at build time (synced via `scripts/sync-schema.sh`). To exercise the core conformance corpus, check out the spec repo alongside this one (at `../spec`, or `./spec` inside the repo) and run `go test ./...` from the root module.
 
 ## Layout
 
@@ -24,11 +24,11 @@ formats/
   usage/                   ← .../formats/usage
   operationgraph/          ← .../formats/operationgraph
   workersrpc/              ← .../formats/workersrpc
-cmd/
-  ob/                      ← .../cmd/ob (the CLI binary)
 ```
 
-The format libraries previously lived in separate repos (`openbindings/openapi-go`, `openbindings/asyncapi-go`, etc.). They were consolidated into this monorepo because they all implement the same `BindingInvoker`/`InterfaceCreator` interfaces from the core SDK and need to evolve in lockstep with it. This pattern matches the modern convention for first-party SDK families in Go (`aws-sdk-go-v2`, `googleapis/google-cloud-go`, `Azure/azure-sdk-for-go`, `open-telemetry/opentelemetry-go`, `kubernetes/kubernetes`).
+The format libraries previously lived in separate repos (`openbindings/openapi-go`, `openbindings/asyncapi-go`, etc.). They were consolidated into this monorepo because they all implement the same `BindingInvoker`/`InterfaceSynthesizer` interfaces from the core SDK and need to evolve in lockstep with it. This pattern matches the modern convention for first-party SDK families in Go (`aws-sdk-go-v2`, `googleapis/google-cloud-go`, `Azure/azure-sdk-for-go`, `open-telemetry/opentelemetry-go`, `kubernetes/kubernetes`).
+
+The [`ob` CLI](https://github.com/openbindings/ob) is built on this SDK but lives in its own repo, with its own versioning and release cadence.
 
 ## Install
 
@@ -46,21 +46,23 @@ go get github.com/openbindings/openbindings-go/formats/asyncapi
 # ...
 ```
 
-The CLI:
+The `ob` CLI (separate repo):
 
 ```
-go install github.com/openbindings/openbindings-go/cmd/ob@latest
+brew install --cask openbindings/tap/ob
+# or
+go install github.com/openbindings/ob/cmd/ob@latest
 ```
 
 ## What this SDK does
 
-- **Core types** for the OpenBindings interface document: operations, bindings, sources, transforms, schemas, roles
+- **Core types** for the OpenBindings interface document: operations, bindings, sources, transforms, schemas
 - **Lossless JSON** round-tripping that preserves unknown fields and `x-*` extensions for forward compatibility
 - **Validation** with shape-level checks, strict mode for unknown fields, and format token validation
-- **Schema compatibility** checking under the OpenBindings Profile v0.1 (covariant outputs, contravariant inputs) with diagnostic reasons
-- **`FetchInterface`** for resolving OBIs from URLs (well-known discovery, then synthesis from raw OpenAPI / AsyncAPI / etc. via supplied creators)
+- **Schema compatibility** checking under the OpenBindings Schema Compatibility Profile v0.1 (covariant outputs, contravariant inputs) with diagnostic reasons
+- **`FetchInterface`** for resolving OBIs from URLs: well-known discovery, then synthesis from raw OpenAPI / AsyncAPI / etc. via supplied synthesizers
 - **`OperationInvoker`** that dispatches operations to per-format binding invokers and applies transforms
-- **Context store** for per-host credential persistence with scheme-agnostic key normalization
+- **Context contracts** for per-origin invocation context (credentials and non-secret configuration), resolved at call time with least-privilege scoping
 
 The SDK is the foundation layer. It defines the contracts that binding invokers (OpenAPI, AsyncAPI, gRPC, etc.) implement but does not contain any format-specific logic itself.
 
@@ -96,21 +98,20 @@ import (
     openapi "github.com/openbindings/openbindings-go/formats/openapi"
 )
 
-// Wire up an invoker with the format(s) you need, plus a context resolver for
-// any credentials the bindings negotiate at call time.
-opInv := openbindings.NewOperationInvoker(openapi.NewInvoker()).
-    WithRuntime(openbindings.StoreContextResolver(openbindings.NewMemoryStore()))
+// Wire up an operation invoker with the format(s) you need.
+opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 
-// Resolve an OBI from a URL (well-known discovery + creator synthesis).
+// Resolve an OBI from a URL (well-known discovery, with synthesis as the
+// fallback when the target only exposes a raw spec such as an OpenAPI doc).
 fetched, err := openbindings.FetchInterface(ctx, "https://api.example.com",
-    openbindings.WithCreators(openapi.NewCreator()))
+    openbindings.WithSynthesizers(openapi.NewSynthesizer()))
 if err != nil {
     log.Fatal(err)
 }
-iface := &fetched.Interface
+iface := fetched.Interface
 
 // Invoke. One cardinality-agnostic handle serves every operation; a unary call
-// writes one input and reads one output. Options are rarely needed — the common
+// writes one input and reads one output. Options are rarely needed; the common
 // call passes none.
 call := openbindings.Invoke(ctx, opInv, iface,
     openbindings.NewOperationSignature[any, any]("listItems"))
@@ -124,7 +125,7 @@ if err != nil {
 fmt.Println(out)
 ```
 
-For compile-time-typed operations, run `ob codegen <obi> --lang go` to generate an `OperationSignatures` namespace — one typed `OperationSignature[In, Out]` per operation — that you pass to this same `Invoke` for fully-typed input and output.
+For compile-time-typed operations, run `ob codegen <obi> --lang go` to generate an `OperationSignatures` namespace, one typed `OperationSignature[In, Out]` per operation, that you pass to this same `Invoke` for fully-typed input and output.
 
 ### Check compatibility
 
@@ -140,7 +141,7 @@ for _, issue := range issues {
 Every operation returns a cardinality-agnostic `Invocation[I, O]` handle: the
 caller writes input messages until done; the invocation yields output messages
 until done. One shape serves unary, server-streaming, client-streaming, and
-bidirectional bindings — cardinality is a property of the selected binding,
+bidirectional bindings. Cardinality is a property of the selected binding,
 never of the call signature:
 
 ```go
@@ -176,39 +177,61 @@ resolved by the operation invoker's `ContextResolver` when one is configured.
 The SDK routes operations to binding invokers by format token. Invokers declare what formats they handle (including semver ranges like `openapi@^3.0.0`) and the SDK matches OBI source formats against those declarations:
 
 ```go
-exec := openbindings.NewOperationInvoker(
+opInv := openbindings.NewOperationInvoker(
     openapi.NewInvoker(),   // handles openapi@^3.0.0
     asyncapi.NewInvoker(),  // handles asyncapi@^3.0.0
     grpc.NewInvoker(),      // handles grpc (versionless)
 )
 ```
 
-Invokers implement `BindingInvoker`. Interface creators (which synthesize OBIs from raw specs) implement `InterfaceCreator`. Source inspectors (which enumerate refs in a source) implement `SourceInspector`. A single type may implement any combination. See [Implementing a Binding Format](https://github.com/openbindings/spec/blob/main/guides/implementing-a-binding-format.md) for a step-by-step walkthrough.
+| Module | Format token(s) | Synthesizes OBIs? |
+|--------|-----------------|-------------------|
+| `formats/openapi` | `openapi@^3.0.0` | yes |
+| `formats/asyncapi` | `asyncapi@^3.0.0` | yes |
+| `formats/graphql` | `graphql` | yes |
+| `formats/grpc` | `grpc` | yes |
+| `formats/connect` | `connect` | yes |
+| `formats/mcp` | `mcp@2025-11-25` | yes |
+| `formats/usage` | `usage@^2.0.0`, `usage@^3.0.0` | yes |
+| `formats/operationgraph` | `openbindings.operation-graph@0.2.0` | no (graphs are authored, then composed at invoke time) |
+| `formats/workersrpc` | `workers-rpc@^1.0.0` | no (Go-side stub; dispatch requires the Workers runtime) |
+
+Invokers implement `BindingInvoker`. Interface synthesizers (which synthesize OBIs from raw specs) implement `InterfaceSynthesizer`. Source inspectors (which enumerate refs in a source) implement `SourceInspector`. A single type may implement any combination.
 
 ## Context and authentication
 
-Credentials are never part of an OBI document — they are context, supplied per
-call or resolved at invocation time. The context key is `host[:port]` —
-scheme-agnostic, so `http://`, `https://`, and `ws://` for the same host share
-context:
+Context is never part of an OBI document. Credentials and other runtime
+configuration are supplied per call or resolved at invocation time, keyed by
+normalized origin. The context key is `host[:port]` and is scheme-agnostic, so
+`http://`, `https://`, and `ws://` for the same origin share context:
 
 ```go
-store := openbindings.NewMemoryStore()
 key := openbindings.NormalizeContextKey("https://api.example.com/v1/users")
 // key = "api.example.com"
-store.Set(ctx, key, map[string]any{"bearerToken": "tok_123"})
 ```
+
+The SDK defines the `ContextStore` contract (`Get`/`Set`/`Delete` keyed by
+origin; values are opaque maps the SDK never inspects) and leaves storage to
+the caller: a file, a keychain, or an in-memory map in tests.
 
 A binding that needs context it wasn't given raises a `CONTEXT_REQUIRED`
 challenge before any side effect; the operation invoker resolves challenges
 through its configured `ContextResolver` and re-drives the binding.
-`openbindings.StoreContextResolver(store)` is the store-backed resolver — the
-composition of the `binding-invoker` and `context-store` roles — and is wired
-in via `OperationInvoker.WithRuntime(resolver)`. Apps that resolve
-interactively (prompts, browser redirects, keychains) supply their own
-resolver instead. Format invokers that can derive requirements from their
-source (e.g. OpenAPI `securitySchemes`) also implement the side-effect-free
-`BindingPreparer` preflight.
+`openbindings.StoreContextResolver(store)` is the store-backed resolver, the
+composition of the published binding-invoker and context-store interfaces. It
+treats a challenge as a scope, not a hint: via `ScopeContext` it returns only
+the credential fields the satisfied requirement-alternative needs, plus
+non-secret configuration, never other stored credentials.
+
+```go
+opInv := openbindings.NewOperationInvoker(openapi.NewInvoker()).
+    WithRuntime(openbindings.StoreContextResolver(store)) // store implements ContextStore
+```
+
+Apps that resolve interactively (prompts, browser redirects, keychains) supply
+their own resolver instead. Format invokers that can derive requirements from
+their source (e.g. OpenAPI `securitySchemes`) also implement the
+side-effect-free `BindingPreparer` preflight.
 
 ## Schema compatibility profile
 

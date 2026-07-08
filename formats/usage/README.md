@@ -1,4 +1,4 @@
-# usage-go
+# formats/usage
 
 Binding invoker, interface synthesizer, and usage-spec parser for bare [jdx usage](https://usage.jdx.dev/) CLI descriptors, for the [OpenBindings](https://openbindings.com) Go SDK.
 
@@ -118,7 +118,7 @@ Input schemas derived from usage specs inherit the source format's thin value ty
 
 Usage-spec bindings execute local CLI binaries, not network services. Credentials are applied via environment variables through the `environment` key in the `BindingContext`, not HTTP headers.
 
-### Interface creation
+### Interface synthesis
 
 Converts a usage-spec KDL document into an OBI by:
 

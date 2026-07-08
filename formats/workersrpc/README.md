@@ -1,8 +1,8 @@
-# workers-rpc-go
+# formats/workersrpc
 
 Go-side stub registration for the `workers-rpc@^1.0.0` OpenBindings binding format.
 
-**This package cannot dispatch Workers RPC calls.** Cloudflare Workers RPC is a JavaScript runtime feature: a sibling Worker exposes a `WorkerEntrypoint` class via a service binding declared in `wrangler.toml`, and the calling Worker invokes methods on it through `env[bindingName][methodName](args)`. The Cloudflare runtime handles structured-clone serialization across the binding boundary. There is no HTTP, no JSON, no URL — and no way for a Go program to participate.
+**This package cannot dispatch Workers RPC calls.** Cloudflare Workers RPC is a JavaScript runtime feature: a sibling Worker exposes a `WorkerEntrypoint` class via a service binding declared in `wrangler.toml`, and the calling Worker invokes methods on it through `env[bindingName][methodName](args)`. The Cloudflare runtime handles structured-clone serialization across the binding boundary. There is no HTTP, no JSON, no URL, and no way for a Go program to participate.
 
 For the actual runtime invoker, use [`@openbindings/workers-rpc`](https://github.com/openbindings/openbindings-ts/tree/main/packages/workers-rpc) from inside your Cloudflare Worker.
 
@@ -10,11 +10,11 @@ For the actual runtime invoker, use [`@openbindings/workers-rpc`](https://github
 
 Even though Go cannot dispatch Workers RPC, the Go side of the OpenBindings ecosystem still needs to know the format token exists. Without this stub:
 
-1. **`ob create`, `ob diff`, `ob sync`, `ob validate`** would reject any OBI that declares a `workers-rpc@^1.0.0` source as "unknown format". Hand-authored Workers RPC OBIs would be unusable from any Go-based tool.
-2. **`ob codegen --lang typescript`** would refuse to generate clients for Workers RPC bindings, even though the generated client itself runs in TypeScript and uses the real `WorkersRpcInvoker`. Codegen needs to recognize the format token to walk the OBI's bindings; it does not need to dispatch.
+1. **`ob synthesize`, `ob diff`, `ob validate`** would reject any OBI that declares a `workers-rpc@^1.0.0` source as "unknown format". Hand-authored Workers RPC OBIs would be unusable from any Go-based tool.
+2. **`ob codegen --lang typescript`** would refuse to generate typed operation signatures for Workers RPC bindings, even though the generated code runs in TypeScript. Generated code is protocol-agnostic (an `OperationSignatures` namespace passed to a generic `invoke`); consumers wire the real `WorkersRpcInvoker` into their `OperationInvoker` at runtime, inside the Worker. Codegen needs to recognize the format token to walk the OBI's bindings; it does not need to dispatch.
 3. **Validation tooling** that checks whether an OBI's declared formats are recognized would flag every Workers RPC OBI as having an unknown format.
 
-This package solves all three by registering the format token and providing stub implementations of `BindingInvoker` and `InterfaceCreator` that return clear errors directing the caller to the TypeScript runtime if they actually try to dispatch.
+This package solves all three by registering the format token and providing stub implementations of `BindingInvoker` (via `NewInvoker`) and `InterfaceSynthesizer` (via `NewSynthesizer`) that fail with clear errors if anything actually tries to dispatch or synthesize.
 
 ## Usage
 
@@ -24,21 +24,21 @@ import (
     workersrpc "github.com/openbindings/openbindings-go/formats/workersrpc"
 )
 
-opExec := openbindings.NewOperationInvoker(
+opInv := openbindings.NewOperationInvoker(
     workersrpc.NewInvoker(), // registers workers-rpc@^1.0.0 as a known format
     // ...other invokers...
 )
 ```
 
-The stub's `Formats()` returns `[{Token: "workers-rpc@^1.0.0", Description: "Cloudflare Workers RPC bindings (Go-side stub; dispatch requires the Workers runtime)"}]`. `InvokeBinding` always returns an already-errored invocation handle (terminal `ERR_SOURCE_CONFIG_ERROR`), and `CreateInterface` returns an error, each with a message pointing at `@openbindings/workers-rpc`.
+The stub invoker's `Formats()` returns `[{Token: "workers-rpc@^1.0.0", Description: "Cloudflare Workers RPC bindings (Go-side stub; dispatch requires the Workers runtime)"}]`. `InvokeBinding` always returns an already-errored invocation handle (terminal `ERR_SOURCE_CONFIG_ERROR`) whose message points at `@openbindings/workers-rpc`. `SynthesizeInterface` returns an error explaining that Workers RPC OBIs are hand-authored.
 
 ## Authoring Workers RPC OBIs
 
-Workers RPC OBIs are **hand-authored**. The contract is the TypeScript class on the target Worker, not a machine-readable spec file, so there is no source artifact for `ob create` to derive operations from. Author the `operations` and `bindings` sections directly:
+Workers RPC OBIs are **hand-authored**. The contract is the TypeScript class on the target Worker, not a machine-readable spec file, so there is no source artifact for `ob synthesize` to derive operations from. Author the `operations` and `bindings` sections directly:
 
 ```json
 {
-  "openbindings": "0.1.0",
+  "openbindings": "0.2.0",
   "operations": {
     "mintToken": {
       "input": { "type": "object", "properties": { "user": { "type": "string" } } },
@@ -61,9 +61,7 @@ Workers RPC OBIs are **hand-authored**. The contract is the TypeScript class on 
 }
 ```
 
-The binding's `ref` field is the literal method name on the target `WorkerEntrypoint` class. The source's `location` is symbolic — `workers-rpc://` is a convention indicating a non-HTTP source whose OBI is embedded in the codegen output rather than fetched from `/.well-known/openbindings`. Callers pass that embedded interface to typed invoker methods directly.
-
-See [`spec/guides/binding-format-conventions.md`](https://github.com/openbindings/spec/blob/main/guides/binding-format-conventions.md) for the broader context on binding format conventions.
+The binding's `ref` field is the literal method name on the target `WorkerEntrypoint` class. The source's `location` is symbolic: `workers-rpc://` is a convention indicating a non-HTTP source that is never fetched from `/.well-known/openbindings`. The OBI document ships with the consumer instead (checked into the calling Worker's repo, typically alongside its generated `OperationSignatures`), and is passed directly to `invoke`.
 
 ## License
 

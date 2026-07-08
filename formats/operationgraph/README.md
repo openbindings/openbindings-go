@@ -1,4 +1,4 @@
-# operation-graph-go
+# formats/operationgraph
 
 Binding invoker for the [`openbindings.operation-graph`](https://openbindings.com/spec) format (the transparency rewrite of `@0.2.0`). Executes operation graphs: directed graphs of typed nodes that compose [OpenBindings](https://openbindings.com) operations, governed by the identity law — `input → operation(y) → output` is observationally indistinguishable from invoking `y` directly.
 
@@ -20,13 +20,13 @@ import (
 )
 
 // Create the OperationInvoker with protocol-level invokers.
-opExec := openbindings.NewOperationInvoker(
+opInv := openbindings.NewOperationInvoker(
     openapi.NewInvoker(),
 )
 
 // Create the operation graph invoker and register it.
-graphExec := operationgraph.NewInvoker(opExec)
-opExec.AddBindingInvoker(graphExec)
+graphInv := operationgraph.NewInvoker(opInv)
+opInv.AddBindingInvoker(graphInv)
 ```
 
 Once registered, operation graph bindings are executed automatically when you call `Invoke` on an OBI that uses them.

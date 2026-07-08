@@ -1,10 +1,10 @@
-# openapi-go
+# formats/openapi
 
-OpenAPI 3.x binding invoker and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
+OpenAPI 3.x binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
 
-This package enables OpenBindings to invoke operations against OpenAPI specs and synthesize OBI documents from them. It reads OpenAPI 3.x documents, constructs HTTP requests, applies credentials via security schemes, and returns results as a stream of events.
+This package enables OpenBindings to invoke operations against OpenAPI specs and synthesize OBI documents from them. It reads OpenAPI 3.x documents, constructs HTTP requests, applies credentials via security schemes, and yields results through the SDK's cardinality-agnostic `Invocation` handle.
 
-See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/patterns) for how invokers and creators fit into the OpenBindings architecture.
+See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 
 ## Install
 
@@ -24,7 +24,7 @@ import (
     openapi "github.com/openbindings/openbindings-go/formats/openapi"
 )
 
-exec := openbindings.NewOperationInvoker(openapi.NewInvoker())
+opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 ```
 
 The invoker declares `openapi@^3.0.0` — it handles any OpenAPI 3.x spec.
@@ -35,29 +35,36 @@ Typically you don't call the invoker directly — the `OperationInvoker` routes 
 
 ```go
 invoker := openapi.NewInvoker()
-ch, err := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationInput{
-    Source: openbindings.BindingInvocationSource{
-        Format:   "openapi@3.1",
+
+inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+    Source: openbindings.InvocationSource{
+        Format:   "openapi@3.1.0",
         Location: "https://api.example.com/openapi.json",
     },
     Ref:     "#/paths/~1users/get",
     Context: map[string]any{"bearerToken": "tok_123"},
 })
-for ev := range ch {
-    if ev.Error != nil {
-        log.Fatal(ev.Error.Message)
-    }
-    fmt.Println(ev.Output)
+
+// Input flows through the handle, not the args.
+if err := inv.Write(ctx, map[string]any{"limit": 10}); err != nil {
+    log.Fatal(err)
 }
+
+// Unary: assert exactly one output.
+out, err := openbindings.Single(ctx, inv.Outputs())
+if err != nil {
+    log.Fatal(err) // terminal *openbindings.InvocationError
+}
+fmt.Println(out)
 ```
 
-### Create an interface from an OpenAPI spec
+### Synthesize an interface from an OpenAPI spec
 
 ```go
-creator := openapi.NewCreator()
-iface, err := creator.CreateInterface(ctx, &openbindings.CreateInput{
-    Sources: []openbindings.CreateSource{{
-        Format:   "openapi@3.1",
+synth := openapi.NewSynthesizer()
+iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
+    Sources: []openbindings.SynthesizeSource{{
+        Format:   "openapi@3.1.0",
         Location: "https://api.example.com/openapi.json",
     }},
 })
@@ -96,13 +103,13 @@ Credentials are applied based on the OpenAPI spec's `securitySchemes`:
 
 When no security schemes are defined, falls back to bearer, then basic, then apiKey.
 
-### Interface creation
+### Interface synthesis
 
 - Operation keys derived from `operationId` when present, otherwise from path + method
 - Paths iterated alphabetically, methods in fixed order: get, put, post, delete, options, head, patch, trace
 - Input schemas built from parameters (path, query, header) and request body
 - Output schemas built from success responses (200, 201, 202)
-- Security schemes extracted and mapped to OBI security entries
+- No security metadata written to the OBI; `securitySchemes` are honored at invocation time via context negotiation (`CONTEXT_REQUIRED` challenges and the `BindingPreparer` preflight)
 
 ## How it works
 
@@ -113,7 +120,7 @@ When no security schemes are defined, falls back to bearer, then basic, then api
 3. Resolves the base URL from the spec's `servers` array
 4. Classifies input fields as path, query, header, or body parameters based on the OpenAPI parameter definitions
 5. Applies credentials from the context using the spec's `securitySchemes` (bearer, basic, apiKey with correct placement)
-6. Makes the HTTP request and returns the result as a stream event
+6. Makes the HTTP request and emits the result as the invocation's output
 
 ### Credential application
 
@@ -125,7 +132,7 @@ Credentials are applied based on the OpenAPI spec's security configuration:
 
 When no security schemes are defined, falls back to bearer -> basic -> apiKey in that order.
 
-### Interface creation
+### Interface synthesis
 
 Converts an OpenAPI 3.x document into an OBI by:
 - Extracting operations from each path + method combination

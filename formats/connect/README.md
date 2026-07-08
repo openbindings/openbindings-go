@@ -1,10 +1,10 @@
-# connect-go
+# formats/connect
 
-Connect (Buf) binding invoker and interface creator for the [OpenBindings](https://openbindings.com) Go SDK.
+Connect (Buf) binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
 
 This package enables OpenBindings to invoke operations against Connect services and synthesize OBI documents from protobuf definitions. It uses the Connect wire protocol (HTTP POST with JSON) and shares the same protobuf service definitions and ref convention as the gRPC invoker.
 
-See the [spec](https://github.com/openbindings/spec) and [pattern documentation](https://github.com/openbindings/spec/tree/main/guides) for how binding invokers and interface creators fit into the OpenBindings architecture.
+See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 
 ## Install
 
@@ -24,7 +24,7 @@ import (
     connectbinding "github.com/openbindings/openbindings-go/formats/connect"
 )
 
-exec := openbindings.NewOperationInvoker(connectbinding.NewInvoker())
+opInv := openbindings.NewOperationInvoker(connectbinding.NewInvoker())
 ```
 
 ### Invoke a binding
@@ -71,12 +71,12 @@ for {
 }
 ```
 
-### Create an interface from a .proto file
+### Synthesize an interface from a .proto file
 
 ```go
-creator := connectbinding.NewCreator()
-iface, err := creator.CreateInterface(ctx, &openbindings.CreateInput{
-    Sources: []openbindings.CreateSource{{
+synth := connectbinding.NewSynthesizer()
+iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
+    Sources: []openbindings.SynthesizeSource{{
         Format:   "connect",
         Location: "./service.proto",
     }},
@@ -134,7 +134,7 @@ The Connect invoker supports two cardinalities, both taking exactly one request 
 
 Server-streaming uses the Connect envelope-framed wire format with `Content-Type: application/connect+json` per the [Connect protocol specification](https://connectrpc.com/docs/protocol#streaming-rpcs). Server-streaming dispatch requires inline proto `content` on the source so the invoker can detect that the method is streaming; without proto content the invoker falls back to unary invocation.
 
-The interface creator skips **client-streaming** methods during interface creation (out of the module's cardinality scope: one request message in, one or more outputs out). Server-streaming methods are included.
+The interface synthesizer skips **client-streaming** methods during synthesis (out of the module's cardinality scope: one request message in, one or more outputs out). Server-streaming methods are included.
 
 Compression is not currently supported. Bidirectional streaming is out of scope.
 
