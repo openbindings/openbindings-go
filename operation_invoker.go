@@ -701,6 +701,13 @@ func (e *OperationInvoker) runOutputs(
 				// floor — the remedy is the schema election, not the hook.
 				if FloorStamped(outputSchema) && hooks.DecodeDecidedBy() == "hook" {
 					msg += " — the synthesized schema still declares the floor's string; elect the real output schema (`ob operation output-schema`)"
+				} else if tier := hooks.DecodeDecidedBy(); tier != "" {
+					// Decode-lane provenance in the MESSAGE, not only the
+					// x-ob-decode trailer stamp: a wrong decode lane (e.g.
+					// text when the payload was JSON but the header was
+					// absent) produces exactly this shape mismatch, and the
+					// first-touch reader needs the pointer where they look.
+					msg += fmt.Sprintf(" (output decoded by the %s tier; a wrong decode lane yields this class of mismatch — the x-ob-decode trailer stamp carries the lane)", tier)
 				}
 				return &InvocationError{
 					Code:    ErrCodeValidationFailed,
