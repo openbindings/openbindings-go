@@ -1,9 +1,11 @@
 package openapi
 
 import (
+	"context"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func minimalDoc() *openapi3.T {
@@ -304,5 +306,31 @@ paths:
 	}
 	if _, hasExMax := page["exclusiveMaximum"]; hasExMax {
 		t.Errorf("page.exclusiveMaximum (false) should have been removed, got %#v", page)
+	}
+}
+
+// Content-fed synthesis must emit an invocable source: with no location,
+// the provided artifact is embedded (a source needs location or content;
+// dropping the content would emit neither).
+func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
+	content := `{"openapi":"3.0.3","info":{"title":"T","version":"1.0.0"},"paths":{"/x":{"get":{"operationId":"getX","responses":{"200":{"description":"ok"}}}}}}`
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{Format: "openapi@3.0", Content: content}},
+	})
+	if err != nil {
+		t.Fatalf("synthesize: %v", err)
+	}
+	src, ok := iface.Sources[DefaultSourceName]
+	if !ok {
+		t.Fatal("expected the default source entry")
+	}
+	if src.Location != "" {
+		t.Errorf("content-only synthesis must not invent a location, got %q", src.Location)
+	}
+	if src.Content == nil {
+		t.Fatal("content-fed synthesis must embed the artifact")
+	}
+	if s, _ := src.Content.(string); s != content {
+		t.Error("embedded content must be the provided artifact verbatim")
 	}
 }

@@ -1,7 +1,13 @@
 package usage
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func mustParse(t *testing.T, kdl string) *Spec {
@@ -325,5 +331,41 @@ cmd "init" help="Initialize"
 	}
 	if _, ok := iface.Operations["init"]; !ok {
 		t.Error("expected operation 'init'")
+	}
+}
+
+// A relative artifact path is authoring convenience: intake absolutizes it,
+// so the strict loader accepts it AND the emitted source's location is
+// invocable as written (the invoke lane never resolves against a base).
+func TestSynthesizeInterface_RelativeLocationAbsolutized(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cli.kdl"), []byte(testSpecKDL()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{Format: "usage@" + MaxTestedVersion, Location: "cli.kdl"}},
+	})
+	if err != nil {
+		t.Fatalf("synthesize: %v", err)
+	}
+	var loc string
+	for _, src := range iface.Sources {
+		loc = src.Location
+	}
+	if !filepath.IsAbs(loc) {
+		t.Fatalf("emitted location must be absolute (invocable as written), got %q", loc)
+	}
+	if _, err := artifactText(context.Background(), loc, nil); err != nil {
+		t.Fatalf("emitted location must satisfy the strict invoke-lane loader: %v", err)
+	}
+}
+
+// URLs get a clear refusal (usage artifacts are local files or exec:
+// locators), not an os.ReadFile("https://...") error.
+func TestArtifactText_URLRefusedClearly(t *testing.T) {
+	_, err := artifactText(context.Background(), "https://example.com/cli.kdl", nil)
+	if err == nil || !strings.Contains(err.Error(), "not fetchable") {
+		t.Fatalf("want the clear not-fetchable refusal, got %v", err)
 	}
 }

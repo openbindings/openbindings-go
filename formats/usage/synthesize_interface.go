@@ -1,9 +1,8 @@
 package usage
 
 import (
-	"context"
 	"fmt"
-	"os"
+	"path/filepath"
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -29,30 +28,24 @@ func synthesizeFromArtifactText(text string) (openbindings.Interface, error) {
 	})
 }
 
-// loadArtifactText reads a bare kdl artifact's text from inline content, a
-// file path, or an exec: locator.
-func loadArtifactText(ctx context.Context, location string, content any) (string, error) {
-	if content != nil {
-		switch c := content.(type) {
-		case string:
-			return c, nil
-		case []byte:
-			return string(c), nil
-		default:
-			return "", fmt.Errorf("unsupported content type %T (expected string or []byte)", content)
-		}
+// absolutizeArtifactLocation is the authoring-side intake rule shared by
+// synthesis and inspection: a relative file path is operator convenience at
+// authoring time and is absolutized against the working directory, so the
+// strict loader (artifactText — one loader for every lane) accepts it AND
+// the location emitted into a synthesized source is invocable as written.
+// Inline content, exec: locators, and URLs pass through untouched (URLs get
+// the loader's clear refusal).
+func absolutizeArtifactLocation(location string, content any) (string, error) {
+	if content != nil || location == "" ||
+		strings.HasPrefix(location, "exec:") || strings.Contains(location, "://") ||
+		filepath.IsAbs(location) {
+		return location, nil
 	}
-	if location == "" {
-		return "", fmt.Errorf("source must have location or content")
-	}
-	if strings.HasPrefix(location, "exec:") {
-		return resolveCommandArtifact(ctx, location)
-	}
-	data, err := os.ReadFile(location)
+	abs, err := filepath.Abs(location)
 	if err != nil {
-		return "", fmt.Errorf("read usage spec: %w", err)
+		return "", fmt.Errorf("resolve usage artifact path: %w", err)
 	}
-	return string(data), nil
+	return abs, nil
 }
 
 // floorOutputSchema is the floor-true derived output contract: the text

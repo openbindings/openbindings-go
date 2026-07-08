@@ -12,7 +12,11 @@ import (
 // command-path refs (the format's own grammar), one per bindable command,
 // exactly as synthesis would bind them.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
-	text, err := loadArtifactText(ctx, source.Location, source.Content)
+	location, err := absolutizeArtifactLocation(source.Location, source.Content)
+	if err != nil {
+		return nil, fmt.Errorf("load usage source: %w", err)
+	}
+	text, err := artifactText(ctx, location, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load usage source: %w", err)
 	}

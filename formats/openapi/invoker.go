@@ -239,6 +239,19 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
 	iface := convertDocToInterface(doc, src.Location)
+	// Content-fed synthesis: the emitted source must stay invocable. A
+	// source needs location or content; with no location, dropping the
+	// provided content would emit neither.
+	if src.Location == "" && src.Content != nil {
+		if entry, ok := iface.Sources[DefaultSourceName]; ok {
+			data, cerr := openbindings.ContentToBytes(src.Content)
+			if cerr != nil {
+				return nil, fmt.Errorf("embed source content: %w", cerr)
+			}
+			entry.Content = string(data)
+			iface.Sources[DefaultSourceName] = entry
+		}
+	}
 	if in.Name != "" {
 		iface.Name = in.Name
 	}

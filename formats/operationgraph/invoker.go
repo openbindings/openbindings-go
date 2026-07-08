@@ -62,15 +62,27 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 // through the output side.
 //
 // Pre-flight failures (source load, ref resolution, version refusal per
-// OG-T-02, validation per OG-T-01) surface as an already-errored handle
-// without consuming any caller input.
+// OG-T-02, validation per OG-T-01) surface as a terminal error through the
+// handle without consuming any caller input. Creation is inert: the handle
+// returns synchronously and the document load (a potential network fetch)
+// happens on the driving goroutine, per the core invocation contract.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	go e.drive(ctx, args, inv)
+	return inv
+}
+
+// drive performs the preflight (load, resolve, version-check, validate) and
+// runs the engine, firing preflight failures as terminal errors on the
+// handle.
+func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
 	doc, err := e.loadDocument(args.Source.Location, args.Source.Content)
 	if err != nil {
-		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceLoadFailed,
 			Message: err.Error(),
 		})
+		return
 	}
 
 	// The ref is a REQUIRED JSON Pointer fragment addressing the graph
@@ -82,17 +94,19 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 		if errors.As(err, &re) && re.invalid {
 			code = openbindings.ErrCodeInvalidRef
 		}
-		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+		inv.FireError(&openbindings.InvocationError{
 			Code:    code,
 			Message: err.Error(),
 		})
+		return
 	}
 	graph, err := graphFromValue(target)
 	if err != nil {
-		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeValidationFailed,
 			Message: fmt.Sprintf("ref %q: %v", args.Ref, err),
 		})
+		return
 	}
 
 	// OG-T-02: refuse graphs declaring a format version this implementation
@@ -100,10 +114,11 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 	// token is advisory).
 	if graph.Version != "" && semverRe.MatchString(graph.Version) {
 		if err := checkVersion(graph.Version); err != nil {
-			return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+			inv.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeUnsupportedFormatVersion,
 				Message: err.Error(),
 			})
+			return
 		}
 	}
 
@@ -118,18 +133,15 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 		}
 	}
 	if err := Validate(graph, opKeys); err != nil {
-		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeValidationFailed,
 			Message: err.Error(),
 		})
+		return
 	}
 
-	inv := openbindings.NewInvocationImpl[any, any](ctx)
-	go func() {
-		eng := newEngine(graph, e.invoker, args, e.invoker.TransformEvaluator, e.schemas)
-		eng.execute(ctx, inv)
-	}()
-	return inv
+	eng := newEngine(graph, e.invoker, args, e.invoker.TransformEvaluator, e.schemas)
+	eng.execute(ctx, inv)
 }
 
 // loadDocument loads and parses an operation graph source document into a

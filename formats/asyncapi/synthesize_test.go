@@ -112,3 +112,29 @@ func TestSynthesizeInterface_FormatToken(t *testing.T) {
 		t.Errorf("format = %q, want asyncapi@3.0", iface.Sources[DefaultSourceName].Format)
 	}
 }
+
+// Content-fed synthesis must emit an invocable source: with no location,
+// the provided artifact is embedded (a source needs location or content;
+// dropping the content would emit neither).
+func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
+	content := `{"asyncapi":"3.0.0","info":{"title":"T","version":"1.0.0"},"operations":{}}`
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{Format: "asyncapi@3.0", Content: content}},
+	})
+	if err != nil {
+		t.Fatalf("synthesize: %v", err)
+	}
+	src, ok := iface.Sources[DefaultSourceName]
+	if !ok {
+		t.Fatal("expected the default source entry")
+	}
+	if src.Location != "" {
+		t.Errorf("content-only synthesis must not invent a location, got %q", src.Location)
+	}
+	if src.Content == nil {
+		t.Fatal("content-fed synthesis must embed the artifact")
+	}
+	if s, _ := src.Content.(string); s != content {
+		t.Error("embedded content must be the provided artifact verbatim")
+	}
+}

@@ -183,7 +183,24 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	if err != nil {
 		return nil, err
 	}
-	return synthesizeInterfaceWithDoc(ctx, in, doc)
+	iface, err := synthesizeInterfaceWithDoc(ctx, in, doc)
+	if err != nil {
+		return nil, err
+	}
+	// Content-fed synthesis: the emitted source must stay invocable. A
+	// source needs location or content; with no location, dropping the
+	// provided content would emit neither.
+	if src.Location == "" && src.Content != nil {
+		if entry, ok := iface.Sources[DefaultSourceName]; ok {
+			data, cerr := openbindings.ContentToBytes(src.Content)
+			if cerr != nil {
+				return nil, fmt.Errorf("embed source content: %w", cerr)
+			}
+			entry.Content = string(data)
+			iface.Sources[DefaultSourceName] = entry
+		}
+	}
+	return iface, nil
 }
 
 // BuiltinHooks exposes the asyncapi builtin decoder to the seam's

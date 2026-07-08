@@ -92,7 +92,10 @@ func artifactText(ctx context.Context, location string, content any) (string, er
 	if strings.HasPrefix(location, "exec:") {
 		return resolveCommandArtifact(ctx, location)
 	}
-	if !filepath.IsAbs(location) && !strings.Contains(location, "://") {
+	if strings.Contains(location, "://") {
+		return "", fmt.Errorf("usage artifacts are local files or exec: locators; %q is not fetchable by this format", location)
+	}
+	if !filepath.IsAbs(location) {
 		return "", fmt.Errorf("usage location %q must be absolute (never resolved against a carriage base)", location)
 	}
 	data, err := os.ReadFile(location)
@@ -153,7 +156,11 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	}
 	src := in.Sources[0]
 
-	text, err := loadArtifactText(ctx, src.Location, src.Content)
+	location, err := absolutizeArtifactLocation(src.Location, src.Content)
+	if err != nil {
+		return nil, err
+	}
+	text, err := artifactText(ctx, location, src.Content)
 	if err != nil {
 		return nil, err
 	}
@@ -162,9 +169,12 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, fmt.Errorf("parse usage content: %w", err)
 	}
 
+	// The emitted source carries the absolutized location, so the
+	// synthesized document is invocable as written (the invoke lane never
+	// resolves against a carriage base).
 	sourceEntry := openbindings.Source{Format: src.Format}
-	if src.Location != "" {
-		sourceEntry.Location = src.Location
+	if location != "" {
+		sourceEntry.Location = location
 	} else {
 		sourceEntry.Content = text
 	}
