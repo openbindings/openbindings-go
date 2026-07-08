@@ -12,7 +12,7 @@
     "openbindings": {
       "type": "string",
       "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
-      "description": "OpenBindings document format version. Semantic Versioning 2.0.0 (e.g., 0.2.0)."
+      "description": "OpenBindings document format version. Semantic Versioning 2.0.0 (e.g., 0.2.0). Pattern validates SemVer syntax only: passing it does not mean a given tool accepts the version. Version refusal (higher major, and pre-1.0 higher minor) and prerelease opt-in are runtime tool behavior per OBI-T-04 and §11.1, keyed to the tool's supported range, and are not expressible in this schema."
     },
     "name": {
       "type": "string",
@@ -177,12 +177,13 @@
       "properties": {
         "format": {
           "type": "string",
+          "minLength": 1,
           "description": "Binding format token (e.g., openapi@3.1)."
         },
         "location": {
           "type": "string",
           "minLength": 1,
-          "description": "URI or path to the binding specification."
+          "description": "Absolute URI (or format-defined absolute address) of the binding specification."
         },
         "content": {
           "oneOf": [

@@ -124,7 +124,7 @@
 
 - **`Interface.ValidateInterface()` renamed to `Interface.Validate()`.** The package-name-flavored verb was redundant when the receiver was already an `Interface`. `ValidateDocument(data)` (which parses then validates) keeps its name.
 
-- **Validation options trimmed.** `WithExampleValidation` and `WithRequireSupportedVersion` removed: example schema validation (OBI-D-15) and the supported-version check (OBI-T-04) are now unconditional in `Validate()`. `WithRejectUnknownTypedFields` is the only remaining option.
+- **Validation options trimmed.** `WithExampleValidation` and `WithRequireSupportedVersion` removed: example schema validation (OBI-D-15 then; OBI-D-11 under the current numbering) and the supported-version check (OBI-T-04) are now unconditional in `Validate()`. `WithRejectUnknownTypedFields` is the only remaining option.
 
 - **OBI-T-07 / OBI-T-08 nil guards tightened.** `Invoke` and the streaming output path now validate input/output against the operation's schema whenever the schema is specified, including when the value is `nil`. Previously these checks silently skipped on `nil`, which let invalid omissions slip past the contract.
 
@@ -148,8 +148,8 @@
   the app's `ContextResolver`.
 
 - **Conformance rule IDs corrected** to match the spec: `OBI-D-16` → `OBI-D-13`
-  (SemVer `openbindings` field), `OBI-T-13` → `OBI-T-12` (operation-name
-  resolution).
+  (SemVer `openbindings` field; `OBI-D-12` under the current numbering),
+  `OBI-T-13` → `OBI-T-12` (operation-name resolution).
 
 - **`InterfaceClient`.** The struct and its `InterfaceClientOption`,
   `WithContextStore`, `WithPlatformCallbacks`, and `WithDefaultContext`
