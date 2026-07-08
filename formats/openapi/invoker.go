@@ -233,6 +233,9 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}
+	if len(in.Sources) > 1 {
+		return nil, openbindings.ErrMultipleSources
+	}
 	src := in.Sources[0]
 	doc, err := loadDocument(src.Location, src.Content)
 	if err != nil {

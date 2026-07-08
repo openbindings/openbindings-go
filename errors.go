@@ -44,6 +44,13 @@ var (
 	// ErrNoSources is returned when an operation requires sources but none were provided.
 	ErrNoSources = errors.New("openbindings: no sources provided")
 
+	// ErrMultipleSources is returned by single-source synthesizers handed a
+	// multi-source input. Multi-source composition is implementation-defined
+	// (the format packages compose one artifact per call); answering for a
+	// subset silently is never legitimate — compose above the format
+	// (per-source synthesis + merge, or a service-level synthesizer).
+	ErrMultipleSources = errors.New("openbindings: this synthesizer composes one source per call; synthesize per source and merge, or use a multi-source synthesizer")
+
 	// ErrTransformRefNotFound is returned when a transform reference cannot be resolved.
 	ErrTransformRefNotFound = errors.New("openbindings: transform reference not found")
 

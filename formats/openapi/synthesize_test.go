@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -332,5 +333,19 @@ func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	}
 	if s, _ := src.Content.(string); s != content {
 		t.Error("embedded content must be the provided artifact verbatim")
+	}
+}
+
+// Multi-source composition is implementation-defined; a single-source
+// synthesizer refuses extras loudly rather than silently using a subset.
+func TestSynthesizeInterface_RefusesMultipleSources(t *testing.T) {
+	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{
+			{Format: "openapi@3.0", Content: "{}"},
+			{Format: "openapi@3.0", Content: "{}"},
+		},
+	})
+	if !errors.Is(err, openbindings.ErrMultipleSources) {
+		t.Fatalf("want ErrMultipleSources, got %v", err)
 	}
 }
