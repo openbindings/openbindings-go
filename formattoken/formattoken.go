@@ -1,3 +1,8 @@
+// Package formattoken parses, normalizes, and matches OpenBindings format
+// tokens — the `<name>@<version>` strings identifying a binding source's
+// format (e.g. openapi@3.1). Sources declare exact versions; tools declare
+// the ranges they handle (openapi@^3.0.0); Matches answers whether a
+// declared source token falls inside a tool's range.
 package formattoken
 
 import (

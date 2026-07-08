@@ -1,3 +1,8 @@
+// Package canonicaljson serializes JSON in the RFC 8785 (JCS) canonical
+// form — deterministic, byte-identical bytes across languages and
+// implementations, for diffs, hashing (e.g. a delegate registry's
+// contentHash), and golden tests. Small and dependency-free by design;
+// see the rationale note below the imports.
 package canonicaljson
 
 import (

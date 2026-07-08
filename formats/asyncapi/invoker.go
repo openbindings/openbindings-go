@@ -1,3 +1,8 @@
+// Package asyncapi is the AsyncAPI 3.x binding invoker and interface
+// synthesizer for the OpenBindings Go SDK: HTTP (request + SSE) and
+// WebSocket channels behind the SDK's cardinality-agnostic Invocation
+// handle. The exported document-model types mirror the AsyncAPI shape the
+// synthesizer reads.
 package asyncapi
 
 import (

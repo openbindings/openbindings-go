@@ -12,7 +12,9 @@ import (
 // exit-code meaning, or field routing), the gap is made up in CONSUMER
 // CONFIGURATION — these hooks — never by OB authoring the missing coverage
 // into a document and never by OBI absorbing format conventions.
-// Design record: ob-pj/invocation-configuration-design.md (v8).
+// The model is documented publicly in the invocation-configuration guide
+// (https://openbindings.com/spec/invocation-configuration) and the spec
+// repo's formats README (the wire questions each format answers).
 //
 // Generic SHAPE, protocol-specific HANDLING: one set of signatures serves
 // every format; the callback body switches on the site (FormatName,
