@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
-	golang.org/x/net v0.53.0
+	golang.org/x/net v0.56.0
 )
 
-require golang.org/x/text v0.36.0
+require golang.org/x/text v0.38.0

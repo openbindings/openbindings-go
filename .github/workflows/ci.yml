@@ -33,6 +33,12 @@ jobs:
         with:
           go-version-file: ${{ matrix.module }}/go.mod
           cache: false
+      - name: workspace (resolve the untagged core from this checkout)
+        # Format modules require the core at a version that is not tagged
+        # yet; a CI-local go.work resolves it from the same checkout, the
+        # way local development does. Harmless post-tag (workspace wins).
+        if: matrix.module != '.'
+        run: go work init . ${{ matrix.module }}
       - name: vet ${{ matrix.module }}
         working-directory: ${{ matrix.module }}
         run: go vet ./...
