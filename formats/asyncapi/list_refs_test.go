@@ -89,12 +89,12 @@ func TestInspectSource_RefFormat(t *testing.T) {
 }
 
 func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
-	doc := &Document{
+	doc := &document{
 		AsyncAPI: "3.0.0",
-		Channels: map[string]Channel{"ch": {Address: "/ch"}},
-		Operations: map[string]Operation{
-			"sendMsg":    {Action: "send", Channel: ChannelRef{Ref: "#/channels/ch"}},
-			"receiveMsg": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/ch"}},
+		Channels: map[string]channel{"ch": {Address: "/ch"}},
+		Operations: map[string]asyncOperation{
+			"sendMsg":    {Action: "send", Channel: channelRef{Ref: "#/channels/ch"}},
+			"receiveMsg": {Action: "receive", Channel: channelRef{Ref: "#/channels/ch"}},
 		},
 	}
 

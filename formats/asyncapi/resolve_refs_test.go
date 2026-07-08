@@ -5,13 +5,13 @@ import (
 )
 
 func TestResolveRefs_SchemaRefInPayload(t *testing.T) {
-	doc := &Document{
+	doc := &document{
 		AsyncAPI: "3.0.0",
-		Info:     Info{Title: "Test", Version: "1.0.0"},
-		Channels: map[string]Channel{
+		Info:     info{Title: "Test", Version: "1.0.0"},
+		Channels: map[string]channel{
 			"events": {
 				Address: "/events",
-				Messages: map[string]Message{
+				Messages: map[string]message{
 					"UserEvent": {
 						Payload: map[string]any{
 							"$ref": "#/components/schemas/UserEvent",
@@ -20,13 +20,13 @@ func TestResolveRefs_SchemaRefInPayload(t *testing.T) {
 				},
 			},
 		},
-		Operations: map[string]Operation{
+		Operations: map[string]asyncOperation{
 			"receiveEvent": {
 				Action:  "receive",
-				Channel: ChannelRef{Ref: "#/channels/events"},
+				Channel: channelRef{Ref: "#/channels/events"},
 			},
 		},
-		Components: &Components{
+		Components: &components{
 			Schemas: map[string]any{
 				"UserEvent": map[string]any{
 					"type": "object",
@@ -67,30 +67,30 @@ func TestResolveRefs_SchemaRefInPayload(t *testing.T) {
 }
 
 func TestResolveRefs_MessageRefInChannel(t *testing.T) {
-	doc := &Document{
+	doc := &document{
 		AsyncAPI: "3.0.0",
-		Info:     Info{Title: "Test", Version: "1.0.0"},
-		Channels: map[string]Channel{
+		Info:     info{Title: "Test", Version: "1.0.0"},
+		Channels: map[string]channel{
 			"events": {
 				Address: "/events",
-				Messages: map[string]Message{
+				Messages: map[string]message{
 					"UserEvent": {
 						Ref: "#/components/messages/UserEvent",
 					},
 				},
 			},
 		},
-		Operations: map[string]Operation{
+		Operations: map[string]asyncOperation{
 			"receiveEvent": {
 				Action:  "receive",
-				Channel: ChannelRef{Ref: "#/channels/events"},
-				Messages: []MessageRef{
+				Channel: channelRef{Ref: "#/channels/events"},
+				Messages: []messageRef{
 					{Ref: "#/channels/events/messages/UserEvent"},
 				},
 			},
 		},
-		Components: &Components{
-			Messages: map[string]Message{
+		Components: &components{
+			Messages: map[string]message{
 				"UserEvent": {
 					Name:    "UserEvent",
 					Summary: "A user event",
@@ -127,13 +127,13 @@ func TestResolveRefs_MessageRefInChannel(t *testing.T) {
 }
 
 func TestResolveRefs_NestedSchemaRef(t *testing.T) {
-	doc := &Document{
+	doc := &document{
 		AsyncAPI: "3.0.0",
-		Info:     Info{Title: "Test", Version: "1.0.0"},
-		Channels: map[string]Channel{
+		Info:     info{Title: "Test", Version: "1.0.0"},
+		Channels: map[string]channel{
 			"orders": {
 				Address: "/orders",
-				Messages: map[string]Message{
+				Messages: map[string]message{
 					"Order": {
 						Payload: map[string]any{
 							"type": "object",
@@ -150,8 +150,8 @@ func TestResolveRefs_NestedSchemaRef(t *testing.T) {
 				},
 			},
 		},
-		Operations: map[string]Operation{},
-		Components: &Components{
+		Operations: map[string]asyncOperation{},
+		Components: &components{
 			Schemas: map[string]any{
 				"OrderItem": map[string]any{
 					"type": "object",
@@ -184,13 +184,13 @@ func TestResolveRefs_NestedSchemaRef(t *testing.T) {
 }
 
 func TestResolveRefs_CircularRefNoInfiniteLoop(t *testing.T) {
-	doc := &Document{
+	doc := &document{
 		AsyncAPI: "3.0.0",
-		Info:     Info{Title: "Test", Version: "1.0.0"},
-		Channels: map[string]Channel{
+		Info:     info{Title: "Test", Version: "1.0.0"},
+		Channels: map[string]channel{
 			"nodes": {
 				Address: "/nodes",
-				Messages: map[string]Message{
+				Messages: map[string]message{
 					"Node": {
 						Payload: map[string]any{
 							"$ref": "#/components/schemas/Node",
@@ -199,8 +199,8 @@ func TestResolveRefs_CircularRefNoInfiniteLoop(t *testing.T) {
 				},
 			},
 		},
-		Operations: map[string]Operation{},
-		Components: &Components{
+		Operations: map[string]asyncOperation{},
+		Components: &components{
 			Schemas: map[string]any{
 				"Node": map[string]any{
 					"type": "object",
@@ -249,13 +249,13 @@ func TestResolveRefs_NilDocument(t *testing.T) {
 }
 
 func TestResolveRefs_NoComponents(t *testing.T) {
-	doc := &Document{
+	doc := &document{
 		AsyncAPI: "3.0.0",
-		Info:     Info{Title: "Test", Version: "1.0.0"},
-		Channels: map[string]Channel{
+		Info:     info{Title: "Test", Version: "1.0.0"},
+		Channels: map[string]channel{
 			"ch": {
 				Address: "/ch",
-				Messages: map[string]Message{
+				Messages: map[string]message{
 					"Msg": {
 						Payload: map[string]any{
 							"type": "string",
@@ -264,7 +264,7 @@ func TestResolveRefs_NoComponents(t *testing.T) {
 				},
 			},
 		},
-		Operations: map[string]Operation{},
+		Operations: map[string]asyncOperation{},
 	}
 
 	// Should not panic when there are no components/refs.
@@ -280,30 +280,30 @@ func TestResolveRefs_EndToEnd_SynthesizeInterface(t *testing.T) {
 	// Verify that $ref resolution works end-to-end through synthesizeInterfaceWithDoc.
 	// The message in the operation uses a $ref to a component message,
 	// whose payload uses a $ref to a component schema.
-	doc := &Document{
+	doc := &document{
 		AsyncAPI: "3.0.0",
-		Info:     Info{Title: "Ref Test", Version: "2.0.0"},
-		Channels: map[string]Channel{
+		Info:     info{Title: "Ref Test", Version: "2.0.0"},
+		Channels: map[string]channel{
 			"events": {
 				Address: "/events",
-				Messages: map[string]Message{
+				Messages: map[string]message{
 					"MyEvent": {
 						Ref: "#/components/messages/MyEvent",
 					},
 				},
 			},
 		},
-		Operations: map[string]Operation{
+		Operations: map[string]asyncOperation{
 			"receiveEvent": {
 				Action:  "receive",
-				Channel: ChannelRef{Ref: "#/channels/events"},
-				Messages: []MessageRef{
+				Channel: channelRef{Ref: "#/channels/events"},
+				Messages: []messageRef{
 					{Ref: "#/components/messages/MyEvent"},
 				},
 			},
 		},
-		Components: &Components{
-			Messages: map[string]Message{
+		Components: &components{
+			Messages: map[string]message{
 				"MyEvent": {
 					Name: "MyEvent",
 					Payload: map[string]any{
@@ -349,11 +349,11 @@ func TestResolveRefs_EndToEnd_SynthesizeInterface(t *testing.T) {
 }
 
 func TestResolveRefs_ComponentSchemaRefToAnotherSchema(t *testing.T) {
-	doc := &Document{
+	doc := &document{
 		AsyncAPI:   "3.0.0",
-		Info:       Info{Title: "Test", Version: "1.0.0"},
-		Operations: map[string]Operation{},
-		Components: &Components{
+		Info:       info{Title: "Test", Version: "1.0.0"},
+		Operations: map[string]asyncOperation{},
+		Components: &components{
 			Schemas: map[string]any{
 				"Address": map[string]any{
 					"type": "object",

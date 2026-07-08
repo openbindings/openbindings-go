@@ -8,7 +8,7 @@ import (
 )
 
 // helper wraps synthesizeInterfaceWithDoc for simpler test calls
-func testSynthesizeInterface(t *testing.T, doc *Document, location string) openbindings.Interface {
+func testSynthesizeInterface(t *testing.T, doc *document, location string) openbindings.Interface {
 	t.Helper()
 	iface, err := synthesizeInterfaceWithDoc(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{Format: FormatToken, Location: location}},
@@ -20,10 +20,10 @@ func testSynthesizeInterface(t *testing.T, doc *Document, location string) openb
 }
 
 func TestSynthesizeInterface_CopiesMetadata(t *testing.T) {
-	doc := &Document{
+	doc := &document{
 		AsyncAPI:   "3.0.0",
-		Info:       Info{Title: "Test API", Version: "1.0.0", Description: "A test"},
-		Operations: map[string]Operation{},
+		Info:       info{Title: "Test API", Version: "1.0.0", Description: "A test"},
+		Operations: map[string]asyncOperation{},
 	}
 
 	iface := testSynthesizeInterface(t, doc, "")
@@ -39,13 +39,13 @@ func TestSynthesizeInterface_CopiesMetadata(t *testing.T) {
 }
 
 func TestSynthesizeInterface_CreatesOperationsAlphabetically(t *testing.T) {
-	doc := &Document{
+	doc := &document{
 		AsyncAPI: "3.0.0",
-		Operations: map[string]Operation{
-			"zeta":  {Action: "send", Channel: ChannelRef{Ref: "#/channels/ch"}},
-			"alpha": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/ch"}},
+		Operations: map[string]asyncOperation{
+			"zeta":  {Action: "send", Channel: channelRef{Ref: "#/channels/ch"}},
+			"alpha": {Action: "receive", Channel: channelRef{Ref: "#/channels/ch"}},
 		},
-		Channels: map[string]Channel{"ch": {Address: "/ch"}},
+		Channels: map[string]channel{"ch": {Address: "/ch"}},
 	}
 
 	iface := testSynthesizeInterface(t, doc, "")
@@ -61,12 +61,12 @@ func TestSynthesizeInterface_CreatesOperationsAlphabetically(t *testing.T) {
 }
 
 func TestSynthesizeInterface_CreatesBindingsWithRefs(t *testing.T) {
-	doc := &Document{
+	doc := &document{
 		AsyncAPI: "3.0.0",
-		Operations: map[string]Operation{
-			"sendMsg": {Action: "send", Channel: ChannelRef{Ref: "#/channels/messages"}},
+		Operations: map[string]asyncOperation{
+			"sendMsg": {Action: "send", Channel: channelRef{Ref: "#/channels/messages"}},
 		},
-		Channels: map[string]Channel{"messages": {Address: "/messages"}},
+		Channels: map[string]channel{"messages": {Address: "/messages"}},
 	}
 
 	iface := testSynthesizeInterface(t, doc, "")
@@ -84,7 +84,7 @@ func TestSynthesizeInterface_CreatesBindingsWithRefs(t *testing.T) {
 }
 
 func TestSynthesizeInterface_SourceLocationConditional(t *testing.T) {
-	doc := &Document{AsyncAPI: "3.0.0", Operations: map[string]Operation{}}
+	doc := &document{AsyncAPI: "3.0.0", Operations: map[string]asyncOperation{}}
 
 	withLoc := testSynthesizeInterface(t, doc, "https://example.com/spec.json")
 	if withLoc.Sources[DefaultSourceName].Location != "https://example.com/spec.json" {
@@ -98,7 +98,7 @@ func TestSynthesizeInterface_SourceLocationConditional(t *testing.T) {
 }
 
 func TestSynthesizeInterface_NoOperations(t *testing.T) {
-	doc := &Document{AsyncAPI: "3.0.0", Operations: map[string]Operation{}}
+	doc := &document{AsyncAPI: "3.0.0", Operations: map[string]asyncOperation{}}
 	iface := testSynthesizeInterface(t, doc, "")
 	if len(iface.Operations) != 0 {
 		t.Errorf("expected 0 operations, got %d", len(iface.Operations))
@@ -106,7 +106,7 @@ func TestSynthesizeInterface_NoOperations(t *testing.T) {
 }
 
 func TestSynthesizeInterface_FormatToken(t *testing.T) {
-	doc := &Document{AsyncAPI: "3.0.0", Operations: map[string]Operation{}}
+	doc := &document{AsyncAPI: "3.0.0", Operations: map[string]asyncOperation{}}
 	iface := testSynthesizeInterface(t, doc, "")
 	if iface.Sources[DefaultSourceName].Format != "asyncapi@3.0" {
 		t.Errorf("format = %q, want asyncapi@3.0", iface.Sources[DefaultSourceName].Format)

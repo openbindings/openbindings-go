@@ -19,7 +19,7 @@ const FormatToken = "asyncapi@^3.0.0"
 // DefaultSourceName is the key used in the interface's Sources map for the AsyncAPI source.
 const DefaultSourceName = "asyncapi"
 
-func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeInput, doc *Document) (*openbindings.Interface, error) {
+func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeInput, doc *document) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
 	}
@@ -116,13 +116,13 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 // declarations and surfaced via CONTEXT_REQUIRED negotiation (see
 // requiredContext in invoke.go and Invoker.PrepareBinding).
 
-func loadDocument(ctx context.Context, client *http.Client, location string, content any) (*Document, error) {
+func loadDocument(ctx context.Context, client *http.Client, location string, content any) (*document, error) {
 	data, err := sourceToBytes(ctx, client, location, content)
 	if err != nil {
 		return nil, err
 	}
 
-	var doc Document
+	var doc document
 
 	if isJSON(data) {
 		if err := json.Unmarshal(data, &doc); err != nil {
@@ -182,14 +182,14 @@ func isJSON(data []byte) bool {
 	return false
 }
 
-func operationDescription(op Operation) string {
+func operationDescription(op asyncOperation) string {
 	if op.Description != "" {
 		return op.Description
 	}
 	return op.Summary
 }
 
-func resolveOperationPayload(doc *Document, op Operation) map[string]any {
+func resolveOperationPayload(doc *document, op asyncOperation) map[string]any {
 	if len(op.Messages) > 0 {
 		msg := resolveMessageRef(doc, op.Messages[0])
 		if msg != nil && msg.Payload != nil {
@@ -215,7 +215,7 @@ func resolveOperationPayload(doc *Document, op Operation) map[string]any {
 	return nil
 }
 
-func resolveReplyPayload(doc *Document, reply *OperationReply) map[string]any {
+func resolveReplyPayload(doc *document, reply *operationReply) map[string]any {
 	if reply == nil {
 		return nil
 	}
@@ -230,7 +230,7 @@ func resolveReplyPayload(doc *Document, reply *OperationReply) map[string]any {
 	return nil
 }
 
-func resolveMessageRef(doc *Document, ref MessageRef) *Message {
+func resolveMessageRef(doc *document, ref messageRef) *message {
 	if ref.Ref == "" {
 		return nil
 	}

@@ -89,44 +89,44 @@ func drainOutputs(t *testing.T, call openbindings.Invocation[any, any]) ([]any, 
 // per-operation (sendMessage, receiveEvents); sendOpenMessage, sendAck, and
 // receiveStream carry no security so server-side failures and cancellation
 // can be exercised without tripping the CONTEXT_REQUIRED gate.
-func makeAsyncAPISpec(baseURL string) *Document {
-	return &Document{
+func makeAsyncAPISpec(baseURL string) *document {
+	return &document{
 		AsyncAPI: "3.0.0",
-		Info:     Info{Title: "Test API", Version: "1.0.0"},
-		Servers: map[string]Server{
+		Info:     info{Title: "Test API", Version: "1.0.0"},
+		Servers: map[string]server{
 			"test": {
 				Host:     strings.TrimPrefix(strings.TrimPrefix(baseURL, "http://"), "https://"),
 				Protocol: "http",
 			},
 		},
-		Channels: map[string]Channel{
+		Channels: map[string]channel{
 			"messages": {Address: "/messages"},
 			"events":   {Address: "/events"},
 			"stream":   {Address: "/stream"},
 			"ack":      {Address: "/ack"},
 		},
-		Operations: map[string]Operation{
+		Operations: map[string]asyncOperation{
 			"sendMessage": {
 				Action:   "send",
-				Channel:  ChannelRef{Ref: "#/channels/messages"},
-				Messages: []MessageRef{{Ref: "#/components/messages/json"}},
+				Channel:  channelRef{Ref: "#/channels/messages"},
+				Messages: []messageRef{{Ref: "#/components/messages/json"}},
 				Security: []map[string][]string{{"bearer": {}}},
 			},
-			"sendOpenMessage": {Action: "send", Channel: ChannelRef{Ref: "#/channels/messages"}, Messages: []MessageRef{{Ref: "#/components/messages/json"}}},
-			"sendAck":         {Action: "send", Channel: ChannelRef{Ref: "#/channels/ack"}, Messages: []MessageRef{{Ref: "#/components/messages/json"}}},
+			"sendOpenMessage": {Action: "send", Channel: channelRef{Ref: "#/channels/messages"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
+			"sendAck":         {Action: "send", Channel: channelRef{Ref: "#/channels/ack"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
 			"receiveEvents": {
 				Action:   "receive",
-				Channel:  ChannelRef{Ref: "#/channels/events"},
-				Messages: []MessageRef{{Ref: "#/components/messages/json"}},
+				Channel:  channelRef{Ref: "#/channels/events"},
+				Messages: []messageRef{{Ref: "#/components/messages/json"}},
 				Security: []map[string][]string{{"bearer": {}}},
 			},
-			"receiveStream": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/stream"}, Messages: []MessageRef{{Ref: "#/components/messages/json"}}},
+			"receiveStream": {Action: "receive", Channel: channelRef{Ref: "#/channels/stream"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
 		},
-		Components: &Components{
-			Messages: map[string]Message{
+		Components: &components{
+			Messages: map[string]message{
 				"json": {Name: "json", ContentType: "application/json"},
 			},
-			SecuritySchemes: map[string]SecurityScheme{
+			SecuritySchemes: map[string]securityScheme{
 				"bearer": {Type: "http", Scheme: "bearer"},
 			},
 		},
@@ -453,15 +453,15 @@ func TestSSEReceiveStreamsBareOutputs(t *testing.T) {
 
 // sseEventDoc builds a minimal doc with one receive op (no security) whose
 // channel address points at the given path.
-func sseEventDoc(baseURL, path string) *Document {
-	return &Document{
+func sseEventDoc(baseURL, path string) *document {
+	return &document{
 		AsyncAPI: "3.0.0",
-		Info:     Info{Title: "SSE Cap Test", Version: "1.0.0"},
-		Servers: map[string]Server{
+		Info:     info{Title: "SSE Cap Test", Version: "1.0.0"},
+		Servers: map[string]server{
 			"test": {Host: strings.TrimPrefix(baseURL, "http://"), Protocol: "http"},
 		},
-		Channels:   map[string]Channel{"caps": {Address: path}},
-		Operations: map[string]Operation{"receiveCaps": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/caps"}}},
+		Channels:   map[string]channel{"caps": {Address: path}},
+		Operations: map[string]asyncOperation{"receiveCaps": {Action: "receive", Channel: channelRef{Ref: "#/channels/caps"}}},
 	}
 }
 
@@ -736,28 +736,28 @@ func TestOperationInvokerResolvesChallengeFromStore(t *testing.T) {
 // makeWSAsyncAPISpec returns an AsyncAPI 3.x document configured with a
 // WebSocket server, given the host:port of an httptest.Server. scheme nil
 // means no declared security.
-func makeWSAsyncAPISpec(httpURL string, scheme *SecurityScheme) *Document {
+func makeWSAsyncAPISpec(httpURL string, scheme *securityScheme) *document {
 	host := strings.TrimPrefix(strings.TrimPrefix(httpURL, "http://"), "https://")
-	server := Server{Host: host, Protocol: "ws"}
-	doc := &Document{
+	srv := server{Host: host, Protocol: "ws"}
+	doc := &document{
 		AsyncAPI: "3.0.0",
-		Info:     Info{Title: "WS Test API", Version: "1.0.0"},
-		Channels: map[string]Channel{
+		Info:     info{Title: "WS Test API", Version: "1.0.0"},
+		Channels: map[string]channel{
 			"stream": {Address: "/ws"},
 		},
-		Operations: map[string]Operation{
-			"subscribe": {Action: "receive", Channel: ChannelRef{Ref: "#/channels/stream"}, Messages: []MessageRef{{Ref: "#/components/messages/json"}}},
-			"publish":   {Action: "send", Channel: ChannelRef{Ref: "#/channels/stream"}, Messages: []MessageRef{{Ref: "#/components/messages/json"}}},
+		Operations: map[string]asyncOperation{
+			"subscribe": {Action: "receive", Channel: channelRef{Ref: "#/channels/stream"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
+			"publish":   {Action: "send", Channel: channelRef{Ref: "#/channels/stream"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
 		},
-		Components: &Components{
-			Messages: map[string]Message{"json": {Name: "json", ContentType: "application/json"}},
+		Components: &components{
+			Messages: map[string]message{"json": {Name: "json", ContentType: "application/json"}},
 		},
 	}
 	if scheme != nil {
-		server.Security = []map[string][]string{{"auth": {}}}
-		doc.Components.SecuritySchemes = map[string]SecurityScheme{"auth": *scheme}
+		srv.Security = []map[string][]string{{"auth": {}}}
+		doc.Components.SecuritySchemes = map[string]securityScheme{"auth": *scheme}
 	}
-	doc.Servers = map[string]Server{"wsServer": server}
+	doc.Servers = map[string]server{"wsServer": srv}
 	return doc
 }
 
@@ -810,7 +810,7 @@ func writeWSJSON(ctx context.Context, conn *websocket.Conn, msg any) error {
 	return conn.Write(writeCtx, websocket.MessageText, raw)
 }
 
-func wsSource(srv *httptest.Server, scheme *SecurityScheme) openbindings.InvocationSource {
+func wsSource(srv *httptest.Server, scheme *securityScheme) openbindings.InvocationSource {
 	return openbindings.InvocationSource{Format: FormatToken, Content: makeWSAsyncAPISpec(srv.URL, scheme)}
 }
 
@@ -838,7 +838,7 @@ func TestWebSocketBearerInFirstFrame(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:  wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"}),
+		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "test-bearer-xyz"},
 	})
@@ -922,7 +922,7 @@ func TestWebSocketBearerFirstFrameOncePerConnection(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	source := wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"})
+	source := wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"})
 	bindCtx := map[string]any{"bearerToken": "tok"}
 
 	sub1 := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
@@ -974,7 +974,7 @@ func TestWebSocketQueryParamApiKey(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:  wsSource(srv, &SecurityScheme{Type: "apiKey", In: "query", Name: "api_key"}),
+		Source:  wsSource(srv, &securityScheme{Type: "apiKey", In: "query", Name: "api_key"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"apiKey": "secret-key-abc"},
 	})
@@ -1009,7 +1009,7 @@ func TestWebSocketStreamingMultipleEvents(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:  wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"}),
+		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "tok"},
 	})
@@ -1040,7 +1040,7 @@ func TestWebSocketStopCancelsSubscription(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:  wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"}),
+		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "tok"},
 	})
@@ -1095,7 +1095,7 @@ func TestWebSocketServerErrorFrame(t *testing.T) {
 		return parsed, nil
 	}
 	args := &openbindings.BindingInvocationArgs{
-		Source:  wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"}),
+		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "tok"},
 	}

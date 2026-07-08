@@ -1,8 +1,9 @@
 // Package asyncapi is the AsyncAPI 3.x binding invoker and interface
 // synthesizer for the OpenBindings Go SDK: HTTP (request + SSE) and
 // WebSocket channels behind the SDK's cardinality-agnostic Invocation
-// handle. The exported document-model types mirror the AsyncAPI shape the
-// synthesizer reads.
+// handle. The public surface is the format contract (Invoker, Synthesizer,
+// their constructors, and the format token); the document model the
+// synthesizer reads is internal.
 package asyncapi
 
 import (
@@ -34,7 +35,7 @@ func newDefaultHTTPClient() *http.Client {
 type Invoker struct {
 	httpClient *http.Client
 	mu         sync.RWMutex
-	docCache   map[string]*Document
+	docCache   map[string]*document
 	wsPool     *wsPool
 }
 
@@ -47,7 +48,7 @@ var (
 func NewInvoker() *Invoker {
 	return &Invoker{
 		httpClient: newDefaultHTTPClient(),
-		docCache:   make(map[string]*Document),
+		docCache:   make(map[string]*document),
 		wsPool:     newWSPool(),
 	}
 }
@@ -60,7 +61,7 @@ func (e *Invoker) Close() {
 
 // cachedLoadDocument loads an AsyncAPI doc, caching by location within a process.
 // When content is provided, the cache is bypassed and updated with the fresh parse.
-func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, content any) (*Document, error) {
+func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, content any) (*document, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
 		if doc, ok := e.docCache[location]; ok {
@@ -124,7 +125,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 // answer is not knowable without network I/O). Only inline source content
 // and the warm doc cache are consulted; nothing is fetched.
 func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
-	var doc *Document
+	var doc *document
 	if args.Source.Content != nil {
 		// loadDocument performs no I/O when content is inline.
 		d, err := loadDocument(ctx, e.httpClient, args.Source.Location, args.Source.Content)

@@ -80,7 +80,7 @@ func TestWSPool_SequentialSendsShareOneConnection(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	source := wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"})
+	source := wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"})
 
 	for i := 0; i < 5; i++ {
 		sendOnce(t, binv, source, map[string]any{"bearerToken": "tok"}, map[string]any{"seq": i})
@@ -107,7 +107,7 @@ func TestWSPool_ConcurrentSendsShareOneConnection(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	source := wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"})
+	source := wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"})
 
 	const concurrency = 10
 	var wg sync.WaitGroup
@@ -173,7 +173,7 @@ func TestWSPool_ClientStreamingFrames(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:  wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"}),
+		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/publish",
 		Context: map[string]any{"bearerToken": "tok"},
 	})
@@ -220,7 +220,7 @@ func TestWSPool_DifferentCredentialsNeverShareConnection(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	source := wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"})
+	source := wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"})
 
 	sendOnce(t, binv, source, map[string]any{"bearerToken": "tenant-a"}, map[string]any{"seq": 0})
 	sendOnce(t, binv, source, map[string]any{"bearerToken": "tenant-b"}, map[string]any{"seq": 1})
@@ -302,7 +302,7 @@ func TestWSPool_IdleTimeoutEviction(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	binv.wsPool.idleTimeout = 50 * time.Millisecond
-	source := wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"})
+	source := wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"})
 
 	sendOnce(t, binv, source, map[string]any{"bearerToken": "tok"}, map[string]any{"msg": "first"})
 	if c := upgrades.Load(); c != 1 {
@@ -339,7 +339,7 @@ func TestWSPool_CloseClosesAllConnections(t *testing.T) {
 	srv := wsTestServer(t, frameCollector(&upgrades, frames))
 
 	binv := NewInvoker()
-	source := wsSource(srv, &SecurityScheme{Type: "http", Scheme: "bearer"})
+	source := wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"})
 
 	sendOnce(t, binv, source, map[string]any{"bearerToken": "tok"}, map[string]any{"msg": "hi"})
 

@@ -98,7 +98,7 @@ func newWSPool() *wsPool {
 // digest of the credential identity the dial would use. Two invocations with
 // different credentials must never share an authenticated socket
 // (cross-tenant credential leak); identical credentials still pool.
-func wsPoolKey(serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any) string {
+func wsPoolKey(serverURL, address string, doc *document, asyncOp *asyncOperation, bindCtx map[string]any) string {
 	return serverURL + "|" + address + "|" + credentialDigest(serverURL, address, doc, asyncOp, bindCtx)
 }
 
@@ -107,7 +107,7 @@ func wsPoolKey(serverURL, address string, doc *Document, asyncOp *Operation, bin
 // applyHTTPContext places (spec-driven schemes, fallback credentials, context
 // headers/cookies) plus the first-frame bearer token. The digest — not the
 // raw material — goes into the pool key so credentials never sit in map keys.
-func credentialDigest(serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any) string {
+func credentialDigest(serverURL, address string, doc *document, asyncOp *asyncOperation, bindCtx map[string]any) string {
 	h := sha256.New()
 	if req, err := http.NewRequest(http.MethodGet, serverURL+"/"+trimLeadingSlash(address), nil); err == nil {
 		applyHTTPContext(req, doc, asyncOp, bindCtx)
@@ -157,7 +157,7 @@ func (pw *pooledWS) sendFirstFrameAuth(ctx context.Context, frame []byte) error 
 //
 // If multiple goroutines call acquire for the same key concurrently, only one
 // creates the connection while the others wait.
-func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Document, asyncOp *Operation, bindCtx map[string]any, l *wsListener) (*pooledWS, func(), error) {
+func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *document, asyncOp *asyncOperation, bindCtx map[string]any, l *wsListener) (*pooledWS, func(), error) {
 	key := wsPoolKey(serverURL, address, doc, asyncOp, bindCtx)
 
 	for {
@@ -221,7 +221,7 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *Do
 // spec-driven apiKey credentials placed in the query must reach the dialed
 // URL, because browsers cannot set custom WebSocket upgrade headers), then
 // starts the broadcast reader goroutine.
-func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *Document, asyncOp *Operation, bindCtx map[string]any, l *wsListener) (*pooledWS, func(), error) {
+func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *document, asyncOp *asyncOperation, bindCtx map[string]any, l *wsListener) (*pooledWS, func(), error) {
 	wsURL := serverURL + "/" + trimLeadingSlash(address)
 
 	upgradeReq, err := http.NewRequestWithContext(ctx, http.MethodGet, wsURL, nil)

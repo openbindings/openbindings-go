@@ -9,7 +9,7 @@ import (
 // #/) within a parsed AsyncAPI document. It mutates the document in place.
 // Only internal refs are handled; external refs (http://, ./file.json) are
 // left as-is.
-func resolveRefs(doc *Document) {
+func resolveRefs(doc *document) {
 	if doc == nil {
 		return
 	}
@@ -158,7 +158,7 @@ func resolveJSONPointer(root map[string]any, pointer string) any {
 }
 
 // resolveMessageRefByPointer resolves a message $ref pointer and returns a Message.
-func resolveMessageRefByPointer(ref string, rawDoc map[string]any) *Message {
+func resolveMessageRefByPointer(ref string, rawDoc map[string]any) *message {
 	if !strings.HasPrefix(ref, "#/") {
 		return nil
 	}
@@ -179,7 +179,7 @@ func resolveMessageRefByPointer(ref string, rawDoc map[string]any) *Message {
 		return nil
 	}
 
-	var msg Message
+	var msg message
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil
 	}

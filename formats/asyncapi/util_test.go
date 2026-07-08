@@ -32,8 +32,8 @@ func TestParseRef_Empty(t *testing.T) {
 }
 
 func TestResolveServer_HTTPServer(t *testing.T) {
-	doc := &Document{
-		Servers: map[string]Server{
+	doc := &document{
+		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https"},
 		},
 	}
@@ -50,8 +50,8 @@ func TestResolveServer_HTTPServer(t *testing.T) {
 }
 
 func TestResolveServer_MetadataOverride(t *testing.T) {
-	doc := &Document{
-		Servers: map[string]Server{
+	doc := &document{
+		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https"},
 		},
 	}
@@ -69,7 +69,7 @@ func TestResolveServer_MetadataOverride(t *testing.T) {
 }
 
 func TestResolveServer_NoServers(t *testing.T) {
-	doc := &Document{}
+	doc := &document{}
 	_, _, err := resolveServer(doc, nil)
 	if err == nil {
 		t.Error("expected error for doc with no servers")
@@ -77,24 +77,24 @@ func TestResolveServer_NoServers(t *testing.T) {
 }
 
 // secureDoc builds a doc whose server declares the named security schemes.
-func secureDoc(schemes map[string]SecurityScheme, names ...string) *Document {
+func secureDoc(schemes map[string]securityScheme, names ...string) *document {
 	reqs := make([]map[string][]string, 0, len(names))
 	for _, n := range names {
 		reqs = append(reqs, map[string][]string{n: {}})
 	}
-	return &Document{
-		Servers: map[string]Server{
+	return &document{
+		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https", Security: reqs},
 		},
-		Operations: map[string]Operation{
-			"op": {Action: "send", Channel: ChannelRef{Ref: "#/channels/ch"}},
+		Operations: map[string]asyncOperation{
+			"op": {Action: "send", Channel: channelRef{Ref: "#/channels/ch"}},
 		},
-		Components: &Components{SecuritySchemes: schemes},
+		Components: &components{SecuritySchemes: schemes},
 	}
 }
 
 func TestRequiredContext_BearerRequirement(t *testing.T) {
-	doc := secureDoc(map[string]SecurityScheme{
+	doc := secureDoc(map[string]securityScheme{
 		"bearer": {Type: "http", Scheme: "bearer", Description: "API token"},
 	}, "bearer")
 	op := doc.Operations["op"]
@@ -124,7 +124,7 @@ func TestRequiredContext_BearerRequirement(t *testing.T) {
 }
 
 func TestRequiredContext_AlternativesAnyOneSuffices(t *testing.T) {
-	doc := secureDoc(map[string]SecurityScheme{
+	doc := secureDoc(map[string]securityScheme{
 		"key":   {Type: "apiKey", In: "header", Name: "X-Key"},
 		"basic": {Type: "userPassword"},
 	}, "key", "basic")
@@ -149,7 +149,7 @@ func TestRequiredContext_AlternativesAnyOneSuffices(t *testing.T) {
 }
 
 func TestRequiredContext_OperationOverridesServer(t *testing.T) {
-	doc := secureDoc(map[string]SecurityScheme{
+	doc := secureDoc(map[string]securityScheme{
 		"bearer": {Type: "http", Scheme: "bearer"},
 		"key":    {Type: "httpApiKey", In: "query", Name: "k"},
 	}, "bearer")
@@ -170,14 +170,14 @@ func TestRequiredContext_OperationOverridesServer(t *testing.T) {
 // of them as requirements (the document model represents multi-scheme
 // conjunctions).
 func TestRequiredContext_ConjunctionMapsToOneAlternative(t *testing.T) {
-	doc := &Document{
-		Servers: map[string]Server{
+	doc := &document{
+		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https", Security: []map[string][]string{
 				{"bearer": {}, "key": {}}, // one object: bearer AND key
 			}},
 		},
-		Operations: map[string]Operation{"op": {Action: "send"}},
-		Components: &Components{SecuritySchemes: map[string]SecurityScheme{
+		Operations: map[string]asyncOperation{"op": {Action: "send"}},
+		Components: &components{SecuritySchemes: map[string]securityScheme{
 			"bearer": {Type: "http", Scheme: "bearer"},
 			"key":    {Type: "apiKey", In: "header", Name: "X-Key"},
 		}},
@@ -211,7 +211,7 @@ func TestRequiredContext_ConjunctionMapsToOneAlternative(t *testing.T) {
 // openapi-mirroring rule: an empty requirement object means anonymous access
 // is allowed, so no challenge is warranted at all.
 func TestRequiredContext_EmptyRequirementObjectAllowsAnonymous(t *testing.T) {
-	doc := secureDoc(map[string]SecurityScheme{
+	doc := secureDoc(map[string]securityScheme{
 		"bearer": {Type: "http", Scheme: "bearer"},
 	}, "bearer")
 	server := doc.Servers["prod"]
@@ -228,14 +228,14 @@ func TestRequiredContext_EmptyRequirementObjectAllowsAnonymous(t *testing.T) {
 // a conjunction containing an unmappable scheme is dropped entirely rather
 // than degraded into a weaker requirement.
 func TestRequiredContext_InexpressibleSchemeSkipsWholeAlternative(t *testing.T) {
-	doc := &Document{
-		Servers: map[string]Server{
+	doc := &document{
+		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https", Security: []map[string][]string{
 				{"bearer": {}, "custom": {}},
 			}},
 		},
-		Operations: map[string]Operation{"op": {Action: "send"}},
-		Components: &Components{SecuritySchemes: map[string]SecurityScheme{
+		Operations: map[string]asyncOperation{"op": {Action: "send"}},
+		Components: &components{SecuritySchemes: map[string]securityScheme{
 			"bearer": {Type: "http", Scheme: "bearer"},
 			"custom": {Type: "scramSha256"},
 		}},
@@ -250,15 +250,15 @@ func TestRequiredContext_InexpressibleSchemeSkipsWholeAlternative(t *testing.T) 
 // come from the SAME server the connection targets (first sorted supported
 // server), never from another server that happens to declare security.
 func TestRequiredContext_DerivesFromConnectionServer(t *testing.T) {
-	doc := &Document{
-		Servers: map[string]Server{
+	doc := &document{
+		Servers: map[string]server{
 			// "a" sorts first and is the connection target: no security.
 			"a": {Host: "open.example.com", Protocol: "https"},
 			// "b" declares security but is NOT the server dialed.
 			"b": {Host: "secure.example.com", Protocol: "https", Security: []map[string][]string{{"bearer": {}}}},
 		},
-		Operations: map[string]Operation{"op": {Action: "send"}},
-		Components: &Components{SecuritySchemes: map[string]SecurityScheme{
+		Operations: map[string]asyncOperation{"op": {Action: "send"}},
+		Components: &components{SecuritySchemes: map[string]securityScheme{
 			"bearer": {Type: "http", Scheme: "bearer"},
 		}},
 	}
@@ -269,9 +269,9 @@ func TestRequiredContext_DerivesFromConnectionServer(t *testing.T) {
 }
 
 func TestRequiredContext_NoDeclaredSecurity(t *testing.T) {
-	doc := &Document{
-		Servers:    map[string]Server{"prod": {Host: "api.example.com", Protocol: "https"}},
-		Operations: map[string]Operation{"op": {Action: "send"}},
+	doc := &document{
+		Servers:    map[string]server{"prod": {Host: "api.example.com", Protocol: "https"}},
+		Operations: map[string]asyncOperation{"op": {Action: "send"}},
 	}
 	op := doc.Operations["op"]
 	if got := requiredContext(doc, &op, "https://api.example.com", nil); got != nil {
@@ -280,7 +280,7 @@ func TestRequiredContext_NoDeclaredSecurity(t *testing.T) {
 }
 
 func TestRequiredContext_UnknownSchemeNotEnforced(t *testing.T) {
-	doc := secureDoc(map[string]SecurityScheme{
+	doc := secureDoc(map[string]securityScheme{
 		"custom": {Type: "scramSha256"},
 	}, "custom")
 	op := doc.Operations["op"]
@@ -291,19 +291,19 @@ func TestRequiredContext_UnknownSchemeNotEnforced(t *testing.T) {
 
 func TestRequirementType_Families(t *testing.T) {
 	cases := []struct {
-		scheme SecurityScheme
+		scheme securityScheme
 		want   string
 	}{
-		{SecurityScheme{Type: "http", Scheme: "bearer"}, "auth.bearer"},
-		{SecurityScheme{Type: "http", Scheme: "Bearer"}, "auth.bearer"},
-		{SecurityScheme{Type: "http", Scheme: "basic"}, "auth.basic"},
-		{SecurityScheme{Type: "http", Scheme: "digest"}, ""},
-		{SecurityScheme{Type: "httpBearer"}, "auth.bearer"},
-		{SecurityScheme{Type: "userPassword"}, "auth.basic"},
-		{SecurityScheme{Type: "apiKey"}, "auth.apiKey"},
-		{SecurityScheme{Type: "httpApiKey"}, "auth.apiKey"},
-		{SecurityScheme{Type: "oauth2"}, "auth.oauth2"},
-		{SecurityScheme{Type: "scramSha256"}, ""},
+		{securityScheme{Type: "http", Scheme: "bearer"}, "auth.bearer"},
+		{securityScheme{Type: "http", Scheme: "Bearer"}, "auth.bearer"},
+		{securityScheme{Type: "http", Scheme: "basic"}, "auth.basic"},
+		{securityScheme{Type: "http", Scheme: "digest"}, ""},
+		{securityScheme{Type: "httpBearer"}, "auth.bearer"},
+		{securityScheme{Type: "userPassword"}, "auth.basic"},
+		{securityScheme{Type: "apiKey"}, "auth.apiKey"},
+		{securityScheme{Type: "httpApiKey"}, "auth.apiKey"},
+		{securityScheme{Type: "oauth2"}, "auth.oauth2"},
+		{securityScheme{Type: "scramSha256"}, ""},
 	}
 	for _, tc := range cases {
 		if got := requirementType(tc.scheme); got != tc.want {

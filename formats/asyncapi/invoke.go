@@ -48,7 +48,7 @@ type handle = openbindings.BindingHandle[any, any]
 // runBinding resolves the operation, checks runtime context, and dispatches
 // to the protocol-specific runner. Terminates the handle exactly once. ctx is
 // expected to be bound to the invocation's lifetime (DoneContext).
-func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *openbindings.BindingInvocationArgs, h handle, doc *Document) {
+func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *openbindings.BindingInvocationArgs, h handle, doc *document) {
 	opID, err := parseRef(args.Ref)
 	if err != nil {
 		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: err.Error()})
@@ -138,7 +138,7 @@ func parseRef(ref string) (string, error) {
 	return ref, nil
 }
 
-func resolveServer(doc *Document, ctx map[string]any) (url string, protocol string, err error) {
+func resolveServer(doc *document, ctx map[string]any) (url string, protocol string, err error) {
 	if meta := openbindings.ContextMetadata(ctx); meta != nil {
 		if base, ok := meta["baseURL"].(string); ok && base != "" {
 			proto := "http"
@@ -170,7 +170,7 @@ func resolveServer(doc *Document, ctx map[string]any) (url string, protocol stri
 // exists. Security derivation MUST consult this same server so the
 // requirements always describe the server actually dialed, never some other
 // server that happens to declare security.
-func pickDocServer(doc *Document) *Server {
+func pickDocServer(doc *document) *server {
 	serverNames := make([]string, 0, len(doc.Servers))
 	for name := range doc.Servers {
 		serverNames = append(serverNames, name)
@@ -194,7 +194,7 @@ func pickDocServer(doc *Document) *Server {
 // requirementType maps an AsyncAPI security scheme to a standard requirement
 // family, or "" when the scheme family is unknown (not checkable, not
 // enforced).
-func requirementType(s SecurityScheme) string {
+func requirementType(s securityScheme) string {
 	switch s.Type {
 	case "http":
 		switch strings.ToLower(s.Scheme) {
@@ -226,7 +226,7 @@ func requirementType(s SecurityScheme) string {
 // whole operation, mirroring openapi); an object containing a scheme the SDK
 // cannot express is skipped entirely rather than degraded into a weaker
 // requirement. Side-effect-free; shared by runBinding and PrepareBinding.
-func requiredContext(doc *Document, asyncOp *Operation, serverURL string, ctx map[string]any) *openbindings.ContextRequiredDetails {
+func requiredContext(doc *document, asyncOp *asyncOperation, serverURL string, ctx map[string]any) *openbindings.ContextRequiredDetails {
 	requirements := securityRequirements(doc, asyncOp)
 	if len(requirements) == 0 || doc.Components == nil || len(doc.Components.SecuritySchemes) == 0 {
 		return nil
@@ -286,7 +286,7 @@ func requiredContext(doc *Document, asyncOp *Operation, serverURL string, ctx ma
 // an operation: operation-level security overrides; otherwise the
 // requirements of the doc server the connection targets (the same server
 // pickDocServer selects).
-func securityRequirements(doc *Document, asyncOp *Operation) []map[string][]string {
+func securityRequirements(doc *document, asyncOp *asyncOperation) []map[string][]string {
 	if asyncOp != nil && len(asyncOp.Security) > 0 {
 		return asyncOp.Security
 	}
@@ -300,7 +300,7 @@ func securityRequirements(doc *Document, asyncOp *Operation) []map[string][]stri
 // Send over HTTP: unary POST
 // ---------------------------------------------------------------------------
 
-func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address string, doc *Document, asyncOp *Operation, args *openbindings.BindingInvocationArgs, h handle) {
+func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
 	// Unary: the first input is the message payload. No-input convention:
 	// an operation-layer call (Binding != nil) for an operation that declares
 	// no input (InputSchema == nil) closes input on entry and sends one empty
@@ -413,7 +413,7 @@ func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address st
 // Receive over HTTP: SSE subscribe
 // ---------------------------------------------------------------------------
 
-func runSSEReceive(ctx context.Context, client *http.Client, serverURL, address string, doc *Document, asyncOp *Operation, args *openbindings.BindingInvocationArgs, h handle) {
+func runSSEReceive(ctx context.Context, client *http.Client, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
 	// Server -> client: the channel takes no caller input.
 	_ = h.CloseInput()
 
@@ -524,7 +524,7 @@ func decodeWSFrame(args *openbindings.BindingInvocationArgs, site openbindings.I
 // Receive over WebSocket: subscribe (bidi-capable) on a pooled socket
 // ---------------------------------------------------------------------------
 
-func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, doc *Document, asyncOp *Operation, args *openbindings.BindingInvocationArgs, h handle) {
+func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
 	// The subscription is registered inside acquire (before the reader
 	// starts on a fresh dial) so no early server push can be lost.
 	sub := newWSSubscription()
@@ -616,7 +616,7 @@ func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, 
 // schemes whose credential is a bearer token. Gates the first-frame bearer
 // convention so the token is never volunteered to servers that do not
 // declare bearer auth.
-func declaresBearerScheme(doc *Document, asyncOp *Operation) bool {
+func declaresBearerScheme(doc *document, asyncOp *asyncOperation) bool {
 	for _, s := range resolveSecuritySchemes(doc, asyncOp) {
 		switch requirementType(s) {
 		case "auth.bearer", "auth.oauth2":
@@ -693,7 +693,7 @@ func (s *wsSubscription) next(ctx context.Context) (frame []byte, closed bool, c
 // Send over WebSocket: client-streaming publish on a pooled socket
 // ---------------------------------------------------------------------------
 
-func runWSSend(ctx context.Context, pool *wsPool, serverURL, address string, doc *Document, asyncOp *Operation, args *openbindings.BindingInvocationArgs, h handle) {
+func runWSSend(ctx context.Context, pool *wsPool, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
 	pw, _, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, args.Context, nil)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -759,7 +759,7 @@ func runWSSend(ctx context.Context, pool *wsPool, serverURL, address string, doc
 // builtin follows the DECLARED message contentType (never payload
 // sniffing); Status carries the initial response's status on every unit
 // (real and invocation-scoped, never fabricated).
-func decodeSSEEvent(args *openbindings.BindingInvocationArgs, site openbindings.InvokeSite, doc *Document, asyncOp *Operation, resp *http.Response, dataLines []string) (any, error) {
+func decodeSSEEvent(args *openbindings.BindingInvocationArgs, site openbindings.InvokeSite, doc *document, asyncOp *asyncOperation, resp *http.Response, dataLines []string) (any, error) {
 	status := resp.StatusCode
 	raw := openbindings.RawResult{
 		Status: &status,
@@ -807,7 +807,7 @@ func httpStatusError(resp *http.Response) *openbindings.InvocationError {
 // applyHTTPContext applies opaque binding context (credentials via well-known
 // fields) and execution options (headers, cookies) to an HTTP request, using
 // AsyncAPI securitySchemes for spec-driven credential placement.
-func applyHTTPContext(req *http.Request, doc *Document, asyncOp *Operation, bindCtx map[string]any) {
+func applyHTTPContext(req *http.Request, doc *document, asyncOp *asyncOperation, bindCtx map[string]any) {
 	if len(bindCtx) > 0 {
 		applied, queryParams := applyCredentialsViaSecuritySchemes(req, doc, asyncOp, bindCtx)
 		if !applied {
@@ -836,7 +836,7 @@ func applyHTTPContext(req *http.Request, doc *Document, asyncOp *Operation, bind
 // operation, flattened for credential placement. The requirements come from
 // securityRequirements (operation-level, else the server the connection
 // targets).
-func resolveSecuritySchemes(doc *Document, asyncOp *Operation) []SecurityScheme {
+func resolveSecuritySchemes(doc *document, asyncOp *asyncOperation) []securityScheme {
 	requirements := securityRequirements(doc, asyncOp)
 	if len(requirements) == 0 {
 		return nil
@@ -846,7 +846,7 @@ func resolveSecuritySchemes(doc *Document, asyncOp *Operation) []SecurityScheme 
 		return nil
 	}
 
-	var result []SecurityScheme
+	var result []securityScheme
 	seen := map[string]bool{}
 	for _, req := range requirements {
 		schemeNames := make([]string, 0, len(req))
@@ -870,7 +870,7 @@ func resolveSecuritySchemes(doc *Document, asyncOp *Operation) []SecurityScheme 
 // applyCredentialsViaSecuritySchemes reads the AsyncAPI doc's securitySchemes
 // and operation/server-level security requirements to place credentials exactly
 // where the spec declares (header, query, or cookie with the correct name).
-func applyCredentialsViaSecuritySchemes(req *http.Request, doc *Document, asyncOp *Operation, bindCtx map[string]any) (applied bool, queryParams url.Values) {
+func applyCredentialsViaSecuritySchemes(req *http.Request, doc *document, asyncOp *asyncOperation, bindCtx map[string]any) (applied bool, queryParams url.Values) {
 	schemes := resolveSecuritySchemes(doc, asyncOp)
 	if len(schemes) == 0 {
 		return false, nil
@@ -962,7 +962,7 @@ func applyCredentialsFallback(req *http.Request, bindCtx map[string]any) {
 // (the AsyncAPI document's answer to the decode question), falling back to
 // the document default, else "" (the text lane). This is the SPEC answer;
 // it never reads payload bytes.
-func declaredContentType(doc *Document, asyncOp *Operation) string {
+func declaredContentType(doc *document, asyncOp *asyncOperation) string {
 	if asyncOp == nil {
 		return ""
 	}
