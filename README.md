@@ -233,6 +233,43 @@ their own resolver instead. Format invokers that can derive requirements from
 their source (e.g. OpenAPI `securitySchemes`) also implement the
 side-effect-free `BindingPreparer` preflight.
 
+## Transforms (invoking tools only)
+
+OpenBindings mandates JSONata 2.0 as the transform language for tools that
+evaluate `inputTransform`/`outputTransform` (OBI-T-10). This SDK does not
+bundle a JSONata runtime — tools that only parse, validate, inspect, or
+generate code do not need one — and it does not pick a Go implementation
+for you: you supply any JSONata library behind the `TransformEvaluator`
+seam on `OperationInvoker`. A complete adapter (this one over
+[`blues/jsonata-go`](https://github.com/blues/jsonata-go), the library the
+`ob` CLI happens to use — a worked example, not an endorsement):
+
+```go
+import jsonata "github.com/blues/jsonata-go"
+
+type jsonataEvaluator struct{}
+
+func (jsonataEvaluator) Evaluate(expression string, data any) (any, error) {
+	expr, err := jsonata.Compile(expression)
+	if err != nil {
+		return nil, err
+	}
+	return expr.Eval(data)
+}
+
+invoker.TransformEvaluator = jsonataEvaluator{}
+```
+
+Implement `TransformEvaluatorWithBindings` too if you evaluate
+operation-graph transforms (they receive `$input` and friends as
+variables). Two constraints an adapter must honor: the evaluation
+environment is **closed** — do not register host-reaching functions
+(filesystem, network, environment) for document-supplied expressions;
+OBI-T-10 makes that nonconformant, and it would make the same transform
+compute different values on different hosts — and where JSONata's
+documentation is ambiguous, follow the reference implementation's
+behavior (the spec's tiebreak).
+
 ## Consumer configuration (hooks)
 
 Where a binding format's specification doesn't answer a wire question, the
