@@ -13,7 +13,7 @@ import (
 
 func ExampleInterface_basic() {
 	data := []byte(`{
-		"openbindings": "0.1.0",
+		"openbindings": "0.2.0",
 		"name": "Example API",
 		"operations": {
 			"getUser": {
@@ -36,7 +36,7 @@ func ExampleInterface_basic() {
 
 func ExampleInterface_Validate() {
 	data := []byte(`{
-		"openbindings": "0.1.0",
+		"openbindings": "0.2.0",
 		"operations": {
 			"getUser": {
 				"description": "Get a user by ID"
@@ -62,7 +62,7 @@ func ExampleInterface_Validate() {
 
 func ExampleInterface_Validate_strict() {
 	data := []byte(`{
-		"openbindings": "0.1.0",
+		"openbindings": "0.2.0",
 		"unknownField": "should fail in strict mode",
 		"operations": {
 			"getUser": {"description": "Get a user"}
@@ -86,7 +86,7 @@ func ExampleInterface_Validate_strict() {
 
 func ExampleInterface_lossless() {
 	data := []byte(`{
-		"openbindings": "0.1.0",
+		"openbindings": "0.2.0",
 		"x-custom": "preserved",
 		"operations": {}
 	}`)
@@ -163,7 +163,7 @@ func Example_formattoken() {
 func ExampleTransform() {
 	// Per v0.2 §6.5, transforms are JSONata 2.0 expression strings.
 	iface := openbindings.Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]openbindings.Operation{
 			"processPayment": {},
 		},

@@ -17,6 +17,8 @@ import (
 // interoperability.
 //
 // The SDK stores and retrieves context but never inspects its contents.
+// Setting a nil value removes the entry (the published contract pins
+// set-null ≡ delete, so Get's nil uniformly means "no entry").
 // The published openbindings.key-value-store interface standardizes this
 // same get/set/delete capability where a store sits across a wire.
 type ContextStore interface {

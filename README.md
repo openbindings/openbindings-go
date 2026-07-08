@@ -233,6 +233,29 @@ their own resolver instead. Format invokers that can derive requirements from
 their source (e.g. OpenAPI `securitySchemes`) also implement the
 side-effect-free `BindingPreparer` preflight.
 
+## Consumer configuration (hooks)
+
+Where a binding format's specification doesn't answer a wire question, the
+consumer configures the answer — the SDK never guesses from payload bytes.
+Three hook axes cover the three wire questions:
+
+- **Decode** (`OutputDecoder`) — how raw bytes become an output value when
+  the format doesn't say (e.g. which lane a CLI's stdout carries).
+- **Classify** (`ResultClassifier`) — which outcomes are success when the
+  format doesn't say (e.g. diff(1)-style exit codes).
+- **Route** (`FieldRouter`) — which channel an input field rides (argv,
+  stdin, a temp file) for exec-style formats.
+
+A hook declines by returning `ErrUseDefault`, falling through the chain:
+per-invocation (`WithOutputDecoder`, `WithResultClassifier`,
+`WithFieldRouter`) → invoker-level (the `OperationInvoker` fields) → the
+format's content-independent built-in assumption. Formats whose
+specifications answer their own wire questions (OpenAPI, gRPC) never
+consult hooks; the configuration burden is the honest signal of a format's
+completeness. See the invocation-configuration guide on
+[openbindings.com](https://openbindings.com/spec/invocation-configuration)
+for the full model.
+
 ## Schema compatibility profile
 
 The `schemaprofile` subpackage implements the OpenBindings Schema Compatibility Profile v0.1 for deterministic schema comparison:
