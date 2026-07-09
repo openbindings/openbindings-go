@@ -143,7 +143,7 @@ func TestInputCompatible_EmptyTargetRequiresUnconstrainedCandidate(t *testing.T)
 	// Empty target ({}) is Top — the interface may send any value.
 	// A constrained candidate cannot handle the full domain, so it is incompatible.
 	candidate := map[string]any{
-		"type": "object",
+		"type":     "object",
 		"required": []any{"id"},
 		"properties": map[string]any{
 			"id": map[string]any{"type": "string"},

@@ -38,12 +38,12 @@ import (
 // Marshal returns a deterministic JSON encoding of the input according to RFC 8785 (JCS).
 //
 // Notes:
-// - Objects are sorted by member names using UTF-16 code unit lexicographic order.
-// - Arrays preserve order.
-// - Strings are serialized using JSON string syntax per RFC 8785 §3.2.2.2: \b, \t, \n, \f, \r use
-//   shorthand escapes; remaining control characters use \u00XX (lowercase hex).
-// - Numbers are serialized using ECMAScript-compatible number serialization (as required by RFC 8785).
-// - Output is compact (no extra whitespace).
+//   - Objects are sorted by member names using UTF-16 code unit lexicographic order.
+//   - Arrays preserve order.
+//   - Strings are serialized using JSON string syntax per RFC 8785 §3.2.2.2: \b, \t, \n, \f, \r use
+//     shorthand escapes; remaining control characters use \u00XX (lowercase hex).
+//   - Numbers are serialized using ECMAScript-compatible number serialization (as required by RFC 8785).
+//   - Output is compact (no extra whitespace).
 func Marshal(v any) ([]byte, error) {
 	var b []byte
 

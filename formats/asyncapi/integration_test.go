@@ -1176,3 +1176,42 @@ func TestWebSocketBidiControlFrames(t *testing.T) {
 		t.Fatalf("expected clean EOF after server close, got %v", err)
 	}
 }
+
+// TestNewInvokerWithClient verifies that an Invoker created with a custom
+// HTTP client uses that client for outbound requests.
+func TestNewInvokerWithClient(t *testing.T) {
+	var requestCount int
+	custom := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		requestCount++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"received":true}`)),
+			Request:    req,
+		}, nil
+	})}
+	binv := NewInvokerWithClient(custom)
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: makeAsyncAPISpec("http://example.test")},
+		Ref:    "#/operations/sendOpenMessage",
+	})
+	if err := call.Write(bg(), map[string]any{"text": "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	outs, err := drainOutputs(t, call)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if requestCount != 1 {
+		t.Errorf("expected custom transport to be called exactly once, got %d", requestCount)
+	}
+	if len(outs) != 1 {
+		t.Fatalf("expected one output through the custom client, got %d", len(outs))
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

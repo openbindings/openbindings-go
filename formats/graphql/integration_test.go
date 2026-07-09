@@ -958,3 +958,39 @@ func TestIntegrationSynthesizeInterface_RecursiveType(t *testing.T) {
 		t.Errorf("generated query is suspiciously long (%d chars): %s", len(queryStr), queryStr[:200])
 	}
 }
+
+// TestNewInvokerWithClient verifies that an Invoker created with a custom
+// HTTP client uses that client for outbound requests (inline schema content
+// skips introspection, so the single request is the query POST).
+func TestNewInvokerWithClient(t *testing.T) {
+	var requestCount int
+	custom := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		requestCount++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"data":{"users":[{"id":"1","name":"Ada"}]}}`)),
+			Request:    req,
+		}, nil
+	})}
+
+	schemaJSON, _ := json.Marshal(map[string]any{"data": map[string]any{"__schema": testSchema}})
+	call := NewInvokerWithClient(custom).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: "http://example.test/graphql", Content: string(schemaJSON)},
+		Ref:    "Query/users",
+	})
+	out, ierr := driveSingle(t, call, nil)
+	if ierr != nil {
+		t.Fatalf("stream error: %s: %s", ierr.Code, ierr.Message)
+	}
+	if requestCount != 1 {
+		t.Errorf("expected custom transport to be called exactly once, got %d", requestCount)
+	}
+	if _, ok := out.([]any); !ok {
+		t.Errorf("expected list output through the custom client, got %T", out)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

@@ -799,3 +799,37 @@ func TestInvokeBinding_NoInputConvention(t *testing.T) {
 		t.Fatalf("unexpected output: %v", got)
 	}
 }
+
+// TestNewInvokerWithClient verifies that an Invoker created with a custom
+// HTTP client uses that client for outbound requests.
+func TestNewInvokerWithClient(t *testing.T) {
+	ctx := testContext(t)
+	var requestCount int
+	custom := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		requestCount++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"id":"abc","name":"hello"}`)),
+			Request:    req,
+		}, nil
+	})}
+
+	inv := invokeWith(t, ctx, NewInvokerWithClient(custom),
+		unaryArgs("http://example.test", testProto, "testpkg.TestService/GetItem"),
+		map[string]any{"id": "abc"})
+	got, err := openbindings.Single[any](ctx, inv.Outputs())
+	if err != nil {
+		t.Fatalf("Single: %v", err)
+	}
+	if requestCount != 1 {
+		t.Errorf("expected custom transport to be called exactly once, got %d", requestCount)
+	}
+	if data, ok := got.(map[string]any); !ok || data["id"] != "abc" {
+		t.Errorf("unexpected response through custom client: %+v", got)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

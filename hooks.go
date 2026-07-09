@@ -486,7 +486,6 @@ func stampSite(site *InvokeSite, formatInvoker BindingInvoker) {
 	}
 }
 
-
 // FloorStamped reports whether a derived output schema carries the
 // synthesis floor-stamp ({"type":"string","x-ob":{"floor":...}}) — the
 // declaration the diagnostics key on. Content-independent: it reads the

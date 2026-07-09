@@ -204,6 +204,8 @@ opInv := openbindings.NewOperationInvoker(
 
 Invokers implement `BindingInvoker`. Interface synthesizers (which synthesize OBIs from raw specs) implement `InterfaceSynthesizer`. Source inspectors (which enumerate refs in a source) implement `SourceInspector`. A single type may implement any combination.
 
+Every HTTP-speaking invoker accepts an injected `*http.Client` via `NewInvokerWithClient` (it also rides WebSocket upgrade handshakes), and invokers that pool resources — grpc connections, asyncapi WebSockets, mcp sessions — implement `io.Closer`.
+
 ## Context and authentication
 
 Context is never part of an OBI document. Credentials and other runtime

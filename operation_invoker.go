@@ -909,7 +909,6 @@ func applyTransformRef(eval TransformEvaluator, transforms map[string]Transform,
 	return eval.Evaluate(expr, data)
 }
 
-
 // PlanOperation is the side-effect-free invocation plan (the diagnostics
 // contract's probe): per axis (route per-field), the CONSULTATION CHAIN —
 // which tiers would be asked, in order, and the format's leaf answer —

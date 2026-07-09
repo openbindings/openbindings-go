@@ -82,11 +82,11 @@ func TestCanonicalizeLocation_EqualityPairs(t *testing.T) {
 
 	// Pairs that should NOT canonicalize to the same value.
 	distinct := [][2]string{
-		{"https://example.com/foo", "http://example.com/foo"},     // scheme
-		{"https://example.com/x", "https://example.com/x/"},       // trailing slash
-		{"https://example.com/Foo", "https://example.com/foo"},    // path case
-		{"https://example.com/?a=1", "https://example.com/?a=2"},  // query
-		{"https://example.com/", "https://example.com:8443/"},     // non-default port
+		{"https://example.com/foo", "http://example.com/foo"},    // scheme
+		{"https://example.com/x", "https://example.com/x/"},      // trailing slash
+		{"https://example.com/Foo", "https://example.com/foo"},   // path case
+		{"https://example.com/?a=1", "https://example.com/?a=2"}, // query
+		{"https://example.com/", "https://example.com:8443/"},    // non-default port
 	}
 	for _, p := range distinct {
 		a, err := CanonicalizeLocation(p[0])
