@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 
@@ -706,8 +707,9 @@ func (e *OperationInvoker) runOutputs(
 					// x-ob-decode trailer stamp: a wrong decode lane (e.g.
 					// text when the payload was JSON but the header was
 					// absent) produces exactly this shape mismatch, and the
-					// first-touch reader needs the pointer where they look.
-					msg += fmt.Sprintf(" (output decoded by the %s tier; a wrong decode lane yields this class of mismatch — the x-ob-decode trailer stamp carries the lane)", tier)
+					// first-touch reader needs the pointer where they look —
+					// in plain language, not the seam's internal vocabulary.
+					msg += fmt.Sprintf(" (the response was decoded as %s; if the service actually returned a different shape — say JSON without a Content-Type header — this mismatch is the symptom, and the fix is the response's declared type or a custom OutputDecoder)", describeDecodeTier(tier))
 				}
 				return &InvocationError{
 					Code:    ErrCodeValidationFailed,
@@ -778,6 +780,19 @@ func makeInputValidator(op *Operation, iface *Interface, operationName string) f
 	}
 }
 
+// describeDecodeTier renders a decode tier for a first-touch error message:
+// the seam's internal names ("builtin", "hook") become plain descriptions.
+func describeDecodeTier(tier string) string {
+	switch tier {
+	case "builtin":
+		return "the format's default rule"
+	case "hook":
+		return "your custom OutputDecoder"
+	default:
+		return tier
+	}
+}
+
 // asIE unwraps err into *InvocationError (including wrapped ones — a foreign
 // Invocation impl may wrap the SDK error while preserving its load-bearing
 // Code).
@@ -820,6 +835,12 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 	var best *BindingEntry
 	bestPref := math.Inf(-1)
 	bestDeprecated := true
+	// Bindings that matched the operation but were skipped because no
+	// registered invoker handles their source format. The distinction is
+	// load-bearing for the error: "the document has no binding" sends the
+	// user to audit the OBI; "the binding needs a format you didn't
+	// register" sends them to their own NewOperationInvoker call.
+	formatSkipped := map[string]string{} // binding key -> required format
 
 	for k, b := range iface.Bindings {
 		if b.Operation != opKey {
@@ -830,6 +851,7 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 		if availableFormats != nil {
 			src, ok := iface.Sources[b.Source]
 			if ok && !formatMatches(src.Format, availableFormats) {
+				formatSkipped[k] = src.Format
 				continue
 			}
 		}
@@ -855,6 +877,24 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 	}
 
 	if best == nil {
+		if len(formatSkipped) > 0 {
+			keys := make([]string, 0, len(formatSkipped))
+			for k := range formatSkipped {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			var needs []string
+			for _, k := range keys {
+				needs = append(needs, fmt.Sprintf("%q requires format %s", k, formatSkipped[k]))
+			}
+			registered := make([]string, 0, len(availableFormats))
+			for f := range availableFormats {
+				registered = append(registered, f)
+			}
+			sort.Strings(registered)
+			return "", nil, fmt.Errorf("%w: %s — binding %s; registered invoker formats: [%s] (did you register the format's invoker with NewOperationInvoker?)",
+				ErrBindingNotFound, opKey, strings.Join(needs, ", "), strings.Join(registered, ", "))
+		}
 		return "", nil, fmt.Errorf("%w: %s", ErrBindingNotFound, opKey)
 	}
 	return bestKey, best, nil
@@ -933,9 +973,15 @@ func (e *OperationInvoker) PlanOperation(ctx context.Context, obi *Interface, op
 	}
 
 	// The format's contribution: axis leaves + per-field route answers.
+	// A format that does not participate in the consultation seam (not a
+	// BuiltinHooksProvider — machine formats answer their own wire
+	// questions) contributes "not-consulted" on every axis, so the plan
+	// never claims a hook will run where the format ignores the seam.
 	var contrib *BindingPlan
+	consultsSeam := false
 	if inv := e.invoker.findInvoker(source.Format); inv != nil {
 		if p, ok := inv.(BuiltinHooksProvider); ok {
+			consultsSeam = true
 			args := &BindingInvocationArgs{
 				Source: InvocationSource{Format: source.Format, Location: source.Location},
 				Ref:    binding.Ref,
@@ -950,6 +996,15 @@ func (e *OperationInvoker) PlanOperation(ctx context.Context, obi *Interface, op
 	}
 	if contrib == nil {
 		contrib = &BindingPlan{}
+	}
+	if !consultsSeam {
+		notConsulted := PlanAxis{Chain: []string{"not-consulted"}}
+		if len(contrib.Decode.Chain) == 0 {
+			contrib.Decode = notConsulted
+		}
+		if len(contrib.Classify.Chain) == 0 {
+			contrib.Classify = notConsulted
+		}
 	}
 
 	hookAttached := func(perInv, invoker bool) bool { return perInv || invoker }

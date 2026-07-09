@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -818,5 +819,30 @@ func TestContextRequiredFromDecodesMapDetails(t *testing.T) {
 	if d == nil || d.Target != "api.example.com" || len(d.Alternatives) != 1 ||
 		d.Alternatives[0].Requirements[0].Type != "auth.bearer" {
 		t.Fatalf("map-shaped details not decoded: %+v", d)
+	}
+}
+
+// A cancellation that lands while the input side was never written nor
+// closed is almost always the forgot-to-Write hang; the terminal message
+// diagnoses it instead of reporting a bare cancellation.
+func TestCancelDiagnosesNeverWrittenInput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	inv := NewInvocationImpl[string, string](ctx)
+	cancel()
+	_, err := inv.Outputs().Read(bg())
+	if err == nil || !strings.Contains(err.Error(), "never written or closed") {
+		t.Errorf("want the forgot-to-Write diagnosis, got: %v", err)
+	}
+
+	// A written invocation keeps the plain message.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	inv2 := NewInvocationImpl[string, string](ctx2)
+	if err := inv2.Write(bg(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	cancel2()
+	_, err = inv2.Outputs().Read(bg())
+	if err == nil || strings.Contains(err.Error(), "never written") {
+		t.Errorf("written invocation should get the plain cancellation, got: %v", err)
 	}
 }

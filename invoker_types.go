@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 )
@@ -15,6 +16,18 @@ import (
 // Values are opaque context records — credentials, headers, cookies,
 // environment, metadata — using well-known field names for cross-invoker
 // interoperability.
+//
+// The well-known credential fields, by the requirement family they satisfy:
+//
+//	auth.bearer  →  "bearerToken"
+//	auth.apiKey  →  "apiKey"
+//	auth.basic   →  "basic" (a {"username","password"} object)
+//	auth.oauth2  →  "accessToken" (plus "refreshToken", "clientSecret")
+//
+// so satisfying a bearer challenge for an origin is one call:
+//
+//	store.Set(ctx, openbindings.NormalizeContextKey(target),
+//	    map[string]any{"bearerToken": token})
 //
 // The SDK stores and retrieves context but never inspects its contents.
 // Setting a nil value removes the entry (the published contract pins
@@ -214,10 +227,50 @@ func (e *InvocationError) Error() string {
 	if e == nil {
 		return ""
 	}
-	if e.Message != "" {
-		return e.Message
+	msg := e.Message
+	if msg == "" {
+		msg = e.Code
 	}
-	return e.Code
+	// A CONTEXT_REQUIRED challenge is actionable only through its details;
+	// an error string that hides the target and the requirement families
+	// strands whoever sees it in a log. Formats write the prose, the
+	// challenge writes the facts.
+	if d := ContextRequiredFrom(e); d != nil {
+		if summary := contextRequirementSummary(d); summary != "" {
+			return msg + " (" + summary + ")"
+		}
+	}
+	return msg
+}
+
+// contextRequirementSummary renders "target: <t>; satisfied by: auth.bearer
+// (context field \"bearerToken\"), ..." for the challenge's alternatives.
+func contextRequirementSummary(d *ContextRequiredDetails) string {
+	var alts []string
+	for _, alt := range d.Alternatives {
+		var reqs []string
+		for _, req := range alt.Requirements {
+			if field, ok := requirementFields[req.Type]; ok {
+				reqs = append(reqs, fmt.Sprintf("%s (context field %q)", req.Type, field))
+			} else {
+				reqs = append(reqs, req.Type)
+			}
+		}
+		if len(reqs) > 0 {
+			alts = append(alts, strings.Join(reqs, " + "))
+		}
+	}
+	if d.Target == "" && len(alts) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 2)
+	if d.Target != "" {
+		parts = append(parts, "target: "+d.Target)
+	}
+	if len(alts) > 0 {
+		parts = append(parts, "satisfied by: "+strings.Join(alts, ", or "))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // RedactContext returns a shallow copy of ctx with well-known credential

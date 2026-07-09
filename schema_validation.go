@@ -320,5 +320,22 @@ func ValidateAgainstSchema(value any, schema JSONSchema, schemas map[string]JSON
 	if err != nil {
 		return fmt.Errorf("openbindings: schema compilation failed: %w", err)
 	}
-	return compiled.Validate(value)
+	if verr := compiled.Validate(value); verr != nil {
+		// The library's Error() leads with the compiler's internal resource
+		// URI; the flattened per-leaf lines are the readable form. The raw
+		// error stays reachable through Unwrap for structured consumers.
+		return &schemaValidationError{lines: splitSchemaError(verr), cause: verr}
+	}
+	return nil
 }
+
+// schemaValidationError renders a validation failure as its per-leaf lines
+// (the shape splitSchemaError produces) instead of the underlying library's
+// resource-URI-prefixed dump.
+type schemaValidationError struct {
+	lines []string
+	cause error
+}
+
+func (e *schemaValidationError) Error() string { return strings.Join(e.lines, "; ") }
+func (e *schemaValidationError) Unwrap() error { return e.cause }

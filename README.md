@@ -76,8 +76,11 @@ import (
     openbindings "github.com/openbindings/openbindings-go"
 )
 
-var iface openbindings.Interface
-if err := json.Unmarshal(data, &iface); err != nil {
+// ParseDocument is the conformant front door for untrusted or wire bytes:
+// unlike a plain json.Unmarshal it also rejects duplicate object keys
+// (OBI-D-01). FetchInterface uses it internally.
+iface, err := openbindings.ParseDocument(data)
+if err != nil {
     log.Fatal(err)
 }
 if err := iface.Validate(); err != nil {
@@ -172,6 +175,13 @@ fired, the terminal error itself — and the output side always carries the
 authoritative verdict. Checking a write error is optional fast-fail, never
 required for correctness, and `Close()` never fails.
 
+Two idioms worth knowing. For an operation with **no input**, call `Close()`
+(or nothing at all — bindings that need no input dispatch without one). For
+an operation that **requires input**, forgetting to `Write` parks the binding
+until your ctx cancels; the cancellation terminal diagnoses it ("the input
+side was never written or closed"). `Close()` without a `Write` fails fast
+with `ERR_MISSING_INPUT` naming the missing parameter.
+
 Client-streaming and bidirectional callers own `Close()` (and drive input and
 output from separate goroutines); `Header`/`Trailer` carry leading/trailing
 metadata and `Cancel()` tears the invocation down. Missing runtime context
@@ -221,6 +231,23 @@ key := openbindings.NormalizeContextKey("https://api.example.com/v1/users")
 The SDK defines the `ContextStore` contract (`Get`/`Set`/`Delete` keyed by
 origin; values are opaque maps the SDK never inspects) and leaves storage to
 the caller: a file, a keychain, or an in-memory map in tests.
+
+Credential values use well-known field names, keyed by the requirement
+family the challenge declares:
+
+| Requirement | Context field |
+|---|---|
+| `auth.bearer` | `bearerToken` |
+| `auth.apiKey` | `apiKey` |
+| `auth.basic` | `basic` (a `{"username","password"}` object) |
+| `auth.oauth2` | `accessToken` (plus `refreshToken`, `clientSecret`) |
+
+so satisfying a bearer challenge is one complete call:
+
+```go
+_ = store.Set(ctx, openbindings.NormalizeContextKey("https://api.example.com"),
+    map[string]any{"bearerToken": token})
+```
 
 A binding that needs context it wasn't given raises a `CONTEXT_REQUIRED`
 challenge before any side effect; the operation invoker resolves challenges

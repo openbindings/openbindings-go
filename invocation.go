@@ -322,6 +322,11 @@ type InvocationImpl[I, O any] struct {
 	outputsClaimed bool
 	inputReaders   atomic.Int32
 	outputReaders  atomic.Int32
+	// wroteInput records that at least one Write was accepted. Diagnostic
+	// only: a cancellation that arrives while the input side was never
+	// written NOR closed is almost always the forgot-to-Write hang, and the
+	// terminal message says so.
+	wroteInput atomic.Bool
 	// pendingEmits counts EmitOutput calls between their open-state check and
 	// their select resolution. The reader's terminal path waits for in-flight
 	// emits to settle before surfacing the terminal, closing the
@@ -359,10 +364,24 @@ func NewInvocationImpl[I, O any](ctx context.Context) *InvocationImpl[I, O] {
 			return i
 		}
 		i.stopWatch = context.AfterFunc(ctx, func() {
-			i.FireError(&InvocationError{Code: ErrCodeCancelled, Message: "invocation cancelled"})
+			i.FireError(&InvocationError{Code: ErrCodeCancelled, Message: i.cancelMessage()})
 		})
 	}
 	return i
+}
+
+// cancelMessage diagnoses the most common cancellation: a binding parked
+// waiting for input the caller never sent. When the input side was neither
+// written nor closed by anyone, the terminal says so instead of leaving a
+// bare "cancelled" over what was actually the forgot-to-Write hang.
+func (i *InvocationImpl[I, O]) cancelMessage() string {
+	i.mu.Lock()
+	closed := i.inputClosed
+	i.mu.Unlock()
+	if !i.wroteInput.Load() && !closed {
+		return "invocation cancelled (the input side was never written or closed — a binding waiting for input parks until cancellation; write the operation's input, or Close() for no-input operations)"
+	}
+	return "invocation cancelled"
 }
 
 // ----- Caller-facing -----
@@ -384,6 +403,7 @@ func (i *InvocationImpl[I, O]) Write(ctx context.Context, input I) error {
 	}
 	select {
 	case i.inputCh <- input:
+		i.wroteInput.Store(true)
 		return nil
 	case <-i.inputClosedCh:
 		// A terminal transition also closes the input side; prefer the

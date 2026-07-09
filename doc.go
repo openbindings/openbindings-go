@@ -12,13 +12,16 @@
 //
 // # Documents
 //
-//	var iface openbindings.Interface
-//	if err := json.Unmarshal(data, &iface); err != nil {
+//	iface, err := openbindings.ParseDocument(data) // rejects duplicate keys (OBI-D-01)
+//	if err != nil {
 //	    log.Fatal(err)
 //	}
 //	if err := iface.Validate(); err != nil {
 //	    log.Fatal(err)
 //	}
+//
+// (json.Unmarshal into Interface also works and is lossless, but only
+// ParseDocument enforces OBI-D-01 on wire bytes.)
 //
 // JSON schema fields are represented as JSON objects (map[string]any); this
 // preserves structure but does not capture non-object schema roots. Every

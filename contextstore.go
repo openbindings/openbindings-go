@@ -141,6 +141,11 @@ func ScopeContext(stored map[string]any, details *ContextRequiredDetails) map[st
 // returns only the credentials the satisfied alternative needs plus non-secret
 // config, never other stored credentials.
 //
+// A stored entry that does NOT satisfy the challenge (wrong field name,
+// empty value) is a decline like any other: the challenge surfaces, and its
+// error text names the requirement family and the context field that would
+// satisfy it — check the stored entry's keys against that field name.
+//
 // Apps that resolve interactively (prompt, browser redirect, keychain)
 // supply their own resolver and MAY persist what they obtain for durable
 // requirements under the target-derived key; non-durable context MUST NOT be

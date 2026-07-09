@@ -61,11 +61,19 @@ func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*F
 		return nil, fmt.Errorf("openbindings: FetchInterface: empty target")
 	}
 
+	// The resolution chain has up to three steps (direct OBI, well-known
+	// discovery, per-format synthesis). On total failure the caller gets the
+	// WHOLE trail: reporting only the last step's raw error hands a user who
+	// pointed at an API's HTML root a third-party parse error with no
+	// statement of what was tried or how to fix it.
+	var trail []string
+
 	if IsHTTPURL(target) {
 		iface, err := tryFetchOBI(ctx, o.client, target)
 		if err == nil && iface != nil {
 			return &FetchedInterface{Interface: iface}, nil
 		}
+		trail = append(trail, "direct fetch: "+fetchStepResult(iface, err))
 
 		if !shouldSkipWellKnownDiscovery(target) {
 			wellKnown := strings.TrimRight(target, "/") + WellKnownPath
@@ -73,32 +81,47 @@ func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*F
 			if err == nil && iface != nil {
 				return &FetchedInterface{Interface: iface}, nil
 			}
+			trail = append(trail, WellKnownPath+": "+fetchStepResult(iface, err))
 		}
 	}
 
 	if len(o.synthesizers) == 0 {
+		if len(trail) > 0 {
+			return nil, fmt.Errorf("no OBI available at %s (%s) and no synthesizers supplied for synthesis", sanitizeURL(target), strings.Join(trail, "; "))
+		}
 		return nil, fmt.Errorf("no OBI available at %s and no synthesizers supplied for synthesis", sanitizeURL(target))
 	}
 
 	combined := CombineSynthesizers(o.synthesizers...)
-	var lastErr error
 	for _, fi := range combined.Formats() {
 		iface, err := combined.SynthesizeInterface(ctx, &SynthesizeInput{
 			Sources: []SynthesizeSource{{Format: fi.Token, Location: target}},
 		})
 		if err != nil {
-			lastErr = err
+			trail = append(trail, fmt.Sprintf("synthesize as %s: %v", fi.Token, err))
 			continue
 		}
 		if iface != nil && len(iface.Operations) > 0 {
 			return &FetchedInterface{Interface: iface, Synthesized: true}, nil
 		}
+		trail = append(trail, fmt.Sprintf("synthesize as %s: no operations derived", fi.Token))
 	}
 
-	if lastErr != nil {
-		return nil, lastErr
+	return nil, fmt.Errorf("could not resolve an OBI from %s:\n  %s\nhint: if the target serves a raw spec (OpenAPI, AsyncAPI, ...), pass the spec document's own URL",
+		sanitizeURL(target), strings.Join(trail, "\n  "))
+}
+
+// fetchStepResult summarizes one resolution-chain step for the failure
+// trail: the error when there was one, otherwise "not an OBI" (tryFetchOBI
+// returns nil,nil for reachable URLs serving something else).
+func fetchStepResult(iface *Interface, err error) string {
+	if err != nil {
+		return err.Error()
 	}
-	return nil, fmt.Errorf("no synthesizer could synthesize an interface from %s", sanitizeURL(target))
+	if iface == nil {
+		return "not an OBI"
+	}
+	return "ok"
 }
 
 // tryFetchOBI attempts to fetch and parse a URL as an OBI document.

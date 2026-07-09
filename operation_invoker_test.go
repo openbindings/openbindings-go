@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -834,5 +835,60 @@ func TestOpMetadataPassThrough(t *testing.T) {
 	}
 	if tr := call.Trailer(); len(tr["x-mock-trailer"]) != 1 {
 		t.Fatalf("trailer: %v", tr)
+	}
+}
+
+// A binding that exists but needs an unregistered format must not report
+// "no binding for operation" — that sends the user to audit the document,
+// where they will find the binding present and correct, instead of to
+// their own NewOperationInvoker call.
+func TestSelectBinding_FormatSkippedNamesTheGap(t *testing.T) {
+	iface := &Interface{
+		OpenBindings: "0.2.0",
+		Operations:   map[string]Operation{"listItems": {}},
+		Sources:      map[string]Source{"api": {Format: "openapi@3.1.0", Location: "https://x.test/spec.json"}},
+		Bindings:     map[string]BindingEntry{"listItems.api": {Operation: "listItems", Source: "api", Ref: "#/paths/~1items/get"}},
+	}
+	_, _, err := selectBinding(iface, "listItems", map[string]bool{"mock@1.0": true})
+	if !errors.Is(err, ErrBindingNotFound) {
+		t.Fatalf("want ErrBindingNotFound, got %v", err)
+	}
+	for _, want := range []string{"listItems.api", "openapi@3.1.0", "mock@1.0", "register the format's invoker"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q, got: %v", want, err)
+		}
+	}
+
+	// A genuinely missing binding keeps the plain message.
+	_, _, err = selectBinding(iface, "listItems", nil)
+	if err != nil {
+		t.Fatalf("nil availableFormats should select the binding, got %v", err)
+	}
+}
+
+// A format outside the consultation seam (not a BuiltinHooksProvider) must
+// plan as not-consulted on the decode/classify axes even when an
+// invoker-level hook is attached — the plan is the one diagnostic surface
+// for "will my hook run?", and claiming "hook" for a format that ignores
+// the seam is exactly the wrong answer.
+func TestPlanOperation_NonSeamFormatReportsNotConsulted(t *testing.T) {
+	iface := &Interface{
+		OpenBindings: "0.2.0",
+		Operations:   map[string]Operation{"op": {}},
+		Sources:      map[string]Source{"s": {Format: "mock@1.0", Location: "mem://x"}},
+		Bindings:     map[string]BindingEntry{"op.s": {Operation: "op", Source: "s", Ref: "op"}},
+	}
+	opInv := NewOperationInvoker(&mockBindingInvoker{}) // no BuiltinHooksProvider
+	opInv.OutputDecoder = func(InvokeSite, RawResult) (any, error) { return nil, nil }
+
+	plan, err := opInv.PlanOperation(context.Background(), iface, "op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Decode.Chain) != 1 || plan.Decode.Chain[0] != "not-consulted" {
+		t.Errorf("Decode.Chain = %v, want [not-consulted]", plan.Decode.Chain)
+	}
+	if len(plan.Classify.Chain) != 1 || plan.Classify.Chain[0] != "not-consulted" {
+		t.Errorf("Classify.Chain = %v, want [not-consulted]", plan.Classify.Chain)
 	}
 }
