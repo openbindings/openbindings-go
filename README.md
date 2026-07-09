@@ -166,6 +166,12 @@ _ = call.Write(ctx, map[string]any{"id": "item_1"})
 item, err := openbindings.Single(ctx, call.Outputs())
 ```
 
+`Write`'s error contract makes both styles above safe: every error it returns
+is truthful — your ctx error, a flow signal, or, when a terminal has already
+fired, the terminal error itself — and the output side always carries the
+authoritative verdict. Checking a write error is optional fast-fail, never
+required for correctness, and `Close()` never fails.
+
 Client-streaming and bidirectional callers own `Close()` (and drive input and
 output from separate goroutines); `Header`/`Trailer` carry leading/trailing
 metadata and `Cancel()` tears the invocation down. Missing runtime context

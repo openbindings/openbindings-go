@@ -71,17 +71,25 @@ func driveOutputs(ctx context.Context, call openbindings.Invocation[any, any], i
 	}
 }
 
-// driveSingle drives a unary invocation to its single output or terminal error.
+// driveSingle is the canonical unary pattern (write, close, Single): unlike
+// draining, Single asserts exactly-one, so a zero- or multi-output unary
+// invocation fails the test instead of passing silently.
 func driveSingle(t *testing.T, call openbindings.Invocation[any, any], input any) (any, *openbindings.InvocationError) {
 	t.Helper()
-	vals, ie := driveOutputs(context.Background(), call, input)
-	if ie != nil {
+	ctx := context.Background()
+	if input != nil {
+		_ = call.Write(ctx, input)
+	}
+	_ = call.Close()
+	out, err := openbindings.Single(ctx, call.Outputs())
+	if err != nil {
+		var ie *openbindings.InvocationError
+		if !errors.As(err, &ie) {
+			t.Fatalf("expected *InvocationError, got %T: %v", err, err)
+		}
 		return nil, ie
 	}
-	if len(vals) == 0 {
-		return nil, nil
-	}
-	return vals[0], nil
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------
