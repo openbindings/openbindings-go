@@ -978,7 +978,7 @@ func declaredContentType(doc *document, asyncOp *asyncOperation) string {
 			}
 		}
 	}
-	return ""
+	return doc.DefaultContentType
 }
 
 // builtinDecodeFor is the asyncapi builtin decoder: strict JSON when the

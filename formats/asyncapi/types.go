@@ -3,12 +3,13 @@ package asyncapi
 // document represents an AsyncAPI 3.0 document.
 // Only the fields needed for OpenBindings conversion are modeled.
 type document struct {
-	AsyncAPI   string                    `json:"asyncapi" yaml:"asyncapi"`
-	Info       info                      `json:"info" yaml:"info"`
-	Servers    map[string]server         `json:"servers,omitempty" yaml:"servers,omitempty"`
-	Channels   map[string]channel        `json:"channels,omitempty" yaml:"channels,omitempty"`
-	Operations map[string]asyncOperation `json:"operations,omitempty" yaml:"operations,omitempty"`
-	Components *components               `json:"components,omitempty" yaml:"components,omitempty"`
+	AsyncAPI           string                    `json:"asyncapi" yaml:"asyncapi"`
+	DefaultContentType string                    `json:"defaultContentType,omitempty" yaml:"defaultContentType,omitempty"`
+	Info               info                      `json:"info" yaml:"info"`
+	Servers            map[string]server         `json:"servers,omitempty" yaml:"servers,omitempty"`
+	Channels           map[string]channel        `json:"channels,omitempty" yaml:"channels,omitempty"`
+	Operations         map[string]asyncOperation `json:"operations,omitempty" yaml:"operations,omitempty"`
+	Components         *components               `json:"components,omitempty" yaml:"components,omitempty"`
 }
 
 type info struct {

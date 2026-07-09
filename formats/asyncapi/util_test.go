@@ -311,3 +311,29 @@ func TestRequirementType_Families(t *testing.T) {
 		}
 	}
 }
+
+// AsyncAPI 3.0: a message that omits contentType takes the document's
+// defaultContentType — still the declared lane, never payload sniffing.
+// Regression: the model didn't parse defaultContentType, so JSON events
+// from documents relying on it decoded as strings and failed OBI-T-08.
+func TestDeclaredContentType_FallsBackToDocumentDefault(t *testing.T) {
+	doc := &document{
+		AsyncAPI:           "3.0.0",
+		DefaultContentType: "application/json",
+		Operations: map[string]asyncOperation{
+			"sub": {Action: "receive", Messages: []messageRef{{Ref: "#/components/messages/plain"}}},
+		},
+		Components: &components{
+			Messages: map[string]message{"plain": {Name: "plain"}}, // no contentType
+		},
+	}
+	op := doc.Operations["sub"]
+	if got := declaredContentType(doc, &op); got != "application/json" {
+		t.Errorf("declaredContentType = %q, want the document default", got)
+	}
+	// A per-message declaration still wins over the default.
+	doc.Components.Messages["plain"] = message{Name: "plain", ContentType: "text/plain"}
+	if got := declaredContentType(doc, &op); got != "text/plain" {
+		t.Errorf("declaredContentType = %q, want the per-message declaration", got)
+	}
+}
