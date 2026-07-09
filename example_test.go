@@ -2,14 +2,68 @@ package openbindings_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 
 	"github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/canonicaljson"
 	"github.com/openbindings/openbindings-go/formattoken"
 )
+
+// echoInvoker is a minimal BindingInvoker for the examples: it answers
+// every binding with its first input, wrapped. Real invokers (openapi,
+// asyncapi, graphql, grpc, mcp, usage) live in the formats/* submodules;
+// this is the entire seam a format implements.
+type echoInvoker struct{}
+
+func (echoInvoker) Formats() []openbindings.FormatInfo {
+	return []openbindings.FormatInfo{{Token: "echo@1.0", Description: "example echo format"}}
+}
+
+func (echoInvoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	go func() {
+		in, err := inv.ReadInput(ctx)
+		if err != nil && err != io.EOF {
+			return // terminal already fired
+		}
+		_ = inv.CloseInput()
+		if err := inv.EmitOutput(map[string]any{"echoed": in}); err != nil {
+			return
+		}
+		inv.CloseOutput()
+	}()
+	return inv
+}
+
+// ExampleInvoke shows the canonical unary flow: one cardinality-agnostic
+// handle serves every operation; a unary call writes one input and reads
+// its single output through the blessed assertion.
+func ExampleInvoke() {
+	ctx := context.Background()
+
+	iface := &openbindings.Interface{
+		OpenBindings: "0.2.0",
+		Name:         "Echo",
+		Operations:   map[string]openbindings.Operation{"echo": {}},
+		Sources:      map[string]openbindings.Source{"echo": {Format: "echo@1.0", Location: "mem://echo"}},
+		Bindings:     map[string]openbindings.BindingEntry{"echo.main": {Operation: "echo", Source: "echo", Ref: "echo"}},
+	}
+
+	opInv := openbindings.NewOperationInvoker(echoInvoker{})
+	call := openbindings.Invoke(ctx, opInv, iface,
+		openbindings.NewOperationSignature[any, any]("echo"))
+	_ = call.Write(ctx, "hello") // write errors are truthful; the verdict arrives below
+	out, err := openbindings.Single(ctx, call.Outputs())
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(out)
+	// Output: map[echoed:hello]
+}
 
 func ExampleInterface_basic() {
 	data := []byte(`{
