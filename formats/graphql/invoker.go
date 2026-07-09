@@ -40,16 +40,37 @@ func newDefaultHTTPClient() *http.Client {
 }
 
 // Invoker handles binding invocation for GraphQL sources.
+//
+// The introspection-schema cache is scoped to the Invoker instance (keyed
+// by normalized endpoint) and lives as long as it does — scope instances
+// per tenant to bound growth and avoid cross-tenant contamination in
+// multi-tenant servers.
 type Invoker struct {
 	client  *http.Client
 	mu      sync.RWMutex
 	schemas map[string]*introspectionSchema // normalized endpoint -> cached schema
 }
 
-// NewInvoker creates a new GraphQL binding invoker.
+// NewInvoker creates a new GraphQL binding invoker with a default HTTP
+// client. Use NewInvokerWithClient to inject a custom client (e.g., for
+// tests, or to add a transport layer for tracing or auth).
 func NewInvoker() *Invoker {
+	return NewInvokerWithClient(nil)
+}
+
+// NewInvokerWithClient creates an Invoker that uses the supplied
+// *http.Client for all outbound requests — queries, mutations,
+// introspection, and the subscription WebSocket handshake. A nil client
+// falls back to the default. The caller is responsible for configuring
+// redirect policy, transport, and any other client-level behavior. No
+// overall request timeout should be set on the client because the caller
+// controls cancellation via context.
+func NewInvokerWithClient(client *http.Client) *Invoker {
+	if client == nil {
+		client = newDefaultHTTPClient()
+	}
 	return &Invoker{
-		client:  newDefaultHTTPClient(),
+		client:  client,
 		schemas: make(map[string]*introspectionSchema),
 	}
 }
@@ -153,7 +174,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 
 	if rootType == "Subscription" {
-		streamSubscription(bctx, args.Source.Location, query, variables, headers, inv)
+		streamSubscription(bctx, e.client, args.Source.Location, query, variables, headers, inv)
 		return
 	}
 

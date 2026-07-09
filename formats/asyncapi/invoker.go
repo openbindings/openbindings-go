@@ -32,6 +32,11 @@ func newDefaultHTTPClient() *http.Client {
 }
 
 // Invoker handles binding invocation for AsyncAPI 3.x sources.
+//
+// The document cache and WebSocket pool are scoped to the Invoker instance
+// (keyed by source location / server-and-credentials respectively) and live
+// as long as it does — scope instances per tenant to bound growth and avoid
+// cross-tenant contamination in multi-tenant servers.
 type Invoker struct {
 	httpClient *http.Client
 	mu         sync.RWMutex
@@ -44,19 +49,35 @@ var (
 	_ openbindings.BindingPreparer = (*Invoker)(nil)
 )
 
-// NewInvoker creates a new AsyncAPI binding invoker.
+// NewInvoker creates a new AsyncAPI binding invoker with a default HTTP
+// client. Use NewInvokerWithClient to inject a custom client (e.g., for
+// tests, or to add a transport layer for tracing or auth).
 func NewInvoker() *Invoker {
+	return NewInvokerWithClient(nil)
+}
+
+// NewInvokerWithClient creates an Invoker that uses the supplied
+// *http.Client for all outbound requests, including the WebSocket upgrade
+// handshake. A nil client falls back to the default. The caller is
+// responsible for configuring redirect policy, transport, and any other
+// client-level behavior. No overall request timeout should be set on the
+// client because the caller controls cancellation via context.
+func NewInvokerWithClient(client *http.Client) *Invoker {
+	if client == nil {
+		client = newDefaultHTTPClient()
+	}
 	return &Invoker{
-		httpClient: newDefaultHTTPClient(),
+		httpClient: client,
 		docCache:   make(map[string]*document),
-		wsPool:     newWSPool(),
+		wsPool:     newWSPool(client),
 	}
 }
 
-// Close shuts down all pooled WebSocket connections. After Close returns, the
-// Invoker should not be used for new invocations.
-func (e *Invoker) Close() {
+// Close shuts down all pooled WebSocket connections (io.Closer). After Close
+// returns, the Invoker should not be used for new invocations.
+func (e *Invoker) Close() error {
 	e.wsPool.closeAll()
+	return nil
 }
 
 // cachedLoadDocument loads an AsyncAPI doc, caching by location within a process.

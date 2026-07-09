@@ -24,6 +24,10 @@ var FormatRanges = []string{"usage@^2.0.0", "usage@^3.0.0"}
 // (usage.kdl): refs are space-separated command paths; the wire questions
 // the artifact cannot answer (routing, decode, classify) are answered by
 // documented assumptions overridable through the consumer hook seam.
+//
+// The parsed-spec cache is scoped to the Invoker instance (keyed by
+// artifact location) and lives as long as it does — scope instances per
+// tenant to bound growth in multi-tenant servers.
 type Invoker struct {
 	specCache sync.Map // map[string]*Spec
 }

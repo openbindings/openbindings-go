@@ -33,18 +33,31 @@ type Invoker struct {
 	client *http.Client
 }
 
-// NewInvoker creates a new Connect binding invoker.
+// NewInvoker creates a new Connect binding invoker with a default HTTP
+// client. Use NewInvokerWithClient to inject a custom client (e.g., for
+// tests, or to add a transport layer for tracing or auth).
 func NewInvoker() *Invoker {
-	return &Invoker{
-		client: &http.Client{
+	return NewInvokerWithClient(nil)
+}
+
+// NewInvokerWithClient creates an Invoker that uses the supplied
+// *http.Client for all outbound requests. A nil client falls back to the
+// default. The caller is responsible for configuring redirect policy,
+// transport, and any other client-level behavior. No overall request
+// timeout should be set on the client because the caller controls
+// cancellation via context.
+func NewInvokerWithClient(client *http.Client) *Invoker {
+	if client == nil {
+		client = &http.Client{
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= maxRedirects {
 					return fmt.Errorf("stopped after %d redirects", maxRedirects)
 				}
 				return nil
 			},
-		},
+		}
 	}
+	return &Invoker{client: client}
 }
 
 // Formats returns the source formats supported by the Connect invoker.

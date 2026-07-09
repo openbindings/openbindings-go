@@ -209,7 +209,7 @@ func (e *httpError) Error() string {
 // is emitted as one output, a `complete` closes the output side, and an
 // `error`/transport failure fires a terminal error. The dial/handshake run
 // under ctx so a cancelled invocation tears the connection down.
-func streamSubscription(ctx context.Context, endpointURL, query string, variables map[string]any, headers map[string]string, inv openbindings.BindingHandle[any, any]) {
+func streamSubscription(ctx context.Context, client *http.Client, endpointURL, query string, variables map[string]any, headers map[string]string, inv openbindings.BindingHandle[any, any]) {
 	wsURL := httpToWS(endpointURL)
 
 	wsHeaders := http.Header{}
@@ -220,6 +220,7 @@ func streamSubscription(ctx context.Context, endpointURL, query string, variable
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		Subprotocols: []string{"graphql-transport-ws"},
 		HTTPHeader:   wsHeaders,
+		HTTPClient:   client,
 	})
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("websocket dial: %v", err)})

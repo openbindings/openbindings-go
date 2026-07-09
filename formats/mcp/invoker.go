@@ -83,10 +83,11 @@ func NewInvoker(opts ...InvokerOption) *Invoker {
 	return e
 }
 
-// Close shuts down all pooled MCP sessions. After Close returns, the Invoker
-// should not be used for new invocations.
-func (e *Invoker) Close() {
+// Close shuts down all pooled MCP sessions (io.Closer). After Close returns,
+// the Invoker should not be used for new invocations.
+func (e *Invoker) Close() error {
 	e.pool.closeAll()
+	return nil
 }
 
 // Formats returns the source formats supported by the MCP invoker.

@@ -10,7 +10,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -19,6 +18,11 @@ import (
 const FormatToken = "openbindings.operation-graph@0.2.0"
 
 // Invoker handles binding invocation for operation graph sources.
+//
+// The document and compiled-schema caches are scoped to the Invoker
+// instance (keyed by source location) and live as long as it does — scope
+// instances per tenant to bound growth and avoid cross-tenant
+// contamination in multi-tenant servers.
 type Invoker struct {
 	invoker  *openbindings.OperationInvoker
 	mu       sync.RWMutex
@@ -27,23 +31,41 @@ type Invoker struct {
 	client   *http.Client
 }
 
-// NewInvoker creates a new operation graph binding invoker.
-// The OperationInvoker is used to invoke sub-operations referenced by
-// operation and each nodes in the graph.
+// NewInvoker creates a new operation graph binding invoker with a default
+// HTTP client (used only to fetch graph documents; use NewInvokerWithClient
+// to inject a custom one). The OperationInvoker is used to invoke
+// sub-operations referenced by operation and each nodes in the graph — the
+// mutual reference is inherent to the format (graphs recurse through the
+// operation invoker), so wiring is two-phase:
+//
+//	opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
+//	opInv.AddBindingInvoker(operationgraph.NewInvoker(opInv))
 func NewInvoker(invoker *openbindings.OperationInvoker) *Invoker {
-	return &Invoker{
-		invoker:  invoker,
-		docCache: make(map[string]any),
-		schemas:  newSchemaCache(),
-		client: &http.Client{
-			Timeout: 30 * time.Second,
+	return NewInvokerWithClient(invoker, nil)
+}
+
+// NewInvokerWithClient creates an Invoker that uses the supplied
+// *http.Client to fetch graph documents. A nil client falls back to the
+// default. The caller is responsible for configuring redirect policy,
+// transport, and any other client-level behavior. No overall request
+// timeout should be set on the client because the caller controls
+// cancellation via context.
+func NewInvokerWithClient(invoker *openbindings.OperationInvoker, client *http.Client) *Invoker {
+	if client == nil {
+		client = &http.Client{
 			CheckRedirect: func(_ *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
 					return fmt.Errorf("stopped after 10 redirects")
 				}
 				return nil
 			},
-		},
+		}
+	}
+	return &Invoker{
+		invoker:  invoker,
+		docCache: make(map[string]any),
+		schemas:  newSchemaCache(),
+		client:   client,
 	}
 }
 
@@ -76,7 +98,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 // runs the engine, firing preflight failures as terminal errors on the
 // handle.
 func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
-	doc, err := e.loadDocument(args.Source.Location, args.Source.Content)
+	doc, err := e.loadDocument(ctx, args.Source.Location, args.Source.Content)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceLoadFailed,
@@ -147,7 +169,7 @@ func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocatio
 // loadDocument loads and parses an operation graph source document into a
 // generic JSON value (the host document's shape is unconstrained by the
 // format). Parsed documents are cached by location when content is absent.
-func (e *Invoker) loadDocument(location string, content any) (any, error) {
+func (e *Invoker) loadDocument(ctx context.Context, location string, content any) (any, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
 		if doc, ok := e.docCache[location]; ok {
@@ -180,7 +202,7 @@ func (e *Invoker) loadDocument(location string, content any) (any, error) {
 			return nil, fmt.Errorf("source must have location or content")
 		}
 		var err error
-		data, err = e.loadLocation(location)
+		data, err = e.loadLocation(ctx, location)
 		if err != nil {
 			return nil, err
 		}
@@ -200,10 +222,12 @@ func (e *Invoker) loadDocument(location string, content any) (any, error) {
 }
 
 // loadLocation reads a graph document from an http(s) URL or a local file
-// path (bare path or file:// URI). Remote responses are size-bounded.
-func (e *Invoker) loadLocation(location string) ([]byte, error) {
+// path (bare path or file:// URI). Remote responses are size-bounded and
+// the fetch runs under ctx (the invocation's lifetime), per the core
+// contract that the caller controls cancellation via context.
+func (e *Invoker) loadLocation(ctx context.Context, location string) ([]byte, error) {
 	if openbindings.IsHTTPURL(location) {
-		req, err := http.NewRequest(http.MethodGet, location, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
 		if err != nil {
 			return nil, fmt.Errorf("invalid location %q: %w", location, err)
 		}

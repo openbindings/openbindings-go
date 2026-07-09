@@ -8,6 +8,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -52,13 +53,18 @@ func (e *Invoker) getConn(ctx context.Context, address string) (*grpc.ClientConn
 	return conn, nil
 }
 
-// Close tears down all cached connections.
-func (e *Invoker) Close() {
+// Close tears down all cached connections (io.Closer). After Close returns,
+// the Invoker should not be used for new invocations.
+func (e *Invoker) Close() error {
+	var errs []error
 	e.conns.Range(func(key, value any) bool {
-		_ = value.(*grpc.ClientConn).Close()
+		if err := value.(*grpc.ClientConn).Close(); err != nil {
+			errs = append(errs, err)
+		}
 		e.conns.Delete(key)
 		return true
 	})
+	return errors.Join(errs...)
 }
 
 // Formats returns the source formats supported by the gRPC invoker.

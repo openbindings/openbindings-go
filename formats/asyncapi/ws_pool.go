@@ -55,6 +55,7 @@ type wsPool struct {
 	conns       map[string]*pooledWS
 	creating    map[string]chan struct{} // closed when connection creation finishes
 	idleTimeout time.Duration
+	httpClient  *http.Client // rides the WebSocket upgrade handshake
 }
 
 // pooledWS is a pooled WebSocket connection with reference counting,
@@ -86,11 +87,12 @@ type pooledWS struct {
 	localClose bool  // set before the pool closes the socket itself
 }
 
-func newWSPool() *wsPool {
+func newWSPool(httpClient *http.Client) *wsPool {
 	return &wsPool{
 		conns:       make(map[string]*pooledWS),
 		creating:    make(map[string]chan struct{}),
 		idleTimeout: defaultWSIdleTimeout,
+		httpClient:  httpClient,
 	}
 }
 
@@ -232,6 +234,7 @@ func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string,
 
 	dialOpts := &websocket.DialOptions{
 		HTTPHeader: upgradeReq.Header,
+		HTTPClient: p.httpClient,
 	}
 
 	// Dial with the request's reconstructed URL rather than the original
