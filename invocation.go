@@ -162,7 +162,19 @@ func ContextRequiredFrom(err *InvocationError) *ContextRequiredDetails {
 // and `defer cancel()` when abandoning the output stream early (Go has no
 // `for await`-break hook; OutputStream.Stop is the explicit form).
 type Invocation[I, O any] interface {
+	// Write submits one input message. Semantics are enqueue, not delivery:
+	// nil means the message was accepted into the input stream; the
+	// invocation's outcome still arrives at the output terminal. Every error
+	// Write returns is truthful — the caller's ctx error, a flow signal
+	// (ErrCodeInputClosed once the input side has closed), or, when a
+	// terminal has already fired, the terminal error itself, never a weaker
+	// substitute. The output side remains the authoritative verdict: a write
+	// racing a clean completion can return ErrCodeInvocationClosed even
+	// though the invocation succeeded. Treat Write errors as fast-fail, not
+	// as the outcome.
 	Write(ctx context.Context, input I) error
+	// Close signals that no more input is coming (graceful; idempotent; it
+	// never fails). Outputs continue until the binding closes its side.
 	Close() error
 	// Outputs acquires the output sequence. Single-consumer, acquire-once:
 	// a second call PANICS with ErrCodeAlreadyConsumed (a second consumer is
