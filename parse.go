@@ -57,6 +57,19 @@ func ParseDocument(data []byte) (*Interface, error) {
 			Problems: []string{fmt.Sprintf("openbindings: %q exceeds this SDK's MaxTestedVersion %q (OBI-T-04)", iface.OpenBindings, MaxTestedVersion)},
 		}
 	}
+	// The refusal runs downward too (below MinSupported; pre-1.0 lower
+	// minor), and prereleases refuse absent declared support — the same
+	// gates Interface.Validate applies, with identical messages.
+	if lower, err := IsLowerThanMinSupported(iface.OpenBindings); err == nil && lower {
+		return nil, &ValidationError{
+			Problems: []string{fmt.Sprintf("openbindings: %q is below this SDK's MinSupportedVersion %q (OBI-T-04)", iface.OpenBindings, MinSupportedVersion)},
+		}
+	}
+	if pre, _ := IsUnsupportedPrerelease(iface.OpenBindings); pre {
+		return nil, &ValidationError{
+			Problems: []string{fmt.Sprintf("openbindings: %q is a pre-release this SDK does not declare support for (OBI-T-04)", iface.OpenBindings)},
+		}
+	}
 
 	return &iface, nil
 }

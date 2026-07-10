@@ -53,7 +53,7 @@ func assertPreservedExtensionAndUnknown(t *testing.T, outMap map[string]any) {
 
 func makeTestInterface(name string, ops ...string) *Interface {
 	iface := &Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Name:         name,
 		Operations:   map[string]Operation{},
 	}
