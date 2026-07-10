@@ -266,8 +266,9 @@ func existingKeys(g *Graph, keys ...string) []string {
 var semverRe = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
 
 // The format version this implementation supports. OG-T-02 (mirroring the
-// core spec's OBI-T-04): refuse a higher major version, and a higher minor
-// version while the format is pre-1.0.
+// core spec's OBI-T-04): refuse a higher major version or one below the
+// supported minimum (pre-1.0, both bounds apply to minors), and refuse
+// prereleases absent declared support.
 const (
 	supportedMajor = 0
 	supportedMinor = 2
@@ -283,6 +284,12 @@ func checkVersion(version string) error {
 	minor, _ := strconv.Atoi(m[2])
 	if major > supportedMajor || (supportedMajor == 0 && major == 0 && minor > supportedMinor) {
 		return fmt.Errorf("OG-T-02: graph declares openbindings.operation-graph %s; this implementation supports up to %d.%d.x", version, supportedMajor, supportedMinor)
+	}
+	if major < supportedMajor || (supportedMajor == 0 && major == 0 && minor < supportedMinor) {
+		return fmt.Errorf("OG-T-02: graph declares openbindings.operation-graph %s; this implementation supports no lower than %d.%d.x", version, supportedMajor, supportedMinor)
+	}
+	if m[4] != "" {
+		return fmt.Errorf("OG-T-02: graph declares prerelease openbindings.operation-graph %s; this implementation declares no prerelease support", version)
 	}
 	return nil
 }
