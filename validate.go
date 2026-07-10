@@ -522,6 +522,8 @@ func walkSchema(errs *[]string, prefix string, schema any) {
 			validateURIRef(errs, prefix+".$ref", str)
 			if !strings.HasPrefix(str, "#") && !referenceIsAbsolute(str) {
 				*errs = append(*errs, fmt.Sprintf("%s.$ref: %q must be a same-document fragment or an absolute URI, not a relative reference (OBI-D-05)", prefix, str))
+			} else if strings.HasPrefix(str, "#") && str != "#" && !strings.HasPrefix(str, "#/") {
+				*errs = append(*errs, fmt.Sprintf("%s.$ref: %q is a plain-name fragment; a same-document schema $ref is a JSON Pointer fragment (bare # or #/...), and the schemas map is the document's named-schema mechanism (OBI-D-05)", prefix, str))
 			}
 		}
 	}

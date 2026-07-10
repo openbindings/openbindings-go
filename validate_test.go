@@ -347,6 +347,28 @@ func TestInterfaceValidate_SourceLocationRelativeRejected(t *testing.T) {
 	}
 }
 
+func TestInterfaceValidate_PlainNameFragmentRefRejected(t *testing.T) {
+	// OBI-D-05: same-document schema $refs are JSON Pointer fragments; a
+	// plain-name ($anchor) fragment is rejected — the schemas map is the
+	// document's named-schema mechanism.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$ref": "#task"}},
+		},
+		Schemas: map[string]JSONSchema{
+			"Task": {"$anchor": "task", "type": "object"},
+		},
+	}
+	err := i.Validate()
+	if err == nil {
+		t.Fatal("plain-name fragment $ref should be rejected")
+	}
+	if !strings.Contains(err.Error(), "plain-name fragment") {
+		t.Fatalf("expected plain-name fragment error, got %v", err)
+	}
+}
+
 func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
