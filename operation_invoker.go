@@ -703,7 +703,7 @@ func (e *OperationInvoker) runOutputs(
 				// derived schema means the CONTRACT still declares the
 				// floor — the remedy is the schema election, not the hook.
 				if FloorStamped(outputSchema) && hooks.DecodeDecidedBy() == "hook" {
-					msg += " — the synthesized schema still declares the floor's string; elect the real output schema (`ob operation output-schema`)"
+					msg += " — the synthesized schema still declares the floor's string; elect the real output schema (a stored output-schema election on the operation)"
 				} else if tier := hooks.DecodeDecidedBy(); tier != "" {
 					// Decode-lane provenance in the MESSAGE, not only the
 					// x-ob-decode trailer stamp: a wrong decode lane (e.g.
