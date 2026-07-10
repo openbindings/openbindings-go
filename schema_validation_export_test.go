@@ -32,3 +32,17 @@ func TestValidateAgainstSchema_ExternalRefFailsClosed(t *testing.T) {
 		t.Fatal("external $ref should fail closed, not validate partially")
 	}
 }
+
+// TestValidateAgainstSchema_FormatIsAnnotationOnly pins §6.2's boundary
+// rule: `format` never asserts at OBI validation boundaries — a value
+// violating `format` still validates; enforced syntax belongs to `pattern`.
+func TestValidateAgainstSchema_FormatIsAnnotationOnly(t *testing.T) {
+	opSchema := JSONSchema{"type": "string", "format": "email"}
+	if err := ValidateAgainstSchema("not-an-email", opSchema, nil); err != nil {
+		t.Fatalf("format must be annotation-only at OBI boundaries, got %v", err)
+	}
+	patternSchema := JSONSchema{"type": "string", "pattern": "^[^@]+@[^@]+$"}
+	if err := ValidateAgainstSchema("not-an-email", patternSchema, nil); err == nil {
+		t.Fatal("pattern is the assertion lane and must reject")
+	}
+}
