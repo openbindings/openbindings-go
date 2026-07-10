@@ -296,9 +296,30 @@ const (
 )
 
 
+// Keyword-shape tables for the OG-V-18 walk: recursion follows JSON Schema
+// 2020-12 keyword shapes so that property NAMES under `properties`/`$defs`/
+// etc. are schema content, never treated as keywords (the same discipline as
+// the core SDK's schema walk).
+var embeddedSchemaMapKeywords = map[string]bool{
+	"properties": true, "patternProperties": true, "$defs": true,
+	"definitions": true, "dependentSchemas": true,
+}
+
+var embeddedSchemaSingleKeywords = map[string]bool{
+	"items": true, "additionalItems": true, "unevaluatedItems": true,
+	"contains": true, "additionalProperties": true,
+	"unevaluatedProperties": true, "propertyNames": true, "not": true,
+	"if": true, "then": true, "else": true, "contentSchema": true,
+}
+
+var embeddedSchemaArrayKeywords = map[string]bool{
+	"prefixItems": true, "allOf": true, "anyOf": true, "oneOf": true,
+}
+
 // validateEmbeddedSchema enforces OG-V-18 on one embedded schema object:
 // $schema, when present, equals the 2020-12 dialect URI, and $vocabulary
-// appears nowhere within the schema tree.
+// appears at no schema position within the tree. Recursion is
+// keyword-shape-aware: only values in schema positions are walked.
 func validateEmbeddedSchema(report func(string), prefix string, s map[string]any) {
 	const draft202012 = "https://json-schema.org/draft/2020-12/schema"
 	if v, ok := s["$schema"]; ok {
@@ -310,13 +331,25 @@ func validateEmbeddedSchema(report func(string), prefix string, s map[string]any
 		report(fmt.Sprintf("%s: $vocabulary is forbidden in embedded schemas (OG-V-18)", prefix))
 	}
 	for k, v := range s {
-		switch t := v.(type) {
-		case map[string]any:
-			validateEmbeddedSchema(report, prefix+"."+k, t)
-		case []any:
-			for i, item := range t {
-				if m, ok := item.(map[string]any); ok {
-					validateEmbeddedSchema(report, fmt.Sprintf("%s.%s[%d]", prefix, k, i), m)
+		switch {
+		case embeddedSchemaMapKeywords[k]:
+			if m, ok := v.(map[string]any); ok {
+				for mk, mv := range m {
+					if sub, ok := mv.(map[string]any); ok {
+						validateEmbeddedSchema(report, fmt.Sprintf("%s.%s.%s", prefix, k, mk), sub)
+					}
+				}
+			}
+		case embeddedSchemaSingleKeywords[k]:
+			if sub, ok := v.(map[string]any); ok {
+				validateEmbeddedSchema(report, prefix+"."+k, sub)
+			}
+		case embeddedSchemaArrayKeywords[k]:
+			if arr, ok := v.([]any); ok {
+				for i, item := range arr {
+					if sub, ok := item.(map[string]any); ok {
+						validateEmbeddedSchema(report, fmt.Sprintf("%s.%s[%d]", prefix, k, i), sub)
+					}
 				}
 			}
 		}
