@@ -129,6 +129,10 @@ For WebSocket receive subscriptions, bearer tokens are sent in the first message
 
 Falls back to bearer, then basic, then apiKey when no security schemes are defined.
 
+### Consumer hooks
+
+Each message's bytes-to-value rule is chosen from its declared content type (the operation's `contentType`, falling back to the document's `defaultContentType`). This format **consults the consumer hooks seam** (`InvokeHooks`): a `DecodeOutput` hook may override the builtin rule for a message. Each emit records whether the decode was `builtin` or `hook` in its trailer metadata. (Classification is not applicable — message-oriented transports have no per-message success status the way HTTP does.)
+
 ### Interface synthesis
 
 - Operations iterated alphabetically for deterministic output

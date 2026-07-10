@@ -28,12 +28,11 @@ func WithRejectUnknownTypedFields() ValidateOption {
 // against openbindings.schema.json.
 //
 // Validate unconditionally enforces OBI-D-12 (openbindings field must
-// be a valid SemVer 2.0.0 string) and OBI-T-04 (refuse to load when the
-// document's major version is higher than this SDK's MaxTestedVersion, or --
-// while MaxTestedVersion is pre-1.0 -- when its minor is higher). Versions
-// outside the supported range in the other direction (older minor pre-1.0,
-// etc.) are accepted for forward compatibility; the spec's SHOULD-warn behavior
-// is left to higher-level tools.
+// be a valid SemVer 2.0.0 string) and OBI-T-04 (refuse versions outside the
+// supported range in EITHER direction: a higher major — or, pre-1.0, a
+// higher minor — than MaxTestedVersion, and likewise anything below
+// MinSupportedVersion; processing a document under the wrong version's
+// rules misreads it both ways).
 func (i Interface) Validate(opts ...ValidateOption) error {
 	o := validateOptions{
 		rejectUnknownTypedFields: false,
@@ -56,6 +55,9 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		errs = append(errs, fmt.Sprintf("openbindings: %v (OBI-T-04)", err))
 	} else if higher {
 		errs = append(errs, fmt.Sprintf("openbindings: %q exceeds this SDK's MaxTestedVersion %q (OBI-T-04)", i.OpenBindings, MaxTestedVersion))
+	} else if lower, _ := IsLowerThanMinSupported(i.OpenBindings); lower {
+		// Reachable only when the version parsed, so the error is ignored.
+		errs = append(errs, fmt.Sprintf("openbindings: %q is below this SDK's MinSupportedVersion %q (OBI-T-04)", i.OpenBindings, MinSupportedVersion))
 	} else if pre, _ := IsUnsupportedPrerelease(i.OpenBindings); pre {
 		// Reachable only when the version parsed (IsValidSemver passed above), so the error is ignored.
 		errs = append(errs, fmt.Sprintf("openbindings: %q is a pre-release this SDK does not declare support for (OBI-T-04)", i.OpenBindings))
@@ -392,7 +394,7 @@ func validateLocation(errs *[]string, prefix, raw string) {
 		return
 	}
 	if isRelativeReference(raw) {
-		*errs = append(*errs, fmt.Sprintf("%s: %q must be an absolute URI or a format-defined absolute address, not a relative reference (OBI-D-05)", prefix, raw))
+		*errs = append(*errs, fmt.Sprintf("%s: %q must be an absolute URI or a format-defined absolute address, not a relative reference (OBI-D-05); a local artifact can be embedded as the source's content instead (a file:// URL is machine-coupled and resolves only on the authoring machine)", prefix, raw))
 		return
 	}
 	if !screenURIChars(errs, prefix, raw) {

@@ -91,7 +91,7 @@ func TestInterfaceValidate_RefusesInvalidSemver_OBI_D_16(t *testing.T) {
 
 func TestInterfaceValidate_UnknownTopLevelFields_StrictMode(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
@@ -106,7 +106,7 @@ func TestInterfaceValidate_UnknownTopLevelFields_StrictMode(t *testing.T) {
 
 func TestInterfaceValidate_UnknownFields_StrictMode_CatchesNestedTypedObjects(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
 		},
@@ -140,7 +140,7 @@ func TestInterfaceValidate_UnknownFields_StrictMode_CatchesNestedTypedObjects(t 
 
 func TestInterfaceValidate_StrictMode_CatchesOperationExampleUnknownFields(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {
 				Examples: map[string]OperationExample{
@@ -163,7 +163,7 @@ func TestInterfaceValidate_StrictMode_CatchesOperationExampleUnknownFields(t *te
 
 func TestInterfaceValidate_StrictMode_CatchesInlineTransformUnknownFields(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
 		},
@@ -189,7 +189,7 @@ func TestInterfaceValidate_StrictMode_CatchesInlineTransformUnknownFields(t *tes
 
 func TestInterfaceValidate_AliasesMustBeUniqueAcrossOperations(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"a": {Aliases: []string{"shared"}},
 			"b": {Aliases: []string{"shared"}},
@@ -204,7 +204,7 @@ func TestInterfaceValidate_AliasAsContractNameIsValid(t *testing.T) {
 	// Cross-document correspondence is now expressed by adopting the shared
 	// contract's operation name as an alias; no roles/satisfies machinery.
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"createTask": {
 				Aliases: []string{"tasks.create"},
@@ -248,7 +248,7 @@ func containsProblem(err error, want string) bool {
 
 func TestInterfaceValidate_SourceMustHaveLocationOrContent(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
 		Sources: map[string]Source{
 			"empty": {Format: "openapi@3.1"},
@@ -265,7 +265,7 @@ func TestInterfaceValidate_SourceMustHaveLocationOrContent(t *testing.T) {
 
 func TestInterfaceValidate_SourceAcceptsBothLocationAndContent(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
 		Sources: map[string]Source{
 			"both": {
@@ -286,7 +286,7 @@ func TestInterfaceValidate_EmptyTransformExpressionAccepted(t *testing.T) {
 	// allows any string). Evaluation failures surface at invoke time via
 	// ErrEmptyTransformExpression, not at document validation.
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
 		Transforms: map[string]Transform{
 			"empty": "",
@@ -312,7 +312,7 @@ func TestInterfaceValidate_SourceLocationFormatDefinedAddress(t *testing.T) {
 	} {
 		t.Run(addr, func(t *testing.T) {
 			i := Interface{
-				OpenBindings: "0.1.0",
+				OpenBindings: "0.2.0",
 				Operations:   map[string]Operation{},
 				Sources: map[string]Source{
 					"svc": {Format: "grpc@1.0", Location: addr},
@@ -330,7 +330,7 @@ func TestInterfaceValidate_SourceLocationRelativeRejected(t *testing.T) {
 	for _, loc := range []string{"./openapi.json", "openapi.json", "../api/openapi.json", "/abs/openapi.json"} {
 		t.Run(loc, func(t *testing.T) {
 			i := Interface{
-				OpenBindings: "0.1.0",
+				OpenBindings: "0.2.0",
 				Operations:   map[string]Operation{},
 				Sources: map[string]Source{
 					"api": {Format: "openapi@3.1", Location: loc},
@@ -349,7 +349,7 @@ func TestInterfaceValidate_SourceLocationRelativeRejected(t *testing.T) {
 
 func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
 		},
@@ -377,7 +377,7 @@ func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 
 func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
 		},
@@ -402,7 +402,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 
 func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
 		},
@@ -426,7 +426,7 @@ func TestInterfaceValidate_EmptyInlineTransformAccepted(t *testing.T) {
 	// No document rule forbids an empty inline transform expression; the
 	// invoke layer fails empty expressions at run time instead.
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"op": {},
 		},
@@ -448,7 +448,7 @@ func TestInterfaceValidate_EmptyInlineTransformAccepted(t *testing.T) {
 
 func TestInterfaceValidate_ValidInterfaceWithTransforms(t *testing.T) {
 	i := Interface{
-		OpenBindings: "0.1.0",
+		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
 			"pay": {},
 		},
@@ -815,5 +815,24 @@ func TestInterfaceValidate_ExampleValidation_InternalRefStillValidated(t *testin
 	}
 	if !containsProblemSubstring(err, "OBI-D-11") {
 		t.Fatalf("expected OBI-D-11 tag, got %v", err)
+	}
+}
+
+// OBI-T-04's refusal runs downward too: a version below the SDK's minimum is
+// refused rather than processed under the wrong rules (pre-1.0 minors may
+// change field semantics in either direction — the priority→preference
+// inversion being the live example).
+func TestInterfaceValidate_RefusesBelowMinSupported(t *testing.T) {
+	iface := Interface{
+		OpenBindings: "0.1.0",
+		Operations:   map[string]Operation{},
+	}
+	err := iface.Validate()
+	if err == nil {
+		t.Fatal("a document below MinSupportedVersion must refuse")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "below this SDK's MinSupportedVersion") || !strings.Contains(msg, "OBI-T-04") {
+		t.Errorf("refusal must cite the floor and the rule, got: %s", msg)
 	}
 }

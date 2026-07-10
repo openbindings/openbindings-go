@@ -80,7 +80,7 @@ func convertDocToInterface(doc *openapi3.T, location string) openbindings.Interf
 				obiOp.Tags = op.Tags
 			}
 
-			inputSchema := buildInputSchema(op, pathParams)
+			inputSchema := buildInputSchema(op, pathParams, refRegistry)
 			if inputSchema != nil {
 				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry)
 				obiOp.Input = translateSchemaDialect(inlined, formatVersion)
@@ -181,7 +181,7 @@ func buildJSONPointerRef(path, method string) string {
 	return "#/paths/" + escaped + "/" + strings.ToLower(method)
 }
 
-func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters) map[string]any {
+func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, refRegistry map[string]any) map[string]any {
 	properties := map[string]any{}
 	var required []string
 
@@ -211,13 +211,20 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters) ma
 		rb := op.RequestBody.Value
 		bodySchema := requestBodyToSchema(rb)
 		if bodySchema != nil {
+			// Resolve a $ref body BEFORE the flatten decision: bodies
+			// declared by reference are the production norm, and wrapping
+			// the unresolved {"$ref"} in a phantom "body" property emits a
+			// contract the invoker then sends literally onto the wire.
+			if _, isRef := bodySchema["$ref"]; isRef {
+				if resolved, ok := inlineRefs(bodySchema, refRegistry, map[string]bool{}).(map[string]any); ok {
+					bodySchema = resolved
+				}
+			}
 			if bodyProps, ok := bodySchema["properties"].(map[string]any); ok {
 				for k, v := range bodyProps {
 					properties[k] = v
 				}
-				if bodyReq, ok := bodySchema["required"].([]string); ok {
-					required = append(required, bodyReq...)
-				}
+				required = append(required, stringSlice(bodySchema["required"])...)
 			} else {
 				properties["body"] = bodySchema
 				if rb.Required {
@@ -349,6 +356,26 @@ func preferJSONMediaType(content openapi3.Content) *openapi3.MediaType {
 
 	if len(keys) > 0 {
 		return content[keys[0]]
+	}
+	return nil
+}
+
+// stringSlice extracts a string list from a schema field that may be
+// []string (Go-built schemas) or []any (anything that round-tripped
+// through JSON — the required-ness of body fields was silently dropped
+// when only []string was handled).
+func stringSlice(v any) []string {
+	switch vals := v.(type) {
+	case []string:
+		return vals
+	case []any:
+		out := make([]string, 0, len(vals))
+		for _, item := range vals {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
 	}
 	return nil
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/jhump/protoreflect/v2/grpcreflect"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -25,7 +26,32 @@ const DefaultSourceName = "grpcServer"
 
 // Invoker handles binding invocation for gRPC sources.
 type Invoker struct {
-	conns sync.Map // address -> *grpc.ClientConn
+	conns   sync.Map // address -> *grpc.ClientConn
+	dialCfg dialConfig
+}
+
+// InvokerOption configures an Invoker.
+type InvokerOption func(*Invoker)
+
+// WithTransportCredentials sets the caller-owned transport identity (mTLS
+// client certificates, a custom CA pool, forced plaintext) for every
+// connection this invoker dials. It replaces the automatic TLS detection
+// (port 443 / https:// / grpcs://) entirely: a caller who states the
+// transport identity owns it. This is process-level default identity; a
+// per-target credential lane (an auth.mtls context family) is designed
+// follow-up work and would override this default per connection.
+func WithTransportCredentials(creds credentials.TransportCredentials) InvokerOption {
+	return func(e *Invoker) { e.dialCfg.creds = creds }
+}
+
+// WithDialOptions appends grpc-go dial options (interceptors, keepalive,
+// user-agent, ...) to every connection this invoker dials, after the
+// defaults; grpc-go's last-wins semantics apply where an option overlaps.
+// This is the grpc counterpart of the HTTP formats' NewInvokerWithClient:
+// the invoker is openly grpc-go, so its transport speaks grpc-go's own
+// vocabulary rather than an invented one.
+func WithDialOptions(opts ...grpc.DialOption) InvokerOption {
+	return func(e *Invoker) { e.dialCfg.extra = append(e.dialCfg.extra, opts...) }
 }
 
 var (
@@ -35,14 +61,20 @@ var (
 )
 
 // NewInvoker creates a new gRPC binding invoker.
-func NewInvoker() *Invoker { return &Invoker{} }
+func NewInvoker(opts ...InvokerOption) *Invoker {
+	e := &Invoker{}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
+}
 
 func (e *Invoker) getConn(ctx context.Context, address string) (*grpc.ClientConn, error) {
 	key := address
 	if v, ok := e.conns.Load(key); ok {
 		return v.(*grpc.ClientConn), nil
 	}
-	conn, err := dial(ctx, address)
+	conn, err := dial(ctx, address, e.dialCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -101,10 +133,27 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	if strings.TrimSpace(args.Source.Location) == "" {
+	// The dial address: the source's location, else the context metadata
+	// override (`metadata.baseURL`, the same key the openapi invoker honors
+	// for targeting the same OBI at a different host). An embed-mode source
+	// carries the SCHEMA as content, so the address is the one thing the
+	// document cannot supply from the artifact itself.
+	address := strings.TrimSpace(args.Source.Location)
+	if address == "" {
+		if meta := openbindings.ContextMetadata(args.Context); meta != nil {
+			if v, ok := meta["baseURL"].(string); ok {
+				address = strings.TrimSpace(v)
+			}
+		}
+	}
+	if address == "" {
+		msg := "gRPC source requires a server address: set the source's location (host:port)"
+		if args.Source.Content != nil {
+			msg = "gRPC source carries its schema as embedded content but no server address: set the source's location to the service address (host:port), or provide baseURL in context metadata"
+		}
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: "gRPC source requires a location (server address)",
+			Message: msg,
 		})
 		return
 	}
@@ -118,7 +167,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// file locations are only used by the Synthesizer.
 	var svcDesc protoreflect.ServiceDescriptor
 	if args.Source.Content != nil {
-		disc, parseErr := discoverFromProto(bctx, args.Source.Location, args.Source.Content)
+		disc, parseErr := discoverFromProto(bctx, "", args.Source.Content)
 		if parseErr != nil {
 			inv.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeSourceLoadFailed,
@@ -141,7 +190,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		}
 	}
 
-	conn, err := e.getConn(bctx, args.Source.Location)
+	conn, err := e.getConn(bctx, address)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeConnectFailed,
@@ -196,10 +245,34 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 }
 
 // Synthesizer handles interface synthesis from gRPC servers.
-type Synthesizer struct{}
+type Synthesizer struct {
+	dialCfg dialConfig
+}
+
+// SynthesizerOption configures a Synthesizer.
+type SynthesizerOption func(*Synthesizer)
+
+// WithSynthesizerTransportCredentials sets the transport identity used when
+// discovering via server reflection. Discovery dials the live service, so a
+// setup the invocation lane needs (mTLS, custom CA) is needed here too.
+func WithSynthesizerTransportCredentials(creds credentials.TransportCredentials) SynthesizerOption {
+	return func(c *Synthesizer) { c.dialCfg.creds = creds }
+}
+
+// WithSynthesizerDialOptions appends grpc-go dial options to reflection
+// discovery connections, after the defaults.
+func WithSynthesizerDialOptions(opts ...grpc.DialOption) SynthesizerOption {
+	return func(c *Synthesizer) { c.dialCfg.extra = append(c.dialCfg.extra, opts...) }
+}
 
 // NewSynthesizer creates a new gRPC interface synthesizer.
-func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
+func NewSynthesizer(opts ...SynthesizerOption) *Synthesizer {
+	c := &Synthesizer{}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
 
 // Formats returns the source formats supported by the gRPC synthesizer.
 func (c *Synthesizer) Formats() []openbindings.FormatInfo {
@@ -236,7 +309,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		if addr == "" {
 			return nil, fmt.Errorf("gRPC source requires a location (host:port address or .proto file path)")
 		}
-		disc, err = discover(ctx, addr)
+		disc, err = discover(ctx, addr, c.dialCfg)
 		if err != nil {
 			return nil, fmt.Errorf("gRPC discovery: %w", err)
 		}

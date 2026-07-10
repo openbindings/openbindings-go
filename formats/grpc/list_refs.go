@@ -24,7 +24,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		if addr == "" {
 			return nil, fmt.Errorf("gRPC source requires a location or content")
 		}
-		disc, err = discover(ctx, addr)
+		disc, err = discover(ctx, addr, c.dialCfg)
 		if err != nil {
 			return nil, fmt.Errorf("gRPC reflection: %w", err)
 		}

@@ -115,8 +115,37 @@ The service name is the protobuf fully qualified name. The method name is the un
 
 ### Source expectations
 
-- **`location`**: The gRPC server address (`host:port`) or a path to a `.proto` file. TLS is auto-detected for port 443 or `https://` prefixes. When the location ends in `.proto`, the file is parsed directly instead of using server reflection.
-- **`content`**: Inline protobuf definition (string). When provided, parsed directly without connecting to a server for reflection. The server address in `location` is still used for invocation.
+- **`location`**: The gRPC server address (`host:port`) or a path to a `.proto` file. TLS is auto-detected for port 443, or forced off any port with an `https://` or `grpcs://` prefix (the prefix is the invoker's affordance, stripped before dialing). When the location ends in `.proto`, the file is parsed directly instead of using server reflection.
+- **`content`**: Inline protobuf definition (string, self-contained — no imports). When provided, method descriptors are built from it directly, never from reflection.
+
+### Transport configuration
+
+The invoker and synthesizer take functional options speaking grpc-go's own vocabulary (the invoker is openly grpc-go; inventing an abstraction over it would serve nobody):
+
+```go
+grpc.NewInvoker()                                          // zero-config: TLS auto-detected (:443, https://, grpcs://)
+grpc.NewInvoker(grpcfmt.WithTransportCredentials(creds))   // mTLS / custom CA / forced plaintext — replaces auto-detection
+grpc.NewInvoker(grpcfmt.WithDialOptions(opts...))          // interceptors, keepalive, user-agent, ... (appended after defaults)
+grpc.NewSynthesizer(grpcfmt.WithSynthesizerTransportCredentials(creds)) // reflection discovery dials live, so it needs the same setup
+```
+
+A caller who states the transport identity owns it: `WithTransportCredentials` disables the automatic TLS detection entirely. These are process-level defaults applied to every connection the invoker dials; a per-target credential lane (an `auth.mtls` context family) is designed follow-up work.
+
+### Dial address resolution (invocation)
+
+The address the invoker dials resolves in order: the source's `location`, then the `baseURL` field of the invocation context's `metadata` (the same override key the openapi invoker honors for targeting the same OBI at a different host). A source that carries its schema as embedded `content` but supplies no address through either lane refuses with a message naming both remedies.
+
+gRPC is a **service-addressed format** (core spec §6.4): its `location` names the live service, not a document. A source may therefore carry both — embedded `content` pins the contract (descriptors build from it, never from reflection) while `location` remains the dial address:
+
+```json
+"blend": {
+  "format": "grpc",
+  "content": "syntax = \"proto3\"; ...",
+  "location": "api.example.com:443"
+}
+```
+
+This is the publishing form for servers with reflection disabled: the document is self-contained for schema purposes and complete for invocation. (`ob source add x.obi.json grpc:./svc.proto --resolve content --uri host:port` authors it.)
 
 ### Credential application
 
@@ -142,6 +171,10 @@ The resulting OBI will have `format: "grpc"`, reflecting the gRPC access path. I
 - Protobuf message types converted to JSON Schema (int64 mapped to string for JS safety)
 - Methods sorted alphabetically for deterministic output
 - No security metadata in protobuf; an unauthenticated call surfaces as a terminal `ERR_AUTH_REQUIRED`, and credential resolution happens above the binding (operation-layer context negotiation)
+
+### Consumer hooks
+
+protobuf framing is unambiguous: the response message type and the gRPC status code fully determine decode and success. This format **does not consult the consumer hooks seam** (`InvokeHooks`) — a `DecodeOutput`, `Classify`, or `Route` hook has no effect here, and `ob plan` reports it as `not-consulted`. Hooks matter for formats with open wire questions (openapi, asyncapi).
 
 ## How it works
 

@@ -369,3 +369,36 @@ func TestArtifactText_URLRefusedClearly(t *testing.T) {
 		t.Fatalf("want the clear not-fetchable refusal, got %v", err)
 	}
 }
+
+// A usage `alias` is command-scoped CLI shorthand; an OBI alias is a
+// satisfaction identifier in the document's FLAT namespace (OBI-D-04).
+// Mapping CLI aliases across produced invalid documents the moment two
+// command groups both declared `alias "ls"` — synthesize output must always
+// pass the SDK's own validator.
+func TestSynthesizeInterface_CLIAliasesAreNotSatisfactionAliases(t *testing.T) {
+	iface, err := synthesizeFromArtifactText(`
+name "mycli"
+version "1.0.0"
+cmd "context" {
+  cmd "list" help="List contexts" {
+    alias "ls"
+  }
+}
+cmd "source" {
+  cmd "list" help="List sources" {
+    alias "ls"
+  }
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, op := range iface.Operations {
+		if len(op.Aliases) != 0 {
+			t.Errorf("operation %q carries CLI shorthand as satisfaction aliases: %v", key, op.Aliases)
+		}
+	}
+	if err := iface.Validate(); err != nil {
+		t.Errorf("synthesize output must validate: %v", err)
+	}
+}

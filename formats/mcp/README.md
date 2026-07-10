@@ -106,6 +106,21 @@ Credentials from the invocation context are applied as HTTP headers:
 
 Context `headers` and `cookies` are forwarded. No security metadata in MCP; an HTTP 401 surfaces as a terminal `ERR_AUTH_REQUIRED` and context resolution happens above the binding.
 
+### Custom HTTP client
+
+The Streamable HTTP transport always installs an internal header injector (needed for per-call response capture). To run that injector over your own transport, pass a base `*http.Client`:
+
+```go
+invoker := mcp.NewInvoker(mcp.WithHTTPClient(myClient))       // invocation lane
+synth := mcp.NewSynthesizer(mcp.WithSynthesizerHTTPClient(myClient)) // discovery lane
+```
+
+The client's `Transport` becomes the round-trip base beneath the injector; its `Timeout`, redirect policy, and cookie jar are preserved. Use it for a corporate proxy, mTLS client certificates, or a custom CA pool. Discovery connects live, so a setup the invocation lane needs is needed on the synthesizer too. This is the MCP counterpart to the openapi invoker's `NewInvokerWithClient`.
+
+### Consumer hooks
+
+An MCP tool result is self-describing: `structuredContent`/`content` carries the output and `isError` signals failure, both protocol-native. This format **does not consult the consumer hooks seam** (`InvokeHooks`); a `DecodeOutput`, `Classify`, or `Route` hook has no effect, and `ob plan` reports it as `not-consulted`.
+
 ### Entity type mapping
 
 | Entity | Ref format | Input | Output |

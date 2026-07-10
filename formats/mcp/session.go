@@ -29,6 +29,10 @@ type sessionPool struct {
 	sessions    map[string]*mcpSession
 	creating    map[string]chan struct{} // closed when session creation finishes
 	idleTimeout time.Duration
+	// baseClient, when set, supplies the transport (proxy, mTLS, custom CA),
+	// timeout, redirect policy, and cookie jar for every pooled session. The
+	// per-session headerTransport wraps its Transport; nil means stdlib defaults.
+	baseClient *http.Client
 }
 
 func newSessionPool() *sessionPool {
@@ -173,14 +177,10 @@ func (p *sessionPool) createSession(ctx context.Context, clientVersion string, u
 
 	// The headerTransport is always installed (even with no auth headers) so
 	// per-call response capture works for HTTP error mapping and Invocation
-	// header metadata.
+	// header metadata. httpClientWithHeaders layers it over the pool's base
+	// client so proxy, mTLS, and custom-CA configuration is honored.
 	transport := &gomcp.StreamableClientTransport{Endpoint: url}
-	transport.HTTPClient = &http.Client{
-		Transport: &headerTransport{
-			base:    http.DefaultTransport,
-			headers: headers,
-		},
-	}
+	transport.HTTPClient = httpClientWithHeaders(p.baseClient, headers)
 
 	opts := &gomcp.ClientOptions{
 		ProgressNotificationHandler: s.demuxProgress,

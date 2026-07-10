@@ -142,6 +142,10 @@ Compression is not currently supported. Bidirectional streaming is out of scope.
 
 Connect and gRPC are separate wire protocols that share protobuf service definitions. The same `.proto` file can produce both `format: "grpc"` and `format: "connect"` bindings. A service that speaks both protocols would have two sources and two sets of bindings in its OBI.
 
+### Consumer hooks
+
+Like gRPC, protobuf framing plus the Connect envelope status fully determine decode and success. This format **does not consult the consumer hooks seam** (`InvokeHooks`); a `DecodeOutput`, `Classify`, or `Route` hook has no effect, and `ob plan` reports it as `not-consulted`.
+
 ## License
 
 Apache-2.0

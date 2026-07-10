@@ -134,6 +134,10 @@ Invocation options `headers` and `cookies` are also forwarded. If the server ret
 
 Subscription refs (e.g., `Subscription/onOrderUpdated`) are executed over WebSocket using the `graphql-transport-ws` sub-protocol. The invoker opens the connection, performs the protocol handshake, sends the subscribe message, and streams `next` payloads as outputs until `complete` or cancellation.
 
+### Consumer hooks
+
+The GraphQL `{ data, errors }` envelope is unambiguous: the invoker reads `data` as the output and treats a non-empty `errors` array as failure natively. This format **does not consult the consumer hooks seam** (`InvokeHooks`); a `DecodeOutput`, `Classify`, or `Route` hook has no effect, and `ob plan` reports it as `not-consulted`.
+
 ### Type mapping (interface synthesis)
 
 When synthesizing an OBI from a GraphQL endpoint, types are mapped to JSON Schema as follows:

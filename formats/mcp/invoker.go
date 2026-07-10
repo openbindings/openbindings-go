@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -45,6 +46,7 @@ const FormatToken = "mcp@2025-11-25"
 type Invoker struct {
 	clientVersion string
 	idleTimeout   time.Duration
+	httpClient    *http.Client
 	pool          *sessionPool
 }
 
@@ -55,6 +57,18 @@ type InvokerOption func(*Invoker)
 func WithClientVersion(v string) InvokerOption {
 	return func(e *Invoker) {
 		e.clientVersion = v
+	}
+}
+
+// WithHTTPClient injects the base *http.Client for every pooled session's
+// Streamable HTTP transport. Its Transport becomes the round-trip base beneath
+// the MCP header injector, and its Timeout, redirect policy, and cookie jar are
+// preserved. Use this for a corporate proxy, mTLS client certificates, or a
+// custom CA pool. A nil client (or an unset option) means stdlib defaults. This
+// is the MCP counterpart to the openapi invoker's NewInvokerWithClient.
+func WithHTTPClient(c *http.Client) InvokerOption {
+	return func(e *Invoker) {
+		e.httpClient = c
 	}
 }
 
@@ -80,6 +94,7 @@ func NewInvoker(opts ...InvokerOption) *Invoker {
 	if e.idleTimeout > 0 {
 		e.pool.idleTimeout = e.idleTimeout
 	}
+	e.pool.baseClient = e.httpClient
 	return e
 }
 
@@ -118,6 +133,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 // Synthesizer handles interface synthesis from MCP servers.
 type Synthesizer struct {
 	clientVersion string
+	httpClient    *http.Client
 }
 
 // SynthesizerOption configures a Synthesizer.
@@ -127,6 +143,17 @@ type SynthesizerOption func(*Synthesizer)
 func WithSynthesizerClientVersion(v string) SynthesizerOption {
 	return func(c *Synthesizer) {
 		c.clientVersion = v
+	}
+}
+
+// WithSynthesizerHTTPClient injects the base *http.Client used to reach the MCP
+// server during discovery. Like the invoker's WithHTTPClient, its Transport is
+// wrapped by the MCP header injector and the rest of its configuration is
+// preserved. Discovery connects live, so a proxy or mTLS setup that the
+// invocation lane needs is needed here too.
+func WithSynthesizerHTTPClient(c *http.Client) SynthesizerOption {
+	return func(s *Synthesizer) {
+		s.httpClient = c
 	}
 }
 
@@ -156,7 +183,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	}
 	src := in.Sources[0]
 
-	disc, err := discover(ctx, c.clientVersion, src.Location)
+	disc, err := discover(ctx, c.clientVersion, c.httpClient, src.Location)
 	if err != nil {
 		return nil, fmt.Errorf("MCP discovery: %w", err)
 	}

@@ -90,13 +90,13 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 			copy(op.Tags, path[:len(path)-1])
 		}
 		if cmd != nil {
-			for _, alias := range cmd.Aliases {
-				for _, an := range alias.Names {
-					if !alias.Hide {
-						op.Aliases = append(op.Aliases, an)
-					}
-				}
-			}
+			// A usage `alias` is command-scoped CLI shorthand (`ls` under five
+			// different groups is idiomatic); an OBI alias is a satisfaction
+			// identifier in the document's FLAT identifier namespace
+			// (OBI-D-04, OBI-T-12) — a different concept entirely. Mapping
+			// them across produced documents that failed the SDK's own
+			// validator on alias collisions. CLI aliases stay where they
+			// live: in the usage artifact itself.
 			inputSchema, serr := generateInputSchema(*cmd, inherited)
 			if serr != nil {
 				return serr

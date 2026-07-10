@@ -984,3 +984,81 @@ func TestIntegration_SSEResponse_Cancellation(t *testing.T) {
 		t.Fatal("SSE stream did not terminate within 3s of cancellation")
 	}
 }
+
+// Request bodies declared via $ref are the production norm; the
+// synthesized contract must describe the FLAT caller shape and the invoker
+// must send it verbatim. Regression: the flatten decision ran before ref
+// inlining, so a phantom "body" wrapper entered the contract AND went
+// literally onto the wire, while required-ness ([]any after the JSON
+// round-trip) was silently dropped.
+func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
+	spec := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "Pets", "version": "1.0.0"},
+	  "paths": {"/pets": {"post": {
+	    "operationId": "createPet",
+	    "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Pet"}}}},
+	    "responses": {"201": {"description": "created"}}
+	  }}},
+	  "components": {"schemas": {"Pet": {
+	    "type": "object",
+	    "properties": {"name": {"type": "string"}, "tag": {"type": "string"}},
+	    "required": ["name"]
+	  }}}
+	}`
+
+	var receivedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{Format: "openapi@3.0", Content: strings.ReplaceAll(spec, "PLACEHOLDER", srv.URL)}},
+	})
+	if err != nil {
+		t.Fatalf("synthesize: %v", err)
+	}
+
+	op := iface.Operations["createPet"]
+	props, _ := op.Input["properties"].(map[string]any)
+	if _, hasBody := props["body"]; hasBody {
+		t.Errorf("contract carries a phantom body wrapper: %v", op.Input)
+	}
+	if _, hasName := props["name"]; !hasName {
+		t.Fatalf("contract must describe the flat caller shape, got properties %v", props)
+	}
+	req, _ := op.Input["required"].([]string)
+	found := false
+	for _, r := range req {
+		if r == "name" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("required-ness of body fields dropped: required = %v", op.Input["required"])
+	}
+
+	// The contract's shape goes onto the wire verbatim.
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{Format: "openapi@3.0", Content: strings.ReplaceAll(spec, `"paths"`, `"servers": [{"url": "`+srv.URL+`"}], "paths"`)},
+		Ref:     "#/paths/~1pets/post",
+		Context: nil,
+	})
+	if _, ierr := driveSingle(t, call, map[string]any{"name": "rex"}); ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(receivedBody, &wire); err != nil {
+		t.Fatalf("wire body: %v (%s)", err, receivedBody)
+	}
+	if wire["name"] != "rex" {
+		t.Errorf("wire body should be the flat shape, got %s", receivedBody)
+	}
+	if _, wrapped := wire["body"]; wrapped {
+		t.Errorf("phantom body wrapper reached the wire: %s", receivedBody)
+	}
+}

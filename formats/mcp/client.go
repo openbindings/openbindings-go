@@ -25,8 +25,8 @@ func clientInfo(version string) *gomcp.Implementation {
 	}
 }
 
-func discover(ctx context.Context, clientVersion string, url string) (*discovery, error) {
-	session, err := connect(ctx, clientVersion, url, nil)
+func discover(ctx context.Context, clientVersion string, baseClient *http.Client, url string) (*discovery, error) {
+	session, err := connect(ctx, clientVersion, baseClient, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("connect to MCP server: %w", err)
 	}
@@ -111,20 +111,13 @@ func getPromptPooled(ctx context.Context, pool *sessionPool, clientVersion strin
 	return result, nil
 }
 
-func connect(ctx context.Context, clientVersion string, url string, headers map[string]string) (*gomcp.ClientSession, error) {
+func connect(ctx context.Context, clientVersion string, baseClient *http.Client, url string, headers map[string]string) (*gomcp.ClientSession, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("MCP source location must be an HTTP or HTTPS URL, got %q", url)
 	}
 
 	transport := &gomcp.StreamableClientTransport{Endpoint: url}
-	if len(headers) > 0 {
-		transport.HTTPClient = &http.Client{
-			Transport: &headerTransport{
-				base:    http.DefaultTransport,
-				headers: headers,
-			},
-		}
-	}
+	transport.HTTPClient = httpClientWithHeaders(baseClient, headers)
 
 	client := gomcp.NewClient(clientInfo(clientVersion), nil)
 	session, err := client.Connect(ctx, transport, nil)
@@ -132,6 +125,28 @@ func connect(ctx context.Context, clientVersion string, url string, headers map[
 		return nil, err
 	}
 	return session, nil
+}
+
+// httpClientWithHeaders builds the *http.Client the MCP Streamable HTTP
+// transport uses. The headerTransport is always installed (even with no auth
+// headers) so per-call response capture works for HTTP error mapping and
+// Invocation header metadata. A caller-supplied base client contributes its
+// Transport as the round-trip base plus its Timeout, redirect policy, and
+// cookie jar; a nil base means stdlib defaults. This is the seam for corporate
+// proxies, mTLS client certificates, or a custom CA pool.
+func httpClientWithHeaders(base *http.Client, headers map[string]string) *http.Client {
+	hc := &http.Client{}
+	roundTripBase := http.DefaultTransport
+	if base != nil {
+		hc.Timeout = base.Timeout
+		hc.CheckRedirect = base.CheckRedirect
+		hc.Jar = base.Jar
+		if base.Transport != nil {
+			roundTripBase = base.Transport
+		}
+	}
+	hc.Transport = &headerTransport{base: roundTripBase, headers: headers}
+	return hc
 }
 
 // headerTransport injects extra HTTP headers into every request and records

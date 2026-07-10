@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/bufbuild/protocompile"
@@ -20,8 +21,15 @@ type discovery struct {
 	address  string
 }
 
-func discover(ctx context.Context, address string) (*discovery, error) {
-	conn, err := dial(ctx, address)
+func discover(ctx context.Context, address string, cfg dialConfig) (*discovery, error) {
+	// A local FILE that isn't a .proto (a compiled FileDescriptorSet, say)
+	// lands here because only .proto dispatches to the parse lane. Dialing a
+	// file path yields an unrelated resolver error; name the gap instead.
+	if fi, statErr := os.Stat(address); statErr == nil && fi.Mode().IsRegular() {
+		return nil, fmt.Errorf(
+			"grpc source %q is a local file, not a reflection address; compiled descriptor sets (.pb/.binpb) are not yet a supported source — use the .proto source file or a live host:port reflection address", address)
+	}
+	conn, err := dial(ctx, address, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -76,18 +84,40 @@ func findServiceInFile(file protoreflect.FileDescriptor, name protoreflect.FullN
 	return nil
 }
 
-func dial(ctx context.Context, address string) (*grpc.ClientConn, error) {
+// dialConfig carries caller-supplied transport configuration into dial.
+// The zero value means automatic behavior (TLS auto-detection, no extras).
+type dialConfig struct {
+	// creds, when set, is the caller-owned transport identity (mTLS client
+	// certificates, a custom CA pool, forced plaintext). It replaces the
+	// automatic TLS detection entirely: a caller who states the transport
+	// identity owns it.
+	creds credentials.TransportCredentials
+	// extra dial options append after the defaults; grpc-go's own last-wins
+	// semantics apply where an option overlaps a default.
+	extra []grpc.DialOption
+}
+
+func dial(ctx context.Context, address string, cfg dialConfig) (*grpc.ClientConn, error) {
 	var opts []grpc.DialOption
 
-	if needsTLS(address) {
+	switch {
+	case cfg.creds != nil:
+		opts = append(opts, grpc.WithTransportCredentials(cfg.creds))
+	case needsTLS(address):
 		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})))
-	} else {
+	default:
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
+	opts = append(opts, cfg.extra...)
 
-	target := address
-	if !strings.Contains(address, "://") {
-		target = "dns:///" + address
+	// An https:// (or grpcs://) prefix is the documented way to force TLS
+	// off port 443; it is OUR affordance, not gRPC target syntax, so the
+	// scheme is stripped before the address reaches the resolver
+	// (grpc.NewClient reads "https://host:port" as scheme https plus a
+	// malformed authority: "too many colons in address").
+	target := stripTLSScheme(address)
+	if !strings.Contains(target, "://") {
+		target = "dns:///" + target
 	}
 
 	conn, err := grpc.NewClient(target, opts...)
@@ -97,11 +127,20 @@ func dial(ctx context.Context, address string) (*grpc.ClientConn, error) {
 	return conn, nil
 }
 
+func stripTLSScheme(address string) string {
+	for _, scheme := range []string{"https://", "grpcs://"} {
+		if strings.HasPrefix(address, scheme) {
+			return strings.TrimPrefix(address, scheme)
+		}
+	}
+	return address
+}
+
 func needsTLS(address string) bool {
 	if strings.HasSuffix(address, ":443") {
 		return true
 	}
-	if strings.HasPrefix(address, "https://") {
+	if strings.HasPrefix(address, "https://") || strings.HasPrefix(address, "grpcs://") {
 		return true
 	}
 	return false

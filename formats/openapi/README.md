@@ -93,6 +93,23 @@ Path separators are escaped per RFC 6901: `/` becomes `~1`, `~` becomes `~0`. Me
 - **`location`**: URL or file path to the OpenAPI JSON/YAML document. Resolved relative to the OBI document location.
 - **`content`**: Inline OpenAPI document (parsed directly, bypasses location).
 
+### Base URL override
+
+By default the request target is the spec's first `servers[]` entry (a relative server URL like `/api/v3` is resolved against the source `location`'s origin). To send the same OBI at a different host, e.g. staging or a local mock, set `metadata.baseURL` in the invocation context:
+
+```go
+Context: map[string]any{
+    "metadata":    map[string]any{"baseURL": "https://staging.example.com"},
+    "bearerToken": "tok_123",
+}
+```
+
+`metadata.baseURL` takes precedence over the spec's `servers`. When absent and the spec has no server URL, invocation fails with a message telling you to set one or the other.
+
+### Custom HTTP client
+
+`NewInvokerWithClient(*http.Client)` supplies the client used for every request (corporate proxy, mTLS client certificate, custom CA pool, tracing transport). Do not set an overall `Timeout` on it; cancellation is driven by the invocation context. `NewInvoker()` uses a default client with a 10-redirect cap.
+
 ### Credential application
 
 Credentials are applied based on the OpenAPI spec's `securitySchemes`:
@@ -102,6 +119,16 @@ Credentials are applied based on the OpenAPI spec's `securitySchemes`:
 - `apiKey`: Placed in header, query, or cookie as the spec declares, from `apiKey`
 
 When no security schemes are defined, falls back to bearer, then basic, then apiKey.
+
+### Consumer hooks
+
+HTTP leaves wire questions the OpenAPI document does not settle: which bytes-to-value rule to apply, whether a given response counts as success, and where the payload lives. This format **consults the consumer hooks seam** (`InvokeHooks`) for all three:
+
+- **Decode** — the builtin rule is chosen from the response `Content-Type`; a `DecodeOutput` hook may override it.
+- **Classify** — the builtin verdict is HTTP status (2xx success); a `Classify` hook may reclassify (a 200 envelope carrying an application error, say).
+- **Route** — a hook may redirect where the payload is read from.
+
+Each invocation records how the decision was made in its trailer metadata (`builtin` vs `hook`), so a caller can see whether their hook fired. Formats with unambiguous framing (grpc, connect, graphql, mcp, workersrpc) do not consult the seam; `ob plan` reports `not-consulted` for them.
 
 ### Interface synthesis
 

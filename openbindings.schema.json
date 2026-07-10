@@ -48,7 +48,7 @@
     },
     "sources": {
       "type": "object",
-      "description": "Registry of binding artifacts (e.g., OpenAPI/AsyncAPI/proto).",
+      "description": "Map of sources: references to binding artifacts (e.g., an OpenAPI document, AsyncAPI document, or proto file), each identified by a format token and a location or embedded content.",
       "propertyNames": {
         "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"
       },
@@ -183,14 +183,14 @@
         "location": {
           "type": "string",
           "minLength": 1,
-          "description": "Absolute URI (or format-defined absolute address) of the binding specification."
+          "description": "Absolute URI or format-defined absolute address: the binding artifact, or — per the format's conventions — the live service it describes."
         },
         "content": {
           "oneOf": [
             { "type": "object" },
             { "type": "string", "minLength": 1 }
           ],
-          "description": "Binding specification content, embedded directly. Object for JSON-based formats, string for text formats (e.g. KDL, protobuf). If both location and content are present, implementations MUST prefer content."
+          "description": "Binding artifact content, embedded directly. Object for JSON-based formats, string for text formats (e.g. KDL, protobuf). If both location and content are present, implementations MUST prefer content."
         },
         "description": {
           "type": "string",

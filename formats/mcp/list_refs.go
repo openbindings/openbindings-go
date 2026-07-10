@@ -15,7 +15,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		return nil, fmt.Errorf("MCP source requires a location (server URL)")
 	}
 
-	disc, err := discover(ctx, c.clientVersion, source.Location)
+	disc, err := discover(ctx, c.clientVersion, c.httpClient, source.Location)
 	if err != nil {
 		return nil, fmt.Errorf("MCP discovery: %w", err)
 	}

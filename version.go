@@ -65,6 +65,28 @@ func IsHigherMajorOrPre1MinorThanMaxTested(v string) (bool, error) {
 	return false, nil
 }
 
+// IsLowerThanMinSupported reports whether v falls below the SDK's
+// MinSupportedVersion in the sense OBI-T-04 mandates refusal — the downward
+// half of the rule: a version outside the supported range in either
+// direction is refused rather than processed under the wrong rules (pre-1.0
+// minors may change field semantics both ways). Mirrors the upward rule's
+// granularity: lower major always refuses; a lower minor refuses only while
+// the floor is pre-1.0 (post-1.0 minors are additive, so an older minor
+// within a supported major reads safely). Patch is never a refusal trigger.
+func IsLowerThanMinSupported(v string) (bool, error) {
+	parsed, err := parseSemverStrict(v)
+	if err != nil {
+		return false, err
+	}
+	if parsed.major < minSupportedSemver.major {
+		return true, nil
+	}
+	if minSupportedSemver.major == 0 && parsed.major == 0 && parsed.minor < minSupportedSemver.minor {
+		return true, nil
+	}
+	return false, nil
+}
+
 // IsUnsupportedPrerelease reports whether v carries a pre-release identifier
 // that this SDK does not declare support for. Per OBI-T-04 and §11.1, a tool
 // MUST NOT accept a prerelease unless it declares support for that specific

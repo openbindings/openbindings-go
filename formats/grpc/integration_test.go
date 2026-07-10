@@ -687,3 +687,54 @@ func TestIntegration_NoInputConvention(t *testing.T) {
 		t.Fatalf("no-input convention should dispatch without a write: %v", err)
 	}
 }
+
+// TestIntegration_InvokerOptions_RealDialPath exercises the constructor
+// options through the PRODUCTION dial path (no pre-stored connection):
+// WithDialOptions carries the bufconn context dialer, and
+// WithTransportCredentials(insecure) must OVERRIDE the automatic TLS
+// detection — the address ends in :443, which auto-detection would wrap in
+// TLS and fail against the plaintext test server. (passthrough:/// keeps
+// grpc-go from DNS-resolving the synthetic bufconn host.) A caller who states the
+// transport identity owns it.
+func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
+	dialer, ts := setupTestServer(t)
+	_ = ts
+
+	invoker := NewInvoker(
+		WithTransportCredentials(insecure.NewCredentials()),
+		WithDialOptions(grpc.WithContextDialer(dialer), grpc.WithUserAgent("ob-option-test")),
+	)
+	t.Cleanup(func() { _ = invoker.Close() })
+
+	ctx := testCtx(t)
+	inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Location: "passthrough:///bufconn:443"},
+		Ref:    "testpkg.ItemService/GetItem",
+	})
+	if err := inv.Write(ctx, map[string]any{"id": "i1"}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	out, err := openbindings.Single(ctx, inv.Outputs())
+	if err != nil {
+		t.Fatalf("invoke through caller-configured transport failed: %v", err)
+	}
+	if out == nil {
+		t.Fatal("no output")
+	}
+
+	// Negative control: WITHOUT caller credentials, the :443 suffix
+	// auto-detects TLS against the plaintext server and the call fails —
+	// proving the option genuinely overrode auto-detection above.
+	autoTLS := NewInvoker(WithDialOptions(grpc.WithContextDialer(dialer)))
+	t.Cleanup(func() { _ = autoTLS.Close() })
+	ctl, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	inv2 := autoTLS.InvokeBinding(ctl, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Location: "passthrough:///bufconn:443"},
+		Ref:    "testpkg.ItemService/GetItem",
+	})
+	_ = inv2.Write(ctl, map[string]any{"id": "i1"})
+	if _, err := openbindings.Single(ctl, inv2.Outputs()); err == nil {
+		t.Fatal("auto-TLS against the plaintext server should fail; the negative control is vacuous")
+	}
+}
