@@ -1,6 +1,7 @@
 package operationgraph
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -219,6 +220,26 @@ func ValidateGraph(g *Graph, operationKeys map[string]bool) []GraphValidationIss
 			addIssue("OG-V-13", fmt.Sprintf("buffer node %q must not have both until and through", key), key)
 		}
 
+		// OG-V-18: embedded schemas are 2020-12 objects — $schema, when
+		// present, pinned to the 2020-12 URI; $vocabulary nowhere within.
+		for field, raw := range map[string]*json.RawMessage{
+			"schema": node.Schema, "until": node.Until, "through": node.Through,
+		} {
+			if raw == nil {
+				continue
+			}
+			var embedded any
+			if err := json.Unmarshal(*raw, &embedded); err != nil {
+				continue // structurally invalid JSON is the schema's concern
+			}
+			obj, ok := embedded.(map[string]any)
+			if !ok {
+				addIssue("OG-V-18", fmt.Sprintf("node %q %s must be a JSON Schema 2020-12 object", key, field), key)
+				continue
+			}
+			validateEmbeddedSchema(func(msg string) { addIssue("OG-V-18", msg, key) }, fmt.Sprintf("node %q %s", key, field), obj)
+		}
+
 		// OG-V-15: onError references an existing node.
 		if node.OnError != "" {
 			if _, ok := g.Nodes[node.OnError]; !ok {
@@ -273,6 +294,34 @@ const (
 	supportedMajor = 0
 	supportedMinor = 2
 )
+
+
+// validateEmbeddedSchema enforces OG-V-18 on one embedded schema object:
+// $schema, when present, equals the 2020-12 dialect URI, and $vocabulary
+// appears nowhere within the schema tree.
+func validateEmbeddedSchema(report func(string), prefix string, s map[string]any) {
+	const draft202012 = "https://json-schema.org/draft/2020-12/schema"
+	if v, ok := s["$schema"]; ok {
+		if str, isStr := v.(string); isStr && str != draft202012 {
+			report(fmt.Sprintf("%s: $schema %q must equal %q (OG-V-18)", prefix, str, draft202012))
+		}
+	}
+	if _, ok := s["$vocabulary"]; ok {
+		report(fmt.Sprintf("%s: $vocabulary is forbidden in embedded schemas (OG-V-18)", prefix))
+	}
+	for k, v := range s {
+		switch t := v.(type) {
+		case map[string]any:
+			validateEmbeddedSchema(report, prefix+"."+k, t)
+		case []any:
+			for i, item := range t {
+				if m, ok := item.(map[string]any); ok {
+					validateEmbeddedSchema(report, fmt.Sprintf("%s.%s[%d]", prefix, k, i), m)
+				}
+			}
+		}
+	}
+}
 
 // checkVersion applies OG-T-02 to a graph's declared format version.
 func checkVersion(version string) error {
