@@ -90,8 +90,39 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 // happens on the driving goroutine, per the core invocation contract.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	// Cross-graph nesting bound (spec: Security considerations). A
+	// graph-bound operation can invoke operations bound to further graphs,
+	// including mutually recursive ones; per-graph budgets reset at each
+	// level, so the recursion budget rides the context across nested graph
+	// invocations and terminates the invocation when exhausted.
+	depth := nestingDepth(ctx)
+	if depth >= maxNestingDepth {
+		go inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeExecutionFailed,
+			Message: fmt.Sprintf("operation-graph nesting depth exceeds this implementation's recursion budget (%d); mutually recursive graph bindings have no spec-level bound (Security considerations)", maxNestingDepth),
+		})
+		return inv
+	}
+	ctx = context.WithValue(ctx, nestingDepthKey{}, depth+1)
 	go e.drive(ctx, args, inv)
 	return inv
+}
+
+// nestingDepthKey carries the cross-graph recursion budget through the
+// context of nested graph invocations.
+type nestingDepthKey struct{}
+
+// maxNestingDepth is the recursion budget for nested graph invocations. A
+// legitimate composition nesting this deep is implausible; the budget exists
+// to terminate mutually recursive graph bindings with a diagnosable error
+// instead of exhausting the stack.
+const maxNestingDepth = 32
+
+func nestingDepth(ctx context.Context) int {
+	if d, ok := ctx.Value(nestingDepthKey{}).(int); ok {
+		return d
+	}
+	return 0
 }
 
 // drive performs the preflight (load, resolve, version-check, validate) and

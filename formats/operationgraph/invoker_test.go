@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -80,3 +81,66 @@ func TestNewInvokerWithClient(t *testing.T) {
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestInvokeBinding_CrossGraphRecursionBounded pins the Security
+// considerations' cross-graph nesting bound: a graph whose operation node is
+// bound to the graph itself recurses through fresh per-graph budgets, so the
+// context-carried recursion budget must terminate it with a diagnosable
+// error instead of exhausting the stack.
+func TestInvokeBinding_CrossGraphRecursionBounded(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	graphDoc := map[string]any{"graphs": map[string]any{"loop": map[string]any{
+		"openbindings.operation-graph": "0.2.0",
+		"nodes": map[string]any{
+			"in":  map[string]any{"type": "input"},
+			"r":   map[string]any{"type": "operation", "operation": "recurse"},
+			"out": map[string]any{"type": "output"},
+		},
+		"edges": []any{
+			map[string]any{"from": "in", "to": "r"},
+			map[string]any{"from": "r", "to": "out"},
+		},
+	}}}
+
+	iface := &openbindings.Interface{
+		OpenBindings: "0.2.0",
+		Operations:   map[string]openbindings.Operation{"recurse": {}},
+		Sources: map[string]openbindings.Source{
+			"g": {Format: FormatToken, Content: graphDoc},
+		},
+		Bindings: map[string]openbindings.BindingEntry{
+			"recurse.g": {Operation: "recurse", Source: "g", Ref: "#/graphs/loop"},
+		},
+	}
+
+	opInvoker := openbindings.NewOperationInvoker()
+	opInvoker.TransformEvaluator = &jsonataEvaluator{}
+	opInvoker.AddBindingInvoker(NewInvoker(opInvoker))
+
+	call := opInvoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source:    openbindings.InvocationSource{Format: FormatToken, Content: graphDoc},
+		Ref:       "#/graphs/loop",
+		Interface: iface,
+	})
+	if err := call.Write(ctx, map[string]any{"go": true}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = call.Close()
+
+	out := call.Outputs()
+	for {
+		_, err := out.Read(ctx)
+		if err != nil {
+			ie := openbindings.AsInvocationError(err)
+			if ie == nil {
+				t.Fatalf("expected InvocationError terminal, got %v", err)
+			}
+			if !strings.Contains(ie.Message, "recursion budget") {
+				t.Fatalf("expected recursion-budget refusal, got %v", ie)
+			}
+			return
+		}
+	}
+}
