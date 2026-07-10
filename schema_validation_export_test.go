@@ -20,3 +20,15 @@ func TestValidateAgainstSchema(t *testing.T) {
 		t.Fatal("invalid value accepted")
 	}
 }
+
+// TestValidateAgainstSchema_ExternalRefFailsClosed pins the OBI-T-07/T-08
+// clarification: validation is against the FULLY RESOLVED schema, so a
+// schema carrying an external $ref the tool cannot fetch is a validation
+// error (fail closed), never a partial pass.
+func TestValidateAgainstSchema_ExternalRefFailsClosed(t *testing.T) {
+	opSchema := JSONSchema{"$ref": "https://example.com/schemas/user-input.json"}
+	err := ValidateAgainstSchema(map[string]any{"id": "u1"}, opSchema, nil)
+	if err == nil {
+		t.Fatal("external $ref should fail closed, not validate partially")
+	}
+}
