@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -63,9 +64,19 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		errs = append(errs, fmt.Sprintf("openbindings: %q is a pre-release this SDK does not declare support for (OBI-T-04)", i.OpenBindings))
 	}
 
+	// Generic-JSON view of the whole document for OBI-D-16 pointer
+	// resolution (existence checks for same-document schema $refs). A marshal
+	// failure leaves docView nil, which skips the D-16 check rather than
+	// erroring: the lossless marshal of a decoded document does not fail in
+	// practice, and D-16 is a referential-integrity check, not a parse gate.
+	var docView any
+	if data, jerr := json.Marshal(i); jerr == nil {
+		_ = json.Unmarshal(data, &docView)
+	}
+
 	// Validate schemas: keys match identifier pattern (OBI-D-03); each schema
 	// is walked for OBI-D-05 ($ref URI), OBI-D-06 ($schema dialect), OBI-D-07
-	// (no $vocabulary).
+	// (no $vocabulary), and OBI-D-16 (same-document $refs resolve).
 	schKeys := make([]string, 0, len(i.Schemas))
 	for k := range i.Schemas {
 		schKeys = append(schKeys, k)
@@ -73,7 +84,7 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 	sort.Strings(schKeys)
 	for _, k := range schKeys {
 		validateIdent(&errs, "schemas key", k)
-		walkSchema(&errs, fmt.Sprintf("schemas[%q]", k), i.Schemas[k])
+		walkSchema(&errs, fmt.Sprintf("schemas[%q]", k), i.Schemas[k], docView, false)
 	}
 
 	if i.Operations == nil {
@@ -135,10 +146,10 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 
 		// Walk operation input/output schemas for OBI-D-05/D-07/D-08.
 		if op.Input != nil {
-			walkSchema(&errs, fmt.Sprintf("operations[%q].input", k), op.Input)
+			walkSchema(&errs, fmt.Sprintf("operations[%q].input", k), op.Input, docView, false)
 		}
 		if op.Output != nil {
-			walkSchema(&errs, fmt.Sprintf("operations[%q].output", k), op.Output)
+			walkSchema(&errs, fmt.Sprintf("operations[%q].output", k), op.Output, docView, false)
 		}
 
 		// OBI-D-03: example keys must match the identifier pattern.
@@ -273,6 +284,41 @@ func appendUnknownFieldProblems(errs *[]string, prefix string, unknown map[strin
 		return
 	}
 	*errs = append(*errs, fmt.Sprintf("%s: unknown fields: %s", prefix, strings.Join(keys, ", ")))
+}
+
+
+// docPointerResolves reports whether an RFC 6901 JSON Pointer (the fragment
+// with its leading # removed) resolves to an existing location in doc, the
+// generic-JSON view of the whole OBI document. Existence only: OBI-D-16 does
+// not type-check the target.
+func docPointerResolves(doc any, pointer string) bool {
+	if pointer == "" {
+		return true // bare # addresses the document root
+	}
+	if !strings.HasPrefix(pointer, "/") {
+		return false
+	}
+	cur := doc
+	for _, tok := range strings.Split(pointer[1:], "/") {
+		tok = strings.ReplaceAll(strings.ReplaceAll(tok, "~1", "/"), "~0", "~")
+		switch node := cur.(type) {
+		case map[string]any:
+			v, ok := node[tok]
+			if !ok {
+				return false
+			}
+			cur = v
+		case []any:
+			idx, err := strconv.Atoi(tok)
+			if err != nil || idx < 0 || idx >= len(node) {
+				return false
+			}
+			cur = node[idx]
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // validateTransformRef validates that a $ref resolves to a named transform per OBI-D-10.
@@ -495,7 +541,7 @@ var arraySchemaKeywords = map[string]bool{
 // Recursion follows JSON Schema keyword shapes so that property names under
 // `properties`/`patternProperties`/`$defs`/etc. are not themselves treated as
 // schema keywords.
-func walkSchema(errs *[]string, prefix string, schema any) {
+func walkSchema(errs *[]string, prefix string, schema any, doc any, inID bool) {
 	var s map[string]any
 	switch v := schema.(type) {
 	case map[string]any:
@@ -507,6 +553,15 @@ func walkSchema(errs *[]string, prefix string, schema any) {
 	}
 	if s == nil {
 		return
+	}
+
+	// A schema that declares its own $id is a distinct schema resource: its
+	// $ref (and its subtree's) resolve against that resource's base per §10,
+	// so OBI-D-16's root-context resolution check does not apply inside it.
+	if v, ok := s["$id"]; ok {
+		if _, isStr := v.(string); isStr {
+			inID = true
+		}
 	}
 
 	if v, ok := s["$schema"]; ok {
@@ -524,6 +579,10 @@ func walkSchema(errs *[]string, prefix string, schema any) {
 				*errs = append(*errs, fmt.Sprintf("%s.$ref: %q must be a same-document fragment or an absolute URI, not a relative reference (OBI-D-05)", prefix, str))
 			} else if strings.HasPrefix(str, "#") && str != "#" && !strings.HasPrefix(str, "#/") {
 				*errs = append(*errs, fmt.Sprintf("%s.$ref: %q is a plain-name fragment; a same-document schema $ref is a JSON Pointer fragment (bare # or #/...), and the schemas map is the document's named-schema mechanism (OBI-D-05)", prefix, str))
+			} else if (str == "#" || strings.HasPrefix(str, "#/")) && !inID && doc != nil {
+				if !docPointerResolves(doc, strings.TrimPrefix(str, "#")) {
+					*errs = append(*errs, fmt.Sprintf("%s.$ref: %q does not resolve within the document (OBI-D-16)", prefix, str))
+				}
 			}
 		}
 	}
@@ -549,15 +608,15 @@ func walkSchema(errs *[]string, prefix string, schema any) {
 				}
 				sort.Strings(subKeys)
 				for _, sk := range subKeys {
-					walkSchema(errs, fmt.Sprintf("%s.%s.%s", prefix, k, sk), m[sk])
+					walkSchema(errs, fmt.Sprintf("%s.%s.%s", prefix, k, sk), m[sk], doc, inID)
 				}
 			}
 		case singleSchemaKeywords[k]:
-			walkSchema(errs, prefix+"."+k, v)
+			walkSchema(errs, prefix+"."+k, v, doc, inID)
 		case arraySchemaKeywords[k]:
 			if arr, ok := v.([]any); ok {
 				for idx, item := range arr {
-					walkSchema(errs, fmt.Sprintf("%s.%s[%d]", prefix, k, idx), item)
+					walkSchema(errs, fmt.Sprintf("%s.%s[%d]", prefix, k, idx), item, doc, inID)
 				}
 			}
 		}

@@ -369,6 +369,48 @@ func TestInterfaceValidate_PlainNameFragmentRefRejected(t *testing.T) {
 	}
 }
 
+func TestInterfaceValidate_DanglingSchemaRefRejected(t *testing.T) {
+	// OBI-D-16: a same-document schema $ref resolves from the document root;
+	// a dangling pointer invalidates the document (internal referential
+	// integrity, matching OBI-D-08/09/10).
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Missing"}},
+		},
+		Schemas: map[string]JSONSchema{"Task": {"type": "object"}},
+	}
+	err := i.Validate()
+	if err == nil {
+		t.Fatal("dangling same-document $ref should be rejected")
+	}
+	if !strings.Contains(err.Error(), "does not resolve within the document (OBI-D-16)") {
+		t.Fatalf("expected OBI-D-16 error, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_NestedIDScopeSkipsD16(t *testing.T) {
+	// A $ref inside a schema declaring its own $id resolves against that
+	// resource's base per §10 and is out of OBI-D-16's scope.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Task"}},
+		},
+		Schemas: map[string]JSONSchema{
+			"Task": {
+				"$id":        "https://example.com/task.schema.json",
+				"type":       "object",
+				"properties": map[string]any{"parent": map[string]any{"$ref": "#/$defs/base"}},
+				"$defs":      map[string]any{"base": map[string]any{"type": "string"}},
+			},
+		},
+	}
+	if err := i.Validate(); err != nil {
+		t.Fatalf("resource-internal $ref should be out of D-16 scope, got %v", err)
+	}
+}
+
 func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
