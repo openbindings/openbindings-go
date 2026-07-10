@@ -117,6 +117,7 @@ Credentials are applied based on the OpenAPI spec's `securitySchemes`:
 - `http` + `bearer`: `Authorization: Bearer <token>` from `bearerToken`
 - `http` + `basic`: `Authorization: Basic <encoded>` from `basic.username`/`basic.password`
 - `apiKey`: Placed in header, query, or cookie as the spec declares, from `apiKey`
+- `oauth2` / `openIdConnect`: `Authorization: Bearer <token>` from the `accessToken` (or `bearerToken`) context field
 
 When no security schemes are defined, falls back to bearer, then basic, then apiKey.
 
@@ -156,6 +157,7 @@ Credentials are applied based on the OpenAPI spec's security configuration:
 - **`http` + `bearer`**: Sets `Authorization: Bearer <token>` from `bearerToken` context field
 - **`http` + `basic`**: Sets `Authorization: Basic <encoded>` from `basic.username`/`basic.password` context fields
 - **`apiKey`**: Places the `apiKey` context field in the header, query param, or cookie as the spec declares
+- **`oauth2` / `openIdConnect`**: Sets `Authorization: Bearer <token>` from the `accessToken` (or `bearerToken`) context field
 
 When no security schemes are defined, falls back to bearer -> basic -> apiKey in that order.
 

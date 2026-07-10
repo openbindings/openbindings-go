@@ -38,8 +38,9 @@ const maxRouteBytes = maxCLIOutputBytes
 // the argv-facing field map (with `-`/path substitutions applied), the
 // stdin payload (nil when no field rides stdin), a cleanup for any
 // materialized temp files, and the per-field routing record (for
-// x-ob-route provenance and tests). Record values are §4.5.2
-// provenance-qualified: "assumption/argv" when the chain declined to the
+// x-ob-route provenance and tests). Record values are provenance-qualified
+// per the conventions record's x-ob-route stamps (spec/formats/README.md):
+// "assumption/argv" when the chain declined to the
 // default, "hook/<token>" when a hook elected the channel (tier-blind on
 // purpose — success provenance is).
 type routedInput struct {

@@ -148,7 +148,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 }
 
 // PrepareBinding is the side-effect-free preflight (the prepareBinding
-// operation of the openbindings.binding-invoker role): it derives the
+// operation of the openbindings.binding-invoker interface): it derives the
 // operation's auth requirements from the document's securitySchemes and
 // reports the context the invocation would require, or nil when it can
 // proceed.
@@ -283,8 +283,9 @@ func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.Resul
 	return decode, BuiltinClassify
 }
 
-// PlanContributions reports the openapi axis chain leaves: both §6 rules
-// are spec/wire answers, and routing is spec-covered (in:/requestBody) —
+// PlanContributions reports the openapi axis chain leaves: both built-in
+// default rules (the conventions record, spec/formats/README.md) are
+// spec/wire answers, and routing is spec-covered (in:/requestBody) —
 // the FieldRouter is consulted but decline-only in v1.
 func (e *Invoker) PlanContributions(_ *openbindings.BindingInvocationArgs) (*openbindings.BindingPlan, error) {
 	return &openbindings.BindingPlan{

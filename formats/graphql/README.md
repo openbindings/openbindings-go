@@ -128,7 +128,7 @@ GraphQL introspection does not expose security metadata. Credentials are applied
 2. `apiKey` context field sets `Authorization: ApiKey <key>`
 3. `basic` context fields set `Authorization: Basic <encoded>`
 
-Invocation options `headers` and `cookies` are also forwarded. If the server returns HTTP 401, the invoker's auth retry flow resolves credentials via platform callbacks and retries once.
+Invocation options `headers` and `cookies` are also forwarded. If the server returns HTTP 401, the invocation fails with a terminal `ERR_AUTH_REQUIRED` error; GraphQL introspection exposes no security metadata, so there is no pre-dispatch `CONTEXT_REQUIRED` challenge — supply credentials via the binding context up front.
 
 ### Subscriptions
 

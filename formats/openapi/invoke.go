@@ -241,7 +241,8 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 
 	// Classify, then decode — both through the consultation seam
 	// (per-invocation hook → invoker-level hook → the format builtins
-	// below). §6's pinned rules, content-independent throughout:
+	// below). The conventions record's recommended built-in defaults
+	// (spec/formats/README.md), content-independent throughout:
 	// classify = success iff status ∈ 2xx (declared `responses` never
 	// change classification — they enrich failure details); decode = the
 	// response's Content-Type HEADER decides the lane (wire framing, not
@@ -277,9 +278,10 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 
-	// §4.5.2 success stamps: decode provenance is header/content-type when
-	// the builtin (the Content-Type lane) decided, hook when overridden;
-	// classify is always assumption/2xx unless a hook widened it.
+	// Success provenance stamps (conventions record): decode provenance is
+	// header/content-type when the builtin (the Content-Type lane) decided,
+	// hook when overridden; classify is always assumption/2xx unless a hook
+	// widened it.
 	inv.SetTrailer(decodeClassifyTrailer(args.Hooks, "header/content-type"))
 	if err := inv.EmitOutput(output); err != nil {
 		return
@@ -287,9 +289,10 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	inv.CloseOutput()
 }
 
-// decodeClassifyTrailer builds the §4.5.2 x-ob-decode/x-ob-classify
-// success stamps for an HTTP-lane invoker, given the axis's builtin
-// provenance token. A hook decision on either axis stamps "hook".
+// decodeClassifyTrailer builds the x-ob-decode/x-ob-classify success
+// provenance stamps (the conventions record, spec/formats/README.md) for
+// an HTTP-lane invoker, given the axis's builtin provenance token. A hook
+// decision on either axis stamps "hook".
 func decodeClassifyTrailer(hooks *openbindings.InvokeHooks, builtinDecode string) openbindings.Metadata {
 	decode, classify := builtinDecode, "assumption/2xx"
 	if hooks.DecodeDecidedBy() == "hook" {
@@ -474,7 +477,8 @@ func schemeToRequirement(s *openapi3.SecurityScheme, baseURL string) (openbindin
 }
 
 // oauth2Requirement builds an auth.oauth2 requirement carrying the flow's
-// authorize/token URLs and scopes under the role's convention field names
+// authorize/token URLs and scopes under the binding-invoker contract's
+// convention field names
 // (authorizeUrl, tokenUrl, scopes). It prefers the authorization-code flow —
 // the only interactive, PKCE-capable flow — then implicit, then any flow with
 // an authorization endpoint. Relative URLs are resolved against the base URL.

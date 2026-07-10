@@ -198,8 +198,8 @@ Client-streaming and bidi methods are not supported and terminate pre-dispatch w
 Credentials are applied as gRPC metadata in priority order:
 
 - **bearer**: Sets `authorization: Bearer <token>` from `bearerToken` context field
-- **basic**: Sets `authorization: Basic <encoded>` from `basic.username`/`basic.password` context fields
 - **apiKey**: Sets `authorization: ApiKey <key>` from `apiKey` context field
+- **basic**: Sets `authorization: Basic <encoded>` from `basic.username`/`basic.password` context fields
 
 The context's `headers` map is also forwarded as gRPC metadata.
 

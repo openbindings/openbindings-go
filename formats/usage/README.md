@@ -112,7 +112,7 @@ Input schemas derived from usage specs inherit the source format's thin value ty
 2. Resolves the binding ref — a space-separated command path — against the command tree (empty ref = the root command)
 3. Consults the `FieldRouter` chain per input field and applies the channel mechanics (stdin piping, `-` operands, temp-file materialization) with loud slot-compatibility refusals, then builds argv from the remaining fields (flags by name, positionals in declared order)
 4. Executes the binary via `os/exec` with the constructed argv and routed stdin
-5. Classifies the exit through the seam (assumption: exit 0), decodes stdout through the seam (assumption: text), and emits the value with `x-exit-code`/`x-stderr` and the §4.5.2 provenance stamps (`x-ob-decode`, `x-ob-classify`, per-field `x-ob-route`) as trailing metadata
+5. Classifies the exit through the seam (assumption: exit 0), decodes stdout through the seam (assumption: text), and emits the value with `x-exit-code`/`x-stderr` and the provenance stamps (`x-ob-decode`, `x-ob-classify`, per-field `x-ob-route`; see the conventions record, spec/formats/README.md) as trailing metadata
 
 ### Credential application
 

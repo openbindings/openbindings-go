@@ -398,7 +398,8 @@ func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address st
 		return
 	}
 
-	// §4.5.2 success stamps: decode is spec/content-type (the message's
+	// Success provenance stamps (the conventions record,
+	// spec/formats/README.md): decode is spec/content-type (the message's
 	// declared contentType decides the lane), hook when overridden;
 	// classify is not-consulted (asyncapi runs no result classifier — the
 	// HTTP 4xx guard above is transport, not a format verdict).
@@ -793,7 +794,8 @@ func httpStatusError(resp *http.Response) *openbindings.InvocationError {
 		details["body"] = fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes)
 	} else {
 		// The raw capture, verbatim: error details carry bytes-as-text,
-		// never a sniffed parse (payload-independence, §6).
+		// never a sniffed parse (payload-independence, per the conventions
+		// record's recommended built-in defaults).
 		details["body"] = string(body)
 	}
 	ie.Details = details
@@ -1009,8 +1011,9 @@ func builtinDecodeFor(contentType string) openbindings.OutputDecoder {
 	}
 }
 
-// decodeTrailer builds the §4.5.2 x-ob-decode stamp (and the fixed
-// x-ob-classify not-consulted stamp — asyncapi runs no classifier) for a
+// decodeTrailer builds the x-ob-decode provenance stamp (the conventions
+// record, spec/formats/README.md) — and the fixed x-ob-classify
+// not-consulted stamp, asyncapi runs no classifier — for a
 // successful message decode, given the builtin decode provenance token.
 func decodeTrailer(hooks *openbindings.InvokeHooks, builtinDecode string) openbindings.Metadata {
 	decode := builtinDecode

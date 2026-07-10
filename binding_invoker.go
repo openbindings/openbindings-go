@@ -22,7 +22,7 @@ type BindingInvoker interface {
 }
 
 // BindingPreparer is the optional side-effect-free preflight capability (the
-// prepareBinding operation of the openbindings.binding-invoker role): it
+// prepareBinding operation of the openbindings.binding-invoker interface): it
 // reports the context the binding would require for this invocation, or nil
 // when the binding can proceed. Lets the operation layer resolve context
 // BEFORE the caller streams input, collapsing knowable-upfront challenges

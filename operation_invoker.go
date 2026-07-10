@@ -130,8 +130,8 @@ func (e *OperationInvoker) WithRuntime(resolver ContextResolver) *OperationInvok
 
 // Formats returns all formats registered with this invoker. It is an
 // aggregation convenience over the registered binding invokers; the
-// operation-invoker role itself carries no listFormats operation (its
-// format reach is dynamic, e.g. via delegates).
+// openbindings.operation-invoker interface itself carries no listFormats
+// operation (its format reach is dynamic, e.g. via delegates).
 func (e *OperationInvoker) Formats() []FormatInfo {
 	return e.invoker.Formats()
 }
@@ -206,7 +206,7 @@ func (e *OperationInvoker) fillBindingArgs(args *BindingInvocationArgs) {
 }
 
 // PrepareBinding is the side-effect-free preflight for a resolved binding
-// (binding-invoker role prepareBinding).
+// (the openbindings.binding-invoker interface's prepareBinding).
 func (e *OperationInvoker) PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	return e.invoker.prepareBinding(ctx, args)
 }
@@ -288,7 +288,8 @@ func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindi
 }
 
 // PrepareOperation is the operation-layer side-effect-free preflight (the
-// operation-invoker role prepareOperation), the by-reference counterpart to
+// openbindings.operation-invoker interface's prepareOperation), the
+// by-reference counterpart to
 // PrepareBinding. It resolves operation against obi to a concrete binding
 // (OBI-T-12 + OBI-T-09 selection, or a WithBindingKey-pinned binding) and
 // reports that binding's context requirements without invoking or causing any
@@ -402,7 +403,7 @@ func (e *OperationInvoker) run(
 		contextData = merged
 	}
 
-	// Preflight (binding-invoker role prepareBinding): collapse
+	// Preflight (the binding-invoker contract's prepareBinding): collapse
 	// knowable-upfront context challenges into the clean no-input-consumed
 	// case before anything is forwarded.
 	details, err := e.invoker.prepareBinding(ctx, bindingArgs())
@@ -477,7 +478,8 @@ func (e *OperationInvoker) run(
 		for k, v := range inner.Trailer() {
 			merged[k] = v
 		}
-		// §4.5.3: the unvalidated-assumption warning rides the trailer on
+		// Per the conventions record (spec/formats/README.md), the
+		// unvalidated-assumption warning rides the trailer on
 		// SUCCESS only (failures carry tier-precise provenance already),
 		// keyed on the format's own decode stamp — only an assumption
 		// lane can trigger it.

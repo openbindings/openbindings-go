@@ -181,7 +181,8 @@ type InvokeHooks struct {
 	// hook). Hooks run on a single binding goroutine per invocation.
 	decodeDecidedBy string
 	// classifyDecidedBy mirrors decodeDecidedBy for the classify axis —
-	// read by the §4.5.2 success stamps (x-ob-classify).
+	// read by the x-ob-classify success provenance stamp (the conventions
+	// record, spec/formats/README.md).
 	classifyDecidedBy string
 }
 
@@ -502,9 +503,10 @@ func FloorStamped(schema JSONSchema) bool {
 	return has
 }
 
-// AssumptionWarning composes the §4.5.3 unvalidated/undiscriminating-
-// assumption warning: it fires when an ASSUMPTION decoded the output
-// (decodeStamp is the format's §4.5.2 x-ob-decode trailer stamp —
+// AssumptionWarning composes the unvalidated/undiscriminating-assumption
+// warning recommended by the conventions record (spec/formats/README.md):
+// it fires when an ASSUMPTION decoded the output
+// (decodeStamp is the format's x-ob-decode provenance trailer stamp —
 // "assumption/<detail>" means the documented default ran; "hook",
 // "header/...", "spec/...", or absent mean it did not) AND the output
 // contract cannot catch a wrong lane (no schema, a non-discriminating
@@ -533,8 +535,8 @@ func AssumptionWarning(decodeStamp string, outputSchema JSONSchema) string {
 
 // NonDiscriminatingOutput reports whether an output contract cannot catch
 // a wrong decode lane: absent, empty, boolean-true, or admitting bare
-// strings. Content-independent contract inspection (the §4.5.3 warning's
-// trigger arms).
+// strings. Content-independent contract inspection (the assumption
+// warning's trigger arms).
 func NonDiscriminatingOutput(schema JSONSchema) bool {
 	if schema == nil || len(schema) == 0 {
 		return true

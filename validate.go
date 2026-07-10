@@ -144,7 +144,7 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 			aliasOwner[a] = k
 		}
 
-		// Walk operation input/output schemas for OBI-D-05/D-07/D-08.
+		// Walk operation input/output schemas for OBI-D-05/D-06/D-07/D-16.
 		if op.Input != nil {
 			walkSchema(&errs, fmt.Sprintf("operations[%q].input", k), op.Input, docView, false)
 		}

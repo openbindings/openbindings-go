@@ -30,13 +30,13 @@ import (
 type Metadata map[string][]string
 
 // ---------------------------------------------------------------------------
-// Context negotiation shapes (openbindings.binding-invoker role)
+// Context negotiation shapes (the openbindings.binding-invoker interface)
 // ---------------------------------------------------------------------------
 
 // ContextRequirement is one runtime prerequisite. Type names a requirement
 // family (e.g. "auth.bearer", "auth.apiKey", "auth.basic", "auth.oauth2");
 // additional fields are family-specific and round-trip through Extra (the
-// binding-invoker role declares requirement objects open).
+// binding-invoker contract declares requirement objects open).
 type ContextRequirement struct {
 	Type string `json:"type"`
 	// Durable reports whether resolved context MAY be cached under the
@@ -92,8 +92,8 @@ type ContextAlternative struct {
 }
 
 // ContextRequiredDetails is the details payload of a CONTEXT_REQUIRED
-// terminal error, per the openbindings.binding-invoker role. Alternatives is
-// disjunctive: satisfying any one alternative suffices.
+// terminal error, per the openbindings.binding-invoker interface.
+// Alternatives is disjunctive: satisfying any one alternative suffices.
 type ContextRequiredDetails struct {
 	// Target is the target the binding addresses (e.g. its endpoint URL or
 	// host); the runtime/resolver derives a storage key from it — the invoker

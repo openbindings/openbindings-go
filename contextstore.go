@@ -6,9 +6,9 @@ import "context"
 // Store-backed context resolver
 // ---------------------------------------------------------------------------
 
-// requirementFields maps standard requirement families (binding-invoker
-// role) to the well-known context field that satisfies them (context-store
-// role).
+// requirementFields maps standard requirement families to the well-known
+// context field that satisfies them, per the binding-invoker contract's
+// BindingContext shape (interfaces/binding-invoker).
 var requirementFields = map[string]string{
 	"auth.bearer": "bearerToken",
 	"auth.apiKey": "apiKey",
@@ -69,7 +69,8 @@ func ContextSatisfies(ctx map[string]any, details *ContextRequiredDetails) bool 
 }
 
 // ScopeContext returns the least-privilege subset of a stored context for a
-// challenge (binding-invoker role). A CONTEXT_REQUIRED challenge is a scope,
+// challenge (the published binding-invoker contract). A CONTEXT_REQUIRED
+// challenge is a scope,
 // not a hint: the invoker receives only what it declared it needs. Every
 // non-secret configuration field passes through unchanged; among the secret
 // credential fields, only those belonging to the requirement families of the
@@ -132,8 +133,10 @@ func ScopeContext(stored map[string]any, details *ContextRequiredDetails) map[st
 }
 
 // StoreContextResolver builds a read-only ContextResolver backed by a
-// ContextStore: the composition of the binding-invoker and context-store
-// roles. It derives the store key from the challenge's target by normalizing
+// ContextStore: it resolves the binding-invoker contract's CONTEXT_REQUIRED
+// challenges from stored BindingContext entries (the well-known fields live
+// in that contract, interfaces/binding-invoker).
+// It derives the store key from the challenge's target by normalizing
 // it (NormalizeEndpoint), returns the least-privilege subset of the stored
 // context (ScopeContext) when it satisfies one of the challenge's alternatives,
 // and declines otherwise — at which point the challenge surfaces to the caller

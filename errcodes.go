@@ -2,7 +2,7 @@ package openbindings
 
 // Canonical invocation error codes. Wire values are SCREAMING_SNAKE with an
 // ERR_ prefix, plus the un-prefixed negotiation signal CONTEXT_REQUIRED,
-// matching the openbindings.binding-invoker role. The TypeScript SDK uses
+// matching the openbindings.binding-invoker interface. The TypeScript SDK uses
 // the same values for the same failure classes, so consumers switching on
 // Code are portable for every code an invocation handle can carry. (One
 // idiom split: the local wiring failures — unknown operation/binding/source
@@ -47,12 +47,12 @@ const (
 	// before the input side closed.
 	ErrCodeMissingInput = "ERR_MISSING_INPUT"
 
-	// ErrCodeProtocol indicates a frame-protocol violation (binding-invoker
-	// role wire protocol).
+	// ErrCodeProtocol indicates a frame-protocol violation (the
+	// binding-invoker contract's wire protocol).
 	ErrCodeProtocol = "ERR_PROTOCOL"
 
 	// ErrCodeTransportClosed indicates the transport closed without a
-	// terminal frame (binding-invoker role wire protocol).
+	// terminal frame (the binding-invoker contract's wire protocol).
 	ErrCodeTransportClosed = "ERR_TRANSPORT_CLOSED"
 
 	// ErrCodeContextRequired indicates missing runtime context (credentials,

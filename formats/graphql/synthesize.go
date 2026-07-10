@@ -96,9 +96,9 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string) (ope
 	}
 
 	// GraphQL introspection does not expose security metadata, so we
-	// leave the security section empty. If the server requires auth, the
-	// invoker's auth retry flow will handle it (401 -> resolve
-	// credentials -> retry).
+	// leave the security section empty. If the server requires auth, a 401
+	// surfaces as a terminal ERR_AUTH_REQUIRED; credentials must be
+	// supplied via the binding context up front.
 
 	return iface, nil
 }
