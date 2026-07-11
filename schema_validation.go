@@ -39,6 +39,7 @@ func init() {
 		panic(fmt.Sprintf("openbindings: embedded openbindings.schema.json is not valid JSON: %v", err))
 	}
 	c := jsonschema.NewCompiler()
+	c.UseRegexpEngine(ECMARegexpEngine)
 	if err := c.AddResource("openbindings:///schema", doc); err != nil {
 		panic(fmt.Sprintf("openbindings: cannot register OBI schema: %v", err))
 	}
@@ -193,6 +194,7 @@ func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema
 		}
 	}
 	c := jsonschema.NewCompiler()
+	c.UseRegexpEngine(ECMARegexpEngine)
 	const url = "openbindings:///example-schema"
 	if err := c.AddResource(url, rootMap); err != nil {
 		return nil, err

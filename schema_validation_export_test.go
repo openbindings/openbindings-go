@@ -46,3 +46,20 @@ func TestValidateAgainstSchema_FormatIsAnnotationOnly(t *testing.T) {
 		t.Fatal("pattern is the assertion lane and must reject")
 	}
 }
+
+// TestValidateAgainstSchema_ECMAPatternDialect pins the regex dialect at
+// OBI boundaries: JSON Schema 2020-12 specifies ECMA-262 semantics, so a
+// lookahead pattern (inexpressible in RE2) asserts correctly.
+func TestValidateAgainstSchema_ECMAPatternDialect(t *testing.T) {
+	lookahead := JSONSchema{"type": "string", "pattern": "^(?=.*[A-Z]).*$"}
+	if err := ValidateAgainstSchema("Password1", lookahead, nil); err != nil {
+		t.Fatalf("lookahead must match per ECMA dialect, got %v", err)
+	}
+	if err := ValidateAgainstSchema("nocaps", lookahead, nil); err == nil {
+		t.Fatal("lookahead must reject a string without uppercase")
+	}
+	// Engine-fidelity note: regexp2's ECMAScript mode tolerates some
+	// non-ECMA extras (inline flags like (?i)) rather than rejecting
+	// them — a named liberal-acceptance delta vs TS, confined to
+	// patterns that are invalid per the spec's dialect anyway.
+}

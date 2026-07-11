@@ -8,3 +8,5 @@ require (
 )
 
 require golang.org/x/text v0.38.0
+
+require github.com/dlclark/regexp2 v1.12.0 // indirect

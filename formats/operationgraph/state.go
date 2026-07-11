@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -247,6 +248,7 @@ func (sc *schemaCache) match(schema *json.RawMessage, data any) (bool, error) {
 			return false, fmt.Errorf("compile embedded schema: %w", err)
 		}
 		compiler := jsonschema.NewCompiler()
+		compiler.UseRegexpEngine(openbindings.ECMARegexpEngine)
 		if err := compiler.AddResource("embedded.json", schemaDoc); err != nil {
 			return false, fmt.Errorf("compile embedded schema: %w", err)
 		}
