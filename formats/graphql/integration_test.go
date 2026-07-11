@@ -994,3 +994,234 @@ func TestNewInvokerWithClient(t *testing.T) {
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// ---------------------------------------------------------------------------
+// B3.5 format-parity batch
+// ---------------------------------------------------------------------------
+
+// TestIntegrationInvokeMutation_Accepts2xxStatus verifies that a 201 Created
+// response with a valid GraphQL body succeeds — GraphQL-over-HTTP responses
+// are legitimately any 2xx (TS parity; TS already accepts any 2xx).
+func TestIntegrationInvokeMutation_Accepts2xxStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "__schema") {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"__schema": testSchema}})
+			return
+		}
+		// A 201 Created is a legitimate GraphQL-over-HTTP success status.
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"createUser": map[string]any{"id": "new-123", "name": "Charlie", "email": "charlie@example.com"}},
+		})
+	}))
+	defer srv.Close()
+
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:    "Mutation/createUser",
+	})
+	out, ierr := driveSingle(t, call, map[string]any{"name": "Charlie", "email": "charlie@example.com"})
+	if ierr != nil {
+		t.Fatalf("expected a 201 response to classify as success, got stream error: %s: %s", ierr.Code, ierr.Message)
+	}
+	data, ok := out.(map[string]any)
+	if !ok || data["id"] != "new-123" {
+		t.Fatalf("expected createUser data, got %#v", out)
+	}
+}
+
+// TestIntegrationInvokeQuery_OversizedResponseRefused verifies the Go
+// response-size cap (10MB) refuses an oversized query response rather than
+// buffering it unbounded.
+func TestIntegrationInvokeQuery_OversizedResponseRefused(t *testing.T) {
+	huge := strings.Repeat("x", int(maxResponseBytes)+16)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"ping":"`))
+		_, _ = w.Write([]byte(huge))
+		_, _ = w.Write([]byte(`"}}`))
+	}))
+	defer srv.Close()
+
+	// A prebuilt _query const skips introspection entirely, isolating the
+	// cap check to the query-dispatch response.
+	inputSchema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"_query": map[string]any{"type": "string", "const": "query { ping }"}},
+	}
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source:      openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:         "Query/ping",
+		InputSchema: inputSchema,
+	})
+	_, ierr := driveSingle(t, call, nil)
+	if ierr == nil {
+		t.Fatal("expected an error for an oversized response, got none")
+	}
+	if ierr.Code != openbindings.ErrCodeExecutionFailed {
+		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeExecutionFailed)
+	}
+	if !strings.Contains(ierr.Message, "byte limit") {
+		t.Errorf("error message = %q, want to contain %q", ierr.Message, "byte limit")
+	}
+}
+
+// TestIntegrationInvokeQueryNoArgs_NoInputRecipe verifies the no-input
+// recipe for a zero-argument field resolved via introspection: the caller
+// never writes nor closes, so the binding itself must close input before
+// reading — otherwise ReadInput parks forever (the operation-layer no-input
+// convention every other format honors via a schema/args-driven fallback;
+// TS parity).
+func TestIntegrationInvokeQueryNoArgs_NoInputRecipe(t *testing.T) {
+	srv := newTestServer()
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:    "Query/users",
+	})
+	out, err := openbindings.Single(ctx, call.Outputs())
+	if err != nil {
+		t.Fatalf("no-input recipe should dispatch without a caller write/close, got: %v", err)
+	}
+	data, ok := out.([]any)
+	if !ok || len(data) != 2 {
+		t.Fatalf("expected 2 users, got %#v", out)
+	}
+}
+
+// TestIntegrationInvokeQuery_PrebuiltQueryNoVariables_NoInputRecipe is the
+// prebuilt-_query counterpart: an input schema whose only property is
+// `_query` (schemaDeclaresVariables == false) must also dispatch without a
+// caller write/close.
+func TestIntegrationInvokeQuery_PrebuiltQueryNoVariables_NoInputRecipe(t *testing.T) {
+	srv := newTestServer()
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	inputSchema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"_query": map[string]any{"type": "string", "const": "query { users { id name email } }"}},
+	}
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source:      openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:         "Query/users",
+		InputSchema: inputSchema,
+	})
+	out, err := openbindings.Single(ctx, call.Outputs())
+	if err != nil {
+		t.Fatalf("no-input recipe should dispatch without a caller write/close, got: %v", err)
+	}
+	data, ok := out.([]any)
+	if !ok || len(data) != 2 {
+		t.Fatalf("expected 2 users, got %#v", out)
+	}
+}
+
+// TestIntegrationInvokeBinding_MissingLocation verifies a pre-dispatch
+// missing-location check fires a clean ErrCodeSourceLoadFailed before any
+// network I/O, matching the TS invoker's precheck.
+func TestIntegrationInvokeBinding_MissingLocation(t *testing.T) {
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql"}, // no Location
+		Ref:    "Query/ping",
+	})
+	_, ierr := driveSingle(t, call, nil)
+	if ierr == nil {
+		t.Fatal("expected an error for a missing location, got none")
+	}
+	if ierr.Code != openbindings.ErrCodeSourceLoadFailed {
+		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeSourceLoadFailed)
+	}
+	const want = "GraphQL source requires a location (endpoint URL)"
+	if ierr.Message != want {
+		t.Errorf("error message = %q, want %q", ierr.Message, want)
+	}
+}
+
+// TestIntegrationSubscription_CloseWithoutComplete verifies that a CLEAN
+// WebSocket close (StatusNormalClosure) without a terminal `complete` frame
+// still surfaces as a terminal error with a stable, library-independent
+// message — a silent success here would mask a server that vanished
+// mid-subscription (TS parity: "WebSocket closed before subscription
+// complete").
+func TestIntegrationSubscription_CloseWithoutComplete(t *testing.T) {
+	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
+		if expectClientMessage(ctx, conn, "connection_init") != nil {
+			return
+		}
+		_ = writeServerMessage(ctx, conn, map[string]any{"type": "connection_ack"})
+		subID, err := expectClientSubscribe(ctx, conn)
+		if err != nil {
+			return
+		}
+		_ = writeServerMessage(ctx, conn, map[string]any{
+			"id":   subID,
+			"type": "next",
+			"payload": map[string]any{
+				"data": map[string]any{"messageStream": map[string]any{"id": "1", "body": "first"}},
+			},
+		})
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+	})
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:    "Subscription/messageStream",
+	})
+	events, ierr := driveOutputs(ctx, call, nil)
+	if len(events) < 1 {
+		t.Fatal("expected at least the first event before the connection closed")
+	}
+	if ierr == nil || ierr.Code != openbindings.ErrCodeStreamError {
+		t.Fatalf("expected a terminal ERR_STREAM_ERROR for the close-without-complete, got %v", ierr)
+	}
+	const want = "WebSocket closed before subscription complete"
+	if ierr.Message != want {
+		t.Errorf("error message = %q, want %q", ierr.Message, want)
+	}
+}
+
+// TestIntegrationSubscription_ClosedDuringHandshake verifies a WebSocket
+// close BEFORE connection_ack surfaces a stable, library-independent
+// ERR_CONNECT_FAILED message rather than a leaked transport error string
+// (TS parity: "WebSocket closed during handshake").
+func TestIntegrationSubscription_ClosedDuringHandshake(t *testing.T) {
+	srv := subscriptionErrorTestServer(t, func(ctx context.Context, conn *websocket.Conn) {
+		// Close immediately, before ever reading connection_init or
+		// replying with connection_ack.
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+	})
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Ref:    "Subscription/messageStream",
+	})
+	_, ierr := driveSingle(t, call, nil)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeConnectFailed {
+		t.Fatalf("expected ERR_CONNECT_FAILED for a handshake-phase close, got %v", ierr)
+	}
+	const want = "WebSocket closed during handshake"
+	if ierr.Message != want {
+		t.Errorf("error message = %q, want %q", ierr.Message, want)
+	}
+}

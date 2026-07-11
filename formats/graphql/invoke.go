@@ -285,6 +285,27 @@ func queryFromSchema(schema map[string]any) (string, bool) {
 	return constVal, true
 }
 
+// schemaDeclaresVariables reports whether the operation's input schema
+// declares any property beyond the _query const. Used to decide the
+// no-input dispatch keying for the prebuilt-query path: a synthesized
+// operation whose schema is `_query` alone takes no caller-supplied
+// variables (TS parity).
+func schemaDeclaresVariables(schema map[string]any) bool {
+	if schema == nil {
+		return false
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return false
+	}
+	for k := range props {
+		if k != queryFieldName {
+			return true
+		}
+	}
+	return false
+}
+
 // inputToVariablesPassthrough converts the operation input to a GraphQL
 // variables map, passing through all keys except the _query field.
 func inputToVariablesPassthrough(input any) map[string]any {

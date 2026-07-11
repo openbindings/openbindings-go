@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -181,7 +182,11 @@ func doGraphQLHTTP(ctx context.Context, client *http.Client, endpointURL, query 
 		return nil, resp.Header, nil, &httpError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	// GraphQL-over-HTTP responses are legitimately any 2xx (a 201, for
+	// instance, from a server that treats mutations as resource creation at
+	// the transport level); only the envelope's `errors` array — checked
+	// below by the caller — decides success (TS parity).
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, resp.Header, nil, &httpError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
@@ -233,7 +238,15 @@ func streamSubscription(ctx context.Context, client *http.Client, endpointURL, q
 		return
 	}
 	if err := expectMessage(ctx, conn, "connection_ack"); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("connection_ack: %v", err)})
+		if errors.Is(err, errWSClosed) {
+			// The connection ended before a handshake reply arrived. A
+			// stable, library-independent message beats leaking the
+			// transport's raw close-frame text (TS parity: "WebSocket
+			// closed during handshake").
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: "WebSocket closed during handshake"})
+		} else {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("connection_ack: %v", err)})
+		}
 		return
 	}
 
@@ -256,7 +269,14 @@ func streamSubscription(ctx context.Context, client *http.Client, endpointURL, q
 			if ctx.Err() != nil {
 				return // cancelled; the handle is already terminal
 			}
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()})
+			// Once any close frame arrives (clean or abnormal), Read always
+			// errors — there is no library-agnostic way to tell "the peer
+			// hung up cleanly" from "the network died" here, and either way
+			// ending without a `complete` frame is an abnormal termination.
+			// A stable message beats leaking the transport's raw close-frame
+			// text (TS parity: "WebSocket closed before subscription
+			// complete").
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: "WebSocket closed before subscription complete"})
 			return
 		}
 
@@ -320,10 +340,16 @@ func writeJSON(ctx context.Context, conn *websocket.Conn, v any) error {
 	return conn.Write(ctx, websocket.MessageText, raw)
 }
 
+// errWSClosed marks a connection-close detected while expecting a specific
+// handshake message, so the caller can substitute a stable,
+// library-independent message instead of leaking the transport's raw
+// close-frame text.
+var errWSClosed = errors.New("websocket closed")
+
 func expectMessage(ctx context.Context, conn *websocket.Conn, expectedType string) error {
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", errWSClosed, err)
 	}
 	var msg struct {
 		Type string `json:"type"`

@@ -129,13 +129,61 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
+	// Pre-dispatch validation: fail before any network I/O or input read, so
+	// a caller retry after resolving the location never re-sends
+	// already-consumed input (TS parity). `content` pins the schema but
+	// execution always POSTs to `location` (OBI-T-15 service-addressed
+	// pairing), so this check is unconditional.
+	if args.Source.Location == "" {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: "GraphQL source requires a location (endpoint URL)"})
+		return
+	}
+
 	headers := buildHTTPHeaders(args.Context)
 
-	// Input is the GraphQL variables object. An operation-layer call for an
-	// operation that declares no input (InputSchema == nil) closes input on
-	// entry; otherwise read the single variables object the caller writes.
-	var input any
+	// Resolve the query plan BEFORE reading input, so "does this dispatch
+	// want a caller-supplied variables object" is known ahead of the read.
+	// A prebuilt `_query` const skips introspection outright — the schema
+	// declaring properties beyond `_query` answers the question; otherwise
+	// the field is resolved via inline content or (cached) network
+	// introspection and its declared args answer it (TS parity: schema/
+	// args-driven, the GraphQL-native signal).
+	prebuiltQuery, hasPrebuilt := queryFromSchema(args.InputSchema)
+
+	var schema *introspectionSchema
+	wantsInput := true
+	if hasPrebuilt {
+		wantsInput = schemaDeclaresVariables(args.InputSchema)
+	} else {
+		s, ierr := e.resolveSchema(bctx, args, headers)
+		if ierr != nil {
+			inv.FireError(ierr)
+			return
+		}
+		schema = s
+		targetField, ferr := resolveField(schema, rootType, fieldName)
+		if ferr != nil {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: ferr.Error()})
+			return
+		}
+		wantsInput = len(targetField.Args) > 0
+	}
+
+	// Operation-layer no-input convention (checked last so it can override
+	// the GraphQL-native signal above, mirroring every other format's
+	// invoker): the call came through the operation layer for an operation
+	// that declares no input at all. Dispatch with empty input even when
+	// the field takes GraphQL arguments the OBI did not express.
 	if args.Binding != nil && args.InputSchema == nil {
+		wantsInput = false
+	}
+
+	// Input is the GraphQL variables object. A dispatch that wants no input
+	// closes input on entry — a caller of a no-input dispatch never writes
+	// nor closes, so reading would park forever; otherwise read the single
+	// variables object the caller writes.
+	var input any
+	if !wantsInput {
 		_ = inv.CloseInput()
 	} else {
 		v, rerr := inv.ReadInput(bctx)
@@ -151,20 +199,13 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		_ = inv.CloseInput()
 	}
 
-	// Build the query. A prebuilt `_query` const in the operation's input
-	// schema skips introspection entirely; otherwise introspect (or parse
-	// inline content) and synthesize the query from the field descriptor.
+	// Build the query from the already-resolved plan.
 	var query string
 	var variables map[string]any
-	if q, ok := queryFromSchema(args.InputSchema); ok {
-		query = q
+	if hasPrebuilt {
+		query = prebuiltQuery
 		variables = inputToVariablesPassthrough(input)
 	} else {
-		schema, ierr := e.resolveSchema(bctx, args, headers)
-		if ierr != nil {
-			inv.FireError(ierr)
-			return
-		}
 		q, vars, berr := buildQueryFromIntrospection(schema, rootType, fieldName, input)
 		if berr != nil {
 			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: berr.Error()})
