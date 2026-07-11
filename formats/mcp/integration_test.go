@@ -115,6 +115,34 @@ func setupMCPServer(t *testing.T) (*httptest.Server, *testState) {
 		}, nil, nil
 	})
 
+	// Register a tool that sends a progress notification with an explicit
+	// total of 0. Pins the NAMED GAP (see the TS-side test of the same
+	// name in invoker.test.ts and the batch's final report): the go-mcp
+	// SDK's ProgressNotificationParams.Total is a plain float64 tagged
+	// `json:"total,omitempty"` whose own doc comment says "Zero means
+	// unknown", so this binding cannot distinguish an explicit total:0
+	// from an absent total -- both arrive as the Go zero value. TS's zod
+	// schema preserves an explicit total:0. Not fixable without bypassing
+	// go-mcp's typed API; tracked as a divergence forced by the two SDKs'
+	// underlying MCP libraries, not a choice either binding author made.
+	type progressZeroInput struct{}
+	gomcp.AddTool(server, &gomcp.Tool{
+		Name:        "progressZeroTotal",
+		Description: "Sends a single progress notification with total:0",
+	}, func(ctx context.Context, req *gomcp.CallToolRequest, args progressZeroInput) (*gomcp.CallToolResult, any, error) {
+		token := req.Params.GetProgressToken()
+		if token != nil && req.Session != nil {
+			_ = req.Session.NotifyProgress(ctx, &gomcp.ProgressNotificationParams{
+				ProgressToken: token,
+				Progress:      1,
+				Total:         0,
+			})
+		}
+		return &gomcp.CallToolResult{
+			Content: []gomcp.Content{&gomcp.TextContent{Text: "done"}},
+		}, nil, nil
+	})
+
 	// Register a static resource.
 	server.AddResource(&gomcp.Resource{
 		Name:        "status",
@@ -277,9 +305,9 @@ func TestIntegration_SynthesizeInterface(t *testing.T) {
 		t.Errorf("version = %q, want 1.0.0", iface.Version)
 	}
 
-	// Tools: echo, alwaysFails, slow, longRunning; resource: status; prompt: greet.
-	if len(iface.Operations) != 6 {
-		t.Fatalf("expected 6 operations, got %d: %v", len(iface.Operations), keys(iface.Operations))
+	// Tools: echo, alwaysFails, slow, longRunning, progressZeroTotal; resource: status; prompt: greet.
+	if len(iface.Operations) != 7 {
+		t.Fatalf("expected 7 operations, got %d: %v", len(iface.Operations), keys(iface.Operations))
 	}
 	for _, op := range []string{"echo", "longRunning", "status", "greet"} {
 		if _, ok := iface.Operations[op]; !ok {
@@ -662,6 +690,44 @@ func TestIntegration_ToolProgressNotifications(t *testing.T) {
 			if ms, isStr := msg.(string); !isStr || !strings.HasPrefix(ms, "step ") {
 				t.Errorf("progress event %d: message = %v, want \"step N\"", i, msg)
 			}
+		}
+	}
+}
+
+// TestIntegration_ToolProgressZeroTotal pins a NAMED GAP against the TS SDK
+// (see the identically-named test in invoker.test.ts and the B3.5 batch's
+// final report): an explicit total:0 the server sends is indistinguishable,
+// once go-mcp has unmarshaled it, from no total at all -- both are the Go
+// zero value on a plain (non-pointer) float64 field the go-mcp SDK itself
+// tags `json:"total,omitempty"` and documents as "Zero means unknown"
+// (ProgressNotificationParams.Total). This binding's emitted progress map
+// therefore omits "total" here, where the TS SDK's zod schema (which
+// distinguishes "absent" from "present and falsy") preserves it. Forced by
+// the two SDKs' underlying MCP libraries, not a choice either binding
+// author made -- not fixable here without bypassing go-mcp's typed API to
+// hand-parse raw JSON-RPC, disproportionate to a total=0 edge case.
+func TestIntegration_ToolProgressZeroTotal(t *testing.T) {
+	ts, _ := setupMCPServer(t)
+
+	invoker := NewInvoker()
+	defer invoker.Close()
+
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/progressZeroTotal", nil))
+	if err := call.Write(bg(), map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+
+	vals, err := drainOutputs(t, call)
+	if err != nil {
+		t.Fatalf("unexpected terminal error: %v", err)
+	}
+	for i, ev := range vals {
+		data, ok := ev.(map[string]any)
+		if !ok || data["progress"] == nil {
+			continue // the final tool result, not a progress event
+		}
+		if _, hasTotal := data["total"]; hasTotal {
+			t.Errorf("progress event %d: NAMED GAP violated -- total:0 must be dropped (go-mcp's own zero-means-unknown convention), got %v", i, data)
 		}
 	}
 }
