@@ -585,21 +585,27 @@ func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, 
 	}()
 
 	// Socket -> outputs. Owns the terminal transition: clean socket close ->
-	// CloseOutput; socket error -> ERR_STREAM_ERROR.
+	// CloseOutput; socket error or backpressure overflow -> ERR_STREAM_ERROR.
+	// Overflow fails only this subscription — the shared reader keeps
+	// broadcasting to the pooled connection's other listeners untouched.
 	for {
-		frame, closed, closeErr, ok := sub.next(ctx)
+		res, ok := sub.next(ctx)
 		if !ok {
 			return // invocation terminated (cancelled) while waiting
 		}
-		if closed {
-			if closeErr != nil {
-				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: closeErr.Error()})
+		if res.Overflowed {
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: res.OverflowMsg})
+			return
+		}
+		if res.Closed {
+			if res.CloseErr != nil {
+				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: res.CloseErr.Error()})
 			} else {
 				h.CloseOutput()
 			}
 			return
 		}
-		out, derr := decodeWSFrame(args, siteFor(args, serverURL), declaredContentType(doc, asyncOp), frame)
+		out, derr := decodeWSFrame(args, siteFor(args, serverURL), declaredContentType(doc, asyncOp), res.Frame)
 		if derr != nil {
 			// A decode error mid-stream is terminal; already-emitted
 			// outputs stand (drain-before-terminal).
@@ -628,24 +634,67 @@ func declaresBearerScheme(doc *document, asyncOp *asyncOperation) bool {
 	return false
 }
 
+// Backpressure bounds for the undelivered-frame buffer between a pooled
+// socket's broadcast and one receive subscription's consumer: whichever
+// bound trips first fails THAT subscription loudly rather than buffering
+// unboundedly (bounded-queue-fail-loud, per spec/formats/asyncapi.md's WS
+// slow-consumer ruling — Redis client-output-buffer-limit, NATS
+// slow-consumer, and MQTT max_queued_messages are the pub/sub-ecosystem
+// precedent, and NATS pairs a count bound with a byte bound the same way).
+// Reference-package defaults, not spec-mandated numbers. var, not const, so
+// tests can lower them instead of pushing the full volume through a test
+// socket.
+var (
+	maxWSBufferedFrames = 1024
+	maxWSBufferedBytes  = 64 * 1024 * 1024 // 64 MiB
+)
+
 // wsSubscription buffers broadcast frames from a pooled socket for one
 // consumer, preserving arrival order without blocking the shared reader
-// goroutine (the EmitOutput parking downstream is the real backpressure).
+// goroutine. The buffer is itself bounded (maxWSBufferedFrames /
+// maxWSBufferedBytes, whichever trips first): once a consumer stops
+// draining, push() stops accepting new frames for THIS subscription only —
+// the shared reader keeps broadcasting to every other listener on the
+// pooled connection unaffected — and next() surfaces the terminal error
+// after draining whatever was already buffered (drain-before-terminal).
+// runWSReceive's deferred unsubscribe() detaches this listener once the
+// terminal fires; the pooled socket itself is never touched.
 type wsSubscription struct {
-	mu       sync.Mutex
-	frames   [][]byte
-	closed   bool
-	closeErr error
-	notify   chan struct{} // 1-buffered wake signal
+	mu          sync.Mutex
+	frames      [][]byte
+	bufBytes    int
+	closed      bool
+	closeErr    error
+	overflowed  bool
+	overflowMsg string
+	notify      chan struct{} // 1-buffered wake signal
 }
 
 func newWSSubscription() *wsSubscription {
 	return &wsSubscription{notify: make(chan struct{}, 1)}
 }
 
+// push appends a broadcast frame unless the subscription has already
+// overflowed or closed. Tripping either bound marks the subscription
+// overflowed and drops this (and every subsequent) frame — the tripping
+// frame itself is never buffered, mirroring the TS reference invoker.
 func (s *wsSubscription) push(frame []byte) {
 	s.mu.Lock()
-	s.frames = append(s.frames, frame)
+	if s.overflowed || s.closed {
+		s.mu.Unlock()
+		return
+	}
+	switch {
+	case len(s.frames) >= maxWSBufferedFrames:
+		s.overflowed = true
+		s.overflowMsg = fmt.Sprintf("backpressure overflow: more than %d undelivered frames", maxWSBufferedFrames)
+	case s.bufBytes+len(frame) > maxWSBufferedBytes:
+		s.overflowed = true
+		s.overflowMsg = fmt.Sprintf("backpressure overflow: more than %d undelivered bytes", maxWSBufferedBytes)
+	default:
+		s.frames = append(s.frames, frame)
+		s.bufBytes += len(frame)
+	}
 	s.mu.Unlock()
 	s.wake()
 }
@@ -665,28 +714,44 @@ func (s *wsSubscription) wake() {
 	}
 }
 
-// next returns the next frame, or closed=true once the socket has closed
-// (buffered frames always drain first), or ok=false when ctx ends first.
-func (s *wsSubscription) next(ctx context.Context) (frame []byte, closed bool, closeErr error, ok bool) {
+// wsSubResult is one dequeued step of a wsSubscription: exactly one of
+// (Frame set), Overflowed, or Closed is true.
+type wsSubResult struct {
+	Frame       []byte
+	Overflowed  bool
+	OverflowMsg string
+	Closed      bool
+	CloseErr    error
+}
+
+// next returns the next frame (buffered frames always drain first before
+// Overflowed or Closed surfaces), or ok=false when ctx ends first.
+func (s *wsSubscription) next(ctx context.Context) (res wsSubResult, ok bool) {
 	for {
 		s.mu.Lock()
 		if len(s.frames) > 0 {
-			frame = s.frames[0]
+			frame := s.frames[0]
 			s.frames = s.frames[1:]
+			s.bufBytes -= len(frame)
 			s.mu.Unlock()
-			return frame, false, nil, true
+			return wsSubResult{Frame: frame}, true
+		}
+		if s.overflowed {
+			msg := s.overflowMsg
+			s.mu.Unlock()
+			return wsSubResult{Overflowed: true, OverflowMsg: msg}, true
 		}
 		if s.closed {
 			err := s.closeErr
 			s.mu.Unlock()
-			return nil, true, err, true
+			return wsSubResult{Closed: true, CloseErr: err}, true
 		}
 		s.mu.Unlock()
 
 		select {
 		case <-s.notify:
 		case <-ctx.Done():
-			return nil, false, nil, false
+			return wsSubResult{}, false
 		}
 	}
 }
