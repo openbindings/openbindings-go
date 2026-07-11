@@ -1062,3 +1062,56 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 		t.Errorf("phantom body wrapper reached the wire: %s", receivedBody)
 	}
 }
+
+// TestIntegration_CollisionDeliversToBothWireLocations proves the
+// field-collision rule end to end: PUT /users/{id} with id also required
+// in the body sends ONE caller value to BOTH wire locations.
+func TestIntegration_CollisionDeliversToBothWireLocations(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ts.Close()
+
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.0.0",
+	  "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {
+	    "/users/{id}": {
+	      "put": {
+	        "operationId": "updateUser",
+	        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+	        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+	          "type": "object",
+	          "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+	          "required": ["id", "name"]
+	        }}}},
+	        "responses": {"200": {"description": "ok"}}
+	      }
+	    }
+	  }
+	}`, ts.URL)
+
+	inv := NewInvoker()
+	call := inv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: "openapi@3.0.0", Content: spec},
+		Ref:    "#/paths/~1users~1{id}/put",
+	})
+	if err := call.Write(context.Background(), map[string]any{"id": "u1", "name": "Ada"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openbindings.Single(context.Background(), call.Outputs()); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/users/u1" {
+		t.Fatalf("path = %q, want /users/u1", gotPath)
+	}
+	if gotBody["id"] != "u1" || gotBody["name"] != "Ada" {
+		t.Fatalf("body must carry the colliding field too, got %v", gotBody)
+	}
+}

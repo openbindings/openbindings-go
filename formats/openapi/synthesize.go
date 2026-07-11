@@ -11,7 +11,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func convertDocToInterface(doc *openapi3.T, location string) openbindings.Interface {
+func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindings.SynthesizerWarning)) openbindings.Interface {
 	formatVersion := openbindings.DetectFormatVersion(doc.OpenAPI)
 
 	sourceEntry := openbindings.Source{
@@ -80,7 +80,7 @@ func convertDocToInterface(doc *openapi3.T, location string) openbindings.Interf
 				obiOp.Tags = op.Tags
 			}
 
-			inputSchema := buildInputSchema(op, pathParams, refRegistry)
+			inputSchema := buildInputSchema(op, pathParams, refRegistry, opKey, warn)
 			if inputSchema != nil {
 				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry)
 				obiOp.Input = translateSchemaDialect(inlined, formatVersion)
@@ -181,7 +181,7 @@ func buildJSONPointerRef(path, method string) string {
 	return "#/paths/" + escaped + "/" + strings.ToLower(method)
 }
 
-func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, refRegistry map[string]any) map[string]any {
+func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, refRegistry map[string]any, opKey string, warn func(openbindings.SynthesizerWarning)) map[string]any {
 	properties := map[string]any{}
 	var required []string
 
@@ -222,6 +222,18 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 			}
 			if bodyProps, ok := bodySchema["properties"].(map[string]any); ok {
 				for k, v := range bodyProps {
+					// Field-collision rule: a name declared as a parameter
+					// AND a body property flattens to ONE input field (the
+					// body's schema wins deterministically); at invocation
+					// the one value is delivered to every declared wire
+					// location. Warn so the merge is never silent.
+					if _, collides := properties[k]; collides && warn != nil {
+						warn(openbindings.SynthesizerWarning{
+							Code:    "openapi.param_body_collision",
+							Message: fmt.Sprintf("field %q is declared as a parameter and a body property; the flattened input carries one field (body schema shown) whose value is delivered to both wire locations at invocation", k),
+							Path:    fmt.Sprintf("operations.%s.input.properties.%s", opKey, k),
+						})
+					}
 					properties[k] = v
 				}
 				required = append(required, stringSlice(bodySchema["required"])...)

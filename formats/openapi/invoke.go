@@ -147,7 +147,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		_ = inv.CloseInput()
 	}
 
-	resolvedPath, queryParams, headerParams, bodyFields := classifyInput(allParams, inputMap, pathTemplate)
+	resolvedPath, queryParams, headerParams, bodyFields := classifyInput(allParams, inputMap, pathTemplate, bodyPropertyNames(op))
 
 	reqURL := baseURL + resolvedPath
 	if len(queryParams) > 0 {
@@ -608,7 +608,7 @@ func resolveBaseURLWithLocation(doc *openapi3.T, ctx map[string]any, sourceLocat
 	return base, nil
 }
 
-func classifyInput(params openapi3.Parameters, input map[string]any, pathTemplate string) (resolvedPath string, query, headers, body map[string]any) {
+func classifyInput(params openapi3.Parameters, input map[string]any, pathTemplate string, bodyProps map[string]bool) (resolvedPath string, query, headers, body map[string]any) {
 	query = map[string]any{}
 	headers = map[string]any{}
 	body = map[string]any{}
@@ -641,6 +641,14 @@ func classifyInput(params openapi3.Parameters, input map[string]any, pathTemplat
 		default:
 			body[name] = value
 		}
+		// One name, one value, delivered to EVERY declared wire location:
+		// a field that is both a parameter and a body property (PUT
+		// /users/{id} with id in the body) rides the parameter location
+		// AND stays in the body — the flattened contract says what, the
+		// wire locations are plumbing.
+		if isParam && bodyProps[name] {
+			body[name] = value
+		}
 	}
 
 	// Declared cookie params travel in a Cookie header (sorted for a
@@ -664,6 +672,34 @@ func classifyInput(params openapi3.Parameters, input map[string]any, pathTemplat
 
 func hasRequestBody(op *openapi3.Operation) bool {
 	return op.RequestBody != nil && op.RequestBody.Value != nil
+}
+
+// bodyPropertyNames returns the JSON request body's declared top-level
+// property names. Used for the field-collision rule: a flattened input
+// field that is both a parameter and a body property is delivered to both
+// wire locations. The loader resolves $refs, so schema values are direct.
+func bodyPropertyNames(op *openapi3.Operation) map[string]bool {
+	if !hasRequestBody(op) {
+		return nil
+	}
+	for contentType, media := range op.RequestBody.Value.Content {
+		if media == nil || media.Schema == nil || media.Schema.Value == nil {
+			continue
+		}
+		if contentType != "application/json" && !strings.HasSuffix(contentType, "+json") {
+			continue
+		}
+		props := media.Schema.Value.Properties
+		if len(props) == 0 {
+			return nil
+		}
+		names := make(map[string]bool, len(props))
+		for name := range props {
+			names[name] = true
+		}
+		return names
+	}
+	return nil
 }
 
 // requiredInputMissing reports why a bare input close cannot satisfy the

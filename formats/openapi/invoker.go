@@ -241,7 +241,12 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
-	iface := convertDocToInterface(doc, src.Location)
+	warn := func(w openbindings.SynthesizerWarning) {
+		if in.OnWarning != nil {
+			in.OnWarning(w)
+		}
+	}
+	iface := convertDocToInterface(doc, src.Location, warn)
 	// Content-fed synthesis: the emitted source must stay invocable. A
 	// source needs location or content; with no location, dropping the
 	// provided content would emit neither.

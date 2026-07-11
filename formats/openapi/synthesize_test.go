@@ -37,7 +37,7 @@ func minimalDoc() *openapi3.T {
 
 func TestConvertDocToInterface_CopiesMetadata(t *testing.T) {
 	doc := minimalDoc()
-	iface := convertDocToInterface(doc, "https://example.com/openapi.json")
+	iface := convertDocToInterface(doc, "https://example.com/openapi.json", nil)
 
 	if iface.Name != "Test API" {
 		t.Errorf("Name = %q, want %q", iface.Name, "Test API")
@@ -52,7 +52,7 @@ func TestConvertDocToInterface_CopiesMetadata(t *testing.T) {
 
 func TestConvertDocToInterface_CreatesOperations(t *testing.T) {
 	doc := minimalDoc()
-	iface := convertDocToInterface(doc, "")
+	iface := convertDocToInterface(doc, "", nil)
 
 	if len(iface.Operations) != 2 {
 		t.Fatalf("len(Operations) = %d, want 2", len(iface.Operations))
@@ -67,7 +67,7 @@ func TestConvertDocToInterface_CreatesOperations(t *testing.T) {
 
 func TestConvertDocToInterface_CreatesBindingsWithRefs(t *testing.T) {
 	doc := minimalDoc()
-	iface := convertDocToInterface(doc, "")
+	iface := convertDocToInterface(doc, "", nil)
 
 	if len(iface.Bindings) != 2 {
 		t.Fatalf("len(Bindings) = %d, want 2", len(iface.Bindings))
@@ -91,7 +91,7 @@ func TestConvertDocToInterface_CreatesBindingsWithRefs(t *testing.T) {
 
 func TestConvertDocToInterface_CreatesSourceEntry(t *testing.T) {
 	doc := minimalDoc()
-	iface := convertDocToInterface(doc, "https://example.com/openapi.json")
+	iface := convertDocToInterface(doc, "https://example.com/openapi.json", nil)
 
 	src, ok := iface.Sources[DefaultSourceName]
 	if !ok {
@@ -114,7 +114,7 @@ func TestConvertDocToInterface_NoPaths(t *testing.T) {
 		OpenAPI: "3.0.3",
 		Info:    &openapi3.Info{Title: "Empty", Version: "1.0.0"},
 	}
-	iface := convertDocToInterface(doc, "")
+	iface := convertDocToInterface(doc, "", nil)
 
 	if len(iface.Operations) != 0 {
 		t.Errorf("len(Operations) = %d, want 0", len(iface.Operations))
@@ -137,7 +137,7 @@ func TestConvertDocToInterface_DerivesKeyFromOperationId(t *testing.T) {
 			}),
 		),
 	}
-	iface := convertDocToInterface(doc, "")
+	iface := convertDocToInterface(doc, "", nil)
 
 	if _, ok := iface.Operations["findPets"]; !ok {
 		t.Errorf("expected operation key 'findPets', got keys: %v", keys(iface.Operations))
@@ -157,7 +157,7 @@ func TestConvertDocToInterface_DerivesKeyFromPathWhenNoOperationId(t *testing.T)
 			}),
 		),
 	}
-	iface := convertDocToInterface(doc, "")
+	iface := convertDocToInterface(doc, "", nil)
 
 	// Should derive key from path + method
 	if _, ok := iface.Operations["pets.get"]; !ok {
@@ -197,7 +197,7 @@ paths:
 	if err != nil {
 		t.Fatalf("loadDocument: %v", err)
 	}
-	iface := convertDocToInterface(doc, "")
+	iface := convertDocToInterface(doc, "", nil)
 
 	op, ok := iface.Operations["abilityList"]
 	if !ok {
@@ -251,7 +251,7 @@ paths:
 	if err != nil {
 		t.Fatalf("loadDocument: %v", err)
 	}
-	iface := convertDocToInterface(doc, "")
+	iface := convertDocToInterface(doc, "", nil)
 
 	op := iface.Operations["x"]
 	props := op.Output["properties"].(map[string]any)
@@ -289,7 +289,7 @@ paths:
 	if err != nil {
 		t.Fatalf("loadDocument: %v", err)
 	}
-	iface := convertDocToInterface(doc, "")
+	iface := convertDocToInterface(doc, "", nil)
 
 	op := iface.Operations["q"]
 	props := op.Input["properties"].(map[string]any)
@@ -347,5 +347,45 @@ func TestSynthesizeInterface_RefusesMultipleSources(t *testing.T) {
 	})
 	if !errors.Is(err, openbindings.ErrMultipleSources) {
 		t.Fatalf("want ErrMultipleSources, got %v", err)
+	}
+}
+
+// TestSynthesize_ParamBodyCollisionWarns pins the field-collision rule's
+// synthesis half: the merge is deterministic (body schema wins) and never
+// silent — a SynthesizerWarning names the field and the delivery rule.
+func TestSynthesize_ParamBodyCollisionWarns(t *testing.T) {
+	spec := `{
+	  "openapi": "3.0.0",
+	  "info": {"title": "t", "version": "1"},
+	  "paths": {
+	    "/users/{id}": {
+	      "put": {
+	        "operationId": "updateUser",
+	        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+	        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+	          "type": "object",
+	          "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+	          "required": ["id", "name"]
+	        }}}},
+	        "responses": {"200": {"description": "ok"}}
+	      }
+	    }
+	  }
+	}`
+	var warnings []openbindings.SynthesizerWarning
+	synth := NewSynthesizer()
+	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources:   []openbindings.SynthesizeSource{{Content: spec}},
+		OnWarning: func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 || warnings[0].Code != "openapi.param_body_collision" {
+		t.Fatalf("want one param_body_collision warning, got %v", warnings)
+	}
+	props, _ := iface.Operations["updateUser"].Input["properties"].(map[string]any)
+	if _, ok := props["id"]; !ok {
+		t.Fatalf("flattened input must carry one id field, got %v", props)
 	}
 }

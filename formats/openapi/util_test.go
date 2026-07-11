@@ -377,7 +377,7 @@ func TestClassifyInput_PathQueryHeaderBody(t *testing.T) {
 		"title":        "hello",
 	}
 
-	resolvedPath, query, headers, body := classifyInput(params, input, "/items/{id}")
+	resolvedPath, query, headers, body := classifyInput(params, input, "/items/{id}", nil)
 
 	if resolvedPath != "/items/42" {
 		t.Errorf("resolvedPath = %q, want %q", resolvedPath, "/items/42")
@@ -409,7 +409,7 @@ func TestClassifyInput_CookieParamsGoToCookieHeader(t *testing.T) {
 		"title":      "hello",
 	}
 
-	_, _, headers, body := classifyInput(params, input, "/session")
+	_, _, headers, body := classifyInput(params, input, "/session", nil)
 
 	if got := headers["Cookie"]; got != "csrf=c-2; session_id=s-1" {
 		t.Errorf("headers[Cookie] = %v, want %q", got, "csrf=c-2; session_id=s-1")
@@ -429,7 +429,7 @@ func TestClassifyInput_UnknownParamsGoToBody(t *testing.T) {
 	params := openapi3.Parameters{}
 	input := map[string]any{"foo": "bar", "baz": 1}
 
-	_, _, _, body := classifyInput(params, input, "/test")
+	_, _, _, body := classifyInput(params, input, "/test", nil)
 
 	if len(body) != 2 {
 		t.Errorf("body has %d entries, want 2", len(body))
@@ -623,5 +623,37 @@ func TestBuildMultipartBody_BinaryFieldWrongType(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "expected []byte") {
 		t.Errorf("error = %q, want it to mention []byte", err.Error())
+	}
+}
+
+// TestClassifyInput_CollisionDeliversToBothLocations pins the
+// field-collision rule: a field declared as a parameter AND a body
+// property carries ONE value delivered to every declared wire location.
+func TestClassifyInput_CollisionDeliversToBothLocations(t *testing.T) {
+	params := openapi3.Parameters{
+		{Value: &openapi3.Parameter{Name: "id", In: "path", Required: true}},
+	}
+	input := map[string]any{"id": "u1", "name": "Ada"}
+	path, _, _, body := classifyInput(params, input, "/users/{id}", map[string]bool{"id": true, "name": true})
+	if path != "/users/u1" {
+		t.Fatalf("path = %q, want /users/u1", path)
+	}
+	if body["id"] != "u1" {
+		t.Fatalf("body must keep the colliding field, got %v", body)
+	}
+	if body["name"] != "Ada" {
+		t.Fatalf("body missing name: %v", body)
+	}
+}
+
+// Without a body declaration the parameter stays exclusive (unchanged).
+func TestClassifyInput_ParamOnlyStaysExclusive(t *testing.T) {
+	params := openapi3.Parameters{
+		{Value: &openapi3.Parameter{Name: "id", In: "path", Required: true}},
+	}
+	input := map[string]any{"id": "u1"}
+	_, _, _, body := classifyInput(params, input, "/users/{id}", nil)
+	if _, ok := body["id"]; ok {
+		t.Fatalf("param-only field must not leak into the body: %v", body)
 	}
 }
