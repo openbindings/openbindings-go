@@ -291,6 +291,15 @@ func appendUnknownFieldProblems(errs *[]string, prefix string, unknown map[strin
 // generic-JSON view of the whole OBI document. Existence only: OBI-D-16 does
 // not type-check the target.
 func docPointerResolves(doc any, pointer string) bool {
+	// The fragment is the pointer's URI-fragment representation (RFC 6901
+	// §6): percent-decode the whole fragment first, then evaluate the
+	// result as a JSON Pointer (§10). Malformed percent-encoding simply
+	// fails to resolve — it is already a D-05 char-screen violation upstream.
+	decoded, err := url.PathUnescape(pointer)
+	if err != nil {
+		return false
+	}
+	pointer = decoded
 	if pointer == "" {
 		return true // bare # addresses the document root
 	}
@@ -536,7 +545,9 @@ var arraySchemaKeywords = map[string]bool{
 //   - OBI-D-07: $vocabulary keyword is forbidden anywhere in any schema.
 //   - OBI-D-05: $ref and $id values MUST be absolute or same-document and
 //     well-formed URI references (RFC 3986 §4.1); $dynamicRef and
-//     $dynamicAnchor do not appear at OBI positions at all.
+//     $dynamicAnchor do not appear at OBI positions at all. A nested $id
+//     inside a schema that already declares one is resource-internal and
+//     exempt from the absoluteness check, per §10 clause 2.
 //
 // Recursion follows JSON Schema keyword shapes so that property names under
 // `properties`/`patternProperties`/`$defs`/etc. are not themselves treated as
@@ -554,6 +565,13 @@ func walkSchema(errs *[]string, prefix string, schema any, doc any, inID bool) {
 	if s == nil {
 		return
 	}
+
+	// wasInID captures the incoming scope before the mutation below: it
+	// distinguishes an $id at an OBI position (must be absolute, OBI-D-05)
+	// from a nested $id inside a schema that already declares one (resolves
+	// against that resource's base per JSON Schema 2020-12 and MAY be
+	// relative — resource-internal, §10 clause 2).
+	wasInID := inID
 
 	// A schema that declares its own $id is a distinct schema resource: its
 	// $ref (and its subtree's) resolve against that resource's base per §10,
@@ -602,7 +620,7 @@ func walkSchema(errs *[]string, prefix string, schema any, doc any, inID bool) {
 		}
 	}
 	if v, ok := s["$id"]; ok {
-		if str, ok := v.(string); ok && !referenceIsAbsolute(str) {
+		if str, ok := v.(string); ok && !wasInID && !referenceIsAbsolute(str) {
 			*errs = append(*errs, fmt.Sprintf("%s.$id: %q must be an absolute URI (OBI-D-05)", prefix, str))
 		}
 	}

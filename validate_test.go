@@ -389,6 +389,42 @@ func TestInterfaceValidate_DanglingSchemaRefRejected(t *testing.T) {
 	}
 }
 
+func TestInterfaceValidate_PercentEncodedFragmentResolves(t *testing.T) {
+	// RFC 6901 §6 / OBI-D-16: the fragment is percent-decoded first, then
+	// evaluated as a JSON Pointer — "#/schemas/T%61sk" addresses the
+	// schemas key "Task", exactly as "#/schemas/Task" does.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$ref": "#/schemas/T%61sk"}},
+		},
+		Schemas: map[string]JSONSchema{"Task": {"type": "object"}},
+	}
+	if err := i.Validate(); err != nil {
+		t.Fatalf("percent-encoded fragment should resolve, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) {
+	// A percent-encoded fragment that decodes to a genuinely-missing
+	// location still fails OBI-D-16 — decoding does not weaken the
+	// referential-integrity check.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$ref": "#/schemas/M%69ssing"}},
+		},
+		Schemas: map[string]JSONSchema{"Task": {"type": "object"}},
+	}
+	err := i.Validate()
+	if err == nil {
+		t.Fatal("dangling percent-encoded $ref should be rejected")
+	}
+	if !strings.Contains(err.Error(), "does not resolve within the document (OBI-D-16)") {
+		t.Fatalf("expected OBI-D-16 error, got %v", err)
+	}
+}
+
 func TestInterfaceValidate_NestedIDScopeSkipsD16(t *testing.T) {
 	// A $ref inside a schema declaring its own $id resolves against that
 	// resource's base per §10 and is out of OBI-D-16's scope.
@@ -431,6 +467,50 @@ func TestInterfaceValidate_AnchorInsideIDScopePermitted(t *testing.T) {
 	}
 	if err := i.Validate(); err != nil {
 		t.Fatalf("anchor inside $id scope must be permitted, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_NestedRelativeIDInsideIDScopePermitted(t *testing.T) {
+	// §10 clause 2 / OBI-D-05: a nested $id inside a schema that already
+	// declares its own $id resolves against that resource's base per JSON
+	// Schema 2020-12 and MAY be relative — that resource's internal
+	// business, the same scope carve-out as $ref/$anchor/dynamic-pair.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Task"}},
+		},
+		Schemas: map[string]JSONSchema{
+			"Task": {
+				"$id":   "https://example.com/task.schema.json",
+				"type":  "object",
+				"$defs": map[string]any{"kind": map[string]any{"$id": "kind.schema.json", "type": "string"}},
+			},
+		},
+	}
+	if err := i.Validate(); err != nil {
+		t.Fatalf("nested relative $id inside $id scope must be permitted, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_TopLevelRelativeIDRejected(t *testing.T) {
+	// A schema $id at an OBI position (not nested inside another
+	// $id-declaring schema) MUST still be absolute (OBI-D-05).
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Task"}},
+		},
+		Schemas: map[string]JSONSchema{
+			"Task": {"$id": "task.schema.json", "type": "object"},
+		},
+	}
+	err := i.Validate()
+	if err == nil {
+		t.Fatal("relative $id at an OBI position should be rejected")
+	}
+	if !strings.Contains(err.Error(), `$id: "task.schema.json" must be an absolute URI (OBI-D-05)`) {
+		t.Fatalf("expected OBI-D-05 $id error, got %v", err)
 	}
 }
 

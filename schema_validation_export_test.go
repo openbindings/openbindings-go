@@ -98,6 +98,28 @@ func TestValidateAgainstSchema_DynamicPairInsideEmbeddedID(t *testing.T) {
 	}
 }
 
+// TestValidateAgainstSchema_PercentEncodedFragmentResolves pins the
+// invocation-boundary compiler (compileExampleSchema, via the underlying
+// jsonschema/v6 library) resolving a percent-encoded same-document
+// fragment end to end: RFC 6901 §6 decodes the fragment before evaluating
+// it as a JSON Pointer, so "#/schemas/T%61sk" reaches the schemas key
+// "Task" exactly as "#/schemas/Task" does — the compile backend needs no
+// SDK-side normalization here (santhosh-tekuri/jsonschema/v6 is
+// RFC-correct on its own).
+func TestValidateAgainstSchema_PercentEncodedFragmentResolves(t *testing.T) {
+	schemas := map[string]JSONSchema{
+		"Task": {"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}},
+	}
+	opSchema := JSONSchema{"$ref": "#/schemas/T%61sk"}
+
+	if err := ValidateAgainstSchema(map[string]any{"name": "ok"}, opSchema, schemas); err != nil {
+		t.Fatalf("percent-encoded fragment should resolve end to end, got %v", err)
+	}
+	if err := ValidateAgainstSchema(map[string]any{"name": 5}, opSchema, schemas); err == nil {
+		t.Fatal("resolved schema should still enforce its constraints")
+	}
+}
+
 // TestValidateAgainstSchema_ReachableClosureOnly pins the scope of
 // T-07/T-08's "whole governing schema": the static closure REACHABLE from
 // the governing root (keyword subschemas + reference targets,
