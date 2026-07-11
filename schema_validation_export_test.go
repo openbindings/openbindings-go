@@ -63,3 +63,46 @@ func TestValidateAgainstSchema_ECMAPatternDialect(t *testing.T) {
 	// them — a named liberal-acceptance delta vs TS, confined to
 	// patterns that are invalid per the spec's dialect anyway.
 }
+
+// TestValidateAgainstSchema_ReachableClosureOnly pins the scope of
+// T-07/T-08's "whole governing schema": the static closure REACHABLE from
+// the governing root (keyword subschemas + reference targets,
+// transitively). A lexically-present but unreachable entry — an
+// unreferenced $defs member, an unrelated document-schemas entry merged
+// into the compound — never participates in a verdict and must not poison
+// the boundary. A dangling same-document ref there is OBI-D-16's
+// document-level concern, not an invocation refusal. Mirrors the TS SDK's
+// schema-conformance oracle.
+func TestValidateAgainstSchema_ReachableClosureOnly(t *testing.T) {
+	// Unreferenced $defs entry with an external $ref: must not refuse.
+	dead := JSONSchema{
+		"type":  "string",
+		"$defs": map[string]any{"dead": map[string]any{"$ref": "https://example.com/never-fetched.json"}},
+	}
+	if err := ValidateAgainstSchema("hi", dead, nil); err != nil {
+		t.Fatalf("unreachable $defs entry must not poison the boundary, got %v", err)
+	}
+	// Unrelated document-schemas entry with an external $ref: must not
+	// poison an operation that never references it.
+	unrelated := map[string]JSONSchema{
+		"Unused": {"$ref": "https://example.com/never-fetched.json"},
+	}
+	if err := ValidateAgainstSchema("hi", JSONSchema{"type": "string"}, unrelated); err != nil {
+		t.Fatalf("unreachable document schema must not poison the boundary, got %v", err)
+	}
+	// The same external $ref REACHED from the root still fails closed.
+	reached := JSONSchema{
+		"$ref":  "#/$defs/a",
+		"$defs": map[string]any{"a": map[string]any{"$ref": "https://example.com/never-fetched.json"}},
+	}
+	if err := ValidateAgainstSchema("hi", reached, nil); err == nil {
+		t.Fatal("external $ref reached from the root must fail closed")
+	}
+	// And a document-schemas entry reached from the root still fails closed.
+	used := map[string]JSONSchema{
+		"Used": {"$ref": "https://example.com/never-fetched.json"},
+	}
+	if err := ValidateAgainstSchema("hi", JSONSchema{"$ref": "#/schemas/Used"}, used); err == nil {
+		t.Fatal("reachable document schema's external $ref must fail closed")
+	}
+}

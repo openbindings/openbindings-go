@@ -15,11 +15,12 @@ type conformanceFixture struct {
 }
 
 type conformanceTest struct {
-	Description       string          `json:"description"`
-	Document          json.RawMessage `json:"document"`
-	Valid             bool            `json:"valid"`
-	Violates          []string        `json:"violates,omitempty"`
-	RequiresMaxTested string          `json:"requiresMaxTested,omitempty"`
+	Description          string          `json:"description"`
+	Document             json.RawMessage `json:"document"`
+	Valid                bool            `json:"valid"`
+	Violates             []string        `json:"violates,omitempty"`
+	RequiresMaxTested    string          `json:"requiresMaxTested,omitempty"`
+	RequiresMinSupported string          `json:"requiresMinSupported,omitempty"`
 }
 
 func TestConformanceCorpus(t *testing.T) {
@@ -77,6 +78,14 @@ func runConformanceDir(t *testing.T, dir string) {
 					higher, err := IsHigherMajorOrPre1MinorThanMaxTested(tt.RequiresMaxTested)
 					if err == nil && higher {
 						t.Skip("requires MaxTested >=", tt.RequiresMaxTested)
+					}
+				}
+				if tt.RequiresMinSupported != "" {
+					// Downward-refusal tests apply only when the SDK's minimum
+					// supported version is at or above the annotation's value.
+					lower, err := IsLowerThanMinSupported(tt.RequiresMinSupported)
+					if err == nil && !lower && tt.RequiresMinSupported != MinSupportedVersion {
+						t.Skip("requires MinSupported >=", tt.RequiresMinSupported)
 					}
 				}
 
