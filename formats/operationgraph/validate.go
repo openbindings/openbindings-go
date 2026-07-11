@@ -330,6 +330,9 @@ func validateEmbeddedSchema(report func(string), prefix string, s map[string]any
 	if _, ok := s["$vocabulary"]; ok {
 		report(fmt.Sprintf("%s: $vocabulary is forbidden in embedded schemas (OG-V-18)", prefix))
 	}
+	if _, ok := s["$ref"]; ok {
+		report(fmt.Sprintf("%s: $ref is forbidden in embedded schemas — they are self-contained (OG-V-18)", prefix))
+	}
 	for k, v := range s {
 		switch {
 		case embeddedSchemaMapKeywords[k]:
