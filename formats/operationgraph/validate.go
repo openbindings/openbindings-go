@@ -295,7 +295,6 @@ const (
 	supportedMinor = 2
 )
 
-
 // Keyword-shape tables for the OG-V-18 walk: recursion follows JSON Schema
 // 2020-12 keyword shapes so that property NAMES under `properties`/`$defs`/
 // etc. are schema content, never treated as keywords (the same discipline as

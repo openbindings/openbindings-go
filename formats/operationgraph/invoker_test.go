@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"time"
 	"testing"
+	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
