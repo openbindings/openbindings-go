@@ -631,7 +631,10 @@ func classifyInput(params openapi3.Parameters, input map[string]any, pathTemplat
 		}
 		switch classification {
 		case "path":
-			resolvedPath = strings.ReplaceAll(resolvedPath, "{"+name+"}", fmt.Sprintf("%v", value))
+			// Encode so a value containing `/`, `?`, or `#` cannot corrupt
+			// the request URL's path/query structure (TS parity: the same
+			// encodeURIComponent byte set, so both SDKs emit identical URLs).
+			resolvedPath = strings.ReplaceAll(resolvedPath, "{"+name+"}", encodePathValue(fmt.Sprintf("%v", value)))
 		case "query":
 			query[name] = value
 		case "header":
@@ -670,6 +673,31 @@ func classifyInput(params openapi3.Parameters, input map[string]any, pathTemplat
 	return resolvedPath, query, headers, body
 }
 
+// encodePathValue percent-encodes one path parameter value with exactly
+// JavaScript's encodeURIComponent byte set (every byte except ALPHA / DIGIT /
+// "-" "_" "." "!" "~" "*" "'" "(" ")" is %XX-escaped, UTF-8 bytewise), so the
+// Go and TS invokers substitute byte-identical URL path segments.
+// url.PathEscape is NOT equivalent: it passes sub-delims like "$&+,:;=@"
+// through unescaped.
+func encodePathValue(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', '0' <= c && c <= '9',
+			c == '-', c == '_', c == '.', c == '!', c == '~', c == '*', c == '\'', c == '(', c == ')':
+			b.WriteByte(c)
+		default:
+			const hex = "0123456789ABCDEF"
+			b.WriteByte('%')
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&0xF])
+		}
+	}
+	return b.String()
+}
+
 func hasRequestBody(op *openapi3.Operation) bool {
 	return op.RequestBody != nil && op.RequestBody.Value != nil
 }
@@ -686,7 +714,14 @@ func bodyPropertyNames(op *openapi3.Operation) map[string]bool {
 		if media == nil || media.Schema == nil || media.Schema.Value == nil {
 			continue
 		}
-		if contentType != "application/json" && !strings.HasSuffix(contentType, "+json") {
+		// Match on the media type alone: parameters like "; charset=utf-8"
+		// never change whether the body is JSON (TS parity).
+		mt := contentType
+		if i := strings.Index(mt, ";"); i >= 0 {
+			mt = mt[:i]
+		}
+		mt = strings.TrimSpace(mt)
+		if mt != "application/json" && !strings.HasSuffix(mt, "+json") {
 			continue
 		}
 		props := media.Schema.Value.Properties

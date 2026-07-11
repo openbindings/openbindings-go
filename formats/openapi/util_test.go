@@ -425,6 +425,42 @@ func TestClassifyInput_CookieParamsGoToCookieHeader(t *testing.T) {
 	}
 }
 
+// TestClassifyInput_PathValuesPercentEncoded pins the cross-SDK URL rule
+// (mirrors the TS invoker.test.ts pin): path parameter values are
+// percent-encoded with the encodeURIComponent byte set, so a value carrying
+// `/`, `?`, or `#` cannot corrupt the request URL's path/query structure.
+func TestClassifyInput_PathValuesPercentEncoded(t *testing.T) {
+	params := openapi3.Parameters{
+		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "id", In: "path"}},
+	}
+	input := map[string]any{"id": "a/b?c#d"}
+
+	resolvedPath, _, _, _ := classifyInput(params, input, "/users/{id}", nil)
+
+	if resolvedPath != "/users/a%2Fb%3Fc%23d" {
+		t.Errorf("resolvedPath = %q, want %q", resolvedPath, "/users/a%2Fb%3Fc%23d")
+	}
+}
+
+// TestEncodePathValue_MatchesEncodeURIComponent pins the exact byte set:
+// encodeURIComponent leaves ALPHA / DIGIT / - _ . ! ~ * ' ( ) unescaped and
+// %XX-escapes everything else (UTF-8 bytewise) — sub-delims like "$&+,:;=@"
+// ARE escaped (unlike Go's url.PathEscape).
+func TestEncodePathValue_MatchesEncodeURIComponent(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"plain-1_2.3", "plain-1_2.3"},
+		{"!~*'()", "!~*'()"},
+		{"a b", "a%20b"},
+		{"$&+,:;=@", "%24%26%2B%2C%3A%3B%3D%40"},
+		{"héllo", "h%C3%A9llo"},
+	}
+	for _, tc := range cases {
+		if got := encodePathValue(tc.in); got != tc.want {
+			t.Errorf("encodePathValue(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestClassifyInput_UnknownParamsGoToBody(t *testing.T) {
 	params := openapi3.Parameters{}
 	input := map[string]any{"foo": "bar", "baz": 1}
@@ -643,6 +679,36 @@ func TestClassifyInput_CollisionDeliversToBothLocations(t *testing.T) {
 	}
 	if body["name"] != "Ada" {
 		t.Fatalf("body missing name: %v", body)
+	}
+}
+
+// TestBodyPropertyNames_MediaTypeParameters pins that media-type parameters
+// ("; charset=utf-8") never change whether a request body is JSON: the
+// collision rule still sees the body's property names (TS parity — TS
+// stripped parameters, Go compared the full content-type key and missed).
+func TestBodyPropertyNames_MediaTypeParameters(t *testing.T) {
+	op := &openapi3.Operation{
+		RequestBody: &openapi3.RequestBodyRef{
+			Value: &openapi3.RequestBody{
+				Content: openapi3.Content{
+					"application/json; charset=utf-8": &openapi3.MediaType{
+						Schema: &openapi3.SchemaRef{
+							Value: &openapi3.Schema{
+								Type: &openapi3.Types{"object"},
+								Properties: openapi3.Schemas{
+									"id":   &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+									"name": &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	names := bodyPropertyNames(op)
+	if !names["id"] || !names["name"] {
+		t.Fatalf("bodyPropertyNames must see through media-type parameters, got %v", names)
 	}
 }
 

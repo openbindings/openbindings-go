@@ -1063,6 +1063,101 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestIntegration_RefParametersRouteCorrectly pins that $ref'd parameters
+// (the components/parameters indirection, a production norm) are resolved at
+// document load, so a $ref'd path/query parameter routes to its declared wire
+// location instead of silently falling into the body (TS is aligned TO this).
+func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
+	var gotPath, gotQuery string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.Query().Get("verbose")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.0.3",
+	  "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {
+	    "/users/{id}": {
+	      "get": {
+	        "operationId": "getUser",
+	        "parameters": [
+	          {"$ref": "#/components/parameters/IdParam"},
+	          {"$ref": "#/components/parameters/VerboseParam"}
+	        ],
+	        "responses": {"200": {"description": "ok"}}
+	      }
+	    }
+	  },
+	  "components": {
+	    "parameters": {
+	      "IdParam": {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
+	      "VerboseParam": {"name": "verbose", "in": "query", "schema": {"type": "boolean"}}
+	    }
+	  }
+	}`, srv.URL)
+
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: spec},
+		Ref:    "#/paths/~1users~1{id}/get",
+	})
+	if _, ierr := driveSingle(t, call, map[string]any{"id": "u1", "verbose": true}); ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	if gotPath != "/users/u1" {
+		t.Errorf("path = %q, want /users/u1 ($ref'd path param must route to the path)", gotPath)
+	}
+	if gotQuery != "true" {
+		t.Errorf("query verbose = %q, want true ($ref'd query param must route to the query)", gotQuery)
+	}
+	if len(gotBody) > 0 {
+		t.Errorf("no field should fall to the body of a GET without requestBody, got %s", gotBody)
+	}
+}
+
+// TestPrepareBinding_UsesCachePrimedFromContent pins the content+location
+// cache rule: an invocation with BOTH content and location primes the
+// location-keyed document cache, so a later location-only prepareBinding
+// (which never fetches) can report requirements from the warm cache
+// (TS is aligned TO this).
+func TestPrepareBinding_UsesCachePrimedFromContent(t *testing.T) {
+	spec, _ := json.Marshal(makeOpenAPISpec("https://api.example.com"))
+	location := "https://example.test/openapi.json"
+
+	binv := NewInvoker()
+	// Content+location invocation: no fetch happens (content is authoritative),
+	// but the parse must land in the location-keyed cache.
+	call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Location: location, Content: string(spec)},
+		Ref:    "#/paths/~1items/get",
+	})
+	_, ierr := driveOutputs(context.Background(), call, nil)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeContextRequired {
+		t.Fatalf("expected CONTEXT_REQUIRED, got %v", ierr)
+	}
+
+	// Location-only preflight: must be served from the warm cache.
+	details, err := binv.PrepareBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Location: location},
+		Ref:    "#/paths/~1items/get",
+	})
+	if err != nil {
+		t.Fatalf("prepareBinding: %v", err)
+	}
+	if details == nil {
+		t.Fatal("prepareBinding must see the cached document primed from content")
+	}
+	if details.Target != "https://api.example.com" {
+		t.Errorf("target = %q, want https://api.example.com", details.Target)
+	}
+}
+
 // TestIntegration_CollisionDeliversToBothWireLocations proves the
 // field-collision rule end to end: PUT /users/{id} with id also required
 // in the body sends ONE caller value to BOTH wire locations.
