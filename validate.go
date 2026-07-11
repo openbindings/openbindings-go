@@ -286,7 +286,6 @@ func appendUnknownFieldProblems(errs *[]string, prefix string, unknown map[strin
 	*errs = append(*errs, fmt.Sprintf("%s: unknown fields: %s", prefix, strings.Join(keys, ", ")))
 }
 
-
 // docPointerResolves reports whether an RFC 6901 JSON Pointer (the fragment
 // with its leading # removed) resolves to an existing location in doc, the
 // generic-JSON view of the whole OBI document. Existence only: OBI-D-16 does
@@ -536,7 +535,8 @@ var arraySchemaKeywords = map[string]bool{
 //   - OBI-D-06: $schema, where present, MUST equal the 2020-12 dialect URI.
 //   - OBI-D-07: $vocabulary keyword is forbidden anywhere in any schema.
 //   - OBI-D-05: $ref and $id values MUST be absolute or same-document and
-//     well-formed URI references (RFC 3986 §4.1).
+//     well-formed URI references (RFC 3986 §4.1); $dynamicRef and
+//     $dynamicAnchor do not appear at OBI positions at all.
 //
 // Recursion follows JSON Schema keyword shapes so that property names under
 // `properties`/`patternProperties`/`$defs`/etc. are not themselves treated as
@@ -571,6 +571,18 @@ func walkSchema(errs *[]string, prefix string, schema any, doc any, inID bool) {
 	}
 	if _, ok := s["$vocabulary"]; ok {
 		*errs = append(*errs, fmt.Sprintf("%s: $vocabulary keyword is forbidden in OBI documents (OBI-D-07)", prefix))
+	}
+	// The dynamic pair does not appear at OBI positions at all: dynamic
+	// resolution follows the runtime dynamic scope rather than the document
+	// (§10 clause 2). Inside a schema declaring its own $id, both are that
+	// resource's internal business — the same scope carve-out as $ref/$anchor.
+	if !inID {
+		if _, ok := s["$dynamicRef"]; ok {
+			*errs = append(*errs, fmt.Sprintf("%s: $dynamicRef does not appear at OBI positions; dynamic resolution follows the runtime dynamic scope rather than the document (OBI-D-05)", prefix))
+		}
+		if _, ok := s["$dynamicAnchor"]; ok {
+			*errs = append(*errs, fmt.Sprintf("%s: $dynamicAnchor does not appear at OBI positions; it would be a second named-schema mechanism competing with the schemas map, as $anchor would (OBI-D-05)", prefix))
+		}
 	}
 	if v, ok := s["$ref"]; ok {
 		if str, ok := v.(string); ok {

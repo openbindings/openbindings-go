@@ -434,6 +434,95 @@ func TestInterfaceValidate_AnchorInsideIDScopePermitted(t *testing.T) {
 	}
 }
 
+func TestInterfaceValidate_DynamicRefAtOperationPositionRejected(t *testing.T) {
+	// OBI-D-05: the dynamic pair does not appear at OBI positions at all;
+	// $dynamicRef on an operation's output schema is a violation.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$dynamicRef": "#node"}},
+		},
+	}
+	err := i.Validate()
+	if err == nil {
+		t.Fatal("$dynamicRef at an OBI position should be rejected")
+	}
+	if !strings.Contains(err.Error(), "$dynamicRef does not appear at OBI positions") || !strings.Contains(err.Error(), "OBI-D-05") {
+		t.Fatalf("expected OBI-D-05 $dynamicRef error, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_DynamicAnchorInSchemasMapRejected(t *testing.T) {
+	// OBI-D-05: $dynamicAnchor would be a second named-schema mechanism
+	// competing with the schemas map, exactly as $anchor would.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Task"}},
+		},
+		Schemas: map[string]JSONSchema{
+			"Task": {"$dynamicAnchor": "task", "type": "object"},
+		},
+	}
+	err := i.Validate()
+	if err == nil {
+		t.Fatal("$dynamicAnchor at an OBI position should be rejected")
+	}
+	if !strings.Contains(err.Error(), "$dynamicAnchor does not appear at OBI positions") || !strings.Contains(err.Error(), "OBI-D-05") {
+		t.Fatalf("expected OBI-D-05 $dynamicAnchor error, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_DynamicPairInsideIDScopePermitted(t *testing.T) {
+	// A schema resource declaring its own $id may use the dynamic pair
+	// internally, per the same scope rule as $ref/$anchor — including full
+	// 2020-12 recursive-extension semantics (a sibling $dynamicAnchor plus a
+	// nested $dynamicRef referencing it).
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Tree"}},
+		},
+		Schemas: map[string]JSONSchema{
+			"Tree": {
+				"$id":            "https://example.com/tree.schema.json",
+				"$dynamicAnchor": "node",
+				"type":           "object",
+				"properties": map[string]any{
+					"children": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"$dynamicRef": "#node"},
+					},
+				},
+			},
+		},
+	}
+	if err := i.Validate(); err != nil {
+		t.Fatalf("dynamic pair inside $id scope must be permitted, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_PropertyNamedDynamicRefIsData(t *testing.T) {
+	// A property NAMED $dynamicRef under `properties` is data, not a
+	// keyword: the walker is keyword-shape-aware, mirroring the same guard
+	// already in place for $ref.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{
+				"type": "object",
+				"properties": map[string]any{
+					"$dynamicRef":    map[string]any{"type": "string"},
+					"$dynamicAnchor": map[string]any{"type": "string"},
+				},
+			}},
+		},
+	}
+	if err := i.Validate(); err != nil {
+		t.Fatalf("property named $dynamicRef/$dynamicAnchor must be treated as data, got %v", err)
+	}
+}
+
 func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",

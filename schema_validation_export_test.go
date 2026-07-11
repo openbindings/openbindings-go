@@ -64,6 +64,40 @@ func TestValidateAgainstSchema_ECMAPatternDialect(t *testing.T) {
 	// patterns that are invalid per the spec's dialect anyway.
 }
 
+// TestValidateAgainstSchema_DynamicPairInsideEmbeddedID pins that the
+// invocation-boundary compiler (the reachable-closure resolution performed
+// by compileExampleSchema, via the underlying jsonschema/v6 library) does
+// not choke on a legal $dynamicRef/$dynamicAnchor pair confined inside a
+// schema declaring its own $id (OBI-D-05's carve-out; OBI-D-16 notes
+// $dynamicRef does not participate in same-document reference resolution).
+// Full 2020-12 recursive-extension semantics apply within the resource.
+func TestValidateAgainstSchema_DynamicPairInsideEmbeddedID(t *testing.T) {
+	schemas := map[string]JSONSchema{
+		"Tree": {
+			"$id":            "https://example.com/tree.schema.json",
+			"$dynamicAnchor": "node",
+			"type":           "object",
+			"properties": map[string]any{
+				"children": map[string]any{
+					"type":  "array",
+					"items": map[string]any{"$dynamicRef": "#node"},
+				},
+			},
+		},
+	}
+	opSchema := JSONSchema{"$ref": "#/schemas/Tree"}
+
+	good := map[string]any{"children": []any{map[string]any{"children": []any{}}}}
+	if err := ValidateAgainstSchema(good, opSchema, schemas); err != nil {
+		t.Fatalf("legal embedded-$id dynamic pair must not choke the boundary scan, got %v", err)
+	}
+
+	bad := map[string]any{"children": []any{map[string]any{"children": "not-an-array"}}}
+	if err := ValidateAgainstSchema(bad, opSchema, schemas); err == nil {
+		t.Fatal("value violating the recursively-applied schema should be rejected")
+	}
+}
+
 // TestValidateAgainstSchema_ReachableClosureOnly pins the scope of
 // T-07/T-08's "whole governing schema": the static closure REACHABLE from
 // the governing root (keyword subschemas + reference targets,
