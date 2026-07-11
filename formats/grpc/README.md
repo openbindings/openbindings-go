@@ -168,7 +168,7 @@ The resulting OBI will have `format: "grpc"`, reflecting the gRPC access path. I
 - Services discovered via gRPC server reflection or `.proto` file parsing
 - Infrastructure services filtered out (`grpc.reflection.*`, `grpc.health.*`)
 - Client-streaming RPCs skipped (unary and server-streaming supported)
-- Protobuf message types converted to JSON Schema (int64 mapped to string for JS safety)
+- Protobuf message types converted to JSON Schema (int64-family fields as `{"type": "integer", "format": "int64"}`; downstream codegen reads `format: int64` to pick precision-preserving types)
 - Methods sorted alphabetically for deterministic output
 - No security metadata in protobuf; an unauthenticated call surfaces as a terminal `ERR_AUTH_REQUIRED`, and credential resolution happens above the binding (operation-layer context negotiation)
 
