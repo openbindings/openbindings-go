@@ -144,13 +144,14 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 
 	// --- Dispatch. ---
+	site := siteFor(args, location)
 	var derr *openbindings.InvocationError
 	var suspect bool
 	switch entityType {
 	case "tools":
-		derr, suspect = runTool(callCtx, session, name, toolArgs, inv, hc, setHeader)
+		derr, suspect = runTool(callCtx, session, name, toolArgs, inv, hc, setHeader, site, args.Hooks)
 	case "resources":
-		derr, suspect = runResource(callCtx, session, name, inv, hc, setHeader)
+		derr, suspect = runResource(callCtx, session, name, inv, hc, setHeader, site, args.Hooks)
 	default: // prompts
 		derr, suspect = runPrompt(callCtx, session, name, promptArgs, inv, hc, setHeader)
 	}
@@ -218,6 +219,8 @@ func runTool(
 	inv *openbindings.InvocationImpl[any, any],
 	hc *headerCapture,
 	setHeader func(),
+	site openbindings.InvokeSite,
+	hooks *openbindings.InvokeHooks,
 ) (*openbindings.InvocationError, bool) {
 	// Each call gets a fresh progress token so the server can correlate
 	// notifications to this specific invocation.
@@ -291,7 +294,18 @@ func runTool(
 	}
 
 	setHeader()
-	if err := inv.EmitOutput(toolResultValue(result)); err != nil {
+	value, decodeStamp, derr := toolResultValue(result, site, hooks)
+	if derr != nil {
+		return derr, false
+	}
+	// Success provenance stamps (conventions record): decode provenance
+	// names the lane that produced the value; classification is
+	// protocol-native (CallToolResult.isError), stamped as such.
+	inv.SetTrailer(openbindings.Metadata{
+		"x-ob-decode":   {decodeStamp},
+		"x-ob-classify": {"protocol/isError"},
+	})
+	if err := inv.EmitOutput(value); err != nil {
 		return nil, false // invocation terminated while parked; already settled
 	}
 	inv.CloseOutput()
@@ -306,6 +320,8 @@ func runResource(
 	inv *openbindings.InvocationImpl[any, any],
 	hc *headerCapture,
 	setHeader func(),
+	site openbindings.InvokeSite,
+	hooks *openbindings.InvokeHooks,
 ) (*openbindings.InvocationError, bool) {
 	result, err := session.session.ReadResource(ctx, &gomcp.ReadResourceParams{URI: uri})
 	if err != nil {
@@ -313,7 +329,12 @@ func runResource(
 	}
 
 	setHeader()
-	if err := inv.EmitOutput(resourceValue(result)); err != nil {
+	value, decodeStamp, derr := resourceValue(result, site, hooks)
+	if derr != nil {
+		return derr, false
+	}
+	inv.SetTrailer(openbindings.Metadata{"x-ob-decode": {decodeStamp}})
+	if err := inv.EmitOutput(value); err != nil {
 		return nil, false
 	}
 	inv.CloseOutput()
@@ -475,48 +496,125 @@ func (hc *headerCapture) lastStatus() (int, string) {
 // Result conversion
 // ---------------------------------------------------------------------------
 
-// toolResultValue converts a CallToolResult into the output value. Prefers
-// structured content when available; otherwise extracts the content array.
-func toolResultValue(result *gomcp.CallToolResult) any {
+// siteFor builds the hook-consultation site for an MCP binding.
+func siteFor(args *openbindings.BindingInvocationArgs, target string) openbindings.InvokeSite {
+	var site openbindings.InvokeSite
+	if args.Site != nil {
+		site = *args.Site
+	} else {
+		site.Format = args.Source.Format
+		site.Ref = args.Ref
+	}
+	if site.Target == "" {
+		site.Target = target
+	}
+	return site
+}
+
+// toolResultValue converts a CallToolResult into the output value and its
+// decode-provenance stamp. structuredContent is MCP's declared structured
+// lane (2025-11-25: servers MUST conform it to outputSchema) and wins
+// outright — there are no bytes to decode. A single text content is a
+// STRING by the content-independent builtin: MCP defines JSON-in-text as
+// the backwards-compatibility shadow of structuredContent, so parsing it
+// is a consumer choice, opted into through the decode seam, never a
+// payload sniff. Other content shapes are protocol-structured and pass
+// through as generic values.
+func toolResultValue(result *gomcp.CallToolResult, site openbindings.InvokeSite, hooks *openbindings.InvokeHooks) (any, string, *openbindings.InvocationError) {
 	if result.StructuredContent != nil {
 		switch sc := result.StructuredContent.(type) {
 		case json.RawMessage:
 			var structured any
 			if json.Unmarshal(sc, &structured) == nil {
-				return structured
+				return structured, "structuredContent", nil
 			}
 		default:
-			return sc
+			return sc, "structuredContent", nil
 		}
 	}
-	return extractContent(result.Content)
+	if len(result.Content) == 1 {
+		if tc, ok := result.Content[0].(*gomcp.TextContent); ok {
+			out, err := hooks.DecodeOutput(site, openbindings.RawResult{Body: []byte(tc.Text)}, builtinTextDecode)
+			if err != nil {
+				return nil, "", openbindings.AsInvocationError(err)
+			}
+			return out, decodeStampFor(hooks, "text"), nil
+		}
+	}
+	return extractContent(result.Content), "content", nil
 }
 
-// resourceValue converts a ReadResourceResult into the output value.
-func resourceValue(result *gomcp.ReadResourceResult) any {
+// builtinTextDecode is the MCP text builtin: the value is the text,
+// verbatim. Content-independent per the conventions record; JSON-in-text
+// consumers opt in with a decode hook.
+func builtinTextDecode(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+	return string(raw.Body), nil
+}
+
+// decodeStampFor names the decode lane for the x-ob-decode provenance
+// stamp: the builtin's token, or "hook" when a hook decided.
+func decodeStampFor(hooks *openbindings.InvokeHooks, builtin string) string {
+	if hooks.DecodeDecidedBy() == "hook" {
+		return "hook"
+	}
+	return builtin
+}
+
+// resourceValue converts a ReadResourceResult into the output value and
+// its decode-provenance stamp. Resources carry a DECLARED mimeType, so the
+// builtin is the same header-driven lane HTTP uses: json/+json parses
+// strictly (a parse failure is a loud error, never a silent fall-through),
+// anything else is text, and the payload's shape never picks the lane.
+func resourceValue(result *gomcp.ReadResourceResult, site openbindings.InvokeSite, hooks *openbindings.InvokeHooks) (any, string, *openbindings.InvocationError) {
 	if len(result.Contents) == 0 {
-		return nil
+		return nil, "content", nil
 	}
 
 	if len(result.Contents) == 1 {
 		c := result.Contents[0]
 		if c.Text != "" {
-			var parsed any
-			if json.Unmarshal([]byte(c.Text), &parsed) == nil {
-				return parsed
+			out, err := hooks.DecodeOutput(site, openbindings.RawResult{Body: []byte(c.Text)}, builtinMIMEDecode(c.MIMEType))
+			if err != nil {
+				return nil, "", openbindings.AsInvocationError(err)
 			}
-			return c.Text
+			return out, decodeStampFor(hooks, "declared/mime-type"), nil
 		}
 		// Non-text (e.g. blob) content: return the whole content object so
 		// binary data survives, matching the TS SDK which returns `c` as-is.
-		return contentToGeneric(c)
+		return contentToGeneric(c), "content", nil
 	}
 
 	var items []any
 	for _, c := range result.Contents {
 		items = append(items, contentToGeneric(c))
 	}
-	return items
+	return items, "content", nil
+}
+
+// builtinMIMEDecode is the resource builtin: the declared mimeType decides
+// the lane. application/json and +json parse strictly; a declared-JSON
+// body that does not parse is a loud invocation error.
+func builtinMIMEDecode(mimeType string) openbindings.OutputDecoder {
+	return func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+		if isJSONMIME(mimeType) {
+			var parsed any
+			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
+				return nil, &openbindings.InvocationError{
+					Code:    openbindings.ErrCodeExecutionFailed,
+					Message: fmt.Sprintf("resource declares %s but its text is not valid JSON: %v", mimeType, err),
+				}
+			}
+			return parsed, nil
+		}
+		return string(raw.Body), nil
+	}
+}
+
+// isJSONMIME reports whether a declared media type selects the JSON lane
+// (application/json or any +json suffix), matching the HTTP lane's rule.
+func isJSONMIME(mimeType string) bool {
+	mt := strings.TrimSpace(strings.SplitN(mimeType, ";", 2)[0])
+	return mt == "application/json" || strings.HasSuffix(mt, "+json")
 }
 
 // contentToGeneric round-trips a resource content through JSON so every field
@@ -566,10 +664,8 @@ func extractContent(content []gomcp.Content) any {
 
 	if len(content) == 1 {
 		if tc, ok := content[0].(*gomcp.TextContent); ok {
-			var parsed any
-			if json.Unmarshal([]byte(tc.Text), &parsed) == nil {
-				return parsed
-			}
+			// Reached only outside the tool text lane (which consults the
+			// decode seam); text is text — never sniffed for JSON.
 			return tc.Text
 		}
 	}

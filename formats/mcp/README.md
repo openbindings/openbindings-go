@@ -119,7 +119,14 @@ The client's `Transport` becomes the round-trip base beneath the injector; its `
 
 ### Consumer hooks
 
-An MCP tool result is self-describing: `structuredContent`/`content` carries the output and `isError` signals failure, both protocol-native. This format **does not consult the consumer hooks seam** (`InvokeHooks`); a `DecodeOutput`, `Classify`, or `Route` hook has no effect, and `ob plan` reports it as `not-consulted`.
+This format consults the **decode axis** of the consumer hooks seam (`InvokeHooks`) on its text lanes; classification and routing stay protocol-native (`isError` decides success; MCP has no field routing), so `Classify` and `Route` hooks have no effect.
+
+The decode lanes are content-independent, per the conventions record (spec/formats/README.md):
+
+- **Tool results.** `structuredContent` is MCP's declared structured lane (2025-11-25: servers MUST conform it to `outputSchema`) and wins outright. Absent it, a single text content is a **string, verbatim** — MCP defines JSON-serialized-into-text as the backwards-compatibility *shadow* of `structuredContent`, so parsing it is a consumer choice made through a `DecodeOutput` hook, never a payload sniff. Other content shapes pass through as generic values.
+- **Resources.** The declared `mimeType` decides the lane, exactly like the HTTP header rule: `application/json`/`+json` parses strictly (a parse failure is a loud error, never a silent fall-through); anything else is text.
+
+Success provenance rides the `x-ob-decode` trailer stamp (`structuredContent`, `text`, `declared/mime-type`, or `hook`); classification stamps `protocol/isError`.
 
 ### Entity type mapping
 
