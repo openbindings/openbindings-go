@@ -411,6 +411,29 @@ func TestInterfaceValidate_NestedIDScopeSkipsD16(t *testing.T) {
 	}
 }
 
+func TestInterfaceValidate_AnchorInsideIDScopePermitted(t *testing.T) {
+	// OBI-D-05's pointer-form rule carves out $id-declaring schemas: their
+	// internal fragments (including plain-name anchors) are that
+	// resource's business, per the same scope rule as OBI-D-16.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Task"}},
+		},
+		Schemas: map[string]JSONSchema{
+			"Task": {
+				"$id":        "https://example.com/task.schema.json",
+				"type":       "object",
+				"properties": map[string]any{"kind": map[string]any{"$ref": "#kindAnchor"}},
+				"$defs":      map[string]any{"kind": map[string]any{"$anchor": "kindAnchor", "type": "string"}},
+			},
+		},
+	}
+	if err := i.Validate(); err != nil {
+		t.Fatalf("anchor inside $id scope must be permitted, got %v", err)
+	}
+}
+
 func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",

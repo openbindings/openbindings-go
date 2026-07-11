@@ -577,7 +577,10 @@ func walkSchema(errs *[]string, prefix string, schema any, doc any, inID bool) {
 			validateURIRef(errs, prefix+".$ref", str)
 			if !strings.HasPrefix(str, "#") && !referenceIsAbsolute(str) {
 				*errs = append(*errs, fmt.Sprintf("%s.$ref: %q must be a same-document fragment or an absolute URI, not a relative reference (OBI-D-05)", prefix, str))
-			} else if strings.HasPrefix(str, "#") && str != "#" && !strings.HasPrefix(str, "#/") {
+			} else if strings.HasPrefix(str, "#") && str != "#" && !strings.HasPrefix(str, "#/") && !inID {
+				// Inside a schema declaring its own $id, fragments resolve
+				// against that resource's base per JSON Schema — the same
+				// scope carve-out as OBI-D-16.
 				*errs = append(*errs, fmt.Sprintf("%s.$ref: %q is a plain-name fragment; a same-document schema $ref is a JSON Pointer fragment (bare # or #/...), and the schemas map is the document's named-schema mechanism (OBI-D-05)", prefix, str))
 			} else if (str == "#" || strings.HasPrefix(str, "#/")) && !inID && doc != nil {
 				if !docPointerResolves(doc, strings.TrimPrefix(str, "#")) {
