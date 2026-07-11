@@ -183,8 +183,9 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 
 	// MCP discovery does not expose security metadata, and OBI documents carry
 	// no security section: runtime context is negotiated at call time. If the
-	// server requires auth, the invoker surfaces a CONTEXT_REQUIRED challenge
-	// (e.g. on a 401) for the operation layer to resolve and replay.
+	// server requires auth, an unauthenticated call surfaces as a terminal
+	// ERR_AUTH_REQUIRED (this invoker derives no static CONTEXT_REQUIRED
+	// challenge; resolution happens above the binding).
 
 	return &iface, nil
 }
