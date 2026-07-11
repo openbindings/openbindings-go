@@ -77,10 +77,13 @@ func TestResolveServer_NoServers(t *testing.T) {
 }
 
 // secureDoc builds a doc whose server declares the named security schemes.
+// Each name becomes its own $ref list entry — the AsyncAPI 3.0 shape, where
+// `security` is a flat list of Security Scheme Objects or Reference
+// Objects, never OpenAPI/2.x-style requirement maps.
 func secureDoc(schemes map[string]securityScheme, names ...string) *document {
-	reqs := make([]map[string][]string, 0, len(names))
+	reqs := make([]securityRequirement, 0, len(names))
 	for _, n := range names {
-		reqs = append(reqs, map[string][]string{n: {}})
+		reqs = append(reqs, securityRequirement{Ref: "#/components/securitySchemes/" + n})
 	}
 	return &document{
 		Servers: map[string]server{
@@ -154,7 +157,7 @@ func TestRequiredContext_OperationOverridesServer(t *testing.T) {
 		"key":    {Type: "httpApiKey", In: "query", Name: "k"},
 	}, "bearer")
 	op := doc.Operations["op"]
-	op.Security = []map[string][]string{{"key": {}}}
+	op.Security = []securityRequirement{{Ref: "#/components/securitySchemes/key"}}
 
 	details := requiredContext(doc, &op, "https://api.example.com", nil)
 	if details == nil || len(details.Alternatives) != 1 {
@@ -165,15 +168,18 @@ func TestRequiredContext_OperationOverridesServer(t *testing.T) {
 	}
 }
 
-// TestRequiredContext_ConjunctionMapsToOneAlternative verifies the AND shape:
-// a requirement OBJECT naming several schemes is one alternative carrying ALL
-// of them as requirements (the document model represents multi-scheme
-// conjunctions).
-func TestRequiredContext_ConjunctionMapsToOneAlternative(t *testing.T) {
+// TestRequiredContext_MultipleEntriesAreIndependentAlternatives verifies the
+// AsyncAPI 3.0 shape: `security` is a flat list, and each entry is its own
+// standalone alternative (pure OR). There is no OpenAPI/2.x-style
+// requirement-object that groups several scheme names into one AND'd
+// alternative — a list of two entries always means "satisfy either", never
+// "satisfy both".
+func TestRequiredContext_MultipleEntriesAreIndependentAlternatives(t *testing.T) {
 	doc := &document{
 		Servers: map[string]server{
-			"prod": {Host: "api.example.com", Protocol: "https", Security: []map[string][]string{
-				{"bearer": {}, "key": {}}, // one object: bearer AND key
+			"prod": {Host: "api.example.com", Protocol: "https", Security: []securityRequirement{
+				{Ref: "#/components/securitySchemes/bearer"},
+				{Ref: "#/components/securitySchemes/key"},
 			}},
 		},
 		Operations: map[string]asyncOperation{"op": {Action: "send"}},
@@ -185,64 +191,76 @@ func TestRequiredContext_ConjunctionMapsToOneAlternative(t *testing.T) {
 	op := doc.Operations["op"]
 
 	details := requiredContext(doc, &op, "https://api.example.com", nil)
-	if details == nil || len(details.Alternatives) != 1 {
-		t.Fatalf("expected 1 alternative, got %+v", details)
+	if details == nil || len(details.Alternatives) != 2 {
+		t.Fatalf("expected 2 independent alternatives, got %+v", details)
 	}
-	reqs := details.Alternatives[0].Requirements
-	if len(reqs) != 2 {
-		t.Fatalf("expected 2 requirements in the conjunction, got %+v", reqs)
-	}
-	types := map[string]bool{reqs[0].Type: true, reqs[1].Type: true}
-	if !types["auth.bearer"] || !types["auth.apiKey"] {
-		t.Errorf("requirement types = %v, want auth.bearer and auth.apiKey", types)
+	for _, alt := range details.Alternatives {
+		if len(alt.Requirements) != 1 {
+			t.Errorf("each AsyncAPI 3.0 security entry is a single-scheme alternative, got %+v", alt)
+		}
 	}
 
-	// One credential alone must NOT satisfy the conjunction.
-	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t"}); got == nil {
-		t.Error("bearer alone must not satisfy a bearer-AND-apiKey conjunction")
+	// Either credential alone suffices (pure OR, never a conjunction).
+	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t"}); got != nil {
+		t.Errorf("bearer alone should satisfy one of the alternatives, got %+v", got)
 	}
-	// Both together do.
-	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t", "apiKey": "k"}); got != nil {
-		t.Errorf("bearer+apiKey should satisfy, got %+v", got)
+	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"apiKey": "k"}); got != nil {
+		t.Errorf("apiKey alone should satisfy one of the alternatives, got %+v", got)
 	}
 }
 
-// TestRequiredContext_EmptyRequirementObjectAllowsAnonymous verifies the
-// openapi-mirroring rule: an empty requirement object means anonymous access
-// is allowed, so no challenge is warranted at all.
-func TestRequiredContext_EmptyRequirementObjectAllowsAnonymous(t *testing.T) {
-	doc := secureDoc(map[string]securityScheme{
-		"bearer": {Type: "http", Scheme: "bearer"},
-	}, "bearer")
-	server := doc.Servers["prod"]
-	server.Security = append(server.Security, map[string][]string{}) // anonymous alternative
-	doc.Servers["prod"] = server
-	op := doc.Operations["op"]
-
-	if got := requiredContext(doc, &op, "https://api.example.com", nil); got != nil {
-		t.Errorf("an empty requirement object allows anonymous access, got %+v", got)
-	}
-}
-
-// TestRequiredContext_InexpressibleSchemeSkipsWholeAlternative verifies that
-// a conjunction containing an unmappable scheme is dropped entirely rather
-// than degraded into a weaker requirement.
-func TestRequiredContext_InexpressibleSchemeSkipsWholeAlternative(t *testing.T) {
+// TestRequiredContext_InlineSchemeObject verifies that a `security` list
+// entry MAY be an inline Security Scheme Object (not just a $ref to
+// components.securitySchemes) — both forms are valid per the AsyncAPI 3.0
+// spec, and an inline entry needs no components.securitySchemes section at
+// all to be enforced.
+func TestRequiredContext_InlineSchemeObject(t *testing.T) {
 	doc := &document{
 		Servers: map[string]server{
-			"prod": {Host: "api.example.com", Protocol: "https", Security: []map[string][]string{
-				{"bearer": {}, "custom": {}},
+			"prod": {Host: "api.example.com", Protocol: "https", Security: []securityRequirement{
+				{securityScheme: securityScheme{Type: "http", Scheme: "bearer", Description: "inline"}},
+			}},
+		},
+		Operations: map[string]asyncOperation{"op": {Action: "send"}},
+		// Deliberately no Components: the scheme is inline, not a $ref.
+	}
+	op := doc.Operations["op"]
+
+	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	if details == nil || len(details.Alternatives) != 1 {
+		t.Fatalf("expected 1 alternative from the inline scheme, got %+v", details)
+	}
+	req := details.Alternatives[0].Requirements[0]
+	if req.Type != "auth.bearer" || req.Description != "inline" {
+		t.Errorf("requirement = %+v, want auth.bearer/inline", req)
+	}
+}
+
+// TestRequiredContext_UnresolvableRefSkipsEntry verifies that a $ref which
+// cannot be resolved (dangling, or components.securitySchemes absent) is
+// dropped rather than degraded into a weaker requirement — mirroring the
+// "inexpressible scheme" rule, now expressed per-entry since AsyncAPI 3.0
+// entries are standalone.
+func TestRequiredContext_UnresolvableRefSkipsEntry(t *testing.T) {
+	doc := &document{
+		Servers: map[string]server{
+			"prod": {Host: "api.example.com", Protocol: "https", Security: []securityRequirement{
+				{Ref: "#/components/securitySchemes/bearer"},
+				{Ref: "#/components/securitySchemes/missing"},
 			}},
 		},
 		Operations: map[string]asyncOperation{"op": {Action: "send"}},
 		Components: &components{SecuritySchemes: map[string]securityScheme{
 			"bearer": {Type: "http", Scheme: "bearer"},
-			"custom": {Type: "scramSha256"},
 		}},
 	}
 	op := doc.Operations["op"]
-	if got := requiredContext(doc, &op, "https://api.example.com", nil); got != nil {
-		t.Errorf("an alternative with an inexpressible scheme must be skipped, got %+v", got)
+	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	if details == nil || len(details.Alternatives) != 1 {
+		t.Fatalf("expected exactly 1 alternative (the resolvable bearer entry), got %+v", details)
+	}
+	if details.Alternatives[0].Requirements[0].Type != "auth.bearer" {
+		t.Errorf("expected the resolvable entry to survive, got %+v", details.Alternatives[0])
 	}
 }
 
@@ -255,7 +273,7 @@ func TestRequiredContext_DerivesFromConnectionServer(t *testing.T) {
 			// "a" sorts first and is the connection target: no security.
 			"a": {Host: "open.example.com", Protocol: "https"},
 			// "b" declares security but is NOT the server dialed.
-			"b": {Host: "secure.example.com", Protocol: "https", Security: []map[string][]string{{"bearer": {}}}},
+			"b": {Host: "secure.example.com", Protocol: "https", Security: []securityRequirement{{Ref: "#/components/securitySchemes/bearer"}}},
 		},
 		Operations: map[string]asyncOperation{"op": {Action: "send"}},
 		Components: &components{SecuritySchemes: map[string]securityScheme{

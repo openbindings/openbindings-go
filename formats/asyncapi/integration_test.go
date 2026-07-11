@@ -110,7 +110,7 @@ func makeAsyncAPISpec(baseURL string) *document {
 				Action:   "send",
 				Channel:  channelRef{Ref: "#/channels/messages"},
 				Messages: []messageRef{{Ref: "#/components/messages/json"}},
-				Security: []map[string][]string{{"bearer": {}}},
+				Security: []securityRequirement{{Ref: "#/components/securitySchemes/bearer"}},
 			},
 			"sendOpenMessage": {Action: "send", Channel: channelRef{Ref: "#/channels/messages"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
 			"sendAck":         {Action: "send", Channel: channelRef{Ref: "#/channels/ack"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
@@ -118,7 +118,7 @@ func makeAsyncAPISpec(baseURL string) *document {
 				Action:   "receive",
 				Channel:  channelRef{Ref: "#/channels/events"},
 				Messages: []messageRef{{Ref: "#/components/messages/json"}},
-				Security: []map[string][]string{{"bearer": {}}},
+				Security: []securityRequirement{{Ref: "#/components/securitySchemes/bearer"}},
 			},
 			"receiveStream": {Action: "receive", Channel: channelRef{Ref: "#/channels/stream"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
 		},
@@ -247,6 +247,122 @@ func TestContextRequiredOnReceive(t *testing.T) {
 	}
 	if got := requests.Load(); got != before {
 		t.Errorf("challenge must precede any I/O: %d requests dispatched", got-before)
+	}
+}
+
+// TestRealAsyncAPI30SecurityListParsesAndChallenges is an end-to-end
+// regression test for the AsyncAPI 3.0 security shape, parsed from raw JSON
+// text (not constructed via Go struct literals) so it exercises the same
+// json.Unmarshal path a real source document takes. Per the AsyncAPI 3.0
+// spec, `security` is a flat LIST of Security Scheme Objects or Reference
+// Objects — before the fix, the document model declared it as
+// []map[string][]string (OpenAPI/2.x-style requirement maps), which cannot
+// even unmarshal a real 3.0 security declaration: json.Unmarshal fails with
+// "cannot unmarshal string into Go value of type []string" for BOTH the
+// $ref form and the inline-scheme form, so loadDocument returned a hard
+// error for any real-world 3.0 document declaring security this way.
+func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
+	docJSON := `{
+		"asyncapi": "3.0.0",
+		"info": {"title": "t", "version": "1.0.0"},
+		"servers": {"prod": {"host": "api.example.com", "protocol": "https"}},
+		"channels": {"c": {"address": "/c"}},
+		"operations": {
+			"refScheme": {
+				"action": "send",
+				"channel": {"$ref": "#/channels/c"},
+				"security": [{"$ref": "#/components/securitySchemes/bearer"}]
+			},
+			"inlineScheme": {
+				"action": "send",
+				"channel": {"$ref": "#/channels/c"},
+				"security": [{"type": "http", "scheme": "bearer"}]
+			}
+		},
+		"components": {
+			"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}
+		}
+	}`
+
+	binv := NewInvoker()
+	defer binv.Close()
+
+	for _, opRef := range []string{"#/operations/refScheme", "#/operations/inlineScheme"} {
+		t.Run(opRef, func(t *testing.T) {
+			details, err := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
+				Source: openbindings.InvocationSource{Format: FormatToken, Content: docJSON},
+				Ref:    opRef,
+			})
+			if err != nil {
+				t.Fatalf("document failed to parse (the real bug this guards against): %v", err)
+			}
+			if details == nil {
+				t.Fatal("expected a CONTEXT_REQUIRED challenge for the declared bearer security, got nil")
+			}
+			if details.Target != "https://api.example.com" {
+				t.Errorf("Target = %q, want https://api.example.com", details.Target)
+			}
+			if len(details.Alternatives) != 1 || details.Alternatives[0].Requirements[0].Type != "auth.bearer" {
+				t.Errorf("alternatives = %+v, want one auth.bearer requirement", details.Alternatives)
+			}
+
+			// A bearer token in context satisfies the challenge.
+			ok, err := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
+				Source:  openbindings.InvocationSource{Format: FormatToken, Content: docJSON},
+				Ref:     opRef,
+				Context: map[string]any{"bearerToken": "t"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok != nil {
+				t.Errorf("expected nil once the bearer token is supplied, got %+v", ok)
+			}
+		})
+	}
+}
+
+// TestChannelAddressFallsBackToChannelName is regression coverage for the
+// [assumption] documented in spec/formats/asyncapi.md: "A channel without an
+// `address` is assumed addressable by its channel name (the 2.x-lineage
+// habit)." The behavior already existed in runBinding but had no direct
+// test; this pins it and gives the TS SDK's equivalent test something to
+// mirror for parity.
+func TestChannelAddressFallsBackToChannelName(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(202)
+	}))
+	defer srv.Close()
+
+	docJSON := fmt.Sprintf(`{
+		"asyncapi": "3.0.0",
+		"info": {"title": "t", "version": "1.0.0"},
+		"servers": {"test": {"host": %q, "protocol": "http"}},
+		"channels": {"notify": {}},
+		"operations": {
+			"notifyOp": {"action": "send", "channel": {"$ref": "#/channels/notify"}}
+		}
+	}`, strings.TrimPrefix(srv.URL, "http://"))
+
+	binv := NewInvoker()
+	defer binv.Close()
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: docJSON},
+		Ref:    "#/operations/notifyOp",
+	})
+	if err := call.Write(bg(), map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := call.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := drainOutputs(t, call); err != nil {
+		t.Fatalf("send failed: %v", err)
+	}
+	if gotPath != "/notify" {
+		t.Errorf("request path = %q, want /notify (the channel's own name, since it declares no address)", gotPath)
 	}
 }
 
@@ -754,7 +870,7 @@ func makeWSAsyncAPISpec(httpURL string, scheme *securityScheme) *document {
 		},
 	}
 	if scheme != nil {
-		srv.Security = []map[string][]string{{"auth": {}}}
+		srv.Security = []securityRequirement{{Ref: "#/components/securitySchemes/auth"}}
 		doc.Components.SecuritySchemes = map[string]securityScheme{"auth": *scheme}
 	}
 	doc.Servers = map[string]server{"wsServer": srv}

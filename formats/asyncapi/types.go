@@ -24,7 +24,7 @@ type server struct {
 	PathName    string                `json:"pathname,omitempty" yaml:"pathname,omitempty"`
 	Description string                `json:"description,omitempty" yaml:"description,omitempty"`
 	Tags        []tag                 `json:"tags,omitempty" yaml:"tags,omitempty"`
-	Security    []map[string][]string `json:"security,omitempty" yaml:"security,omitempty"`
+	Security    []securityRequirement `json:"security,omitempty" yaml:"security,omitempty"`
 }
 
 type channel struct {
@@ -44,7 +44,7 @@ type asyncOperation struct {
 	Messages    []messageRef          `json:"messages,omitempty" yaml:"messages,omitempty"`
 	Tags        []tag                 `json:"tags,omitempty" yaml:"tags,omitempty"`
 	Reply       *operationReply       `json:"reply,omitempty" yaml:"reply,omitempty"`
-	Security    []map[string][]string `json:"security,omitempty" yaml:"security,omitempty"`
+	Security    []securityRequirement `json:"security,omitempty" yaml:"security,omitempty"`
 }
 
 type operationReply struct {
@@ -93,6 +93,20 @@ type securityScheme struct {
 	Scheme       string      `json:"scheme,omitempty" yaml:"scheme,omitempty"`
 	BearerFormat string      `json:"bearerFormat,omitempty" yaml:"bearerFormat,omitempty"`
 	Flows        *oauthFlows `json:"flows,omitempty" yaml:"flows,omitempty"`
+}
+
+// securityRequirement is one entry in an AsyncAPI 3.0 `security` list. Per
+// the AsyncAPI 3.0 spec, `security` on a server or operation is a LIST of
+// Security Scheme Objects or Reference Objects — NOT a list of
+// requirement-maps keyed by scheme name (that shape is OpenAPI's, and
+// AsyncAPI 2.x's). Each list entry is its own standalone alternative:
+// satisfying any ONE entry authorizes the connection/operation (pure OR;
+// AsyncAPI 3.0 has no AND-conjunction grouping within one entry). An entry
+// is either a $ref to a components.securitySchemes definition, or an
+// inline Security Scheme Object — both forms are valid per spec.
+type securityRequirement struct {
+	Ref            string `json:"$ref,omitempty" yaml:"$ref,omitempty"`
+	securityScheme `yaml:",inline"`
 }
 
 type oauthFlows struct {

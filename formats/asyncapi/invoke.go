@@ -218,55 +218,35 @@ func requirementType(s securityScheme) string {
 
 // requiredContext computes the context the binding requires for this
 // operation, or nil when the provided context already satisfies it (or the
-// doc declares nothing checkable). The document model represents security as
-// requirement OBJECTS (scheme name -> scopes): the list is a disjunction (OR)
-// of objects, each object a conjunction (AND) of schemes — exactly the
-// alternatives/requirements shape of ContextRequiredDetails. An empty
-// requirement object means anonymous access is allowed (no challenge for the
-// whole operation, mirroring openapi); an object containing a scheme the SDK
-// cannot express is skipped entirely rather than degraded into a weaker
-// requirement. Side-effect-free; shared by runBinding and PrepareBinding.
+// doc declares nothing checkable). Per the AsyncAPI 3.0 spec, `security` is a
+// flat LIST of Security Scheme Objects or Reference Objects: each entry is
+// its own standalone alternative, so satisfying any ONE entry authorizes the
+// operation (pure OR — there is no OpenAPI/2.x-style AND-conjunction grouping
+// within a single entry). An entry the SDK cannot resolve or express (an
+// unresolvable $ref, or an unmapped scheme family) is skipped entirely rather
+// than degraded into a weaker requirement. Side-effect-free; shared by
+// runBinding and PrepareBinding.
 func requiredContext(doc *document, asyncOp *asyncOperation, serverURL string, ctx map[string]any) *openbindings.ContextRequiredDetails {
 	requirements := securityRequirements(doc, asyncOp)
-	if len(requirements) == 0 || doc.Components == nil || len(doc.Components.SecuritySchemes) == 0 {
+	if len(requirements) == 0 {
 		return nil
 	}
 
 	var alternatives []openbindings.ContextAlternative
-	for _, reqObj := range requirements {
-		if len(reqObj) == 0 {
-			// Empty requirement object: anonymous access is allowed.
-			return nil
+	for _, entry := range requirements {
+		scheme, ok := resolveSecurityRequirement(doc, entry)
+		if !ok {
+			continue // unresolvable $ref: not checkable, not enforced
 		}
-		schemeNames := make([]string, 0, len(reqObj))
-		for name := range reqObj {
-			schemeNames = append(schemeNames, name)
+		typ := requirementType(scheme)
+		if typ == "" {
+			continue // unknown scheme family: not checkable, not enforced
 		}
-		sort.Strings(schemeNames)
-
-		var reqs []openbindings.ContextRequirement
-		expressible := true
-		for _, name := range schemeNames {
-			scheme, ok := doc.Components.SecuritySchemes[name]
-			if !ok {
-				expressible = false
-				break
-			}
-			typ := requirementType(scheme)
-			if typ == "" {
-				expressible = false
-				break
-			}
-			req := openbindings.ContextRequirement{Type: typ}
-			if scheme.Description != "" {
-				req.Description = scheme.Description
-			}
-			reqs = append(reqs, req)
+		req := openbindings.ContextRequirement{Type: typ}
+		if scheme.Description != "" {
+			req.Description = scheme.Description
 		}
-		if !expressible || len(reqs) == 0 {
-			continue
-		}
-		alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: reqs})
+		alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: []openbindings.ContextRequirement{req}})
 	}
 	if len(alternatives) == 0 {
 		return nil
@@ -282,11 +262,10 @@ func requiredContext(doc *document, asyncOp *asyncOperation, serverURL string, c
 	return details
 }
 
-// securityRequirements returns the security requirement objects applicable to
-// an operation: operation-level security overrides; otherwise the
-// requirements of the doc server the connection targets (the same server
-// pickDocServer selects).
-func securityRequirements(doc *document, asyncOp *asyncOperation) []map[string][]string {
+// securityRequirements returns the security list applicable to an operation:
+// operation-level security overrides; otherwise the security of the doc
+// server the connection targets (the same server pickDocServer selects).
+func securityRequirements(doc *document, asyncOp *asyncOperation) []securityRequirement {
 	if asyncOp != nil && len(asyncOp.Security) > 0 {
 		return asyncOp.Security
 	}
@@ -294,6 +273,28 @@ func securityRequirements(doc *document, asyncOp *asyncOperation) []map[string][
 		return server.Security
 	}
 	return nil
+}
+
+// resolveSecurityRequirement resolves one `security` list entry to a concrete
+// securityScheme: a $ref is looked up by name in
+// doc.Components.SecuritySchemes; an inline entry (no $ref) is used exactly
+// as declared. ok is false when a $ref cannot be resolved — an unresolvable
+// reference is not checkable, not enforced, never degraded into a weaker
+// requirement.
+func resolveSecurityRequirement(doc *document, req securityRequirement) (securityScheme, bool) {
+	if req.Ref != "" {
+		if doc.Components == nil {
+			return securityScheme{}, false
+		}
+		scheme, ok := doc.Components.SecuritySchemes[extractRefName(req.Ref)]
+		return scheme, ok
+	}
+	if req.Type == "" {
+		// Neither a $ref nor an inline scheme (e.g. a stray empty object):
+		// nothing to check.
+		return securityScheme{}, false
+	}
+	return req.securityScheme, true
 }
 
 // ---------------------------------------------------------------------------
@@ -835,35 +836,20 @@ func applyHTTPContext(req *http.Request, doc *document, asyncOp *asyncOperation,
 }
 
 // resolveSecuritySchemes returns the security schemes applicable to an
-// operation, flattened for credential placement. The requirements come from
-// securityRequirements (operation-level, else the server the connection
-// targets).
+// operation, flattened for credential placement, in declaration order. The
+// entries come from securityRequirements (operation-level, else the server
+// the connection targets); an entry that fails to resolve (a dangling $ref)
+// is dropped.
 func resolveSecuritySchemes(doc *document, asyncOp *asyncOperation) []securityScheme {
 	requirements := securityRequirements(doc, asyncOp)
 	if len(requirements) == 0 {
 		return nil
 	}
 
-	if doc.Components == nil || len(doc.Components.SecuritySchemes) == 0 {
-		return nil
-	}
-
 	var result []securityScheme
-	seen := map[string]bool{}
 	for _, req := range requirements {
-		schemeNames := make([]string, 0, len(req))
-		for schemeName := range req {
-			schemeNames = append(schemeNames, schemeName)
-		}
-		sort.Strings(schemeNames)
-		for _, schemeName := range schemeNames {
-			if seen[schemeName] {
-				continue
-			}
-			seen[schemeName] = true
-			if scheme, ok := doc.Components.SecuritySchemes[schemeName]; ok {
-				result = append(result, scheme)
-			}
+		if scheme, ok := resolveSecurityRequirement(doc, req); ok {
+			result = append(result, scheme)
 		}
 	}
 	return result
