@@ -195,3 +195,119 @@ func TestNormalizeContextKey(t *testing.T) {
 		}
 	}
 }
+
+// TestNormalizeContextKey_ElidesExplicitDefaultPort pins the rule that an
+// explicit port matching the scheme's default is stripped so a key written
+// with the default port and one written without it collide — the origin is
+// the same, so credentials stored under one must be found via the other. A
+// non-default port, and any string with no scheme (a format-defined address
+// like gRPC's bare "host:port"), are returned unchanged. IPv6 hosts are
+// covered so the bracketed form isn't corrupted by the suffix-strip.
+func TestNormalizeContextKey_ElidesExplicitDefaultPort(t *testing.T) {
+	cases := map[string]string{
+		"https://api.example.com:443": "api.example.com",
+		"http://x:80":                 "x",
+		"wss://x:443":                 "x",
+		"ws://x:80":                   "x",
+		"https://x:8443":              "x:8443",       // non-default port kept
+		"10.0.0.1:443":                "10.0.0.1:443", // no scheme: unchanged
+		"host:50051":                  "host:50051",   // no scheme: unchanged
+		"https://[::1]:443":           "[::1]",        // IPv6 default port elided
+		"https://[::1]:8443":          "[::1]:8443",   // IPv6 non-default port kept
+		"https://[::1]":               "[::1]",        // IPv6 no port, unaffected
+	}
+	for in, want := range cases {
+		if got := NormalizeContextKey(in); got != want {
+			t.Errorf("NormalizeContextKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestNormalizeContextKey_DefaultPortEquivalence pins the actual bug: a URL
+// with an explicit default port and the same URL without one must produce
+// the IDENTICAL key, so credentials stored via one binding source are found
+// via another that writes the port explicitly (or vice versa).
+func TestNormalizeContextKey_DefaultPortEquivalence(t *testing.T) {
+	pairs := [][2]string{
+		{"https://api.example.com:443", "https://api.example.com"},
+		{"http://x:80", "http://x"},
+		{"wss://x:443", "wss://x"},
+		{"ws://x:80", "ws://x"},
+	}
+	for _, p := range pairs {
+		a, b := NormalizeContextKey(p[0]), NormalizeContextKey(p[1])
+		if a != b {
+			t.Errorf("NormalizeContextKey(%q) = %q != NormalizeContextKey(%q) = %q, want equal", p[0], a, p[1], b)
+		}
+	}
+}
+
+// TestNormalizeEndpoint_ElidesExplicitDefaultPort mirrors the
+// NormalizeContextKey case through NormalizeEndpoint — the actual runtime
+// path StoreContextResolver uses — since NormalizeEndpoint parses the URL
+// first and must carry the scheme through to the elision logic rather than
+// dropping it (dropping it would silently disable elision for every URL).
+func TestNormalizeEndpoint_ElidesExplicitDefaultPort(t *testing.T) {
+	cases := map[string]string{
+		"https://api.example.com:443/v1": "api.example.com",
+		"https://api.example.com/v1":     "api.example.com",
+		"http://x:80":                    "x",
+		"wss://x:443/stream":             "x",
+		"https://x:8443":                 "x:8443",
+		"10.0.0.1:443":                   "10.0.0.1:443",
+		"host:50051":                     "host:50051",
+	}
+	for in, want := range cases {
+		if got := NormalizeEndpoint(in); got != want {
+			t.Errorf("NormalizeEndpoint(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestStoreContextResolver_DefaultPortMissFixed is the integration-flavored
+// proof: a credential stored under a target written WITHOUT the scheme's
+// default port must be found when the challenge target is written WITH it
+// (and vice versa), through the actual store-backed resolution path — before
+// this fix the two forms produced different store keys and the credential
+// was silently missed.
+func TestStoreContextResolver_DefaultPortMissFixed(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("stored without port, challenged with explicit default port", func(t *testing.T) {
+		// A different binding source once wrote the credential keyed off a
+		// target with no explicit port.
+		store := testStore{
+			NormalizeEndpoint("https://api.example.com/v1/users"): {"bearerToken": "stored-tok"},
+		}
+		resolve := StoreContextResolver(store)
+		details := &ContextRequiredDetails{
+			Target: "https://api.example.com:443/v1/users",
+			Alternatives: []ContextAlternative{
+				{Requirements: []ContextRequirement{{Type: "auth.bearer"}}},
+			},
+		}
+		got, err := resolve(ctx, details)
+		if err != nil || ContextBearerToken(got) != "stored-tok" {
+			t.Fatalf("got %v err=%v, want the stored credential resolved despite the explicit default port", got, err)
+		}
+	})
+
+	t.Run("stored with explicit default port, challenged without", func(t *testing.T) {
+		// The reverse: the credential was written keyed off a target that
+		// spelled out the default port explicitly.
+		store := testStore{
+			NormalizeEndpoint("https://api.example.com:443/v1/users"): {"bearerToken": "stored-tok"},
+		}
+		resolve := StoreContextResolver(store)
+		details := &ContextRequiredDetails{
+			Target: "https://api.example.com/v1/users",
+			Alternatives: []ContextAlternative{
+				{Requirements: []ContextRequirement{{Type: "auth.bearer"}}},
+			},
+		}
+		got, err := resolve(ctx, details)
+		if err != nil || ContextBearerToken(got) != "stored-tok" {
+			t.Fatalf("got %v err=%v, want the stored credential resolved", got, err)
+		}
+	})
+}

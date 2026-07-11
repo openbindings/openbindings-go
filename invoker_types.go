@@ -399,23 +399,30 @@ func extractStringMap(ctx map[string]any, key string) map[string]string {
 }
 
 // NormalizeEndpoint normalizes a remote endpoint URL to a stable context key:
-// it URL-parses the input (lowercasing the host, stripping userinfo) and
-// returns NormalizeContextKey over the host[:port], falling back to
-// NormalizeContextKey(raw) for non-URL strings. The store-backed resolver uses
-// this to derive a storage key from a challenge's target — it matches the
-// TypeScript SDK's normalizeEndpoint so keys are identical across languages.
+// it URL-parses the input and returns NormalizeContextKey over
+// "scheme://host[:port]" (so a port matching the scheme's default is elided,
+// same as NormalizeContextKey), falling back to NormalizeContextKey(raw) for
+// non-URL strings. The store-backed resolver uses this to derive a storage
+// key from a challenge's target — it matches the TypeScript SDK's
+// normalizeEndpoint so keys are identical across languages.
 func NormalizeEndpoint(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if u, err := url.Parse(raw); err == nil && u.Host != "" {
-		return NormalizeContextKey(u.Host)
+		return NormalizeContextKey(u.Scheme + "://" + u.Host)
 	}
 	return NormalizeContextKey(raw)
 }
 
 // NormalizeContextKey normalizes a URL to a stable context store key.
 // The key is host[:port] (scheme, path, query, and fragment are stripped)
-// to enable cross-invoker credential sharing for the same API origin.
-// Non-URL strings are returned as-is.
+// to enable cross-invoker credential sharing for the same API origin. When
+// the input carries a scheme, an explicit port matching that scheme's
+// default (443 for https/wss, 80 for http/ws) is elided, so a key written
+// with the default port and one written without it collide; any other
+// explicit port is kept as-is. Strings without a scheme (e.g. a gRPC
+// "host:port" format-defined address) are returned as-is: with no scheme
+// there is no known default, and eliding a port there would corrupt a
+// format-defined address.
 func NormalizeContextKey(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -427,6 +434,7 @@ func NormalizeContextKey(raw string) string {
 	if idx < 0 {
 		return raw
 	}
+	scheme := raw[:idx]
 	host := raw[idx+3:]
 	if slashIdx := strings.Index(host, "/"); slashIdx >= 0 {
 		host = host[:slashIdx]
@@ -437,5 +445,22 @@ func NormalizeContextKey(raw string) string {
 	if hIdx := strings.Index(host, "#"); hIdx >= 0 {
 		host = host[:hIdx]
 	}
-	return host
+	return elideDefaultPort(scheme, host)
+}
+
+// elideDefaultPort strips an explicit port from host when it equals the
+// given scheme's default port (443 for https/wss, 80 for http/ws), so a
+// context key written with the default port and one written without it
+// resolve to the same key. Any other explicit port, and any scheme with no
+// known default, is returned unchanged. The scheme is lowercased for the
+// comparison only; it is never part of the returned key.
+func elideDefaultPort(scheme, host string) string {
+	switch strings.ToLower(scheme) {
+	case "https", "wss":
+		return strings.TrimSuffix(host, ":443")
+	case "http", "ws":
+		return strings.TrimSuffix(host, ":80")
+	default:
+		return host
+	}
 }

@@ -338,6 +338,73 @@ func TestOAuth2Requirement_PasswordOnly(t *testing.T) {
 	}
 }
 
+// TestOAuth2Requirement_PasswordPriorityOverClientCredentials pins the fixed
+// selection order (password before clientCredentials) when a scheme offers
+// both token-only flows, so the same scheme always resolves to the same flow
+// regardless of field iteration order. The TS SDK mirrors this exact order
+// (it previously fell back to object insertion order, which was
+// non-deterministic across differently-authored but equivalent documents).
+func TestOAuth2Requirement_PasswordPriorityOverClientCredentials(t *testing.T) {
+	scheme := &openapi3.SecurityScheme{
+		Type: "oauth2",
+		Flows: &openapi3.OAuthFlows{
+			ClientCredentials: &openapi3.OAuthFlow{
+				TokenURL: "https://auth.example.com/client-credentials/token",
+				Scopes:   map[string]string{"cc": "ClientCredentials"},
+			},
+			Password: &openapi3.OAuthFlow{
+				TokenURL: "https://auth.example.com/password/token",
+				Scopes:   map[string]string{"pw": "Password"},
+			},
+		},
+	}
+	req, ok := schemeToRequirement(scheme, "https://api.example.com")
+	if !ok || req.Type != "auth.oauth2" {
+		t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+	}
+	if got := req.Extra["tokenUrl"]; got != "https://auth.example.com/password/token" {
+		t.Errorf("tokenUrl = %v, want password's tokenUrl (fixed priority over clientCredentials)", got)
+	}
+	scopes, _ := req.Extra["scopes"].([]string)
+	if len(scopes) != 1 || scopes[0] != "pw" {
+		t.Errorf("scopes = %v, want [pw] (password flow's scopes)", req.Extra["scopes"])
+	}
+}
+
+// TestOAuth2Requirement_AuthorizationCodeWinsOverAll pins that
+// authorizationCode is selected over every other flow when present,
+// including when implicit/password/clientCredentials are also declared.
+func TestOAuth2Requirement_AuthorizationCodeWinsOverAll(t *testing.T) {
+	scheme := &openapi3.SecurityScheme{
+		Type: "oauth2",
+		Flows: &openapi3.OAuthFlows{
+			ClientCredentials: &openapi3.OAuthFlow{
+				TokenURL: "https://auth.example.com/client-credentials/token",
+			},
+			Password: &openapi3.OAuthFlow{
+				TokenURL: "https://auth.example.com/password/token",
+			},
+			Implicit: &openapi3.OAuthFlow{
+				AuthorizationURL: "https://auth.example.com/implicit/authorize",
+			},
+			AuthorizationCode: &openapi3.OAuthFlow{
+				AuthorizationURL: "https://auth.example.com/authorize",
+				TokenURL:         "https://auth.example.com/authcode/token",
+			},
+		},
+	}
+	req, ok := schemeToRequirement(scheme, "https://api.example.com")
+	if !ok || req.Type != "auth.oauth2" {
+		t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+	}
+	if got := req.Extra["authorizeUrl"]; got != "https://auth.example.com/authorize" {
+		t.Errorf("authorizeUrl = %v, want authorizationCode's authorizeUrl", got)
+	}
+	if got := req.Extra["tokenUrl"]; got != "https://auth.example.com/authcode/token" {
+		t.Errorf("tokenUrl = %v, want authorizationCode's tokenUrl", got)
+	}
+}
+
 // TestRequiredContext_DigestOnlyAlternativeSkipped verifies an operation
 // whose only security alternative is inexpressible (http digest) raises no
 // challenge at all.
