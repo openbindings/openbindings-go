@@ -75,3 +75,102 @@ func TestScopeContext_NilInput(t *testing.T) {
 		t.Error("nil input must return nil")
 	}
 }
+
+// TestScopeContext_AdmitsOnlyTheNamedAPIKey is the R2.e ruling's core test:
+// a stored context carrying apiKeys entries for TWO names, challenged by an
+// alternative naming only ONE of them, must scope to exactly that one entry
+// — never the whole apiKeys map, and never the other alternative's key.
+func TestScopeContext_AdmitsOnlyTheNamedAPIKey(t *testing.T) {
+	stored := map[string]any{
+		"apiKeys": map[string]any{
+			"serviceA": "key-a",
+			"serviceB": "key-b", // a different alternative's key; must be withheld
+		},
+		"headers": map[string]any{"Accept": "application/json"},
+	}
+	details := &ContextRequiredDetails{
+		Target: "https://api.example.com",
+		Alternatives: []ContextAlternative{
+			{Requirements: []ContextRequirement{{Type: "auth.apiKey", Name: "serviceA"}}},
+		},
+	}
+	got := ScopeContext(stored, details)
+	want := map[string]any{
+		"apiKeys": map[string]any{"serviceA": "key-a"},
+		"headers": map[string]any{"Accept": "application/json"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("scoped = %v, want %v (serviceB withheld)", got, want)
+	}
+}
+
+// TestScopeContext_AdmitsBothNamedAPIKeysForANDedAlternative verifies the
+// R2.d/e pairing: an alternative that ANDs two named apiKey requirements
+// admits both named entries (and only those two).
+func TestScopeContext_AdmitsBothNamedAPIKeysForANDedAlternative(t *testing.T) {
+	stored := map[string]any{
+		"apiKeys": map[string]any{
+			"headerKey": "hdr-key",
+			"queryKey":  "qry-key",
+			"unrelated": "should-be-withheld",
+		},
+	}
+	details := &ContextRequiredDetails{
+		Alternatives: []ContextAlternative{
+			{Requirements: []ContextRequirement{
+				{Type: "auth.apiKey", Name: "headerKey"},
+				{Type: "auth.apiKey", Name: "queryKey"},
+			}},
+		},
+	}
+	got := ScopeContext(stored, details)
+	want := map[string]any{
+		"apiKeys": map[string]any{"headerKey": "hdr-key", "queryKey": "qry-key"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("scoped = %v, want %v", got, want)
+	}
+}
+
+// TestScopeContext_NamedAPIKeyFallsBackToPlainApiKey verifies the same
+// fallback priority as ContextAPIKeyFor: when no apiKeys map satisfies the
+// named requirement, the plain "apiKey" field (if present) is what actually
+// satisfied it, and that is what gets admitted.
+func TestScopeContext_NamedAPIKeyFallsBackToPlainApiKey(t *testing.T) {
+	stored := map[string]any{"apiKey": "fallback-key"}
+	details := &ContextRequiredDetails{
+		Alternatives: []ContextAlternative{
+			{Requirements: []ContextRequirement{{Type: "auth.apiKey", Name: "svcKey"}}},
+		},
+	}
+	got := ScopeContext(stored, details)
+	want := map[string]any{"apiKey": "fallback-key"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("scoped = %v, want %v", got, want)
+	}
+}
+
+// TestScopeContext_UnmappedAlternativeAdmitsNoCredentials verifies the R2.c
+// ruling holds through scoping: an alternative whose only requirement is an
+// unmapped family (e.g. "auth.http.digest") is never satisfiable
+// (requirementSatisfied always declines it), so ScopeContext falls through
+// the whole loop admitting nothing — real stored credentials (bearerToken,
+// apiKey) stay withheld exactly as when no alternative is satisfied at all;
+// only non-secret configuration passes through.
+func TestScopeContext_UnmappedAlternativeAdmitsNoCredentials(t *testing.T) {
+	stored := map[string]any{
+		"bearerToken": "should-be-withheld",
+		"apiKey":      "should-be-withheld",
+		"headers":     map[string]any{"X": "1"},
+	}
+	details := &ContextRequiredDetails{
+		Alternatives: []ContextAlternative{
+			{Requirements: []ContextRequirement{{Type: "auth.http.digest"}}},
+		},
+	}
+	got := ScopeContext(stored, details)
+	want := map[string]any{"headers": map[string]any{"X": "1"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("scoped = %v, want %v (no alternative is satisfiable, so no credential is admitted)", got, want)
+	}
+}

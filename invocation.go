@@ -39,6 +39,14 @@ type Metadata map[string][]string
 // binding-invoker contract declares requirement objects open).
 type ContextRequirement struct {
 	Type string `json:"type"`
+	// Name is the scheme name as the source artifact declares it (e.g. an
+	// OpenAPI securitySchemes key, or the AsyncAPI components.securitySchemes
+	// key a $ref resolves through). Distinguishes two requirements of the
+	// same type within one alternative — two ANDed API keys are otherwise
+	// indistinguishable — and keys BindingContext's scheme-scoped 'apiKeys'
+	// lookup. Empty when the artifact scheme has no addressable name (e.g.
+	// an inline AsyncAPI scheme object).
+	Name string `json:"name,omitempty"`
 	// Durable reports whether resolved context MAY be cached under the
 	// target-derived key. nil means true; non-durable context MUST be
 	// re-satisfied per call.
@@ -48,11 +56,14 @@ type ContextRequirement struct {
 }
 
 func (r ContextRequirement) MarshalJSON() ([]byte, error) {
-	out := make(map[string]any, 3+len(r.Extra))
+	out := make(map[string]any, 4+len(r.Extra))
 	for k, v := range r.Extra {
 		out[k] = v
 	}
 	out["type"] = r.Type
+	if r.Name != "" {
+		out["name"] = r.Name
+	}
 	if r.Durable != nil {
 		out["durable"] = *r.Durable
 	}
@@ -70,6 +81,9 @@ func (r *ContextRequirement) UnmarshalJSON(b []byte) error {
 	if t, ok := raw["type"].(string); ok {
 		r.Type = t
 	}
+	if n, ok := raw["name"].(string); ok {
+		r.Name = n
+	}
 	if d, ok := raw["durable"].(bool); ok {
 		r.Durable = &d
 	}
@@ -77,6 +91,7 @@ func (r *ContextRequirement) UnmarshalJSON(b []byte) error {
 		r.Description = d
 	}
 	delete(raw, "type")
+	delete(raw, "name")
 	delete(raw, "durable")
 	delete(raw, "description")
 	if len(raw) > 0 {

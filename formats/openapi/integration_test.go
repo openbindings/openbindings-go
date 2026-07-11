@@ -632,6 +632,88 @@ func TestIntegration_OAuth2CredentialsApplied(t *testing.T) {
 	}
 }
 
+// TestIntegration_TwoANDedAPIKeysDistinguishedByName verifies the R2.d
+// ruling end to end: an operation whose single security alternative ANDs two
+// apiKey schemes (header + query, different securitySchemes keys) resolves
+// each credential independently from context.apiKeys[name] — the two keys
+// would otherwise be indistinguishable under the old single "apiKey"
+// convenience field, and each must land in its own declared wire location.
+func TestIntegration_TwoANDedAPIKeysDistinguishedByName(t *testing.T) {
+	var gotHeader, gotQuery string
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("X-Header-Key")
+		gotQuery = r.URL.Query().Get("api_key")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	})
+
+	spec := map[string]any{
+		"openapi": "3.0.3",
+		"info":    map[string]any{"title": "Two Key API", "version": "1.0.0"},
+		"servers": []map[string]any{{"url": srv.URL}},
+		"paths": map[string]any{
+			"/secure": map[string]any{
+				"get": map[string]any{
+					"operationId": "secure",
+					"security":    []map[string]any{{"headerKey": []any{}, "queryKey": []any{}}},
+					"responses":   map[string]any{"200": map[string]any{"description": "OK"}},
+				},
+			},
+		},
+		"components": map[string]any{
+			"securitySchemes": map[string]any{
+				"headerKey": map[string]any{"type": "apiKey", "in": "header", "name": "X-Header-Key"},
+				"queryKey":  map[string]any{"type": "apiKey", "in": "query", "name": "api_key"},
+			},
+		},
+	}
+	specBytes, _ := json.Marshal(spec)
+
+	binv := NewInvoker()
+	source := openbindings.InvocationSource{Format: FormatToken, Content: string(specBytes)}
+
+	// Preflight: the AND'd alternative challenges, each requirement carrying
+	// its own securitySchemes key as Name (R2.a ruling).
+	call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: source,
+		Ref:    "#/paths/~1secure/get",
+	})
+	_, ierr := driveSingle(t, call, nil)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeContextRequired {
+		t.Fatalf("expected CONTEXT_REQUIRED, got %v", ierr)
+	}
+	details, _ := ierr.Details.(*openbindings.ContextRequiredDetails)
+	if details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 2 {
+		t.Fatalf("unexpected challenge shape: %+v", ierr.Details)
+	}
+	names := map[string]bool{}
+	for _, req := range details.Alternatives[0].Requirements {
+		names[req.Name] = true
+	}
+	if !names["headerKey"] || !names["queryKey"] {
+		t.Fatalf("requirement Names = %v, want {headerKey, queryKey}", names)
+	}
+
+	// Resolve with scheme-scoped apiKeys: both credentials must reach their
+	// own declared wire location, distinguishably.
+	call2 := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: source,
+		Ref:    "#/paths/~1secure/get",
+		Context: map[string]any{
+			"apiKeys": map[string]any{"headerKey": "hdr-secret", "queryKey": "qry-secret"},
+		},
+	})
+	if _, ierr := driveSingle(t, call2, nil); ierr != nil {
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+	}
+	if gotHeader != "hdr-secret" {
+		t.Errorf("header key = %q, want %q", gotHeader, "hdr-secret")
+	}
+	if gotQuery != "qry-secret" {
+		t.Errorf("query key = %q, want %q", gotQuery, "qry-secret")
+	}
+}
+
 // TestIntegration_ContextRequired_ZeroIO verifies the CONTEXT_REQUIRED
 // challenge is raised pre-dispatch: the request-counting server sees zero
 // requests (parity with the asyncapi/mcp zero-I/O tests).

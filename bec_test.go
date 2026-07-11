@@ -89,6 +89,45 @@ func TestContextSatisfies(t *testing.T) {
 			t.Fatal("auth.oauth2 should map to accessToken")
 		}
 	})
+
+	// R2.d ruling: a NAMED auth.apiKey requirement is satisfied by the
+	// scheme-scoped apiKeys[name] entry, falling back to the single apiKey
+	// convenience field — the same priority ContextAPIKeyFor applies.
+	t.Run("named auth.apiKey checks apiKeys[name] first, falls back to apiKey", func(t *testing.T) {
+		named := &ContextRequiredDetails{
+			Target:       "k",
+			Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.apiKey", Name: "svcKey"}}}},
+		}
+		if !ContextSatisfies(map[string]any{"apiKeys": map[string]any{"svcKey": "k1"}}, named) {
+			t.Fatal("apiKeys[name] entry should satisfy a named requirement")
+		}
+		if ContextSatisfies(map[string]any{"apiKeys": map[string]any{"otherKey": "k1"}}, named) {
+			t.Fatal("an apiKeys entry under a DIFFERENT name must not satisfy")
+		}
+		if !ContextSatisfies(map[string]any{"apiKey": "fallback"}, named) {
+			t.Fatal("the plain apiKey field must still satisfy a named requirement (fallback)")
+		}
+	})
+
+	// R2.c ruling: an unmapped requirement family (a scheme this SDK
+	// surfaces but has no resolver for) must never be satisfiable by the
+	// built-in check — no resolver at this layer, no invented convention.
+	t.Run("unmapped family is never satisfiable", func(t *testing.T) {
+		details := &ContextRequiredDetails{
+			Target:       "k",
+			Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.http.digest"}}}},
+		}
+		ctx := map[string]any{
+			"bearerToken":      "t",
+			"apiKey":           "k",
+			"basic":            map[string]any{"username": "u", "password": "p"},
+			"accessToken":      "a",
+			"auth.http.digest": "anything", // even a literally-matching key must not count
+		}
+		if ContextSatisfies(ctx, details) {
+			t.Fatal("an unmapped requirement family must never be satisfiable by the built-in check")
+		}
+	})
 }
 
 func TestStoreContextResolver(t *testing.T) {
@@ -118,6 +157,36 @@ func TestStoreContextResolver(t *testing.T) {
 		got, err := resolve(ctx, bearerOrAPIKey)
 		if err != nil || got != nil {
 			t.Fatalf("expected decline, got %v err=%v", got, err)
+		}
+	})
+
+	// R2.e ruling, end to end through the store-backed resolver: a store
+	// carrying apiKeys entries for TWO names, challenged by an alternative
+	// naming only one, must resolve a scoped context carrying only that one
+	// entry — never the other name's key.
+	t.Run("scopes apiKeys to only the challenged name", func(t *testing.T) {
+		store := testStore{"api.example.com": {
+			"apiKeys": map[string]any{
+				"serviceA": "key-a",
+				"serviceB": "key-b",
+			},
+		}}
+		resolve := StoreContextResolver(store)
+		details := &ContextRequiredDetails{
+			Target: "https://api.example.com/v1",
+			Alternatives: []ContextAlternative{
+				{Requirements: []ContextRequirement{{Type: "auth.apiKey", Name: "serviceA"}}},
+			},
+		}
+		got, err := resolve(ctx, details)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ContextAPIKeyFor(got, "serviceA") != "key-a" {
+			t.Fatalf("serviceA key not resolved: %v", got)
+		}
+		if ContextAPIKeyFor(got, "serviceB") != "" {
+			t.Fatalf("serviceB key must be withheld: %v", got)
 		}
 	})
 }

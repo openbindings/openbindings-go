@@ -2,6 +2,8 @@ package asyncapi
 
 import (
 	"testing"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func TestParseRef_BareID(t *testing.T) {
@@ -297,13 +299,92 @@ func TestRequiredContext_NoDeclaredSecurity(t *testing.T) {
 	}
 }
 
-func TestRequiredContext_UnknownSchemeNotEnforced(t *testing.T) {
+// TestRequiredContext_UnknownSchemeSurfaced verifies the R2.c ruling
+// (flipped from TestRequiredContext_UnknownSchemeNotEnforced, which pinned
+// the old drop behavior): an unmapped scheme family (e.g. "scramSha256") is
+// now SURFACED as "auth."+type with its components.securitySchemes key as
+// Name (R2.a), instead of silently dropped — a document whose every
+// alternative is unmapped now produces a challenge rather than dispatching
+// unauthenticated.
+func TestRequiredContext_UnknownSchemeSurfaced(t *testing.T) {
 	doc := secureDoc(map[string]securityScheme{
 		"custom": {Type: "scramSha256"},
 	}, "custom")
 	op := doc.Operations["op"]
-	if got := requiredContext(doc, &op, "https://api.example.com", nil); got != nil {
-		t.Errorf("unknown scheme families are not checkable, got %+v", got)
+	got := requiredContext(doc, &op, "https://api.example.com", nil)
+	if got == nil {
+		t.Fatal("expected a challenge surfacing the unmapped scheme, got nil")
+	}
+	if len(got.Alternatives) != 1 || len(got.Alternatives[0].Requirements) != 1 {
+		t.Fatalf("unexpected challenge shape: %+v", got)
+	}
+	req := got.Alternatives[0].Requirements[0]
+	if req.Type != "auth.scramSha256" {
+		t.Errorf("Type = %q, want auth.scramSha256", req.Type)
+	}
+	if req.Name != "custom" {
+		t.Errorf("Name = %q, want the securitySchemes key %q", req.Name, "custom")
+	}
+	// Unresolvable by the built-in satisfaction check (rule 10: no resolver
+	// at this layer invented for an unmapped family).
+	if openbindings.ContextSatisfies(map[string]any{"bearerToken": "t"}, got) {
+		t.Error("an unmapped requirement must never be satisfiable by the built-in check")
+	}
+}
+
+// TestRequiredContext_UnmappedHTTPSchemeSurfaced verifies the R2.c ruling's
+// http-scheme naming: an unmapped "http" scheme (e.g. digest) surfaces as
+// "auth.http.<scheme>", mirroring openapi's naming exactly.
+func TestRequiredContext_UnmappedHTTPSchemeSurfaced(t *testing.T) {
+	doc := secureDoc(map[string]securityScheme{
+		"digestAuth": {Type: "http", Scheme: "digest"},
+	}, "digestAuth")
+	op := doc.Operations["op"]
+	got := requiredContext(doc, &op, "https://api.example.com", nil)
+	if got == nil || len(got.Alternatives) != 1 {
+		t.Fatalf("expected a surfaced challenge, got %+v", got)
+	}
+	req := got.Alternatives[0].Requirements[0]
+	if req.Type != "auth.http.digest" {
+		t.Errorf("Type = %q, want auth.http.digest", req.Type)
+	}
+	if req.Name != "digestAuth" {
+		t.Errorf("Name = %q, want %q", req.Name, "digestAuth")
+	}
+}
+
+// TestRequiredContext_NameFromRefVsInline verifies the R2.a ruling's naming
+// rule for AsyncAPI: a $ref entry carries the components.securitySchemes key
+// it resolved through as Name; an inline scheme object has no addressable
+// name and carries an empty Name.
+func TestRequiredContext_NameFromRefVsInline(t *testing.T) {
+	doc := secureDoc(map[string]securityScheme{
+		"bearer": {Type: "http", Scheme: "bearer"},
+	}, "bearer")
+	op := doc.Operations["op"]
+	got := requiredContext(doc, &op, "https://api.example.com", nil)
+	if got == nil || len(got.Alternatives) != 1 {
+		t.Fatalf("expected 1 alternative, got %+v", got)
+	}
+	if name := got.Alternatives[0].Requirements[0].Name; name != "bearer" {
+		t.Errorf("$ref entry Name = %q, want %q", name, "bearer")
+	}
+
+	inlineDoc := &document{
+		Servers: map[string]server{
+			"prod": {Host: "api.example.com", Protocol: "https", Security: []securityRequirement{
+				{securityScheme: securityScheme{Type: "http", Scheme: "bearer"}},
+			}},
+		},
+		Operations: map[string]asyncOperation{"op": {Action: "send"}},
+	}
+	inlineOp := inlineDoc.Operations["op"]
+	gotInline := requiredContext(inlineDoc, &inlineOp, "https://api.example.com", nil)
+	if gotInline == nil || len(gotInline.Alternatives) != 1 {
+		t.Fatalf("expected 1 alternative, got %+v", gotInline)
+	}
+	if name := gotInline.Alternatives[0].Requirements[0].Name; name != "" {
+		t.Errorf("inline scheme Name = %q, want empty (no addressable name)", name)
 	}
 }
 
@@ -327,6 +408,107 @@ func TestRequirementType_Families(t *testing.T) {
 		if got := requirementType(tc.scheme); got != tc.want {
 			t.Errorf("requirementType(%+v) = %q, want %q", tc.scheme, got, tc.want)
 		}
+	}
+}
+
+// TestUnmappedRequirementType verifies the R2.c naming rule mirrors openapi
+// exactly: an unmapped "http" scheme surfaces as "auth.http.<scheme>";
+// anything else surfaces as "auth."+type verbatim.
+func TestUnmappedRequirementType(t *testing.T) {
+	cases := []struct {
+		scheme securityScheme
+		want   string
+	}{
+		{securityScheme{Type: "http", Scheme: "digest"}, "auth.http.digest"},
+		{securityScheme{Type: "http", Scheme: "negotiate"}, "auth.http.negotiate"},
+		{securityScheme{Type: "scramSha256"}, "auth.scramSha256"},
+		{securityScheme{Type: "X509"}, "auth.X509"},
+	}
+	for _, tc := range cases {
+		if got := unmappedRequirementType(tc.scheme); got != tc.want {
+			t.Errorf("unmappedRequirementType(%+v) = %q, want %q", tc.scheme, got, tc.want)
+		}
+	}
+}
+
+// TestOAuth2Requirement_GrantTypeSurfacesSelectedFlow mirrors openapi's
+// oauth2 grantType test (R2.b ruling): grantType names exactly the flow the
+// fixed priority selects (authorizationCode > implicit > password >
+// clientCredentials), alongside authorizeUrl/tokenUrl/scopes.
+func TestOAuth2Requirement_GrantTypeSurfacesSelectedFlow(t *testing.T) {
+	cases := []struct {
+		name  string
+		flows *oauthFlows
+		want  string
+	}{
+		{
+			"authorizationCode",
+			&oauthFlows{AuthorizationCode: &oauthFlow{AuthorizationURL: "https://a.example.com/authorize", TokenURL: "https://a.example.com/token"}},
+			"authorization_code",
+		},
+		{
+			"implicit",
+			&oauthFlows{Implicit: &oauthFlow{AuthorizationURL: "https://a.example.com/authorize"}},
+			"implicit",
+		},
+		{
+			"password",
+			&oauthFlows{Password: &oauthFlow{TokenURL: "https://a.example.com/token"}},
+			"password",
+		},
+		{
+			"clientCredentials",
+			&oauthFlows{ClientCredentials: &oauthFlow{TokenURL: "https://a.example.com/token"}},
+			"client_credentials",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := securityScheme{Type: "oauth2", Flows: tc.flows}
+			req := oauth2Requirement(scheme, "https://api.example.com")
+			if req.Type != "auth.oauth2" {
+				t.Fatalf("Type = %q, want auth.oauth2", req.Type)
+			}
+			if got := req.Extra["grantType"]; got != tc.want {
+				t.Errorf("grantType = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOAuth2Requirement_CarriesFlowFields verifies authorizeUrl/tokenUrl
+// (relative ones absolutized against the server URL) and scopes ride
+// alongside grantType — parity with openapi's oauth2Requirement.
+func TestOAuth2Requirement_CarriesFlowFields(t *testing.T) {
+	scheme := securityScheme{
+		Type: "oauth2",
+		Flows: &oauthFlows{
+			AuthorizationCode: &oauthFlow{
+				AuthorizationURL: "/oauth/authorize", // relative -> absolutized
+				TokenURL:         "https://auth.example.com/oauth/token",
+				Scopes:           map[string]string{"read": "Read", "write": "Write"},
+			},
+		},
+	}
+	req := oauth2Requirement(scheme, "https://api.example.com")
+	if got := req.Extra["authorizeUrl"]; got != "https://api.example.com/oauth/authorize" {
+		t.Errorf("authorizeUrl = %v, want absolutized host URL", got)
+	}
+	if got := req.Extra["tokenUrl"]; got != "https://auth.example.com/oauth/token" {
+		t.Errorf("tokenUrl = %v", got)
+	}
+	scopes, _ := req.Extra["scopes"].([]string)
+	if len(scopes) != 2 || scopes[0] != "read" || scopes[1] != "write" {
+		t.Errorf("scopes = %v, want [read write]", req.Extra["scopes"])
+	}
+}
+
+// TestOAuth2Requirement_NoFlows verifies a bare oauth2 scheme (no `flows`)
+// carries only the type — no grantType, no Extra.
+func TestOAuth2Requirement_NoFlows(t *testing.T) {
+	req := oauth2Requirement(securityScheme{Type: "oauth2"}, "https://api.example.com")
+	if req.Type != "auth.oauth2" || req.Extra != nil {
+		t.Errorf("expected bare auth.oauth2 with no Extra, got %+v", req)
 	}
 }
 

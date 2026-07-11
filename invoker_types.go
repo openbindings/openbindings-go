@@ -19,10 +19,11 @@ import (
 //
 // The well-known credential fields, by the requirement family they satisfy:
 //
-//	auth.bearer  →  "bearerToken"
-//	auth.apiKey  →  "apiKey"
-//	auth.basic   →  "basic" (a {"username","password"} object)
-//	auth.oauth2  →  "accessToken" (plus "refreshToken", "clientSecret")
+//	auth.bearer          →  "bearerToken"
+//	auth.apiKey          →  "apiKey"
+//	auth.apiKey (named)  →  "apiKeys"[name] (falls back to "apiKey")
+//	auth.basic           →  "basic" (a {"username","password"} object)
+//	auth.oauth2          →  "accessToken" (plus "refreshToken", "clientSecret")
 //
 // so satisfying a bearer challenge for an origin is one call:
 //
@@ -299,6 +300,18 @@ func RedactContext(ctx map[string]any) map[string]any {
 			} else {
 				redacted[k] = v
 			}
+		case "apiKeys":
+			// Scheme-scoped API keys (R2.d ruling): every named entry is
+			// credential material, same as the single 'apiKey' field.
+			if m, ok := v.(map[string]any); ok {
+				rc := make(map[string]any, len(m))
+				for name := range m {
+					rc[name] = "[REDACTED]"
+				}
+				redacted[k] = rc
+			} else {
+				redacted[k] = v
+			}
 		default:
 			redacted[k] = v
 		}
@@ -327,6 +340,29 @@ func ContextAPIKey(ctx map[string]any) string {
 	}
 	v, _ := ctx["apiKey"].(string)
 	return v
+}
+
+// ContextAPIKeyFor returns the API key for a NAMED scheme: the scheme-scoped
+// context.apiKeys[name] entry first (the form BindingContext defines for an
+// alternative that ANDs several API keys at once — two ANDed apiKey schemes
+// are otherwise indistinguishable), falling back to the single well-known
+// apiKey convenience field. name == "" behaves exactly like ContextAPIKey
+// (an unnamed requirement has no named entry to prefer). Every format
+// invoker's credential application (openapi, asyncapi) and the core
+// satisfaction/scoping logic (requirementSatisfied, admitRequirement) share
+// this one lookup rather than duplicating the priority per call site.
+func ContextAPIKeyFor(ctx map[string]any, name string) string {
+	if ctx == nil {
+		return ""
+	}
+	if name != "" {
+		if keys, ok := ctx["apiKeys"].(map[string]any); ok {
+			if v, ok := keys[name].(string); ok && v != "" {
+				return v
+			}
+		}
+	}
+	return ContextAPIKey(ctx)
 }
 
 // ContextBasicAuth returns the well-known basic auth fields from context.

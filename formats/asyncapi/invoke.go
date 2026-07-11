@@ -192,8 +192,9 @@ func pickDocServer(doc *document) *server {
 // ---------------------------------------------------------------------------
 
 // requirementType maps an AsyncAPI security scheme to a standard requirement
-// family, or "" when the scheme family is unknown (not checkable, not
-// enforced).
+// family, or "" when the scheme family is unmapped — a scheme this SDK
+// cannot itself resolve (see unmappedRequirementType, which requiredContext
+// consults instead of dropping the scheme, per the R2.c ruling).
 func requirementType(s securityScheme) string {
 	switch s.Type {
 	case "http":
@@ -216,15 +217,36 @@ func requirementType(s securityScheme) string {
 	return ""
 }
 
+// unmappedRequirementType derives the R2.c surfaced-requirement type for a
+// scheme family requirementType doesn't map: "auth.http.<scheme>" for an
+// HTTP auth scheme other than bearer/basic (e.g. "auth.http.digest"), or
+// "auth." + the artifact's own type verbatim otherwise (e.g.
+// "auth.scramSha256", "auth.X509"). The alternative stays discoverable to a
+// runtime with a resolver for that family, rather than silently dropped.
+func unmappedRequirementType(s securityScheme) string {
+	if s.Type == "http" {
+		if s.Scheme == "" {
+			// A missing scheme value degrades to the bare family, never a
+			// trailing dot (TS parity).
+			return "auth.http"
+		}
+		return "auth.http." + strings.ToLower(s.Scheme)
+	}
+	return "auth." + s.Type
+}
+
 // requiredContext computes the context the binding requires for this
 // operation, or nil when the provided context already satisfies it (or the
 // doc declares nothing checkable). Per the AsyncAPI 3.0 spec, `security` is a
 // flat LIST of Security Scheme Objects or Reference Objects: each entry is
 // its own standalone alternative, so satisfying any ONE entry authorizes the
 // operation (pure OR — there is no OpenAPI/2.x-style AND-conjunction grouping
-// within a single entry). An entry the SDK cannot resolve or express (an
-// unresolvable $ref, or an unmapped scheme family) is skipped entirely rather
-// than degraded into a weaker requirement. Side-effect-free; shared by
+// within a single entry). An unresolvable $ref is skipped entirely (nothing
+// to check); an entry whose scheme family requirementType doesn't map is now
+// SURFACED with a derived type (R2.c ruling) rather than dropped, so the
+// alternative stays discoverable to a runtime with a resolver for it — a
+// document whose every alternative is unmapped now produces a challenge
+// instead of dispatching unauthenticated. Side-effect-free; shared by
 // runBinding and PrepareBinding.
 func requiredContext(doc *document, asyncOp *asyncOperation, serverURL string, ctx map[string]any) *openbindings.ContextRequiredDetails {
 	requirements := securityRequirements(doc, asyncOp)
@@ -238,14 +260,23 @@ func requiredContext(doc *document, asyncOp *asyncOperation, serverURL string, c
 		if !ok {
 			continue // unresolvable $ref: not checkable, not enforced
 		}
-		typ := requirementType(scheme)
-		if typ == "" {
-			continue // unknown scheme family: not checkable, not enforced
+		var req openbindings.ContextRequirement
+		if typ := requirementType(scheme); typ != "" {
+			if typ == "auth.oauth2" {
+				req = oauth2Requirement(scheme, serverURL)
+			} else {
+				req = openbindings.ContextRequirement{Type: typ}
+			}
+		} else {
+			req = openbindings.ContextRequirement{Type: unmappedRequirementType(scheme)}
 		}
-		req := openbindings.ContextRequirement{Type: typ}
 		if scheme.Description != "" {
 			req.Description = scheme.Description
 		}
+		// R2.a ruling: the components.securitySchemes key this entry's $ref
+		// resolved through (empty for an inline scheme object — no
+		// addressable name).
+		req.Name = securityRequirementName(entry)
 		alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: []openbindings.ContextRequirement{req}})
 	}
 	if len(alternatives) == 0 {
@@ -260,6 +291,72 @@ func requiredContext(doc *document, asyncOp *asyncOperation, serverURL string, c
 		return nil
 	}
 	return details
+}
+
+// oauth2Requirement builds an auth.oauth2 requirement carrying the SELECTED
+// flow's grantType (R2.b ruling) alongside its authorize/token URLs and
+// scopes, under the binding-invoker contract's convention field names
+// (grantType, authorizeUrl, tokenUrl, scopes) — mirrors openapi's
+// oauth2Requirement exactly. Fixed priority, surfaced not changed:
+// authorizationCode > implicit > password > clientCredentials, the last two
+// selected only when they carry a tokenUrl (the field both formats restrict
+// them to). Relative URLs are resolved against the server URL.
+func oauth2Requirement(s securityScheme, serverURL string) openbindings.ContextRequirement {
+	req := openbindings.ContextRequirement{Type: "auth.oauth2"}
+	if s.Flows == nil {
+		return req
+	}
+	var flow *oauthFlow
+	var grantType string
+	switch {
+	case s.Flows.AuthorizationCode != nil:
+		flow, grantType = s.Flows.AuthorizationCode, "authorization_code"
+	case s.Flows.Implicit != nil:
+		flow, grantType = s.Flows.Implicit, "implicit"
+	case s.Flows.Password != nil && s.Flows.Password.TokenURL != "":
+		flow, grantType = s.Flows.Password, "password"
+	case s.Flows.ClientCredentials != nil && s.Flows.ClientCredentials.TokenURL != "":
+		flow, grantType = s.Flows.ClientCredentials, "client_credentials"
+	}
+	if flow == nil {
+		return req
+	}
+	extra := map[string]any{"grantType": grantType}
+	if flow.AuthorizationURL != "" {
+		extra["authorizeUrl"] = absolutizeURL(flow.AuthorizationURL, serverURL)
+	}
+	if flow.TokenURL != "" {
+		extra["tokenUrl"] = absolutizeURL(flow.TokenURL, serverURL)
+	}
+	if len(flow.Scopes) > 0 {
+		scopes := make([]string, 0, len(flow.Scopes))
+		for k := range flow.Scopes {
+			scopes = append(scopes, k)
+		}
+		sort.Strings(scopes)
+		extra["scopes"] = scopes
+	}
+	req.Extra = extra
+	return req
+}
+
+// absolutizeURL resolves a possibly-relative flow URL against the server
+// base; absolute URLs pass through unchanged. Mirrors openapi's
+// absolutizeURL (same behavior; kept local since the format packages don't
+// share private helpers).
+func absolutizeURL(ref, baseURL string) string {
+	u, err := url.Parse(ref)
+	if err != nil {
+		return ref
+	}
+	if u.IsAbs() {
+		return ref
+	}
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return ref
+	}
+	return base.ResolveReference(u).String()
 }
 
 // securityRequirements returns the security list applicable to an operation:
@@ -295,6 +392,16 @@ func resolveSecurityRequirement(doc *document, req securityRequirement) (securit
 		return securityScheme{}, false
 	}
 	return req.securityScheme, true
+}
+
+// securityRequirementName returns the components.securitySchemes key a
+// security list entry's $ref resolves through (the R2.a ruling's Name),
+// or "" for an inline scheme object — it has no addressable name.
+func securityRequirementName(req securityRequirement) string {
+	if req.Ref == "" {
+		return ""
+	}
+	return extractRefName(req.Ref)
 }
 
 // ---------------------------------------------------------------------------
@@ -625,8 +732,8 @@ func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, 
 // convention so the token is never volunteered to servers that do not
 // declare bearer auth.
 func declaresBearerScheme(doc *document, asyncOp *asyncOperation) bool {
-	for _, s := range resolveSecuritySchemes(doc, asyncOp) {
-		switch requirementType(s) {
+	for _, named := range resolveSecuritySchemes(doc, asyncOp) {
+		switch requirementType(named.Scheme) {
 		case "auth.bearer", "auth.oauth2":
 			return true
 		}
@@ -900,21 +1007,32 @@ func applyHTTPContext(req *http.Request, doc *document, asyncOp *asyncOperation,
 	}
 }
 
+// namedSecurityScheme pairs a resolved AsyncAPI security scheme with the
+// components.securitySchemes key its requirement entry's $ref resolved
+// through (empty for an inline scheme) — the same name requiredContext
+// stamps onto the ContextRequirement's Name (R2.a ruling), needed here so
+// credential application can look up a NAMED apiKey scheme's key via
+// ContextAPIKeyFor without re-deriving it.
+type namedSecurityScheme struct {
+	Name   string
+	Scheme securityScheme
+}
+
 // resolveSecuritySchemes returns the security schemes applicable to an
 // operation, flattened for credential placement, in declaration order. The
 // entries come from securityRequirements (operation-level, else the server
 // the connection targets); an entry that fails to resolve (a dangling $ref)
 // is dropped.
-func resolveSecuritySchemes(doc *document, asyncOp *asyncOperation) []securityScheme {
+func resolveSecuritySchemes(doc *document, asyncOp *asyncOperation) []namedSecurityScheme {
 	requirements := securityRequirements(doc, asyncOp)
 	if len(requirements) == 0 {
 		return nil
 	}
 
-	var result []securityScheme
+	var result []namedSecurityScheme
 	for _, req := range requirements {
 		if scheme, ok := resolveSecurityRequirement(doc, req); ok {
-			result = append(result, scheme)
+			result = append(result, namedSecurityScheme{Name: securityRequirementName(req), Scheme: scheme})
 		}
 	}
 	return result
@@ -923,6 +1041,9 @@ func resolveSecuritySchemes(doc *document, asyncOp *asyncOperation) []securitySc
 // applyCredentialsViaSecuritySchemes reads the AsyncAPI doc's securitySchemes
 // and operation/server-level security requirements to place credentials exactly
 // where the spec declares (header, query, or cookie with the correct name).
+// An apiKey/httpApiKey scheme looks up its credential by the
+// securitySchemes key first (R2.d ruling: context.apiKeys[name]), falling
+// back to the single context.apiKey.
 func applyCredentialsViaSecuritySchemes(req *http.Request, doc *document, asyncOp *asyncOperation, bindCtx map[string]any) (applied bool, queryParams url.Values) {
 	schemes := resolveSecuritySchemes(doc, asyncOp)
 	if len(schemes) == 0 {
@@ -931,10 +1052,11 @@ func applyCredentialsViaSecuritySchemes(req *http.Request, doc *document, asyncO
 
 	queryParams = url.Values{}
 
-	for _, s := range schemes {
+	for _, named := range schemes {
+		s := named.Scheme
 		switch s.Type {
 		case "apiKey", "httpApiKey":
-			val := openbindings.ContextAPIKey(bindCtx)
+			val := openbindings.ContextAPIKeyFor(bindCtx, named.Name)
 			if val == "" {
 				continue
 			}

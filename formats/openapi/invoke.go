@@ -421,6 +421,11 @@ func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string
 				expressible = false
 				break
 			}
+			// R2.a ruling: every requirement carries the securitySchemes key
+			// that named it — distinguishes two ANDed schemes of the same
+			// type within this alternative and keys the scheme-scoped
+			// 'apiKeys' credential lookup.
+			req.Name = schemeName
 			reqs = append(reqs, req)
 		}
 		if expressible && len(reqs) > 0 {
@@ -442,10 +447,17 @@ func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string
 	return details
 }
 
-// schemeToRequirement maps an OpenAPI security scheme to the standard context
-// requirement family, carrying the family-specific fields a resolver needs to
-// act without out-of-band knowledge (notably oauth2 flow endpoints). The bool
-// is false for schemes the SDK cannot express (so the alternative is skipped).
+// schemeToRequirement maps an OpenAPI security scheme to a context
+// requirement, carrying the family-specific fields a resolver needs to act
+// without out-of-band knowledge (notably oauth2 flow endpoints). Per the
+// R2.c ruling, a scheme family the SDK cannot itself resolve is no longer
+// dropped: it is surfaced with a type derived from the artifact ("auth.http."
+// + the HTTP scheme for an unmapped "http" scheme, e.g. "auth.http.digest";
+// "auth." + the artifact's own type otherwise, e.g. "auth.mutualTLS") so the
+// alternative stays discoverable to a runtime with a resolver for it, rather
+// than silently vanishing into an unauthenticated dispatch. Every switch arm
+// now returns true; the bool is kept for signature stability (and as a hook
+// for a genuinely inexpressible future case) rather than removed.
 func schemeToRequirement(s *openapi3.SecurityScheme, baseURL string) (openbindings.ContextRequirement, bool) {
 	switch s.Type {
 	case "http":
@@ -455,9 +467,14 @@ func schemeToRequirement(s *openapi3.SecurityScheme, baseURL string) (openbindin
 		case "bearer":
 			return openbindings.ContextRequirement{Type: "auth.bearer"}, true
 		default:
-			// digest, negotiate, etc.: not expressible as a context
-			// requirement, so the whole alternative is skipped (TS parity).
-			return openbindings.ContextRequirement{}, false
+			// digest, negotiate, etc.: not a family this SDK resolves
+			// itself, but SURFACED (R2.c ruling), not dropped. A missing
+			// scheme value degrades to the bare family, never a trailing
+			// dot (TS parity).
+			return openbindings.ContextRequirement{
+				Type:        httpRequirementType(s.Scheme),
+				Description: s.Description,
+			}, true
 		}
 	case "apiKey":
 		return openbindings.ContextRequirement{Type: "auth.apiKey"}, true
@@ -465,49 +482,65 @@ func schemeToRequirement(s *openapi3.SecurityScheme, baseURL string) (openbindin
 		return oauth2Requirement(s, baseURL), true
 	case "openIdConnect":
 		// OpenID Connect resolves to an OAuth2 access token; the discovery URL
-		// lets a resolver fetch the authorize/token endpoints.
+		// lets a resolver fetch the authorize/token endpoints. No flow is
+		// selected here (openIdConnect has no `flows` object), so this
+		// requirement carries no grantType (R2.b ruling).
 		req := openbindings.ContextRequirement{Type: "auth.oauth2"}
 		if s.OpenIdConnectUrl != "" {
 			req.Extra = map[string]any{"openIdConnectUrl": absolutizeURL(s.OpenIdConnectUrl, baseURL)}
 		}
 		return req, true
 	default:
-		return openbindings.ContextRequirement{}, false
+		// Any other artifact type this SDK doesn't itself resolve (e.g.
+		// "mutualTLS"): surfaced verbatim (R2.c ruling) rather than dropped.
+		return openbindings.ContextRequirement{
+			Type:        "auth." + s.Type,
+			Description: s.Description,
+		}, true
 	}
 }
 
-// oauth2Requirement builds an auth.oauth2 requirement carrying the flow's
-// authorize/token URLs and scopes under the binding-invoker contract's
-// convention field names
-// (authorizeUrl, tokenUrl, scopes). It prefers the authorization-code flow —
-// the only interactive, PKCE-capable flow — then implicit, then any flow with
-// an authorization endpoint. Relative URLs are resolved against the base URL.
+// oauth2Requirement builds an auth.oauth2 requirement carrying the SELECTED
+// flow's grantType (R2.b ruling) alongside its authorize/token URLs and
+// scopes, under the binding-invoker contract's convention field names
+// (grantType, authorizeUrl, tokenUrl, scopes). Fixed priority — surfaced,
+// never changed by this ruling: authorizationCode (the only interactive,
+// PKCE-capable flow) > implicit > password > clientCredentials, the last two
+// selected only when they carry a tokenUrl (OpenAPI 3.x defines
+// authorizationUrl only for authorizationCode/implicit). Relative URLs are
+// resolved against the base URL.
+// httpRequirementType derives the surfaced type for an http scheme this SDK
+// does not itself resolve: "auth.http.<scheme>" (lowercased), degrading to
+// the bare "auth.http" when the artifact omits the scheme value (TS parity —
+// never a trailing dot).
+func httpRequirementType(scheme string) string {
+	if scheme == "" {
+		return "auth.http"
+	}
+	return "auth.http." + strings.ToLower(scheme)
+}
+
 func oauth2Requirement(s *openapi3.SecurityScheme, baseURL string) openbindings.ContextRequirement {
 	req := openbindings.ContextRequirement{Type: "auth.oauth2"}
 	if s.Flows == nil {
 		return req
 	}
-	flow := s.Flows.AuthorizationCode
-	if flow == nil {
-		flow = s.Flows.Implicit
-	}
-	if flow == nil {
-		// Password and clientCredentials flows carry only a tokenUrl in
-		// OpenAPI 3.x (authorizationUrl is undefined for them), so select on
-		// TokenURL — the endpoint they actually have. Selecting on
-		// AuthorizationURL here would never match, leaving these schemes with a
-		// bare auth.oauth2 requirement (no tokenUrl/scopes).
-		for _, f := range []*openapi3.OAuthFlow{s.Flows.Password, s.Flows.ClientCredentials} {
-			if f != nil && f.TokenURL != "" {
-				flow = f
-				break
-			}
-		}
+	var flow *openapi3.OAuthFlow
+	var grantType string
+	switch {
+	case s.Flows.AuthorizationCode != nil:
+		flow, grantType = s.Flows.AuthorizationCode, "authorization_code"
+	case s.Flows.Implicit != nil:
+		flow, grantType = s.Flows.Implicit, "implicit"
+	case s.Flows.Password != nil && s.Flows.Password.TokenURL != "":
+		flow, grantType = s.Flows.Password, "password"
+	case s.Flows.ClientCredentials != nil && s.Flows.ClientCredentials.TokenURL != "":
+		flow, grantType = s.Flows.ClientCredentials, "client_credentials"
 	}
 	if flow == nil {
 		return req
 	}
-	extra := map[string]any{}
+	extra := map[string]any{"grantType": grantType}
 	if flow.AuthorizationURL != "" {
 		extra["authorizeUrl"] = absolutizeURL(flow.AuthorizationURL, baseURL)
 	}
@@ -522,9 +555,7 @@ func oauth2Requirement(s *openapi3.SecurityScheme, baseURL string) openbindings.
 		sort.Strings(scopes)
 		extra["scopes"] = scopes
 	}
-	if len(extra) > 0 {
-		req.Extra = extra
-	}
+	req.Extra = extra
 	return req
 }
 
@@ -861,7 +892,10 @@ func applyHTTPContext(req *http.Request, doc *openapi3.T, op *openapi3.Operation
 // applyCredentialsViaSecuritySchemes reads the OpenAPI doc's securitySchemes
 // and operation-level security requirements to place credentials exactly
 // where the spec declares (header, query, or cookie with the correct name).
-// Credentials are read from well-known context fields.
+// Credentials are read from well-known context fields; an apiKey scheme
+// looks up its credential by the securitySchemes key first (R2.d ruling:
+// context.apiKeys[name], so two ANDed apiKey schemes with different names
+// resolve to different keys), falling back to the single context.apiKey.
 func applyCredentialsViaSecuritySchemes(req *http.Request, doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any) bool {
 	schemes := resolveSecuritySchemes(doc, op)
 	if len(schemes) == 0 {
@@ -870,15 +904,15 @@ func applyCredentialsViaSecuritySchemes(req *http.Request, doc *openapi3.T, op *
 
 	applied := false
 
-	for _, scheme := range schemes {
-		if scheme.Value == nil {
+	for _, named := range schemes {
+		if named.Scheme.Value == nil {
 			continue
 		}
-		s := scheme.Value
+		s := named.Scheme.Value
 
 		switch s.Type {
 		case "apiKey":
-			val := openbindings.ContextAPIKey(bindCtx)
+			val := openbindings.ContextAPIKeyFor(bindCtx, named.Name)
 			if val == "" {
 				continue
 			}
@@ -925,9 +959,20 @@ func applyCredentialsViaSecuritySchemes(req *http.Request, doc *openapi3.T, op *
 	return applied
 }
 
-// resolveSecuritySchemes returns the security scheme refs applicable to an operation.
-// Operation-level security overrides top-level; falls back to top-level if not set.
-func resolveSecuritySchemes(doc *openapi3.T, op *openapi3.Operation) []*openapi3.SecuritySchemeRef {
+// namedSecurityScheme pairs a resolved OpenAPI security scheme with the
+// securitySchemes map key it was resolved from — the same key requiredContext
+// stamps onto the ContextRequirement's Name (R2.a ruling), needed here so
+// credential application can look up a NAMED apiKey scheme's key via
+// ContextAPIKeyFor without re-deriving the name.
+type namedSecurityScheme struct {
+	Name   string
+	Scheme *openapi3.SecuritySchemeRef
+}
+
+// resolveSecuritySchemes returns the security schemes applicable to an
+// operation, each paired with its securitySchemes key. Operation-level
+// security overrides top-level; falls back to top-level if not set.
+func resolveSecuritySchemes(doc *openapi3.T, op *openapi3.Operation) []namedSecurityScheme {
 	var requirements *openapi3.SecurityRequirements
 	if op != nil {
 		requirements = op.Security
@@ -943,7 +988,7 @@ func resolveSecuritySchemes(doc *openapi3.T, op *openapi3.Operation) []*openapi3
 		return nil
 	}
 
-	var result []*openapi3.SecuritySchemeRef
+	var result []namedSecurityScheme
 	seen := map[string]bool{}
 	for _, req := range *requirements {
 		for schemeName := range req {
@@ -952,7 +997,7 @@ func resolveSecuritySchemes(doc *openapi3.T, op *openapi3.Operation) []*openapi3
 			}
 			seen[schemeName] = true
 			if ref, ok := doc.Components.SecuritySchemes[schemeName]; ok {
-				result = append(result, ref)
+				result = append(result, namedSecurityScheme{Name: schemeName, Scheme: ref})
 			}
 		}
 	}

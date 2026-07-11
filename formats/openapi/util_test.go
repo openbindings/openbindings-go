@@ -202,6 +202,9 @@ func TestRequiredContext(t *testing.T) {
 		t.Errorf("unexpected challenge shape: %+v", d)
 	} else if d.Target != "https://api.example.com" {
 		t.Errorf("challenge target = %q, want https://api.example.com", d.Target)
+	} else if got := d.Alternatives[0].Requirements[0].Name; got != "bearerAuth" {
+		// R2.a ruling: every requirement carries the securitySchemes key as Name.
+		t.Errorf("Name = %q, want the securitySchemes key %q", got, "bearerAuth")
 	}
 
 	if d := requiredContext(doc, op, map[string]any{"bearerToken": "tok"}, "https://api.example.com"); d != nil {
@@ -214,10 +217,52 @@ func TestRequiredContext(t *testing.T) {
 	}
 }
 
+// TestRequiredContext_NameDistinguishesANDedSchemes verifies the R2.a ruling
+// end to end for the AND case: a single alternative requiring two schemes of
+// the same family (two apiKey schemes) carries a distinct Name per
+// requirement, the securitySchemes key each was declared under — otherwise
+// they would be indistinguishable.
+func TestRequiredContext_NameDistinguishesANDedSchemes(t *testing.T) {
+	doc := &openapi3.T{
+		Components: &openapi3.Components{
+			SecuritySchemes: openapi3.SecuritySchemes{
+				"headerKey": &openapi3.SecuritySchemeRef{
+					Value: &openapi3.SecurityScheme{Type: "apiKey", In: "header", Name: "X-Header-Key"},
+				},
+				"queryKey": &openapi3.SecuritySchemeRef{
+					Value: &openapi3.SecurityScheme{Type: "apiKey", In: "query", Name: "api_key"},
+				},
+			},
+		},
+	}
+	op := &openapi3.Operation{
+		Security: openapi3.NewSecurityRequirements().With(
+			openapi3.NewSecurityRequirement().Authenticate("headerKey").Authenticate("queryKey"),
+		),
+	}
+	d := requiredContext(doc, op, nil, "https://api.example.com")
+	if d == nil || len(d.Alternatives) != 1 || len(d.Alternatives[0].Requirements) != 2 {
+		t.Fatalf("expected one AND'd alternative with 2 requirements, got %+v", d)
+	}
+	names := map[string]bool{}
+	for _, req := range d.Alternatives[0].Requirements {
+		if req.Type != "auth.apiKey" {
+			t.Errorf("requirement type = %q, want auth.apiKey", req.Type)
+		}
+		names[req.Name] = true
+	}
+	if !names["headerKey"] || !names["queryKey"] {
+		t.Errorf("requirement Names = %v, want {headerKey, queryKey}", names)
+	}
+}
+
 // TestSchemeToRequirementType verifies the scheme→requirement mapping:
-// openIdConnect stays auth.oauth2 (TS is aligned TO this), while http schemes
-// other than bearer/basic (e.g. digest) are inexpressible — the alternative
-// is skipped rather than degraded to auth.bearer.
+// openIdConnect stays auth.oauth2 (TS is aligned TO this). R2.c ruling
+// (flipped from the prior "inexpressible -> skipped" pin): http schemes
+// other than bearer/basic (e.g. digest, negotiate) and other unmapped
+// artifact types (e.g. mutualTLS) are now SURFACED with a derived type
+// ("auth.http.<scheme>" / "auth."+type) instead of dropped, and
+// schemeToRequirement always reports ok=true.
 func TestSchemeToRequirementType(t *testing.T) {
 	cases := []struct {
 		scheme *openapi3.SecurityScheme
@@ -226,22 +271,36 @@ func TestSchemeToRequirementType(t *testing.T) {
 		{&openapi3.SecurityScheme{Type: "http", Scheme: "bearer"}, "auth.bearer"},
 		{&openapi3.SecurityScheme{Type: "http", Scheme: "Bearer"}, "auth.bearer"},
 		{&openapi3.SecurityScheme{Type: "http", Scheme: "basic"}, "auth.basic"},
-		{&openapi3.SecurityScheme{Type: "http", Scheme: "digest"}, ""},
-		{&openapi3.SecurityScheme{Type: "http", Scheme: "negotiate"}, ""},
+		{&openapi3.SecurityScheme{Type: "http", Scheme: "digest"}, "auth.http.digest"},
+		{&openapi3.SecurityScheme{Type: "http", Scheme: "negotiate"}, "auth.http.negotiate"},
 		{&openapi3.SecurityScheme{Type: "apiKey"}, "auth.apiKey"},
 		{&openapi3.SecurityScheme{Type: "oauth2"}, "auth.oauth2"},
 		{&openapi3.SecurityScheme{Type: "openIdConnect"}, "auth.oauth2"},
-		{&openapi3.SecurityScheme{Type: "mutualTLS"}, ""},
+		{&openapi3.SecurityScheme{Type: "mutualTLS"}, "auth.mutualTLS"},
 	}
 	for _, tc := range cases {
 		req, ok := schemeToRequirement(tc.scheme, "https://api.example.com")
-		got := ""
-		if ok {
-			got = req.Type
+		if !ok {
+			t.Errorf("schemeToRequirement(%s/%s) ok = false, want true (every scheme now surfaces, R2.c ruling)", tc.scheme.Type, tc.scheme.Scheme)
+			continue
 		}
-		if got != tc.want {
-			t.Errorf("schemeToRequirement(%s/%s) = %q, want %q", tc.scheme.Type, tc.scheme.Scheme, got, tc.want)
+		if req.Type != tc.want {
+			t.Errorf("schemeToRequirement(%s/%s) = %q, want %q", tc.scheme.Type, tc.scheme.Scheme, req.Type, tc.want)
 		}
+	}
+}
+
+// TestSchemeToRequirementType_UnmappedCarriesDescription verifies the R2.c
+// ruling's description passthrough: an unmapped scheme's artifact
+// description rides the surfaced requirement.
+func TestSchemeToRequirementType_UnmappedCarriesDescription(t *testing.T) {
+	scheme := &openapi3.SecurityScheme{Type: "http", Scheme: "digest", Description: "Digest auth"}
+	req, ok := schemeToRequirement(scheme, "https://api.example.com")
+	if !ok || req.Type != "auth.http.digest" {
+		t.Fatalf("expected auth.http.digest, got (%+v, %v)", req, ok)
+	}
+	if req.Description != "Digest auth" {
+		t.Errorf("Description = %q, want %q", req.Description, "Digest auth")
 	}
 }
 
@@ -274,12 +333,65 @@ func TestOAuth2Requirement_CarriesFlowFields(t *testing.T) {
 	if len(scopes) != 2 || scopes[0] != "read" || scopes[1] != "write" {
 		t.Errorf("scopes = %v, want [read write]", req.Extra["scopes"])
 	}
+	// R2.b ruling: the selected flow's grantType rides alongside authorizeUrl/tokenUrl/scopes.
+	if got := req.Extra["grantType"]; got != "authorization_code" {
+		t.Errorf("grantType = %v, want authorization_code", got)
+	}
 
-	// openIdConnect carries its discovery URL.
+	// openIdConnect carries its discovery URL and NO grantType (R2.b ruling:
+	// openIdConnect has no `flows`, so no flow is ever genuinely selected).
 	oidc := &openapi3.SecurityScheme{Type: "openIdConnect", OpenIdConnectUrl: "https://auth.example.com/.well-known/openid-configuration"}
 	r2, _ := schemeToRequirement(oidc, "https://api.example.com")
 	if r2.Extra["openIdConnectUrl"] != "https://auth.example.com/.well-known/openid-configuration" {
 		t.Errorf("openIdConnectUrl not carried: %+v", r2.Extra)
+	}
+	if _, present := r2.Extra["grantType"]; present {
+		t.Errorf("openIdConnect must carry no grantType, got %v", r2.Extra["grantType"])
+	}
+}
+
+// TestOAuth2Requirement_GrantTypeSurfacesSelectedFlow verifies the R2.b
+// ruling end to end: grantType names exactly the flow the existing fixed
+// priority selects (authorizationCode > implicit > password >
+// clientCredentials), never a flow that wasn't actually chosen.
+func TestOAuth2Requirement_GrantTypeSurfacesSelectedFlow(t *testing.T) {
+	cases := []struct {
+		name  string
+		flows *openapi3.OAuthFlows
+		want  string
+	}{
+		{
+			"authorizationCode",
+			&openapi3.OAuthFlows{AuthorizationCode: &openapi3.OAuthFlow{AuthorizationURL: "https://a.example.com/authorize", TokenURL: "https://a.example.com/token"}},
+			"authorization_code",
+		},
+		{
+			"implicit",
+			&openapi3.OAuthFlows{Implicit: &openapi3.OAuthFlow{AuthorizationURL: "https://a.example.com/authorize"}},
+			"implicit",
+		},
+		{
+			"password",
+			&openapi3.OAuthFlows{Password: &openapi3.OAuthFlow{TokenURL: "https://a.example.com/token"}},
+			"password",
+		},
+		{
+			"clientCredentials",
+			&openapi3.OAuthFlows{ClientCredentials: &openapi3.OAuthFlow{TokenURL: "https://a.example.com/token"}},
+			"client_credentials",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := &openapi3.SecurityScheme{Type: "oauth2", Flows: tc.flows}
+			req, ok := schemeToRequirement(scheme, "https://api.example.com")
+			if !ok || req.Type != "auth.oauth2" {
+				t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+			}
+			if got := req.Extra["grantType"]; got != tc.want {
+				t.Errorf("grantType = %v, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -369,6 +481,9 @@ func TestOAuth2Requirement_PasswordPriorityOverClientCredentials(t *testing.T) {
 	if len(scopes) != 1 || scopes[0] != "pw" {
 		t.Errorf("scopes = %v, want [pw] (password flow's scopes)", req.Extra["scopes"])
 	}
+	if got := req.Extra["grantType"]; got != "password" {
+		t.Errorf("grantType = %v, want password (fixed priority over clientCredentials)", got)
+	}
 }
 
 // TestOAuth2Requirement_AuthorizationCodeWinsOverAll pins that
@@ -403,12 +518,19 @@ func TestOAuth2Requirement_AuthorizationCodeWinsOverAll(t *testing.T) {
 	if got := req.Extra["tokenUrl"]; got != "https://auth.example.com/authcode/token" {
 		t.Errorf("tokenUrl = %v, want authorizationCode's tokenUrl", got)
 	}
+	if got := req.Extra["grantType"]; got != "authorization_code" {
+		t.Errorf("grantType = %v, want authorization_code (wins over every other flow)", got)
+	}
 }
 
-// TestRequiredContext_DigestOnlyAlternativeSkipped verifies an operation
-// whose only security alternative is inexpressible (http digest) raises no
-// challenge at all.
-func TestRequiredContext_DigestOnlyAlternativeSkipped(t *testing.T) {
+// TestRequiredContext_DigestOnlyAlternativeSurfaced verifies the R2.c ruling
+// (flipped from TestRequiredContext_DigestOnlyAlternativeSkipped, which
+// pinned the old drop behavior): an operation whose only security
+// alternative was previously inexpressible (http digest) now raises a
+// CONTEXT_REQUIRED challenge surfacing "auth.http.digest" — carrying the
+// securitySchemes key as Name (R2.a) — instead of silently dispatching
+// unauthenticated.
+func TestRequiredContext_DigestOnlyAlternativeSurfaced(t *testing.T) {
 	doc := &openapi3.T{
 		Components: &openapi3.Components{
 			SecuritySchemes: openapi3.SecuritySchemes{
@@ -421,8 +543,25 @@ func TestRequiredContext_DigestOnlyAlternativeSkipped(t *testing.T) {
 	op := &openapi3.Operation{
 		Security: openapi3.NewSecurityRequirements().With(openapi3.NewSecurityRequirement().Authenticate("digestAuth")),
 	}
-	if d := requiredContext(doc, op, nil, "https://api.example.com"); d != nil {
-		t.Errorf("an inexpressible-only alternative must yield no challenge, got %+v", d)
+	d := requiredContext(doc, op, nil, "https://api.example.com")
+	if d == nil {
+		t.Fatal("expected a challenge surfacing the unmapped digest scheme, got nil")
+	}
+	if len(d.Alternatives) != 1 || len(d.Alternatives[0].Requirements) != 1 {
+		t.Fatalf("unexpected challenge shape: %+v", d)
+	}
+	req := d.Alternatives[0].Requirements[0]
+	if req.Type != "auth.http.digest" {
+		t.Errorf("Type = %q, want auth.http.digest", req.Type)
+	}
+	if req.Name != "digestAuth" {
+		t.Errorf("Name = %q, want the securitySchemes key %q", req.Name, "digestAuth")
+	}
+	// The surfaced-but-unresolvable requirement is unselectable by the
+	// built-in satisfaction check (rule 10: no resolver at this layer) —
+	// no context can satisfy it.
+	if openbindings.ContextSatisfies(map[string]any{"bearerToken": "t"}, d) {
+		t.Error("an unmapped requirement must never be satisfiable by the built-in check")
 	}
 }
 

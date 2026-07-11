@@ -1,6 +1,9 @@
 package openbindings
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // ---------------------------------------------------------------------------
 // Store-backed context resolver
@@ -21,6 +24,12 @@ var requirementFields = map[string]string{
 // satisfaction; this names the whole family, so scoping can admit (for example)
 // an oauth2 refresh token alongside its access token. Any field not listed in a
 // family is treated as non-secret configuration.
+//
+// "auth.apiKey" names only "apiKey" here (the unnamed, single-key
+// convenience): a NAMED auth.apiKey requirement is satisfied and scoped
+// through the separate 'apiKeys' map (see requirementSatisfied /
+// admitRequirement), never wholesale — admitting the whole map here would
+// leak every other alternative's key alongside the one actually needed.
 var requirementFamilyFields = map[string][]string{
 	"auth.bearer": {"bearerToken"},
 	"auth.apiKey": {"apiKey"},
@@ -28,18 +37,64 @@ var requirementFamilyFields = map[string][]string{
 	"auth.oauth2": {"accessToken", "refreshToken", "clientSecret"},
 }
 
+// credentialFieldNames are the BindingContext fields ScopeContext treats as
+// secret credential material (admitted only for the alternative selected),
+// as opposed to non-secret configuration (headers, cookies, environment,
+// metadata, ...) which always passes through. Listed independently of
+// requirementFamilyFields because 'apiKeys' is a credential field but is
+// never admitted wholesale by that map's generic per-family copy — it is
+// scoped per name by admitRequirement.
+var credentialFieldNames = map[string]bool{
+	"bearerToken":  true,
+	"apiKey":       true,
+	"apiKeys":      true,
+	"basic":        true,
+	"accessToken":  true,
+	"refreshToken": true,
+	"clientSecret": true,
+}
+
 // isCredentialField reports whether a context key names secret credential
 // material, as opposed to non-secret configuration (headers, cookies,
 // environment, metadata, ...).
 func isCredentialField(key string) bool {
-	for _, fields := range requirementFamilyFields {
-		for _, f := range fields {
-			if f == key {
-				return true
-			}
-		}
+	return credentialFieldNames[key]
+}
+
+// requirementSatisfied reports whether ctx resolves one requirement. A NAMED
+// auth.apiKey requirement (req.Name set) checks the scheme-scoped
+// context.apiKeys[req.Name] first, falling back to the single context.apiKey
+// convenience — the same priority ContextAPIKeyFor applies at
+// credential-application time. A mapped family (auth.bearer/apiKey/basic/
+// oauth2, or an unnamed auth.apiKey) checks the single well-known field it
+// resolves into.
+//
+// Every other "auth.*" type is UNMAPPED: a scheme an invoker surfaced from
+// the artifact but has no resolver for (e.g. "auth.http.digest",
+// "auth.mutualTLS", "auth.scramSha256" — the R2.c ruling). It is always
+// unsatisfiable here — never checked against a field named after the type
+// itself — because rule 10 of the binding-invoker contract makes an
+// unrecognized requirement type unsatisfiable by a runtime with no resolver
+// for it, and this layer must not invent a satisfaction convention for the
+// reserved "auth." namespace.
+//
+// A non-"auth." type (e.g. "config.value", "approval.user") is a different,
+// pre-existing convention: those families fall back to a context field named
+// after the type itself, because a resolver for them conventionally stores
+// its result there. That fallback is untouched by this ruling.
+func requirementSatisfied(ctx map[string]any, req ContextRequirement) bool {
+	if req.Type == "auth.apiKey" && req.Name != "" {
+		return ContextAPIKeyFor(ctx, req.Name) != ""
 	}
-	return false
+	field, mapped := requirementFields[req.Type]
+	if !mapped {
+		if strings.HasPrefix(req.Type, "auth.") {
+			return false
+		}
+		field = req.Type
+	}
+	v, present := ctx[field]
+	return present && v != nil && v != ""
 }
 
 // ContextSatisfies reports whether the context can satisfy every requirement
@@ -51,12 +106,7 @@ func ContextSatisfies(ctx map[string]any, details *ContextRequiredDetails) bool 
 	for _, alt := range details.Alternatives {
 		ok := len(alt.Requirements) > 0
 		for _, req := range alt.Requirements {
-			field, mapped := requirementFields[req.Type]
-			if !mapped {
-				field = req.Type
-			}
-			v, present := ctx[field]
-			if !present || v == nil || v == "" {
+			if !requirementSatisfied(ctx, req) {
 				ok = false
 				break
 			}
@@ -104,11 +154,7 @@ func ScopeContext(stored map[string]any, details *ContextRequiredDetails) map[st
 		}
 		satisfied := true
 		for _, req := range alt.Requirements {
-			field, mapped := requirementFields[req.Type]
-			if !mapped {
-				field = req.Type
-			}
-			if v, present := stored[field]; !present || v == nil || v == "" {
+			if !requirementSatisfied(stored, req) {
 				satisfied = false
 				break
 			}
@@ -117,19 +163,51 @@ func ScopeContext(stored map[string]any, details *ContextRequiredDetails) map[st
 			continue
 		}
 		for _, req := range alt.Requirements {
-			fields, ok := requirementFamilyFields[req.Type]
-			if !ok {
-				fields = []string{req.Type}
-			}
-			for _, f := range fields {
-				if v, present := stored[f]; present {
-					out[f] = v
-				}
-			}
+			admitRequirement(out, stored, req)
 		}
 		return out
 	}
 	return out
+}
+
+// admitRequirement copies into out the stored credential field(s) that
+// satisfy one already-satisfied requirement. A NAMED auth.apiKey requirement
+// admits only its single 'apiKeys[name]' entry (never the whole 'apiKeys'
+// map, and never another alternative's key) — scoped provisioning per the
+// binding-invoker contract's least-privilege rule (§ ContextRequiredDetails:
+// "provisions only the context that satisfies the one selected
+// alternative"). Falls back to the plain 'apiKey' field when the named entry
+// is what actually satisfied the requirement (requirementSatisfied's own
+// fallback). Every other requirement admits its whole family
+// (requirementFamilyFields), or a single field named after req.Type when the
+// family is unmapped.
+func admitRequirement(out, stored map[string]any, req ContextRequirement) {
+	if req.Type == "auth.apiKey" && req.Name != "" {
+		if keys, ok := stored["apiKeys"].(map[string]any); ok {
+			if v, ok := keys[req.Name].(string); ok && v != "" {
+				scoped, _ := out["apiKeys"].(map[string]any)
+				if scoped == nil {
+					scoped = map[string]any{}
+					out["apiKeys"] = scoped
+				}
+				scoped[req.Name] = v
+				return
+			}
+		}
+		if v, present := stored["apiKey"]; present {
+			out["apiKey"] = v
+		}
+		return
+	}
+	fields, ok := requirementFamilyFields[req.Type]
+	if !ok {
+		fields = []string{req.Type}
+	}
+	for _, f := range fields {
+		if v, present := stored[f]; present {
+			out[f] = v
+		}
+	}
 }
 
 // StoreContextResolver builds a read-only ContextResolver backed by a

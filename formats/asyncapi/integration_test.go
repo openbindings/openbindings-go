@@ -1111,6 +1111,44 @@ func TestWebSocketQueryParamApiKey(t *testing.T) {
 	}
 }
 
+// TestWebSocketQueryParamApiKey_NamedViaApiKeysMap verifies the R2.d ruling:
+// an apiKey scheme's credential resolves from the scheme-scoped
+// context.apiKeys[name] entry (name = the securitySchemes key,
+// makeWSAsyncAPISpec always names it "auth") when the plain "apiKey"
+// convenience field is absent — the same wire placement as
+// TestWebSocketQueryParamApiKey, reached through the named lookup instead.
+func TestWebSocketQueryParamApiKey_NamedViaApiKeysMap(t *testing.T) {
+	keyCh := make(chan string, 1)
+	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
+		keyCh <- r.URL.Query().Get("api_key")
+		_ = writeWSJSON(ctx, conn, map[string]any{"ok": true})
+	})
+
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  wsSource(srv, &securityScheme{Type: "apiKey", In: "query", Name: "api_key"}),
+		Ref:     "#/operations/subscribe",
+		Context: map[string]any{"apiKeys": map[string]any{"auth": "named-secret-xyz"}},
+	})
+	vals, err := drainOutputs(t, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vals) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(vals))
+	}
+	select {
+	case key := <-keyCh:
+		if key != "named-secret-xyz" {
+			t.Errorf("named apiKeys entry not propagated: got %q, want named-secret-xyz", key)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server never saw the upgrade")
+	}
+}
+
 // TestWebSocketStreamingMultipleEvents verifies each server-pushed frame is
 // one bare output in arrival order, and a clean server close ends the stream.
 func TestWebSocketStreamingMultipleEvents(t *testing.T) {
