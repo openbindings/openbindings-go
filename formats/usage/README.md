@@ -92,8 +92,11 @@ iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput
         Location: "mycli.usage.kdl",
     }},
 })
-// iface carries the pristine artifact as its source, one operation per
-// bindable command (dot-joined keys, e.g. config.set), bindings ref'ing
+// iface EMBEDS the pristine artifact as its source (a local file path is
+// not a conformant OBI-D-05 location, so it never rides the emitted
+// document; a spaceless exec: locator, being a well-formed URI, is emitted
+// verbatim instead), one operation per bindable command (dot-joined keys,
+// e.g. config.set), bindings ref'ing
 // command paths, and FLOOR-TRUE output schemas: {"type":"string"} with an
 // in-schema x-ob floor-stamp (the text assumption always yields a string,
 // so the derived contract never lies; the stamp keys the diagnostics and
@@ -126,7 +129,7 @@ Converts a usage-spec KDL document into an OBI by:
 - Walking all commands depth-first, skipping `subcommand_required` nodes
 - Generating JSON Schema input from flags (boolean, string, integer, array) and positional args
 - Using dot-separated paths as operation keys and space-separated paths as refs (e.g. `config.set` / `config set`)
-- Carrying the pristine artifact verbatim as the source (location-referenced or embedded)
+- Carrying the pristine artifact verbatim as the source: embedded `content` for inline and file-path intake (a local path is a relative reference under OBI-D-05, so it never rides the emitted `location`), the locator itself for a URI-valid (spaceless) `exec:` locator; a spaced `exec:` locator also embeds (its conformant reference form is a recorded open point in the conventions doc)
 
 ## Parser SDK
 

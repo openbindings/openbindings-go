@@ -334,30 +334,110 @@ cmd "init" help="Initialize"
 	}
 }
 
-// A relative artifact path is authoring convenience: intake absolutizes it,
-// so the strict loader accepts it AND the emitted source's location is
-// invocable as written (the invoke lane never resolves against a base).
-func TestSynthesizeInterface_RelativeLocationAbsolutized(t *testing.T) {
+// emissionTestKDL is a minimal artifact carrying name+version so the
+// synthesized document exercises Interface.Validate end to end.
+const emissionTestKDL = `name "mycli"
+version "1.0.0"
+about "A test CLI"
+cmd "greet" help="Say hello"
+`
+
+// A local FILE path — relative or absolute — is a relative reference under
+// OBI-D-05 and must never ride the emitted location: synthesis takes the
+// embed-default lane (pristine artifact as content, machine-coupled path
+// kept out of the document), and the emitted document passes the SDK's own
+// validator. Intake still absolutizes relative paths so the strict loader
+// (one loader for every lane) reads them.
+func TestSynthesizeInterface_FilePathEmitsEmbeddedContent(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "cli.kdl"), []byte(testSpecKDL()), 0o644); err != nil {
+	path := filepath.Join(dir, "cli.kdl")
+	if err := os.WriteFile(path, []byte(emissionTestKDL), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(dir)
+
+	for name, location := range map[string]string{"relative": "cli.kdl", "absolute": path} {
+		t.Run(name, func(t *testing.T) {
+			if name == "relative" {
+				t.Chdir(dir)
+			}
+			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+				Sources: []openbindings.SynthesizeSource{{Format: "usage@" + MaxTestedVersion, Location: location}},
+			})
+			if err != nil {
+				t.Fatalf("synthesize: %v", err)
+			}
+			src := iface.Sources[DefaultSourceName]
+			if src.Location != "" {
+				t.Errorf("emitted location = %q, want empty (a file path is not a conformant OBI-D-05 location)", src.Location)
+			}
+			if src.Content != emissionTestKDL {
+				t.Errorf("emitted content must be the pristine artifact text, got %v", src.Content)
+			}
+			if err := iface.Validate(); err != nil {
+				t.Errorf("synthesized document must pass Interface.Validate: %v", err)
+			}
+		})
+	}
+}
+
+// writeEmitterScript writes an executable that prints emissionTestKDL on
+// stdout (ignoring any arguments), returning its absolute path.
+func writeEmitterScript(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "emitter")
+	script := "#!/bin/sh\ncat <<'EOF'\n" + emissionTestKDL + "EOF\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// An exec: locator WITHOUT arguments is a well-formed URI, so it survives
+// OBI-D-05 verbatim: synthesis preserves it as the emitted location (the
+// live-generated-descriptor lane) and the document validates.
+func TestSynthesizeInterface_SpacelessExecLocatorEmitsLocation(t *testing.T) {
+	locator := "exec:" + writeEmitterScript(t)
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{Format: "usage@" + MaxTestedVersion, Location: "cli.kdl"}},
+		Sources: []openbindings.SynthesizeSource{{Format: "usage@" + MaxTestedVersion, Location: locator}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
 	}
-	var loc string
-	for _, src := range iface.Sources {
-		loc = src.Location
+	src := iface.Sources[DefaultSourceName]
+	if src.Location != locator {
+		t.Errorf("emitted location = %q, want the exec: locator %q", src.Location, locator)
 	}
-	if !filepath.IsAbs(loc) {
-		t.Fatalf("emitted location must be absolute (invocable as written), got %q", loc)
+	if src.Content != nil {
+		t.Errorf("a URI-valid exec: locator emits by reference, got embedded content %v", src.Content)
 	}
-	if _, err := artifactText(context.Background(), loc, nil); err != nil {
-		t.Fatalf("emitted location must satisfy the strict invoke-lane loader: %v", err)
+	if err := iface.Validate(); err != nil {
+		t.Errorf("synthesized document must pass Interface.Validate: %v", err)
+	}
+}
+
+// An exec: locator WITH arguments contains spaces and is not a well-formed
+// URI (OBI-D-05 rejects it as a document location). Synthesis runs the
+// locator and embeds the generated artifact instead; the conformant
+// *reference* form for spaced locators (percent-encoding vs refusal) is a
+// recorded open point in the conventions doc, deliberately not invented
+// here.
+func TestSynthesizeInterface_SpacedExecLocatorEmbeds(t *testing.T) {
+	locator := "exec:" + writeEmitterScript(t) + " --spec"
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{Format: "usage@" + MaxTestedVersion, Location: locator}},
+	})
+	if err != nil {
+		t.Fatalf("synthesize: %v", err)
+	}
+	src := iface.Sources[DefaultSourceName]
+	if src.Location != "" {
+		t.Errorf("emitted location = %q, want empty (a spaced exec: locator is not a conformant OBI-D-05 location)", src.Location)
+	}
+	if src.Content != emissionTestKDL {
+		t.Errorf("emitted content must be the generated artifact text, got %v", src.Content)
+	}
+	if err := iface.Validate(); err != nil {
+		t.Errorf("synthesized document must pass Interface.Validate: %v", err)
 	}
 }
 

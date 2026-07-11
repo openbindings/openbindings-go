@@ -2,6 +2,7 @@ package usage
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -31,10 +32,12 @@ func synthesizeFromArtifactText(text string) (openbindings.Interface, error) {
 // absolutizeArtifactLocation is the authoring-side intake rule shared by
 // synthesis and inspection: a relative file path is operator convenience at
 // authoring time and is absolutized against the working directory, so the
-// strict loader (artifactText — one loader for every lane) accepts it AND
-// the location emitted into a synthesized source is invocable as written.
+// strict loader (artifactText — one loader for every lane) accepts it.
 // Inline content, exec: locators, and URLs pass through untouched (URLs get
-// the loader's clear refusal).
+// the loader's clear refusal). Emission is a separate rule: a file path —
+// however absolute the filesystem considers it — is a relative reference
+// under OBI-D-05 and is never emitted as a document location; see
+// emittableAsLocation.
 func absolutizeArtifactLocation(location string, content any) (string, error) {
 	if content != nil || location == "" ||
 		strings.HasPrefix(location, "exec:") || strings.Contains(location, "://") ||
@@ -47,6 +50,71 @@ func absolutizeArtifactLocation(location string, content any) (string, error) {
 	}
 	return abs, nil
 }
+
+// emittableAsLocation is the authoring-side EMISSION rule: it reports
+// whether an intake location survives the core validator's OBI-D-05
+// location rule and so may ride a synthesized document's `location`
+// verbatim. Only an exec: locator that is a well-formed URI qualifies — a
+// locator with arguments contains spaces, which RFC 3986 forbids (the
+// conformant reference form for spaced locators is a recorded open point
+// in the conventions doc, deliberately not invented here). A local file
+// path is a relative reference under OBI-D-05 no matter how absolute the
+// filesystem considers it. Everything non-emittable takes the project's
+// embed-default lane: the artifact rides as content and the machine-
+// coupled path stays out of the document entirely.
+func emittableAsLocation(location string) bool {
+	if !strings.HasPrefix(location, "exec:") {
+		return false
+	}
+	return isWellFormedURI(location)
+}
+
+// isWellFormedURI mirrors the core validator's OBI-D-05 character screen
+// (validate.go screenURIChars: RFC 3986 unreserved + reserved characters
+// with well-formed percent-encoding) followed by the structural parse. The
+// core screen is unexported; the emission tests pin lockstep by asserting
+// every emitted document passes Interface.Validate.
+func isWellFormedURI(raw string) bool {
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if c == '%' {
+			if i+2 >= len(raw) || !isHexByte(raw[i+1]) || !isHexByte(raw[i+2]) {
+				return false
+			}
+			i += 2
+			continue
+		}
+		if !uriRefAllowedChars[c] {
+			return false
+		}
+	}
+	_, err := url.Parse(raw)
+	return err == nil
+}
+
+func isHexByte(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// uriRefAllowedChars holds the unreserved + reserved characters allowed in
+// a URI reference per RFC 3986 (the same table the core validator screens
+// locations with).
+var uriRefAllowedChars = func() [256]bool {
+	var t [256]bool
+	for c := byte('A'); c <= 'Z'; c++ {
+		t[c] = true
+	}
+	for c := byte('a'); c <= 'z'; c++ {
+		t[c] = true
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		t[c] = true
+	}
+	for _, c := range []byte("-._~:/?#[]@!$&'()*+,;=") {
+		t[c] = true
+	}
+	return t
+}()
 
 // floorOutputSchema is the floor-true derived output contract: the text
 // assumption always yields a string, stamped with in-schema x-ob

@@ -176,11 +176,17 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, fmt.Errorf("parse usage content: %w", err)
 	}
 
-	// The emitted source carries the absolutized location, so the
-	// synthesized document is invocable as written (the invoke lane never
-	// resolves against a carriage base).
+	// Emission follows OBI-D-05 (the embed-default ruling for local
+	// artifacts): a file path — even absolutized — is a relative reference
+	// and never rides the emitted location, so the artifact embeds as
+	// pristine content and the machine-coupled path stays out of the
+	// document. Only an exec: locator that is a well-formed URI (no
+	// arguments/spaces) is emitted verbatim. Either way the synthesized
+	// document validates and is invocable as written: content is
+	// authoritative at the invoke lane, and an emitted exec: locator is
+	// resolved live.
 	sourceEntry := openbindings.Source{Format: src.Format}
-	if location != "" {
+	if emittableAsLocation(location) {
 		sourceEntry.Location = location
 	} else {
 		sourceEntry.Content = text
