@@ -304,12 +304,108 @@ func TestInvokeBinding_MissingBaseURL(t *testing.T) {
 	mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
 }
 
+// An embed-mode Connect source carries the SCHEMA as content; the base URL
+// resolves from location, else context metadata.baseURL (the same override
+// key the grpc and openapi invokers honor for targeting the same OBI at a
+// different host), else a remedy-naming refusal.
+func TestInvokeBinding_EmbedModeBaseURLResolution(t *testing.T) {
+	proto := `syntax = "proto3";
+package tiny;
+service Tiny { rpc Ping(PingMsg) returns (PingMsg); }
+message PingMsg { string msg = 1; }
+`
+	ctx := testContext(t)
+	invoker := NewInvoker()
+
+	// No location, no metadata: refuse, naming both remedies. The message
+	// must be the embedded-content-aware variant, distinct from the
+	// no-content-at-all message.
+	h := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{Format: FormatToken, Content: proto},
+		Ref:    "tiny.Tiny/Ping",
+	})
+	ierr := mustTerminalError(t, ctx, h, openbindings.ErrCodeSourceConfigError)
+	for _, want := range []string{"embedded content", "location", "baseURL"} {
+		if !strings.Contains(ierr.Message, want) {
+			t.Errorf("refusal must mention %q, got: %s", want, ierr.Message)
+		}
+	}
+
+	// metadata.baseURL supplies the base URL: the invocation proceeds past
+	// the config gate (failing later at the unreachable endpoint, not at
+	// configuration).
+	h2 := invokeWith(t, ctx, invoker, &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{Format: FormatToken, Content: proto},
+		Ref:     "tiny.Tiny/Ping",
+		Context: map[string]any{"metadata": map[string]any{"baseURL": "http://127.0.0.1:1"}},
+	}, map[string]any{"msg": "hi"})
+
+	_, ierr2 := collectOutputs(t, ctx, h2)
+	if ierr2 == nil {
+		t.Fatal("dial of an unreachable base URL must fail")
+	}
+	if ierr2.Code == openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("baseURL must satisfy the config gate; still got config error: %s", ierr2.Message)
+	}
+}
+
+// A location-empty source with NO embedded content gets the plain (not
+// embedded-content-aware) refusal message: there is no schema to point at,
+// so the remedy is only the location/baseURL pair, not a mention of content.
+func TestInvokeBinding_MissingBaseURL_NoContentMessage(t *testing.T) {
+	ctx := testContext(t)
+	inv := NewInvoker().InvokeBinding(ctx, unaryArgs("", nil, "testpkg.TestService/GetItem"))
+	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
+	if strings.Contains(ierr.Message, "embedded content") {
+		t.Errorf("no-content refusal should not claim embedded content, got: %s", ierr.Message)
+	}
+	for _, want := range []string{"location"} {
+		if !strings.Contains(ierr.Message, want) {
+			t.Errorf("refusal must mention %q, got: %s", want, ierr.Message)
+		}
+	}
+}
+
 func TestInvokeBinding_BadProtoContent(t *testing.T) {
 	ctx := testContext(t)
 	srv := unreachableServer(t)
 
 	inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, "this is not proto {", "testpkg.TestService/GetItem"))
 	mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceLoadFailed)
+}
+
+// clientStreamingProto declares a client-streaming method alongside a
+// regular unary one, so the invoker's cardinality check can be proven
+// against a real resolved descriptor.
+const clientStreamingProto = `
+syntax = "proto3";
+package testpkg;
+
+message Chunk { bytes data = 1; }
+message UploadSummary { int32 bytesReceived = 1; }
+
+service UploadService {
+  rpc Upload(stream Chunk) returns (UploadSummary);
+}
+`
+
+// With a resolved descriptor (embedded proto content), a client-streaming
+// method must be refused loudly pre-dispatch — never silently mis-dispatched
+// as a broken unary request. The refusal must fire before any network I/O
+// (unreachableServer fails the test if the server is ever reached) and
+// before any input is required, mirroring formats/grpc's equivalent refusal.
+func TestInvokeBinding_ClientStreamingRefused(t *testing.T) {
+	ctx := testContext(t)
+	srv := unreachableServer(t)
+
+	inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, clientStreamingProto, "testpkg.UploadService/Upload"))
+
+	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
+	for _, want := range []string{"UploadService/Upload", "client-streaming"} {
+		if !strings.Contains(ierr.Message, want) {
+			t.Errorf("refusal must mention %q, got: %s", want, ierr.Message)
+		}
+	}
 }
 
 func TestInvokeBinding_MissingInput(t *testing.T) {

@@ -60,7 +60,7 @@ func discoverFromProto(ctx context.Context, location string, content any) (*disc
 
 // convertToInterface converts protobuf service descriptors to an OpenBindings
 // interface with Connect format bindings.
-func convertToInterface(disc *discovery, sourceLocation string) (openbindings.Interface, error) {
+func convertToInterface(disc *discovery, sourceLocation string, onWarning func(openbindings.SynthesizerWarning)) (openbindings.Interface, error) {
 	if disc == nil {
 		return openbindings.Interface{}, fmt.Errorf("nil discovery result")
 	}
@@ -104,10 +104,10 @@ func convertToInterface(disc *discovery, sourceLocation string) (openbindings.In
 			}
 
 			if inputType := method.Input(); inputType != nil {
-				op.Input = messageToJSONSchema(inputType)
+				op.Input = newSchemaWalker(onWarning, "operations."+opKey+".input").message(inputType)
 			}
 			if outputType := method.Output(); outputType != nil {
-				op.Output = messageToJSONSchema(outputType)
+				op.Output = newSchemaWalker(onWarning, "operations."+opKey+".output").message(outputType)
 			}
 
 			iface.Operations[opKey] = op
@@ -175,46 +175,206 @@ func trimComment(s string) string {
 	return s
 }
 
-// messageToJSONSchema and helpers are similar to grpc-go's implementation.
-// Both formats use the same protobuf type system.
-
-func messageToJSONSchema(msg protoreflect.MessageDescriptor) map[string]any {
-	return messageToJSONSchemaVisited(msg, make(map[string]bool))
+// schemaWalker walks a proto message tree and produces JSON Schema. It holds
+// traversal state (cycle detection, warning callback, OBI path) so individual
+// walk methods stay focused on structural translation. Mirrors formats/grpc's
+// schemaWalker: both formats share the same protobuf type system and the same
+// proto3-JSON translation, so the shapes they synthesize must match.
+type schemaWalker struct {
+	visited   map[string]bool
+	onWarning func(openbindings.SynthesizerWarning)
+	path      string
 }
 
-func messageToJSONSchemaVisited(msg protoreflect.MessageDescriptor, visited map[string]bool) map[string]any {
+func newSchemaWalker(onWarning func(openbindings.SynthesizerWarning), path string) *schemaWalker {
+	return &schemaWalker{
+		visited:   make(map[string]bool),
+		onWarning: onWarning,
+		path:      path,
+	}
+}
+
+func (w *schemaWalker) warn(code, message string, details map[string]any) {
+	if w.onWarning == nil {
+		return
+	}
+	w.onWarning(openbindings.SynthesizerWarning{
+		Code:    code,
+		Message: message,
+		Path:    w.path,
+		Details: details,
+	})
+}
+
+func (w *schemaWalker) message(msg protoreflect.MessageDescriptor) map[string]any {
 	fqn := string(msg.FullName())
-	if visited[fqn] {
+	if w.visited[fqn] {
 		return map[string]any{"type": "object"}
 	}
-	visited[fqn] = true
 
-	schema := map[string]any{"type": "object"}
+	// Well-known proto types have canonical JSON representations per the
+	// proto3 JSON mapping spec. Emit those directly instead of descending
+	// into the message's fields — traversing Timestamp's `seconds`/`nanos`
+	// produces a contract the invoker's protojson layer cannot accept.
+	if wk := wellKnownSchema(fqn); wk != nil {
+		return wk
+	}
 
-	fields := msg.Fields()
-	if fields.Len() == 0 {
+	w.visited[fqn] = true
+
+	schema := map[string]any{
+		"type": "object",
+	}
+
+	fieldsDesc := msg.Fields()
+	if fieldsDesc.Len() == 0 {
 		return schema
 	}
 
-	properties := map[string]any{}
-	for i := 0; i < fields.Len(); i++ {
-		field := fields.Get(i)
-		properties[field.JSONName()] = fieldToSchema(field, visited)
+	var regularFields []protoreflect.FieldDescriptor
+	oneofGroups := map[string][]protoreflect.FieldDescriptor{}
+	var oneofOrder []string
+	for i := 0; i < fieldsDesc.Len(); i++ {
+		field := fieldsDesc.Get(i)
+		oo := field.ContainingOneof()
+		// Proto3 `optional` fields are wrapped in synthetic single-field
+		// oneofs for explicit-presence tracking; they are not user-declared
+		// unions and must not be emitted as oneOf variants.
+		if oo == nil || oo.IsSynthetic() {
+			regularFields = append(regularFields, field)
+			continue
+		}
+		name := string(oo.Name())
+		if _, seen := oneofGroups[name]; !seen {
+			oneofOrder = append(oneofOrder, name)
+		}
+		oneofGroups[name] = append(oneofGroups[name], field)
 	}
-	schema["properties"] = properties
+
+	// Single oneof group: emit top-level `oneOf` preserving exactly-one-of
+	// semantics. Multiple oneof groups: the v0.1 schema profile rejects
+	// `oneOf` inside `allOf` (schemaprofile/allof.go), and a Cartesian
+	// expansion would incorrectly force one member per group. Fall back to
+	// putting multi-group oneof fields in `properties` as independent
+	// optional fields and surface a warning so callers know the emitted
+	// OBI cannot enforce exclusivity. Multi-group messages will be
+	// properly expressible when a future profile revision allows `oneOf`
+	// inside `allOf`.
+	useOneOf := len(oneofGroups) == 1
+
+	if len(oneofGroups) > 1 {
+		groupNames := make([]string, 0, len(oneofOrder))
+		groupNames = append(groupNames, oneofOrder...)
+		w.warn(
+			"connect.multi_group_oneof",
+			fmt.Sprintf("message %s contains %d oneof groups; the v0.1 schema profile cannot express multi-group exclusivity, so members are emitted as independent optional properties", string(msg.Name()), len(oneofGroups)),
+			map[string]any{
+				"message": string(msg.FullName()),
+				"groups":  groupNames,
+			},
+		)
+	}
+
+	properties := map[string]any{}
+	for _, field := range regularFields {
+		properties[field.JSONName()] = w.field(field)
+	}
+	if !useOneOf {
+		for _, name := range oneofOrder {
+			for _, field := range oneofGroups[name] {
+				properties[field.JSONName()] = w.field(field)
+			}
+		}
+	}
+	if len(properties) > 0 {
+		schema["properties"] = properties
+	}
+
+	if useOneOf {
+		group := oneofGroups[oneofOrder[0]]
+		variants := make([]any, 0, len(group))
+		for _, field := range group {
+			jsonName := field.JSONName()
+			variants = append(variants, map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					jsonName: w.field(field),
+				},
+				"required": []any{jsonName},
+			})
+		}
+		schema["oneOf"] = variants
+	}
+
 	return schema
 }
 
-func fieldToSchema(field protoreflect.FieldDescriptor, visited map[string]bool) map[string]any {
+// wellKnownSchema returns the canonical JSON Schema for a google.protobuf.*
+// well-known message type, matching proto3's JSON mapping. Returns nil for
+// any other fully qualified name.
+//
+// Schemas describe semantic types, not wire encoding. 64-bit integers emit
+// as {"type":"integer","format":"int64"}; the wire's choice of carrying them
+// as JSON numbers, JSON strings, or protobuf varints is an invoker concern.
+// Downstream codegen can read format:int64 to pick precision-preserving
+// language types (TypeScript string, Go int64, Rust i64).
+func wellKnownSchema(fqn string) map[string]any {
+	switch fqn {
+	case "google.protobuf.Timestamp":
+		return map[string]any{"type": "string", "format": "date-time"}
+	case "google.protobuf.Duration":
+		return map[string]any{
+			"type":        "string",
+			"description": "Duration in seconds with up to nine fractional digits, suffixed with 's'",
+		}
+	case "google.protobuf.FieldMask":
+		return map[string]any{
+			"type":        "string",
+			"description": "Comma-separated list of fully-qualified field paths",
+		}
+	case "google.protobuf.Struct":
+		return map[string]any{"type": "object"}
+	case "google.protobuf.Value":
+		return map[string]any{}
+	case "google.protobuf.ListValue":
+		return map[string]any{"type": "array"}
+	case "google.protobuf.Empty":
+		return map[string]any{"type": "object"}
+	case "google.protobuf.BoolValue":
+		return map[string]any{"type": "boolean"}
+	case "google.protobuf.StringValue":
+		return map[string]any{"type": "string"}
+	case "google.protobuf.BytesValue":
+		return map[string]any{"type": "string"}
+	case "google.protobuf.Int32Value", "google.protobuf.UInt32Value":
+		return map[string]any{"type": "integer"}
+	case "google.protobuf.Int64Value", "google.protobuf.UInt64Value":
+		return map[string]any{"type": "integer", "format": "int64"}
+	case "google.protobuf.FloatValue", "google.protobuf.DoubleValue":
+		return map[string]any{"type": "number"}
+	case "google.protobuf.Any":
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"@type": map[string]any{"type": "string"},
+				"value": map[string]any{},
+			},
+			"required": []any{"@type"},
+		}
+	}
+	return nil
+}
+
+func (w *schemaWalker) field(field protoreflect.FieldDescriptor) map[string]any {
 	if field.IsMap() {
 		valField := field.MapValue()
 		return map[string]any{
 			"type":                 "object",
-			"additionalProperties": scalarOrMessageSchema(valField, visited),
+			"additionalProperties": w.scalarOrMessage(valField),
 		}
 	}
 
-	s := scalarOrMessageSchema(field, visited)
+	s := w.scalarOrMessage(field)
 
 	if field.Cardinality() == protoreflect.Repeated && !field.IsMap() {
 		return map[string]any{
@@ -226,7 +386,7 @@ func fieldToSchema(field protoreflect.FieldDescriptor, visited map[string]bool) 
 	return s
 }
 
-func scalarOrMessageSchema(field protoreflect.FieldDescriptor, visited map[string]bool) map[string]any {
+func (w *schemaWalker) scalarOrMessage(field protoreflect.FieldDescriptor) map[string]any {
 	switch field.Kind() {
 	case protoreflect.BoolKind:
 		return map[string]any{"type": "boolean"}
@@ -243,7 +403,7 @@ func scalarOrMessageSchema(field protoreflect.FieldDescriptor, visited map[strin
 		protoreflect.Sfixed64Kind,
 		protoreflect.Uint64Kind,
 		protoreflect.Fixed64Kind:
-		return map[string]any{"type": "string"}
+		return map[string]any{"type": "integer", "format": "int64"}
 
 	case protoreflect.FloatKind, protoreflect.DoubleKind:
 		return map[string]any{"type": "number"}
@@ -266,7 +426,7 @@ func scalarOrMessageSchema(field protoreflect.FieldDescriptor, visited map[strin
 	case protoreflect.MessageKind, protoreflect.GroupKind:
 		msgDesc := field.Message()
 		if msgDesc != nil {
-			return messageToJSONSchemaVisited(msgDesc, visited)
+			return w.message(msgDesc)
 		}
 		return map[string]any{"type": "object"}
 

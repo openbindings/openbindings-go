@@ -82,8 +82,15 @@ var _ openbindings.BindingInvoker = (*Invoker)(nil)
 // is available, the invoker falls back to unary invocation and the binding
 // will fail at runtime if the method is actually streaming.
 //
-// All pre-dispatch failures (bad ref, missing base URL, descriptor failures)
-// terminate the handle before any network side effect.
+// Client-streaming and bidirectional methods are out of scope. When a
+// descriptor is available (inline proto `content`), a client-streaming or
+// bidi-streaming method is refused pre-dispatch with a clear invocation
+// error rather than misread as unary; without a descriptor this cardinality
+// is unknowable in advance and the unary-fallback behavior above applies.
+//
+// All pre-dispatch failures (bad ref, missing base URL, descriptor failures,
+// unsupported cardinality) terminate the handle before any network side
+// effect.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
 	go e.run(ctx, args, inv)
@@ -106,11 +113,27 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
+	// The base URL: the source's location, else the context metadata
+	// override (`metadata.baseURL`, the same key the grpc and openapi
+	// invokers honor for targeting the same OBI at a different host). An
+	// embed-mode source carries the SCHEMA as content, so the base URL is
+	// the one thing the document cannot supply from the artifact itself.
 	baseURL := strings.TrimSpace(args.Source.Location)
 	if baseURL == "" {
+		if meta := openbindings.ContextMetadata(args.Context); meta != nil {
+			if v, ok := meta["baseURL"].(string); ok {
+				baseURL = strings.TrimSpace(v)
+			}
+		}
+	}
+	if baseURL == "" {
+		msg := "Connect source requires a base URL: set the source's location"
+		if args.Source.Content != nil {
+			msg = "Connect source carries its schema as embedded content but no base URL: set the source's location to the service base URL, or provide baseURL in context metadata"
+		}
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: "Connect source requires a base URL location",
+			Message: msg,
 		})
 		return
 	}
@@ -127,6 +150,26 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			return
 		}
 		methodDesc = desc
+	}
+
+	// A resolved descriptor exposes cardinality: refuse client-streaming and
+	// bidi-streaming methods loudly here, before any input is consumed or any
+	// network I/O, rather than silently mis-dispatching them as unary (which
+	// would read one input, drop the rest, and send a single unframed request
+	// the server never expects). Mirrors grpc's pre-dispatch refusal. Without
+	// a descriptor (no embedded proto content), cardinality is unknowable in
+	// advance; that case stays unary and fails at runtime if the method is
+	// actually streaming — the format's documented convention.
+	if methodDesc != nil && methodDesc.method != nil && methodDesc.method.IsStreamingClient() {
+		kind := "client-streaming"
+		if methodDesc.method.IsStreamingServer() {
+			kind = "bidi-streaming"
+		}
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeExecutionFailed,
+			Message: fmt.Sprintf("Connect method %s/%s is %s; the connect invoker supports unary and server-streaming methods", svcName, methodName, kind),
+		})
+		return
 	}
 
 	// ----- Input flows through the handle, not the args. Unary and
@@ -218,7 +261,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, fmt.Errorf("Connect proto parse: %w", err)
 	}
 
-	iface, err := convertToInterface(disc, src.Location)
+	iface, err := convertToInterface(disc, src.Location, in.OnWarning)
 	if err != nil {
 		return nil, fmt.Errorf("Connect convert: %w", err)
 	}

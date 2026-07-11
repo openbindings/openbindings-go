@@ -101,7 +101,7 @@ service TestService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iface, err := convertToInterface(disc, "http://localhost:8080")
+	iface, err := convertToInterface(disc, "http://localhost:8080", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
