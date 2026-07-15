@@ -417,6 +417,47 @@ func ContextMetadata(ctx map[string]any) map[string]any {
 	return v
 }
 
+// ContextConfiguration extracts the well-known 'configuration' field from
+// context: per-invocation configuration-point values, keyed by point name —
+// the operation-invoker contract's 'selection' point, and the named points
+// each binding specification defines for its family (decode, classify,
+// route, solicit, server, address, target, transport). The values' meanings
+// belong to whichever specification defines the point; this helper only
+// provides the carriage. Returns nil if absent or not an object.
+func ContextConfiguration(ctx map[string]any) map[string]any {
+	if ctx == nil {
+		return nil
+	}
+	v, _ := ctx["configuration"].(map[string]any)
+	return v
+}
+
+// contextSelectionOverride extracts the operation-invoker contract's
+// 'selection' configuration point from context: an ordered list of binding
+// keys, the first invocable entry winning. Accepts []string or a JSON-parsed
+// []any of strings; anything else is no override.
+func contextSelectionOverride(ctx map[string]any) []string {
+	cfg := ContextConfiguration(ctx)
+	if cfg == nil {
+		return nil
+	}
+	switch v := cfg["selection"].(type) {
+	case []string:
+		return v
+	case []any:
+		keys := make([]string, 0, len(v))
+		for _, e := range v {
+			s, ok := e.(string)
+			if !ok {
+				return nil
+			}
+			keys = append(keys, s)
+		}
+		return keys
+	}
+	return nil
+}
+
 func extractStringMap(ctx map[string]any, key string) map[string]string {
 	if ctx == nil {
 		return nil
