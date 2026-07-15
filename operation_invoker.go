@@ -60,8 +60,10 @@ type TransformEvaluatorWithBindings interface {
 type ContextResolver func(ctx context.Context, details *ContextRequiredDetails) (map[string]any, error)
 
 // OperationInvoker is the operation-layer invoker: it resolves an OBI
-// operation to a binding (OBI-T-12 name resolution, OBI-T-09 selection) and
-// returns a cardinality-agnostic Invocation handle.
+// operation to a binding (OBI-T-12 name resolution; selection by the
+// operation-invoker contract's default policy, consumer-overridable via
+// context.configuration.selection) and returns a cardinality-agnostic
+// Invocation handle.
 //
 // Between the caller and the binding it enforces the operation contract:
 //   - OBI-T-07: every caller input validates against the operation's input
@@ -213,11 +215,12 @@ func (e *OperationInvoker) PrepareBinding(ctx context.Context, args *BindingInvo
 
 // resolveBinding is the shared operation-layer resolution behind Invoke and
 // PrepareOperation: it resolves operation against obi's flat key+alias namespace
-// (OBI-T-12), selects a binding (OBI-T-09) or uses the caller-pinned bindingKey,
+// (OBI-T-12), selects a binding (the contract's default policy, displaced by a
+// context.configuration.selection override or the caller-pinned bindingKey),
 // and looks up its source. A wiring failure returns a typed *InvocationError so
 // each caller can surface it its own way (an errored handle for Invoke, a
 // returned error for PrepareOperation).
-func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindingKey string) (
+func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindingKey string, callerContext map[string]any) (
 	op *Operation, bindingKey string, binding *BindingEntry, source *Source, ierr *InvocationError,
 ) {
 	if obi == nil {
@@ -263,6 +266,14 @@ func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindi
 		}
 		bindingKey = pinnedBindingKey
 		binding = &b
+	} else if k, b, ok := selectionOverride(obi, opKey, contextSelectionOverride(callerContext), e.availableFormats()); ok {
+		// The operation-invoker contract's consumer override
+		// (context.configuration.selection): an ordered list of binding
+		// keys, the first invocable entry winning. It displaces whatever
+		// selection policy is in place; when no listed key is invocable,
+		// the policy below applies.
+		bindingKey = k
+		binding = b
 	} else {
 		selector := e.BindingSelector
 		if selector == nil {
@@ -291,7 +302,9 @@ func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindi
 // openbindings.operation-invoker interface's prepareOperation), the
 // by-reference counterpart to
 // PrepareBinding. It resolves operation against obi to a concrete binding
-// (OBI-T-12 + OBI-T-09 selection, or a WithBindingKey-pinned binding) and
+// (OBI-T-12 resolution + contract-default selection or the
+// context.configuration.selection override, or a WithBindingKey-pinned
+// binding) and
 // reports that binding's context requirements without invoking or causing any
 // side effect. A nil result means requirements could not be determined without
 // invoking (the always-satisfiable answer); WithContext narrows the result to
@@ -303,7 +316,7 @@ func (e *OperationInvoker) PrepareOperation(ctx context.Context, obi *Interface,
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	op, _, binding, source, ierr := e.resolveBinding(obi, operation, cfg.bindingKey)
+	op, _, binding, source, ierr := e.resolveBinding(obi, operation, cfg.bindingKey, cfg.context)
 	if ierr != nil {
 		return nil, ierr
 	}
@@ -814,11 +827,39 @@ func wireError(err error) *InvocationError {
 	return AsInvocationError(err)
 }
 
-// DefaultBindingSelector picks the best binding for an operation. Non-deprecated
-// bindings are preferred over deprecated ones. Within the same deprecation status,
-// higher preference values win (binding preference overrides source preference; an
-// absent preference is the neutral baseline of 0). Ties are broken alphabetically
-// by key.
+// selectionOverride resolves the operation-invoker contract's
+// context.configuration.selection override: the first listed binding key
+// that is invocable — defined on the interface, targeting the resolved
+// operation, and (when availableFormats is non-nil) governed by a
+// specification the invoker can act on — wins. ok is false when no listed
+// key is invocable, in which case the selection policy applies.
+func selectionOverride(iface *Interface, opKey string, keys []string, availableFormats map[string]bool) (string, *BindingEntry, bool) {
+	if iface == nil {
+		return "", nil, false
+	}
+	for _, k := range keys {
+		b, ok := iface.Bindings[k]
+		if !ok || b.Operation != opKey {
+			continue
+		}
+		if availableFormats != nil {
+			if src, ok := iface.Sources[b.Source]; ok && !formatMatches(src.Format, availableFormats) {
+				continue
+			}
+		}
+		entry := b
+		return k, &entry, true
+	}
+	return "", nil, false
+}
+
+// DefaultBindingSelector picks the best binding for an operation, by the
+// operation-invoker contract's normative default policy: non-deprecated
+// candidates rank before deprecated ones; within a tier, higher declared
+// `preference` ranks first, and a candidate with no declared preference
+// ranks below every candidate with one; remaining ties break by
+// lexicographic binding key. Preference is the binding's own — the core
+// defines no source-level preference and nothing is inherited.
 //
 // Returns ErrBindingNotFound if no binding matches the operation.
 func DefaultBindingSelector(iface *Interface, opKey string) (string, *BindingEntry, error) {
@@ -836,6 +877,7 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 	var bestKey string
 	var best *BindingEntry
 	bestPref := math.Inf(-1)
+	bestDeclared := false
 	bestDeprecated := true
 	// Bindings that matched the operation but were skipped because no
 	// registered invoker handles their source format. The distinction is
@@ -858,22 +900,26 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 			}
 		}
 
-		// Binding preference overrides source preference; absent on both is
-		// the neutral baseline of 0.
-		bPref := 0.0
-		if b.Preference != nil {
+		// The ruled default policy: a candidate with no declared preference
+		// ranks below every candidate with one (a declared negative beats
+		// undeclared). Preference is the binding's own; the core defines no
+		// source-level preference and nothing is inherited.
+		declared := b.Preference != nil
+		bPref := math.Inf(-1)
+		if declared {
 			bPref = *b.Preference
-		} else if src, ok := iface.Sources[b.Source]; ok && src.Preference != nil {
-			bPref = *src.Preference
 		}
 
 		betterDeprecation := bestDeprecated && !b.Deprecated
 		sameTier := b.Deprecated == bestDeprecated
-		if best == nil || betterDeprecation || (sameTier && bPref > bestPref) || (sameTier && bPref == bestPref && k < bestKey) {
+		betterPref := declared != bestDeclared && declared || (declared == bestDeclared && bPref > bestPref)
+		samePref := declared == bestDeclared && bPref == bestPref
+		if best == nil || betterDeprecation || (sameTier && betterPref) || (sameTier && samePref && k < bestKey) {
 			bestKey = k
 			entry := b
 			best = &entry
 			bestPref = bPref
+			bestDeclared = declared
 			bestDeprecated = b.Deprecated
 		}
 	}
@@ -962,7 +1008,7 @@ func (e *OperationInvoker) PlanOperation(ctx context.Context, obi *Interface, op
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	_, bindingKey, binding, source, ierr := e.resolveBinding(obi, operation, cfg.bindingKey)
+	_, bindingKey, binding, source, ierr := e.resolveBinding(obi, operation, cfg.bindingKey, cfg.context)
 	if ierr != nil {
 		return nil, ierr
 	}

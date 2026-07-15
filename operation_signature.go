@@ -43,7 +43,7 @@ func NewOperationSignature[I, O any](key string) OperationSignature[I, O] {
 // InvokeOption configures a single Invoke call. Options are rarely needed:
 // invocation context is normally resolved by the invoker's ContextResolver via
 // the reactive CONTEXT_REQUIRED path, and the binding is normally selected by
-// OBI-T-09. The variadic-functional-option shape matches the rest of the SDK
+// the operation-invoker contract's default policy. The variadic-functional-option shape matches the rest of the SDK
 // (FetchOption, ValidateOption), so the common call passes no options at all.
 type InvokeOption func(*invokeConfig)
 
@@ -62,8 +62,9 @@ func WithContext(values map[string]any) InvokeOption {
 	return func(c *invokeConfig) { c.context = values }
 }
 
-// WithBindingKey bypasses binding selection (OBI-T-09) and uses this binding
-// directly. The binding must belong to the resolved operation.
+// WithBindingKey bypasses binding selection entirely (the operation-invoker
+// contract's explicit-binding form) and uses this binding directly. The
+// binding must belong to the resolved operation.
 func WithBindingKey(key string) InvokeOption {
 	return func(c *invokeConfig) { c.bindingKey = key }
 }
@@ -115,14 +116,14 @@ func Invoke[I, O any](
 		opt(&cfg)
 	}
 
-	// Wiring failures (OBI-T-12 resolution, OBI-T-09 selection, unknown source)
+	// Wiring failures (OBI-T-12 resolution, binding selection, unknown source)
 	// resolve to an already-errored typed handle so the caller drives one uniform
 	// shape whether setup or the binding failed; the handle is inert until driven.
 	fail := func(e *InvocationError) *TypedInvocation[I, O] {
 		return NewTypedInvocation[I, O](NewErroredInvocation[any, any](e))
 	}
 
-	op, bindingKey, binding, source, ierr := invoker.resolveBinding(obi, sig.key, cfg.bindingKey)
+	op, bindingKey, binding, source, ierr := invoker.resolveBinding(obi, sig.key, cfg.bindingKey, cfg.context)
 	if ierr != nil {
 		return fail(ierr)
 	}
