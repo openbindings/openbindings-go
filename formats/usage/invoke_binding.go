@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/shlex"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -324,7 +323,7 @@ func emitWithDiagnostics(inv *openbindings.InvocationImpl[any, any], output any,
 }
 
 // runDirect is the direct-binary dispatch path (SDK-only feature, outside
-// the format conventions): the ref is shlex-split as a command, every input
+// the format conventions): the ref is split as a command path (USAGE-D-03), every input
 // field rides argv as a flag, output decodes under the default text mode.
 func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any], binary string, input any) {
 	cmdArgs, err := buildDirectArgsFromRef(args.Ref, input)
@@ -372,9 +371,13 @@ func metadataBinary(ctx map[string]any) string {
 }
 
 func buildDirectArgsFromRef(ref string, input any) ([]string, error) {
-	args, err := shlex.Split(ref)
-	if err != nil {
-		return nil, err
+	// USAGE-D-03: a ref is a space-separated command path — single spaces,
+	// no quoting mechanism.
+	args := strings.Split(ref, " ")
+	for _, tok := range args {
+		if tok == "" {
+			return nil, fmt.Errorf("ref %q is malformed (USAGE-D-03): command-path segments are separated by single spaces", ref)
+		}
 	}
 
 	if input == nil {
@@ -708,22 +711,9 @@ func wrapText(stdoutStr, stderrStr string) map[string]any {
 	return output
 }
 
-func resolveCommandArtifact(ctx context.Context, location string) (string, error) {
-	cmdStr := strings.TrimPrefix(location, "exec:")
-	if cmdStr == "" {
-		return "", fmt.Errorf("empty command in exec: artifact")
-	}
-
-	parts, err := shlex.Split(cmdStr)
-	if err != nil {
-		return "", fmt.Errorf("invalid command syntax: %w", err)
-	}
-	if len(parts) == 0 {
-		return "", fmt.Errorf("empty command in exec: artifact")
-	}
-
-	binName := parts[0]
-	args := parts[1:]
+func resolveCommandArtifact(ctx context.Context, argv []string) (string, error) {
+	binName := argv[0]
+	args := argv[1:]
 
 	cmd := exec.CommandContext(ctx, binName, args...)
 	stdout := &cappedBuffer{limit: maxCLIOutputBytes}

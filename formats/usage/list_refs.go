@@ -16,7 +16,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	if err != nil {
 		return nil, fmt.Errorf("load usage source: %w", err)
 	}
-	text, err := artifactText(ctx, location, source.Content)
+	text, err := artifactText(ctx, location, source.Content, c.AuthorizeExec)
 	if err != nil {
 		return nil, fmt.Errorf("load usage source: %w", err)
 	}

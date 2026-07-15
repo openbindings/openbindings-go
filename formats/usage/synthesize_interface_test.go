@@ -2,6 +2,8 @@ package usage
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -397,7 +399,9 @@ func writeEmitterScript(t *testing.T) string {
 // live-generated-descriptor lane) and the document validates.
 func TestSynthesizeInterface_SpacelessExecLocatorEmitsLocation(t *testing.T) {
 	locator := "exec:" + writeEmitterScript(t)
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+	synth := NewSynthesizer()
+	synth.AuthorizeExec = func([]string) bool { return true }
+	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: locator}},
 	})
 	if err != nil {
@@ -415,38 +419,148 @@ func TestSynthesizeInterface_SpacelessExecLocatorEmitsLocation(t *testing.T) {
 	}
 }
 
-// An exec: locator WITH arguments contains spaces and is not a well-formed
-// URI (OBI-D-05 rejects it as a document location). Synthesis runs the
-// locator and embeds the generated artifact instead; the conformant
-// *reference* form for spaced locators (percent-encoding vs refusal) is a
-// recorded open point in the conventions doc, deliberately not invented
-// here.
-func TestSynthesizeInterface_SpacedExecLocatorEmbeds(t *testing.T) {
+// An exec address WITH arguments is a conformant location under
+// USAGE-D-02 (a bindingSpec-defined absolute address, spaces and all —
+// OBI-D-05's exemption; the old embed fallback predates the promotion).
+// Synthesis emits it verbatim so the generated descriptor stays live.
+func TestSynthesizeInterface_SpacedExecLocatorEmitsLocation(t *testing.T) {
 	locator := "exec:" + writeEmitterScript(t) + " --spec"
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+	synth := NewSynthesizer()
+	synth.AuthorizeExec = func([]string) bool { return true }
+	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: locator}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
 	}
 	src := iface.Sources[DefaultSourceName]
-	if src.Location != "" {
-		t.Errorf("emitted location = %q, want empty (a spaced exec: locator is not a conformant OBI-D-05 location)", src.Location)
+	if src.Location != locator {
+		t.Errorf("emitted location = %q, want the exec address %q", src.Location, locator)
 	}
-	if src.Content != emissionTestKDL {
-		t.Errorf("emitted content must be the generated artifact text, got %v", src.Content)
+	if src.Content != nil {
+		t.Errorf("an exec address emits by reference, got embedded content %v", src.Content)
 	}
 	if err := iface.Validate(); err != nil {
 		t.Errorf("synthesized document must pass Interface.Validate: %v", err)
 	}
 }
 
-// URLs get a clear refusal (usage artifacts are local files or exec:
-// locators), not an os.ReadFile("https://...") error.
-func TestArtifactText_URLRefusedClearly(t *testing.T) {
-	_, err := artifactText(context.Background(), "https://example.com/cli.kdl", nil)
-	if err == nil || !strings.Contains(err.Error(), "not fetchable") {
-		t.Fatalf("want the clear not-fetchable refusal, got %v", err)
+// USAGE-D-02: an http(s) document address is dereferenced.
+func TestArtifactText_HTTPSDocumentAddress(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`name "remote-cli"`))
+	}))
+	t.Cleanup(srv.Close)
+	text, err := artifactText(context.Background(), srv.URL+"/cli.kdl", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != `name "remote-cli"` {
+		t.Fatalf("got %q", text)
+	}
+}
+
+// An unsupported scheme gets a clear declared-capability refusal.
+func TestArtifactText_UnsupportedSchemeRefused(t *testing.T) {
+	_, err := artifactText(context.Background(), "ftp://example.com/cli.kdl", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "not dereferenced by this processor") {
+		t.Fatalf("want the declared-capability refusal, got %v", err)
+	}
+}
+
+// A bare filesystem path is not a document address (USAGE-D-02): refused
+// with a pointer to file:// or embedding, for absolute and relative forms.
+func TestArtifactText_BarePathRefused(t *testing.T) {
+	for _, loc := range []string{"/abs/cli.kdl", "./cli.kdl", "cli.kdl"} {
+		_, err := artifactText(context.Background(), loc, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "file://") {
+			t.Fatalf("bare path %q: want the file://-or-embed refusal, got %v", loc, err)
+		}
+	}
+}
+
+// A file:// document address reads the artifact.
+func TestArtifactText_FileDocumentAddress(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cli.kdl")
+	if err := os.WriteFile(path, []byte(`name "local-cli"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	text, err := artifactText(context.Background(), "file://"+path, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != `name "local-cli"` {
+		t.Fatalf("got %q", text)
+	}
+}
+
+// USAGE-P-02: dereferencing an exec address executes a document-supplied
+// command; the default is refusal, with no execution attempted.
+func TestArtifactText_ExecDeniedByDefault(t *testing.T) {
+	_, err := artifactText(context.Background(), "exec:definitely-not-a-real-command --usage", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "USAGE-P-02") {
+		t.Fatalf("want the USAGE-P-02 refusal, got %v", err)
+	}
+
+	denied := func([]string) bool { return false }
+	_, err = artifactText(context.Background(), "exec:definitely-not-a-real-command --usage", nil, denied)
+	if err == nil || !strings.Contains(err.Error(), "USAGE-P-02") {
+		t.Fatalf("want the USAGE-P-02 refusal under an explicit deny, got %v", err)
+	}
+}
+
+// An authorized exec address runs its argv directly.
+func TestArtifactText_ExecAuthorizedRuns(t *testing.T) {
+	var seen []string
+	allow := func(argv []string) bool { seen = argv; return true }
+	text, err := artifactText(context.Background(), "exec:/bin/echo name", nil, allow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(text) != "name" {
+		t.Fatalf("got %q", text)
+	}
+	if len(seen) != 2 || seen[0] != "/bin/echo" || seen[1] != "name" {
+		t.Fatalf("authorizer must see the exact argv, got %v", seen)
+	}
+}
+
+// USAGE-D-02 exec grammar: single spaces, no quoting mechanism.
+func TestParseExecAddress_Grammar(t *testing.T) {
+	if _, err := ParseExecAddress("exec:tool  usage"); err == nil {
+		t.Fatal("double space must be refused")
+	}
+	if _, err := ParseExecAddress("exec:"); err == nil {
+		t.Fatal("empty command must be refused")
+	}
+	argv, err := ParseExecAddress(`exec:tool "a b"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No quoting: the quote characters are literal token bytes.
+	if len(argv) != 3 || argv[1] != `"a` || argv[2] != `b"` {
+		t.Fatalf("quoting must not be interpreted, got %#v", argv)
+	}
+}
+
+// Emission: exec addresses (spaces and all, per USAGE-D-02) and http(s)
+// document addresses ride verbatim; file:// stays on the embed lane.
+func TestEmittableAsLocation_Rules(t *testing.T) {
+	cases := map[string]bool{
+		"exec:mytool usage":           true,
+		"exec:mytool":                 true,
+		"exec:tool  usage":            false, // malformed grammar
+		"https://example.com/cli.kdl": true,
+		"http://example.com/cli.kdl":  true,
+		"file:///home/user/cli.kdl":   false, // embed-default lane
+		"/abs/cli.kdl":                false,
+		"./cli.kdl":                   false,
+	}
+	for loc, want := range cases {
+		if got := emittableAsLocation(loc); got != want {
+			t.Errorf("emittableAsLocation(%q) = %v, want %v", loc, got, want)
+		}
 	}
 }
 

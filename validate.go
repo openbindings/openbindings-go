@@ -450,14 +450,35 @@ func validateLocation(errs *[]string, prefix, raw string) {
 		*errs = append(*errs, fmt.Sprintf("%s: %q must be an absolute URI or a format-defined absolute address, not a relative reference (OBI-D-05); a local artifact can be embedded as the source's content instead (a file:// URL is machine-coupled and resolves only on the authoring machine)", prefix, raw))
 		return
 	}
+	// OBI-D-05's exemption: a bindingSpec-defined absolute address (a gRPC
+	// host:port, a usage exec argv vector) is well-formed per its own
+	// binding specification, which the core cannot verify. The decidable
+	// discriminator is the hierarchical URI form: a value whose scheme is
+	// followed by "//" claims RFC 3986 URI form and is held to it; a
+	// scheme-opaque non-relative value may be a bindingSpec-defined address
+	// and passes core validation (per-family verification belongs to family
+	// processors, per the partial-verification posture).
+	if !isHierarchicalURIForm(raw) {
+		return
+	}
 	if !screenURIChars(errs, prefix, raw) {
 		return
 	}
-	if hasURIScheme(raw) {
-		if _, err := url.Parse(raw); err != nil {
-			*errs = append(*errs, fmt.Sprintf("%s: %q is not a well-formed URI reference (OBI-D-05)", prefix, raw))
-		}
+	if _, err := url.Parse(raw); err != nil {
+		*errs = append(*errs, fmt.Sprintf("%s: %q is not a well-formed URI reference (OBI-D-05)", prefix, raw))
 	}
+}
+
+// isHierarchicalURIForm reports whether raw is scheme://... — the RFC 3986
+// hierarchical form whose well-formedness the core enforces at source
+// locations. Scheme-opaque values (mailto:-style, exec:argv, host:port) are
+// outside it.
+func isHierarchicalURIForm(raw string) bool {
+	i := strings.IndexByte(raw, ':')
+	if i <= 0 || !hasURIScheme(raw) {
+		return false
+	}
+	return strings.HasPrefix(raw[i+1:], "//")
 }
 
 // isRelativeReference reports whether raw is a relative reference per RFC 3986

@@ -3,8 +3,10 @@ package usage
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -30,9 +32,17 @@ const BindingSpec = "openbindings.usage@1"
 // tenant to bound growth in multi-tenant servers.
 type Invoker struct {
 	specCache sync.Map // map[string]*Spec
+
+	// AuthorizeExec is the USAGE-P-02 gate: dereferencing an exec address
+	// executes a document-supplied command, and a processor MUST NOT do so
+	// without explicit prior authorization from its operator or
+	// configuration for that command. nil means DENY ALL (the normative
+	// default); a consumer wires its authorization policy here.
+	AuthorizeExec func(argv []string) bool
 }
 
-// NewInvoker creates a new usage binding invoker.
+// NewInvoker creates a new usage binding invoker. Exec addresses are
+// denied by default (USAGE-P-02); set AuthorizeExec to authorize.
 func NewInvoker() *Invoker {
 	return &Invoker{}
 }
@@ -52,7 +62,7 @@ func (e *Invoker) cachedLoadSpec(ctx context.Context, location string, content a
 		}
 	}
 
-	text, err := artifactText(ctx, location, content)
+	text, err := artifactText(ctx, location, content, e.AuthorizeExec)
 	if err != nil {
 		return nil, err
 	}
@@ -76,10 +86,12 @@ func (e *Invoker) cachedLoadSpec(ctx context.Context, location string, content a
 	return spec, nil
 }
 
-// artifactText resolves the artifact bytes: inline content verbatim;
-// exec: locators run the binary (its emitted spec); file locations MUST
-// be absolute (never resolved against a carriage base).
-func artifactText(ctx context.Context, location string, content any) (string, error) {
+// artifactText resolves the artifact bytes per USAGE-D-02: inline content
+// verbatim; an exec address runs its argv (gated by USAGE-P-02); a
+// document address (absolute URI: file, http, https) is dereferenced. A
+// bare filesystem path is a relative reference in form and is refused —
+// point it at file:// or embed the artifact as content.
+func artifactText(ctx context.Context, location string, content any, authorizeExec func([]string) bool) (string, error) {
 	if content != nil {
 		switch c := content.(type) {
 		case string:
@@ -94,19 +106,76 @@ func artifactText(ctx context.Context, location string, content any) (string, er
 		return "", fmt.Errorf("source must have location or content")
 	}
 	if strings.HasPrefix(location, "exec:") {
-		return resolveCommandArtifact(ctx, location)
+		argv, err := ParseExecAddress(location)
+		if err != nil {
+			return "", err
+		}
+		// USAGE-P-02: default deny. Executing a document-supplied command
+		// requires explicit prior authorization for that command.
+		if authorizeExec == nil || !authorizeExec(argv) {
+			return "", fmt.Errorf("exec address %q is not authorized (USAGE-P-02: dereferencing an exec address executes a document-supplied command; the default is refusal — authorize this command in your configuration)", location)
+		}
+		return resolveCommandArtifact(ctx, argv)
 	}
-	if strings.Contains(location, "://") {
-		return "", fmt.Errorf("usage artifacts are local files or exec: locators; %q is not fetchable by this format", location)
+	if u, err := url.Parse(location); err == nil && u.Scheme != "" && u.Opaque == "" {
+		switch u.Scheme {
+		case "file":
+			data, rerr := os.ReadFile(u.Path)
+			if rerr != nil {
+				return "", fmt.Errorf("read usage artifact: %w", rerr)
+			}
+			return string(data), nil
+		case "http", "https":
+			return fetchArtifact(ctx, location)
+		default:
+			return "", fmt.Errorf("usage location scheme %q is not dereferenced by this processor (supported: file, http, https, exec addresses)", u.Scheme)
+		}
 	}
-	if !filepath.IsAbs(location) {
-		return "", fmt.Errorf("usage location %q must be absolute (never resolved against a carriage base)", location)
+	return "", fmt.Errorf("usage location %q is not a document address or exec address (USAGE-D-02): a local artifact is addressed as file:// or embedded as the source's content", location)
+}
+
+// fetchArtifact dereferences an http(s) document address, capped at the
+// same output bound the exec lane uses.
+func fetchArtifact(ctx context.Context, location string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
+	if err != nil {
+		return "", err
 	}
-	data, err := os.ReadFile(location)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch usage artifact: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("fetch usage artifact: HTTP %d for %q", resp.StatusCode, location)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxCLIOutputBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read usage artifact: %w", err)
 	}
+	if len(data) > maxCLIOutputBytes {
+		return "", fmt.Errorf("usage artifact at %q exceeds %d bytes", location, maxCLIOutputBytes)
+	}
 	return string(data), nil
+}
+
+// ParseExecAddress parses an exec address per USAGE-D-02's grammar: the
+// exec: prefix followed by one command token and zero or more argument
+// tokens separated by SINGLE spaces. Tokens carry no quoting mechanism —
+// a command whose arguments contain spaces is outside this form (embed
+// its generated descriptor as content instead).
+func ParseExecAddress(location string) ([]string, error) {
+	cmdStr := strings.TrimPrefix(location, "exec:")
+	if cmdStr == "" {
+		return nil, fmt.Errorf("empty command in exec address")
+	}
+	argv := strings.Split(cmdStr, " ")
+	for _, tok := range argv {
+		if tok == "" {
+			return nil, fmt.Errorf("exec address %q is malformed (USAGE-D-02): tokens are separated by single spaces and carry no quoting", location)
+		}
+	}
+	return argv, nil
 }
 
 // Formats returns the source formats supported by the usage invoker.
@@ -131,7 +200,11 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 }
 
 // Synthesizer handles interface synthesis from usage specs.
-type Synthesizer struct{}
+type Synthesizer struct {
+	// AuthorizeExec is the USAGE-P-02 gate for synthesis-time dereference
+	// of exec addresses. nil means DENY ALL (the normative default).
+	AuthorizeExec func(argv []string) bool
+}
 
 // NewSynthesizer creates a new usage interface synthesizer.
 func NewSynthesizer() *Synthesizer {
@@ -163,7 +236,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	if err != nil {
 		return nil, err
 	}
-	text, err := artifactText(ctx, location, src.Content)
+	text, err := artifactText(ctx, location, src.Content, c.AuthorizeExec)
 	if err != nil {
 		return nil, err
 	}
