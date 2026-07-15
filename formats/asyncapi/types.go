@@ -37,6 +37,11 @@ type channel struct {
 }
 
 type asyncOperation struct {
+	// Action is declared from the DESCRIBED APPLICATION's perspective
+	// (AsyncAPI 3.0's own rule): `send` = the application sends to the
+	// channel, `receive` = it expects to receive from it. An invocation is
+	// the counterparty (ASYNC-P-02): invoking `send` subscribes, invoking
+	// `receive` publishes.
 	Action      string                `json:"action" yaml:"action"`
 	Channel     channelRef            `json:"channel" yaml:"channel"`
 	Summary     string                `json:"summary,omitempty" yaml:"summary,omitempty"`
@@ -99,11 +104,13 @@ type securityScheme struct {
 // the AsyncAPI 3.0 spec, `security` on a server or operation is a LIST of
 // Security Scheme Objects or Reference Objects — NOT a list of
 // requirement-maps keyed by scheme name (that shape is OpenAPI's, and
-// AsyncAPI 2.x's). Each list entry is its own standalone alternative:
-// satisfying any ONE entry authorizes the connection/operation (pure OR;
-// AsyncAPI 3.0 has no AND-conjunction grouping within one entry). An entry
-// is either a $ref to a components.securitySchemes definition, or an
-// inline Security Scheme Object — both forms are valid per spec.
+// AsyncAPI 2.x's). WITHIN one list, satisfying any ONE entry suffices
+// (OR; AsyncAPI 3.0 has no AND-conjunction grouping within one entry) —
+// but the server's list and the operation's list are CONJUNCTIVE across
+// each other (ASYNC-P-07): the targeted server's security applies, and the
+// operation's, when declared, applies in addition. An entry is either a
+// $ref to a components.securitySchemes definition, or an inline Security
+// Scheme Object — both forms are valid per spec.
 type securityRequirement struct {
 	Ref            string `json:"$ref,omitempty" yaml:"$ref,omitempty"`
 	securityScheme `yaml:",inline"`

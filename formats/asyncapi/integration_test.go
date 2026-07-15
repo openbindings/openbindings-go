@@ -82,13 +82,17 @@ func drainOutputs(t *testing.T, call openbindings.Invocation[any, any]) ([]any, 
 }
 
 // ---------------------------------------------------------------------------
-// HTTP fixture: unary send + SSE receive
+// HTTP fixture: unary publish + SSE subscription
 // ---------------------------------------------------------------------------
 
-// makeAsyncAPISpec builds the HTTP test document. Bearer security is declared
-// per-operation (sendMessage, receiveEvents); sendOpenMessage, sendAck, and
-// receiveStream carry no security so server-side failures and cancellation
-// can be exercised without tripping the CONTEXT_REQUIRED gate.
+// makeAsyncAPISpec builds the HTTP test document. Operation names describe
+// the INVOKER's role; the `action` values are the artifact's, declared from
+// the described application's perspective (ASYNC-P-02): the ops the tests
+// publish to carry action "receive" (the app receives), the ops the tests
+// subscribe to carry action "send" (the app sends). Bearer security is
+// declared per-operation (sendMessage, receiveEvents); sendOpenMessage,
+// sendAck, and receiveStream carry no security so server-side failures and
+// cancellation can be exercised without tripping the CONTEXT_REQUIRED gate.
 func makeAsyncAPISpec(baseURL string) *document {
 	return &document{
 		AsyncAPI: "3.0.0",
@@ -107,20 +111,21 @@ func makeAsyncAPISpec(baseURL string) *document {
 		},
 		Operations: map[string]asyncOperation{
 			"sendMessage": {
-				Action:   "send",
+				Action:   "receive",
 				Channel:  channelRef{Ref: "#/channels/messages"},
 				Messages: []messageRef{{Ref: "#/components/messages/json"}},
+				Reply:    &operationReply{Messages: []messageRef{{Ref: "#/components/messages/json"}}},
 				Security: []securityRequirement{{Ref: "#/components/securitySchemes/bearer"}},
 			},
-			"sendOpenMessage": {Action: "send", Channel: channelRef{Ref: "#/channels/messages"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
-			"sendAck":         {Action: "send", Channel: channelRef{Ref: "#/channels/ack"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
+			"sendOpenMessage": {Action: "receive", Channel: channelRef{Ref: "#/channels/messages"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
+			"sendAck":         {Action: "receive", Channel: channelRef{Ref: "#/channels/ack"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
 			"receiveEvents": {
-				Action:   "receive",
+				Action:   "send",
 				Channel:  channelRef{Ref: "#/channels/events"},
 				Messages: []messageRef{{Ref: "#/components/messages/json"}},
 				Security: []securityRequirement{{Ref: "#/components/securitySchemes/bearer"}},
 			},
-			"receiveStream": {Action: "receive", Channel: channelRef{Ref: "#/channels/stream"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
+			"receiveStream": {Action: "send", Channel: channelRef{Ref: "#/channels/stream"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
 		},
 		Components: &components{
 			Messages: map[string]message{
@@ -322,12 +327,12 @@ func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
 	}
 }
 
-// TestChannelAddressFallsBackToChannelName is regression coverage for the
-// [assumption] documented in spec/formats/asyncapi.md: "A channel without an
-// `address` is assumed addressable by its channel name (the 2.x-lineage
-// habit)." The behavior already existed in runBinding but had no direct
-// test; this pins it and gives the TS SDK's equivalent test something to
-// mirror for parity.
+// TestChannelAddressFallsBackToChannelName pins the current channel-name
+// fallback for a channel with no `address`. NOTE: openbindings.asyncapi@1
+// makes an absent/null address a PRE-DISPATCH REFUSAL (the address
+// configuration point, ASYNC-P-04 — never a guess); this fallback is slated
+// for removal with that punch-list item, and this test will flip to assert
+// the refusal.
 func TestChannelAddressFallsBackToChannelName(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -342,7 +347,7 @@ func TestChannelAddressFallsBackToChannelName(t *testing.T) {
 		"servers": {"test": {"host": %q, "protocol": "http"}},
 		"channels": {"notify": {}},
 		"operations": {
-			"notifyOp": {"action": "send", "channel": {"$ref": "#/channels/notify"}}
+			"notifyOp": {"action": "receive", "channel": {"$ref": "#/channels/notify"}}
 		}
 	}`, strings.TrimPrefix(srv.URL, "http://"))
 
@@ -450,47 +455,39 @@ func TestMissingInputOnSend(t *testing.T) {
 	}
 }
 
-// TestNoInputOperationConvention_HTTPSend verifies the operation-layer
-// no-input convention: a call carrying Binding != nil and InputSchema == nil
-// sends one empty-object message without waiting for a write — the caller of
-// a no-input operation never writes nor closes.
-func TestNoInputOperationConvention_HTTPSend(t *testing.T) {
-	srv, _ := newHTTPFixture(t)
+// TestNoInputOperationRefused_HTTPPublish verifies the presence rule
+// (ASYNC-P-03): a publish invocation requires an input value — the input IS
+// the message, and this family defines no empty message. An operation-layer
+// call for an operation declaring no input (Binding != nil, InputSchema ==
+// nil) is refused before dispatch, never substituted with an empty object.
+func TestNoInputOperationRefused_HTTPPublish(t *testing.T) {
+	srv, requests := newHTTPFixture(t)
 	binv := NewInvoker()
 	defer binv.Close()
 
+	before := requests.Load()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
 		Source:  httpSource(srv),
 		Ref:     "#/operations/sendAck",
 		Binding: &openbindings.BindingEntry{Operation: "sendAck", Source: DefaultSourceName, Ref: "#/operations/sendAck"},
-		// InputSchema nil → no-input operation; the binding closes input itself.
+		// InputSchema nil → no-input operation; publish has no empty message.
 	})
-	// The caller writes nothing and does not close; the binding must still
-	// dispatch (drainOutputs reads under a 5s timeout, so a parked binding
-	// fails the test instead of hanging it).
-	vals, err := drainOutputs(t, call)
-	if err != nil {
-		t.Fatalf("no-input convention failed: %v", err)
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != openbindings.ErrCodeMissingInput {
+		t.Fatalf("expected ERR_MISSING_INPUT for a no-input publish, got %v", err)
 	}
-	if len(vals) != 0 {
-		t.Fatalf("a 202 publish ack is not an output, got %v", vals)
+	if got := requests.Load(); got != before {
+		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got-before)
 	}
 }
 
-// TestNoInputOperationConvention_WSSend is the WebSocket variant: the binding
-// publishes one empty-object frame and completes with zero outputs.
-func TestNoInputOperationConvention_WSSend(t *testing.T) {
+// TestNoInputOperationRefused_WSPublish is the WebSocket variant: the
+// refusal fires before any socket is dialed.
+func TestNoInputOperationRefused_WSPublish(t *testing.T) {
 	var upgrades atomic.Int32
-	frames := make(chan map[string]any, 4)
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
 		upgrades.Add(1)
-		for {
-			msg, err := readWSJSON(ctx, conn)
-			if err != nil {
-				return
-			}
-			frames <- msg
-		}
+		<-ctx.Done()
 	})
 
 	binv := NewInvoker()
@@ -501,20 +498,36 @@ func TestNoInputOperationConvention_WSSend(t *testing.T) {
 		Ref:     "#/operations/publish",
 		Binding: &openbindings.BindingEntry{Operation: "publish", Source: DefaultSourceName, Ref: "#/operations/publish"},
 	})
-	vals, err := drainOutputs(t, call)
-	if err != nil {
-		t.Fatalf("no-input convention failed: %v", err)
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != openbindings.ErrCodeMissingInput {
+		t.Fatalf("expected ERR_MISSING_INPUT for a no-input ws publish, got %v", err)
 	}
-	if len(vals) != 0 {
-		t.Fatalf("a ws publish yields no outputs, got %v", vals)
+	if c := upgrades.Load(); c != 0 {
+		t.Errorf("the refusal is pre-dispatch: %d upgrades dialed", c)
 	}
-	select {
-	case f := <-frames:
-		if len(f) != 0 {
-			t.Errorf("expected one empty-object frame, got %v", f)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("server never received the empty-object frame")
+}
+
+// TestWSPublishZeroMessagesRefused verifies the streaming face of the same
+// presence rule: closing input with zero messages sent fails loudly — a
+// publish that published nothing is not a success.
+func TestWSPublishZeroMessagesRefused(t *testing.T) {
+	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
+		<-ctx.Done()
+	})
+
+	binv := NewInvoker()
+	defer binv.Close()
+
+	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: wsSource(srv, nil),
+		Ref:    "#/operations/publish",
+	})
+	if err := call.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != openbindings.ErrCodeMissingInput {
+		t.Fatalf("expected ERR_MISSING_INPUT for a zero-message publish, got %v", err)
 	}
 }
 
@@ -577,7 +590,7 @@ func sseEventDoc(baseURL, path string) *document {
 			"test": {Host: strings.TrimPrefix(baseURL, "http://"), Protocol: "http"},
 		},
 		Channels:   map[string]channel{"caps": {Address: path}},
-		Operations: map[string]asyncOperation{"receiveCaps": {Action: "receive", Channel: channelRef{Ref: "#/channels/caps"}}},
+		Operations: map[string]asyncOperation{"receiveCaps": {Action: "send", Channel: channelRef{Ref: "#/channels/caps"}}},
 	}
 }
 
@@ -862,8 +875,11 @@ func makeWSAsyncAPISpec(httpURL string, scheme *securityScheme) *document {
 			"stream": {Address: "/ws"},
 		},
 		Operations: map[string]asyncOperation{
-			"subscribe": {Action: "receive", Channel: channelRef{Ref: "#/channels/stream"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
-			"publish":   {Action: "send", Channel: channelRef{Ref: "#/channels/stream"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
+			// Names describe the invoker's role; actions are the artifact's
+			// (app-perspective, ASYNC-P-02): invoking `send` subscribes,
+			// invoking `receive` publishes.
+			"subscribe": {Action: "send", Channel: channelRef{Ref: "#/channels/stream"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
+			"publish":   {Action: "receive", Channel: channelRef{Ref: "#/channels/stream"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
 		},
 		Components: &components{
 			Messages: map[string]message{"json": {Name: "json", ContentType: "application/json"}},

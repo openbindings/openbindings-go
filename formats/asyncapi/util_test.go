@@ -153,7 +153,13 @@ func TestRequiredContext_AlternativesAnyOneSuffices(t *testing.T) {
 	}
 }
 
-func TestRequiredContext_OperationOverridesServer(t *testing.T) {
+// TestRequiredContext_ServerAndOperationAreConjunctive verifies the
+// ASYNC-P-07 derivation: the targeted server's security applies AND the
+// operation's security, when declared, applies in addition — the operation
+// never displaces the server. Within each list one entry suffices, so the
+// challenge is the cross product: one server entry paired with one
+// operation entry per alternative.
+func TestRequiredContext_ServerAndOperationAreConjunctive(t *testing.T) {
 	doc := secureDoc(map[string]securityScheme{
 		"bearer": {Type: "http", Scheme: "bearer"},
 		"key":    {Type: "httpApiKey", In: "query", Name: "k"},
@@ -163,10 +169,46 @@ func TestRequiredContext_OperationOverridesServer(t *testing.T) {
 
 	details := requiredContext(doc, &op, "https://api.example.com", nil)
 	if details == nil || len(details.Alternatives) != 1 {
+		t.Fatalf("expected 1 alternative (1 server entry x 1 op entry), got %+v", details)
+	}
+	reqs := details.Alternatives[0].Requirements
+	if len(reqs) != 2 || reqs[0].Type != "auth.bearer" || reqs[1].Type != "auth.apiKey" {
+		t.Fatalf("expected conjunctive [auth.bearer auth.apiKey], got %+v", reqs)
+	}
+
+	// Either credential alone must NOT satisfy the conjunction.
+	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t"}); got == nil {
+		t.Error("bearer alone must not satisfy server AND operation security")
+	}
+	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"apiKeys": map[string]any{"key": "k"}}); got == nil {
+		t.Error("apiKey alone must not satisfy server AND operation security")
+	}
+	// Both together satisfy.
+	both := map[string]any{"bearerToken": "t", "apiKeys": map[string]any{"key": "k"}}
+	if got := requiredContext(doc, &op, "https://api.example.com", both); got != nil {
+		t.Errorf("bearer+apiKey should satisfy the conjunction, got %+v", got)
+	}
+}
+
+// TestRequiredContext_SameSchemeBothLevelsIsOneRequirement verifies a scheme
+// declared on both the server and the operation is one requirement in the
+// paired alternative, never a duplicated conjunct.
+func TestRequiredContext_SameSchemeBothLevelsIsOneRequirement(t *testing.T) {
+	doc := secureDoc(map[string]securityScheme{
+		"bearer": {Type: "http", Scheme: "bearer"},
+	}, "bearer")
+	op := doc.Operations["op"]
+	op.Security = []securityRequirement{{Ref: "#/components/securitySchemes/bearer"}}
+
+	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	if details == nil || len(details.Alternatives) != 1 {
 		t.Fatalf("expected 1 alternative, got %+v", details)
 	}
-	if details.Alternatives[0].Requirements[0].Type != "auth.apiKey" {
-		t.Errorf("operation-level security must win, got %+v", details.Alternatives[0])
+	if reqs := details.Alternatives[0].Requirements; len(reqs) != 1 || reqs[0].Type != "auth.bearer" {
+		t.Fatalf("expected the shared scheme deduplicated to one requirement, got %+v", reqs)
+	}
+	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t"}); got != nil {
+		t.Errorf("the one bearer credential should satisfy, got %+v", got)
 	}
 }
 
@@ -516,24 +558,53 @@ func TestOAuth2Requirement_NoFlows(t *testing.T) {
 // defaultContentType — still the declared lane, never payload sniffing.
 // Regression: the model didn't parse defaultContentType, so JSON events
 // from documents relying on it decoded as strings and failed OBI-T-08.
-func TestDeclaredContentType_FallsBackToDocumentDefault(t *testing.T) {
+func TestMessageContentType_FallsBackToDocumentDefault(t *testing.T) {
 	doc := &document{
 		AsyncAPI:           "3.0.0",
 		DefaultContentType: "application/json",
 		Operations: map[string]asyncOperation{
-			"sub": {Action: "receive", Messages: []messageRef{{Ref: "#/components/messages/plain"}}},
+			"sub": {Action: "send", Messages: []messageRef{{Ref: "#/components/messages/plain"}}},
 		},
 		Components: &components{
 			Messages: map[string]message{"plain": {Name: "plain"}}, // no contentType
 		},
 	}
 	op := doc.Operations["sub"]
-	if got := declaredContentType(doc, &op); got != "application/json" {
-		t.Errorf("declaredContentType = %q, want the document default", got)
+	if got := messageContentType(doc, &op); got != "application/json" {
+		t.Errorf("messageContentType = %q, want the document default", got)
 	}
 	// A per-message declaration still wins over the default.
 	doc.Components.Messages["plain"] = message{Name: "plain", ContentType: "text/plain"}
-	if got := declaredContentType(doc, &op); got != "text/plain" {
-		t.Errorf("declaredContentType = %q, want the per-message declaration", got)
+	if got := messageContentType(doc, &op); got != "text/plain" {
+		t.Errorf("messageContentType = %q, want the per-message declaration", got)
+	}
+}
+
+// Direction-correct decode (ASYNC-P-05): a publish invocation's output (the
+// response) decodes by the REPLY-side declarations, never the operation's
+// own request-side messages.
+func TestReplyContentType_UsesReplySideDeclarations(t *testing.T) {
+	doc := &document{
+		AsyncAPI: "3.0.0",
+		Operations: map[string]asyncOperation{
+			"pub": {
+				Action:   "receive",
+				Messages: []messageRef{{Ref: "#/components/messages/req"}},
+				Reply:    &operationReply{Messages: []messageRef{{Ref: "#/components/messages/rep"}}},
+			},
+		},
+		Components: &components{
+			Messages: map[string]message{
+				"req": {Name: "req", ContentType: "text/plain"},
+				"rep": {Name: "rep", ContentType: "application/json"},
+			},
+		},
+	}
+	op := doc.Operations["pub"]
+	if got := replyContentType(doc, &op); got != "application/json" {
+		t.Errorf("replyContentType = %q, want the reply-side declaration", got)
+	}
+	if got := messageContentType(doc, &op); got != "text/plain" {
+		t.Errorf("messageContentType = %q, want the request-side declaration", got)
 	}
 }
