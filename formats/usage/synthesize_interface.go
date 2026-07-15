@@ -24,8 +24,8 @@ func synthesizeFromArtifactText(text string) (openbindings.Interface, error) {
 		return openbindings.Interface{}, fmt.Errorf("parse usage content: %w", err)
 	}
 	return buildInterfaceFromSpec(spec, openbindings.Source{
-		Format:  "usage@" + MaxTestedVersion,
-		Content: text,
+		BindingSpec: BindingSpec,
+		Content:     text,
 	})
 }
 

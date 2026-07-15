@@ -185,12 +185,12 @@ func TestConvertToInterface_SourceEntry(t *testing.T) {
 	}
 	src := iface.Sources[DefaultSourceName]
 	// A bare artifact synthesizes to a PRISTINE embedded source: the kdl
-	// text verbatim, under the bare usage token.
+	// text verbatim, under the exact published identifier.
 	if src.Location != "" {
 		t.Errorf("location = %q, want empty (embedded artifact)", src.Location)
 	}
-	if src.Format != "usage@"+MaxTestedVersion {
-		t.Errorf("format = %q, want the bare usage token", src.Format)
+	if src.BindingSpec != BindingSpec {
+		t.Errorf("bindingSpec = %q, want %q", src.BindingSpec, BindingSpec)
 	}
 	if src.Content != `name "mycli"` {
 		t.Errorf("expected the pristine kdl text, got %v", src.Content)
@@ -361,7 +361,7 @@ func TestSynthesizeInterface_FilePathEmitsEmbeddedContent(t *testing.T) {
 				t.Chdir(dir)
 			}
 			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{Format: "usage@" + MaxTestedVersion, Location: location}},
+				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: location}},
 			})
 			if err != nil {
 				t.Fatalf("synthesize: %v", err)
@@ -398,7 +398,7 @@ func writeEmitterScript(t *testing.T) string {
 func TestSynthesizeInterface_SpacelessExecLocatorEmitsLocation(t *testing.T) {
 	locator := "exec:" + writeEmitterScript(t)
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{Format: "usage@" + MaxTestedVersion, Location: locator}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: locator}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
@@ -424,7 +424,7 @@ func TestSynthesizeInterface_SpacelessExecLocatorEmitsLocation(t *testing.T) {
 func TestSynthesizeInterface_SpacedExecLocatorEmbeds(t *testing.T) {
 	locator := "exec:" + writeEmitterScript(t) + " --spec"
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{Format: "usage@" + MaxTestedVersion, Location: locator}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: locator}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)

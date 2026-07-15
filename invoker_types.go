@@ -82,9 +82,9 @@ type PlatformCallbacks struct {
 
 // InvocationSource identifies the binding source for invocation.
 type InvocationSource struct {
-	Format   string `json:"format"`
-	Location string `json:"location,omitempty"`
-	Content  any    `json:"content,omitempty"`
+	BindingSpec string `json:"bindingSpec"`
+	Location    string `json:"location,omitempty"`
+	Content     any    `json:"content,omitempty"`
 }
 
 // BindingInvocationArgs are the arguments for invoking a resolved binding
@@ -126,7 +126,7 @@ type BindingInvocationArgs struct {
 
 // SynthesizeSource describes a binding source for interface synthesis.
 type SynthesizeSource struct {
-	Format         string `json:"format"`
+	BindingSpec    string `json:"bindingSpec"`
 	Name           string `json:"name,omitempty"`
 	Location       string `json:"location,omitempty"`
 	Content        any    `json:"content,omitempty"`
@@ -170,9 +170,10 @@ type SynthesizerWarning struct {
 	Details map[string]any `json:"details,omitempty"`
 }
 
-// FormatInfo describes a binding format supported by an invoker.
-type FormatInfo struct {
-	Token       string `json:"token"`
+// BindingSpecInfo describes a binding specification supported by an
+// invoker, by exact identifier.
+type BindingSpecInfo struct {
+	BindingSpec string `json:"bindingSpec"`
 	Description string `json:"description,omitempty"`
 }
 

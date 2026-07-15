@@ -66,8 +66,8 @@ func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			Format:   FormatToken,
-			Location: ts.URL,
+			BindingSpec: BindingSpec,
+			Location:    ts.URL,
 		}},
 	})
 	if err != nil {

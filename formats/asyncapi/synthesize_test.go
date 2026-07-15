@@ -11,7 +11,7 @@ import (
 func testSynthesizeInterface(t *testing.T, doc *document, location string) openbindings.Interface {
 	t.Helper()
 	iface, err := synthesizeInterfaceWithDoc(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{Format: FormatToken, Location: location}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: location}},
 	}, doc)
 	if err != nil {
 		t.Fatal(err)
@@ -105,11 +105,11 @@ func TestSynthesizeInterface_NoOperations(t *testing.T) {
 	}
 }
 
-func TestSynthesizeInterface_FormatToken(t *testing.T) {
+func TestSynthesizeInterface_BindingSpec(t *testing.T) {
 	doc := &document{AsyncAPI: "3.0.0", Operations: map[string]asyncOperation{}}
 	iface := testSynthesizeInterface(t, doc, "")
-	if iface.Sources[DefaultSourceName].Format != "asyncapi@3.0" {
-		t.Errorf("format = %q, want asyncapi@3.0", iface.Sources[DefaultSourceName].Format)
+	if iface.Sources[DefaultSourceName].BindingSpec != BindingSpec {
+		t.Errorf("bindingSpec = %q, want %q", iface.Sources[DefaultSourceName].BindingSpec, BindingSpec)
 	}
 }
 
@@ -119,7 +119,7 @@ func TestSynthesizeInterface_FormatToken(t *testing.T) {
 func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	content := `{"asyncapi":"3.0.0","info":{"title":"T","version":"1.0.0"},"operations":{}}`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{Format: "asyncapi@3.0", Content: content}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: "asyncapi@3.0", Content: content}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)

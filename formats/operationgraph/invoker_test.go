@@ -18,7 +18,7 @@ import (
 // exists (the load may be a network fetch).
 func TestInvokeBinding_PreflightErrorsThroughHandle(t *testing.T) {
 	inv := NewInvoker(openbindings.NewOperationInvoker()).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Location: filepath.Join(t.TempDir(), "missing.json")},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: filepath.Join(t.TempDir(), "missing.json")},
 		Ref:    "#/graphs/g",
 	})
 	if inv == nil {
@@ -57,7 +57,7 @@ func TestNewInvokerWithClient(t *testing.T) {
 
 	ctx := context.Background()
 	inv := NewInvokerWithClient(openbindings.NewOperationInvoker(), custom).InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Location: "http://example.test/graph.json"},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "http://example.test/graph.json"},
 		Ref:    "#/graphs/g",
 	})
 	if err := inv.Write(ctx, map[string]any{"n": 1}); err != nil {
@@ -108,7 +108,7 @@ func TestInvokeBinding_CrossGraphRecursionBounded(t *testing.T) {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]openbindings.Operation{"recurse": {}},
 		Sources: map[string]openbindings.Source{
-			"g": {Format: FormatToken, Content: graphDoc},
+			"g": {BindingSpec: BindingSpec, Content: graphDoc},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
 			"recurse.g": {Operation: "recurse", Source: "g", Ref: "#/graphs/loop"},
@@ -120,7 +120,7 @@ func TestInvokeBinding_CrossGraphRecursionBounded(t *testing.T) {
 	opInvoker.AddBindingInvoker(NewInvoker(opInvoker))
 
 	call := opInvoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:    openbindings.InvocationSource{Format: FormatToken, Content: graphDoc},
+		Source:    openbindings.InvocationSource{BindingSpec: BindingSpec, Content: graphDoc},
 		Ref:       "#/graphs/loop",
 		Interface: iface,
 	})

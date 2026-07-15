@@ -209,7 +209,7 @@ func TestIntegrationInvokeQuery(t *testing.T) {
 	defer srv.Close()
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Query/user",
 	})
 	out, ierr := driveSingle(t, call, map[string]any{"id": "42"})
@@ -233,7 +233,7 @@ func TestIntegrationInvokeQueryNoArgs(t *testing.T) {
 	defer srv.Close()
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Query/users",
 	})
 	out, ierr := driveSingle(t, call, nil)
@@ -254,7 +254,7 @@ func TestIntegrationInvokeMutation(t *testing.T) {
 	defer srv.Close()
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Mutation/createUser",
 	})
 	out, ierr := driveSingle(t, call, map[string]any{"name": "Charlie", "email": "charlie@example.com"})
@@ -288,7 +288,7 @@ func TestIntegrationInvokeWithSchemaQuery(t *testing.T) {
 	}
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:      openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source:      openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:         "Query/user",
 		InputSchema: inputSchema,
 	})
@@ -314,8 +314,8 @@ func TestIntegrationSynthesizeInterface(t *testing.T) {
 
 	iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			Format:   "graphql",
-			Location: srv.URL,
+			BindingSpec: "graphql",
+			Location:    srv.URL,
 		}},
 	})
 	if err != nil {
@@ -339,7 +339,7 @@ func TestIntegrationSourceContent(t *testing.T) {
 	})
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL, Content: string(schemaJSON)},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL, Content: string(schemaJSON)},
 		Ref:    "Query/users",
 	})
 	out, ierr := driveSingle(t, call, nil)
@@ -388,7 +388,7 @@ func TestIntegrationNoCredentials(t *testing.T) {
 	defer srv.Close()
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Query/users",
 	})
 	_, ierr := driveSingle(t, call, nil)
@@ -404,7 +404,7 @@ func TestIntegrationBearerContext(t *testing.T) {
 	defer srv.Close()
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source:  openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:     "Query/users",
 		Context: map[string]any{"bearerToken": "test-token"},
 	})
@@ -611,7 +611,7 @@ func TestIntegrationInvokeSubscription(t *testing.T) {
 	defer cancel()
 
 	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
 	events, ierr := driveOutputs(ctx, call, map[string]any{"topic": "alerts"})
@@ -688,7 +688,7 @@ func TestIntegrationSubscriptionCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
 	_ = call.Close()
@@ -789,7 +789,7 @@ func TestIntegrationSubscription_ErrorMessage(t *testing.T) {
 	defer cancel()
 
 	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
 	events, ierr := driveOutputs(ctx, call, nil)
@@ -832,7 +832,7 @@ func TestIntegrationSubscription_ConnectionDropMidStream(t *testing.T) {
 	defer cancel()
 
 	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
 	events, ierr := driveOutputs(ctx, call, nil)
@@ -859,7 +859,7 @@ func TestIntegrationSubscription_ConnectionAckMismatch(t *testing.T) {
 	defer cancel()
 
 	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
 	done := make(chan *openbindings.InvocationError, 1)
@@ -922,7 +922,7 @@ func TestIntegrationSynthesizeInterface_RecursiveType(t *testing.T) {
 	go func() {
 		defer close(done)
 		iface, createErr = synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-			Sources: []openbindings.SynthesizeSource{{Format: "graphql", Location: srv.URL}},
+			Sources: []openbindings.SynthesizeSource{{BindingSpec: "graphql", Location: srv.URL}},
 		})
 	}()
 
@@ -976,7 +976,7 @@ func TestNewInvokerWithClient(t *testing.T) {
 
 	schemaJSON, _ := json.Marshal(map[string]any{"data": map[string]any{"__schema": testSchema}})
 	call := NewInvokerWithClient(custom).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: "http://example.test/graphql", Content: string(schemaJSON)},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: "http://example.test/graphql", Content: string(schemaJSON)},
 		Ref:    "Query/users",
 	})
 	out, ierr := driveSingle(t, call, nil)
@@ -1023,7 +1023,7 @@ func TestIntegrationInvokeMutation_Accepts2xxStatus(t *testing.T) {
 	defer srv.Close()
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Mutation/createUser",
 	})
 	out, ierr := driveSingle(t, call, map[string]any{"name": "Charlie", "email": "charlie@example.com"})
@@ -1056,7 +1056,7 @@ func TestIntegrationInvokeQuery_OversizedResponseRefused(t *testing.T) {
 		"properties": map[string]any{"_query": map[string]any{"type": "string", "const": "query { ping }"}},
 	}
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:      openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source:      openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:         "Query/ping",
 		InputSchema: inputSchema,
 	})
@@ -1086,7 +1086,7 @@ func TestIntegrationInvokeQueryNoArgs_NoInputRecipe(t *testing.T) {
 	defer cancel()
 
 	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Query/users",
 	})
 	out, err := openbindings.Single(ctx, call.Outputs())
@@ -1115,7 +1115,7 @@ func TestIntegrationInvokeQuery_PrebuiltQueryNoVariables_NoInputRecipe(t *testin
 		"properties": map[string]any{"_query": map[string]any{"type": "string", "const": "query { users { id name email } }"}},
 	}
 	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:      openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source:      openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:         "Query/users",
 		InputSchema: inputSchema,
 	})
@@ -1134,7 +1134,7 @@ func TestIntegrationInvokeQuery_PrebuiltQueryNoVariables_NoInputRecipe(t *testin
 // network I/O, matching the TS invoker's precheck.
 func TestIntegrationInvokeBinding_MissingLocation(t *testing.T) {
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql"}, // no Location
+		Source: openbindings.InvocationSource{BindingSpec: "graphql"}, // no Location
 		Ref:    "Query/ping",
 	})
 	_, ierr := driveSingle(t, call, nil)
@@ -1181,7 +1181,7 @@ func TestIntegrationSubscription_CloseWithoutComplete(t *testing.T) {
 	defer cancel()
 
 	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
 	events, ierr := driveOutputs(ctx, call, nil)
@@ -1213,7 +1213,7 @@ func TestIntegrationSubscription_ClosedDuringHandshake(t *testing.T) {
 	defer cancel()
 
 	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "graphql", Location: srv.URL},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
 		Ref:    "Subscription/messageStream",
 	})
 	_, ierr := driveSingle(t, call, nil)

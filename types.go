@@ -38,7 +38,7 @@ var (
 		"description", "input", "output",
 	)
 	knownSourceSet = knownSet(
-		"format", "location", "content", "description", "preference",
+		"bindingSpec", "location", "content", "description",
 	)
 	knownBindingEntrySet = knownSet(
 		"operation", "source", "ref", "preference", "description", "deprecated",
@@ -221,21 +221,22 @@ func (o Operation) MarshalJSON() ([]byte, error) {
 }
 
 type Source struct {
-	Format      string   `json:"format"`
-	Location    string   `json:"location,omitempty"`
-	Content     any      `json:"content,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Preference  *float64 `json:"preference,omitempty"`
+	// BindingSpec is the binding-specification identifier governing this
+	// source — exact and opaque (core §6: never dereferenced, never
+	// range-matched).
+	BindingSpec string `json:"bindingSpec"`
+	Location    string `json:"location,omitempty"`
+	Content     any    `json:"content,omitempty"`
+	Description string `json:"description,omitempty"`
 
 	LosslessFields
 }
 
 type sourceWire struct {
-	Format      string   `json:"format"`
-	Location    string   `json:"location,omitempty"`
-	Content     any      `json:"content,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Preference  *float64 `json:"preference,omitempty"`
+	BindingSpec string `json:"bindingSpec"`
+	Location    string `json:"location,omitempty"`
+	Content     any    `json:"content,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 func (s *Source) UnmarshalJSON(b []byte) error {
@@ -250,11 +251,10 @@ func (s *Source) UnmarshalJSON(b []byte) error {
 	}
 
 	*s = Source{
-		Format:      w.Format,
+		BindingSpec: w.BindingSpec,
 		Location:    w.Location,
 		Content:     w.Content,
 		Description: w.Description,
-		Preference:  w.Preference,
 	}
 
 	s.Extensions, s.Unknown = splitLossless(raw, knownSourceSet)
@@ -263,11 +263,10 @@ func (s *Source) UnmarshalJSON(b []byte) error {
 
 func (s Source) MarshalJSON() ([]byte, error) {
 	w := sourceWire{
-		Format:      s.Format,
+		BindingSpec: s.BindingSpec,
 		Location:    s.Location,
 		Content:     s.Content,
 		Description: s.Description,
-		Preference:  s.Preference,
 	}
 	return marshalLossless(s.Unknown, s.Extensions, w)
 }

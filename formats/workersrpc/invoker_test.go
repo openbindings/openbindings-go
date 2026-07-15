@@ -10,12 +10,12 @@ import (
 
 func TestInvoker_Formats(t *testing.T) {
 	invoker := NewInvoker()
-	formats := invoker.Formats()
+	formats := invoker.BindingSpecs()
 	if len(formats) != 1 {
 		t.Fatalf("expected exactly 1 format, got %d", len(formats))
 	}
-	if formats[0].Token != FormatToken {
-		t.Errorf("token = %q, want %q", formats[0].Token, FormatToken)
+	if formats[0].BindingSpec != BindingSpec {
+		t.Errorf("token = %q, want %q", formats[0].BindingSpec, BindingSpec)
 	}
 	if formats[0].Description == "" {
 		t.Error("description should be non-empty")
@@ -28,7 +28,7 @@ func TestInvoker_InvokeBinding_AlwaysFails(t *testing.T) {
 	// yield outputs) directing the caller to the TypeScript runtime.
 	invoker := NewInvoker()
 	inv := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Location: "workers-rpc://test"},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "workers-rpc://test"},
 		Ref:    "someMethod",
 	})
 	if inv == nil {
@@ -53,12 +53,12 @@ func TestInvoker_InvokeBinding_AlwaysFails(t *testing.T) {
 
 func TestSynthesizer_Formats(t *testing.T) {
 	c := NewSynthesizer()
-	formats := c.Formats()
+	formats := c.BindingSpecs()
 	if len(formats) != 1 {
 		t.Fatalf("expected exactly 1 format, got %d", len(formats))
 	}
-	if formats[0].Token != FormatToken {
-		t.Errorf("token = %q, want %q", formats[0].Token, FormatToken)
+	if formats[0].BindingSpec != BindingSpec {
+		t.Errorf("token = %q, want %q", formats[0].BindingSpec, BindingSpec)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestSynthesizer_SynthesizeInterface_AlwaysFails(t *testing.T) {
 	c := NewSynthesizer()
 	_, err := c.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{
-			{Format: FormatToken, Location: "workers-rpc://test"},
+			{BindingSpec: BindingSpec, Location: "workers-rpc://test"},
 		},
 	})
 	if err == nil {
@@ -80,11 +80,11 @@ func TestSynthesizer_SynthesizeInterface_AlwaysFails(t *testing.T) {
 	}
 }
 
-func TestFormatToken_Constant(t *testing.T) {
+func TestBindingSpec_Constant(t *testing.T) {
 	// Sanity-check the format token to catch accidental version drift.
 	want := "workers-rpc@^1.0.0"
-	if FormatToken != want {
-		t.Errorf("FormatToken = %q, want %q", FormatToken, want)
+	if BindingSpec != want {
+		t.Errorf("BindingSpec = %q, want %q", BindingSpec, want)
 	}
 }
 

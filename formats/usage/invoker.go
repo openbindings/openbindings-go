@@ -13,12 +13,12 @@ import (
 
 const DefaultSourceName = "usage"
 
-// FormatRanges are the bare jdx usage token ranges this invoker claims —
-// one caret range per supported tool major (the token grammar has no
-// compound ranges): the artifact IS the source (no wrapper —
+// BindingSpec is the published binding-specification identifier this
+// invoker claims — exact and opaque (openbindings.usage@1 governs the
+// supported jdx usage artifact line; the artifact IS the source:
 // specification + configuration = complete invocation; the artifact's
 // gaps are consumer hooks).
-var FormatRanges = []string{"usage@^2.0.0", "usage@^3.0.0"}
+const BindingSpec = "openbindings.usage@1"
 
 // Invoker handles binding invocation for bare jdx usage artifacts
 // (usage.kdl): refs are space-separated command paths; the wire questions
@@ -110,16 +110,12 @@ func artifactText(ctx context.Context, location string, content any) (string, er
 }
 
 // Formats returns the source formats supported by the usage invoker.
-func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return usageFormatInfos()
+func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return usageBindingSpecInfos()
 }
 
-func usageFormatInfos() []openbindings.FormatInfo {
-	infos := make([]openbindings.FormatInfo, len(FormatRanges))
-	for i, token := range FormatRanges {
-		infos[i] = openbindings.FormatInfo{Token: token, Description: "CLI tools described by jdx usage specs"}
-	}
-	return infos
+func usageBindingSpecInfos() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "CLI tools described by jdx usage specs"}}
 }
 
 // InvokeBinding runs a CLI command for a usage-spec binding and returns the
@@ -144,8 +140,8 @@ func NewSynthesizer() *Synthesizer {
 
 // Formats returns the source formats supported by the usage synthesizer:
 // bare jdx usage-spec artifacts.
-func (c *Synthesizer) Formats() []openbindings.FormatInfo {
-	return usageFormatInfos()
+func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+	return usageBindingSpecInfos()
 }
 
 // SynthesizeInterface converts a bare jdx usage source to an OpenBindings
@@ -185,7 +181,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	// document validates and is invocable as written: content is
 	// authoritative at the invoke lane, and an emitted exec: locator is
 	// resolved live.
-	sourceEntry := openbindings.Source{Format: src.Format}
+	sourceEntry := openbindings.Source{BindingSpec: src.BindingSpec}
 	if emittableAsLocation(location) {
 		sourceEntry.Location = location
 	} else {

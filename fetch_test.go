@@ -127,8 +127,8 @@ func TestFetchInterface_FailureCarriesResolutionTrail(t *testing.T) {
 
 type failingSynthesizer struct{}
 
-func (failingSynthesizer) Formats() []FormatInfo {
-	return []FormatInfo{{Token: "fake@1.0"}}
+func (failingSynthesizer) BindingSpecs() []BindingSpecInfo {
+	return []BindingSpecInfo{{BindingSpec: "fake@1.0"}}
 }
 
 func (failingSynthesizer) SynthesizeInterface(context.Context, *SynthesizeInput) (*Interface, error) {

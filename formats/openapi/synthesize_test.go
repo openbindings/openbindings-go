@@ -100,12 +100,8 @@ func TestConvertDocToInterface_CreatesSourceEntry(t *testing.T) {
 	if src.Location != "https://example.com/openapi.json" {
 		t.Errorf("source Location = %q, want %q", src.Location, "https://example.com/openapi.json")
 	}
-	if src.Format == "" {
-		t.Error("source Format is empty")
-	}
-	// Format should contain "openapi@" prefix
-	if src.Format[:8] != "openapi@" {
-		t.Errorf("source Format = %q, want prefix %q", src.Format, "openapi@")
+	if src.BindingSpec != BindingSpec {
+		t.Errorf("source bindingSpec = %q, want the exact identifier %q", src.BindingSpec, BindingSpec)
 	}
 }
 
@@ -224,8 +220,8 @@ paths:
 		t.Errorf("next.nullable should have been removed, got %#v", next)
 	}
 
-	if iface.Sources["openapi"].Format != "openapi@3.0" {
-		t.Errorf("source.format = %q, want \"openapi@3.0\"", iface.Sources["openapi"].Format)
+	if iface.Sources["openapi"].BindingSpec != BindingSpec {
+		t.Errorf("source.bindingSpec = %q, want %q", iface.Sources["openapi"].BindingSpec, BindingSpec)
 	}
 }
 
@@ -316,7 +312,7 @@ paths:
 func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	content := `{"openapi":"3.0.3","info":{"title":"T","version":"1.0.0"},"paths":{"/x":{"get":{"operationId":"getX","responses":{"200":{"description":"ok"}}}}}}`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{Format: "openapi@3.0", Content: content}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: "openapi@3.0", Content: content}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
@@ -341,8 +337,8 @@ func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 func TestSynthesizeInterface_RefusesMultipleSources(t *testing.T) {
 	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{
-			{Format: "openapi@3.0", Content: "{}"},
-			{Format: "openapi@3.0", Content: "{}"},
+			{BindingSpec: "openapi@3.0", Content: "{}"},
+			{BindingSpec: "openapi@3.0", Content: "{}"},
 		},
 	})
 	if !errors.Is(err, openbindings.ErrMultipleSources) {

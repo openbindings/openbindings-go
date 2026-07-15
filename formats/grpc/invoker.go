@@ -21,7 +21,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-const FormatToken = "grpc"
+const BindingSpec = "openbindings.grpc@1"
 const DefaultSourceName = "grpcServer"
 
 // Invoker handles binding invocation for gRPC sources.
@@ -100,8 +100,8 @@ func (e *Invoker) Close() error {
 }
 
 // Formats returns the source formats supported by the gRPC invoker.
-func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "gRPC via server reflection or .proto files"}}
+func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "gRPC via server reflection or .proto files"}}
 }
 
 // InvokeBinding invokes a gRPC binding, returning the invocation handle
@@ -275,8 +275,8 @@ func NewSynthesizer(opts ...SynthesizerOption) *Synthesizer {
 }
 
 // Formats returns the source formats supported by the gRPC synthesizer.
-func (c *Synthesizer) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "gRPC via server reflection or .proto files"}}
+func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "gRPC via server reflection or .proto files"}}
 }
 
 // SynthesizeInterface discovers gRPC services and converts to an OpenBindings interface.

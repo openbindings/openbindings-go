@@ -93,18 +93,18 @@ func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*F
 	}
 
 	combined := CombineSynthesizers(o.synthesizers...)
-	for _, fi := range combined.Formats() {
+	for _, fi := range combined.BindingSpecs() {
 		iface, err := combined.SynthesizeInterface(ctx, &SynthesizeInput{
-			Sources: []SynthesizeSource{{Format: fi.Token, Location: target}},
+			Sources: []SynthesizeSource{{BindingSpec: fi.BindingSpec, Location: target}},
 		})
 		if err != nil {
-			trail = append(trail, fmt.Sprintf("synthesize as %s: %v", fi.Token, err))
+			trail = append(trail, fmt.Sprintf("synthesize as %s: %v", fi.BindingSpec, err))
 			continue
 		}
 		if iface != nil && len(iface.Operations) > 0 {
 			return &FetchedInterface{Interface: iface, Synthesized: true}, nil
 		}
-		trail = append(trail, fmt.Sprintf("synthesize as %s: no operations derived", fi.Token))
+		trail = append(trail, fmt.Sprintf("synthesize as %s: no operations derived", fi.BindingSpec))
 	}
 
 	return nil, fmt.Errorf("could not resolve an OBI from %s:\n  %s\nhint: if the target serves a raw spec (OpenAPI, AsyncAPI, ...), pass the spec document's own URL",

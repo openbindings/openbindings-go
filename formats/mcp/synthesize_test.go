@@ -237,8 +237,8 @@ func TestConvertToInterface_SourceEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := iface.Sources[DefaultSourceName]
-	if src.Format != FormatToken {
-		t.Errorf("format = %q, want %q", src.Format, FormatToken)
+	if src.BindingSpec != BindingSpec {
+		t.Errorf("format = %q, want %q", src.BindingSpec, BindingSpec)
 	}
 	if src.Location != "https://mcp.example.com/sse" {
 		t.Errorf("location = %q, want https://mcp.example.com/sse", src.Location)

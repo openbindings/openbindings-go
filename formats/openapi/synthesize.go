@@ -12,10 +12,12 @@ import (
 )
 
 func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindings.SynthesizerWarning)) openbindings.Interface {
-	formatVersion := openbindings.DetectFormatVersion(doc.OpenAPI)
+	// The schema-dialect translation keys off the artifact's own declared
+	// version (3.0 vs 3.1); the identifier stays exact and version-free.
+	formatVersion := majorMinor(doc.OpenAPI)
 
 	sourceEntry := openbindings.Source{
-		Format: "openapi@" + formatVersion,
+		BindingSpec: BindingSpec,
 	}
 	if location != "" {
 		sourceEntry.Location = location
@@ -508,4 +510,14 @@ func inlineRefsInOperationSchema(schema map[string]any, registry map[string]any)
 		return m
 	}
 	return schema
+}
+
+// majorMinor reduces an artifact version string to its major.minor form
+// ("3.1.0" → "3.1") for dialect decisions.
+func majorMinor(version string) string {
+	parts := strings.SplitN(version, ".", 3)
+	if len(parts) >= 2 {
+		return parts[0] + "." + parts[1]
+	}
+	return version
 }

@@ -106,8 +106,8 @@ func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, conte
 }
 
 // Formats returns the source formats supported by the AsyncAPI invoker.
-func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "AsyncAPI 3.x event-driven APIs"}}
+func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "AsyncAPI 3.x event-driven APIs"}}
 }
 
 // InvokeBinding invokes an AsyncAPI binding, returning the invocation handle
@@ -198,8 +198,8 @@ func NewSynthesizer() *Synthesizer {
 }
 
 // Formats returns the source formats supported by the AsyncAPI synthesizer.
-func (c *Synthesizer) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "AsyncAPI 3.x event-driven APIs"}}
+func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "AsyncAPI 3.x event-driven APIs"}}
 }
 
 // SynthesizeInterface converts an AsyncAPI document to an OpenBindings interface.

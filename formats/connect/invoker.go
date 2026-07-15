@@ -20,7 +20,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-const FormatToken = "connect"
+const BindingSpec = "openbindings.connect@1"
 const DefaultSourceName = "connectServer"
 
 // maxRedirects bounds the redirect chain a single request may follow.
@@ -61,8 +61,8 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 }
 
 // Formats returns the source formats supported by the Connect invoker.
-func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "Connect (Buf) via HTTP"}}
+func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Connect (Buf) via HTTP"}}
 }
 
 var _ openbindings.BindingInvoker = (*Invoker)(nil)
@@ -238,8 +238,8 @@ type Synthesizer struct{}
 func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
 
 // Formats returns the source formats supported by the Connect synthesizer.
-func (c *Synthesizer) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "Connect (Buf) via HTTP"}}
+func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Connect (Buf) via HTTP"}}
 }
 
 // SynthesizeInterface parses a .proto file or inline content and converts to an

@@ -246,7 +246,7 @@ func shortCtx(t *testing.T) context.Context {
 
 func invocationArgs(url, ref string, bindCtx map[string]any) *openbindings.BindingInvocationArgs {
 	return &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: FormatToken, Location: url},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: url},
 		Ref:     ref,
 		Context: bindCtx,
 	}
@@ -290,8 +290,8 @@ func TestIntegration_SynthesizeInterface(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			Format:   FormatToken,
-			Location: ts.URL,
+			BindingSpec: BindingSpec,
+			Location:    ts.URL,
 		}},
 	})
 	if err != nil {

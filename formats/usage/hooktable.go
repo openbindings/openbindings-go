@@ -49,7 +49,7 @@ func (t HookTable) Hooks() (openbindings.OutputDecoder, openbindings.ResultClass
 	}
 
 	decoder := func(site openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
-		if site.FormatName() != "usage" || !decodeJSON[site.Operation] {
+		if site.FamilyName() != "usage" || !decodeJSON[site.Operation] {
 			return nil, openbindings.ErrUseDefault
 		}
 		if len(raw.Body) == 0 {
@@ -67,7 +67,7 @@ func (t HookTable) Hooks() (openbindings.OutputDecoder, openbindings.ResultClass
 	}
 
 	classifier := func(site openbindings.InvokeSite, raw openbindings.RawResult) (bool, error) {
-		if site.FormatName() != "usage" || raw.Status == nil {
+		if site.FamilyName() != "usage" || raw.Status == nil {
 			return false, openbindings.ErrUseDefault
 		}
 		oks, has := t.OKExits[site.Operation]
@@ -78,7 +78,7 @@ func (t HookTable) Hooks() (openbindings.OutputDecoder, openbindings.ResultClass
 	}
 
 	router := func(site openbindings.InvokeSite, field string, _ any) string {
-		if site.FormatName() != "usage" {
+		if site.FamilyName() != "usage" {
 			return ""
 		}
 		routes, has := t.Routes[site.Operation]

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openbindings/openbindings-go/formattoken"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -98,7 +97,7 @@ type OperationInvoker struct {
 	// consumer hooks (the middle precedence tier), consulted by format
 	// invokers through the seam. Set before concurrent use, like the other
 	// fields. Protocol-specific handling lives INSIDE the hook body
-	// (switch on site.FormatName()); decline to fall through.
+	// (switch on site.FamilyName()); decline to fall through.
 	OutputDecoder    OutputDecoder
 	ResultClassifier ResultClassifier
 	FieldRouter      FieldRouter
@@ -134,18 +133,19 @@ func (e *OperationInvoker) WithRuntime(resolver ContextResolver) *OperationInvok
 	return &cp
 }
 
-// Formats returns all formats registered with this invoker. It is an
-// aggregation convenience over the registered binding invokers; the
-// openbindings.operation-invoker interface itself carries no listFormats
-// operation (its format reach is dynamic, e.g. via delegates).
-func (e *OperationInvoker) Formats() []FormatInfo {
-	return e.invoker.Formats()
+// BindingSpecs returns all binding specifications registered with this
+// invoker, by exact identifier. It is an aggregation convenience over the
+// registered binding invokers; the openbindings.operation-invoker interface
+// itself carries no listBindingSpecs operation (its reach is dynamic, e.g.
+// via delegates).
+func (e *OperationInvoker) BindingSpecs() []BindingSpecInfo {
+	return e.invoker.BindingSpecs()
 }
 
-func (e *OperationInvoker) availableFormats() map[string]bool {
+func (e *OperationInvoker) availableBindingSpecs() map[string]bool {
 	m := make(map[string]bool)
-	for _, f := range e.invoker.Formats() {
-		m[f.Token] = true
+	for _, f := range e.invoker.BindingSpecs() {
+		m[f.BindingSpec] = true
 	}
 	return m
 }
@@ -195,14 +195,14 @@ func (e *OperationInvoker) fillBindingArgs(args *BindingInvocationArgs) {
 	}
 	if args.Site == nil {
 		site := &InvokeSite{
-			Format: args.Source.Format,
-			Ref:    args.Ref,
+			BindingSpec: args.Source.BindingSpec,
+			Ref:         args.Ref,
 		}
 		if args.Binding != nil {
 			site.Operation = args.Binding.Operation
 			site.InvokedAs = args.Binding.Operation
 		}
-		if inv := e.invoker.findInvoker(args.Source.Format); inv != nil {
+		if inv := e.invoker.findInvoker(args.Source.BindingSpec); inv != nil {
 			stampSite(site, inv)
 		} else {
 			site.seamStamped = true
@@ -270,7 +270,7 @@ func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindi
 		}
 		bindingKey = pinnedBindingKey
 		binding = &b
-	} else if k, b, ok := selectionOverride(obi, opKey, contextSelectionOverride(callerContext), e.availableFormats()); ok {
+	} else if k, b, ok := selectionOverride(obi, opKey, contextSelectionOverride(callerContext), e.availableBindingSpecs()); ok {
 		// The operation-invoker contract's consumer override
 		// (context.configuration.selection): an ordered list of binding
 		// keys, the first invocable entry winning. It displaces whatever
@@ -282,7 +282,7 @@ func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindi
 		selector := e.BindingSelector
 		if selector == nil {
 			selector = func(iface *Interface, opKey string) (string, *BindingEntry, error) {
-				return selectBinding(iface, opKey, e.availableFormats())
+				return selectBinding(iface, opKey, e.availableBindingSpecs())
 			}
 		}
 		var err error
@@ -326,9 +326,9 @@ func (e *OperationInvoker) PrepareOperation(ctx context.Context, obi *Interface,
 	}
 	return e.PrepareBinding(ctx, &BindingInvocationArgs{
 		Source: InvocationSource{
-			Format:   source.Format,
-			Location: source.Location,
-			Content:  source.Content,
+			BindingSpec: source.BindingSpec,
+			Location:    source.Location,
+			Content:     source.Content,
 		},
 		Ref:         binding.Ref,
 		Binding:     binding,
@@ -385,8 +385,8 @@ func (e *OperationInvoker) run(
 	bindingArgs := func() *BindingInvocationArgs {
 		a := &BindingInvocationArgs{
 			Source: InvocationSource{
-				Format:   source.Format,
-				Location: source.Location,
+				BindingSpec: source.BindingSpec,
+				Location:    source.Location,
 			},
 			Ref:         binding.Ref,
 			Binding:     binding,
@@ -399,13 +399,13 @@ func (e *OperationInvoker) run(
 		}
 		a.Hooks = hooks
 		site := &InvokeSite{
-			Operation:  binding.Operation,
-			InvokedAs:  invokedAs,
-			BindingKey: bindingKey,
-			Format:     source.Format,
-			Ref:        binding.Ref,
+			Operation:   binding.Operation,
+			InvokedAs:   invokedAs,
+			BindingKey:  bindingKey,
+			BindingSpec: source.BindingSpec,
+			Ref:         binding.Ref,
 		}
-		if inv := e.invoker.findInvoker(source.Format); inv != nil {
+		if inv := e.invoker.findInvoker(source.BindingSpec); inv != nil {
 			stampSite(site, inv)
 		} else {
 			site.seamStamped = true
@@ -842,10 +842,10 @@ func wireError(err error) *InvocationError {
 // selectionOverride resolves the operation-invoker contract's
 // context.configuration.selection override: the first listed binding key
 // that is invocable — defined on the interface, targeting the resolved
-// operation, and (when availableFormats is non-nil) governed by a
+// operation, and (when availableSpecs is non-nil) governed by a
 // specification the invoker can act on — wins. ok is false when no listed
 // key is invocable, in which case the selection policy applies.
-func selectionOverride(iface *Interface, opKey string, keys []string, availableFormats map[string]bool) (string, *BindingEntry, bool) {
+func selectionOverride(iface *Interface, opKey string, keys []string, availableSpecs map[string]bool) (string, *BindingEntry, bool) {
 	if iface == nil {
 		return "", nil, false
 	}
@@ -854,8 +854,8 @@ func selectionOverride(iface *Interface, opKey string, keys []string, availableF
 		if !ok || b.Operation != opKey {
 			continue
 		}
-		if availableFormats != nil {
-			if src, ok := iface.Sources[b.Source]; ok && !formatMatches(src.Format, availableFormats) {
+		if availableSpecs != nil {
+			if src, ok := iface.Sources[b.Source]; ok && !availableSpecs[src.BindingSpec] {
 				continue
 			}
 		}
@@ -879,9 +879,9 @@ func DefaultBindingSelector(iface *Interface, opKey string) (string, *BindingEnt
 }
 
 // selectBinding is the internal implementation of binding selection. When
-// availableFormats is non-nil, bindings whose source format is not in the set
-// are skipped.
-func selectBinding(iface *Interface, opKey string, availableFormats map[string]bool) (string, *BindingEntry, error) {
+// availableSpecs is non-nil, bindings whose governing binding specification
+// is not in the set (by exact identifier) are skipped.
+func selectBinding(iface *Interface, opKey string, availableSpecs map[string]bool) (string, *BindingEntry, error) {
 	if iface == nil || len(iface.Bindings) == 0 {
 		return "", nil, fmt.Errorf("%w: %s", ErrBindingNotFound, opKey)
 	}
@@ -892,11 +892,12 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 	bestDeclared := false
 	bestDeprecated := true
 	// Bindings that matched the operation but were skipped because no
-	// registered invoker handles their source format. The distinction is
-	// load-bearing for the error: "the document has no binding" sends the
-	// user to audit the OBI; "the binding needs a format you didn't
-	// register" sends them to their own NewOperationInvoker call.
-	formatSkipped := map[string]string{} // binding key -> required format
+	// registered invoker handles their governing binding specification. The
+	// distinction is load-bearing for the error: "the document has no
+	// binding" sends the user to audit the OBI; "the binding needs a spec
+	// you didn't register" sends them to their own NewOperationInvoker
+	// call.
+	specSkipped := map[string]string{} // binding key -> required binding spec
 
 	for k, b := range iface.Bindings {
 		if b.Operation != opKey {
@@ -904,10 +905,10 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 		}
 
 		// Skip bindings whose source format the invoker can't handle.
-		if availableFormats != nil {
+		if availableSpecs != nil {
 			src, ok := iface.Sources[b.Source]
-			if ok && !formatMatches(src.Format, availableFormats) {
-				formatSkipped[k] = src.Format
+			if ok && !availableSpecs[src.BindingSpec] {
+				specSkipped[k] = src.BindingSpec
 				continue
 			}
 		}
@@ -937,22 +938,22 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 	}
 
 	if best == nil {
-		if len(formatSkipped) > 0 {
-			keys := make([]string, 0, len(formatSkipped))
-			for k := range formatSkipped {
+		if len(specSkipped) > 0 {
+			keys := make([]string, 0, len(specSkipped))
+			for k := range specSkipped {
 				keys = append(keys, k)
 			}
 			sort.Strings(keys)
 			var needs []string
 			for _, k := range keys {
-				needs = append(needs, fmt.Sprintf("%q requires format %s", k, formatSkipped[k]))
+				needs = append(needs, fmt.Sprintf("%q requires binding spec %s", k, specSkipped[k]))
 			}
-			registered := make([]string, 0, len(availableFormats))
-			for f := range availableFormats {
+			registered := make([]string, 0, len(availableSpecs))
+			for f := range availableSpecs {
 				registered = append(registered, f)
 			}
 			sort.Strings(registered)
-			return "", nil, fmt.Errorf("%w: %s — binding %s; registered invoker formats: [%s] (did you register the format's invoker with NewOperationInvoker?)",
+			return "", nil, fmt.Errorf("%w: %s — binding %s; registered binding specs: [%s] (did you register the spec's invoker with NewOperationInvoker?)",
 				ErrBindingNotFound, opKey, strings.Join(needs, ", "), strings.Join(registered, ", "))
 		}
 		return "", nil, fmt.Errorf("%w: %s", ErrBindingNotFound, opKey)
@@ -960,32 +961,19 @@ func selectBinding(iface *Interface, opKey string, availableFormats map[string]b
 	return bestKey, best, nil
 }
 
-// formatMatches checks whether a source format token satisfies one of the
-// invoker-advertised format tokens/ranges.
-func formatMatches(sourceFormat string, available map[string]bool) bool {
-	if available[sourceFormat] {
-		return true
+// familyName extracts the lowercase family name from a binding-specification
+// identifier ("openbindings.openapi@1" → "openapi"). Identifiers themselves
+// stay exact and opaque for matching (core §6); this is a display/dispatch
+// convenience only. A pre-promotion draft token ("graphql") passes through.
+func familyName(identifier string) string {
+	name := strings.TrimSpace(identifier)
+	if at := strings.LastIndexByte(name, '@'); at > 0 {
+		name = name[:at]
 	}
-	for f := range available {
-		vr, err := formattoken.ParseRange(f)
-		if err != nil {
-			continue
-		}
-		if formattoken.Matches(vr, sourceFormat) {
-			return true
-		}
+	if rest, ok := strings.CutPrefix(name, "openbindings."); ok {
+		name = rest
 	}
-	return false
-}
-
-// formatName extracts the lowercase name portion from a format token ("openapi@3.1" → "openapi").
-func formatName(token string) string {
-	token = strings.TrimSpace(token)
-	at := strings.LastIndexByte(token, '@')
-	if at <= 0 {
-		return strings.ToLower(token)
-	}
-	return strings.ToLower(token[:at])
+	return strings.ToLower(name)
 }
 
 // applyTransformRef resolves a TransformOrRef and evaluates it.
@@ -1026,10 +1014,10 @@ func (e *OperationInvoker) PlanOperation(ctx context.Context, obi *Interface, op
 	}
 
 	plan := &InvocationPlan{
-		Operation:  binding.Operation,
-		BindingKey: bindingKey,
-		Format:     source.Format,
-		Ref:        binding.Ref,
+		Operation:   binding.Operation,
+		BindingKey:  bindingKey,
+		BindingSpec: source.BindingSpec,
+		Ref:         binding.Ref,
 	}
 
 	// The format's contribution: axis leaves + per-field route answers.
@@ -1039,11 +1027,11 @@ func (e *OperationInvoker) PlanOperation(ctx context.Context, obi *Interface, op
 	// never claims a hook will run where the format ignores the seam.
 	var contrib *BindingPlan
 	consultsSeam := false
-	if inv := e.invoker.findInvoker(source.Format); inv != nil {
+	if inv := e.invoker.findInvoker(source.BindingSpec); inv != nil {
 		if p, ok := inv.(BuiltinHooksProvider); ok {
 			consultsSeam = true
 			args := &BindingInvocationArgs{
-				Source: InvocationSource{Format: source.Format, Location: source.Location},
+				Source: InvocationSource{BindingSpec: source.BindingSpec, Location: source.Location},
 				Ref:    binding.Ref,
 			}
 			if source.Content != nil {

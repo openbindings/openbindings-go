@@ -132,8 +132,8 @@ service TestService {
 	if !ok {
 		t.Fatal("expected source entry")
 	}
-	if src.Format != FormatToken {
-		t.Errorf("format = %q, want %q", src.Format, FormatToken)
+	if src.BindingSpec != BindingSpec {
+		t.Errorf("format = %q, want %q", src.BindingSpec, BindingSpec)
 	}
 	if src.Location != "http://api.example.com" {
 		t.Errorf("location = %q, want %q", src.Location, "http://api.example.com")
@@ -533,7 +533,7 @@ service TestService {
 	var warnings []openbindings.SynthesizerWarning
 	c := NewSynthesizer()
 	_, err := c.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{Format: FormatToken, Content: proto}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: proto}},
 		OnWarning: func(w openbindings.SynthesizerWarning) {
 			warnings = append(warnings, w)
 		},

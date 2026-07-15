@@ -50,9 +50,9 @@ func testContext(t *testing.T) context.Context {
 func unaryArgs(location string, content any, ref string) *openbindings.BindingInvocationArgs {
 	return &openbindings.BindingInvocationArgs{
 		Source: openbindings.InvocationSource{
-			Format:   FormatToken,
-			Location: location,
-			Content:  content,
+			BindingSpec: BindingSpec,
+			Location:    location,
+			Content:     content,
 		},
 		Ref: ref,
 	}
@@ -321,7 +321,7 @@ message PingMsg { string msg = 1; }
 	// must be the embedded-content-aware variant, distinct from the
 	// no-content-at-all message.
 	h := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: proto},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: proto},
 		Ref:    "tiny.Tiny/Ping",
 	})
 	ierr := mustTerminalError(t, ctx, h, openbindings.ErrCodeSourceConfigError)
@@ -335,7 +335,7 @@ message PingMsg { string msg = 1; }
 	// the config gate (failing later at the unreachable endpoint, not at
 	// configuration).
 	h2 := invokeWith(t, ctx, invoker, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: FormatToken, Content: proto},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: proto},
 		Ref:     "tiny.Tiny/Ping",
 		Context: map[string]any{"metadata": map[string]any{"baseURL": "http://127.0.0.1:1"}},
 	}, map[string]any{"msg": "hi"})

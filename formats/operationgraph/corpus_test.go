@@ -102,8 +102,8 @@ type mockBindingInvoker struct {
 	ops map[string]*mockOp
 }
 
-func (m *mockBindingInvoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: mockFormat}}
+func (m *mockBindingInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: mockFormat}}
 }
 
 func (m *mockBindingInvoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
@@ -332,7 +332,7 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]openbindings.Operation{},
 		Sources: map[string]openbindings.Source{
-			"mock": {Format: mockFormat, Content: map[string]any{}},
+			"mock": {BindingSpec: mockFormat, Content: map[string]any{}},
 		},
 		Bindings: map[string]openbindings.BindingEntry{},
 	}
@@ -352,7 +352,7 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 	doc := map[string]any{"graphs": map[string]any{"g": graphValue}}
 
 	call := opInvoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:    openbindings.InvocationSource{Format: FormatToken, Content: doc},
+		Source:    openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
 		Ref:       "#/graphs/g",
 		Interface: iface,
 	})

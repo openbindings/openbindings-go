@@ -260,7 +260,7 @@ func drainInvocation(t *testing.T, inv openbindings.Invocation[any, any]) ([]any
 
 func bufconnArgs(ref string, bindCtx map[string]any) *openbindings.BindingInvocationArgs {
 	return &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: FormatToken, Location: "bufconn"},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "bufconn"},
 		Ref:     ref,
 		Context: bindCtx,
 	}
@@ -319,8 +319,8 @@ func TestIntegration_SynthesizeInterface_FromReflection(t *testing.T) {
 	if _, ok := iface.Operations["WatchItems"]; !ok {
 		t.Error("expected operation WatchItems")
 	}
-	if iface.Sources[DefaultSourceName].Format != FormatToken {
-		t.Errorf("format = %q, want %q", iface.Sources[DefaultSourceName].Format, FormatToken)
+	if iface.Sources[DefaultSourceName].BindingSpec != BindingSpec {
+		t.Errorf("format = %q, want %q", iface.Sources[DefaultSourceName].BindingSpec, BindingSpec)
 	}
 }
 
@@ -347,7 +347,7 @@ service ItemService {
 	synthesizer := NewSynthesizer()
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{
-			{Format: FormatToken, Location: "localhost:50051", Content: proto},
+			{BindingSpec: BindingSpec, Location: "localhost:50051", Content: proto},
 		},
 	})
 	if err != nil {
@@ -370,8 +370,8 @@ service ItemService {
 	if !ok {
 		t.Fatalf("expected source %q", DefaultSourceName)
 	}
-	if src.Format != FormatToken {
-		t.Errorf("source format = %q, want %q", src.Format, FormatToken)
+	if src.BindingSpec != BindingSpec {
+		t.Errorf("source format = %q, want %q", src.BindingSpec, BindingSpec)
 	}
 	if src.Location != "localhost:50051" {
 		t.Errorf("source location = %q, want %q", src.Location, "localhost:50051")
@@ -641,7 +641,7 @@ func TestIntegration_MissingLocation(t *testing.T) {
 	defer invoker.Close()
 
 	inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec},
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 
@@ -708,7 +708,7 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 
 	ctx := testCtx(t)
 	inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Location: "passthrough:///bufconn:443"},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "passthrough:///bufconn:443"},
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "i1"}); err != nil {
@@ -730,7 +730,7 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 	ctl, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	inv2 := autoTLS.InvokeBinding(ctl, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Location: "passthrough:///bufconn:443"},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "passthrough:///bufconn:443"},
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 	_ = inv2.Write(ctl, map[string]any{"id": "i1"})

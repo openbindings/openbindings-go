@@ -2,8 +2,8 @@ package openbindings
 
 import "context"
 
-// BindingInvoker invokes bindings against format-specific sources.
-// Implementations handle a specific binding format (e.g., OpenAPI, gRPC, MCP).
+// BindingInvoker invokes bindings whose sources are governed by specific
+// binding specifications (e.g., openbindings.openapi@1, openbindings.mcp@1).
 //
 // InvokeBinding returns the Invocation handle synchronously; creation is
 // inert (no I/O during construction). The binding's work is scheduled on its
@@ -17,7 +17,7 @@ import "context"
 // A concrete invoker may also implement InterfaceSynthesizer, SourceInspector,
 // or BindingPreparer; check via type assertion.
 type BindingInvoker interface {
-	Formats() []FormatInfo
+	BindingSpecs() []BindingSpecInfo
 	InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any]
 }
 
@@ -32,18 +32,19 @@ type BindingPreparer interface {
 	PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error)
 }
 
-// InterfaceSynthesizer synthesizes OpenBindings interfaces from format-specific sources.
+// InterfaceSynthesizer synthesizes OpenBindings interfaces from sources
+// governed by its supported binding specifications.
 // Independent of BindingInvoker — an implementation may provide one, the other, or both.
 // Synthesizers load sources fresh on every call; parsed-artifact caching belongs
 // to invokers (authoring wants freshness).
 type InterfaceSynthesizer interface {
-	Formats() []FormatInfo
+	BindingSpecs() []BindingSpecInfo
 	SynthesizeInterface(ctx context.Context, in *SynthesizeInput) (*Interface, error)
 }
 
-// SourceInspector inspects format-specific sources and returns bindable
-// targets that tooling can frame as OpenBindings operations.
+// SourceInspector inspects sources and returns bindable targets that
+// tooling can frame as OpenBindings operations.
 type SourceInspector interface {
-	Formats() []FormatInfo
+	BindingSpecs() []BindingSpecInfo
 	InspectSource(ctx context.Context, source *Source) (*SourceInspection, error)
 }

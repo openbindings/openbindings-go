@@ -6,6 +6,7 @@ package openbindings
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -40,12 +41,12 @@ type mockBindingInvoker struct {
 	contexts []map[string]any
 }
 
-func (m *mockBindingInvoker) Formats() []FormatInfo {
+func (m *mockBindingInvoker) BindingSpecs() []BindingSpecInfo {
 	tok := m.opts.token
 	if tok == "" {
 		tok = "mock@1.0"
 	}
-	return []FormatInfo{{Token: tok}}
+	return []BindingSpecInfo{{BindingSpec: tok}}
 }
 
 func (m *mockBindingInvoker) snapshot() (attempts, prepares int, reads [][]any, contexts []map[string]any) {
@@ -294,7 +295,7 @@ func opTestInterface() *Interface {
 			"uploadChunks": {},
 		},
 		Sources: map[string]Source{
-			"mock": {Format: "mock@1.0", Location: "mem://mock"},
+			"mock": {BindingSpec: "mock@1.0", Location: "mem://mock"},
 		},
 		Bindings: map[string]BindingEntry{
 			"ping.main":    {Operation: "ping", Source: "mock", Ref: "ping"},
@@ -394,7 +395,7 @@ func TestOpWiringErrorsAreErroredHandles(t *testing.T) {
 	t.Run("no invoker for format", func(t *testing.T) {
 		iface := opTestInterface()
 		src := iface.Sources["mock"]
-		src.Format = "absent@1.0"
+		src.BindingSpec = "absent@1.0"
 		iface.Sources["mock"] = src
 		call := Invoke(bg(), op, iface, NewOperationSignature[any, any]("ping"), WithBindingKey("ping.main"))
 		_, err := drainOutputs(t, call)
@@ -911,14 +912,14 @@ func TestSelectBinding_FormatSkippedNamesTheGap(t *testing.T) {
 	iface := &Interface{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"listItems": {}},
-		Sources:      map[string]Source{"api": {Format: "openapi@3.1.0", Location: "https://x.test/spec.json"}},
+		Sources:      map[string]Source{"api": {BindingSpec: "openapi@3.1.0", Location: "https://x.test/spec.json"}},
 		Bindings:     map[string]BindingEntry{"listItems.api": {Operation: "listItems", Source: "api", Ref: "#/paths/~1items/get"}},
 	}
 	_, _, err := selectBinding(iface, "listItems", map[string]bool{"mock@1.0": true})
 	if !errors.Is(err, ErrBindingNotFound) {
 		t.Fatalf("want ErrBindingNotFound, got %v", err)
 	}
-	for _, want := range []string{"listItems.api", "openapi@3.1.0", "mock@1.0", "register the format's invoker"} {
+	for _, want := range []string{"listItems.api", "openapi@3.1.0", "mock@1.0", "register the spec's invoker"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error should mention %q, got: %v", want, err)
 		}
@@ -939,8 +940,8 @@ func selectionTestInterface() *Interface {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"op": {}},
 		Sources: map[string]Source{
-			"a": {Format: "mock@1.0", Location: "https://a.test"},
-			"b": {Format: "mock@1.0", Location: "https://b.test"},
+			"a": {BindingSpec: "mock@1.0", Location: "https://a.test"},
+			"b": {BindingSpec: "mock@1.0", Location: "https://b.test"},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.declared":    {Operation: "op", Source: "a", Ref: "r1", Preference: pf(-5)},
@@ -976,16 +977,32 @@ func TestSelectBinding_UndeclaredRanksBelowAllDeclared(t *testing.T) {
 	}
 }
 
-// The core defines no source-level preference: nothing is inherited from a
-// binding's source, and an undeclared binding preference stays undeclared.
+// The core defines no source-level preference: the model no longer carries
+// the field at all, so a document written with the retired vocabulary
+// parses with it as an unknown field and selection structurally cannot
+// consult it.
 func TestSelectBinding_NoSourcePreferenceInheritance(t *testing.T) {
-	iface := selectionTestInterface()
-	// A source-level preference (retired core vocabulary) must be inert:
-	// op.undeclared's source declaring 100 must not outrank op.declared's -5.
-	src := iface.Sources["b"]
-	src.Preference = pf(100)
-	iface.Sources["b"] = src
-	key, _, err := selectBinding(iface, "op", nil)
+	doc := `{
+		"openbindings": "0.2.0",
+		"operations": {"op": {}},
+		"sources": {
+			"a": {"bindingSpec": "mock@1.0", "location": "https://a.test"},
+			"b": {"bindingSpec": "mock@1.0", "location": "https://b.test", "preference": 100}
+		},
+		"bindings": {
+			"op.declared":   {"operation": "op", "source": "a", "ref": "r1", "preference": -5},
+			"op.undeclared": {"operation": "op", "source": "b", "ref": "r2"}
+		}
+	}`
+	var iface Interface
+	if err := json.Unmarshal([]byte(doc), &iface); err != nil {
+		t.Fatal(err)
+	}
+	// The retired key survives losslessly but is not model surface.
+	if _, isModel := iface.Sources["b"].Unknown["preference"]; !isModel {
+		t.Fatal("retired source preference should land in Unknown")
+	}
+	key, _, err := selectBinding(&iface, "op", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1085,7 +1102,7 @@ func TestPlanOperation_NonSeamFormatReportsNotConsulted(t *testing.T) {
 	iface := &Interface{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{"op": {}},
-		Sources:      map[string]Source{"s": {Format: "mock@1.0", Location: "mem://x"}},
+		Sources:      map[string]Source{"s": {BindingSpec: "mock@1.0", Location: "mem://x"}},
 		Bindings:     map[string]BindingEntry{"op.s": {Operation: "op", Source: "s", Ref: "op"}},
 	}
 	opInv := NewOperationInvoker(&mockBindingInvoker{}) // no BuiltinHooksProvider

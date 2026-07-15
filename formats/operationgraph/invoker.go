@@ -14,8 +14,8 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// FormatToken identifies this package as an operation graph handler.
-const FormatToken = "openbindings.operation-graph@0.2.0"
+// BindingSpec identifies this package as an operation graph handler.
+const BindingSpec = "openbindings.operation-graph@1"
 
 // Invoker handles binding invocation for operation graph sources.
 //
@@ -73,8 +73,8 @@ func NewInvokerWithClient(invoker *openbindings.OperationInvoker, client *http.C
 const maxGraphDocBytes = 8 << 20 // 8 MiB
 
 // Formats returns the binding format tokens this invoker supports.
-func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "OpenBindings operation graphs"}}
+func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenBindings operation graphs"}}
 }
 
 // InvokeBinding invokes an operation graph binding. The handle is returned
