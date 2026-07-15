@@ -2,7 +2,6 @@ package usage
 
 import (
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -40,56 +39,37 @@ func synthesizeFromArtifactText(text string) (openbindings.Interface, error) {
 // emittableAsLocation.
 func absolutizeArtifactLocation(location string, content any) (string, error) {
 	if content != nil || location == "" ||
-		strings.HasPrefix(location, "exec:") || strings.Contains(location, "://") ||
-		filepath.IsAbs(location) {
+		strings.HasPrefix(location, "exec:") || strings.Contains(location, "://") {
 		return location, nil
 	}
-	abs, err := filepath.Abs(location)
-	if err != nil {
-		return "", fmt.Errorf("resolve usage artifact path: %w", err)
+	// A bare filesystem path is authoring-time operator convenience: it
+	// becomes the file:// document address the strict loader accepts
+	// (USAGE-D-02 — one loader for every lane, no bare-path lane).
+	abs := location
+	if !filepath.IsAbs(location) {
+		var err error
+		abs, err = filepath.Abs(location)
+		if err != nil {
+			return "", fmt.Errorf("resolve usage artifact path: %w", err)
+		}
 	}
-	return abs, nil
+	return "file://" + abs, nil
 }
 
 // emittableAsLocation is the authoring-side EMISSION rule: it reports
-// whether an intake location survives the core validator's OBI-D-05
-// location rule and so may ride a synthesized document's `location`
-// verbatim. Only an exec: locator that is a well-formed URI qualifies — a
-// locator with arguments contains spaces, which RFC 3986 forbids (the
-// conformant reference form for spaced locators is a recorded open point
-// in the conventions doc, deliberately not invented here). A local file
-// path is a relative reference under OBI-D-05 no matter how absolute the
-// filesystem considers it. Everything non-emittable takes the project's
-// embed-default lane: the artifact rides as content and the machine-
-// coupled path stays out of the document entirely.
+// whether an intake location may ride a synthesized document's `location`
+// verbatim. Exec addresses qualify per USAGE-D-02's own grammar (a
+// bindingSpec-defined absolute address — spaces and all; the old
+// URI-only restriction predates the promotion). http(s) document
+// addresses qualify as absolute URIs. file:// stays on the project's
+// embed-default lane: conformant but machine-coupled, so the artifact
+// rides as content and the local path stays out of the document.
 func emittableAsLocation(location string) bool {
-	if !strings.HasPrefix(location, "exec:") {
-		return false
+	if strings.HasPrefix(location, "exec:") {
+		_, err := ParseExecAddress(location)
+		return err == nil
 	}
-	return isWellFormedURI(location)
-}
-
-// isWellFormedURI mirrors the core validator's OBI-D-05 character screen
-// (validate.go screenURIChars: RFC 3986 unreserved + reserved characters
-// with well-formed percent-encoding) followed by the structural parse. The
-// core screen is unexported; the emission tests pin lockstep by asserting
-// every emitted document passes Interface.Validate.
-func isWellFormedURI(raw string) bool {
-	for i := 0; i < len(raw); i++ {
-		c := raw[i]
-		if c == '%' {
-			if i+2 >= len(raw) || !isHexByte(raw[i+1]) || !isHexByte(raw[i+2]) {
-				return false
-			}
-			i += 2
-			continue
-		}
-		if !uriRefAllowedChars[c] {
-			return false
-		}
-	}
-	_, err := url.Parse(raw)
-	return err == nil
+	return strings.HasPrefix(location, "http://") || strings.HasPrefix(location, "https://")
 }
 
 func isHexByte(c byte) bool {
