@@ -588,6 +588,71 @@ func TestOpT08ValidatesAfterTransform(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// OBI-T-16 — claim semantics: unresolvable graph is distinct from mismatch;
+// `format` is an annotation, never an assertion
+// ---------------------------------------------------------------------------
+
+// An unresolvable governing schema graph means the claim could not be
+// EVALUATED: ERR_SCHEMA_UNRESOLVED, distinct from a value mismatch, never
+// partial validation.
+func TestOpT16UnresolvableOutputGraphIsSchemaUnresolved(t *testing.T) {
+	iface := opTestInterface()
+	op := iface.Operations["watchTyped"]
+	op.Output = JSONSchema{"$ref": "#/schemas/DoesNotExist"}
+	iface.Operations["watchTyped"] = op
+
+	inv := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := Invoke(bg(), inv, iface, NewOperationSignature[any, any]("watchTyped"))
+	vals, err := drainOutputs(t, call)
+	if len(vals) != 0 {
+		t.Fatalf("nothing may emit under an unestablished graph, got %v", vals)
+	}
+	if codeOf(t, err) != ErrCodeSchemaUnresolved {
+		t.Fatalf("expected ERR_SCHEMA_UNRESOLVED, got %v", err)
+	}
+}
+
+func TestOpT16UnresolvableInputGraphIsSchemaUnresolved(t *testing.T) {
+	iface := opTestInterface()
+	op := iface.Operations["getUser"]
+	op.Input = JSONSchema{"$ref": "#/schemas/DoesNotExist"}
+	iface.Operations["getUser"] = op
+
+	inv := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := Invoke(bg(), inv, iface, NewOperationSignature[any, any]("getUser"))
+	err := call.Write(bg(), map[string]any{"id": "u1"})
+	if codeOf(t, err) != ErrCodeSchemaUnresolved {
+		t.Fatalf("expected ERR_SCHEMA_UNRESOLVED on write, got %v", err)
+	}
+}
+
+// The `format` keyword is an annotation under the core's claim semantics:
+// a value that fails the named format still validates.
+func TestOpT16FormatIsAnnotationNotAssertion(t *testing.T) {
+	iface := opTestInterface()
+	op := iface.Operations["getUser"]
+	op.Input = JSONSchema{
+		"type":       "object",
+		"properties": map[string]any{"id": map[string]any{"type": "string", "format": "email"}},
+		"required":   []any{"id"},
+	}
+	iface.Operations["getUser"] = op
+
+	inv := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := Invoke(bg(), inv, iface, NewOperationSignature[any, any]("getUser"))
+	if err := call.Write(bg(), map[string]any{"id": "not-an-email"}); err != nil {
+		t.Fatalf("format must annotate, never assert: %v", err)
+	}
+	v, err := Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.(map[string]any)["name"] != "Ada" {
+		t.Fatalf("got %v", v)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // CONTEXT_REQUIRED negotiation
 // ---------------------------------------------------------------------------
 

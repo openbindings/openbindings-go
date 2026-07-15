@@ -65,15 +65,19 @@ type ContextResolver func(ctx context.Context, details *ContextRequiredDetails) 
 // context.configuration.selection) and returns a cardinality-agnostic
 // Invocation handle.
 //
-// Between the caller and the binding it enforces the operation contract:
-//   - OBI-T-07: every caller input validates against the operation's input
-//     schema BEFORE the input transform; a failure is terminal and rejects
-//     the offending Write with the same error.
-//   - inputTransform / outputTransform evaluate per message (JSONata 2.0).
-//   - OBI-T-08: each (transformed) output validates against the output
-//     schema before it is emitted; a failure is terminal and the value is
-//     not emitted. Callers that need to inspect unvalidated payloads call
-//     InvokeBinding directly.
+// Between the caller and the binding it enforces the operation contract
+// (validation carries the core's claim semantics, OBI-T-16: complete
+// statically reachable schema graph, `format` as annotation, per value;
+// a mismatch is ERR_VALIDATION_FAILED, an unresolvable governing graph is
+// ERR_SCHEMA_UNRESOLVED, never partial validation):
+//   - every caller input validates against the operation's input schema
+//     BEFORE the input transform; a failure is terminal and rejects the
+//     offending Write with the same error.
+//   - inputTransform / outputTransform evaluate per message (JSONata 2.1).
+//   - each (transformed) output validates against the output schema before
+//     it is emitted; a failure is terminal and the value is not emitted.
+//     Callers that need to inspect unvalidated payloads call InvokeBinding
+//     directly.
 //   - CONTEXT_REQUIRED negotiation: challenges raised by the binding before
 //     any input was consumed are resolved via ContextResolver and the
 //     binding is re-driven against the same input buffer (the
@@ -358,15 +362,19 @@ func (e *OperationInvoker) run(
 		return
 	}
 
-	// OBI-T-08: compile the output schema once per invocation.
+	// Compile the output schema once per invocation, over the complete
+	// statically reachable schema graph (every document schema rides as
+	// $defs). A graph that cannot be established is ERR_SCHEMA_UNRESOLVED —
+	// the claim could not be evaluated — never partial validation
+	// (OBI-T-16).
 	var compiledOutput *jsonschema.Schema
 	if op.Output != nil {
 		defs := buildSchemaDefs(iface.Schemas)
 		compiled, err := compileExampleSchema(op.Output, defs)
 		if err != nil {
 			caller.FireError(&InvocationError{
-				Code:    ErrCodeValidationFailed,
-				Message: fmt.Sprintf("openbindings: output schema compilation failed for %q: %v", bindingKey, err),
+				Code:    ErrCodeSchemaUnresolved,
+				Message: fmt.Sprintf("openbindings: output schema graph for %q could not be established: %v", bindingKey, err),
 			})
 			return
 		}
@@ -756,8 +764,12 @@ func (e *OperationInvoker) resolveContext(ctx context.Context, details *ContextR
 	return resolved, nil
 }
 
-// makeInputValidator builds the OBI-T-07 write-validation hook for an
-// operation, compiling lazily on the first write (concurrency-safe).
+// makeInputValidator builds the write-validation hook for an operation,
+// compiling lazily on the first write (concurrency-safe). Validation
+// carries the core's claim semantics (OBI-T-16): the complete statically
+// reachable schema graph, `format` as annotation, applied per value — a
+// mismatch is ERR_VALIDATION_FAILED; a graph that cannot be established is
+// ERR_SCHEMA_UNRESOLVED, never partial validation.
 func makeInputValidator(op *Operation, iface *Interface, operationName string) func(any) *InvocationError {
 	if op.Input == nil {
 		return nil
@@ -773,8 +785,8 @@ func makeInputValidator(op *Operation, iface *Interface, operationName string) f
 			c, err := compileExampleSchema(op.Input, defs)
 			if err != nil {
 				compileError = &InvocationError{
-					Code:    ErrCodeValidationFailed,
-					Message: fmt.Sprintf("openbindings: input schema compilation failed for %q: %v", operationName, err),
+					Code:    ErrCodeSchemaUnresolved,
+					Message: fmt.Sprintf("openbindings: input schema graph for %q could not be established: %v", operationName, err),
 				}
 				return
 			}

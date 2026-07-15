@@ -349,7 +349,7 @@ type InvocationImpl[I, O any] struct {
 	// AFTER a racing terminal and strand an "accepted" value.
 	pendingEmits atomic.Int32
 
-	// validateInput is the OBI-T-07 hook installed by the operation layer:
+	// validateInput is the input-validation hook installed by the operation layer (OBI-T-16 claim semantics):
 	// a returned error is terminal AND rejects the offending Write with the
 	// same *InvocationError (the binding never sees the message).
 	validateInput func(I) *InvocationError
@@ -407,7 +407,7 @@ func (i *InvocationImpl[I, O]) Write(ctx context.Context, input I) error {
 	}
 	if i.validateInput != nil {
 		if verr := i.validateInput(input); verr != nil {
-			// OBI-T-07 dual signal: terminal AND the offending write rejects
+			// Input-validation dual signal: terminal AND the offending write rejects
 			// with the same error. The binding never sees the message.
 			i.FireError(verr)
 			return verr
@@ -828,10 +828,10 @@ func Single[O any](ctx context.Context, out OutputStream[O]) (O, error) {
 // and output types. Codegen emits one TypedInvocation-returning method per
 // OBI operation. Each raw output is decoded into O at the typed boundary: a
 // direct type assertion first (zero-cost when the binding emitted a concrete
-// O), then a JSON round-trip (the OBI-T-08-validated outputs of the operation
+// O), then a JSON round-trip (the schema-validated outputs of the operation
 // layer are generic maps). On a decode failure Read returns a zero O and a
 // terminal ERR_TYPE_MISMATCH; it never panics — so the `O` a typed invoker
-// hands out is a guarantee backed by T-08 plus a checked decode, not an IOU.
+// hands out is a guarantee backed by output validation (OBI-T-16) plus a checked decode, not an IOU.
 type TypedInvocation[I, O any] struct {
 	inner Invocation[any, any]
 }
@@ -843,7 +843,7 @@ func NewTypedInvocation[I, O any](inner Invocation[any, any]) *TypedInvocation[I
 
 func (t *TypedInvocation[I, O]) Write(ctx context.Context, input I) error {
 	// Encode at the typed boundary, symmetric with the output decode:
-	// OBI-T-07 validation and format invokers operate on generic JSON values
+	// Input validation and format invokers operate on generic JSON values
 	// (maps/slices/primitives), not Go structs. For the untyped flavor (I = any)
 	// this normalizes the value through JSON (e.g. int -> float64), so a caller
 	// driving an [any, any] handle must hand it generic-JSON-shaped input; a

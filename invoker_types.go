@@ -204,7 +204,7 @@ type InvocationError struct {
 	Details any    `json:"details,omitempty"`
 }
 
-// ValidationFailure is a single OBI-T-07/T-08 schema-validation failure
+// ValidationFailure is a single schema-validation failure (OBI-T-16 claim semantics)
 // in a stable, validator-agnostic shape. When validation produces multiple
 // failures (e.g., several fields violating the schema), each one appears
 // as a separate ValidationFailure in InvocationError.Details.Failures.
@@ -219,7 +219,7 @@ type ValidationFailure struct {
 }
 
 // ValidationFailureDetails is the typed shape of InvocationError.Details
-// for OBI-T-07 / OBI-T-08 validation failures.
+// for input/output validation failures (OBI-T-16).
 type ValidationFailureDetails struct {
 	Failures []ValidationFailure `json:"failures"`
 }

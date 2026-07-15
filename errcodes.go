@@ -129,9 +129,19 @@ const (
 	// ErrCodeTransformError indicates a transform evaluation failed.
 	ErrCodeTransformError = "ERR_TRANSFORM_ERROR"
 
-	// ErrCodeValidationFailed indicates input (OBI-T-07) or output (OBI-T-08)
-	// schema validation failed, or graph validation failed before execution.
+	// ErrCodeValidationFailed indicates a value failed validation against
+	// the operation's declared input or output schema — a validation claim
+	// evaluated per the core's claim semantics (OBI-T-16) and found FALSE.
+	// Also used for graph validation failing before execution.
 	ErrCodeValidationFailed = "ERR_VALIDATION_FAILED"
+
+	// ErrCodeSchemaUnresolved indicates the governing schema graph could not
+	// be established (an unresolvable $ref, or a schema that will not
+	// compile), so the validation claim could not be EVALUATED at all —
+	// reported distinctly from a value mismatch and never papered over with
+	// partial validation (OBI-T-16; the openbindings.operation-invoker
+	// contract names this convention code).
+	ErrCodeSchemaUnresolved = "ERR_SCHEMA_UNRESOLVED"
 
 	// ErrCodeRuntime indicates a generic runtime failure inside a binding
 	// implementation.
