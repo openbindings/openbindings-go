@@ -22,7 +22,7 @@ func TestResolveRefs_SchemaRefInPayload(t *testing.T) {
 		},
 		Operations: map[string]asyncOperation{
 			"receiveEvent": {
-				Action:  "receive",
+				Action:  "send",
 				Channel: channelRef{Ref: "#/channels/events"},
 			},
 		},
@@ -82,7 +82,7 @@ func TestResolveRefs_MessageRefInChannel(t *testing.T) {
 		},
 		Operations: map[string]asyncOperation{
 			"receiveEvent": {
-				Action:  "receive",
+				Action:  "send",
 				Channel: channelRef{Ref: "#/channels/events"},
 				Messages: []messageRef{
 					{Ref: "#/channels/events/messages/UserEvent"},
@@ -295,7 +295,7 @@ func TestResolveRefs_EndToEnd_SynthesizeInterface(t *testing.T) {
 		},
 		Operations: map[string]asyncOperation{
 			"receiveEvent": {
-				Action:  "receive",
+				Action:  "send",
 				Channel: channelRef{Ref: "#/channels/events"},
 				Messages: []messageRef{
 					{Ref: "#/components/messages/MyEvent"},

@@ -115,12 +115,14 @@ func (e *Invoker) Formats() []openbindings.FormatInfo {
 // goroutine and every pre-dispatch failure (bad ref, missing server,
 // CONTEXT_REQUIRED) is raised before any observable side effect.
 //
-// Channel-to-handle mapping:
-//   - send + http/https: unary POST (first input -> body, response -> output)
-//   - send + ws/wss: client-streaming publish (each input -> one frame)
-//   - receive + http/https: SSE subscribe (server events -> outputs)
-//   - receive + ws/wss: WebSocket subscribe, bidi-capable (frames -> outputs,
-//     caller inputs -> control frames)
+// Cell-to-handle mapping (complementary perspective, ASYNC-P-02: the
+// artifact describes the application; invoking `send` subscribes, invoking
+// `receive` publishes):
+//   - receive + http/https: unary publish (one input -> body, response -> output)
+//   - receive + ws/wss: client-streaming publish (each input -> one frame)
+//   - send + http/https: SSE subscription (server events -> outputs)
+//   - send + ws/wss: streaming subscription, bidi-capable (frames -> outputs,
+//     caller inputs forward as frames)
 func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
 	go func() {

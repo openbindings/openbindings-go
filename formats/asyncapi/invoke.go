@@ -18,20 +18,27 @@ import (
 
 // AsyncAPI binding execution over the cardinality-agnostic invocation handle.
 //
-// One entrypoint (runBinding) drives every channel shape against the
-// binding-facing BindingHandle:
+// The action is read from the DESCRIBED APPLICATION's perspective — AsyncAPI
+// 3.0's own rule — and an invocation is the counterparty (ASYNC-P-02,
+// spec/binding-specs/asyncapi): invoking a `send` operation SUBSCRIBES to
+// what the application sends; invoking a `receive` operation PUBLISHES what
+// the application expects to receive. The artifact is never read as
+// describing the invoker.
 //
-//	send + http/https     unary HTTP POST: first input -> request body,
-//	                      response -> single output
-//	send + ws/wss         client-streaming publish: every input -> one
-//	                      socket frame; closing input closes the call
-//	receive + http/https  SSE subscribe: server events -> outputs
-//	receive + ws/wss      WebSocket subscribe (bidi-capable): socket
-//	                      frames -> outputs, caller inputs -> socket frames
+// One entrypoint (runBinding) drives every cell against the binding-facing
+// BindingHandle:
 //
-// All pre-dispatch failures (bad ref, missing server, missing context) are
-// raised via FireError BEFORE any network I/O, per the binding-author
-// contract.
+//	receive + http/https  unary publish: one input -> request body (POST),
+//	                      response -> at most one output
+//	receive + ws/wss      client-streaming publish: every input -> one
+//	                      socket frame; the caller closing input ends it
+//	send + http/https     SSE subscription: server events -> outputs
+//	send + ws/wss         streaming subscription (bidi-capable): socket
+//	                      frames -> outputs, caller inputs forward as frames
+//
+// All pre-dispatch failures (bad ref, missing server, missing context,
+// missing publish input) are raised via FireError BEFORE any network I/O,
+// per the binding-author contract.
 
 const maxResponseBytes = 10 * 1024 * 1024 // 10 MB
 
@@ -83,29 +90,32 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		address = channel.Address
 	}
 
+	// The complementary perspective (ASYNC-P-02): `receive` means the
+	// described application receives, so invoking PUBLISHES; `send` means
+	// it sends, so invoking SUBSCRIBES.
 	switch asyncOp.Action {
 	case "receive":
 		switch protocol {
 		case "ws", "wss":
-			runWSReceive(ctx, pool, serverURL, address, doc, &asyncOp, args, h)
+			runWSPublish(ctx, pool, serverURL, address, doc, &asyncOp, args, h)
 		case "http", "https":
-			runSSEReceive(ctx, client, serverURL, address, doc, &asyncOp, args, h)
+			runUnaryPublish(ctx, client, serverURL, address, doc, &asyncOp, args, h)
 		default:
 			h.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeSourceConfigError,
-				Message: fmt.Sprintf("receive not supported for protocol %q (supported: http, https, ws, wss)", protocol),
+				Message: fmt.Sprintf("receive (publish) not supported for protocol %q (supported: http, https, ws, wss)", protocol),
 			})
 		}
 	case "send":
 		switch protocol {
 		case "ws", "wss":
-			runWSSend(ctx, pool, serverURL, address, doc, &asyncOp, args, h)
+			runWSSubscribe(ctx, pool, serverURL, address, doc, &asyncOp, args, h)
 		case "http", "https":
-			runHTTPSend(ctx, client, serverURL, address, doc, &asyncOp, args, h)
+			runSSESubscribe(ctx, client, serverURL, address, doc, &asyncOp, args, h)
 		default:
 			h.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeSourceConfigError,
-				Message: fmt.Sprintf("send not supported for protocol %q (supported: http, https, ws, wss)", protocol),
+				Message: fmt.Sprintf("send (subscribe) not supported for protocol %q (supported: http, https, ws, wss)", protocol),
 			})
 		}
 	default:
@@ -237,47 +247,46 @@ func unmappedRequirementType(s securityScheme) string {
 
 // requiredContext computes the context the binding requires for this
 // operation, or nil when the provided context already satisfies it (or the
-// doc declares nothing checkable). Per the AsyncAPI 3.0 spec, `security` is a
-// flat LIST of Security Scheme Objects or Reference Objects: each entry is
-// its own standalone alternative, so satisfying any ONE entry authorizes the
-// operation (pure OR — there is no OpenAPI/2.x-style AND-conjunction grouping
-// within a single entry). An unresolvable $ref is skipped entirely (nothing
-// to check); an entry whose scheme family requirementType doesn't map is now
-// SURFACED with a derived type (R2.c ruling) rather than dropped, so the
-// alternative stays discoverable to a runtime with a resolver for it — a
-// document whose every alternative is unmapped now produces a challenge
-// instead of dispatching unauthenticated. Side-effect-free; shared by
-// runBinding and PrepareBinding.
+// doc declares nothing checkable). The declaration semantics are AsyncAPI
+// 3.0's, incorporated, and they are CONJUNCTIVE (ASYNC-P-07): the targeted
+// server's `security` applies, and the operation's `security`, when
+// declared, applies IN ADDITION. Within each declared list — a flat LIST of
+// Security Scheme Objects or Reference Objects, not OpenAPI-style
+// requirement-maps — satisfying any ONE entry suffices. That OR-within,
+// AND-across shape maps onto the challenge contract as a cross product:
+// each alternative pairs one resolvable server entry with one resolvable
+// operation entry (or is a single entry when only one list is declared).
+// An unresolvable $ref is skipped entirely (nothing to check); an entry
+// whose scheme family requirementType doesn't map is SURFACED with a
+// derived type (R2.c ruling) rather than dropped, so the alternative stays
+// discoverable to a runtime with a resolver for it. Side-effect-free;
+// shared by runBinding and PrepareBinding.
 func requiredContext(doc *document, asyncOp *asyncOperation, serverURL string, ctx map[string]any) *openbindings.ContextRequiredDetails {
-	requirements := securityRequirements(doc, asyncOp)
-	if len(requirements) == 0 {
-		return nil
-	}
+	serverReqs := resolveRequirementList(doc, serverSecurityRequirements(doc), serverURL)
+	opReqs := resolveRequirementList(doc, operationSecurityRequirements(asyncOp), serverURL)
 
 	var alternatives []openbindings.ContextAlternative
-	for _, entry := range requirements {
-		scheme, ok := resolveSecurityRequirement(doc, entry)
-		if !ok {
-			continue // unresolvable $ref: not checkable, not enforced
-		}
-		var req openbindings.ContextRequirement
-		if typ := requirementType(scheme); typ != "" {
-			if typ == "auth.oauth2" {
-				req = oauth2Requirement(scheme, serverURL)
-			} else {
-				req = openbindings.ContextRequirement{Type: typ}
+	switch {
+	case len(serverReqs) > 0 && len(opReqs) > 0:
+		for _, s := range serverReqs {
+			for _, o := range opReqs {
+				reqs := []openbindings.ContextRequirement{s}
+				// The same scheme declared on both levels is one
+				// requirement, not a duplicated conjunct.
+				if o.Type != s.Type || o.Name != s.Name {
+					reqs = append(reqs, o)
+				}
+				alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: reqs})
 			}
-		} else {
-			req = openbindings.ContextRequirement{Type: unmappedRequirementType(scheme)}
 		}
-		if scheme.Description != "" {
-			req.Description = scheme.Description
+	case len(serverReqs) > 0:
+		for _, s := range serverReqs {
+			alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: []openbindings.ContextRequirement{s}})
 		}
-		// R2.a ruling: the components.securitySchemes key this entry's $ref
-		// resolved through (empty for an inline scheme object — no
-		// addressable name).
-		req.Name = securityRequirementName(entry)
-		alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: []openbindings.ContextRequirement{req}})
+	case len(opReqs) > 0:
+		for _, o := range opReqs {
+			alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: []openbindings.ContextRequirement{o}})
+		}
 	}
 	if len(alternatives) == 0 {
 		return nil
@@ -359,17 +368,57 @@ func absolutizeURL(ref, baseURL string) string {
 	return base.ResolveReference(u).String()
 }
 
-// securityRequirements returns the security list applicable to an operation:
-// operation-level security overrides; otherwise the security of the doc
-// server the connection targets (the same server pickDocServer selects).
-func securityRequirements(doc *document, asyncOp *asyncOperation) []securityRequirement {
-	if asyncOp != nil && len(asyncOp.Security) > 0 {
-		return asyncOp.Security
-	}
-	if server := pickDocServer(doc); server != nil && len(server.Security) > 0 {
+// serverSecurityRequirements returns the security list of the doc server the
+// connection targets (the same server pickDocServer selects), so the
+// requirements always describe the server actually dialed.
+func serverSecurityRequirements(doc *document) []securityRequirement {
+	if server := pickDocServer(doc); server != nil {
 		return server.Security
 	}
 	return nil
+}
+
+// operationSecurityRequirements returns the operation's own security list.
+// It never displaces the server's: the two lists are conjunctive
+// (ASYNC-P-07) — the server's security applies, and the operation's applies
+// in addition.
+func operationSecurityRequirements(asyncOp *asyncOperation) []securityRequirement {
+	if asyncOp == nil {
+		return nil
+	}
+	return asyncOp.Security
+}
+
+// resolveRequirementList resolves one declared security list into concrete
+// ContextRequirements, in declaration order: unresolvable $refs are skipped
+// (not checkable, not enforced, never degraded); unmapped scheme families
+// are surfaced with a derived type (R2.c). Each requirement carries the
+// components.securitySchemes key its entry's $ref resolved through as Name
+// (R2.a; empty for inline schemes).
+func resolveRequirementList(doc *document, requirements []securityRequirement, serverURL string) []openbindings.ContextRequirement {
+	var out []openbindings.ContextRequirement
+	for _, entry := range requirements {
+		scheme, ok := resolveSecurityRequirement(doc, entry)
+		if !ok {
+			continue
+		}
+		var req openbindings.ContextRequirement
+		if typ := requirementType(scheme); typ != "" {
+			if typ == "auth.oauth2" {
+				req = oauth2Requirement(scheme, serverURL)
+			} else {
+				req = openbindings.ContextRequirement{Type: typ}
+			}
+		} else {
+			req = openbindings.ContextRequirement{Type: unmappedRequirementType(scheme)}
+		}
+		if scheme.Description != "" {
+			req.Description = scheme.Description
+		}
+		req.Name = securityRequirementName(entry)
+		out = append(out, req)
+	}
+	return out
 }
 
 // resolveSecurityRequirement resolves one `security` list entry to a concrete
@@ -405,42 +454,40 @@ func securityRequirementName(req securityRequirement) string {
 }
 
 // ---------------------------------------------------------------------------
-// Send over HTTP: unary POST
+// Publish over HTTP (`receive` action): unary POST
 // ---------------------------------------------------------------------------
 
-func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
-	// Unary: the first input is the message payload. No-input convention:
-	// an operation-layer call (Binding != nil) for an operation that declares
-	// no input (InputSchema == nil) closes input on entry and sends one empty
-	// message — callers of no-input operations never write nor close, so
-	// reading would park forever.
-	var first any
+func runUnaryPublish(ctx context.Context, client *http.Client, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+	// Unary: the one input IS the message payload (ASYNC-P-03). A publish
+	// invocation requires an input value — this family defines no empty
+	// message, so absence is a pre-dispatch refusal, never an empty-object
+	// substitute. An operation-layer call for an operation declaring no
+	// input (Binding != nil, InputSchema == nil) is refused up front:
+	// callers of no-input operations never write, so reading would park.
 	if args.Binding != nil && args.InputSchema == nil {
-		_ = h.CloseInput()
-	} else {
-		v, rerr := h.ReadInput(ctx)
-		if rerr == io.EOF {
-			h.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeMissingInput,
-				Message: "send operation requires an input message",
-			})
-			return
-		}
-		if rerr != nil {
-			return // invocation already terminal (or cancelled)
-		}
-		first = v
-		_ = h.CloseInput()
+		h.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeMissingInput,
+			Message: "publish invocation requires an input message (the input is the message; the operation declares no input)",
+		})
+		return
 	}
+	first, rerr := h.ReadInput(ctx)
+	if rerr == io.EOF {
+		h.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeMissingInput,
+			Message: "publish invocation requires an input message",
+		})
+		return
+	}
+	if rerr != nil {
+		return // invocation already terminal (or cancelled)
+	}
+	_ = h.CloseInput()
 
-	body := []byte("{}")
-	if first != nil {
-		var err error
-		body, err = json.Marshal(first)
-		if err != nil {
-			h.FireError(openbindings.AsInvocationError(err))
-			return
-		}
+	body, err := json.Marshal(first)
+	if err != nil {
+		h.FireError(openbindings.AsInvocationError(err))
+		return
 	}
 
 	url := serverURL + "/" + strings.TrimLeft(address, "/")
@@ -500,7 +547,7 @@ func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address st
 	status := resp.StatusCode
 	raw := openbindings.RawResult{Status: &status, Body: respBody, Meta: headerMetadata(resp.Header)}
 	output, derr := args.Hooks.DecodeOutput(siteFor(args, serverURL), raw,
-		builtinDecodeFor(declaredContentType(doc, asyncOp)))
+		builtinDecodeFor(replyContentType(doc, asyncOp)))
 	if derr != nil {
 		h.FireError(openbindings.AsInvocationError(derr))
 		return
@@ -519,11 +566,13 @@ func runHTTPSend(ctx context.Context, client *http.Client, serverURL, address st
 }
 
 // ---------------------------------------------------------------------------
-// Receive over HTTP: SSE subscribe
+// Subscribe over HTTP (`send` action): SSE
 // ---------------------------------------------------------------------------
 
-func runSSEReceive(ctx context.Context, client *http.Client, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
-	// Server -> client: the channel takes no caller input.
+func runSSESubscribe(ctx context.Context, client *http.Client, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+	// The described application sends; we subscribe. An SSE subscription
+	// takes no input: input closes on entry, and a late write rejects
+	// non-terminally at the handle (the refusal surface for supplied input).
 	_ = h.CloseInput()
 
 	url := serverURL + "/" + strings.TrimLeft(address, "/")
@@ -630,10 +679,10 @@ func decodeWSFrame(args *openbindings.BindingInvocationArgs, site openbindings.I
 }
 
 // ---------------------------------------------------------------------------
-// Receive over WebSocket: subscribe (bidi-capable) on a pooled socket
+// Subscribe over WebSocket (`send` action): bidi-capable, on a pooled socket
 // ---------------------------------------------------------------------------
 
-func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+func runWSSubscribe(ctx context.Context, pool *wsPool, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
 	// The subscription is registered inside acquire (before the reader
 	// starts on a fresh dial) so no early server push can be lost.
 	sub := newWSSubscription()
@@ -670,10 +719,11 @@ func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, 
 		}
 	}
 
-	// Inputs -> socket. Lets callers push subscription/control frames; the
-	// caller closing input does NOT end the subscription (outputs keep
-	// flowing). The pump exits on input EOF, on invocation terminal, or when
-	// ctx (bound to the invocation's lifetime) ends.
+	// Inputs -> socket: the duplex lane — caller-supplied input values
+	// forward as frames, and the caller closing input does NOT end the
+	// subscription (outputs keep flowing). The pump exits on input EOF, on
+	// invocation terminal, or when ctx (bound to the invocation's lifetime)
+	// ends.
 	go func() {
 		for {
 			msg, rerr := h.ReadInput(ctx)
@@ -712,7 +762,7 @@ func runWSReceive(ctx context.Context, pool *wsPool, serverURL, address string, 
 			}
 			return
 		}
-		out, derr := decodeWSFrame(args, siteFor(args, serverURL), declaredContentType(doc, asyncOp), res.Frame)
+		out, derr := decodeWSFrame(args, siteFor(args, serverURL), messageContentType(doc, asyncOp), res.Frame)
 		if derr != nil {
 			// A decode error mid-stream is terminal; already-emitted
 			// outputs stand (drain-before-terminal).
@@ -742,7 +792,7 @@ func declaresBearerScheme(doc *document, asyncOp *asyncOperation) bool {
 }
 
 // Backpressure bounds for the undelivered-frame buffer between a pooled
-// socket's broadcast and one receive subscription's consumer: whichever
+// socket's broadcast and one subscription's consumer: whichever
 // bound trips first fails THAT subscription loudly rather than buffering
 // unboundedly (bounded-queue-fail-loud, per spec/formats/asyncapi.md's WS
 // slow-consumer ruling — Redis client-output-buffer-limit, NATS
@@ -764,7 +814,7 @@ var (
 // the shared reader keeps broadcasting to every other listener on the
 // pooled connection unaffected — and next() surfaces the terminal error
 // after draining whatever was already buffered (drain-before-terminal).
-// runWSReceive's deferred unsubscribe() detaches this listener once the
+// runWSSubscribe's deferred unsubscribe() detaches this listener once the
 // terminal fires; the pooled socket itself is never touched.
 type wsSubscription struct {
 	mu          sync.Mutex
@@ -864,10 +914,22 @@ func (s *wsSubscription) next(ctx context.Context) (res wsSubResult, ok bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Send over WebSocket: client-streaming publish on a pooled socket
+// Publish over WebSocket (`receive` action): client-streaming, pooled socket
 // ---------------------------------------------------------------------------
 
-func runWSSend(ctx context.Context, pool *wsPool, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+func runWSPublish(ctx context.Context, pool *wsPool, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+	// A publish invocation requires input — the input IS the message
+	// (ASYNC-P-03); this family defines no empty message. An operation-layer
+	// call for an operation declaring no input is refused before dispatch
+	// (callers of no-input operations never write, so reading would park).
+	if args.Binding != nil && args.InputSchema == nil {
+		h.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeMissingInput,
+			Message: "publish invocation requires an input message (the input is the message; the operation declares no input)",
+		})
+		return
+	}
+
 	pw, _, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, args.Context, nil)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -878,30 +940,23 @@ func runWSSend(ctx context.Context, pool *wsPool, serverURL, address string, doc
 	}
 	defer pw.release()
 
-	// No-input convention: an operation-layer call (Binding != nil) for an
-	// operation that declares no input (InputSchema == nil) closes input on
-	// entry and publishes one empty-object frame — callers of no-input
-	// operations never write nor close, so reading would park forever.
-	if args.Binding != nil && args.InputSchema == nil {
-		_ = h.CloseInput()
-		if werr := pw.send(ctx, []byte("{}")); werr != nil {
-			pool.evict(pw)
-			if ctx.Err() != nil {
-				return
-			}
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
-			return
-		}
-		h.CloseOutput()
-		return
-	}
-
 	// Client-streaming publish: every input is one frame; the caller closing
-	// input completes the call with zero outputs (a publish yields no
-	// outputs; auth rides the upgrade request, never the message body).
+	// input after at least one message completes the call with zero outputs
+	// (a publish yields no outputs; frames the server sends during the
+	// exchange are discarded — a defined disposal; auth rides the upgrade
+	// request, never the message body). Closing with zero messages sent is
+	// the streaming face of the same refusal: nothing was published.
+	sent := 0
 	for {
 		msg, rerr := h.ReadInput(ctx)
 		if rerr == io.EOF {
+			if sent == 0 {
+				h.FireError(&openbindings.InvocationError{
+					Code:    openbindings.ErrCodeMissingInput,
+					Message: "publish invocation requires an input message (input closed with no messages sent)",
+				})
+				return
+			}
 			h.CloseOutput()
 			return
 		}
@@ -922,6 +977,7 @@ func runWSSend(ctx context.Context, pool *wsPool, serverURL, address string, doc
 			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
 			return
 		}
+		sent++
 	}
 }
 
@@ -940,7 +996,7 @@ func decodeSSEEvent(args *openbindings.BindingInvocationArgs, site openbindings.
 		Body:   []byte(strings.Join(dataLines, "\n")),
 		Meta:   headerMetadata(resp.Header),
 	}
-	return args.Hooks.DecodeOutput(site, raw, builtinDecodeFor(declaredContentType(doc, asyncOp)))
+	return args.Hooks.DecodeOutput(site, raw, builtinDecodeFor(messageContentType(doc, asyncOp)))
 }
 
 // headerMetadata converts HTTP response headers to invocation metadata.
@@ -1019,20 +1075,23 @@ type namedSecurityScheme struct {
 }
 
 // resolveSecuritySchemes returns the security schemes applicable to an
-// operation, flattened for credential placement, in declaration order. The
-// entries come from securityRequirements (operation-level, else the server
-// the connection targets); an entry that fails to resolve (a dangling $ref)
-// is dropped.
+// operation, flattened for credential placement: the targeted server's list
+// then the operation's list, in declaration order — both apply, the
+// conjunctive reading (ASYNC-P-07) — with a scheme declared on both levels
+// placed once. An entry that fails to resolve (a dangling $ref) is dropped.
 func resolveSecuritySchemes(doc *document, asyncOp *asyncOperation) []namedSecurityScheme {
-	requirements := securityRequirements(doc, asyncOp)
-	if len(requirements) == 0 {
-		return nil
-	}
-
 	var result []namedSecurityScheme
-	for _, req := range requirements {
-		if scheme, ok := resolveSecurityRequirement(doc, req); ok {
-			result = append(result, namedSecurityScheme{Name: securityRequirementName(req), Scheme: scheme})
+	seen := map[string]bool{}
+	for _, requirements := range [][]securityRequirement{serverSecurityRequirements(doc), operationSecurityRequirements(asyncOp)} {
+		for _, req := range requirements {
+			if scheme, ok := resolveSecurityRequirement(doc, req); ok {
+				key := scheme.Type + "\x00" + scheme.Scheme + "\x00" + securityRequirementName(req)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				result = append(result, namedSecurityScheme{Name: securityRequirementName(req), Scheme: scheme})
+			}
 		}
 	}
 	return result
@@ -1133,11 +1192,12 @@ func applyCredentialsFallback(req *http.Request, bindCtx map[string]any) {
 	}
 }
 
-// declaredContentType returns the operation's declared message contentType
-// (the AsyncAPI document's answer to the decode question), falling back to
-// the document default, else "" (the text lane). This is the SPEC answer;
-// it never reads payload bytes.
-func declaredContentType(doc *document, asyncOp *asyncOperation) string {
+// messageContentType returns the effective content type of the operation's
+// own messages — the declarations governing a subscription's outputs and a
+// publish's input encoding (direction-correct decode, ASYNC-P-05) —
+// falling back to the document default, else "" (the text lane). This is
+// the SPEC answer; it never reads payload bytes.
+func messageContentType(doc *document, asyncOp *asyncOperation) string {
 	if asyncOp == nil {
 		return ""
 	}
@@ -1145,6 +1205,18 @@ func declaredContentType(doc *document, asyncOp *asyncOperation) string {
 		if m := resolveMessageRef(doc, ref); m != nil && m.ContentType != "" {
 			return m.ContentType
 		}
+	}
+	return doc.DefaultContentType
+}
+
+// replyContentType returns the effective content type of the operation's
+// REPLY-side messages — the declarations governing a publish invocation's
+// output: the response decodes by the reply side (direction-correct
+// decode, ASYNC-P-05) — falling back to the document default, else ""
+// (the text lane).
+func replyContentType(doc *document, asyncOp *asyncOperation) string {
+	if asyncOp == nil {
+		return ""
 	}
 	if asyncOp.Reply != nil {
 		for _, ref := range asyncOp.Reply.Messages {

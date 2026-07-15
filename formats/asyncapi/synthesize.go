@@ -78,13 +78,21 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 			}
 		}
 
+		// Schema direction follows the complementary perspective
+		// (ASYNC-P-02): the artifact describes the application, the
+		// invocation is the counterparty.
 		switch asyncOp.Action {
-		case "receive":
+		case "send":
+			// The application sends; invoking subscribes — the operation's
+			// messages are the invoker's OUTPUT.
 			payload := resolveOperationPayload(doc, asyncOp)
 			if payload != nil {
 				obiOp.Output = payload
 			}
-		case "send":
+		case "receive":
+			// The application receives; invoking publishes — the operation's
+			// messages are the invoker's INPUT, and a declared reply is what
+			// the publish's response decodes to.
 			inputPayload := resolveOperationPayload(doc, asyncOp)
 			if inputPayload != nil {
 				obiOp.Input = inputPayload
