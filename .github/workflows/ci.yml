@@ -35,10 +35,16 @@ jobs:
           cache: false
       - name: workspace (resolve the untagged core from this checkout)
         # Format modules require the core at a version that is not tagged
-        # yet; a CI-local go.work resolves it from the same checkout, the
-        # way local development does. Harmless post-tag (workspace wins).
+        # yet. A CI-local go.work needs a version-pinned replace, not just
+        # `use`: module-graph loading still fetches the required version's
+        # go.mod, which does not exist anywhere ("unknown revision"). This
+        # mirrors the local-dev go.work's replace directives. Harmless
+        # post-tag (the replace maps the tagged version to this checkout).
         if: matrix.module != '.'
-        run: go work init . ${{ matrix.module }}
+        run: |
+          go work init . ${{ matrix.module }}
+          ver=$(awk '/github.com\/openbindings\/openbindings-go v/ {print $NF}' ${{ matrix.module }}/go.mod)
+          go work edit -replace "github.com/openbindings/openbindings-go@${ver}=."
       - name: vet ${{ matrix.module }}
         working-directory: ${{ matrix.module }}
         run: go vet ./...
