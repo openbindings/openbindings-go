@@ -176,7 +176,7 @@ type InvokeHooks struct {
 	// decodeDecidedBy records the tier that produced the most recent
 	// decode ("hook" or "builtin") — tier-blind on purpose (the failure
 	// paths are tier-precise; success provenance is not). Read by core's
-	// contract-decided teaching (a T-08 failure against a floor-stamped
+	// contract-decided teaching (an output-validation failure against a floor-stamped
 	// schema after a hook decode names the schema election, not the
 	// hook). Hooks run on a single binding goroutine per invocation.
 	decodeDecidedBy string
