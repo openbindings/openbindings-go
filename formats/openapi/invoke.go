@@ -359,7 +359,7 @@ func siteFor(args *openbindings.BindingInvocationArgs, baseURL string) openbindi
 	if args.Site != nil {
 		site = *args.Site
 	} else {
-		site.Format = args.Source.Format
+		site.BindingSpec = args.Source.BindingSpec
 		site.Ref = args.Ref
 	}
 	if site.Target == "" {

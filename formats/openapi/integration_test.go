@@ -179,7 +179,7 @@ func TestIntegration_MultipartFormData(t *testing.T) {
 
 	call := binv.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
 		Ref:    "#/paths/~1upload/post",
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: string(specBytes)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: string(specBytes)},
 	})
 	_, ierr := driveSingle(t, call, map[string]any{
 		"file":        []byte("binary-content-here"),
@@ -335,7 +335,7 @@ func synthesizeOBI(t *testing.T, specURL string) *openbindings.Interface {
 	ctx := context.Background()
 	iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{
-			{Format: FormatToken, Location: specURL},
+			{BindingSpec: BindingSpec, Location: specURL},
 		},
 	})
 	if err != nil {
@@ -521,7 +521,7 @@ func TestIntegration_MissingRequiredInput_NoDispatch(t *testing.T) {
 	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 	})
-	source := openbindings.InvocationSource{Format: FormatToken, Content: widgetSpec(srv.URL)}
+	source := openbindings.InvocationSource{BindingSpec: BindingSpec, Content: widgetSpec(srv.URL)}
 	binv := NewInvoker()
 
 	cases := []struct {
@@ -565,7 +565,7 @@ func TestIntegration_NoInputOperationConvention(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	call := binv.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: FormatToken, Content: widgetSpec(srv.URL)},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: widgetSpec(srv.URL)},
 		Ref:     "#/paths/~1session/get",
 		Binding: &openbindings.BindingEntry{Operation: "getSession", Source: "api", Ref: "#/paths/~1session/get"},
 		// InputSchema nil → no-input operation; the binding closes input itself.
@@ -620,7 +620,7 @@ func TestIntegration_OAuth2CredentialsApplied(t *testing.T) {
 
 	binv := NewInvoker()
 	call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: FormatToken, Content: string(specBytes)},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: string(specBytes)},
 		Ref:     "#/paths/~1me/get",
 		Context: map[string]any{"accessToken": "at-123"},
 	})
@@ -670,7 +670,7 @@ func TestIntegration_TwoANDedAPIKeysDistinguishedByName(t *testing.T) {
 	specBytes, _ := json.Marshal(spec)
 
 	binv := NewInvoker()
-	source := openbindings.InvocationSource{Format: FormatToken, Content: string(specBytes)}
+	source := openbindings.InvocationSource{BindingSpec: BindingSpec, Content: string(specBytes)}
 
 	// Preflight: the AND'd alternative challenges, each requirement carrying
 	// its own securitySchemes key as Name (R2.a ruling).
@@ -725,7 +725,7 @@ func TestIntegration_ContextRequired_ZeroIO(t *testing.T) {
 
 	binv := NewInvoker()
 	call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: string(spec)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: string(spec)},
 		Ref:    "#/paths/~1items/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
@@ -777,7 +777,7 @@ func sseSpec(serverURL string) string {
 func sseCall(srv *httptest.Server) openbindings.Invocation[any, any] {
 	return NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
 		Ref:    "#/paths/~1events/get",
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: sseSpec(srv.URL)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: sseSpec(srv.URL)},
 	})
 }
 
@@ -812,7 +812,7 @@ func sseCallHooked(srv *httptest.Server) openbindings.Invocation[any, any] {
 	}
 	return op.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
 		Ref:    "#/paths/~1events/get",
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: sseSpec(srv.URL)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: sseSpec(srv.URL)},
 	})
 }
 
@@ -994,7 +994,7 @@ func TestNewInvokerWithClient(t *testing.T) {
 
 	call := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
 		Ref:    "#/paths/~1events/get",
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: sseSpec("http://example.test")},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: sseSpec("http://example.test")},
 	})
 	out, ierr := driveSingle(t, call, nil)
 	if ierr != nil {
@@ -1034,7 +1034,7 @@ func TestIntegration_SSEResponse_Cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
 		Ref:    "#/paths/~1events/get",
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: sseSpec(srv.URL)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: sseSpec(srv.URL)},
 	})
 
 	out := call.Outputs()
@@ -1099,7 +1099,7 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{Format: "openapi@3.0", Content: strings.ReplaceAll(spec, "PLACEHOLDER", srv.URL)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: "openapi@3.0", Content: strings.ReplaceAll(spec, "PLACEHOLDER", srv.URL)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
@@ -1126,7 +1126,7 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 
 	// The contract's shape goes onto the wire verbatim.
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: "openapi@3.0", Content: strings.ReplaceAll(spec, `"paths"`, `"servers": [{"url": "`+srv.URL+`"}], "paths"`)},
+		Source:  openbindings.InvocationSource{BindingSpec: "openapi@3.0", Content: strings.ReplaceAll(spec, `"paths"`, `"servers": [{"url": "`+srv.URL+`"}], "paths"`)},
 		Ref:     "#/paths/~1pets/post",
 		Context: nil,
 	})
@@ -1186,7 +1186,7 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Content: spec},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: spec},
 		Ref:    "#/paths/~1users~1{id}/get",
 	})
 	if _, ierr := driveSingle(t, call, map[string]any{"id": "u1", "verbose": true}); ierr != nil {
@@ -1216,7 +1216,7 @@ func TestPrepareBinding_UsesCachePrimedFromContent(t *testing.T) {
 	// Content+location invocation: no fetch happens (content is authoritative),
 	// but the parse must land in the location-keyed cache.
 	call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Location: location, Content: string(spec)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: location, Content: string(spec)},
 		Ref:    "#/paths/~1items/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
@@ -1226,7 +1226,7 @@ func TestPrepareBinding_UsesCachePrimedFromContent(t *testing.T) {
 
 	// Location-only preflight: must be served from the warm cache.
 	details, err := binv.PrepareBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: FormatToken, Location: location},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: location},
 		Ref:    "#/paths/~1items/get",
 	})
 	if err != nil {
@@ -1276,7 +1276,7 @@ func TestIntegration_CollisionDeliversToBothWireLocations(t *testing.T) {
 
 	inv := NewInvoker()
 	call := inv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "openapi@3.0.0", Content: spec},
+		Source: openbindings.InvocationSource{BindingSpec: "openapi@3.0.0", Content: spec},
 		Ref:    "#/paths/~1users~1{id}/put",
 	})
 	if err := call.Write(context.Background(), map[string]any{"id": "u1", "name": "Ada"}); err != nil {

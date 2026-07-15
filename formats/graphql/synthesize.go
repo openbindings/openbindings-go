@@ -10,7 +10,7 @@ import (
 // convertToInterface converts a GraphQL introspection schema to an OpenBindings interface.
 func convertToInterface(schema *introspectionSchema, sourceLocation string) (openbindings.Interface, error) {
 	sourceEntry := openbindings.Source{
-		Format: FormatToken,
+		BindingSpec: BindingSpec,
 	}
 	if sourceLocation != "" {
 		sourceEntry.Location = sourceLocation

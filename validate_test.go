@@ -112,8 +112,8 @@ func TestInterfaceValidate_UnknownFields_StrictMode_CatchesNestedTypedObjects(t 
 		},
 		Sources: map[string]Source{
 			"src": {
-				Format:   "openapi@3.1",
-				Location: "https://api.example.com/api.json",
+				BindingSpec: "openapi@3.1",
+				Location:    "https://api.example.com/api.json",
 				LosslessFields: LosslessFields{
 					Unknown: map[string]json.RawMessage{
 						"unknownField": json.RawMessage(`{"value":"unknownFieldValue"}`),
@@ -168,7 +168,7 @@ func TestInterfaceValidate_StrictMode_CatchesInlineTransformUnknownFields(t *tes
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {Format: "openapi@3.1", Location: "https://api.example.com/api.json"},
+			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {
@@ -251,7 +251,7 @@ func TestInterfaceValidate_SourceMustHaveLocationOrContent(t *testing.T) {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
 		Sources: map[string]Source{
-			"empty": {Format: "openapi@3.1"},
+			"empty": {BindingSpec: "openapi@3.1"},
 		},
 	}
 	err := i.Validate()
@@ -269,9 +269,9 @@ func TestInterfaceValidate_SourceAcceptsBothLocationAndContent(t *testing.T) {
 		Operations:   map[string]Operation{},
 		Sources: map[string]Source{
 			"both": {
-				Format:   "openapi@3.1",
-				Location: "https://api.example.com/api.json",
-				Content:  map[string]any{"openapi": "3.1.0"},
+				BindingSpec: "openapi@3.1",
+				Location:    "https://api.example.com/api.json",
+				Content:     map[string]any{"openapi": "3.1.0"},
 			},
 		},
 	}
@@ -315,7 +315,7 @@ func TestInterfaceValidate_SourceLocationFormatDefinedAddress(t *testing.T) {
 				OpenBindings: "0.2.0",
 				Operations:   map[string]Operation{},
 				Sources: map[string]Source{
-					"svc": {Format: "grpc@1.0", Location: addr},
+					"svc": {BindingSpec: "grpc@1.0", Location: addr},
 				},
 			}
 			if err := i.Validate(); err != nil {
@@ -333,7 +333,7 @@ func TestInterfaceValidate_SourceLocationRelativeRejected(t *testing.T) {
 				OpenBindings: "0.2.0",
 				Operations:   map[string]Operation{},
 				Sources: map[string]Source{
-					"api": {Format: "openapi@3.1", Location: loc},
+					"api": {BindingSpec: "openapi@3.1", Location: loc},
 				},
 			}
 			err := i.Validate()
@@ -610,7 +610,7 @@ func TestInterfaceValidate_BindingTransformRefMustExist(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {Format: "openapi@3.1", Location: "https://api.example.com/api.json"},
+			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {
@@ -638,7 +638,7 @@ func TestInterfaceValidate_OperationRefMustExist(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {Format: "openapi@3.1", Location: "https://api.example.com/api.json"},
+			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
 		},
 		Bindings: map[string]BindingEntry{
 			"nonexistent.api": {
@@ -687,7 +687,7 @@ func TestInterfaceValidate_EmptyInlineTransformAccepted(t *testing.T) {
 			"op": {},
 		},
 		Sources: map[string]Source{
-			"api": {Format: "openapi@3.1", Location: "https://api.example.com/api.json"},
+			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
 		},
 		Bindings: map[string]BindingEntry{
 			"op.api": {
@@ -712,7 +712,7 @@ func TestInterfaceValidate_ValidInterfaceWithTransforms(t *testing.T) {
 			"toApi": "{ amount: total * 100 }",
 		},
 		Sources: map[string]Source{
-			"stripe": {Format: "openapi@3.1", Location: "https://api.example.com/stripe.json"},
+			"stripe": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/stripe.json"},
 		},
 		Bindings: map[string]BindingEntry{
 			"pay.stripe": {
@@ -929,7 +929,7 @@ func TestParseDocument_TransformRefWithExtensionKeyValidates_OBI_T_03(t *testing
 		"openbindings": "0.2.0",
 		"operations": {"op": {}},
 		"transforms": {"t": "$.payload"},
-		"sources": {"api": {"format": "openapi@3.1", "location": "https://api.example.com/api.json"}},
+		"sources": {"api": {"bindingSpec": "openbindings.openapi@1", "location": "https://api.example.com/api.json"}},
 		"bindings": {
 			"op.api": {
 				"operation": "op",

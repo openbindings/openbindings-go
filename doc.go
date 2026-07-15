@@ -79,6 +79,5 @@
 // # Subpackages
 //
 //   - canonicaljson: RFC 8785 (JCS) deterministic JSON serialization
-//   - formattoken: Parse and normalize <name>@<version> format tokens
 //   - schemaprofile: OpenBindings Schema Compatibility Profile v0.1
 package openbindings

@@ -6,24 +6,19 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestFormats(t *testing.T) {
-	// One caret range per supported tool major (2.x and 3.x — the token
-	// grammar has no compound ranges).
+func TestBindingSpecs(t *testing.T) {
+	// One exact identifier (openbindings.usage@1); identifiers are exact
+	// and opaque — no version ranges.
 	e := NewInvoker()
-	formats := e.Formats()
-	if len(formats) != len(FormatRanges) {
-		t.Fatalf("Formats() = %v, want one entry per range %v", formats, FormatRanges)
-	}
-	for i, want := range FormatRanges {
-		if formats[i].Token != want {
-			t.Errorf("Formats()[%d] = %q, want %q", i, formats[i].Token, want)
-		}
+	specs := e.BindingSpecs()
+	if len(specs) != 1 || specs[0].BindingSpec != BindingSpec {
+		t.Fatalf("BindingSpecs() = %v, want [%s]", specs, BindingSpec)
 	}
 
 	c := NewSynthesizer()
-	formats = c.Formats()
-	if len(formats) != len(FormatRanges) || formats[0].Token != FormatRanges[0] {
-		t.Errorf("Synthesizer.Formats() = %v, want the bare usage token ranges", formats)
+	specs = c.BindingSpecs()
+	if len(specs) != 1 || specs[0].BindingSpec != BindingSpec {
+		t.Errorf("Synthesizer.BindingSpecs() = %v, want [%s]", specs, BindingSpec)
 	}
 }
 

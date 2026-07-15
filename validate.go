@@ -180,9 +180,8 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		// OBI-D-03: source keys must match the identifier pattern.
 		validateIdent(&errs, "sources key", k)
 		src := i.Sources[k]
-		fmtVal := strings.TrimSpace(src.Format)
-		if fmtVal == "" {
-			errs = append(errs, fmt.Sprintf("sources[%q].format: required", k))
+		if strings.TrimSpace(src.BindingSpec) == "" {
+			errs = append(errs, fmt.Sprintf("sources[%q].bindingSpec: required", k))
 		}
 		hasLocation := strings.TrimSpace(src.Location) != ""
 		hasContent := src.Content != nil
@@ -190,7 +189,7 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 			errs = append(errs, fmt.Sprintf("sources[%q]: must have location or content", k))
 		}
 		// OBI-D-05: sources[*].location must be a well-formed, absolute reference
-		// (absolute URI or a format-defined absolute address; never relative).
+		// (absolute URI or a bindingSpec-defined absolute address; never relative).
 		if hasLocation {
 			validateLocation(&errs, fmt.Sprintf("sources[%q].location", k), src.Location)
 		}

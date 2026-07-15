@@ -164,8 +164,8 @@ func TestConvertToInterface_CreatesSourceEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("expected source entry")
 	}
-	if src.Format != FormatToken {
-		t.Errorf("format = %q, want %q", src.Format, FormatToken)
+	if src.BindingSpec != BindingSpec {
+		t.Errorf("format = %q, want %q", src.BindingSpec, BindingSpec)
 	}
 	if src.Location != "api.example.com:443" {
 		t.Errorf("location = %q, want %q", src.Location, "api.example.com:443")

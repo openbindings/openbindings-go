@@ -18,8 +18,8 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// FormatToken identifies this package as an OpenAPI 3.x handler.
-const FormatToken = "openapi@^3.0.0"
+// BindingSpec identifies this package as an OpenAPI 3.x handler.
+const BindingSpec = "openbindings.openapi@1"
 
 // DefaultSourceName is the default source key used when registering an OpenAPI source in an OBI.
 const DefaultSourceName = "openapi"
@@ -114,8 +114,8 @@ func (e *Invoker) cachedLoadDocument(location string, content any) (*openapi3.T,
 }
 
 // Formats returns the binding format tokens this invoker supports.
-func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "OpenAPI 3.x HTTP APIs"}}
+func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"}}
 }
 
 // InvokeBinding invokes an HTTP request based on an OpenAPI binding. The
@@ -224,8 +224,8 @@ func NewSynthesizer() *Synthesizer {
 }
 
 // Formats returns the format tokens this synthesizer supports.
-func (c *Synthesizer) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "OpenAPI 3.x HTTP APIs"}}
+func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"}}
 }
 
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.

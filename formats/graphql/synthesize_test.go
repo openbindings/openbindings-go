@@ -238,8 +238,8 @@ func TestConvertToInterface(t *testing.T) {
 	}
 
 	src := iface.Sources[DefaultSourceName]
-	if src.Format != FormatToken {
-		t.Errorf("source format = %q, want %q", src.Format, FormatToken)
+	if src.BindingSpec != BindingSpec {
+		t.Errorf("source format = %q, want %q", src.BindingSpec, BindingSpec)
 	}
 	if src.Location != "https://api.example.com/graphql" {
 		t.Errorf("source location = %q", src.Location)

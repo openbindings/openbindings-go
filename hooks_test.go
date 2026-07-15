@@ -10,10 +10,10 @@ func intp(v int) *int { return &v }
 
 func testSite() InvokeSite {
 	return InvokeSite{
-		Operation: "com.example.op",
-		InvokedAs: "op",
-		Format:    "usage@2.13.1",
-		Ref:       "check",
+		Operation:   "com.example.op",
+		InvokedAs:   "op",
+		BindingSpec: "usage@2.13.1",
+		Ref:         "check",
 	}
 }
 

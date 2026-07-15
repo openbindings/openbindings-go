@@ -14,7 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const FormatToken = "asyncapi@^3.0.0"
+const BindingSpec = "openbindings.asyncapi@1"
 
 // DefaultSourceName is the key used in the interface's Sources map for the AsyncAPI source.
 const DefaultSourceName = "asyncapi"
@@ -24,10 +24,9 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 		return nil, openbindings.ErrNoSources
 	}
 	src := in.Sources[0]
-	formatVersion := openbindings.DetectFormatVersion(doc.AsyncAPI)
 
 	sourceEntry := openbindings.Source{
-		Format: "asyncapi@" + formatVersion,
+		BindingSpec: BindingSpec,
 	}
 	if src.Location != "" {
 		sourceEntry.Location = src.Location

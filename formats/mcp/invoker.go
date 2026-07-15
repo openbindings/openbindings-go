@@ -22,7 +22,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// FormatToken is the format identifier for MCP sources.
+// BindingSpec is the format identifier for MCP sources.
 // Targets the 2025-11-25 MCP spec revision. Supported features:
 //   - tools/list, tools/call (incl. structuredContent and outputSchema)
 //   - resources/list, resources/read
@@ -30,7 +30,7 @@ import (
 //   - prompts/list, prompts/get
 //
 // Not yet supported: resource subscriptions, sampling, icons, elicitation.
-const FormatToken = "mcp@2025-11-25"
+const BindingSpec = "openbindings.mcp@1"
 
 // Invoker handles binding invocation for MCP sources.
 //
@@ -106,8 +106,8 @@ func (e *Invoker) Close() error {
 }
 
 // Formats returns the source formats supported by the MCP invoker.
-func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "Model Context Protocol"}}
+func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Model Context Protocol"}}
 }
 
 // InvokeBinding invokes an MCP binding and returns the Invocation handle
@@ -169,8 +169,8 @@ func NewSynthesizer(opts ...SynthesizerOption) *Synthesizer {
 }
 
 // Formats returns the source formats supported by the MCP synthesizer.
-func (c *Synthesizer) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "Model Context Protocol"}}
+func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Model Context Protocol"}}
 }
 
 // SynthesizeInterface discovers an MCP server's capabilities and converts to an OpenBindings interface.

@@ -67,7 +67,7 @@ message PingMsg { string msg = 1; }
 
 	// No location, no metadata: refuse, naming both remedies.
 	h := inv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "grpc", Content: proto},
+		Source: openbindings.InvocationSource{BindingSpec: "grpc", Content: proto},
 		Ref:    "tiny.Tiny/Ping",
 	})
 	_, err := openbindings.Single(context.Background(), h.Outputs())
@@ -90,7 +90,7 @@ message PingMsg { string msg = 1; }
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	h2 := inv.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: "grpc", Content: proto},
+		Source:  openbindings.InvocationSource{BindingSpec: "grpc", Content: proto},
 		Ref:     "tiny.Tiny/Ping",
 		Context: map[string]any{"metadata": map[string]any{"baseURL": "127.0.0.1:1"}},
 	})

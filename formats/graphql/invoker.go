@@ -20,7 +20,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-const FormatToken = "graphql"
+const BindingSpec = "graphql"
 const DefaultSourceName = "graphql"
 
 // maxRedirects bounds the redirect chain a single request may follow.
@@ -76,8 +76,8 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 }
 
 // Formats returns the source formats supported by the GraphQL invoker.
-func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "GraphQL APIs"}}
+func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "GraphQL APIs"}}
 }
 
 // cachedIntrospect returns a cached introspection result or performs a fresh
@@ -312,8 +312,8 @@ type Synthesizer struct{}
 func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
 
 // Formats returns the source formats supported by the GraphQL synthesizer.
-func (c *Synthesizer) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: FormatToken, Description: "GraphQL APIs"}}
+func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "GraphQL APIs"}}
 }
 
 // SynthesizeInterface introspects a GraphQL endpoint and converts to an OpenBindings interface.

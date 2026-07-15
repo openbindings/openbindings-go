@@ -79,7 +79,7 @@ cmd "prose" {
 
 // testSource is the bare-kdl fixture source: the artifact IS the source.
 func testSource() openbindings.InvocationSource {
-	return openbindings.InvocationSource{Format: "usage@" + MaxTestedVersion, Content: testSpecKDL()}
+	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: testSpecKDL()}
 }
 
 // driver abstracts the two entry points tests exercise: the format
@@ -271,8 +271,8 @@ cmd "config" subcommand_required=#true {
 	synthesizer := NewSynthesizer()
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			Format:  "usage@" + MaxTestedVersion,
-			Content: spec,
+			BindingSpec: BindingSpec,
+			Content:     spec,
 		}},
 	})
 	if err != nil {
@@ -314,8 +314,8 @@ cmd "config" subcommand_required=#true {
 	// The emitted source is the PRISTINE bare artifact; bindings carry
 	// command-path refs (the format's own grammar).
 	src := iface.Sources[DefaultSourceName]
-	if src.Format != "usage@"+MaxTestedVersion {
-		t.Errorf("source format = %q, want the bare usage token", src.Format)
+	if src.BindingSpec != BindingSpec {
+		t.Errorf("source format = %q, want the bare usage token", src.BindingSpec)
 	}
 	if src.Content != spec {
 		t.Fatal("expected the pristine kdl text as embedded content")
@@ -387,7 +387,7 @@ arg "<words>..." help="Words to echo"
 `
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{Format: "usage@" + MaxTestedVersion, Content: rootKDL},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: rootKDL},
 		Ref:    "",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
@@ -443,7 +443,7 @@ func TestIntegration_Cancellation(t *testing.T) {
 	invoker := NewInvoker()
 	ctx, cancel := context.WithCancel(context.Background())
 	call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{Format: "usage@" + MaxTestedVersion},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec},
 		Ref:     "10",
 		Context: map[string]any{"metadata": map[string]any{"binary": "sleep"}},
 	})

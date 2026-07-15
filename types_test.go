@@ -193,7 +193,7 @@ func TestOperation_OmitsEmptyTags(t *testing.T) {
 
 func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 	in := []byte(`{
-  "format": "openapi@3.1",
+  "bindingSpec": "openbindings.openapi@1",
   "location": "./openapi.json",
   "x-extensionField": "extensionFieldValue",
   "unknownField": {"value": "unknownFieldValue"}
@@ -203,8 +203,8 @@ func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 	outMap := mustRoundTripToMap(t, in, &bs)
 	assertPreservedExtensionAndUnknown(t, outMap)
 
-	if outMap["format"] != "openapi@3.1" {
-		t.Fatalf("expected format preserved, got %#v", outMap["format"])
+	if outMap["bindingSpec"] != "openbindings.openapi@1" {
+		t.Fatalf("expected bindingSpec preserved, got %#v", outMap["bindingSpec"])
 	}
 	if outMap["location"] != "./openapi.json" {
 		t.Fatalf("expected location preserved, got %#v", outMap["location"])
@@ -213,12 +213,12 @@ func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 
 func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	s := Source{
-		Format:   "openapi@3.1",
-		Location: "./typed-location.json",
+		BindingSpec: "openbindings.openapi@1",
+		Location:    "./typed-location.json",
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
-				"format":   json.RawMessage(`"grpc@1.0"`),
-				"location": json.RawMessage(`"./unknown-location.json"`),
+				"bindingSpec": json.RawMessage(`"openbindings.grpc@1"`),
+				"location":    json.RawMessage(`"./unknown-location.json"`),
 			},
 			Extensions: map[string]json.RawMessage{
 				"x-custom": json.RawMessage(`"kept"`),
@@ -229,8 +229,8 @@ func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	out := mustMarshalJSON(t, s)
 	outMap := mustUnmarshalToMap(t, out)
 
-	if outMap["format"] != "openapi@3.1" {
-		t.Fatalf("expected typed format to win, got %#v", outMap["format"])
+	if outMap["bindingSpec"] != "openbindings.openapi@1" {
+		t.Fatalf("expected typed bindingSpec to win, got %#v", outMap["bindingSpec"])
 	}
 	if outMap["location"] != "./typed-location.json" {
 		t.Fatalf("expected typed location to win, got %#v", outMap["location"])
@@ -314,7 +314,7 @@ func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingFields(t *te
   },
   "sources": {
     "src": {
-      "format": "openapi@3.1",
+      "bindingSpec": "openbindings.openapi@1",
       "location": "./openapi.json",
       "x-extensionField": "extensionFieldValue",
       "unknownField": {"value": "unknownFieldValue"}
@@ -664,7 +664,7 @@ func TestInterface_WithTransforms(t *testing.T) {
   },
   "sources": {
     "stripe": {
-      "format": "openapi@3.1",
+      "bindingSpec": "openbindings.openapi@1",
       "location": "./stripe.json"
     }
   },

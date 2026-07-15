@@ -16,7 +16,7 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 	}
 
 	sourceEntry := openbindings.Source{
-		Format: FormatToken,
+		BindingSpec: BindingSpec,
 	}
 	if sourceLocation != "" {
 		sourceEntry.Location = sourceLocation

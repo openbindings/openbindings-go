@@ -10,7 +10,6 @@ import (
 
 	"github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/canonicaljson"
-	"github.com/openbindings/openbindings-go/formattoken"
 )
 
 // echoInvoker is a minimal BindingInvoker for the examples: it answers
@@ -19,8 +18,8 @@ import (
 // this is the entire seam a format implements.
 type echoInvoker struct{}
 
-func (echoInvoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{Token: "echo@1.0", Description: "example echo format"}}
+func (echoInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: "echo@1.0", Description: "example echo format"}}
 }
 
 func (echoInvoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
@@ -49,7 +48,7 @@ func ExampleInvoke() {
 		OpenBindings: "0.2.0",
 		Name:         "Echo",
 		Operations:   map[string]openbindings.Operation{"echo": {}},
-		Sources:      map[string]openbindings.Source{"echo": {Format: "echo@1.0", Location: "mem://echo"}},
+		Sources:      map[string]openbindings.Source{"echo": {BindingSpec: "echo@1.0", Location: "mem://echo"}},
 		Bindings:     map[string]openbindings.BindingEntry{"echo.main": {Operation: "echo", Source: "echo", Ref: "echo"}},
 	}
 
@@ -179,11 +178,11 @@ func ExampleOperation() {
 
 func ExampleSource() {
 	bs := openbindings.Source{
-		Format:   "openapi@3.1",
-		Location: "https://api.example.com/openapi.yaml",
+		BindingSpec: "openapi@3.1",
+		Location:    "https://api.example.com/openapi.yaml",
 	}
 
-	fmt.Println(bs.Format)
+	fmt.Println(bs.BindingSpec)
 	fmt.Println(bs.Location)
 	// Output:
 	// openapi@3.1
@@ -202,18 +201,6 @@ func Example_canonicaljson() {
 	// Output: {"a":2,"m":3,"z":1}
 }
 
-func Example_formattoken() {
-	token, _ := formattoken.Parse("OpenAPI@3.1.0")
-
-	fmt.Println(token.Name)
-	fmt.Println(token.Version)
-	fmt.Println(formattoken.IsOpenBindings(token))
-	// Output:
-	// openapi
-	// 3.1.0
-	// false
-}
-
 func ExampleTransform() {
 	// Per v0.2 §6.5, transforms are JSONata 2.0 expression strings.
 	iface := openbindings.Interface{
@@ -225,7 +212,7 @@ func ExampleTransform() {
 			"toStripeInput": "{ charge_amount: amount * 100 }",
 		},
 		Sources: map[string]openbindings.Source{
-			"stripe": {Format: "openapi@3.1", Location: "https://api.example.com/stripe.json"},
+			"stripe": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/stripe.json"},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
 			"processPayment.stripe": {

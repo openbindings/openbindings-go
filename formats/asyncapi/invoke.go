@@ -1289,7 +1289,7 @@ func siteFor(args *openbindings.BindingInvocationArgs, serverURL string) openbin
 	if args.Site != nil {
 		site = *args.Site
 	} else {
-		site.Format = args.Source.Format
+		site.BindingSpec = args.Source.BindingSpec
 		site.Ref = args.Ref
 	}
 	if site.Target == "" {

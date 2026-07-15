@@ -37,22 +37,23 @@ import (
 // Func-valued fields make this struct NON-COMPARABLE in Go — by design;
 // key tables on its string fields, never on the site itself.
 type InvokeSite struct {
-	Operation  string
-	InvokedAs  string
-	BindingKey string
-	Format     string
-	Ref        string
-	Target     string
+	Operation   string
+	InvokedAs   string
+	BindingKey  string
+	BindingSpec string
+	Ref         string
+	Target      string
 
 	builtinDecode   OutputDecoder
 	builtinClassify ResultClassifier
 	seamStamped     bool
 }
 
-// FormatName returns the bare format name of the site's source token
-// ("usage@2.13.1" → "usage"), so hook bodies never string-match version
-// tokens.
-func (s InvokeSite) FormatName() string { return formatName(s.Format) }
+// FamilyName returns the bare family name of the site's binding
+// specification ("openbindings.usage@1" → "usage"; a pre-promotion draft
+// token like "graphql" passes through), so hook bodies never string-match
+// identifiers.
+func (s InvokeSite) FamilyName() string { return familyName(s.BindingSpec) }
 
 // RawResult is ONE DELIVERY UNIT of a completed transport exchange, as the
 // decode and classify hooks see it.
@@ -120,14 +121,14 @@ type PlanAxis struct {
 // how the wire questions WOULD be answered at this site, by consultation
 // chain. Process-local: it reports THIS process's configuration.
 type InvocationPlan struct {
-	Operation  string              `json:"operation"`
-	BindingKey string              `json:"bindingKey"`
-	Format     string              `json:"format"`
-	Ref        string              `json:"ref,omitempty"`
-	Target     string              `json:"target,omitempty"`
-	Route      map[string]PlanAxis `json:"route,omitempty"`
-	Classify   PlanAxis            `json:"classify"`
-	Decode     PlanAxis            `json:"decode"`
+	Operation   string              `json:"operation"`
+	BindingKey  string              `json:"bindingKey"`
+	BindingSpec string              `json:"bindingSpec"`
+	Ref         string              `json:"ref,omitempty"`
+	Target      string              `json:"target,omitempty"`
+	Route       map[string]PlanAxis `json:"route,omitempty"`
+	Classify    PlanAxis            `json:"classify"`
+	Decode      PlanAxis            `json:"decode"`
 }
 
 // BindingPlan is the format package's contribution to an InvocationPlan:
@@ -304,7 +305,7 @@ func (h *InvokeHooks) DecodeOutput(site InvokeSite, raw RawResult, builtin Outpu
 	if builtin == nil {
 		return nil, &InvocationError{
 			Code:    ErrCodeRuntime,
-			Message: fmt.Sprintf("openbindings: no decoder for format %q (axis not consulted per its matrix row) and every hook declined", site.Format),
+			Message: fmt.Sprintf("openbindings: no decoder for format %q (axis not consulted per its matrix row) and every hook declined", site.BindingSpec),
 		}
 	}
 	v, derr := runDecodeHook(tierBuiltin, builtin, site, raw)
@@ -372,7 +373,7 @@ func (h *InvokeHooks) Classify(site InvokeSite, raw RawResult, builtin ResultCla
 	if builtin == nil {
 		return false, &InvocationError{
 			Code:    ErrCodeRuntime,
-			Message: fmt.Sprintf("openbindings: no classifier for format %q (axis not consulted per its matrix row) and every hook declined", site.Format),
+			Message: fmt.Sprintf("openbindings: no classifier for format %q (axis not consulted per its matrix row) and every hook declined", site.BindingSpec),
 		}
 	}
 	v, cerr := runClassifyHook(tierBuiltin, builtin, site, raw)
@@ -472,7 +473,7 @@ func builtinAbsentError(site InvokeSite, axis string) *InvocationError {
 	}
 	return &InvocationError{
 		Code:    ErrCodeRuntime,
-		Message: fmt.Sprintf("openbindings: no builtin %s for format %q: %s", axis, site.Format, why),
+		Message: fmt.Sprintf("openbindings: no builtin %s for format %q: %s", axis, site.BindingSpec, why),
 	}
 }
 

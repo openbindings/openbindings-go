@@ -43,9 +43,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// FormatToken is the canonical format token for Cloudflare Workers RPC
+// BindingSpec is the canonical format token for Cloudflare Workers RPC
 // bindings. The semver range matches anything in the 1.x line.
-const FormatToken = "workers-rpc@^1.0.0"
+const BindingSpec = "workers-rpc@^1.0.0"
 
 // DefaultSourceName is the conventional source key used when registering
 // a workers-rpc source in an OBInterface. Consumers can override.
@@ -65,9 +65,9 @@ func NewInvoker() *Invoker {
 }
 
 // Formats returns the format tokens this invoker recognizes.
-func (e *Invoker) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{
-		Token:       FormatToken,
+func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{
+		BindingSpec: BindingSpec,
 		Description: "Cloudflare Workers RPC bindings (Go-side stub; dispatch requires the Workers runtime)",
 	}}
 }
@@ -98,9 +98,9 @@ func NewSynthesizer() *Synthesizer {
 }
 
 // Formats returns the format tokens this synthesizer recognizes.
-func (c *Synthesizer) Formats() []openbindings.FormatInfo {
-	return []openbindings.FormatInfo{{
-		Token:       FormatToken,
+func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{
+		BindingSpec: BindingSpec,
 		Description: "Cloudflare Workers RPC bindings (hand-authored; no source synthesis)",
 	}}
 }
