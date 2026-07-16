@@ -1,5 +1,16 @@
 package schemaprofile
 
+// Conformance corpus adapter: runs this package's normalization and
+// directional compatibility checks against the interfaces repository's
+// schema-comparison corpus unmodified (conformance/comparison — the
+// schema-comparison profile's fail-closed boundary, normalization
+// equivalence, directional subsumption, boolean schema forms, and the
+// unspecified-schema suppression rule).
+//
+// The corpus is located via OB_INTERFACES_CORPUS or the local-dev sibling
+// path (openbindings/interfaces next to openbindings/openbindings-go); the
+// tests skip when it is absent.
+
 import (
 	"encoding/json"
 	"errors"
@@ -8,7 +19,9 @@ import (
 	"testing"
 )
 
-// Manifest and fixture types matching the spec conformance format.
+// Manifest and fixture types matching the corpus conventions
+// (interfaces/conformance/comparison/manifest.schema.json and
+// fixture.schema.json).
 
 type manifest struct {
 	ConventionVersion string         `json:"conventionVersion"`
@@ -40,10 +53,13 @@ type obInterface struct {
 	Raw          map[string]any             `json:"-"` // full document for Normalizer.Root
 }
 
+// obOperation carries schema slots as `any` because fixtures may use either
+// JSON Schema form: an object, or a boolean (§5.2). Absent slots decode to
+// nil, which means unspecified.
 type obOperation struct {
-	Input   map[string]any `json:"input,omitempty"`
-	Output  map[string]any `json:"output,omitempty"`
-	Aliases []string       `json:"aliases,omitempty"`
+	Input   any      `json:"input,omitempty"`
+	Output  any      `json:"output,omitempty"`
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 type fixtureOptions struct {
@@ -63,38 +79,60 @@ func (o *obInterface) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*plain)(o))
 }
 
-const conformanceDir = "../../spec/conformance/comparison/"
+// comparisonCorpusDir locates the interfaces conformance corpus: the
+// OB_INTERFACES_CORPUS environment variable, or the local-dev sibling
+// checkout. Same convention as selection_corpus_test.go at the module root.
+func comparisonCorpusDir(t *testing.T) string {
+	t.Helper()
+	if env := os.Getenv("OB_INTERFACES_CORPUS"); env != "" {
+		return env
+	}
+	dir := filepath.Join("..", "..", "interfaces", "conformance")
+	if _, err := os.Stat(dir); err != nil {
+		t.Skipf("interfaces conformance corpus not found at %s (set OB_INTERFACES_CORPUS)", dir)
+	}
+	return dir
+}
 
-// knownGaps lists fixtures that expose known gaps in the schemaprofile package.
-// Each entry maps a fixture path to the reason it must be skipped. These are
-// legitimate spec requirements that the package does not yet implement.
-var knownGaps = map[string]string{
-	// The normalizer does not detect draft-04 boolean exclusiveMinimum/
-	// exclusiveMaximum as non-2020-12 schema constructs. It should reject
-	// them with OutsideProfileError to produce an "indeterminate" verdict.
-	"profile/profile-schema-not-2020-12-indeterminate.json": "normalizer does not detect draft-04 boolean exclusiveMinimum as non-2020-12",
+// fixtureSchemaObjectForm maps a fixture schema value to the object form the
+// profile compares: an object schema as itself, boolean `true` as `{}`, and
+// boolean `false` as `{"not": {}}` — the same equivalent spellings the SDK's
+// SchemaObjectForm applies at the compatibility layer (duplicated here
+// because an in-package test cannot import the root module without a cycle).
+// ok is false when v is neither an object nor a boolean.
+func fixtureSchemaObjectForm(v any) (map[string]any, bool) {
+	switch s := v.(type) {
+	case map[string]any:
+		return s, true
+	case bool:
+		if s {
+			return map[string]any{}, true
+		}
+		return map[string]any{"not": map[string]any{}}, true
+	default:
+		return nil, false
+	}
+}
 
-	// Same root cause as above: one operation uses draft-04 boolean
-	// exclusiveMinimum, which should collapse the multi-op verdict to
-	// indeterminate.
-	"structural/verdict-collapse-indeterminate-dominates.json": "normalizer does not detect draft-04 boolean exclusiveMinimum as non-2020-12",
-
-	// The compat logic explicitly skips additionalProperties for input
-	// direction, but the spec says disabling additionalProperties on the
-	// candidate is a breaking input change.
-	"subsumption/additional-properties-input-disabled-breaking.json": "InputCompatible does not enforce additionalProperties restriction",
-
-	// The schemaprofile package does not implement the suppression mechanism.
-	// Suppressions are an interface-level concern that downgrade breaking
-	// findings to compatible.
-	"suppression/suppressed-required-input-added-audit.json": "suppression mechanism not implemented",
+func directionSchema(t *testing.T, direction string, op obOperation) any {
+	t.Helper()
+	switch direction {
+	case "input":
+		return op.Input
+	case "output":
+		return op.Output
+	default:
+		t.Fatalf("unknown direction %q", direction)
+		return nil
+	}
 }
 
 func TestConformance(t *testing.T) {
-	manifestPath := filepath.Join(conformanceDir, "manifest.json")
+	dir := filepath.Join(comparisonCorpusDir(t), "comparison")
+	manifestPath := filepath.Join(dir, "manifest.json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		t.Skipf("conformance fixtures not available (run from monorepo): %v", err)
+		t.Skipf("comparison corpus not available at %s: %v", dir, err)
 	}
 
 	var m manifest
@@ -109,16 +147,7 @@ func TestConformance(t *testing.T) {
 	for _, entry := range m.Files {
 		entry := entry
 		t.Run(entry.Path, func(t *testing.T) {
-			if entry.Verdict == "unverified" {
-				t.Skipf("unverified verdict (outside schemaprofile scope)")
-				return
-			}
-			if reason, ok := knownGaps[entry.Path]; ok {
-				t.Skipf("known gap: %s", reason)
-				return
-			}
-
-			fixturePath := filepath.Join(conformanceDir, entry.Path)
+			fixturePath := filepath.Join(dir, entry.Path)
 			fdata, err := os.ReadFile(fixturePath)
 			if err != nil {
 				t.Fatalf("read fixture: %v", err)
@@ -140,14 +169,13 @@ func TestConformance(t *testing.T) {
 		})
 		ran++
 	}
-	t.Logf("ran %d conformance fixtures (%d skipped as known gaps, 1 unverified)",
-		ran, len(knownGaps))
+	t.Logf("ran %d conformance fixtures", ran)
 }
 
 // runSubsumeFixture tests subsumption mode by pairing operations between left
 // and right, then calling InputCompatible or OutputCompatible on matched schemas.
-// The per-operation results are collapsed to a summary verdict using the same
-// dominance rules the spec defines: indeterminate > incompatible > compatible.
+// The per-operation results are collapsed to a summary verdict using the
+// profile's dominance rules: indeterminate > incompatible > compatible.
 func runSubsumeFixture(t *testing.T, entry manifestFile, fix fixture) {
 	t.Helper()
 
@@ -218,41 +246,41 @@ func findPairedOp(leftKey string, rightOps map[string]obOperation, leftAliasInde
 func compareOperation(t *testing.T, direction string, leftOp, rightOp obOperation, leftRoot, rightRoot map[string]any, opKey string) opResult {
 	t.Helper()
 
-	var leftSchema, rightSchema map[string]any
-	switch direction {
-	case "input":
-		leftSchema = leftOp.Input
-		rightSchema = rightOp.Input
-	case "output":
-		leftSchema = leftOp.Output
-		rightSchema = rightOp.Output
-	default:
-		t.Fatalf("unknown direction %q", direction)
+	leftRaw := directionSchema(t, direction, leftOp)
+	rightRaw := directionSchema(t, direction, rightOp)
+
+	// An absent schema is unspecified, not Top: the slot's comparison is
+	// skipped and reports no finding — the profile's suppression rule, the
+	// same treatment CheckInterfaceCompatibility applies.
+	if leftRaw == nil || rightRaw == nil {
+		return opResult{verdict: "compatible"}
 	}
 
-	if leftSchema == nil {
-		leftSchema = map[string]any{}
+	leftSchema, ok := fixtureSchemaObjectForm(leftRaw)
+	if !ok {
+		t.Fatalf("operation %q: left %s schema is neither object nor boolean", opKey, direction)
 	}
-	if rightSchema == nil {
-		rightSchema = map[string]any{}
+	rightSchema, ok := fixtureSchemaObjectForm(rightRaw)
+	if !ok {
+		t.Fatalf("operation %q: right %s schema is neither object nor boolean", opKey, direction)
 	}
 
 	// Each schema resolves $ref against its own interface document.
 	// InputCompatible/OutputCompatible normalize both schemas internally,
 	// so we use the left document as Root. For fixtures with cross-document
-	// $ref resolution this would need separate normalizers, but the current
-	// conformance fixtures use self-contained schemas.
+	// $ref resolution this would need separate normalizers, so corpus
+	// fixtures only carry $refs that resolve against the left document.
 	n := &Normalizer{Root: leftRoot}
 
 	var (
-		ok      bool
-		compErr error
+		compatible bool
+		compErr    error
 	)
 	switch direction {
 	case "input":
-		ok, _, compErr = n.InputCompatible(leftSchema, rightSchema)
+		compatible, _, compErr = n.InputCompatible(leftSchema, rightSchema)
 	case "output":
-		ok, _, compErr = n.OutputCompatible(leftSchema, rightSchema)
+		compatible, _, compErr = n.OutputCompatible(leftSchema, rightSchema)
 	}
 
 	if compErr != nil {
@@ -262,7 +290,7 @@ func compareOperation(t *testing.T, direction string, leftOp, rightOp obOperatio
 		}
 		t.Fatalf("operation %q: unexpected error: %v", opKey, compErr)
 	}
-	if ok {
+	if compatible {
 		return opResult{verdict: "compatible"}
 	}
 	return opResult{verdict: "incompatible"}
@@ -279,22 +307,12 @@ func runIdenticalFixture(t *testing.T, entry manifestFile, fix fixture) {
 			t.Fatalf("operation %q in left but not in right", opKey)
 		}
 
-		var leftSchema, rightSchema map[string]any
-		switch entry.Direction {
-		case "input":
-			leftSchema = leftOp.Input
-			rightSchema = rightOp.Input
-		case "output":
-			leftSchema = leftOp.Output
-			rightSchema = rightOp.Output
-		default:
-			t.Fatalf("unknown direction %q", entry.Direction)
-		}
-
-		if leftSchema == nil {
+		leftSchema, ok := fixtureSchemaObjectForm(directionSchema(t, entry.Direction, leftOp))
+		if !ok {
 			leftSchema = map[string]any{}
 		}
-		if rightSchema == nil {
+		rightSchema, ok := fixtureSchemaObjectForm(directionSchema(t, entry.Direction, rightOp))
+		if !ok {
 			rightSchema = map[string]any{}
 		}
 
@@ -333,7 +351,7 @@ func runIdenticalFixture(t *testing.T, entry manifestFile, fix fixture) {
 	}
 }
 
-// collapseVerdicts applies spec verdict dominance:
+// collapseVerdicts applies the profile's verdict dominance:
 // indeterminate > incompatible > compatible.
 func collapseVerdicts(results []opResult) string {
 	has := map[string]bool{}
@@ -352,10 +370,10 @@ func collapseVerdicts(results []opResult) string {
 // TestConformance_ManifestComplete verifies that every fixture file referenced
 // in the manifest actually exists on disk.
 func TestConformance_ManifestComplete(t *testing.T) {
-	manifestPath := filepath.Join(conformanceDir, "manifest.json")
-	data, err := os.ReadFile(manifestPath)
+	dir := filepath.Join(comparisonCorpusDir(t), "comparison")
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
-		t.Skipf("conformance fixtures not available: %v", err)
+		t.Skipf("comparison corpus not available: %v", err)
 	}
 
 	var m manifest
@@ -364,7 +382,7 @@ func TestConformance_ManifestComplete(t *testing.T) {
 	}
 
 	for _, entry := range m.Files {
-		fixturePath := filepath.Join(conformanceDir, entry.Path)
+		fixturePath := filepath.Join(dir, entry.Path)
 		if _, err := os.Stat(fixturePath); err != nil {
 			t.Errorf("manifest references missing file: %s", entry.Path)
 		}
@@ -375,10 +393,10 @@ func TestConformance_ManifestComplete(t *testing.T) {
 // TestConformance_FixtureVerdictConsistency checks that the verdict in the
 // manifest matches the verdict in each fixture's expected.summary.verdict.
 func TestConformance_FixtureVerdictConsistency(t *testing.T) {
-	manifestPath := filepath.Join(conformanceDir, "manifest.json")
-	data, err := os.ReadFile(manifestPath)
+	dir := filepath.Join(comparisonCorpusDir(t), "comparison")
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
-		t.Skipf("conformance fixtures not available: %v", err)
+		t.Skipf("comparison corpus not available: %v", err)
 	}
 
 	var m manifest
@@ -387,7 +405,7 @@ func TestConformance_FixtureVerdictConsistency(t *testing.T) {
 	}
 
 	for _, entry := range m.Files {
-		fixturePath := filepath.Join(conformanceDir, entry.Path)
+		fixturePath := filepath.Join(dir, entry.Path)
 		fdata, err := os.ReadFile(fixturePath)
 		if err != nil {
 			t.Errorf("read fixture %s: %v", entry.Path, err)
@@ -412,34 +430,6 @@ func TestConformance_FixtureVerdictConsistency(t *testing.T) {
 		if expected.Summary.Verdict != entry.Verdict {
 			t.Errorf("%s: manifest verdict %q != fixture expected verdict %q",
 				entry.Path, entry.Verdict, expected.Summary.Verdict)
-		}
-	}
-}
-
-// TestConformance_KnownGapsAreReal verifies that each entry in knownGaps
-// still references a fixture that exists in the manifest. If a fixture is
-// removed from the manifest, the knownGaps entry should be removed too.
-func TestConformance_KnownGapsAreReal(t *testing.T) {
-	manifestPath := filepath.Join(conformanceDir, "manifest.json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Skipf("conformance fixtures not available: %v", err)
-	}
-
-	var m manifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		t.Fatalf("unmarshal manifest: %v", err)
-	}
-
-	manifestPaths := map[string]bool{}
-	for _, entry := range m.Files {
-		manifestPaths[entry.Path] = true
-	}
-
-	for path, reason := range knownGaps {
-		if !manifestPaths[path] {
-			t.Errorf("knownGaps entry %q (reason: %s) does not appear in manifest; remove it",
-				path, reason)
 		}
 	}
 }
