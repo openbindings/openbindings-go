@@ -232,14 +232,14 @@ func TestSnapshotHooks_ComposesTiers(t *testing.T) {
 // a hook decode, a wire-framed lane, an absent stamp (no decode ran), or a
 // discriminating schema silences it.
 func TestAssumptionWarning(t *testing.T) {
-	floor := JSONSchema{"type": "string", "x-ob": map[string]any{"floor": "text"}}
+	floor := map[string]any{"type": "string", "x-ob": map[string]any{"floor": "text"}}
 	if w := AssumptionWarning("assumption/text", floor); w == "" || !strings.Contains(w, "floor-stamped") {
 		t.Fatalf("floor-stamped + assumption decode must warn, got %q", w)
 	}
 	if w := AssumptionWarning("assumption/text", nil); !strings.Contains(w, "no output schema") {
 		t.Fatalf("no schema + assumption decode must warn, got %q", w)
 	}
-	typed := JSONSchema{"type": "object", "required": []any{"id"}}
+	typed := map[string]any{"type": "object", "required": []any{"id"}}
 	if w := AssumptionWarning("assumption/text", typed); w != "" {
 		t.Fatalf("a discriminating schema must not warn, got %q", w)
 	}

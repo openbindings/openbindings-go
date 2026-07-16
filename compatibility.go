@@ -78,12 +78,18 @@ func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityI
 		// Per spec: absent/null schemas are "unspecified" (skip in compatibility).
 		// Empty {} schemas are "accepts anything" (must be checked).
 		// Use != nil to distinguish: nil = unspecified, non-nil (including empty) = specified.
+		// Boolean schemas take their equivalent object spellings (true = {},
+		// false = {"not": {}}) so the profile normalizer sees one form.
 		if reqOp.Output != nil && provOp.Output != nil {
-			compatible, reason, err := norm.OutputCompatible(
-				map[string]any(reqOp.Output),
-				map[string]any(provOp.Output),
-			)
-			if err != nil {
+			reqOut, reqOK := SchemaObjectForm(reqOp.Output)
+			provOut, provOK := SchemaObjectForm(provOp.Output)
+			if !reqOK || !provOK {
+				issues = append(issues, CompatibilityIssue{
+					Operation: opKey,
+					Kind:      CompatibilityOutputIncompatible,
+					Detail:    "output schema check failed: schema is not a JSON Schema object or boolean",
+				})
+			} else if compatible, reason, err := norm.OutputCompatible(reqOut, provOut); err != nil {
 				issues = append(issues, CompatibilityIssue{
 					Operation: opKey,
 					Kind:      CompatibilityOutputIncompatible,
@@ -103,11 +109,15 @@ func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityI
 		}
 
 		if reqOp.Input != nil && provOp.Input != nil {
-			compatible, reason, err := norm.InputCompatible(
-				map[string]any(reqOp.Input),
-				map[string]any(provOp.Input),
-			)
-			if err != nil {
+			reqIn, reqOK := SchemaObjectForm(reqOp.Input)
+			provIn, provOK := SchemaObjectForm(provOp.Input)
+			if !reqOK || !provOK {
+				issues = append(issues, CompatibilityIssue{
+					Operation: opKey,
+					Kind:      CompatibilityInputIncompatible,
+					Detail:    "input schema check failed: schema is not a JSON Schema object or boolean",
+				})
+			} else if compatible, reason, err := norm.InputCompatible(reqIn, provIn); err != nil {
 				issues = append(issues, CompatibilityIssue{
 					Operation: opKey,
 					Kind:      CompatibilityInputIncompatible,

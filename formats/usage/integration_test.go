@@ -303,7 +303,7 @@ cmd "config" subcommand_required=#true {
 	if greetOp.Input == nil {
 		t.Fatal("expected greet input schema")
 	}
-	props := greetOp.Input["properties"].(map[string]any)
+	props := greetOp.Input.(map[string]any)["properties"].(map[string]any)
 	if _, ok := props["name"]; !ok {
 		t.Error("expected 'name' flag in greet input")
 	}
@@ -327,7 +327,7 @@ cmd "config" subcommand_required=#true {
 
 	// FLOOR-TRUE derived outputs: {"type":"string"} with the in-schema
 	// x-ob floor-stamp the diagnostics key on.
-	out := iface.Operations["config.get"].Output
+	out, _ := iface.Operations["config.get"].Output.(map[string]any)
 	if out == nil || out["type"] != "string" {
 		t.Fatalf("expected floor-true string output schema, got %v", out)
 	}

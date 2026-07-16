@@ -336,10 +336,10 @@ func TestResolveRefs_EndToEnd_SynthesizeInterface(t *testing.T) {
 	if op.Output == nil {
 		t.Fatal("expected output schema from resolved $ref chain")
 	}
-	if op.Output["type"] != "object" {
-		t.Errorf("output type = %v, want 'object'", op.Output["type"])
+	if op.Output.(map[string]any)["type"] != "object" {
+		t.Errorf("output type = %v, want 'object'", op.Output.(map[string]any)["type"])
 	}
-	props, ok := op.Output["properties"].(map[string]any)
+	props, ok := op.Output.(map[string]any)["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected properties in output")
 	}

@@ -777,7 +777,7 @@ func TestOperation_EmptySchemaRoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	op := i.Operations["op"]
-	if op.Input == nil || len(op.Input) != 0 {
+	if inMap, ok := op.Input.(map[string]any); !ok || len(inMap) != 0 {
 		t.Fatalf("expected non-nil empty Input schema, got %#v", op.Input)
 	}
 	out, err := json.Marshal(i)
@@ -856,5 +856,42 @@ func TestOperationExample_ExplicitNullPresenceAndRoundTrip(t *testing.T) {
 	}
 	if _, ok := round["output"]; ok {
 		t.Fatalf("expected absent output to stay absent, got %s", out)
+	}
+}
+
+func TestOperation_BooleanSchemaRoundTrip(t *testing.T) {
+	// §5.2 admits boolean schemas at every schema position; true and false
+	// must parse into the typed model and survive marshal unchanged (false
+	// especially: an interface-typed field holding false is present, not
+	// empty).
+	in := []byte(`{"openbindings":"0.2.0","operations":{"op":{"input":true,"output":false}},"schemas":{"Anything":true}}`)
+	var i Interface
+	if err := json.Unmarshal(in, &i); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	op := i.Operations["op"]
+	if b, ok := op.Input.(bool); !ok || !b {
+		t.Fatalf("expected Input to hold boolean true, got %#v", op.Input)
+	}
+	if b, ok := op.Output.(bool); !ok || b {
+		t.Fatalf("expected Output to hold boolean false, got %#v", op.Output)
+	}
+	if b, ok := i.Schemas["Anything"].(bool); !ok || !b {
+		t.Fatalf("expected schemas entry to hold boolean true, got %#v", i.Schemas["Anything"])
+	}
+	out, err := json.Marshal(i)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(out, &round); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	opMap := round["operations"].(map[string]any)["op"].(map[string]any)
+	if v, ok := opMap["input"]; !ok || v != true {
+		t.Fatalf("expected input:true to survive round-trip, got %s", out)
+	}
+	if v, ok := opMap["output"]; !ok || v != false {
+		t.Fatalf("expected output:false to survive round-trip, got %s", out)
 	}
 }

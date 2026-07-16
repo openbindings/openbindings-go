@@ -4,14 +4,14 @@ import "testing"
 
 func TestValidateAgainstSchema(t *testing.T) {
 	schemas := map[string]JSONSchema{
-		"Thing": {
+		"Thing": map[string]any{
 			"type":                 "object",
 			"properties":           map[string]any{"name": map[string]any{"type": "string"}},
 			"required":             []any{"name"},
 			"additionalProperties": false,
 		},
 	}
-	opSchema := JSONSchema{"$ref": "#/schemas/Thing"}
+	opSchema := map[string]any{"$ref": "#/schemas/Thing"}
 
 	if err := ValidateAgainstSchema(map[string]any{"name": "ok"}, opSchema, schemas); err != nil {
 		t.Fatalf("valid value rejected: %v", err)
@@ -26,7 +26,7 @@ func TestValidateAgainstSchema(t *testing.T) {
 // schema carrying an external $ref the tool cannot fetch is a validation
 // error (fail closed), never a partial pass.
 func TestValidateAgainstSchema_ExternalRefFailsClosed(t *testing.T) {
-	opSchema := JSONSchema{"$ref": "https://example.com/schemas/user-input.json"}
+	opSchema := map[string]any{"$ref": "https://example.com/schemas/user-input.json"}
 	err := ValidateAgainstSchema(map[string]any{"id": "u1"}, opSchema, nil)
 	if err == nil {
 		t.Fatal("external $ref should fail closed, not validate partially")
@@ -37,11 +37,11 @@ func TestValidateAgainstSchema_ExternalRefFailsClosed(t *testing.T) {
 // rule: `format` never asserts at OBI validation boundaries — a value
 // violating `format` still validates; enforced syntax belongs to `pattern`.
 func TestValidateAgainstSchema_FormatIsAnnotationOnly(t *testing.T) {
-	opSchema := JSONSchema{"type": "string", "format": "email"}
+	opSchema := map[string]any{"type": "string", "format": "email"}
 	if err := ValidateAgainstSchema("not-an-email", opSchema, nil); err != nil {
 		t.Fatalf("format must be annotation-only at OBI boundaries, got %v", err)
 	}
-	patternSchema := JSONSchema{"type": "string", "pattern": "^[^@]+@[^@]+$"}
+	patternSchema := map[string]any{"type": "string", "pattern": "^[^@]+@[^@]+$"}
 	if err := ValidateAgainstSchema("not-an-email", patternSchema, nil); err == nil {
 		t.Fatal("pattern is the assertion lane and must reject")
 	}
@@ -51,7 +51,7 @@ func TestValidateAgainstSchema_FormatIsAnnotationOnly(t *testing.T) {
 // OBI boundaries: JSON Schema 2020-12 specifies ECMA-262 semantics, so a
 // lookahead pattern (inexpressible in RE2) asserts correctly.
 func TestValidateAgainstSchema_ECMAPatternDialect(t *testing.T) {
-	lookahead := JSONSchema{"type": "string", "pattern": "^(?=.*[A-Z]).*$"}
+	lookahead := map[string]any{"type": "string", "pattern": "^(?=.*[A-Z]).*$"}
 	if err := ValidateAgainstSchema("Password1", lookahead, nil); err != nil {
 		t.Fatalf("lookahead must match per ECMA dialect, got %v", err)
 	}
@@ -73,7 +73,7 @@ func TestValidateAgainstSchema_ECMAPatternDialect(t *testing.T) {
 // Full 2020-12 recursive-extension semantics apply within the resource.
 func TestValidateAgainstSchema_DynamicPairInsideEmbeddedID(t *testing.T) {
 	schemas := map[string]JSONSchema{
-		"Tree": {
+		"Tree": map[string]any{
 			"$id":            "https://example.com/tree.schema.json",
 			"$dynamicAnchor": "node",
 			"type":           "object",
@@ -85,7 +85,7 @@ func TestValidateAgainstSchema_DynamicPairInsideEmbeddedID(t *testing.T) {
 			},
 		},
 	}
-	opSchema := JSONSchema{"$ref": "#/schemas/Tree"}
+	opSchema := map[string]any{"$ref": "#/schemas/Tree"}
 
 	good := map[string]any{"children": []any{map[string]any{"children": []any{}}}}
 	if err := ValidateAgainstSchema(good, opSchema, schemas); err != nil {
@@ -108,9 +108,9 @@ func TestValidateAgainstSchema_DynamicPairInsideEmbeddedID(t *testing.T) {
 // RFC-correct on its own).
 func TestValidateAgainstSchema_PercentEncodedFragmentResolves(t *testing.T) {
 	schemas := map[string]JSONSchema{
-		"Task": {"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}},
+		"Task": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}},
 	}
-	opSchema := JSONSchema{"$ref": "#/schemas/T%61sk"}
+	opSchema := map[string]any{"$ref": "#/schemas/T%61sk"}
 
 	if err := ValidateAgainstSchema(map[string]any{"name": "ok"}, opSchema, schemas); err != nil {
 		t.Fatalf("percent-encoded fragment should resolve end to end, got %v", err)
@@ -131,7 +131,7 @@ func TestValidateAgainstSchema_PercentEncodedFragmentResolves(t *testing.T) {
 // schema-conformance oracle.
 func TestValidateAgainstSchema_ReachableClosureOnly(t *testing.T) {
 	// Unreferenced $defs entry with an external $ref: must not refuse.
-	dead := JSONSchema{
+	dead := map[string]any{
 		"type":  "string",
 		"$defs": map[string]any{"dead": map[string]any{"$ref": "https://example.com/never-fetched.json"}},
 	}
@@ -141,13 +141,13 @@ func TestValidateAgainstSchema_ReachableClosureOnly(t *testing.T) {
 	// Unrelated document-schemas entry with an external $ref: must not
 	// poison an operation that never references it.
 	unrelated := map[string]JSONSchema{
-		"Unused": {"$ref": "https://example.com/never-fetched.json"},
+		"Unused": map[string]any{"$ref": "https://example.com/never-fetched.json"},
 	}
-	if err := ValidateAgainstSchema("hi", JSONSchema{"type": "string"}, unrelated); err != nil {
+	if err := ValidateAgainstSchema("hi", map[string]any{"type": "string"}, unrelated); err != nil {
 		t.Fatalf("unreachable document schema must not poison the boundary, got %v", err)
 	}
 	// The same external $ref REACHED from the root still fails closed.
-	reached := JSONSchema{
+	reached := map[string]any{
 		"$ref":  "#/$defs/a",
 		"$defs": map[string]any{"a": map[string]any{"$ref": "https://example.com/never-fetched.json"}},
 	}
@@ -156,9 +156,9 @@ func TestValidateAgainstSchema_ReachableClosureOnly(t *testing.T) {
 	}
 	// And a document-schemas entry reached from the root still fails closed.
 	used := map[string]JSONSchema{
-		"Used": {"$ref": "https://example.com/never-fetched.json"},
+		"Used": map[string]any{"$ref": "https://example.com/never-fetched.json"},
 	}
-	if err := ValidateAgainstSchema("hi", JSONSchema{"$ref": "#/schemas/Used"}, used); err == nil {
+	if err := ValidateAgainstSchema("hi", map[string]any{"$ref": "#/schemas/Used"}, used); err == nil {
 		t.Fatal("reachable document schema's external $ref must fail closed")
 	}
 }

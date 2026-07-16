@@ -148,12 +148,13 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// the field is resolved via inline content or (cached) network
 	// introspection and its declared args answer it (TS parity: schema/
 	// args-driven, the GraphQL-native signal).
-	prebuiltQuery, hasPrebuilt := queryFromSchema(args.InputSchema)
+	inputSchemaObj, _ := args.InputSchema.(map[string]any)
+	prebuiltQuery, hasPrebuilt := queryFromSchema(inputSchemaObj)
 
 	var schema *introspectionSchema
 	wantsInput := true
 	if hasPrebuilt {
-		wantsInput = schemaDeclaresVariables(args.InputSchema)
+		wantsInput = schemaDeclaresVariables(inputSchemaObj)
 	} else {
 		s, ierr := e.resolveSchema(bctx, args, headers)
 		if ierr != nil {

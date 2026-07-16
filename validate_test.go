@@ -281,10 +281,10 @@ func TestInterfaceValidate_SourceAcceptsBothLocationAndContent(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_EmptyTransformExpressionAccepted(t *testing.T) {
-	// No document rule forbids an empty transform expression (the schema
-	// allows any string). Evaluation failures surface at invoke time via
-	// ErrEmptyTransformExpression, not at document validation.
+func TestInterfaceValidate_EmptyTransformExpressionRejected(t *testing.T) {
+	// OBI-D-18: every value in the transforms map parses as a syntactically
+	// valid JSONata expression; an empty string is not one (jsonata-js 2.1.1
+	// rejects it at parse, the normative tiebreak).
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations:   map[string]Operation{},
@@ -292,8 +292,12 @@ func TestInterfaceValidate_EmptyTransformExpressionAccepted(t *testing.T) {
 			"empty": "",
 		},
 	}
-	if err := i.Validate(); err != nil {
-		t.Fatalf("expected empty named transform to be accepted, got %v", err)
+	err := i.Validate()
+	if err == nil {
+		t.Fatal("expected empty named transform to be rejected (OBI-D-18)")
+	}
+	if !strings.Contains(err.Error(), `transforms["empty"]: not a syntactically valid JSONata expression (OBI-D-18)`) {
+		t.Fatalf("expected OBI-D-18 problem for empty transform, got %v", err)
 	}
 }
 
@@ -354,10 +358,10 @@ func TestInterfaceValidate_PlainNameFragmentRefRejected(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$ref": "#task"}},
+			"getTask": {Output: map[string]any{"$ref": "#task"}},
 		},
 		Schemas: map[string]JSONSchema{
-			"Task": {"$anchor": "task", "type": "object"},
+			"Task": map[string]any{"$anchor": "task", "type": "object"},
 		},
 	}
 	err := i.Validate()
@@ -376,9 +380,9 @@ func TestInterfaceValidate_DanglingSchemaRefRejected(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Missing"}},
+			"getTask": {Output: map[string]any{"$ref": "#/schemas/Missing"}},
 		},
-		Schemas: map[string]JSONSchema{"Task": {"type": "object"}},
+		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
 	err := i.Validate()
 	if err == nil {
@@ -396,9 +400,9 @@ func TestInterfaceValidate_PercentEncodedFragmentResolves(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$ref": "#/schemas/T%61sk"}},
+			"getTask": {Output: map[string]any{"$ref": "#/schemas/T%61sk"}},
 		},
-		Schemas: map[string]JSONSchema{"Task": {"type": "object"}},
+		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
 	if err := i.Validate(); err != nil {
 		t.Fatalf("percent-encoded fragment should resolve, got %v", err)
@@ -412,9 +416,9 @@ func TestInterfaceValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) 
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$ref": "#/schemas/M%69ssing"}},
+			"getTask": {Output: map[string]any{"$ref": "#/schemas/M%69ssing"}},
 		},
-		Schemas: map[string]JSONSchema{"Task": {"type": "object"}},
+		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
 	err := i.Validate()
 	if err == nil {
@@ -431,10 +435,10 @@ func TestInterfaceValidate_NestedIDScopeSkipsD16(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Task"}},
+			"getTask": {Output: map[string]any{"$ref": "#/schemas/Task"}},
 		},
 		Schemas: map[string]JSONSchema{
-			"Task": {
+			"Task": map[string]any{
 				"$id":        "https://example.com/task.schema.json",
 				"type":       "object",
 				"properties": map[string]any{"parent": map[string]any{"$ref": "#/$defs/base"}},
@@ -454,10 +458,10 @@ func TestInterfaceValidate_AnchorInsideIDScopePermitted(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Task"}},
+			"getTask": {Output: map[string]any{"$ref": "#/schemas/Task"}},
 		},
 		Schemas: map[string]JSONSchema{
-			"Task": {
+			"Task": map[string]any{
 				"$id":        "https://example.com/task.schema.json",
 				"type":       "object",
 				"properties": map[string]any{"kind": map[string]any{"$ref": "#kindAnchor"}},
@@ -478,10 +482,10 @@ func TestInterfaceValidate_NestedRelativeIDInsideIDScopePermitted(t *testing.T) 
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Task"}},
+			"getTask": {Output: map[string]any{"$ref": "#/schemas/Task"}},
 		},
 		Schemas: map[string]JSONSchema{
-			"Task": {
+			"Task": map[string]any{
 				"$id":   "https://example.com/task.schema.json",
 				"type":  "object",
 				"$defs": map[string]any{"kind": map[string]any{"$id": "kind.schema.json", "type": "string"}},
@@ -499,10 +503,10 @@ func TestInterfaceValidate_TopLevelRelativeIDRejected(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Task"}},
+			"getTask": {Output: map[string]any{"$ref": "#/schemas/Task"}},
 		},
 		Schemas: map[string]JSONSchema{
-			"Task": {"$id": "task.schema.json", "type": "object"},
+			"Task": map[string]any{"$id": "task.schema.json", "type": "object"},
 		},
 	}
 	err := i.Validate()
@@ -520,7 +524,7 @@ func TestInterfaceValidate_DynamicRefAtOperationPositionRejected(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$dynamicRef": "#node"}},
+			"getTask": {Output: map[string]any{"$dynamicRef": "#node"}},
 		},
 	}
 	err := i.Validate()
@@ -538,10 +542,10 @@ func TestInterfaceValidate_DynamicAnchorInSchemasMapRejected(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Task"}},
+			"getTask": {Output: map[string]any{"$ref": "#/schemas/Task"}},
 		},
 		Schemas: map[string]JSONSchema{
-			"Task": {"$dynamicAnchor": "task", "type": "object"},
+			"Task": map[string]any{"$dynamicAnchor": "task", "type": "object"},
 		},
 	}
 	err := i.Validate()
@@ -561,10 +565,10 @@ func TestInterfaceValidate_DynamicPairInsideIDScopePermitted(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{"$ref": "#/schemas/Tree"}},
+			"getTask": {Output: map[string]any{"$ref": "#/schemas/Tree"}},
 		},
 		Schemas: map[string]JSONSchema{
-			"Tree": {
+			"Tree": map[string]any{
 				"$id":            "https://example.com/tree.schema.json",
 				"$dynamicAnchor": "node",
 				"type":           "object",
@@ -589,7 +593,7 @@ func TestInterfaceValidate_PropertyNamedDynamicRefIsData(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
-			"getTask": {Output: JSONSchema{
+			"getTask": {Output: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"$dynamicRef":    map[string]any{"type": "string"},
@@ -678,9 +682,9 @@ func TestInterfaceValidate_SourceRefMustExist(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_EmptyInlineTransformAccepted(t *testing.T) {
-	// No document rule forbids an empty inline transform expression; the
-	// invoke layer fails empty expressions at run time instead.
+func TestInterfaceValidate_EmptyInlineTransformRejected(t *testing.T) {
+	// OBI-D-18: an inline transform string must parse as a syntactically
+	// valid JSONata expression; an empty string is not one.
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -697,8 +701,12 @@ func TestInterfaceValidate_EmptyInlineTransformAccepted(t *testing.T) {
 			},
 		},
 	}
-	if err := i.Validate(); err != nil {
-		t.Fatalf("expected empty inline transform to be accepted, got %v", err)
+	err := i.Validate()
+	if err == nil {
+		t.Fatal("expected empty inline transform to be rejected (OBI-D-18)")
+	}
+	if !strings.Contains(err.Error(), `bindings["op.api"].outputTransform: not a syntactically valid JSONata expression (OBI-D-18)`) {
+		t.Fatalf("expected OBI-D-18 problem for empty inline transform, got %v", err)
 	}
 }
 
@@ -759,8 +767,8 @@ func newInterfaceWithExamples(inputSchema, outputSchema JSONSchema, examples map
 
 func TestInterfaceValidate_ExampleValidation_ValidExamplePasses(t *testing.T) {
 	i := newInterfaceWithExamples(
-		JSONSchema{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
-		JSONSchema{"type": "object", "properties": map[string]any{"greeting": map[string]any{"type": "string"}}},
+		map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
+		map[string]any{"type": "object", "properties": map[string]any{"greeting": map[string]any{"type": "string"}}},
 		map[string]OperationExample{
 			"basic": {
 				Input:  map[string]any{"name": "Alice"},
@@ -775,7 +783,7 @@ func TestInterfaceValidate_ExampleValidation_ValidExamplePasses(t *testing.T) {
 
 func TestInterfaceValidate_ExampleValidation_InvalidInputFails(t *testing.T) {
 	i := newInterfaceWithExamples(
-		JSONSchema{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
+		map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
 		nil, // no output schema
 		map[string]OperationExample{
 			"bad": {
@@ -799,7 +807,7 @@ func TestInterfaceValidate_ExampleValidation_InvalidInputFails(t *testing.T) {
 func TestInterfaceValidate_ExampleValidation_InvalidOutputFails(t *testing.T) {
 	i := newInterfaceWithExamples(
 		nil, // no input schema
-		JSONSchema{"type": "object", "properties": map[string]any{"count": map[string]any{"type": "integer"}}, "additionalProperties": false},
+		map[string]any{"type": "object", "properties": map[string]any{"count": map[string]any{"type": "integer"}}, "additionalProperties": false},
 		map[string]OperationExample{
 			"bad": {
 				// "count" should be integer, not string; extra field also present.
@@ -821,7 +829,7 @@ func TestInterfaceValidate_ExampleValidation_InvalidOutputFails(t *testing.T) {
 
 func TestInterfaceValidate_ExampleValidation_RunsByDefault(t *testing.T) {
 	i := newInterfaceWithExamples(
-		JSONSchema{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
+		map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
 		nil,
 		map[string]OperationExample{
 			"bad": {
@@ -854,8 +862,8 @@ func TestInterfaceValidate_ExampleValidation_NoSchemasSkipsGracefully(t *testing
 func TestInterfaceValidate_ExampleValidation_NoExamplesSkipsGracefully(t *testing.T) {
 	// Operation has schemas but no examples.
 	i := newInterfaceWithExamples(
-		JSONSchema{"type": "object"},
-		JSONSchema{"type": "object"},
+		map[string]any{"type": "object"},
+		map[string]any{"type": "object"},
 		nil,
 	)
 	if err := i.Validate(); err != nil {
@@ -866,8 +874,8 @@ func TestInterfaceValidate_ExampleValidation_NoExamplesSkipsGracefully(t *testin
 func TestInterfaceValidate_ExampleValidation_ExampleWithoutInputOrOutput(t *testing.T) {
 	// Example has neither input nor output -- should be skipped, not crash.
 	i := newInterfaceWithExamples(
-		JSONSchema{"type": "object"},
-		JSONSchema{"type": "object"},
+		map[string]any{"type": "object"},
+		map[string]any{"type": "object"},
 		map[string]OperationExample{
 			"empty": {Description: "an example with no data"},
 		},
@@ -882,11 +890,11 @@ func TestInterfaceValidate_ExampleValidation_WithSchemaRef(t *testing.T) {
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{
-			"Person": {"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
+			"Person": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}, "required": []any{"name"}},
 		},
 		Operations: map[string]Operation{
 			"greet": {
-				Input: JSONSchema{"$ref": "#/schemas/Person"},
+				Input: map[string]any{"$ref": "#/schemas/Person"},
 				Examples: map[string]OperationExample{
 					"valid":   {Input: map[string]any{"name": "Bob"}},
 					"invalid": {Input: map[string]any{"wrong": 1}},
@@ -1016,7 +1024,7 @@ func TestInterfaceValidate_ExampleValidation_ExternalRefAbstains(t *testing.T) {
 	// posture it abstains from example validation rather than failing the
 	// document.
 	i := newInterfaceWithExamples(
-		JSONSchema{"$ref": "https://schemas.example.com/user.json"},
+		map[string]any{"$ref": "https://schemas.example.com/user.json"},
 		nil,
 		map[string]OperationExample{
 			"opaque": {Input: map[string]any{"anything": true}},
@@ -1033,11 +1041,11 @@ func TestInterfaceValidate_ExampleValidation_ExternalRefInSchemasMapAbstains(t *
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{
-			"User": {"$ref": "https://schemas.example.com/user.json"},
+			"User": map[string]any{"$ref": "https://schemas.example.com/user.json"},
 		},
 		Operations: map[string]Operation{
 			"greet": {
-				Input: JSONSchema{"$ref": "#/schemas/User"},
+				Input: map[string]any{"$ref": "#/schemas/User"},
 				Examples: map[string]OperationExample{
 					"opaque": {Input: map[string]any{"anything": true}},
 				},
@@ -1054,11 +1062,11 @@ func TestInterfaceValidate_ExampleValidation_InternalRefStillValidated(t *testin
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{
-			"User": {"type": "object", "required": []any{"name"}},
+			"User": map[string]any{"type": "object", "required": []any{"name"}},
 		},
 		Operations: map[string]Operation{
 			"greet": {
-				Input: JSONSchema{"$ref": "#/schemas/User"},
+				Input: map[string]any{"$ref": "#/schemas/User"},
 				Examples: map[string]OperationExample{
 					"bad": {Input: map[string]any{"wrong": 42}},
 				},
@@ -1090,5 +1098,193 @@ func TestInterfaceValidate_RefusesBelowMinSupported(t *testing.T) {
 	msg := err.Error()
 	if !strings.Contains(msg, "below this SDK's MinSupportedVersion") || !strings.Contains(msg, "OBI-T-04") {
 		t.Errorf("refusal must cite the floor and the rule, got: %s", msg)
+	}
+}
+
+func TestInterfaceValidate_SchemaWellFormedness_BooleanForms(t *testing.T) {
+	// OBI-D-17 / §5.2: boolean schemas are valid at every schema position —
+	// operation input/output, schemas-map entries, and nested subschema
+	// positions.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Schemas: map[string]JSONSchema{
+			"Anything": true,
+		},
+		Operations: map[string]Operation{
+			"op": {
+				Input:  true,
+				Output: false,
+			},
+			"nested": {
+				Input: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"locked": false,
+						"values": map[string]any{"type": "array", "items": true},
+					},
+					"additionalProperties": false,
+				},
+			},
+		},
+	}
+	if err := i.Validate(); err != nil {
+		t.Fatalf("expected boolean-form schemas to validate, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_SchemaWellFormedness_MetaSchemaViolations(t *testing.T) {
+	// OBI-D-17: object-form schemas must validate against the 2020-12
+	// meta-schemas, recursively through subschemas.
+	cases := []struct {
+		name    string
+		op      Operation
+		wantSub string
+	}{
+		{
+			name:    "type as number at input",
+			op:      Operation{Input: map[string]any{"type": 42.0}},
+			wantSub: `operations["op"].input: not a well-formed JSON Schema 2020-12 schema:`,
+		},
+		{
+			name:    "unknown simple type",
+			op:      Operation{Input: map[string]any{"type": "str"}},
+			wantSub: `operations["op"].input: not a well-formed JSON Schema 2020-12 schema:`,
+		},
+		{
+			name:    "nested minLength as string",
+			op:      Operation{Output: map[string]any{"type": "object", "properties": map[string]any{"a": map[string]any{"minLength": "3"}}}},
+			wantSub: `operations["op"].output: not a well-formed JSON Schema 2020-12 schema:`,
+		},
+		{
+			name:    "oneOf as object",
+			op:      Operation{Output: map[string]any{"oneOf": map[string]any{"type": "string"}}},
+			wantSub: `operations["op"].output: not a well-formed JSON Schema 2020-12 schema:`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			i := Interface{
+				OpenBindings: "0.2.0",
+				Operations:   map[string]Operation{"op": tc.op},
+			}
+			err := i.Validate()
+			if err == nil {
+				t.Fatal("expected OBI-D-17 violation")
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) || !strings.Contains(err.Error(), "(OBI-D-17)") {
+				t.Fatalf("expected OBI-D-17 problem containing %q, got %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
+func TestInterfaceValidate_SchemaWellFormedness_NonSchemaValues(t *testing.T) {
+	// OBI-D-17: a value at a schema position that is neither object nor
+	// boolean form is a document defect with a deterministic diagnostic.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Schemas: map[string]JSONSchema{
+			"Task": 42.0,
+		},
+		Operations: map[string]Operation{
+			"op": {Output: "not-a-schema"},
+		},
+	}
+	err := i.Validate()
+	if err == nil {
+		t.Fatal("expected OBI-D-17 violations")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `schemas["Task"]: a schema is a JSON Schema 2020-12 object or boolean; got number (OBI-D-17)`) {
+		t.Errorf("expected schemas-map OBI-D-17 problem, got: %s", msg)
+	}
+	if !strings.Contains(msg, `operations["op"].output: a schema is a JSON Schema 2020-12 object or boolean; got string (OBI-D-17)`) {
+		t.Errorf("expected output OBI-D-17 problem, got: %s", msg)
+	}
+}
+
+func TestInterfaceValidate_SchemaWellFormedness_DeliberatelyNarrow(t *testing.T) {
+	// OBI-D-17 is narrow: unknown keywords, unparseable `pattern` regexes,
+	// and unresolvable external $refs all pass — they surface when the
+	// schema is used, not at document validation.
+	i := Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]Operation{
+			"op": {
+				Input: map[string]any{
+					"type":          "object",
+					"x-internal":    true,
+					"futureKeyword": map[string]any{"arbitrary": "annotation"},
+					"properties": map[string]any{
+						"code": map[string]any{"type": "string", "pattern": "([unclosed"},
+					},
+				},
+				Output: map[string]any{"$ref": "https://schemas.example.com/never-published/task.json"},
+			},
+		},
+	}
+	if err := i.Validate(); err != nil {
+		t.Fatalf("expected narrow OBI-D-17 to accept, got %v", err)
+	}
+}
+
+func TestInterfaceValidate_TransformParseValidity(t *testing.T) {
+	// OBI-D-18: named and inline transform expressions must parse as
+	// JSONata; parse-only (an expression whose evaluation would fail is
+	// still document-valid).
+	valid := Interface{
+		OpenBindings: "0.2.0",
+		Operations:   map[string]Operation{"op": {}},
+		Sources: map[string]Source{
+			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
+		},
+		Transforms: map[string]Transform{
+			"nontrivial":      `items[price > 10].{ "label": name & " ($" & $string(price) & ")", "total": price * quantity }`,
+			"evalWouldFail":   "payload.does.not.exist",
+			"unknownFunction": "$definitelyNotARealFunction(payload)",
+		},
+		Bindings: map[string]BindingEntry{
+			"op.api": {
+				Operation:      "op",
+				Source:         "api",
+				InputTransform: &TransformOrRef{Inline: `{ "task_title": title }`},
+			},
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("expected parse-valid transforms to be accepted, got %v", err)
+	}
+
+	invalid := Interface{
+		OpenBindings: "0.2.0",
+		Operations:   map[string]Operation{"op": {}},
+		Sources: map[string]Source{
+			"api": {BindingSpec: "openapi@3.1", Location: "https://api.example.com/api.json"},
+		},
+		Transforms: map[string]Transform{
+			"unbalanced": "(a + b",
+		},
+		Bindings: map[string]BindingEntry{
+			"op.api": {
+				Operation:       "op",
+				Source:          "api",
+				InputTransform:  &TransformOrRef{Inline: "items["},
+				OutputTransform: &TransformOrRef{Inline: `{ "id": }`},
+			},
+		},
+	}
+	err := invalid.Validate()
+	if err == nil {
+		t.Fatal("expected OBI-D-18 violations")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		`transforms["unbalanced"]: not a syntactically valid JSONata expression (OBI-D-18)`,
+		`bindings["op.api"].inputTransform: not a syntactically valid JSONata expression (OBI-D-18)`,
+		`bindings["op.api"].outputTransform: not a syntactically valid JSONata expression (OBI-D-18)`,
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("expected problem %q, got: %s", want, msg)
+		}
 	}
 }

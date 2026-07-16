@@ -7,7 +7,7 @@ func TestCheckInterfaceCompatibility_FullyCompatible(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"getStatus": {
-				Output: JSONSchema{
+				Output: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"status": map[string]any{"type": "string"},
@@ -21,7 +21,7 @@ func TestCheckInterfaceCompatibility_FullyCompatible(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"getStatus": {
-				Output: JSONSchema{
+				Output: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"status": map[string]any{"type": "string"},
@@ -73,7 +73,7 @@ func TestCheckInterfaceCompatibility_OutputUnspecifiedSkipped(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"getStatus": {
-				Output: JSONSchema{
+				Output: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"status": map[string]any{"type": "string"},
@@ -102,7 +102,7 @@ func TestCheckInterfaceCompatibility_OutputIncompatible(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"getStatus": {
-				Output: JSONSchema{
+				Output: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"status": map[string]any{"type": "string"},
@@ -116,7 +116,7 @@ func TestCheckInterfaceCompatibility_OutputIncompatible(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"getStatus": {
-				Output: JSONSchema{"type": "array"},
+				Output: map[string]any{"type": "array"},
 			},
 		},
 	}
@@ -137,7 +137,7 @@ func TestCheckInterfaceCompatibility_InputUnspecifiedSkipped(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"search": {
-				Input: JSONSchema{
+				Input: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"query": map[string]any{"type": "string"},
@@ -165,7 +165,7 @@ func TestCheckInterfaceCompatibility_InputIncompatible(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"search": {
-				Input: JSONSchema{
+				Input: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"query": map[string]any{"type": "string"},
@@ -178,7 +178,7 @@ func TestCheckInterfaceCompatibility_InputIncompatible(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"search": {
-				Input: JSONSchema{
+				Input: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"query": map[string]any{"type": "string"},
@@ -270,7 +270,7 @@ func TestCheckInterfaceCompatibility_DirectKeyTakesPrecedence(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"getStatus": {
-				Output: JSONSchema{"type": "object"},
+				Output: map[string]any{"type": "object"},
 			},
 		},
 	}
@@ -278,7 +278,7 @@ func TestCheckInterfaceCompatibility_DirectKeyTakesPrecedence(t *testing.T) {
 		OpenBindings: "0.1.0",
 		Operations: map[string]Operation{
 			"getStatus": {
-				Output: JSONSchema{"type": "object"},
+				Output: map[string]any{"type": "object"},
 			},
 			"statusAlias": {
 				Aliases: []string{"getStatus"},
@@ -300,13 +300,13 @@ func TestCheckInterfaceCompatibility_EmptySchemaDistinctFromAbsent(t *testing.T)
 		required := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
-				"op": {Output: JSONSchema{}},
+				"op": {Output: map[string]any{}},
 			},
 		}
 		provided := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
-				"op": {Output: JSONSchema{}},
+				"op": {Output: map[string]any{}},
 			},
 		}
 		issues := CheckInterfaceCompatibility(required, provided)
@@ -321,13 +321,13 @@ func TestCheckInterfaceCompatibility_EmptySchemaDistinctFromAbsent(t *testing.T)
 		required := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
-				"op": {Output: JSONSchema{}},
+				"op": {Output: map[string]any{}},
 			},
 		}
 		provided := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
-				"op": {Output: JSONSchema{"type": "string"}},
+				"op": {Output: map[string]any{"type": "string"}},
 			},
 		}
 		issues := CheckInterfaceCompatibility(required, provided)
@@ -342,13 +342,13 @@ func TestCheckInterfaceCompatibility_EmptySchemaDistinctFromAbsent(t *testing.T)
 		required := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
-				"op": {Output: JSONSchema{"type": "string"}},
+				"op": {Output: map[string]any{"type": "string"}},
 			},
 		}
 		provided := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
-				"op": {Output: JSONSchema{}},
+				"op": {Output: map[string]any{}},
 			},
 		}
 		issues := CheckInterfaceCompatibility(required, provided)
@@ -366,14 +366,14 @@ func TestCheckInterfaceCompatibility_EmptySchemaDistinctFromAbsent(t *testing.T)
 		required := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
-				"op": {Input: JSONSchema{}},
+				"op": {Input: map[string]any{}},
 			},
 		}
 		provided := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
 				"op": {
-					Input: JSONSchema{
+					Input: map[string]any{
 						"type": "string",
 					},
 				},
@@ -395,7 +395,7 @@ func TestCheckInterfaceCompatibility_EmptySchemaDistinctFromAbsent(t *testing.T)
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
 				"op": {
-					Input: JSONSchema{
+					Input: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
 							"query": map[string]any{"type": "string"},
@@ -407,7 +407,7 @@ func TestCheckInterfaceCompatibility_EmptySchemaDistinctFromAbsent(t *testing.T)
 		provided := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
-				"op": {Input: JSONSchema{}},
+				"op": {Input: map[string]any{}},
 			},
 		}
 		issues := CheckInterfaceCompatibility(required, provided)
@@ -420,13 +420,13 @@ func TestCheckInterfaceCompatibility_EmptySchemaDistinctFromAbsent(t *testing.T)
 		required := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
-				"op": {Input: JSONSchema{}},
+				"op": {Input: map[string]any{}},
 			},
 		}
 		provided := &Interface{
 			OpenBindings: "0.1.0",
 			Operations: map[string]Operation{
-				"op": {Input: JSONSchema{}},
+				"op": {Input: map[string]any{}},
 			},
 		}
 		issues := CheckInterfaceCompatibility(required, provided)

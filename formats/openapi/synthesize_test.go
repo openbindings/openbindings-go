@@ -200,7 +200,7 @@ paths:
 		t.Fatalf("abilityList operation missing")
 	}
 
-	props, ok := op.Output["properties"].(map[string]any)
+	props, ok := op.Output.(map[string]any)["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("output.properties missing or wrong type: %#v", op.Output)
 	}
@@ -250,7 +250,7 @@ paths:
 	iface := convertDocToInterface(doc, "", nil)
 
 	op := iface.Operations["x"]
-	props := op.Output["properties"].(map[string]any)
+	props := op.Output.(map[string]any)["properties"].(map[string]any)
 
 	legacy := props["legacy"].(map[string]any)
 	// In 3.1, nullable: true is an inert annotation; we pass it through.
@@ -288,7 +288,7 @@ paths:
 	iface := convertDocToInterface(doc, "", nil)
 
 	op := iface.Operations["q"]
-	props := op.Input["properties"].(map[string]any)
+	props := op.Input.(map[string]any)["properties"].(map[string]any)
 	page := props["page"].(map[string]any)
 
 	if _, hasMin := page["minimum"]; hasMin {
@@ -380,7 +380,7 @@ func TestSynthesize_ParamBodyCollisionWarns(t *testing.T) {
 	if len(warnings) != 1 || warnings[0].Code != "openapi.param_body_collision" {
 		t.Fatalf("want one param_body_collision warning, got %v", warnings)
 	}
-	props, _ := iface.Operations["updateUser"].Input["properties"].(map[string]any)
+	props, _ := iface.Operations["updateUser"].Input.(map[string]any)["properties"].(map[string]any)
 	if _, ok := props["id"]; !ok {
 		t.Fatalf("flattened input must carry one id field, got %v", props)
 	}
