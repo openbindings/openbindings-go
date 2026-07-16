@@ -27,7 +27,7 @@ import (
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 ```
 
-The invoker declares `openapi@^3.0.0` — it handles any OpenAPI 3.x spec.
+The invoker declares the binding specification `openbindings.openapi@1` — it handles OpenAPI 3.0.x and 3.1.x documents.
 
 ### Invoke a binding
 
@@ -38,8 +38,8 @@ invoker := openapi.NewInvoker()
 
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        Format:   "openapi@3.1.0",
-        Location: "https://api.example.com/openapi.json",
+        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@1"
+        Location:    "https://api.example.com/openapi.json",
     },
     Ref:     "#/paths/~1users/get",
     Context: map[string]any{"bearerToken": "tok_123"},
@@ -64,20 +64,20 @@ fmt.Println(out)
 synth := openapi.NewSynthesizer()
 iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
     Sources: []openbindings.SynthesizeSource{{
-        Format:   "openapi@3.1.0",
-        Location: "https://api.example.com/openapi.json",
+        BindingSpec: openapi.BindingSpec,
+        Location:    "https://api.example.com/openapi.json",
     }},
 })
 // iface is a fully-formed OBInterface with operations, bindings, and sources
 ```
 
-## Conventions
+## Behavior
 
-These are non-normative conventions specific to the `openapi` binding format.
+This package implements the published [`openbindings.openapi@1`](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md) binding specification; that document is normative for input mapping (the flattened model, OAS style/explode serialization), request media selection, server resolution, interaction shape, and channel assembly.
 
-### Format token
+### Binding specification identifier
 
-`openapi@^3.0.0` (caret range). Matches any OpenAPI 3.x document.
+`openbindings.openapi@1` (exact, opaque). Accepts OpenAPI 3.0.x and 3.1.x documents, discriminated by the artifact's own `openapi` field.
 
 ### Ref format
 
@@ -86,25 +86,27 @@ JSON Pointer into the OpenAPI document: `#/paths/<escaped-path>/<method>`
 - `#/paths/~1users/get` - GET /users
 - `#/paths/~1users~1{id}/put` - PUT /users/{id}
 
-Path separators are escaped per RFC 6901: `/` becomes `~1`, `~` becomes `~0`. Method is lowercase.
+Path separators are escaped per RFC 6901: `/` becomes `~1`, `~` becomes `~0`. The method is lowercase exactly as the artifact spells it — an uppercase method is refused, never case-folded (OAPI-D-03).
 
 ### Source expectations
 
-- **`location`**: URL or file path to the OpenAPI JSON/YAML document. Resolved relative to the OBI document location.
-- **`content`**: Inline OpenAPI document (parsed directly, bypasses location).
+- **`location`**: absolute URI addressing the OpenAPI JSON/YAML document (it also serves as the artifact's base URI for relative `$ref`s and relative server URLs).
+- **`content`**: the inline OpenAPI document (content primacy; a co-present `location` is its base URI). Content with no location must be self-contained.
 
-### Base URL override
+### Server selection
 
-By default the request target is the spec's first `servers[]` entry (a relative server URL like `/api/v3` is resolved against the source `location`'s origin). To send the same OBI at a different host, e.g. staging or a local mock, set `metadata.baseURL` in the invocation context:
+By default the request target is the OAS effective server list's first entry (operation `servers`, else path item's, else document's, else the implied `/`), with server-variable defaults substituted; a relative server URL resolves against the source `location`. Server resolution is the specification's named configuration point: set `configuration.server` in the invocation context to select another declared entry (`url` or `index`), supply `variables`, or supply a complete `baseUrl` outright:
 
 ```go
 Context: map[string]any{
-    "metadata":    map[string]any{"baseURL": "https://staging.example.com"},
+    "configuration": map[string]any{
+        "server": map[string]any{"baseUrl": "https://staging.example.com"},
+    },
     "bearerToken": "tok_123",
 }
 ```
 
-`metadata.baseURL` takes precedence over the spec's `servers`. When absent and the spec has no server URL, invocation fails with a message telling you to set one or the other.
+The legacy `metadata.baseURL` override still works, below the configuration point.
 
 ### Custom HTTP client
 
@@ -143,12 +145,12 @@ Each invocation records how the decision was made in its trailer metadata (`buil
 
 ### Invocation flow
 
-1. Loads and caches the OpenAPI document (JSON or YAML, local or remote)
+1. Loads and caches the OpenAPI document (JSON or YAML, local or remote), discriminating the accepted 3.0.x/3.1.x lines
 2. Parses the ref as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)
-3. Resolves the base URL from the spec's `servers` array
-4. Classifies input fields as path, query, header, or body parameters based on the OpenAPI parameter definitions
-5. Applies credentials from the context using the spec's `securitySchemes` (bearer, basic, apiKey with correct placement)
-6. Makes the HTTP request and emits the result as the invocation's output
+3. Resolves the server (effective list + variables + the `server` configuration point)
+4. Routes input fields per the flattened model — parameters serialize per the OAS style/explode rules; unmatched fields pass into a declared request body and refuse loudly otherwise — and selects the request media type per the specification's preference order
+5. Applies credentials from the context using the spec's `securitySchemes` (bearer, basic, apiKey with correct placement), refusing credential/parameter channel collisions pre-dispatch
+6. Makes the HTTP request; the declared success media bound the interaction shape (unary, or server-streaming for a declared `text/event-stream` response), and results emit through the invocation handle
 
 ### Credential application
 

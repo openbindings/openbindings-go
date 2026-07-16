@@ -1,18 +1,19 @@
 package openapi
 
 import (
-	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"mime/multipart"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	openbindings "github.com/openbindings/openbindings-go"
@@ -56,11 +57,13 @@ func classifyHTTPError(ctx context.Context, err error) string {
 	return openbindings.ErrCodeExecutionFailed
 }
 
-// runBinding invokes one OpenAPI binding, driving the invocation handle.
-// All pre-dispatch failures (bad ref, missing server URL, unresolvable
-// operation, missing context) terminate the handle before any network side
-// effect; the response is then emitted as one output (or a stream of outputs
-// for a `text/event-stream` response).
+// runBinding invokes one OpenAPI binding, driving the invocation handle: one
+// HTTP exchange per invocation (openbindings.openapi@1 §8). All pre-dispatch
+// refusals — bad ref, unresolvable operation, unflattenable declarations,
+// out-of-family request media, unresolvable server, missing context, missing
+// path parameters, unmatched input fields, credential collisions — terminate
+// the handle before any network side effect, and before consuming input where
+// knowable.
 func runBinding(ctx context.Context, client *http.Client, args *openbindings.BindingInvocationArgs, inv openbindings.BindingHandle[any, any], doc *openapi3.T) {
 	// Bound all HTTP I/O to the invocation's lifetime: caller Cancel(), an
 	// abandoned output stream, or upstream ctx cancellation tears down the
@@ -76,16 +79,13 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 
-	baseURL, err := resolveBaseURLWithLocation(doc, args.Context, args.Source.Location)
-	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
-		return
-	}
-
 	if doc.Paths == nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "OpenAPI document has no paths defined"})
 		return
 	}
+	// Pointer evaluation follows OAS reference resolution (OAPI-D-03): the
+	// loader resolves path-item $refs (including 3.1 components.pathItems
+	// targets) at load, before this lookup.
 	pathItem := doc.Paths.Find(pathTemplate)
 	if pathItem == nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: fmt.Sprintf("path %q not in OpenAPI doc", pathTemplate)})
@@ -94,6 +94,28 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	op := pathItem.GetOperation(strings.ToUpper(method))
 	if op == nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: fmt.Sprintf("method %q not in path %q", method, pathTemplate)})
+		return
+	}
+
+	// The flattened model's structural refusals (§9.1) are declaration-only:
+	// they precede input consumption.
+	params := effectiveParameters(pathItem, op)
+	if name := unflattenableParam(params); name != "" {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: fmt.Sprintf("operation declares parameter %q in two different locations: it cannot be represented by the flattened model (OAPI-P-03, unflattenable)", name),
+		})
+		return
+	}
+	plan, err := planRequestBody(op)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		return
+	}
+
+	baseURL, err := resolveServer(doc, pathItem, op, args.Context, args.Source.Location)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
 		return
 	}
 
@@ -108,7 +130,6 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 
 	// ----- Input flows through the handle, not the args. An operation with
 	// no parameters and no request body takes no input. -----
-	allParams := mergeParameters(pathItem.Parameters, op.Parameters)
 	inputMap := map[string]any{}
 	switch {
 	case args.Binding != nil && args.InputSchema == nil:
@@ -119,7 +140,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		// park forever. Dispatch with empty input even when the OpenAPI doc
 		// declares params (e.g. cookie-only params the OBI did not express).
 		_ = inv.CloseInput()
-	case len(allParams) == 0 && !hasRequestBody(op):
+	case len(params) == 0 && !hasRequestBody(op):
 		_ = inv.CloseInput()
 	default:
 		v, rerr := inv.ReadInput(bctx)
@@ -129,7 +150,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 			// the dispatch cannot succeed — fire ERR_MISSING_INPUT before
 			// any network I/O (cross-SDK parity). Otherwise parameters and
 			// body are optional; proceed with an empty input.
-			if missing := requiredInputMissing(allParams, op); missing != "" {
+			if missing := requiredInputMissing(params, op); missing != "" {
 				inv.FireError(&openbindings.InvocationError{
 					Code:    openbindings.ErrCodeMissingInput,
 					Message: missing,
@@ -147,37 +168,59 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		_ = inv.CloseInput()
 	}
 
-	resolvedPath, queryParams, headerParams, bodyFields := classifyInput(allParams, inputMap, pathTemplate, bodyPropertyNames(op))
+	// ----- Routing (§9.1) and body construction (§9.2): still pre-dispatch. -----
 
-	reqURL := baseURL + resolvedPath
-	if len(queryParams) > 0 {
-		q := url.Values{}
-		for k, v := range queryParams {
-			q.Set(k, fmt.Sprintf("%v", v))
+	routed, err := routeInput(params, inputMap, pathTemplate, plan)
+	if err != nil {
+		code := openbindings.ErrCodeValidationFailed
+		if errors.Is(err, errMissingPathParam) {
+			code = openbindings.ErrCodeMissingInput
 		}
-		reqURL += "?" + q.Encode()
+		inv.FireError(&openbindings.InvocationError{Code: code, Message: err.Error()})
+		return
 	}
 
-	var bodyReader io.Reader
-	var contentType string
-	if hasRequestBody(op) {
-		if isMultipartFormData(op) {
-			buf, ct, err := buildMultipartBody(op, bodyFields)
-			if err != nil {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
-				return
-			}
-			bodyReader = buf
-			contentType = ct
-		} else {
-			bodyBytes, err := json.Marshal(bodyFields)
-			if err != nil {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
-				return
-			}
-			bodyReader = bytes.NewReader(bodyBytes)
-			contentType = "application/json"
+	bodyReader, contentType, err := buildRequestBody(doc, plan, routed)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+		return
+	}
+
+	// ----- Channel assembly (§9.6, OAPI-P-10). -----
+
+	placements := credentialPlacements(doc, op, args.Context)
+	if err := checkCredentialCollisions(placements, routed.populated); err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+		return
+	}
+
+	queryUnits := routed.queryUnits
+	cookieUnits := routed.cookieUnits
+	for _, pl := range placements {
+		switch pl.channel {
+		case "query":
+			queryUnits = append(queryUnits, queryEscape(pl.name, false)+"="+queryEscape(pl.value, false))
+		case "cookie":
+			cookieUnits = append(cookieUnits, pl.name+"="+pl.value)
 		}
+	}
+	// Context-supplied transport-hint cookies (consumer context, not
+	// security-scheme credentials) ride after credentials, sorted for
+	// determinism.
+	if hintCookies := openbindings.ContextCookies(args.Context); len(hintCookies) > 0 {
+		names := make([]string, 0, len(hintCookies))
+		for k := range hintCookies {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, k := range names {
+			cookieUnits = append(cookieUnits, k+"="+hintCookies[k])
+		}
+	}
+
+	reqURL := baseURL + routed.resolvedPath
+	if len(queryUnits) > 0 {
+		reqURL += "?" + strings.Join(queryUnits, "&")
 	}
 
 	req, err := http.NewRequestWithContext(bctx, strings.ToUpper(method), reqURL, bodyReader)
@@ -189,15 +232,29 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	// Accept both JSON and Server-Sent Events. Servers that support SSE will
-	// return text/event-stream when streaming; otherwise we get JSON as before.
-	req.Header.Set("Accept", "application/json, text/event-stream")
+	// The Accept header advertises the declared concrete media types of the
+	// operation's success responses; absent any declaration, application/json
+	// (§9.2). For streaming-capable operations the declared text/event-stream
+	// is in the set naturally.
+	req.Header.Set("Accept", acceptHeader(op))
 
-	for k, v := range headerParams {
-		req.Header.Set(k, fmt.Sprintf("%v", v))
+	for _, h := range routed.headers {
+		req.Header.Set(h[0], h[1])
 	}
-
-	applyHTTPContext(req, doc, op, args.Context)
+	for _, pl := range placements {
+		if pl.channel == "header" {
+			req.Header.Set(pl.name, pl.value)
+		}
+	}
+	// Context-supplied transport-hint headers (consumer context) apply last.
+	for k, v := range openbindings.ContextHeaders(args.Context) {
+		req.Header.Set(k, v)
+	}
+	// One Cookie header (OAPI-P-10): declared cookie parameters in
+	// declaration order, credentials appended after.
+	if len(cookieUnits) > 0 {
+		req.Header.Set("Cookie", strings.Join(cookieUnits, "; "))
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -211,13 +268,44 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	// Leading metadata precedes the first emit.
 	_ = inv.SetHeader(headerMetadata(resp.Header))
 
-	// SSE dispatch: a 2xx response with text/event-stream content type is a
-	// streaming response. Hand the (still-open) response to the SSE streamer
-	// which takes ownership of closing the body and the terminal transition.
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 && isSSEContentType(resp.Header.Get("Content-Type")) {
+	site := siteFor(args, baseURL)
+
+	// Interaction-shape dispatch (§8, OAPI-P-06): the shape is bounded by
+	// declaration and selected by framing. An operation is streaming-capable
+	// iff a declared success response declares text/event-stream; for a
+	// streaming-capable operation the response's Content-Type header — never
+	// payload bytes — selects between server-streaming and unary. A
+	// text/event-stream response on an operation that is NOT
+	// streaming-capable contradicts the declaration: a protocol error, never
+	// a silent reclassification.
+	if isSSEContentType(resp.Header.Get("Content-Type")) {
+		if !isStreamingCapable(op) {
+			_ = resp.Body.Close()
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeProtocol,
+				Message: "response arrived as text/event-stream, but no declared success response of this operation declares that media type (OAPI-P-06: an undeclared event-stream response is a protocol error)",
+			})
+			return
+		}
 		// Classification for the stream path runs once, here, at dispatch,
-		// on the initial response status (2xx gate above).
-		streamSSE(bctx, resp, args, siteFor(args, baseURL), inv)
+		// on the initial response's status and headers (the body is the
+		// stream; it is never read for classification).
+		status := resp.StatusCode
+		ok, cerr := args.Hooks.Classify(site, openbindings.RawResult{
+			Status: &status,
+			Meta:   headerMetadata(resp.Header),
+		}, BuiltinClassify)
+		if cerr != nil {
+			_ = resp.Body.Close()
+			inv.FireError(openbindings.AsInvocationError(cerr))
+			return
+		}
+		if !ok {
+			_ = resp.Body.Close()
+			inv.FireError(openbindings.HTTPError(resp.StatusCode, resp.Status))
+			return
+		}
+		streamSSE(bctx, resp, args, site, inv)
 		return
 	}
 
@@ -241,20 +329,19 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 
 	// Classify, then decode — both through the consultation seam
 	// (per-invocation hook → invoker-level hook → the format builtins
-	// below). The conventions record's recommended built-in defaults
-	// (spec/formats/README.md), content-independent throughout:
-	// classify = success iff status ∈ 2xx (declared `responses` never
-	// change classification — they enrich failure details); decode = the
-	// response's Content-Type HEADER decides the lane (wire framing, not
-	// payload sniffing): JSON for application/json and +json suffixes,
-	// text otherwise, absent/unparseable header → text.
+	// below). The binding specification's defaults (OAPI-P-07/P-08),
+	// content-independent throughout: classify = success iff status ∈ 2xx
+	// (declared `responses` never change classification — they enrich
+	// failure details); decode = the response's Content-Type HEADER decides
+	// the lane (wire framing, not payload sniffing): JSON for
+	// application/json and +json suffixes, text otherwise, absent /
+	// unparseable header → text.
 	status := resp.StatusCode
 	raw := openbindings.RawResult{
 		Status: &status,
 		Body:   respBody,
 		Meta:   headerMetadata(resp.Header),
 	}
-	site := siteFor(args, baseURL)
 
 	ok, cerr := args.Hooks.Classify(site, raw, BuiltinClassify)
 	if cerr != nil {
@@ -307,18 +394,20 @@ func decodeClassifyTrailer(hooks *openbindings.InvokeHooks, builtinDecode string
 	}
 }
 
-// BuiltinClassify is the openapi builtin result classifier: success iff
-// the HTTP status is 2xx (the convention floor; declared responses
-// refine failure DETAILS only, never classification).
+// BuiltinClassify is the openapi builtin result classifier (OAPI-P-08):
+// success iff the final HTTP status is 2xx (declared responses refine
+// failure DETAILS only, never classification).
 func BuiltinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (bool, error) {
 	return raw.Status != nil && *raw.Status >= 200 && *raw.Status < 300, nil
 }
 
-// decodeByContentType returns the builtin decoder for one response's
-// declared Content-Type header: strict JSON for application/json and
-// +json suffixes (a declared-JSON body that fails to parse is a lying
-// server — a loud ErrCodeResponseError, never a silent string); text
-// otherwise; an empty body is a nil output.
+// decodeByContentType returns the builtin decoder implementing the header
+// rule (OAPI-P-07): strict JSON for application/json and +json suffixes (a
+// declared-JSON body that fails to parse is a lying server — a loud
+// ErrCodeResponseError, never a silent string); the text lane otherwise —
+// bytes become a string per the header's charset parameter, defaulting to
+// UTF-8, with invalid sequences a loud decode error. An empty body (204
+// included) yields null.
 func decodeByContentType(contentType string) openbindings.OutputDecoder {
 	isJSON := isJSONContentType(contentType)
 	return func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
@@ -335,7 +424,54 @@ func decodeByContentType(contentType string) openbindings.OutputDecoder {
 			}
 			return parsed, nil
 		}
-		return string(raw.Body), nil
+		return decodeTextLane(contentType, raw.Body)
+	}
+}
+
+// decodeTextLane decodes response bytes as text per the Content-Type
+// header's charset parameter, defaulting to UTF-8 (OAPI-P-07). Invalid
+// sequences, and charsets this implementation cannot decode, are loud
+// decode errors — a consumer needing another charset overrides at the
+// decode configuration point.
+func decodeTextLane(contentType string, body []byte) (any, error) {
+	charset := "utf-8"
+	if contentType != "" {
+		if _, params, err := mime.ParseMediaType(contentType); err == nil {
+			if cs := params["charset"]; cs != "" {
+				charset = cs
+			}
+		}
+	}
+	switch strings.ToLower(charset) {
+	case "utf-8", "utf8":
+		if !utf8.Valid(body) {
+			return nil, &openbindings.InvocationError{
+				Code:    openbindings.ErrCodeResponseError,
+				Message: "response body is not valid UTF-8 (the declared/default charset)",
+			}
+		}
+		return string(body), nil
+	case "us-ascii", "ascii":
+		for i := 0; i < len(body); i++ {
+			if body[i] >= 0x80 {
+				return nil, &openbindings.InvocationError{
+					Code:    openbindings.ErrCodeResponseError,
+					Message: fmt.Sprintf("response body byte %d is not valid US-ASCII (the declared charset)", i),
+				}
+			}
+		}
+		return string(body), nil
+	case "iso-8859-1", "iso8859-1", "latin-1", "latin1":
+		runes := make([]rune, len(body))
+		for i, b := range body {
+			runes[i] = rune(b)
+		}
+		return string(runes), nil
+	default:
+		return nil, &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeResponseError,
+			Message: fmt.Sprintf("response declares charset %q, which this implementation cannot decode; override at the decode configuration point", charset),
+		}
 	}
 }
 
@@ -343,11 +479,7 @@ func decodeByContentType(contentType string) openbindings.OutputDecoder {
 // body: application/json or any +json structured-suffix type. Absent or
 // unparseable headers are NOT JSON (the text lane) — never sniffed.
 func isJSONContentType(contentType string) bool {
-	mt := strings.ToLower(strings.TrimSpace(contentType))
-	if i := strings.Index(mt, ";"); i >= 0 {
-		mt = strings.TrimSpace(mt[:i])
-	}
-	return mt == "application/json" || strings.HasSuffix(mt, "+json")
+	return isJSONMediaType(normalizeMediaType(contentType))
 }
 
 // siteFor completes the core-stamped site with the format-known Target
@@ -576,132 +708,58 @@ func absolutizeURL(ref, baseURL string) string {
 	return base.ResolveReference(u).String()
 }
 
+// validRefMethods are the OAS's HTTP method keys, lowercase exactly as the
+// artifact spells them (OAPI-D-03). Acceptance never case-folds.
+var validRefMethods = map[string]bool{
+	"get": true, "put": true, "post": true, "delete": true,
+	"options": true, "head": true, "patch": true, "trace": true,
+}
+
+// parseRef parses a binding ref per OAPI-D-03: a JSON Pointer of the exact
+// form `#/paths/<escaped-path>/<method>` addressing an operation object. The
+// path segment carries RFC 6901 escaping ("/" → "~1", "~" → "~0"), and the
+// method is lowercase exactly as the artifact spells it — an uppercase
+// method is non-conformant and refused, never case-folded.
 func parseRef(ref string) (path string, method string, err error) {
-	ref = strings.TrimPrefix(ref, "#/")
-
-	parts := strings.Split(ref, "/")
-	if len(parts) < 3 || parts[0] != "paths" {
-		return "", "", fmt.Errorf("ref %q must be in format #/paths/<escaped-path>/<method>", ref)
+	const prefix = "#/paths/"
+	if !strings.HasPrefix(ref, prefix) {
+		return "", "", fmt.Errorf("ref %q must be a JSON Pointer of the form #/paths/<escaped-path>/<method> (OAPI-D-03)", ref)
 	}
-
-	method = parts[len(parts)-1]
-	pathSegments := parts[1 : len(parts)-1]
-	escapedPath := strings.Join(pathSegments, "/")
-
-	path = strings.ReplaceAll(escapedPath, "~1", "/")
-	path = strings.ReplaceAll(path, "~0", "~")
-
-	validMethods := map[string]bool{
-		"get": true, "post": true, "put": true, "patch": true,
-		"delete": true, "head": true, "options": true, "trace": true,
+	parts := strings.Split(ref[len(prefix):], "/")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("ref %q must be a JSON Pointer of the form #/paths/<escaped-path>/<method>: the path segment carries RFC 6901 escaping (\"/\" → \"~1\") (OAPI-D-03)", ref)
 	}
-	if !validMethods[strings.ToLower(method)] {
+	escapedPath, method := parts[0], parts[1]
+	if !validRefMethods[method] {
+		if validRefMethods[strings.ToLower(method)] {
+			return "", "", fmt.Errorf("ref %q: method %q must be lowercase exactly as the artifact spells it (OAPI-D-03)", ref, method)
+		}
 		return "", "", fmt.Errorf("invalid HTTP method %q in ref", method)
 	}
 
-	return path, strings.ToLower(method), nil
+	// RFC 6901 unescaping, in order: ~1 first, then ~0.
+	path = strings.ReplaceAll(escapedPath, "~1", "/")
+	path = strings.ReplaceAll(path, "~0", "~")
+	return path, method, nil
 }
 
-func resolveBaseURL(doc *openapi3.T, ctx map[string]any) (string, error) {
-	if meta := openbindings.ContextMetadata(ctx); meta != nil {
-		if base, ok := meta["baseURL"].(string); ok && base != "" {
-			return strings.TrimRight(base, "/"), nil
-		}
-	}
-
-	if len(doc.Servers) > 0 {
-		serverURL := doc.Servers[0].URL
-		if serverURL != "" {
-			return strings.TrimRight(serverURL, "/"), nil
-		}
-	}
-
-	return "", fmt.Errorf("no server URL: set servers in the OpenAPI doc or provide baseURL in context metadata")
+func hasRequestBody(op *openapi3.Operation) bool {
+	return op.RequestBody != nil && op.RequestBody.Value != nil
 }
 
-// resolveBaseURLWithLocation resolves the base URL, falling back to the source
-// location's origin when the spec has a relative server URL (e.g. "/api/v3").
-func resolveBaseURLWithLocation(doc *openapi3.T, ctx map[string]any, sourceLocation string) (string, error) {
-	base, err := resolveBaseURL(doc, ctx)
-	if err != nil {
-		return "", err
-	}
-	if strings.HasPrefix(base, "http://") || strings.HasPrefix(base, "https://") {
-		return base, nil
-	}
-	if openbindings.IsHTTPURL(sourceLocation) {
-		parsed, err := url.Parse(sourceLocation)
-		if err == nil {
-			origin := parsed.Scheme + "://" + parsed.Host
-			return strings.TrimRight(origin+base, "/"), nil
-		}
-	}
-	return base, nil
-}
-
-func classifyInput(params openapi3.Parameters, input map[string]any, pathTemplate string, bodyProps map[string]bool) (resolvedPath string, query, headers, body map[string]any) {
-	query = map[string]any{}
-	headers = map[string]any{}
-	body = map[string]any{}
-	cookies := map[string]any{}
-
-	paramClassification := map[string]string{}
+// requiredInputMissing reports why a bare input close cannot satisfy the
+// operation: a non-empty string names the first required parameter or the
+// required request body. Empty string means an empty request is dispatchable.
+func requiredInputMissing(params openapi3.Parameters, op *openapi3.Operation) string {
 	for _, paramRef := range params {
-		if paramRef == nil || paramRef.Value == nil {
-			continue
-		}
-		paramClassification[paramRef.Value.Name] = paramRef.Value.In
-	}
-
-	resolvedPath = pathTemplate
-	for name, value := range input {
-		classification, isParam := paramClassification[name]
-		if !isParam {
-			body[name] = value
-			continue
-		}
-		switch classification {
-		case "path":
-			// Encode so a value containing `/`, `?`, or `#` cannot corrupt
-			// the request URL's path/query structure (TS parity: the same
-			// encodeURIComponent byte set, so both SDKs emit identical URLs).
-			resolvedPath = strings.ReplaceAll(resolvedPath, "{"+name+"}", encodePathValue(fmt.Sprintf("%v", value)))
-		case "query":
-			query[name] = value
-		case "header":
-			headers[name] = value
-		case "cookie":
-			cookies[name] = value
-		default:
-			body[name] = value
-		}
-		// One name, one value, delivered to EVERY declared wire location:
-		// a field that is both a parameter and a body property (PUT
-		// /users/{id} with id in the body) rides the parameter location
-		// AND stays in the body — the flattened contract says what, the
-		// wire locations are plumbing.
-		if isParam && bodyProps[name] {
-			body[name] = value
+		if paramRef != nil && paramRef.Value != nil && paramRef.Value.Required {
+			return fmt.Sprintf("operation requires parameter %q", paramRef.Value.Name)
 		}
 	}
-
-	// Declared cookie params travel in a Cookie header (sorted for a
-	// deterministic value), never in the body. Context-supplied cookies are
-	// appended later by applyHTTPContext via req.AddCookie.
-	if len(cookies) > 0 {
-		names := make([]string, 0, len(cookies))
-		for name := range cookies {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		pairs := make([]string, 0, len(names))
-		for _, name := range names {
-			pairs = append(pairs, fmt.Sprintf("%s=%v", name, cookies[name]))
-		}
-		headers["Cookie"] = strings.Join(pairs, "; ")
+	if hasRequestBody(op) && op.RequestBody.Value.Required {
+		return "operation requires a request body"
 	}
-
-	return resolvedPath, query, headers, body
+	return ""
 }
 
 // encodePathValue percent-encodes one path parameter value with exactly
@@ -729,187 +787,53 @@ func encodePathValue(s string) string {
 	return b.String()
 }
 
-func hasRequestBody(op *openapi3.Operation) bool {
-	return op.RequestBody != nil && op.RequestBody.Value != nil
+// ---------------------------------------------------------------------------
+// Credentials and channel assembly (§9.6: OAPI-P-09 wire application,
+// OAPI-P-10 channel assembly)
+// ---------------------------------------------------------------------------
+
+// credentialPlacement is one credential's wire application: which channel
+// it rides (header, query, or cookie) under which name.
+type credentialPlacement struct {
+	channel string
+	name    string
+	value   string
 }
 
-// bodyPropertyNames returns the JSON request body's declared top-level
-// property names. Used for the field-collision rule: a flattened input
-// field that is both a parameter and a body property is delivered to both
-// wire locations. The loader resolves $refs, so schema values are direct.
-func bodyPropertyNames(op *openapi3.Operation) map[string]bool {
-	if !hasRequestBody(op) {
+// credentialPlacements derives the credential wire applications for an
+// operation from the artifact's security declarations (read at invocation
+// time, never extracted into the OBI) and the supplied context: an apiKey
+// scheme's credential rides its declared in/name; http basic and bearer,
+// oauth2, and openIdConnect ride the Authorization header. When the document
+// declares no security schemes, well-known context credentials fall back to
+// the Authorization header. Placements are computed BEFORE dispatch so the
+// OAPI-P-10 collision refusal can run pre-dispatch; duplicate channel+name
+// placements collapse to the first.
+func credentialPlacements(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any) []credentialPlacement {
+	if len(bindCtx) == 0 {
 		return nil
 	}
-	for contentType, media := range op.RequestBody.Value.Content {
-		if media == nil || media.Schema == nil || media.Schema.Value == nil {
-			continue
+
+	var placements []credentialPlacement
+	seen := map[string]bool{}
+	add := func(channel, name, value string) {
+		key := channel + "\x00" + name
+		if channel == "header" {
+			key = channel + "\x00" + http.CanonicalHeaderKey(name)
 		}
-		// Match on the media type alone: parameters like "; charset=utf-8"
-		// never change whether the body is JSON (TS parity).
-		mt := contentType
-		if i := strings.Index(mt, ";"); i >= 0 {
-			mt = mt[:i]
+		if seen[key] {
+			return
 		}
-		mt = strings.TrimSpace(mt)
-		if mt != "application/json" && !strings.HasSuffix(mt, "+json") {
-			continue
-		}
-		props := media.Schema.Value.Properties
-		if len(props) == 0 {
-			return nil
-		}
-		names := make(map[string]bool, len(props))
-		for name := range props {
-			names[name] = true
-		}
-		return names
-	}
-	return nil
-}
-
-// requiredInputMissing reports why a bare input close cannot satisfy the
-// operation: a non-empty string names the first required parameter or the
-// required request body. Empty string means an empty request is dispatchable.
-func requiredInputMissing(params openapi3.Parameters, op *openapi3.Operation) string {
-	for _, paramRef := range params {
-		if paramRef != nil && paramRef.Value != nil && paramRef.Value.Required {
-			return fmt.Sprintf("operation requires parameter %q", paramRef.Value.Name)
-		}
-	}
-	if hasRequestBody(op) && op.RequestBody.Value.Required {
-		return "operation requires a request body"
-	}
-	return ""
-}
-
-// isMultipartFormData returns true when the operation's request body specifies
-// multipart/form-data and does NOT also offer application/json (which is preferred).
-func isMultipartFormData(op *openapi3.Operation) bool {
-	if op.RequestBody == nil || op.RequestBody.Value == nil {
-		return false
-	}
-	content := op.RequestBody.Value.Content
-	if content == nil {
-		return false
-	}
-	// Prefer JSON when both are available.
-	if content.Get("application/json") != nil {
-		return false
-	}
-	return content.Get("multipart/form-data") != nil
-}
-
-// buildMultipartBody encodes bodyFields as a multipart/form-data payload.
-// Properties whose schema declares type "string" with format "binary" are
-// expected to carry []byte values and are written as file parts. All other
-// properties are serialized as string form fields.
-func buildMultipartBody(op *openapi3.Operation, bodyFields map[string]any) (*bytes.Buffer, string, error) {
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-
-	binaryFields := resolveBinaryFields(op)
-
-	for name, value := range bodyFields {
-		if binaryFields[name] {
-			data, ok := value.([]byte)
-			if !ok {
-				return nil, "", fmt.Errorf("field %q: expected []byte for binary field, got %T", name, value)
-			}
-			part, err := writer.CreateFormFile(name, name)
-			if err != nil {
-				return nil, "", fmt.Errorf("create form file %q: %w", name, err)
-			}
-			if _, err := part.Write(data); err != nil {
-				return nil, "", fmt.Errorf("write form file %q: %w", name, err)
-			}
-		} else {
-			var fieldStr string
-			switch v := value.(type) {
-			case string:
-				fieldStr = v
-			default:
-				b, err := json.Marshal(v)
-				if err != nil {
-					return nil, "", fmt.Errorf("marshal field %q: %w", name, err)
-				}
-				fieldStr = string(b)
-			}
-			if err := writer.WriteField(name, fieldStr); err != nil {
-				return nil, "", fmt.Errorf("write field %q: %w", name, err)
-			}
-		}
+		seen[key] = true
+		placements = append(placements, credentialPlacement{channel: channel, name: name, value: value})
 	}
 
-	if err := writer.Close(); err != nil {
-		return nil, "", fmt.Errorf("close multipart writer: %w", err)
-	}
-
-	return &buf, writer.FormDataContentType(), nil
-}
-
-// resolveBinaryFields inspects the multipart/form-data schema and returns a set
-// of property names whose schema is type "string" + format "binary".
-func resolveBinaryFields(op *openapi3.Operation) map[string]bool {
-	result := map[string]bool{}
-	if op.RequestBody == nil || op.RequestBody.Value == nil {
-		return result
-	}
-	mt := op.RequestBody.Value.Content.Get("multipart/form-data")
-	if mt == nil || mt.Schema == nil || mt.Schema.Value == nil {
-		return result
-	}
-	for name, propRef := range mt.Schema.Value.Properties {
-		if propRef == nil || propRef.Value == nil {
-			continue
-		}
-		if propRef.Value.Type.Is("string") && propRef.Value.Format == "binary" {
-			result[name] = true
-		}
-	}
-	return result
-}
-
-// applyHTTPContext applies opaque binding context (credentials via well-known
-// fields, plus transport hints headers/cookies via well-known fields) to an
-// HTTP request, using OpenAPI securitySchemes for spec-driven credential
-// placement.
-func applyHTTPContext(req *http.Request, doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any) {
-	if len(bindCtx) > 0 {
-		if !applyCredentialsViaSecuritySchemes(req, doc, op, bindCtx) {
-			applyCredentialsFallback(req, bindCtx)
-		}
-	}
-
-	for k, v := range openbindings.ContextHeaders(bindCtx) {
-		req.Header.Set(k, v)
-	}
-	for k, v := range openbindings.ContextCookies(bindCtx) {
-		req.AddCookie(&http.Cookie{Name: k, Value: v})
-	}
-}
-
-// applyCredentialsViaSecuritySchemes reads the OpenAPI doc's securitySchemes
-// and operation-level security requirements to place credentials exactly
-// where the spec declares (header, query, or cookie with the correct name).
-// Credentials are read from well-known context fields; an apiKey scheme
-// looks up its credential by the securitySchemes key first (R2.d ruling:
-// context.apiKeys[name], so two ANDed apiKey schemes with different names
-// resolve to different keys), falling back to the single context.apiKey.
-func applyCredentialsViaSecuritySchemes(req *http.Request, doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any) bool {
 	schemes := resolveSecuritySchemes(doc, op)
-	if len(schemes) == 0 {
-		return false
-	}
-
-	applied := false
-
 	for _, named := range schemes {
 		if named.Scheme.Value == nil {
 			continue
 		}
 		s := named.Scheme.Value
-
 		switch s.Type {
 		case "apiKey":
 			val := openbindings.ContextAPIKeyFor(bindCtx, named.Name)
@@ -917,46 +841,61 @@ func applyCredentialsViaSecuritySchemes(req *http.Request, doc *openapi3.T, op *
 				continue
 			}
 			switch s.In {
-			case "header":
-				req.Header.Set(s.Name, val)
-				applied = true
-			case "query":
-				q := req.URL.Query()
-				q.Set(s.Name, val)
-				req.URL.RawQuery = q.Encode()
-				applied = true
-			case "cookie":
-				req.AddCookie(&http.Cookie{Name: s.Name, Value: val})
-				applied = true
+			case "header", "query", "cookie":
+				add(s.In, s.Name, val)
 			}
-
 		case "http":
 			switch strings.ToLower(s.Scheme) {
 			case "bearer":
 				if token := openbindings.ContextBearerToken(bindCtx); token != "" {
-					req.Header.Set("Authorization", "Bearer "+token)
-					applied = true
+					add("header", "Authorization", "Bearer "+token)
 				}
 			case "basic":
 				if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
-					req.SetBasicAuth(u, p)
-					applied = true
+					add("header", "Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(u+":"+p)))
 				}
 			}
-
 		case "oauth2", "openIdConnect":
 			token := openbindings.ContextString(bindCtx, "accessToken")
 			if token == "" {
 				token = openbindings.ContextBearerToken(bindCtx)
 			}
 			if token != "" {
-				req.Header.Set("Authorization", "Bearer "+token)
-				applied = true
+				add("header", "Authorization", "Bearer "+token)
 			}
 		}
 	}
 
-	return applied
+	if len(placements) == 0 {
+		// No scheme applied a credential (typically no securitySchemes
+		// declared): well-known context credentials fall back to the
+		// Authorization header.
+		if token := openbindings.ContextBearerToken(bindCtx); token != "" {
+			add("header", "Authorization", "Bearer "+token)
+		} else if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
+			add("header", "Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(u+":"+p)))
+		} else if key := openbindings.ContextAPIKey(bindCtx); key != "" {
+			add("header", "Authorization", "ApiKey "+key)
+		}
+	}
+	return placements
+}
+
+// checkCredentialCollisions enforces the OAPI-P-10 refusal: a name collision
+// between a credential and a caller-populated declared parameter on the same
+// channel is refused before dispatch — loud, never a silent overwrite in
+// either direction. Header names compare case-insensitively.
+func checkCredentialCollisions(placements []credentialPlacement, populated map[string]map[string]bool) error {
+	for _, pl := range placements {
+		name := pl.name
+		if pl.channel == "header" {
+			name = http.CanonicalHeaderKey(name)
+		}
+		if populated[pl.channel][name] {
+			return fmt.Errorf("credential %q collides with a caller-populated %s parameter of the same name (OAPI-P-10: refused before dispatch, never a silent overwrite in either direction)", pl.name, pl.channel)
+		}
+	}
+	return nil
 }
 
 // namedSecurityScheme pairs a resolved OpenAPI security scheme with the
@@ -971,7 +910,9 @@ type namedSecurityScheme struct {
 
 // resolveSecuritySchemes returns the security schemes applicable to an
 // operation, each paired with its securitySchemes key. Operation-level
-// security overrides top-level; falls back to top-level if not set.
+// security overrides top-level; falls back to top-level if not set. Scheme
+// names within each requirement iterate sorted so placement order is
+// deterministic.
 func resolveSecuritySchemes(doc *openapi3.T, op *openapi3.Operation) []namedSecurityScheme {
 	var requirements *openapi3.SecurityRequirements
 	if op != nil {
@@ -991,7 +932,12 @@ func resolveSecuritySchemes(doc *openapi3.T, op *openapi3.Operation) []namedSecu
 	var result []namedSecurityScheme
 	seen := map[string]bool{}
 	for _, req := range *requirements {
+		names := make([]string, 0, len(req))
 		for schemeName := range req {
+			names = append(names, schemeName)
+		}
+		sort.Strings(names)
+		for _, schemeName := range names {
 			if seen[schemeName] {
 				continue
 			}
@@ -1002,16 +948,4 @@ func resolveSecuritySchemes(doc *openapi3.T, op *openapi3.Operation) []namedSecu
 		}
 	}
 	return result
-}
-
-// applyCredentialsFallback applies credentials using sensible defaults when
-// no securitySchemes are defined in the spec.
-func applyCredentialsFallback(req *http.Request, bindCtx map[string]any) {
-	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	} else if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
-		req.SetBasicAuth(u, p)
-	} else if key := openbindings.ContextAPIKey(bindCtx); key != "" {
-		req.Header.Set("Authorization", "ApiKey "+key)
-	}
 }

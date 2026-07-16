@@ -3,6 +3,7 @@ package openapi
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -113,10 +114,34 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 // Matches TS to ensure deterministic output across languages.
 var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 
+// loadDocument loads and discriminates an OpenAPI source per
+// openbindings.openapi@1 §3-§6: `content`, when present, is the artifact
+// (content primacy), with a co-present `location` serving as the embedded
+// artifact's BASE URI — relative $refs resolve against it exactly as they
+// would had the document been retrieved from that address (OAPI-D-01/D-02,
+// §6). Embedded content with no location has no base and must be
+// self-contained: a relative external $ref then fails with a readable error
+// (absolute http(s) $refs still resolve — they need no base). The artifact's
+// own `openapi` field discriminates the accepted lines (OAPI-P-01).
+//
+// String content parses as YAML 1.2 (JSON being a valid subset); duplicate
+// mapping keys are refused loudly by the YAML layer itself, satisfying the
+// §3 duplicate-key pin.
 func loadDocument(location string, content any) (*openapi3.T, error) {
 	loader := openapi3.NewLoader()
 	loader.IsExternalRefsAllowed = true
 
+	doc, err := loadDocumentRaw(loader, location, content)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkAcceptedOpenAPIVersion(doc); err != nil {
+		return nil, err
+	}
+	return doc, nil
+}
+
+func loadDocumentRaw(loader *openapi3.Loader, location string, content any) (*openapi3.T, error) {
 	if content != nil {
 		data, err := openbindings.ContentToBytes(content)
 		if err != nil {
@@ -128,6 +153,11 @@ func loadDocument(location string, content any) (*openapi3.T, error) {
 				return loader.LoadFromDataWithPath(data, loc)
 			}
 		}
+		// No co-present location: no base URI. Absolute http(s) references
+		// still resolve; anything else (a relative $ref in particular) has
+		// nothing to resolve against and refuses with a readable error —
+		// never a silent working-directory file read.
+		loader.ReadFromURIFunc = selfContainedReadFunc()
 		return loader.LoadFromData(data)
 	}
 
@@ -143,7 +173,47 @@ func loadDocument(location string, content any) (*openapi3.T, error) {
 		return loader.LoadFromURI(loc)
 	}
 
+	// A file:// location (the conformant absolute-URI spelling, OAPI-D-02)
+	// loads from its path; bare filesystem paths are accepted leniently for
+	// local tooling.
+	if strings.HasPrefix(location, "file://") {
+		loc, err := url.Parse(location)
+		if err != nil {
+			return nil, fmt.Errorf("invalid URL %q: %w", location, err)
+		}
+		return loader.LoadFromFile(loc.Path)
+	}
 	return loader.LoadFromFile(location)
+}
+
+// selfContainedReadFunc allows absolute http(s) reference targets (they
+// resolve without a base) and refuses everything else: with no co-present
+// location the embedded artifact has no base URI, so a relative reference is
+// unresolvable by definition (§6 — bundle before embedding).
+func selfContainedReadFunc() openapi3.ReadFromURIFunc {
+	httpRead := openapi3.ReadFromHTTP(http.DefaultClient)
+	return func(loader *openapi3.Loader, u *url.URL) ([]byte, error) {
+		if u.IsAbs() && (u.Scheme == "http" || u.Scheme == "https") {
+			return httpRead(loader, u)
+		}
+		return nil, fmt.Errorf("reference %q cannot resolve: embedded content with no co-present location has no base URI and must be self-contained (bundle the document before embedding, or set the source's location)", u)
+	}
+}
+
+// checkAcceptedOpenAPIVersion discriminates the accepted lines per
+// OAPI-P-01: the artifact's own `openapi` field must declare 3.0.* or
+// 3.1.*; any other value — a Swagger 2.0 `swagger` field included — is
+// refused loudly at load.
+func checkAcceptedOpenAPIVersion(doc *openapi3.T) error {
+	v := doc.OpenAPI
+	if v == "" {
+		return fmt.Errorf("document declares no `openapi` field: openbindings.openapi@1 accepts OpenAPI 3.0.x and 3.1.x documents only (OAPI-P-01; Swagger 2.0 is not accepted)")
+	}
+	mm := majorMinor(v)
+	if mm == "3.0" || mm == "3.1" {
+		return nil
+	}
+	return fmt.Errorf("unsupported OpenAPI version %q: openbindings.openapi@1 accepts the 3.0.x and 3.1.x lines only (OAPI-P-01)", v)
 }
 
 func deriveOperationKey(op *openapi3.Operation, path, method string, used map[string]bool) string {
@@ -186,6 +256,7 @@ func buildJSONPointerRef(path, method string) string {
 func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, refRegistry map[string]any, opKey string, warn func(openbindings.SynthesizerWarning)) map[string]any {
 	properties := map[string]any{}
 	var required []string
+	hasOpenBody := false
 
 	allParams := mergeParameters(pathParams, op.Parameters)
 
@@ -239,6 +310,15 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 					properties[k] = v
 				}
 				required = append(required, stringSlice(bodySchema["required"])...)
+			} else if isObjectTypedSchema(bodySchema) {
+				// A free-form object body (type object, no named
+				// properties): the flattened model passes unmatched input
+				// fields through into the body (openbindings.openapi@1
+				// §9.1), so the flattened surface stays an OPEN object —
+				// the synthetic `body` wrap is reserved for NON-object
+				// body schemas, and wrapping here would describe a field
+				// the conformant invoker refuses as unmatched.
+				hasOpenBody = true
 			} else {
 				properties["body"] = bodySchema
 				if rb.Required {
@@ -249,6 +329,9 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 	}
 
 	if len(properties) == 0 {
+		if hasOpenBody {
+			return map[string]any{"type": "object"}
+		}
 		return nil
 	}
 
@@ -520,4 +603,17 @@ func majorMinor(version string) string {
 		return parts[0] + "." + parts[1]
 	}
 	return version
+}
+
+// isObjectTypedSchema reports whether a body schema is explicitly
+// object-typed (3.0 string form or a single-element 3.1 type array): the
+// flattened model's passthrough case, never the synthetic-body wrap.
+func isObjectTypedSchema(schema map[string]any) bool {
+	switch ty := schema["type"].(type) {
+	case string:
+		return ty == "object"
+	case []any:
+		return len(ty) == 1 && ty[0] == "object"
+	}
+	return false
 }

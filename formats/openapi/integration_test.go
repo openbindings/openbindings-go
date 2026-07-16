@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -181,8 +182,11 @@ func TestIntegration_MultipartFormData(t *testing.T) {
 		Ref:    "#/paths/~1upload/post",
 		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: string(specBytes)},
 	})
+	// OAPI-P-04: a binary-signaled part's bytes come from the caller's
+	// STRING value, Base64-decoded (3.0.x signals binary via format: binary
+	// and declares no encoding, so the boundary encoding applies).
 	_, ierr := driveSingle(t, call, map[string]any{
-		"file":        []byte("binary-content-here"),
+		"file":        base64.StdEncoding.EncodeToString([]byte("binary-content-here")),
 		"description": "my upload",
 	})
 	if ierr != nil {

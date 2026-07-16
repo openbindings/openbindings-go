@@ -176,7 +176,7 @@ func (e *Invoker) PrepareBinding(_ context.Context, args *openbindings.BindingIn
 		return nil, nil
 	}
 
-	baseURL, err := resolveBaseURLWithLocation(doc, args.Context, args.Source.Location)
+	baseURL, err := resolveServer(doc, pathItem, op, args.Context, args.Source.Location)
 	if err != nil {
 		// No server URL: the invocation fails with ErrCodeSourceConfigError
 		// before auth matters, so there is no context to report.
