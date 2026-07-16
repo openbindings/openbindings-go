@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -47,6 +48,31 @@ func setupDecodeServer(t *testing.T) *httptest.Server {
 	addResource("goodJSON", "app://good", "application/json", `{"ok":true}`)
 	addResource("badJSON", "app://bad", "application/json", `{not json`)
 	addResource("plainText", "app://plain", "text/plain", `{"looks":"like json"}`)
+
+	// Multi-item, blob, and empty resources exercise §9.3's always-array
+	// resource rule (MCP-P-05): the output value is uniformly the array of
+	// decoded contents items, whatever the count, and blob items decode
+	// structurally before any mimeType consideration.
+	server.AddResource(&gomcp.Resource{Name: "multi", URI: "app://multi"}, func(ctx context.Context, req *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
+		return &gomcp.ReadResourceResult{
+			Contents: []*gomcp.ResourceContents{
+				{URI: "app://multi", MIMEType: "application/json", Text: `{"n":1}`},
+				{URI: "app://multi", MIMEType: "text/plain", Text: "second"},
+			},
+		}, nil
+	})
+	server.AddResource(&gomcp.Resource{Name: "blob", URI: "app://blob"}, func(ctx context.Context, req *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
+		return &gomcp.ReadResourceResult{
+			Contents: []*gomcp.ResourceContents{
+				// Declared-JSON mimeType on a BLOB item: the blob member is
+				// structural and wins, whatever mimeType declares.
+				{URI: "app://blob", MIMEType: "application/json", Blob: []byte("hello world")},
+			},
+		}, nil
+	})
+	server.AddResource(&gomcp.Resource{Name: "empty", URI: "app://empty"}, func(ctx context.Context, req *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
+		return &gomcp.ReadResourceResult{Contents: []*gomcp.ResourceContents{}}, nil
+	})
 
 	handler := gomcp.NewStreamableHTTPHandler(func(r *http.Request) *gomcp.Server { return server }, nil)
 	ts := httptest.NewServer(handler)
@@ -100,6 +126,18 @@ func TestDecode_StructuredContentPreferred(t *testing.T) {
 	}
 }
 
+// singleItem asserts the always-array resource rule (openbindings.mcp@1
+// §9.3, MCP-P-05) and returns the lone decoded item. The resource decode
+// tests previously pinned the non-conformant single-item unwrap.
+func singleItem(t *testing.T, v any) any {
+	t.Helper()
+	items, ok := v.([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("resource output must be the array of decoded contents items, got %T: %v", v, v)
+	}
+	return items[0]
+}
+
 // Resources decode by their DECLARED mimeType: json parses...
 func TestDecode_ResourceDeclaredJSONParses(t *testing.T) {
 	ts := setupDecodeServer(t)
@@ -110,7 +148,7 @@ func TestDecode_ResourceDeclaredJSONParses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, ok := v.(map[string]any)
+	m, ok := singleItem(t, v).(map[string]any)
 	if !ok || m["ok"] != true {
 		t.Fatalf("declared application/json must parse, got %T: %v", v, v)
 	}
@@ -139,8 +177,66 @@ func TestDecode_ResourcePlainTextNeverSniffed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s, ok := v.(string); !ok || s != `{"looks":"like json"}` {
+	if s, ok := singleItem(t, v).(string); !ok || s != `{"looks":"like json"}` {
 		t.Fatalf("text/plain must stay a string regardless of shape, got %T: %v", v, v)
+	}
+}
+
+// The output value is ALWAYS the array of decoded contents items, in order
+// (§9.3, MCP-P-05): a two-item result decodes item-by-item.
+func TestDecode_ResourceMultipleItemsInOrder(t *testing.T) {
+	ts := setupDecodeServer(t)
+	inv := NewInvoker()
+	defer inv.Close()
+
+	v, err := invokeAndRead(t, inv, ts.URL, "resources/app://multi", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, ok := v.([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("expected 2 decoded items, got %T: %v", v, v)
+	}
+	first, ok := items[0].(map[string]any)
+	if !ok || first["n"] != 1.0 {
+		t.Errorf("item 0 must be the parsed JSON, got %T: %v", items[0], items[0])
+	}
+	if items[1] != "second" {
+		t.Errorf("item 1 must be the text string, got %v", items[1])
+	}
+}
+
+// A blob item decodes STRUCTURALLY first (§9.3): the blob member is the
+// item's Base64 string as MCP carries it, whatever mimeType it declares —
+// even application/json.
+func TestDecode_ResourceBlobIsBase64String(t *testing.T) {
+	ts := setupDecodeServer(t)
+	inv := NewInvoker()
+	defer inv.Close()
+
+	v, err := invokeAndRead(t, inv, ts.URL, "resources/app://blob", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := base64.StdEncoding.EncodeToString([]byte("hello world"))
+	if s, ok := singleItem(t, v).(string); !ok || s != want {
+		t.Fatalf("blob item must pass as its Base64 string, got %T: %v", v, v)
+	}
+}
+
+// contents: [] yields [] — the shape never depends on the item count (§9.3).
+func TestDecode_ResourceEmptyContentsIsEmptyArray(t *testing.T) {
+	ts := setupDecodeServer(t)
+	inv := NewInvoker()
+	defer inv.Close()
+
+	v, err := invokeAndRead(t, inv, ts.URL, "resources/app://empty", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, ok := v.([]any)
+	if !ok || len(items) != 0 {
+		t.Fatalf("empty contents must yield an empty array, got %T: %v", v, v)
 	}
 }
 

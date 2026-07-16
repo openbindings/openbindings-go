@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -59,6 +60,14 @@ type mcpSession struct {
 	// progressMu.
 	progressMu       sync.Mutex
 	progressHandlers map[string]*progressRegistration
+
+	// rawProgress queues, per solicited token and FIFO, the raw
+	// notifications/progress params (progressToken removed) observed on the
+	// session's event streams by observeSSEData. The typed per-call handler
+	// pops its queue so the emitted progress value is presence-preserving
+	// (openbindings.mcp@1 §9.2): the go-mcp typed params cannot represent an
+	// explicit "total": 0 or "message": "". Guarded by progressMu.
+	rawProgress map[string][]map[string]any
 
 	// refCount tracks the number of active streams using this session.
 	// Only manipulated under the pool's mu lock.
@@ -170,6 +179,7 @@ func (p *sessionPool) createSession(ctx context.Context, clientVersion string, u
 
 	s := &mcpSession{
 		progressHandlers: make(map[string]*progressRegistration),
+		rawProgress:      make(map[string][]map[string]any),
 		url:              url,
 		key:              key,
 		pool:             p,
@@ -178,9 +188,10 @@ func (p *sessionPool) createSession(ctx context.Context, clientVersion string, u
 	// The headerTransport is always installed (even with no auth headers) so
 	// per-call response capture works for HTTP error mapping and Invocation
 	// header metadata. httpClientWithHeaders layers it over the pool's base
-	// client so proxy, mTLS, and custom-CA configuration is honored.
+	// client so proxy, mTLS, and custom-CA configuration is honored; the SSE
+	// observer feeds the session's raw progress-notification capture.
 	transport := &gomcp.StreamableClientTransport{Endpoint: url}
-	transport.HTTPClient = httpClientWithHeaders(p.baseClient, headers)
+	transport.HTTPClient = httpClientWithHeaders(p.baseClient, headers, s.observeSSEData)
 
 	opts := &gomcp.ClientOptions{
 		ProgressNotificationHandler: s.demuxProgress,
@@ -223,13 +234,66 @@ func (s *mcpSession) registerProgress(token string, handler func(context.Context
 	s.progressMu.Unlock()
 }
 
-// unregisterProgress removes the handler for a progress token. Any in-flight
-// handler calls that started before unregistration may still be executing; the
-// trySend mechanism in the handler guards against sending on a closed channel.
+// unregisterProgress removes the handler for a progress token, along with
+// any queued raw params. Any in-flight handler calls that started before
+// unregistration may still be executing; the trySend mechanism in the handler
+// guards against sending on a closed channel. After unregistration a
+// correlated notification is discarded — §9.2's defined disposal.
 func (s *mcpSession) unregisterProgress(token string) {
 	s.progressMu.Lock()
 	delete(s.progressHandlers, token)
+	delete(s.rawProgress, token)
 	s.progressMu.Unlock()
+}
+
+// observeSSEData inspects one raw server→client JSON-RPC payload from the
+// session's HTTP event streams (wired through the headerTransport's SSE
+// observer) and queues the params of notifications/progress for tokens with
+// a live registration. The wire bytes are unmarshaled directly so JSON
+// presence survives — an explicit "total": 0 stays present, an absent one
+// stays absent (openbindings.mcp@1 §9.2) — and progressToken, correlation
+// plumbing rather than output, is removed here. Payloads for unregistered
+// tokens are not queued: unsolicited or late notifications are discarded.
+func (s *mcpSession) observeSSEData(data []byte) {
+	var msg struct {
+		ID     any            `json:"id"`
+		Method string         `json:"method"`
+		Params map[string]any `json:"params"`
+	}
+	if json.Unmarshal(data, &msg) != nil {
+		return
+	}
+	// Notifications carry no id; anything else is not a progress notification.
+	if msg.Method != "notifications/progress" || msg.ID != nil || msg.Params == nil {
+		return
+	}
+	token := progressTokenString(msg.Params["progressToken"])
+	if token == "" {
+		return
+	}
+	delete(msg.Params, "progressToken")
+	s.progressMu.Lock()
+	defer s.progressMu.Unlock()
+	if _, ok := s.progressHandlers[token]; !ok {
+		return
+	}
+	s.rawProgress[token] = append(s.rawProgress[token], msg.Params)
+}
+
+// popRawProgress pops the oldest queued raw progress params for a token, or
+// nil when none is queued. The SSE observer sees a notification's bytes
+// before the go-mcp client parses those same bytes and dispatches the typed
+// handler, so by the time the handler runs its raw params are queued; FIFO
+// order matches dispatch order within one token.
+func (s *mcpSession) popRawProgress(token string) map[string]any {
+	s.progressMu.Lock()
+	defer s.progressMu.Unlock()
+	q := s.rawProgress[token]
+	if len(q) == 0 {
+		return nil
+	}
+	s.rawProgress[token] = q[1:]
+	return q[0]
 }
 
 // release decrements the ref count and starts the idle timer if no streams

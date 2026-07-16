@@ -116,15 +116,17 @@ func setupMCPServer(t *testing.T) (*httptest.Server, *testState) {
 	})
 
 	// Register a tool that sends a progress notification with an explicit
-	// total of 0. Pins the NAMED GAP (see the TS-side test of the same
-	// name in invoker.test.ts and the batch's final report): the go-mcp
-	// SDK's ProgressNotificationParams.Total is a plain float64 tagged
-	// `json:"total,omitempty"` whose own doc comment says "Zero means
-	// unknown", so this binding cannot distinguish an explicit total:0
-	// from an absent total -- both arrive as the Go zero value. TS's zod
-	// schema preserves an explicit total:0. Not fixable without bypassing
-	// go-mcp's typed API; tracked as a divergence forced by the two SDKs'
-	// underlying MCP libraries, not a choice either binding author made.
+	// total of 0. Exercises openbindings.mcp@1 §9.2's presence-preserving
+	// progress values: an explicit total:0 must survive into the output
+	// value. The go-mcp SDK's typed ProgressNotificationParams.Total (a
+	// plain float64 tagged omitempty, "zero means unknown") cannot represent
+	// the distinction, so the invoker captures the raw notification params
+	// on the wire (see session.observeSSEData) — but NOTE: the go-mcp SERVER
+	// side used here also marshals with omitempty, so a Total of 0 set via
+	// NotifyProgress is omitted from the wire entirely. This fixture
+	// therefore exercises the ABSENT-total half of presence preservation;
+	// the explicit-zero half is covered by the raw-SSE test in
+	// conformance_test.go, which writes the notification bytes directly.
 	type progressZeroInput struct{}
 	gomcp.AddTool(server, &gomcp.Tool{
 		Name:        "progressZeroTotal",
@@ -375,10 +377,17 @@ func TestIntegration_ExecuteResource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The JSON text should be parsed into a map.
-	resp, ok := v.(map[string]any)
+	// Updated for openbindings.mcp@1 §9.3 (MCP-P-05): a resource result is
+	// ALWAYS the array of decoded contents items — this test previously
+	// pinned the non-conformant single-item unwrap. The lone declared-JSON
+	// item parses into a map inside a one-element array.
+	items, ok := v.([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected the array of decoded contents items, got %T: %v", v, v)
+	}
+	resp, ok := items[0].(map[string]any)
 	if !ok {
-		t.Fatalf("expected map response, got %T: %v", v, v)
+		t.Fatalf("expected decoded JSON map item, got %T: %v", items[0], items[0])
 	}
 	if resp["ok"] != true {
 		t.Errorf("ok = %v, want true", resp["ok"])
@@ -544,7 +553,14 @@ func TestIntegration_AuthRequired(t *testing.T) {
 	}
 }
 
-func TestIntegration_UnknownTool_JSONRPCError(t *testing.T) {
+// TestIntegration_UnknownTool_RefusedBeforeDispatch: updated for
+// openbindings.mcp@1 §7 (MCP-P-02) — this test previously pinned the
+// non-conformant blind dispatch, where an unknown tool surfaced as the
+// server's JSON-RPC error. Resolution against the exhausted listing now
+// precedes dispatch for every entity: a ref matching nothing makes the
+// binding unresolvable and is refused as ERR_REF_NOT_FOUND, and no
+// tools/call is ever sent.
+func TestIntegration_UnknownTool_RefusedBeforeDispatch(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
 	invoker := NewInvoker()
@@ -554,18 +570,12 @@ func TestIntegration_UnknownTool_JSONRPCError(t *testing.T) {
 	if err := call.Write(bg(), map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeExecutionFailed {
-		t.Fatalf("code = %q, want ERR_EXECUTION_FAILED", codeOf(t, err))
+	vals, err := drainOutputs(t, call)
+	if len(vals) != 0 {
+		t.Fatalf("expected no outputs, got %v", vals)
 	}
-	var ie *openbindings.InvocationError
-	_ = errors.As(err, &ie)
-	details, ok := ie.Details.(map[string]any)
-	if !ok {
-		t.Fatalf("expected JSON-RPC details map, got %T", ie.Details)
-	}
-	if _, ok := details["code"]; !ok {
-		t.Errorf("expected JSON-RPC error code in details, got %v", details)
+	if codeOf(t, err) != openbindings.ErrCodeRefNotFound {
+		t.Fatalf("code = %q, want ERR_REF_NOT_FOUND", codeOf(t, err))
 	}
 }
 
@@ -622,9 +632,13 @@ func TestIntegration_Cancel(t *testing.T) {
 
 // --- Progress streaming ---
 
-// TestIntegration_ToolProgressNotifications verifies that the invoker emits
-// MCP `notifications/progress` events as outputs ahead of the final tool
-// result, with the result guaranteed last.
+// TestIntegration_ToolProgressNotifications verifies that, when progress is
+// SOLICITED (openbindings.mcp@1 §9.3's `solicit` configuration point — the
+// per-invocation opt-in here; the default is off, see the solicit tests in
+// conformance_test.go), the invoker emits MCP `notifications/progress`
+// events as outputs ahead of the final tool result, with the result
+// guaranteed last (§9.2, MCP-P-04). Updated for the solicit default: this
+// test previously relied on the non-conformant always-solicit behavior.
 //
 // Note: the go-mcp library dispatches progress notifications asynchronously.
 // In edge cases, a notification may not be processed before the tool call
@@ -636,7 +650,8 @@ func TestIntegration_ToolProgressNotifications(t *testing.T) {
 	invoker := NewInvoker()
 	defer invoker.Close()
 
-	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/longRunning", nil))
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/longRunning",
+		map[string]any{"configuration": map[string]any{"solicit": true}}))
 	if err := call.Write(bg(), map[string]any{"steps": 3}); err != nil {
 		t.Fatal(err)
 	}
@@ -694,25 +709,25 @@ func TestIntegration_ToolProgressNotifications(t *testing.T) {
 	}
 }
 
-// TestIntegration_ToolProgressZeroTotal pins a NAMED GAP against the TS SDK
-// (see the identically-named test in invoker.test.ts and the B3.5 batch's
-// final report): an explicit total:0 the server sends is indistinguishable,
-// once go-mcp has unmarshaled it, from no total at all -- both are the Go
-// zero value on a plain (non-pointer) float64 field the go-mcp SDK itself
-// tags `json:"total,omitempty"` and documents as "Zero means unknown"
-// (ProgressNotificationParams.Total). This binding's emitted progress map
-// therefore omits "total" here, where the TS SDK's zod schema (which
-// distinguishes "absent" from "present and falsy") preserves it. Forced by
-// the two SDKs' underlying MCP libraries, not a choice either binding
-// author made -- not fixable here without bypassing go-mcp's typed API to
-// hand-parse raw JSON-RPC, disproportionate to a total=0 edge case.
+// TestIntegration_ToolProgressZeroTotal: updated for openbindings.mcp@1
+// §9.2's presence-preserving progress values — the "named gap" this test
+// previously pinned (an explicit total:0 silently dropped by go-mcp's typed
+// omitempty struct) is CLOSED: the invoker now emits the raw wire params.
+// What this end-to-end fixture can still exercise is only the absent half
+// of presence preservation, because the go-mcp SERVER used here also
+// marshals Total with omitempty: its NotifyProgress(total: 0) puts no
+// "total" member on the wire at all, and an absent total must stay absent.
+// The explicit-zero half (a wire "total":0 surviving into the output value)
+// is proven at the wire seam by TestSolicit_RawPresencePreserved in
+// conformance_test.go.
 func TestIntegration_ToolProgressZeroTotal(t *testing.T) {
 	ts, _ := setupMCPServer(t)
 
 	invoker := NewInvoker()
 	defer invoker.Close()
 
-	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/progressZeroTotal", nil))
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/progressZeroTotal",
+		map[string]any{"configuration": map[string]any{"solicit": true}}))
 	if err := call.Write(bg(), map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
@@ -727,7 +742,7 @@ func TestIntegration_ToolProgressZeroTotal(t *testing.T) {
 			continue // the final tool result, not a progress event
 		}
 		if _, hasTotal := data["total"]; hasTotal {
-			t.Errorf("progress event %d: NAMED GAP violated -- total:0 must be dropped (go-mcp's own zero-means-unknown convention), got %v", i, data)
+			t.Errorf("progress event %d: the server's wire notification carried no total member (go-mcp server-side omitempty), so an absent total must stay absent, got %v", i, data)
 		}
 	}
 }
