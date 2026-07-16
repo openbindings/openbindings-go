@@ -1,9 +1,14 @@
-// Package grpc implements the gRPC binding format for OpenBindings.
+// Package grpc implements the openbindings.grpc@1 binding specification
+// for OpenBindings.
 //
 // The package handles:
-//   - Discovering gRPC services via server reflection or .proto files
+//   - Discovering gRPC services via server reflection (v1, v1alpha on
+//     UNIMPLEMENTED), embedded .proto source text, or an embedded
+//     FileDescriptorSet in canonical JSON
 //   - Converting protobuf service descriptors to OpenBindings interfaces
-//   - Invoking unary and server-streaming RPCs
+//   - Invoking unary and server-streaming RPCs (client-streaming and
+//     bidirectional methods are refused pre-dispatch as this
+//     implementation's declared limitation, per GRPC-P-04)
 package grpc
 
 import (
@@ -14,7 +19,6 @@ import (
 	"sync"
 
 	"github.com/jhump/protoreflect/v2/grpcdynamic"
-	"github.com/jhump/protoreflect/v2/grpcreflect"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -33,13 +37,13 @@ type Invoker struct {
 // InvokerOption configures an Invoker.
 type InvokerOption func(*Invoker)
 
-// WithTransportCredentials sets the caller-owned transport identity (mTLS
+// WithTransportCredentials sets the invoker-level transport identity (mTLS
 // client certificates, a custom CA pool, forced plaintext) for every
-// connection this invoker dials. It replaces the automatic TLS detection
-// (port 443 / https:// / grpcs://) entirely: a caller who states the
-// transport identity owns it. This is process-level default identity; a
-// per-target credential lane (an auth.mtls context family) is designed
-// follow-up work and would override this default per connection.
+// connection this invoker dials. Per the transport configuration point
+// (openbindings.grpc@1 §9.3, GRPC-P-02) it replaces the §4 address-form
+// determination entirely — a caller who states the transport identity owns
+// it — and is itself displaced by a per-invocation
+// context.configuration.transport value.
 func WithTransportCredentials(creds credentials.TransportCredentials) InvokerOption {
 	return func(e *Invoker) { e.dialCfg.creds = creds }
 }
@@ -69,12 +73,16 @@ func NewInvoker(opts ...InvokerOption) *Invoker {
 	return e
 }
 
-func (e *Invoker) getConn(ctx context.Context, address string) (*grpc.ClientConn, error) {
-	key := address
+// getConn returns a cached channel for the (target, transport identity)
+// pair, dialing one if absent. The transport tag is part of the key
+// because the transport configuration point can vary per invocation
+// (§9.3): distinct identities never share a channel.
+func (e *Invoker) getConn(addr dialAddress, creds credentials.TransportCredentials, transportTag string) (*grpc.ClientConn, error) {
+	key := connKey(addr.hostPort, transportTag)
 	if v, ok := e.conns.Load(key); ok {
 		return v.(*grpc.ClientConn), nil
 	}
-	conn, err := dial(ctx, address, e.dialCfg)
+	conn, err := dial(addr, creds, e.dialCfg.extra)
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +124,11 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 }
 
 // run resolves the ref to a method descriptor, reads the request from the
-// handle, and dispatches the RPC. All pre-dispatch failures (bad ref,
-// missing target, descriptor load failures) fire BEFORE any RPC is sent.
+// handle, and dispatches the RPC. All pre-dispatch refusals (bad ref,
+// missing or malformed target, configuration errors, descriptor load
+// failures, schema-range and kind-coverage refusals) fire BEFORE any RPC
+// is sent; with embedded content, resolution also precedes the dial (§7:
+// a processor does not dial blind on the ref name).
 func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
 	// bctx bounds all gRPC I/O to the invocation's lifetime: caller Cancel()
 	// (or upstream ctx cancellation) tears down reflection and RPC streams.
@@ -133,23 +144,28 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	// The dial address: the source's location, else the context metadata
-	// override (`metadata.baseURL`, the same key the openapi invoker honors
-	// for targeting the same OBI at a different host). An embed-mode source
-	// carries the SCHEMA as content, so the address is the one thing the
-	// document cannot supply from the artifact itself.
-	address := strings.TrimSpace(args.Source.Location)
-	if address == "" {
-		if meta := openbindings.ContextMetadata(args.Context); meta != nil {
-			if v, ok := meta["baseURL"].(string); ok {
-				address = strings.TrimSpace(v)
-			}
+	cfg := openbindings.ContextConfiguration(args.Context)
+
+	// Target configuration point (§9.3): the default is the source's
+	// location; per-invocation/consumer configuration (context
+	// configuration.target, both tiers merged by the operation invoker)
+	// replaces it entirely, in the same §4 forms.
+	target := strings.TrimSpace(args.Source.Location)
+	if raw, ok := cfg["target"]; ok && raw != nil {
+		s, isStr := raw.(string)
+		if !isStr || strings.TrimSpace(s) == "" {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeSourceConfigError,
+				Message: fmt.Sprintf("configuration.target must be a dial address string in the openbindings.grpc@1 §4 forms, got %T", raw),
+			})
+			return
 		}
+		target = strings.TrimSpace(s)
 	}
-	if address == "" {
-		msg := "gRPC source requires a server address: set the source's location (host:port)"
+	if target == "" {
+		msg := "gRPC source requires a server dial address: set the source's location (host:port, grpc://host:port, or grpcs://host:port)"
 		if args.Source.Content != nil {
-			msg = "gRPC source carries its schema as embedded content but no server address: set the source's location to the service address (host:port), or provide baseURL in context metadata"
+			msg = "gRPC source carries its schema as embedded content but no server address (a content-only source is not conformant, GRPC-D-02): set the source's location to the service dial address, or supply the target configuration point (context configuration.target)"
 		}
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceConfigError,
@@ -157,17 +173,46 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		})
 		return
 	}
+	addr, err := parseDialAddress(target)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: err.Error(),
+		})
+		return
+	}
 
-	rpcCtx := applyGRPCContext(bctx, args.Context)
+	// Transport configuration point (§9.3, GRPC-P-02): configuration →
+	// invoker-level credentials → the §4 address-form determination.
+	creds, transportTag, err := resolveTransport(cfg, e.dialCfg.creds, addr)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: err.Error(),
+		})
+		return
+	}
 
-	// Resolve service and method descriptors. If inline content is provided
-	// (e.g., a .proto definition), parse it directly — before dialing.
-	// Otherwise use server reflection. Note: isProtoFile is NOT checked here
-	// because Source.Location is the server address for invocation; proto
-	// file locations are only used by the Synthesizer.
+	// Credentials ride outgoing gRPC metadata (§9.5, GRPC-P-07); an
+	// unplaceable key is surfaced here, pre-dispatch.
+	rpcCtx, mdErr := applyGRPCContext(bctx, args.Context)
+	if mdErr != nil {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: mdErr.Error(),
+		})
+		return
+	}
+
+	// Resolve service and method descriptors. Embedded content is the
+	// artifact the processor interprets (§6, content primacy): descriptors
+	// come from it and reflection is never consulted — resolution and the
+	// pre-dispatch gates run before any dial. A location-only source
+	// resolves via Server Reflection after connecting (GRPC-P-01).
 	var svcDesc protoreflect.ServiceDescriptor
+	var methodDesc protoreflect.MethodDescriptor
 	if args.Source.Content != nil {
-		disc, parseErr := discoverFromProto(bctx, "", args.Source.Content)
+		disc, parseErr := discoverFromContent(bctx, args.Source.Content)
 		if parseErr != nil {
 			inv.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeSourceLoadFailed,
@@ -175,6 +220,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			})
 			return
 		}
+		// Byte-exact match against the schema's declared services (GRPC-D-03).
 		for _, svc := range disc.services {
 			if string(svc.FullName()) == svcName {
 				svcDesc = svc
@@ -184,13 +230,25 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		if svcDesc == nil {
 			inv.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeRefNotFound,
-				Message: fmt.Sprintf("service %q not found in proto definition", svcName),
+				Message: fmt.Sprintf("service %q not found in embedded schema", svcName),
 			})
+			return
+		}
+		methodDesc = svcDesc.Methods().ByName(protoreflect.Name(methodName))
+		if methodDesc == nil {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeRefNotFound,
+				Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
+			})
+			return
+		}
+		if ie := preflightMethod(methodDesc); ie != nil {
+			inv.FireError(ie)
 			return
 		}
 	}
 
-	conn, err := e.getConn(bctx, address)
+	conn, err := e.getConn(addr, creds, transportTag)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeConnectFailed,
@@ -199,35 +257,26 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	if svcDesc == nil {
-		refClient := grpcreflect.NewClientAuto(rpcCtx, conn)
+	if methodDesc == nil {
+		refClient := newReflClient(rpcCtx, conn)
 		defer refClient.Reset()
 		svcDesc, err = resolveService(refClient, protoreflect.FullName(svcName))
 		if err != nil {
 			inv.FireError(refResolveError(svcName, err))
 			return
 		}
-	}
-
-	methodDesc := svcDesc.Methods().ByName(protoreflect.Name(methodName))
-	if methodDesc == nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
-		})
-		return
-	}
-
-	if methodDesc.IsStreamingClient() {
-		kind := "client-streaming"
-		if methodDesc.IsStreamingServer() {
-			kind = "bidi-streaming"
+		methodDesc = svcDesc.Methods().ByName(protoreflect.Name(methodName))
+		if methodDesc == nil {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeRefNotFound,
+				Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
+			})
+			return
 		}
-		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: fmt.Sprintf("gRPC method %q is %s; the grpc invoker supports unary and server-streaming methods", methodDesc.FullName(), kind),
-		})
-		return
+		if ie := preflightMethod(methodDesc); ie != nil {
+			inv.FireError(ie)
+			return
+		}
 	}
 
 	noInput := args.Binding != nil && args.InputSchema == nil
@@ -242,6 +291,32 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	} else {
 		runUnary(rpcCtx, inv, stub, methodDesc, reqMsg)
 	}
+}
+
+// preflightMethod applies the pre-dispatch gates that follow method
+// resolution: §3's accepted schema range over the bound method's
+// transitive closure (GRPC-P-03), then interaction-kind coverage
+// (GRPC-P-04). Client-streaming and bidirectional methods are refused
+// before dispatch as this implementation's declared limitation — a
+// coverage declaration, never a reinterpretation of the shape.
+func preflightMethod(methodDesc protoreflect.MethodDescriptor) *openbindings.InvocationError {
+	if err := validateBoundClosure(methodDesc); err != nil {
+		return &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceLoadFailed,
+			Message: err.Error(),
+		}
+	}
+	if methodDesc.IsStreamingClient() {
+		kind := "client-streaming"
+		if methodDesc.IsStreamingServer() {
+			kind = "bidirectional-streaming"
+		}
+		return &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeExecutionFailed,
+			Message: fmt.Sprintf("gRPC method %q is %s; this invoker covers unary and server-streaming methods (implementation-declared limitation, openbindings.grpc@1 §8 / GRPC-P-04)", methodDesc.FullName(), kind),
+		}
+	}
+	return nil
 }
 
 // Synthesizer handles interface synthesis from gRPC servers.

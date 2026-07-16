@@ -12,30 +12,10 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// The https:// prefix is the documented way to force TLS off port 443. It
-// is our affordance, not gRPC target syntax: unstripped it reached the
-// resolver as scheme https + malformed authority and failed with "too many
-// colons in address", making the grpc format effectively plaintext-only
-// for internal deployments.
-func TestDial_TLSSchemeStripped(t *testing.T) {
-	for _, addr := range []string{"https://127.0.0.1:54104", "grpcs://internal.host:8443"} {
-		conn, err := dial(context.Background(), addr, dialConfig{})
-		if err != nil {
-			t.Fatalf("dial(%q) must accept the documented TLS affordance, got: %v", addr, err)
-		}
-		_ = conn.Close()
-	}
-	if !needsTLS("grpcs://h:50051") || !needsTLS("https://h:50051") || !needsTLS("h:443") {
-		t.Error("TLS triggers: grpcs://, https://, and :443 must all fire")
-	}
-	if needsTLS("h:50051") {
-		t.Error("bare host:port must stay plaintext")
-	}
-}
-
-// A grpc location naming a local FILE that isn't a .proto (a compiled
-// FileDescriptorSet, say) must refuse with the gap named, never dial the
-// path as an address (which produced an unrelated resolver error).
+// A grpc location naming a local FILE (a compiled binary FileDescriptorSet,
+// say) must refuse with the remedy named, never dial the path as an address
+// (which produced an unrelated resolver error). Raw binary descriptor bytes
+// have no carriage under openbindings.grpc@1 §3; the JSON carriage does.
 func TestDiscover_RefusesLocalFileAddress(t *testing.T) {
 	dir := t.TempDir()
 	fds := filepath.Join(dir, "blend.pb")
@@ -46,7 +26,7 @@ func TestDiscover_RefusesLocalFileAddress(t *testing.T) {
 	if err == nil {
 		t.Fatal("a local file address must refuse discovery")
 	}
-	for _, want := range []string{"local file", "descriptor set", ".proto", "reflection"} {
+	for _, want := range []string{"local file", "descriptor sets", ".proto", "reflection"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal must mention %q, got: %v", want, err)
 		}
@@ -54,8 +34,10 @@ func TestDiscover_RefusesLocalFileAddress(t *testing.T) {
 }
 
 // An embed-mode grpc source carries the SCHEMA as content; the dial address
-// resolves from location, else context metadata.baseURL (the same override
-// key the openapi invoker honors), else a remedy-naming refusal.
+// resolves from the target configuration point (context
+// configuration.target, §9.3) else the source's location, else a
+// remedy-naming refusal (GRPC-D-02: a content-only source is not
+// conformant).
 func TestInvokeBinding_EmbedModeAddressResolution(t *testing.T) {
 	proto := `syntax = "proto3";
 package tiny;
@@ -65,9 +47,9 @@ message PingMsg { string msg = 1; }
 	inv := NewInvoker()
 	defer func() { _ = inv.Close() }()
 
-	// No location, no metadata: refuse, naming both remedies.
+	// No location, no configuration.target: refuse, naming both remedies.
 	h := inv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: "grpc", Content: proto},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: proto},
 		Ref:    "tiny.Tiny/Ping",
 	})
 	_, err := openbindings.Single(context.Background(), h.Outputs())
@@ -78,21 +60,21 @@ message PingMsg { string msg = 1; }
 	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("want ERR_SOURCE_CONFIG_ERROR, got %v", err)
 	}
-	for _, want := range []string{"embedded content", "location", "baseURL"} {
+	for _, want := range []string{"embedded content", "location", "configuration.target"} {
 		if !strings.Contains(ie.Message, want) {
 			t.Errorf("refusal must mention %q, got: %s", want, ie.Message)
 		}
 	}
 
-	// metadata.baseURL supplies the dial address: the invocation proceeds
-	// past the address gate (failing later at the unreachable endpoint,
-	// not at configuration).
+	// configuration.target supplies the dial address: the invocation
+	// proceeds past the address gate (failing later at the unreachable
+	// endpoint, not at configuration).
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	h2 := inv.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: "grpc", Content: proto},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: proto},
 		Ref:     "tiny.Tiny/Ping",
-		Context: map[string]any{"metadata": map[string]any{"baseURL": "127.0.0.1:1"}},
+		Context: map[string]any{"configuration": map[string]any{"target": "127.0.0.1:1"}},
 	})
 	_ = h2.Write(ctx, map[string]any{"msg": "hi"})
 	_, err2 := openbindings.Single(ctx, h2.Outputs())
@@ -101,6 +83,6 @@ message PingMsg { string msg = 1; }
 	}
 	var ie2 *openbindings.InvocationError
 	if errors.As(err2, &ie2) && ie2.Code == openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("baseURL must satisfy the address gate; still got config error: %s", ie2.Message)
+		t.Fatalf("configuration.target must satisfy the address gate; still got config error: %s", ie2.Message)
 	}
 }
