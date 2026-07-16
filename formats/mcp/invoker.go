@@ -48,6 +48,10 @@ type Invoker struct {
 	idleTimeout   time.Duration
 	httpClient    *http.Client
 	pool          *sessionPool
+	// solicitProgress is the consumer-level value of the family's `solicit`
+	// configuration point (openbindings.mcp@1 §9.3). nil declines, falling
+	// through to the default: not solicited.
+	solicitProgress *bool
 }
 
 // InvokerOption configures an Invoker.
@@ -69,6 +73,20 @@ func WithClientVersion(v string) InvokerOption {
 func WithHTTPClient(c *http.Client) InvokerOption {
 	return func(e *Invoker) {
 		e.httpClient = c
+	}
+}
+
+// WithSolicitProgress sets the consumer-level value of this family's
+// `solicit` configuration point (openbindings.mcp@1 §9.3): whether a
+// tools/call carries a progressToken so the server's correlated progress
+// notifications stream as output values ahead of the result (§9.2). The
+// consultation order is per-invocation context.configuration["solicit"] →
+// this consumer-level setting → the default, which is NOT solicited: without
+// an opt-in the output stream is the result value alone. Solicitation
+// applies to tool invocations only.
+func WithSolicitProgress(v bool) InvokerOption {
+	return func(e *Invoker) {
+		e.solicitProgress = &v
 	}
 }
 
@@ -113,13 +131,19 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 // InvokeBinding invokes an MCP binding and returns the Invocation handle
 // synchronously; the MCP session work is scheduled on its own goroutine.
 //
-// Tool and prompt arguments arrive as the operation's single input message
-// through the handle's Write channel; resource reads take no input (the
-// binding closes the input side on entry). For tool invocations, any
-// `notifications/progress` events the server sends during the call are
-// emitted as outputs ahead of the final tool result. Pre-dispatch failures
-// (bad ref, missing endpoint, non-object input) terminate the handle before
-// any network side effect.
+// The ref resolves against the listing before dispatch (openbindings.mcp@1
+// §7): offline against a pinned listing when the source carries content,
+// otherwise against the live capability-gated, pagination-exhausted listing.
+// Tool arguments, prompt arguments, and a resource template's variables
+// arrive as the operation's single input message through the handle's Write
+// channel; static resource reads take no input (the binding closes the
+// input side once resolution says the ref names a static resource). For
+// tool invocations, `notifications/progress` events stream as outputs ahead
+// of the final result only when solicited (§9.3's `solicit` configuration
+// point — per-invocation context.configuration.solicit, then
+// WithSolicitProgress, default off). Pre-dispatch failures (bad ref,
+// missing endpoint, invalid pin, invalid input, unresolvable ref) terminate
+// the handle before the entity request is sent.
 //
 // Credentials are applied from args.Context (bearerToken, apiKey, basic,
 // headers, cookies) as HTTP headers; an HTTP 401 from the server surfaces as

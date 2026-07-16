@@ -6,6 +6,7 @@ import (
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/yosida95/uritemplate/v3"
 )
 
 const DefaultSourceName = "mcpServer"
@@ -92,19 +93,11 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 			desc = resource.Title
 		}
 
+		// Static resources take no input value (openbindings.mcp@1 §8/§9.1):
+		// the URI is the binding's ref, not caller input, so the operation
+		// declares no input schema.
 		op := openbindings.Operation{
 			Description: desc,
-		}
-
-		op.Input = map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"uri": map[string]any{
-					"type":        "string",
-					"const":       resource.URI,
-					"description": "Resource URI",
-				},
-			},
 		}
 
 		iface.Operations[opKey] = op
@@ -130,16 +123,8 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 		op := openbindings.Operation{
 			Description: desc,
 		}
-
-		op.Input = map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"uriTemplate": map[string]any{
-					"type":        "string",
-					"const":       tmpl.URITemplate,
-					"description": "URI template (RFC 6570)",
-				},
-			},
+		if in := templateInputSchema(tmpl.URITemplate); in != nil {
+			op.Input = in
 		}
 
 		iface.Operations[opKey] = op
@@ -188,6 +173,31 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 	// challenge; resolution happens above the binding).
 
 	return &iface, nil
+}
+
+// templateInputSchema derives a resource template's input schema from its
+// RFC 6570 variables — the operation's input value per openbindings.mcp@1
+// §8/§9.1: one string property per declared variable (template variables are
+// string-typed, never coerced), none required (an unsupplied variable
+// follows RFC 6570's undefined-value expansion), and no undeclared members
+// (the invoker refuses them, hence additionalProperties: false). A template
+// that does not parse yields no input schema; the invoker refuses it loudly
+// at invocation time.
+func templateInputSchema(template string) map[string]any {
+	tmpl, err := uritemplate.New(template)
+	if err != nil {
+		return nil
+	}
+	properties := map[string]any{}
+	for _, name := range tmpl.Varnames() {
+		properties[name] = map[string]any{"type": "string"}
+	}
+	return map[string]any{
+		"type":                 "object",
+		"description":          fmt.Sprintf("Variables of RFC 6570 template %q", template),
+		"properties":           properties,
+		"additionalProperties": false,
+	}
 }
 
 // promptOutputSchema returns a JSON Schema describing the standard MCP

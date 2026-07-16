@@ -115,17 +115,12 @@ func TestConvertToInterface_ResourceOperations(t *testing.T) {
 		t.Fatalf("expected 1 operation, got %d", len(iface.Operations))
 	}
 	op := iface.Operations["config"]
-	// Resource input should have const URI
-	props, ok := op.Input["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("expected properties in input schema")
-	}
-	uriSchema, ok := props["uri"].(map[string]any)
-	if !ok {
-		t.Fatal("expected uri property")
-	}
-	if uriSchema["const"] != "file:///etc/config.json" {
-		t.Errorf("const = %v, want file:///etc/config.json", uriSchema["const"])
+	// Updated for openbindings.mcp@1 §8/§9.1: a static resource takes no
+	// input value — this test previously pinned a const-uri input schema,
+	// an input the conformant invoker refuses. The URI is the binding's
+	// ref, not caller input.
+	if op.Input != nil {
+		t.Fatalf("static resource operation must declare no input, got %v", op.Input)
 	}
 
 	binding := iface.Bindings["config."+DefaultSourceName]
@@ -146,10 +141,32 @@ func TestConvertToInterface_ResourceTemplateOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	op := iface.Operations["user_profile"]
-	props := op.Input["properties"].(map[string]any)
-	tmplSchema := props["uriTemplate"].(map[string]any)
-	if tmplSchema["const"] != "users/{userId}/profile" {
-		t.Errorf("const = %v, want users/{userId}/profile", tmplSchema["const"])
+	// Updated for openbindings.mcp@1 §8/§9.1: a template operation's input
+	// is the object of its RFC 6570 variables (string-typed, none required)
+	// — this test previously pinned a const-uriTemplate input schema, whose
+	// only member the conformant invoker refuses as an undeclared variable.
+	if op.Input == nil {
+		t.Fatal("expected an input schema derived from the template's variables")
+	}
+	props, ok := op.Input["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected properties in input schema")
+	}
+	varSchema, ok := props["userId"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected userId variable property, got %v", props)
+	}
+	if varSchema["type"] != "string" {
+		t.Errorf("userId type = %v, want string (template variables are string-typed)", varSchema["type"])
+	}
+	if _, hasTemplate := props["uriTemplate"]; hasTemplate {
+		t.Error("uriTemplate must not appear as an input property")
+	}
+	if op.Input["additionalProperties"] != false {
+		t.Errorf("additionalProperties = %v, want false (undeclared variables are refused)", op.Input["additionalProperties"])
+	}
+	if _, hasRequired := op.Input["required"]; hasRequired {
+		t.Error("no variable is required: unsupplied variables follow RFC 6570 undefined-value expansion")
 	}
 }
 

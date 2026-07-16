@@ -18,7 +18,7 @@ func TestHTTPClientWithHeaders_PreservesBaseAndInjects(t *testing.T) {
 	marker := &http.Transport{}
 	base := &http.Client{Transport: marker, Timeout: 7 * time.Second}
 
-	hc := httpClientWithHeaders(base, map[string]string{"Authorization": "Bearer t"})
+	hc := httpClientWithHeaders(base, map[string]string{"Authorization": "Bearer t"}, nil)
 
 	if hc.Timeout != 7*time.Second {
 		t.Errorf("Timeout not preserved: got %v", hc.Timeout)
@@ -36,7 +36,7 @@ func TestHTTPClientWithHeaders_PreservesBaseAndInjects(t *testing.T) {
 }
 
 func TestHTTPClientWithHeaders_NilBaseUsesDefaults(t *testing.T) {
-	hc := httpClientWithHeaders(nil, nil)
+	hc := httpClientWithHeaders(nil, nil, nil)
 	ht, ok := hc.Transport.(*headerTransport)
 	if !ok {
 		t.Fatalf("transport must be the *headerTransport injector, got %T", hc.Transport)
@@ -62,7 +62,7 @@ func TestHTTPClientWithHeaders_RoundTripUsesBase(t *testing.T) {
 		return http.DefaultTransport.RoundTrip(r)
 	})}
 
-	hc := httpClientWithHeaders(base, map[string]string{"Authorization": "Bearer secret"})
+	hc := httpClientWithHeaders(base, map[string]string{"Authorization": "Bearer secret"}, nil)
 	resp, err := hc.Get(srv.URL)
 	if err != nil {
 		t.Fatal(err)
