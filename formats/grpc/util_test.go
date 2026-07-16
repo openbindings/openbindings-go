@@ -156,10 +156,21 @@ func TestToOBMetadata(t *testing.T) {
 	}
 }
 
+// mustApplyGRPCContext asserts the context applies cleanly (no unplaceable
+// keys) and returns the resulting context.
+func mustApplyGRPCContext(t *testing.T, ctx context.Context, bindCtx map[string]any) context.Context {
+	t.Helper()
+	result, err := applyGRPCContext(ctx, bindCtx)
+	if err != nil {
+		t.Fatalf("applyGRPCContext: %v", err)
+	}
+	return result
+}
+
 func TestApplyGRPCContext_BearerToken(t *testing.T) {
 	ctx := context.Background()
 	bindCtx := map[string]any{"bearerToken": "tok_123"}
-	result := applyGRPCContext(ctx, bindCtx)
+	result := mustApplyGRPCContext(t, ctx, bindCtx)
 
 	md, ok := metadata.FromOutgoingContext(result)
 	if !ok {
@@ -174,7 +185,7 @@ func TestApplyGRPCContext_BearerToken(t *testing.T) {
 func TestApplyGRPCContext_APIKey(t *testing.T) {
 	ctx := context.Background()
 	bindCtx := map[string]any{"apiKey": "key_abc"}
-	result := applyGRPCContext(ctx, bindCtx)
+	result := mustApplyGRPCContext(t, ctx, bindCtx)
 
 	md, ok := metadata.FromOutgoingContext(result)
 	if !ok {
@@ -189,7 +200,7 @@ func TestApplyGRPCContext_APIKey(t *testing.T) {
 func TestApplyGRPCContext_BasicAuth(t *testing.T) {
 	ctx := context.Background()
 	bindCtx := map[string]any{"basic": map[string]any{"username": "user", "password": "pass"}}
-	result := applyGRPCContext(ctx, bindCtx)
+	result := mustApplyGRPCContext(t, ctx, bindCtx)
 
 	md, ok := metadata.FromOutgoingContext(result)
 	if !ok {
@@ -208,7 +219,7 @@ func TestApplyGRPCContext_BearerTakesPriority(t *testing.T) {
 		"bearerToken": "tok_123",
 		"apiKey":      "key_abc",
 	}
-	result := applyGRPCContext(ctx, bindCtx)
+	result := mustApplyGRPCContext(t, ctx, bindCtx)
 
 	md, _ := metadata.FromOutgoingContext(result)
 	auth := md.Get("authorization")
@@ -219,7 +230,7 @@ func TestApplyGRPCContext_BearerTakesPriority(t *testing.T) {
 
 func TestApplyGRPCContext_NoCredentials(t *testing.T) {
 	ctx := context.Background()
-	result := applyGRPCContext(ctx, nil)
+	result := mustApplyGRPCContext(t, ctx, nil)
 
 	_, ok := metadata.FromOutgoingContext(result)
 	if ok {
@@ -230,9 +241,9 @@ func TestApplyGRPCContext_NoCredentials(t *testing.T) {
 func TestApplyGRPCContext_ContextHeaders(t *testing.T) {
 	ctx := context.Background()
 	bindCtx := map[string]any{
-		"headers": map[string]any{"X-Custom": "value"},
+		"headers": map[string]any{"x-custom": "value"},
 	}
-	result := applyGRPCContext(ctx, bindCtx)
+	result := mustApplyGRPCContext(t, ctx, bindCtx)
 
 	md, ok := metadata.FromOutgoingContext(result)
 	if !ok {
@@ -241,24 +252,6 @@ func TestApplyGRPCContext_ContextHeaders(t *testing.T) {
 	got := md.Get("x-custom")
 	if len(got) != 1 || got[0] != "value" {
 		t.Errorf("x-custom = %v, want [value]", got)
-	}
-}
-
-func TestNeedsTLS_Port443(t *testing.T) {
-	if !needsTLS("api.example.com:443") {
-		t.Error("expected TLS for port 443")
-	}
-}
-
-func TestNeedsTLS_HTTPS(t *testing.T) {
-	if !needsTLS("https://api.example.com") {
-		t.Error("expected TLS for https:// prefix")
-	}
-}
-
-func TestNeedsTLS_PlainPort(t *testing.T) {
-	if needsTLS("localhost:50051") {
-		t.Error("expected no TLS for non-443 port")
 	}
 }
 

@@ -4,6 +4,58 @@
 
 ### Changed
 
+- **Conformance to the published `openbindings.grpc@1` binding
+  specification.** The invoker now implements the spec's rules end to end;
+  breaking changes from the pre-spec behavior:
+  - **Input mapping (GRPC-P-03):** unknown input fields are refused loudly
+    before dispatch (previously silently discarded); the accepted input
+    shape is the request type's canonical ProtoJSON form, so a
+    `google.protobuf.Duration`-typed request takes a JSON string (any
+    canonical form, not only objects); a close-without-write is the §9.1
+    ABSENT input value and dispatches the empty request message
+    (`ERR_MISSING_INPUT` is no longer produced by this module).
+  - **Dial address grammar (GRPC-D-02):** `location` (and the target
+    configuration point) must be one of the three port-explicit forms —
+    `host:port` (TLS iff port 443), `grpc://host:port` (plaintext),
+    `grpcs://host:port` (TLS) — with bracketed IPv6 literals. The
+    pre-spec `https://` affordance is cut (one spelling per meaning), no
+    port is defaulted, and path/query/fragment/userinfo components are
+    refused.
+  - **Configuration points (§9.3):** `context.configuration.target`
+    replaces the source's location entirely; `context.configuration
+    .transport` (`"plaintext"`, `"tls"`, or `{ca, clientCert, clientKey,
+    serverName}`) replaces the address-form transport determination
+    entirely — winning even against an explicit scheme — and outranks the
+    invoker-level `WithTransportCredentials` identity. The former
+    `metadata.baseURL` fallback is renamed into the target point.
+    Connections are now cached per (target, transport identity) pair.
+  - **Descriptor-set content (GRPC-D-01):** a source's object `content` is
+    accepted as a `google.protobuf.FileDescriptorSet` in canonical
+    ProtoJSON — unknown members and bracket-keyed extension members refused
+    loudly, self-contained closure required. String `content` remains
+    single-file `.proto` source text; its `google/protobuf/*` imports now
+    resolve from the processor's bundled copies and any other import is
+    refused loudly at load.
+  - **Accepted schema range (§3):** the bound method's transitive message
+    closure is validated at descriptor load — proto2 groups, required
+    presence (proto2 `required` / editions `LEGACY_REQUIRED`),
+    `message_encoding = DELIMITED`, and editions files resolving
+    `json_format != ALLOW` are refused pre-dispatch; files outside every
+    bound closure are inert carriage.
+  - **Reflection (GRPC-P-01):** `grpc.reflection.v1` is consulted first,
+    falling back to `v1alpha` iff the v1 stream fails `UNIMPLEMENTED`; any
+    other status is the source's failure (the previous client also fell
+    back on `UNAVAILABLE`).
+  - **Metadata placement (GRPC-P-07):** context header keys that violate
+    the gRPC metadata name grammar or use the reserved `grpc-` prefix are
+    UNPLACEABLE — surfaced as a loud pre-dispatch refusal, never normalized
+    or case-folded into place (previously keys were silently lowercased).
+  - **Interaction kinds (GRPC-P-04):** client-streaming and bidirectional
+    methods remain uncovered and are refused pre-dispatch as this
+    implementation's declared limitation, with messages citing the rule.
+  - Conformance tests keyed to the rule identifiers live in
+    `conformance_test.go`.
+
 - **Migrated to the rewritten invoker core.** `InvokeBinding` now takes
   `*openbindings.BindingInvocationArgs` and synchronously returns the
   cardinality-agnostic `openbindings.Invocation[any, any]` handle instead of

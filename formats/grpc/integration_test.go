@@ -3,13 +3,13 @@ package grpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jhump/protoreflect/v2/grpcreflect"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -25,7 +25,13 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
+
+// bufconnLocation is the conformant dial address (GRPC-D-02: explicit
+// port, plaintext determination) the bufconn tests use; the pre-stored
+// connection is keyed to it, so no real dial happens.
+const bufconnLocation = "bufconn:50051"
 
 // testServer records the metadata it received and can demand authentication.
 type testServer struct {
@@ -76,10 +82,11 @@ func (ts *testServer) authRejected(ctx context.Context) bool {
 	return !ok || len(md.Get("authorization")) == 0
 }
 
-func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, error), *testServer) {
-	t.Helper()
-
-	fdp := &descriptorpb.FileDescriptorProto{
+// testItemsFDP returns the test suite's canonical FileDescriptorProto:
+// the testpkg.ItemService schema (also serialized into FileDescriptorSet
+// JSON by the conformance tests).
+func testItemsFDP() *descriptorpb.FileDescriptorProto {
+	return &descriptorpb.FileDescriptorProto{
 		Name:    ptr("testpkg/items.proto"),
 		Package: ptr("testpkg"),
 		Syntax:  ptr("proto3"),
@@ -102,30 +109,50 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 					Type: ptr(descriptorpb.FieldDescriptorProto_TYPE_STRING), Label: ptr(descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL)},
 			}},
 		},
+		Dependency: []string{"google/protobuf/duration.proto"},
 		Service: []*descriptorpb.ServiceDescriptorProto{{
 			Name: ptr("ItemService"),
 			Method: []*descriptorpb.MethodDescriptorProto{
 				{Name: ptr("GetItem"), InputType: ptr(".testpkg.GetItemRequest"), OutputType: ptr(".testpkg.GetItemResponse")},
+				{Name: ptr("EchoDuration"), InputType: ptr(".google.protobuf.Duration"), OutputType: ptr(".testpkg.GetItemResponse")},
 				{Name: ptr("ListItems"), InputType: ptr(".testpkg.ListItemsRequest"), OutputType: ptr(".testpkg.Item"), ServerStreaming: ptr(true)},
 				{Name: ptr("WatchItems"), InputType: ptr(".testpkg.ListItemsRequest"), OutputType: ptr(".testpkg.Item"), ServerStreaming: ptr(true)},
+				{Name: ptr("FailItems"), InputType: ptr(".testpkg.ListItemsRequest"), OutputType: ptr(".testpkg.Item"), ServerStreaming: ptr(true)},
 				{Name: ptr("UploadItems"), InputType: ptr(".testpkg.GetItemRequest"), OutputType: ptr(".testpkg.GetItemResponse"), ClientStreaming: ptr(true)},
+				{Name: ptr("Chat"), InputType: ptr(".testpkg.GetItemRequest"), OutputType: ptr(".testpkg.GetItemResponse"), ClientStreaming: ptr(true), ServerStreaming: ptr(true)},
 			},
 		}},
 	}
+}
 
-	fd, err := protodesc.NewFile(fdp, nil)
+// testItemsRegistry builds the registry holding the test schema and its
+// google/protobuf/duration.proto dependency.
+func testItemsRegistry(t *testing.T) (*protoregistry.Files, protoreflect.FileDescriptor) {
+	t.Helper()
+	files := new(protoregistry.Files)
+	if err := files.RegisterFile(durationpb.File_google_protobuf_duration_proto); err != nil {
+		t.Fatal(err)
+	}
+	fd, err := protodesc.NewFile(testItemsFDP(), files)
 	if err != nil {
 		t.Fatal(err)
 	}
-	files := new(protoregistry.Files)
 	if err := files.RegisterFile(fd); err != nil {
 		t.Fatal(err)
 	}
+	return files, fd
+}
+
+func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, error), *testServer) {
+	t.Helper()
+
+	files, fd := testItemsRegistry(t)
 
 	// Look up message descriptors for building dynamic responses.
 	reqDesc := fd.Messages().ByName("GetItemRequest")
 	respDesc := fd.Messages().ByName("GetItemResponse")
 	itemDesc := fd.Messages().ByName("Item")
+	durDesc := durationpb.File_google_protobuf_duration_proto.Messages().ByName("Duration")
 
 	ts := &testServer{}
 	svr := grpc.NewServer()
@@ -133,26 +160,43 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 	svr.RegisterService(&grpc.ServiceDesc{
 		ServiceName: "testpkg.ItemService",
 		HandlerType: (*any)(nil),
-		Methods: []grpc.MethodDesc{{
-			MethodName: "GetItem",
-			Handler: func(srv any, ctx context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
-				ts.capture(ctx)
-				if ts.authRejected(ctx) {
-					return nil, status.Error(codes.Unauthenticated, "authentication required")
-				}
-				req := dynamicpb.NewMessage(reqDesc)
-				if err := dec(req); err != nil {
-					return nil, err
-				}
-				_ = grpc.SetHeader(ctx, metadata.Pairs("x-test-header", "from-server"))
-				grpc.SetTrailer(ctx, metadata.Pairs("x-test-trailer", "bye"))
-				id := req.Get(reqDesc.Fields().ByName("id")).String()
-				resp := dynamicpb.NewMessage(respDesc)
-				resp.Set(respDesc.Fields().ByName("id"), protoreflect.ValueOfString(id))
-				resp.Set(respDesc.Fields().ByName("name"), protoreflect.ValueOfString("item-"+id))
-				return resp, nil
+		Methods: []grpc.MethodDesc{
+			{
+				MethodName: "GetItem",
+				Handler: func(srv any, ctx context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+					ts.capture(ctx)
+					if ts.authRejected(ctx) {
+						return nil, status.Error(codes.Unauthenticated, "authentication required")
+					}
+					req := dynamicpb.NewMessage(reqDesc)
+					if err := dec(req); err != nil {
+						return nil, err
+					}
+					_ = grpc.SetHeader(ctx, metadata.Pairs("x-test-header", "from-server"))
+					grpc.SetTrailer(ctx, metadata.Pairs("x-test-trailer", "bye"))
+					id := req.Get(reqDesc.Fields().ByName("id")).String()
+					resp := dynamicpb.NewMessage(respDesc)
+					resp.Set(respDesc.Fields().ByName("id"), protoreflect.ValueOfString(id))
+					resp.Set(respDesc.Fields().ByName("name"), protoreflect.ValueOfString("item-"+id))
+					return resp, nil
+				},
 			},
-		}},
+			{
+				MethodName: "EchoDuration",
+				Handler: func(srv any, ctx context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+					ts.capture(ctx)
+					req := dynamicpb.NewMessage(durDesc)
+					if err := dec(req); err != nil {
+						return nil, err
+					}
+					seconds := req.Get(durDesc.Fields().ByName("seconds")).Int()
+					nanos := req.Get(durDesc.Fields().ByName("nanos")).Int()
+					resp := dynamicpb.NewMessage(respDesc)
+					resp.Set(respDesc.Fields().ByName("name"), protoreflect.ValueOfString(fmt.Sprintf("dur-%d.%d", seconds, nanos)))
+					return resp, nil
+				},
+			},
+		},
 		Streams: []grpc.StreamDesc{
 			{
 				StreamName:    "ListItems",
@@ -188,6 +232,36 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 					return stream.Context().Err()
 				},
 			},
+			{
+				// FailItems emits two messages, then a non-OK final status:
+				// the GRPC-P-05/P-06 fixture (emitted values stand, the
+				// final status classifies).
+				StreamName:    "FailItems",
+				ServerStreams: true,
+				Handler: func(srv any, stream grpc.ServerStream) error {
+					ts.capture(stream.Context())
+					for _, pair := range [][2]string{{"1", "first"}, {"2", "second"}} {
+						msg := dynamicpb.NewMessage(itemDesc)
+						msg.Set(itemDesc.Fields().ByName("id"), protoreflect.ValueOfString(pair[0]))
+						msg.Set(itemDesc.Fields().ByName("name"), protoreflect.ValueOfString(pair[1]))
+						if err := stream.SendMsg(msg); err != nil {
+							return err
+						}
+					}
+					return status.Error(codes.ResourceExhausted, "quota exhausted mid-stream")
+				},
+			},
+			{
+				// Chat is bidirectional; the invoker refuses it pre-dispatch
+				// (GRPC-P-04 declared limitation), so this handler is never
+				// reached.
+				StreamName:    "Chat",
+				ClientStreams: true,
+				ServerStreams: true,
+				Handler: func(srv any, stream grpc.ServerStream) error {
+					return status.Error(codes.Unimplemented, "unreached")
+				},
+			},
 		},
 		Metadata: "testpkg/items.proto",
 	}, ts)
@@ -218,13 +292,15 @@ func dialTestServer(t *testing.T, dialer func(context.Context, string) (net.Conn
 	return conn
 }
 
-// newTestInvoker returns an invoker whose "bufconn" address is wired to the
-// test server's in-memory listener.
+// newTestInvoker returns an invoker whose bufconnLocation address is wired
+// to the test server's in-memory listener. The cache key mirrors what run()
+// computes for that location: plaintext is the §4 address-form
+// determination for a non-443 port.
 func newTestInvoker(t *testing.T, dialer func(context.Context, string) (net.Conn, error)) *Invoker {
 	t.Helper()
 	conn := dialTestServer(t, dialer)
 	invoker := NewInvoker()
-	invoker.conns.Store("bufconn", conn)
+	invoker.conns.Store(connKey(bufconnLocation, "plaintext"), conn)
 	return invoker
 }
 
@@ -260,7 +336,7 @@ func drainInvocation(t *testing.T, inv openbindings.Invocation[any, any]) ([]any
 
 func bufconnArgs(ref string, bindCtx map[string]any) *openbindings.BindingInvocationArgs {
 	return &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "bufconn"},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: bufconnLocation},
 		Ref:     ref,
 		Context: bindCtx,
 	}
@@ -278,7 +354,7 @@ func TestIntegration_SynthesizeInterface_FromReflection(t *testing.T) {
 	conn := dialTestServer(t, dialer)
 	ctx := context.Background()
 
-	refClient := grpcreflect.NewClientAuto(ctx, conn)
+	refClient := newReflClient(ctx, conn)
 	defer refClient.Reset()
 
 	serviceNames, err := refClient.ListServices()
@@ -286,7 +362,7 @@ func TestIntegration_SynthesizeInterface_FromReflection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	disc := &discovery{address: "bufconn"}
+	disc := &discovery{address: bufconnLocation}
 	for _, name := range serviceNames {
 		if isInfraService(string(name)) {
 			continue
@@ -298,7 +374,7 @@ func TestIntegration_SynthesizeInterface_FromReflection(t *testing.T) {
 		disc.services = append(disc.services, svcDesc)
 	}
 
-	iface, err := convertToInterface(disc, "bufconn", nil)
+	iface, err := convertToInterface(disc, bufconnLocation, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,18 +382,15 @@ func TestIntegration_SynthesizeInterface_FromReflection(t *testing.T) {
 	if iface.Name != "ItemService" {
 		t.Errorf("name = %q, want %q", iface.Name, "ItemService")
 	}
-	// UploadItems is client-streaming and must be skipped by the synthesizer.
-	if len(iface.Operations) != 3 {
-		t.Fatalf("expected 3 operations, got %d", len(iface.Operations))
+	// UploadItems (client-streaming) and Chat (bidi) must be skipped by the
+	// synthesizer; the five unary/server-streaming methods remain.
+	if len(iface.Operations) != 5 {
+		t.Fatalf("expected 5 operations, got %d", len(iface.Operations))
 	}
-	if _, ok := iface.Operations["GetItem"]; !ok {
-		t.Error("expected operation GetItem")
-	}
-	if _, ok := iface.Operations["ListItems"]; !ok {
-		t.Error("expected operation ListItems")
-	}
-	if _, ok := iface.Operations["WatchItems"]; !ok {
-		t.Error("expected operation WatchItems")
+	for _, op := range []string{"GetItem", "EchoDuration", "ListItems", "WatchItems", "FailItems"} {
+		if _, ok := iface.Operations[op]; !ok {
+			t.Errorf("expected operation %s", op)
+		}
 	}
 	if iface.Sources[DefaultSourceName].BindingSpec != BindingSpec {
 		t.Errorf("format = %q, want %q", iface.Sources[DefaultSourceName].BindingSpec, BindingSpec)
@@ -511,7 +584,7 @@ func TestIntegration_ContextHeadersForwarded(t *testing.T) {
 
 	ctx := testCtx(t)
 	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/GetItem",
-		map[string]any{"headers": map[string]any{"X-Custom": "custom-value"}}))
+		map[string]any{"headers": map[string]any{"x-custom": "custom-value"}}))
 	if err := inv.Write(ctx, map[string]any{"id": "1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -549,21 +622,31 @@ func TestIntegration_Unauthenticated(t *testing.T) {
 	}
 }
 
-func TestIntegration_MissingInput(t *testing.T) {
+// A close-without-write is §9.1's ABSENT input value: it marshals as the
+// empty request message for a unary method — even one whose request type
+// has fields — never an error (GRPC-P-03).
+func TestIntegration_AbsentInputDispatchesEmptyMessage(t *testing.T) {
 	dialer, _ := setupTestServer(t)
 	invoker := newTestInvoker(t, dialer)
 	defer invoker.Close()
 
 	ctx := testCtx(t)
-	// GetItemRequest has fields, so a close-without-write is ERR_MISSING_INPUT.
 	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/GetItem", nil))
 	if err := inv.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	_, terr := drainInvocation(t, inv)
-	if terr == nil || terr.Code != openbindings.ErrCodeMissingInput {
-		t.Fatalf("expected ERR_MISSING_INPUT, got %v", terr)
+	v, err := openbindings.Single(ctx, inv.Outputs())
+	if err != nil {
+		t.Fatalf("absent input must dispatch the empty request message: %v", err)
+	}
+	resp, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map response, got %T", v)
+	}
+	// The server echoes "item-"+id; an empty request means an empty id.
+	if resp["name"] != "item-" {
+		t.Errorf("name = %v, want item- (empty request message)", resp["name"])
 	}
 }
 
@@ -690,12 +773,12 @@ func TestIntegration_NoInputConvention(t *testing.T) {
 
 // TestIntegration_InvokerOptions_RealDialPath exercises the constructor
 // options through the PRODUCTION dial path (no pre-stored connection):
-// WithDialOptions carries the bufconn context dialer, and
-// WithTransportCredentials(insecure) must OVERRIDE the automatic TLS
-// detection — the address ends in :443, which auto-detection would wrap in
-// TLS and fail against the plaintext test server. (passthrough:/// keeps
-// grpc-go from DNS-resolving the synthetic bufconn host.) A caller who states the
-// transport identity owns it.
+// WithDialOptions carries the bufconn context dialer (which ignores the
+// resolved address and connects in-memory), and
+// WithTransportCredentials(insecure) must OVERRIDE the §4 address-form
+// determination — the address ends in :443, which the address-form rule
+// would wrap in TLS and fail against the plaintext test server
+// (GRPC-P-02: an override is an override).
 func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 	dialer, ts := setupTestServer(t)
 	_ = ts
@@ -708,7 +791,7 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 
 	ctx := testCtx(t)
 	inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "passthrough:///bufconn:443"},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "i1"}); err != nil {
@@ -722,19 +805,20 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 		t.Fatal("no output")
 	}
 
-	// Negative control: WITHOUT caller credentials, the :443 suffix
-	// auto-detects TLS against the plaintext server and the call fails —
-	// proving the option genuinely overrode auto-detection above.
+	// Negative control: WITHOUT caller credentials, the :443 port makes
+	// the address-form rule elect TLS against the plaintext server and the
+	// call fails — proving the option genuinely overrode the determination
+	// above.
 	autoTLS := NewInvoker(WithDialOptions(grpc.WithContextDialer(dialer)))
 	t.Cleanup(func() { _ = autoTLS.Close() })
 	ctl, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	inv2 := autoTLS.InvokeBinding(ctl, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "passthrough:///bufconn:443"},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 	_ = inv2.Write(ctl, map[string]any{"id": "i1"})
 	if _, err := openbindings.Single(ctl, inv2.Outputs()); err == nil {
-		t.Fatal("auto-TLS against the plaintext server should fail; the negative control is vacuous")
+		t.Fatal("TLS determination against the plaintext server should fail; the negative control is vacuous")
 	}
 }

@@ -30,7 +30,8 @@ import (
 // set with InputSchema nil) — the latter guards a no-input operation over a
 // fielded message from parking on a write that never comes. For all other
 // methods the first written input becomes the request; a close-without-write
-// is a terminal ERR_MISSING_INPUT.
+// is the §9.1 absent input value, which marshals as the empty request
+// message for unary and server-streaming methods (GRPC-P-03).
 //
 // The bool result reports whether dispatch should proceed; on false the
 // invocation is already terminal.
@@ -42,11 +43,8 @@ func readRequest(ctx context.Context, inv openbindings.BindingHandle[any, any], 
 
 	raw, err := inv.ReadInput(ctx)
 	if err == io.EOF {
-		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeMissingInput,
-			Message: fmt.Sprintf("gRPC method %q requires an input message", methodDesc.FullName()),
-		})
-		return nil, false
+		// §9.1: an absent input value marshals as the empty request message.
+		return dynamicpb.NewMessage(methodDesc.Input()), true
 	}
 	if err != nil {
 		return nil, false // invocation already terminal (cancelled or errored)
@@ -140,9 +138,15 @@ func runServerStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 	}
 }
 
-// applyGRPCContext attaches binding context credentials and transport-hint
-// headers as gRPC outgoing metadata.
-func applyGRPCContext(ctx context.Context, bindCtx map[string]any) context.Context {
+// applyGRPCContext attaches binding-context credentials and caller-supplied
+// header entries as outgoing gRPC metadata per §9.5 (GRPC-P-07): a bearer
+// token rides `authorization: Bearer <token>`; any other entry naming a
+// valid metadata key rides that key. A key that violates the gRPC metadata
+// name grammar (lowercase letters, digits, `-`, `_`, `.`) or uses the
+// protocol-reserved `grpc-` prefix is UNPLACEABLE — surfaced to the
+// consumer as a loud pre-dispatch refusal, never normalized or case-folded
+// into place, never silently skipped.
+func applyGRPCContext(ctx context.Context, bindCtx map[string]any) (context.Context, error) {
 	md := metadata.MD{}
 
 	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
@@ -155,13 +159,37 @@ func applyGRPCContext(ctx context.Context, bindCtx map[string]any) context.Conte
 	}
 
 	for k, v := range openbindings.ContextHeaders(bindCtx) {
-		md.Set(strings.ToLower(k), v)
+		if err := checkMetadataKey(k); err != nil {
+			return nil, err
+		}
+		md.Set(k, v)
 	}
 
 	if len(md) == 0 {
-		return ctx
+		return ctx, nil
 	}
-	return metadata.NewOutgoingContext(ctx, md)
+	return metadata.NewOutgoingContext(ctx, md), nil
+}
+
+// checkMetadataKey validates a caller-supplied key against the gRPC
+// metadata name grammar (§9.5, GRPC-P-07).
+func checkMetadataKey(k string) error {
+	if strings.HasPrefix(k, "grpc-") {
+		return fmt.Errorf(
+			"context header %q uses the protocol-reserved grpc- prefix and cannot be placed as gRPC metadata; unplaceable credentials are surfaced, never silently skipped (openbindings.grpc@1 §9.5)", k)
+	}
+	if k == "" {
+		return fmt.Errorf("context header with empty name cannot be placed as gRPC metadata (openbindings.grpc@1 §9.5)")
+	}
+	for i := 0; i < len(k); i++ {
+		c := k[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			continue
+		}
+		return fmt.Errorf(
+			"context header %q violates the gRPC metadata name grammar (lowercase letters, digits, '-', '_', '.') and is unplaceable; keys are never normalized or case-folded into place (openbindings.grpc@1 §9.5)", k)
+	}
+	return nil
 }
 
 // toOBMetadata converts gRPC metadata to the handle's Metadata shape (both
@@ -177,6 +205,11 @@ func toOBMetadata(md metadata.MD) openbindings.Metadata {
 	return out
 }
 
+// parseRef splits a binding ref per GRPC-D-03 (§7):
+// <fully-qualified-service>/<method> — the service's package-qualified
+// name, or its bare name when its file declares no package
+// (`CoffeeShop/GetMenu` is legal), one '/', and the unqualified RPC name.
+// Matching downstream is byte-exact; no case folding.
 func parseRef(ref string) (string, string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -184,26 +217,30 @@ func parseRef(ref string) (string, string, error) {
 	}
 	idx := strings.LastIndex(ref, "/")
 	if idx < 0 || idx == 0 || idx == len(ref)-1 {
-		return "", "", fmt.Errorf("gRPC ref %q must be in the form package.Service/Method", ref)
+		return "", "", fmt.Errorf("gRPC ref %q must be <fully-qualified-service>/<method> (openbindings.grpc@1 GRPC-D-03)", ref)
 	}
 	return ref[:idx], ref[idx+1:], nil
 }
 
+// buildRequest unmarshals one caller-facing input value into the request
+// message per §9.1 (GRPC-P-03): the accepted shape is the request type's
+// CANONICAL JSON form — an object for ordinary messages, the mapping's
+// defined form where it differs (a string for a google.protobuf.Duration-
+// typed request, the wrapped value for wrapper types, and so on).
+// Unmarshalling follows the mapping's own rules, including its default
+// posture on unknown fields: they are refused loudly, never silently
+// discarded. A value that fails to unmarshal is refused before dispatch.
 func buildRequest(method protoreflect.MethodDescriptor, input any) (proto.Message, error) {
 	msg := dynamicpb.NewMessage(method.Input())
 	if input == nil {
 		return msg, nil
 	}
-	inputMap, ok := input.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("gRPC input must be a JSON object, got %T", input)
-	}
-	jsonBytes, err := json.Marshal(inputMap)
+	jsonBytes, err := json.Marshal(input)
 	if err != nil {
 		return nil, fmt.Errorf("marshal input: %w", err)
 	}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(jsonBytes, msg); err != nil {
-		return nil, fmt.Errorf("unmarshal input to protobuf: %w", err)
+	if err := protojson.Unmarshal(jsonBytes, msg); err != nil {
+		return nil, fmt.Errorf("input is not the canonical JSON form of %s: %v", method.Input().FullName(), err)
 	}
 	return msg, nil
 }
