@@ -161,7 +161,7 @@ func ExampleInterface_lossless() {
 func ExampleOperation() {
 	op := openbindings.Operation{
 		Description: "Create a new user",
-		Input: openbindings.JSONSchema{
+		Input: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{"type": "string"},
@@ -170,7 +170,7 @@ func ExampleOperation() {
 	}
 
 	fmt.Println(op.Description)
-	fmt.Println(op.Input["type"])
+	fmt.Println(op.Input.(map[string]any)["type"])
 	// Output:
 	// Create a new user
 	// object

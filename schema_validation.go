@@ -33,6 +33,12 @@ var openbindingsSchemaJSON []byte
 // openbindings.schema.json).
 var compiledOBISchema *jsonschema.Schema
 
+// compiledMetaSchema is the JSON Schema 2020-12 meta-schema, compiled once at
+// init from the validator library's locally embedded copy (never fetched from
+// the network, per OBI-D-17's verification note). Used by Validate() to
+// enforce OBI-D-17 (every schema in the document is well-formed).
+var compiledMetaSchema *jsonschema.Schema
+
 func init() {
 	var doc any
 	if err := json.Unmarshal(openbindingsSchemaJSON, &doc); err != nil {
@@ -48,6 +54,36 @@ func init() {
 		panic(fmt.Sprintf("openbindings: cannot compile OBI schema: %v", err))
 	}
 	compiledOBISchema = s
+
+	mc := jsonschema.NewCompiler()
+	mc.UseRegexpEngine(ECMARegexpEngine)
+	meta, err := mc.Compile(draft202012URI)
+	if err != nil {
+		panic(fmt.Sprintf("openbindings: cannot compile embedded 2020-12 meta-schema: %v", err))
+	}
+	compiledMetaSchema = meta
+}
+
+// validateSchemaWellFormedness reports OBI-D-17 violations at one schema
+// position: the value must be a JSON Schema 2020-12 schema in object or
+// boolean form, and the object form must validate against the 2020-12
+// meta-schemas (which cover subschemas recursively). The check is
+// deliberately narrow, mirroring §5.2: unknown keywords, unparseable
+// `pattern` values, and unresolvable `$ref` targets all pass — they surface
+// when the schema is used, not here.
+func validateSchemaWellFormedness(errs *[]string, prefix string, schema JSONSchema) {
+	switch v := schema.(type) {
+	case bool:
+		// Boolean schemas are always well-formed.
+	case map[string]any:
+		if verr := compiledMetaSchema.Validate(any(v)); verr != nil {
+			for _, line := range splitSchemaError(verr) {
+				*errs = append(*errs, fmt.Sprintf("%s: not a well-formed JSON Schema 2020-12 schema: %s (OBI-D-17)", prefix, line))
+			}
+		}
+	default:
+		*errs = append(*errs, fmt.Sprintf("%s: a schema is a JSON Schema 2020-12 object or boolean; got %s (OBI-D-17)", prefix, jsonTypeName(v)))
+	}
 }
 
 // validateAgainstOBISchema reports OBI-D-02 violations: the document does
@@ -135,8 +171,6 @@ func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 // abstains from example checks against them.
 func schemaHasExternalRef(v any) bool {
 	switch t := v.(type) {
-	case JSONSchema:
-		return schemaHasExternalRef(map[string]any(t))
 	case map[string]any:
 		if ref, ok := t["$ref"].(string); ok && !strings.HasPrefix(ref, "#") {
 			return true
@@ -165,7 +199,14 @@ func buildSchemaDefs(schemas map[string]JSONSchema) map[string]any {
 	}
 	defs := make(map[string]any, len(schemas))
 	for name, sch := range schemas {
-		defs[name] = rewriteSchemaRefs(deepCopyJSON(map[string]any(sch)))
+		switch v := sch.(type) {
+		case map[string]any:
+			defs[name] = rewriteSchemaRefs(deepCopyJSON(v))
+		default:
+			// Boolean schemas carry no refs to rewrite; anything else is
+			// malformed (OBI-D-17's concern) and surfaces at compile time.
+			defs[name] = v
+		}
 	}
 	return defs
 }
@@ -174,29 +215,36 @@ func buildSchemaDefs(schemas map[string]JSONSchema) map[string]any {
 // operation's input/output schema, with the document's schemas map
 // exposed under $defs, then compiles it.
 func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema.Schema, error) {
-	root := deepCopyJSON(map[string]any(opSchema))
-	rootMap, ok := root.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("operation schema must be a JSON object")
-	}
-	rewriteSchemaRefs(rootMap)
-	if len(defs) > 0 {
-		if existing, has := rootMap["$defs"]; has {
-			if existingMap, isMap := existing.(map[string]any); isMap {
-				for k, v := range defs {
-					if _, present := existingMap[k]; !present {
-						existingMap[k] = v
+	var root any
+	switch v := opSchema.(type) {
+	case map[string]any:
+		copied := deepCopyJSON(v)
+		rootMap := copied.(map[string]any)
+		rewriteSchemaRefs(rootMap)
+		if len(defs) > 0 {
+			if existing, has := rootMap["$defs"]; has {
+				if existingMap, isMap := existing.(map[string]any); isMap {
+					for k, dv := range defs {
+						if _, present := existingMap[k]; !present {
+							existingMap[k] = dv
+						}
 					}
 				}
+			} else {
+				rootMap["$defs"] = defs
 			}
-		} else {
-			rootMap["$defs"] = defs
 		}
+		root = rootMap
+	case bool:
+		// Boolean schemas reference nothing; compile the boolean directly.
+		root = v
+	default:
+		return nil, fmt.Errorf("operation schema must be a JSON Schema object or boolean")
 	}
 	c := jsonschema.NewCompiler()
 	c.UseRegexpEngine(ECMARegexpEngine)
 	const url = "openbindings:///example-schema"
-	if err := c.AddResource(url, rootMap); err != nil {
+	if err := c.AddResource(url, root); err != nil {
 		return nil, err
 	}
 	return c.Compile(url)

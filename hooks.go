@@ -493,10 +493,12 @@ func stampSite(site *InvokeSite, formatInvoker BindingInvoker) {
 // declaration the diagnostics key on. Content-independent: it reads the
 // contract, never payload bytes.
 func FloorStamped(schema JSONSchema) bool {
-	if schema == nil {
+	obj, ok := schema.(map[string]any)
+	if !ok {
+		// nil (unspecified) and boolean-form schemas carry no stamp.
 		return false
 	}
-	xob, _ := schema["x-ob"].(map[string]any)
+	xob, _ := obj["x-ob"].(map[string]any)
 	if xob == nil {
 		return false
 	}
@@ -520,11 +522,12 @@ func AssumptionWarning(decodeStamp string, outputSchema JSONSchema) string {
 	if !strings.HasPrefix(decodeStamp, "assumption/") {
 		return ""
 	}
+	obj, isObj := outputSchema.(map[string]any)
 	var reason string
 	switch {
 	case FloorStamped(outputSchema):
 		reason = "floor-stamped output schema"
-	case outputSchema == nil || len(outputSchema) == 0:
+	case outputSchema == nil || (isObj && len(obj) == 0):
 		reason = "no output schema"
 	case NonDiscriminatingOutput(outputSchema):
 		reason = "non-discriminating output schema"
@@ -539,13 +542,22 @@ func AssumptionWarning(decodeStamp string, outputSchema JSONSchema) string {
 // strings. Content-independent contract inspection (the assumption
 // warning's trigger arms).
 func NonDiscriminatingOutput(schema JSONSchema) bool {
-	if schema == nil || len(schema) == 0 {
+	if schema == nil {
+		return true
+	}
+	if b, isBool := schema.(bool); isBool {
+		// Boolean-true accepts everything (cannot catch a wrong lane);
+		// boolean-false rejects everything (any wrong decode fails loudly).
+		return b
+	}
+	obj, isObj := schema.(map[string]any)
+	if !isObj || len(obj) == 0 {
 		return true
 	}
 	if FloorStamped(schema) {
 		return true
 	}
-	switch t := schema["type"].(type) {
+	switch t := obj["type"].(type) {
 	case string:
 		return t == "string"
 	case []any:
@@ -559,7 +571,7 @@ func NonDiscriminatingOutput(schema JSONSchema) bool {
 		// obviously excludes strings: treat as non-discriminating unless
 		// a combinator is present (a oneOf/anyOf/allOf is at least TRYING
 		// to discriminate; honest-but-cheap).
-		if schema["oneOf"] == nil && schema["anyOf"] == nil && schema["allOf"] == nil && schema["$ref"] == nil {
+		if obj["oneOf"] == nil && obj["anyOf"] == nil && obj["allOf"] == nil && obj["$ref"] == nil {
 			return true
 		}
 	}

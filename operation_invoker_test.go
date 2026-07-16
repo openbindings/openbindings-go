@@ -252,7 +252,7 @@ func opTestInterface() *Interface {
 	return &Interface{
 		OpenBindings: "0.2.0",
 		Schemas: map[string]JSONSchema{
-			"UserInput": {
+			"UserInput": map[string]any{
 				"type":                 "object",
 				"properties":           map[string]any{"id": map[string]any{"type": "string"}},
 				"required":             []any{"id"},
@@ -263,8 +263,8 @@ func opTestInterface() *Interface {
 			"ping": {},
 			"getUser": {
 				Aliases: []string{"fetchUser"},
-				Input:   JSONSchema{"$ref": "#/schemas/UserInput"},
-				Output: JSONSchema{
+				Input:   map[string]any{"$ref": "#/schemas/UserInput"},
+				Output: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"id":   map[string]any{"type": "string"},
@@ -275,7 +275,7 @@ func opTestInterface() *Interface {
 			},
 			"echo": {},
 			"watchOrders": {
-				Output: JSONSchema{
+				Output: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"id":     map[string]any{"type": "string"},
@@ -285,7 +285,7 @@ func opTestInterface() *Interface {
 				},
 			},
 			"watchTyped": {
-				Output: JSONSchema{
+				Output: map[string]any{
 					"type":       "object",
 					"properties": map[string]any{"n": map[string]any{"type": "number"}},
 					"required":   []any{"n"},
@@ -504,7 +504,7 @@ func TestOpT07InvalidWriteRejectsAndTerminates(t *testing.T) {
 func TestOpT07ValidatesBeforeTransform(t *testing.T) {
 	iface := opTestInterface()
 	echo := iface.Operations["echo"]
-	echo.Input = JSONSchema{
+	echo.Input = map[string]any{
 		"type":       "object",
 		"properties": map[string]any{"id": map[string]any{"type": "string"}},
 		"required":   []any{"id"},
@@ -599,7 +599,7 @@ func TestOpT08ValidatesAfterTransform(t *testing.T) {
 func TestOpT16UnresolvableOutputGraphIsSchemaUnresolved(t *testing.T) {
 	iface := opTestInterface()
 	op := iface.Operations["watchTyped"]
-	op.Output = JSONSchema{"$ref": "#/schemas/DoesNotExist"}
+	op.Output = map[string]any{"$ref": "#/schemas/DoesNotExist"}
 	iface.Operations["watchTyped"] = op
 
 	inv := newOpInvoker(&mockBindingInvoker{}, nil)
@@ -616,7 +616,7 @@ func TestOpT16UnresolvableOutputGraphIsSchemaUnresolved(t *testing.T) {
 func TestOpT16UnresolvableInputGraphIsSchemaUnresolved(t *testing.T) {
 	iface := opTestInterface()
 	op := iface.Operations["getUser"]
-	op.Input = JSONSchema{"$ref": "#/schemas/DoesNotExist"}
+	op.Input = map[string]any{"$ref": "#/schemas/DoesNotExist"}
 	iface.Operations["getUser"] = op
 
 	inv := newOpInvoker(&mockBindingInvoker{}, nil)
@@ -632,7 +632,7 @@ func TestOpT16UnresolvableInputGraphIsSchemaUnresolved(t *testing.T) {
 func TestOpT16FormatIsAnnotationNotAssertion(t *testing.T) {
 	iface := opTestInterface()
 	op := iface.Operations["getUser"]
-	op.Input = JSONSchema{
+	op.Input = map[string]any{
 		"type":       "object",
 		"properties": map[string]any{"id": map[string]any{"type": "string", "format": "email"}},
 		"required":   []any{"id"},

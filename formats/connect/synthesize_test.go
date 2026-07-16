@@ -172,14 +172,14 @@ service TestService {
 	if op.Input == nil {
 		t.Fatal("expected input schema")
 	}
-	if op.Input["type"] != "object" {
-		t.Errorf("input type = %v, want object", op.Input["type"])
+	if op.Input.(map[string]any)["type"] != "object" {
+		t.Errorf("input type = %v, want object", op.Input.(map[string]any)["type"])
 	}
 	if op.Output == nil {
 		t.Fatal("expected output schema")
 	}
-	if op.Output["type"] != "object" {
-		t.Errorf("output type = %v, want object", op.Output["type"])
+	if op.Output.(map[string]any)["type"] != "object" {
+		t.Errorf("output type = %v, want object", op.Output.(map[string]any)["type"])
 	}
 }
 
@@ -328,7 +328,7 @@ func TestConvertToInterface_WellKnownTimestampField(t *testing.T) {
 	}
 
 	op := iface.Operations["GetItem"]
-	props, ok := op.Input["properties"].(map[string]any)
+	props, ok := op.Input.(map[string]any)["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected input properties")
 	}
@@ -370,7 +370,7 @@ service TestService {
 		t.Fatal(err)
 	}
 
-	props, ok := iface.Operations["GetItem"].Input["properties"].(map[string]any)
+	props, ok := iface.Operations["GetItem"].Input.(map[string]any)["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected input properties")
 	}
@@ -412,7 +412,7 @@ service TestService {
 		t.Fatal(err)
 	}
 
-	input := iface.Operations["GetItem"].Input
+	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
 	variants, ok := input["oneOf"].([]any)
 	if !ok {
 		t.Fatalf("expected oneOf on input schema, got %v", input)
@@ -484,7 +484,7 @@ service TestService {
 		t.Fatal(err)
 	}
 
-	input := iface.Operations["GetItem"].Input
+	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
 	if _, ok := input["oneOf"]; ok {
 		t.Error("multi-group oneof must not emit top-level oneOf")
 	}

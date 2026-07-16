@@ -89,14 +89,14 @@ func TestConvertToInterface_ToolInputOutputSchemas(t *testing.T) {
 	if op.Input == nil {
 		t.Fatal("expected input schema")
 	}
-	if op.Input["type"] != "object" {
-		t.Errorf("input type = %v, want object", op.Input["type"])
+	if op.Input.(map[string]any)["type"] != "object" {
+		t.Errorf("input type = %v, want object", op.Input.(map[string]any)["type"])
 	}
 	if op.Output == nil {
 		t.Fatal("expected output schema")
 	}
-	if op.Output["type"] != "object" {
-		t.Errorf("output type = %v, want object", op.Output["type"])
+	if op.Output.(map[string]any)["type"] != "object" {
+		t.Errorf("output type = %v, want object", op.Output.(map[string]any)["type"])
 	}
 }
 
@@ -148,7 +148,7 @@ func TestConvertToInterface_ResourceTemplateOperations(t *testing.T) {
 	if op.Input == nil {
 		t.Fatal("expected an input schema derived from the template's variables")
 	}
-	props, ok := op.Input["properties"].(map[string]any)
+	props, ok := op.Input.(map[string]any)["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected properties in input schema")
 	}
@@ -162,10 +162,10 @@ func TestConvertToInterface_ResourceTemplateOperations(t *testing.T) {
 	if _, hasTemplate := props["uriTemplate"]; hasTemplate {
 		t.Error("uriTemplate must not appear as an input property")
 	}
-	if op.Input["additionalProperties"] != false {
-		t.Errorf("additionalProperties = %v, want false (undeclared variables are refused)", op.Input["additionalProperties"])
+	if op.Input.(map[string]any)["additionalProperties"] != false {
+		t.Errorf("additionalProperties = %v, want false (undeclared variables are refused)", op.Input.(map[string]any)["additionalProperties"])
 	}
-	if _, hasRequired := op.Input["required"]; hasRequired {
+	if _, hasRequired := op.Input.(map[string]any)["required"]; hasRequired {
 		t.Error("no variable is required: unsupplied variables follow RFC 6570 undefined-value expansion")
 	}
 }
@@ -192,14 +192,14 @@ func TestConvertToInterface_PromptOperations(t *testing.T) {
 	if op.Input == nil {
 		t.Fatal("expected input schema for prompt")
 	}
-	props := op.Input["properties"].(map[string]any)
+	props := op.Input.(map[string]any)["properties"].(map[string]any)
 	if _, ok := props["language"]; !ok {
 		t.Error("expected language property")
 	}
 	if _, ok := props["style"]; !ok {
 		t.Error("expected style property")
 	}
-	req, ok := op.Input["required"].([]string)
+	req, ok := op.Input.(map[string]any)["required"].([]string)
 	if !ok {
 		t.Fatal("expected required array")
 	}
@@ -228,17 +228,17 @@ func TestConvertToInterface_PromptHasOutputSchema(t *testing.T) {
 	if op.Output == nil {
 		t.Fatal("expected output schema for prompt operation")
 	}
-	if op.Output["type"] != "object" {
-		t.Errorf("output type = %v, want object", op.Output["type"])
+	if op.Output.(map[string]any)["type"] != "object" {
+		t.Errorf("output type = %v, want object", op.Output.(map[string]any)["type"])
 	}
-	props, ok := op.Output["properties"].(map[string]any)
+	props, ok := op.Output.(map[string]any)["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected properties in output schema")
 	}
 	if _, ok := props["messages"]; !ok {
 		t.Error("expected messages property in output schema")
 	}
-	req, ok := op.Output["required"].([]string)
+	req, ok := op.Output.(map[string]any)["required"].([]string)
 	if !ok {
 		t.Fatal("expected required array in output schema")
 	}

@@ -942,7 +942,7 @@ func TestIntegrationSynthesizeInterface_RecursiveType(t *testing.T) {
 	if !ok {
 		t.Fatal("expected operation 'node' in created interface")
 	}
-	props, _ := op.Input["properties"].(map[string]any)
+	props, _ := op.Input.(map[string]any)["properties"].(map[string]any)
 	queryProp, _ := props["_query"].(map[string]any)
 	if queryProp == nil {
 		t.Fatal("node input schema missing _query property")

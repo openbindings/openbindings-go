@@ -1110,14 +1110,14 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 	}
 
 	op := iface.Operations["createPet"]
-	props, _ := op.Input["properties"].(map[string]any)
+	props, _ := op.Input.(map[string]any)["properties"].(map[string]any)
 	if _, hasBody := props["body"]; hasBody {
 		t.Errorf("contract carries a phantom body wrapper: %v", op.Input)
 	}
 	if _, hasName := props["name"]; !hasName {
 		t.Fatalf("contract must describe the flat caller shape, got properties %v", props)
 	}
-	req, _ := op.Input["required"].([]string)
+	req, _ := op.Input.(map[string]any)["required"].([]string)
 	found := false
 	for _, r := range req {
 		if r == "name" {
@@ -1125,7 +1125,7 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("required-ness of body fields dropped: required = %v", op.Input["required"])
+		t.Errorf("required-ness of body fields dropped: required = %v", op.Input.(map[string]any)["required"])
 	}
 
 	// The contract's shape goes onto the wire verbatim.

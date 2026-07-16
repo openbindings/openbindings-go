@@ -9,4 +9,7 @@ require (
 
 require golang.org/x/text v0.38.0
 
-require github.com/dlclark/regexp2 v1.12.0 // indirect
+require (
+	github.com/blues/jsonata-go v1.5.4 // indirect
+	github.com/dlclark/regexp2 v1.12.0 // indirect
+)

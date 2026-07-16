@@ -6,9 +6,58 @@ import (
 	"strings"
 )
 
-// JSONSchema is intentionally untyped to avoid coupling to any one JSON Schema library.
-// This preserves arbitrary keys/values structurally, but not raw JSON bytes (use canonicaljson.Marshal if you need stable bytes).
-type JSONSchema map[string]any
+// JSONSchema holds a JSON Schema 2020-12 value in either of its two forms:
+// an object schema (map[string]any) or a boolean schema (bool) — §5.2 admits
+// boolean schemas at every schema position (`true` accepts every value,
+// `false` accepts none, `{}` is equivalent to `true`). It is intentionally
+// untyped beyond that to avoid coupling to any one JSON Schema library.
+// This preserves arbitrary keys/values structurally, but not raw JSON bytes
+// (use canonicaljson.Marshal if you need stable bytes).
+//
+// A nil JSONSchema means the schema is unspecified (the field is absent);
+// well-formedness of a present value is a document rule (OBI-D-17), enforced
+// by Validate rather than by this type.
+type JSONSchema any
+
+// SchemaObjectForm returns the object form of a schema value: an object
+// schema as itself, boolean `true` as `{}`, and boolean `false` as
+// `{"not": {}}` (the equivalent object spellings per JSON Schema 2020-12).
+// ok is false when v is neither an object nor a boolean — a malformed
+// schema value (an OBI-D-17 violation, reported by Validate).
+func SchemaObjectForm(v JSONSchema) (m map[string]any, ok bool) {
+	switch s := v.(type) {
+	case map[string]any:
+		return s, true
+	case bool:
+		if s {
+			return map[string]any{}, true
+		}
+		return map[string]any{"not": map[string]any{}}, true
+	default:
+		return nil, false
+	}
+}
+
+// jsonTypeName names the JSON type of a decoded value (null, boolean,
+// number, string, array, object) for diagnostics.
+func jsonTypeName(v any) string {
+	switch v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case float64, json.Number:
+		return "number"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return fmt.Sprintf("%T", v)
+	}
+}
 
 // LosslessFields is embedded in every typed OpenBindings struct to preserve
 // JSON fields that the SDK does not (yet) model. Extensions holds keys starting
@@ -203,21 +252,11 @@ func (o Operation) MarshalJSON() ([]byte, error) {
 		Output:      o.Output,
 		Examples:    o.Examples,
 	}
-	// The spec distinguishes an empty {} schema (accepts any value) from an
-	// absent one (contract unspecified). omitempty drops both nil and empty
-	// maps, so re-emit {} for non-nil empty schemas to preserve the
-	// distinction on round-trip.
-	var overrides map[string]json.RawMessage
-	if o.Input != nil && len(o.Input) == 0 {
-		overrides = map[string]json.RawMessage{"input": json.RawMessage("{}")}
-	}
-	if o.Output != nil && len(o.Output) == 0 {
-		if overrides == nil {
-			overrides = map[string]json.RawMessage{}
-		}
-		overrides["output"] = json.RawMessage("{}")
-	}
-	return marshalLosslessWith(o.Unknown, o.Extensions, w, overrides)
+	// The spec distinguishes an empty {} schema (accepts any value) and a
+	// boolean schema from an absent one (contract unspecified). JSONSchema
+	// is interface-typed, so omitempty drops only nil (absent) values —
+	// {}, true, and false all round-trip without special handling.
+	return marshalLosslessWith(o.Unknown, o.Extensions, w, nil)
 }
 
 type Source struct {

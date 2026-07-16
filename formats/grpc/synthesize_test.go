@@ -241,10 +241,10 @@ func TestConvertToInterface_InputOutputSchemas(t *testing.T) {
 	if op.Input == nil {
 		t.Fatal("expected input schema")
 	}
-	if op.Input["type"] != "object" {
-		t.Errorf("input type = %v, want object", op.Input["type"])
+	if op.Input.(map[string]any)["type"] != "object" {
+		t.Errorf("input type = %v, want object", op.Input.(map[string]any)["type"])
 	}
-	props, ok := op.Input["properties"].(map[string]any)
+	props, ok := op.Input.(map[string]any)["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected input properties")
 	}
@@ -516,7 +516,7 @@ func TestConvertToInterface_WellKnownTimestampField(t *testing.T) {
 	}
 
 	op := iface.Operations["GetItem"]
-	props, ok := op.Input["properties"].(map[string]any)
+	props, ok := op.Input.(map[string]any)["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected input properties")
 	}
@@ -575,7 +575,7 @@ func TestConvertToInterface_OneofSingleGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	input := iface.Operations["GetItem"].Input
+	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
 	variants, ok := input["oneOf"].([]any)
 	if !ok {
 		t.Fatalf("expected oneOf on input schema, got %v", input)
@@ -654,7 +654,7 @@ func TestConvertToInterface_OneofWithRegularFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	input := iface.Operations["GetItem"].Input
+	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
 
 	props, ok := input["properties"].(map[string]any)
 	if !ok {
@@ -720,7 +720,7 @@ func TestConvertToInterface_OneofMultipleGroupsFallsBackToProperties(t *testing.
 		t.Fatal(err)
 	}
 
-	input := iface.Operations["GetItem"].Input
+	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
 	if _, ok := input["oneOf"]; ok {
 		t.Error("multi-group oneof should not emit oneOf (v0.1 profile limitation)")
 	}
@@ -795,7 +795,7 @@ func TestConvertToInterface_Proto3OptionalNotTreatedAsOneof(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	input := iface.Operations["GetItem"].Input
+	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
 	if _, ok := input["oneOf"]; ok {
 		t.Error("proto3 optional field should not produce oneOf (synthetic oneof)")
 	}
@@ -852,7 +852,7 @@ func TestConvertToInterface_OneofShapeAcceptedByProfile(t *testing.T) {
 	}
 
 	n := &schemaprofile.Normalizer{}
-	input := iface.Operations["GetItem"].Input
+	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
 	if _, err := n.Normalize(input); err != nil {
 		t.Fatalf("oneof schema rejected by v0.1 profile: %v", err)
 	}
@@ -925,7 +925,7 @@ func TestConvertToInterface_ByteAndInt64ShapesAcceptedByProfile(t *testing.T) {
 	}
 
 	n := &schemaprofile.Normalizer{}
-	input := iface.Operations["GetItem"].Input
+	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
 	if _, err := n.Normalize(input); err != nil {
 		t.Fatalf("bytes/int64 schema rejected by v0.1 profile: %v", err)
 	}

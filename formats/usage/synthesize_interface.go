@@ -100,7 +100,7 @@ var uriRefAllowedChars = func() [256]bool {
 // assumption always yields a string, stamped with in-schema x-ob
 // provenance so the diagnostics key on it and elections self-clear it.
 func floorOutputSchema() openbindings.JSONSchema {
-	return openbindings.JSONSchema{
+	return map[string]any{
 		"type": "string",
 		"x-ob": map[string]any{"floor": "text"},
 	}

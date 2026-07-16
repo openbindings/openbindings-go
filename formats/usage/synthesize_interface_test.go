@@ -119,7 +119,7 @@ cmd "greet" help="Say hello" {
 	if op.Input == nil {
 		t.Fatal("expected input schema")
 	}
-	props, ok := op.Input["properties"].(map[string]any)
+	props, ok := op.Input.(map[string]any)["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected properties")
 	}
@@ -139,7 +139,7 @@ cmd "greet" help="Say hello" {
 	}
 
 	// required=#true flag should appear in the schema's required array
-	req, _ := op.Input["required"].([]string)
+	req, _ := op.Input.(map[string]any)["required"].([]string)
 	foundRequired := false
 	for _, r := range req {
 		if r == "name" {
@@ -162,13 +162,13 @@ cmd "greet" help="Say hello" {
 		t.Fatal(err)
 	}
 	op := iface.Operations["greet"]
-	props := op.Input["properties"].(map[string]any)
+	props := op.Input.(map[string]any)["properties"].(map[string]any)
 	nameSchema := props["name"].(map[string]any)
 	if nameSchema["type"] != "string" {
 		t.Errorf("type = %v, want string", nameSchema["type"])
 	}
 	// Required arg should be in required list
-	req, _ := op.Input["required"].([]string)
+	req, _ := op.Input.(map[string]any)["required"].([]string)
 	found := false
 	for _, r := range req {
 		if r == "name" {
@@ -239,7 +239,7 @@ cmd "status" help="Show status"
 			t.Errorf("%s: expected input schema with inherited --verbose", opKey)
 			continue
 		}
-		props, _ := op.Input["properties"].(map[string]any)
+		props, _ := op.Input.(map[string]any)["properties"].(map[string]any)
 		if _, ok := props["verbose"]; !ok {
 			t.Errorf("%s: expected 'verbose' property from top-level global flag", opKey)
 		}
@@ -272,7 +272,7 @@ arg "[file]..." help="Files to search"
 	if op.Input == nil {
 		t.Fatal("expected input schema")
 	}
-	props := op.Input["properties"].(map[string]any)
+	props := op.Input.(map[string]any)["properties"].(map[string]any)
 	for _, expected := range []string{"ignore-case", "recursive", "pattern", "file"} {
 		if _, ok := props[expected]; !ok {
 			t.Errorf("expected property %q in root operation input", expected)
@@ -280,7 +280,7 @@ arg "[file]..." help="Files to search"
 	}
 
 	// Required arg should be in required list.
-	req, _ := op.Input["required"].([]string)
+	req, _ := op.Input.(map[string]any)["required"].([]string)
 	found := false
 	for _, r := range req {
 		if r == "pattern" {

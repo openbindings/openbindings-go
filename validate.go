@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	jsonata "github.com/blues/jsonata-go"
 )
 
 type validateOptions struct {
@@ -75,8 +77,10 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 	}
 
 	// Validate schemas: keys match identifier pattern (OBI-D-03); each schema
-	// is walked for OBI-D-05 ($ref URI), OBI-D-06 ($schema dialect), OBI-D-07
-	// (no $vocabulary), and OBI-D-16 (same-document $refs resolve).
+	// is checked for well-formedness against the 2020-12 meta-schemas
+	// (OBI-D-17) and walked for OBI-D-05 ($ref URI), OBI-D-06 ($schema
+	// dialect), OBI-D-07 (no $vocabulary), and OBI-D-16 (same-document $refs
+	// resolve).
 	schKeys := make([]string, 0, len(i.Schemas))
 	for k := range i.Schemas {
 		schKeys = append(schKeys, k)
@@ -84,6 +88,7 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 	sort.Strings(schKeys)
 	for _, k := range schKeys {
 		validateIdent(&errs, "schemas key", k)
+		validateSchemaWellFormedness(&errs, fmt.Sprintf("schemas[%q]", k), i.Schemas[k])
 		walkSchema(&errs, fmt.Sprintf("schemas[%q]", k), i.Schemas[k], docView, false)
 	}
 
@@ -144,11 +149,14 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 			aliasOwner[a] = k
 		}
 
-		// Walk operation input/output schemas for OBI-D-05/D-06/D-07/D-16.
+		// Check operation input/output schemas for well-formedness (OBI-D-17)
+		// and walk them for OBI-D-05/D-06/D-07/D-16.
 		if op.Input != nil {
+			validateSchemaWellFormedness(&errs, fmt.Sprintf("operations[%q].input", k), op.Input)
 			walkSchema(&errs, fmt.Sprintf("operations[%q].input", k), op.Input, docView, false)
 		}
 		if op.Output != nil {
+			validateSchemaWellFormedness(&errs, fmt.Sprintf("operations[%q].output", k), op.Output)
 			walkSchema(&errs, fmt.Sprintf("operations[%q].output", k), op.Output, docView, false)
 		}
 
@@ -198,10 +206,11 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		}
 	}
 
-	// Validate transforms. No document rule constrains the expression's
-	// content (an empty string is schema-valid); evaluation failures,
-	// including empty expressions, surface at invoke time per OBI-T-10
-	// (ErrEmptyTransformExpression / ERR_TRANSFORM_ERROR).
+	// Validate transforms. OBI-D-18: every value in the transforms map parses
+	// as a syntactically valid expression of the pinned transform language
+	// (JSONata 2.1, jsonata-js 2.1.1 parse-acceptance tiebreak). Parse-only:
+	// evaluation failures (undefined results, dynamic errors) remain invoke-
+	// time outcomes per OBI-T-10 / ERR_TRANSFORM_ERROR.
 	trKeys := make([]string, 0, len(i.Transforms))
 	for k := range i.Transforms {
 		trKeys = append(trKeys, k)
@@ -210,6 +219,7 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 	for _, k := range trKeys {
 		// OBI-D-03: transform keys must match the identifier pattern.
 		validateIdent(&errs, "transforms key", k)
+		validateTransformExpression(&errs, fmt.Sprintf("transforms[%q]", k), i.Transforms[k])
 	}
 
 	// Validate bindings.
@@ -235,15 +245,24 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 			errs = append(errs, fmt.Sprintf("bindings[%q].source: references unknown source %q (OBI-D-09)", k, b.Source))
 		}
 
-		// Validate transform references.
-		if b.InputTransform != nil && b.InputTransform.IsRef() {
-			if err := validateTransformRef(b.InputTransform.Ref, i.Transforms); err != nil {
-				errs = append(errs, fmt.Sprintf("bindings[%q].inputTransform.$ref: %v", k, err))
+		// Validate transform references (OBI-D-10) and inline transform
+		// parse-validity (OBI-D-18).
+		if b.InputTransform != nil {
+			if b.InputTransform.IsRef() {
+				if err := validateTransformRef(b.InputTransform.Ref, i.Transforms); err != nil {
+					errs = append(errs, fmt.Sprintf("bindings[%q].inputTransform.$ref: %v", k, err))
+				}
+			} else {
+				validateTransformExpression(&errs, fmt.Sprintf("bindings[%q].inputTransform", k), b.InputTransform.Inline)
 			}
 		}
-		if b.OutputTransform != nil && b.OutputTransform.IsRef() {
-			if err := validateTransformRef(b.OutputTransform.Ref, i.Transforms); err != nil {
-				errs = append(errs, fmt.Sprintf("bindings[%q].outputTransform.$ref: %v", k, err))
+		if b.OutputTransform != nil {
+			if b.OutputTransform.IsRef() {
+				if err := validateTransformRef(b.OutputTransform.Ref, i.Transforms); err != nil {
+					errs = append(errs, fmt.Sprintf("bindings[%q].outputTransform.$ref: %v", k, err))
+				}
+			} else {
+				validateTransformExpression(&errs, fmt.Sprintf("bindings[%q].outputTransform", k), b.OutputTransform.Inline)
 			}
 		}
 
@@ -326,6 +345,32 @@ func docPointerResolves(doc any, pointer string) bool {
 		}
 	}
 	return true
+}
+
+// validateTransformExpression reports an OBI-D-18 violation when expr does
+// not parse as a syntactically valid expression of the pinned transform
+// language (§5.5: JSONata 2.1, with jsonata-js 2.1.1's parse acceptance as
+// the normative tiebreak). Parse-only: membership in the language, not
+// success of evaluation — undefined results and dynamic errors remain
+// invoke-time outcomes.
+func validateTransformExpression(errs *[]string, prefix, expr string) {
+	if !jsonataParses(expr) {
+		*errs = append(*errs, fmt.Sprintf("%s: not a syntactically valid JSONata expression (OBI-D-18)", prefix))
+	}
+}
+
+// jsonataParses reports whether expr parses under the bundled JSONata
+// parser. The parser is only ever handed document-supplied strings, so a
+// parser panic is treated as a parse failure rather than crashing document
+// validation.
+func jsonataParses(expr string) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	_, err := jsonata.Compile(expr)
+	return err == nil
 }
 
 // validateTransformRef validates that a $ref resolves to a named transform per OBI-D-10.
@@ -573,16 +618,10 @@ var arraySchemaKeywords = map[string]bool{
 // `properties`/`patternProperties`/`$defs`/etc. are not themselves treated as
 // schema keywords.
 func walkSchema(errs *[]string, prefix string, schema any, doc any, inID bool) {
-	var s map[string]any
-	switch v := schema.(type) {
-	case map[string]any:
-		s = v
-	case JSONSchema:
-		s = map[string]any(v)
-	default:
-		return
-	}
-	if s == nil {
+	s, ok := schema.(map[string]any)
+	if !ok || s == nil {
+		// Boolean schemas carry no keywords to walk; non-schema values are
+		// OBI-D-17's concern (validateSchemaWellFormedness).
 		return
 	}
 
