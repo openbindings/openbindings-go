@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -106,7 +107,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 
 		iface.Operations[opKey] = obiOp
 
-		ref := "#/operations/" + opID
+		ref := operationRef(opID)
 		bindingKey := opKey + "." + DefaultSourceName
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
@@ -141,13 +142,29 @@ func loadDocument(ctx context.Context, client *http.Client, location string, con
 		}
 	}
 
-	if !strings.HasPrefix(doc.AsyncAPI, "3.") {
-		return nil, fmt.Errorf("unsupported AsyncAPI version %q (expected 3.x)", doc.AsyncAPI)
+	// ASYNC-P-01: the artifact's own `asyncapi` field discriminates the
+	// accepted line — 3.0.x ONLY. A later 3.x line is adopted by compatible
+	// revision of the binding specification, never sight-unseen.
+	if !strings.HasPrefix(doc.AsyncAPI, "3.0.") {
+		return nil, fmt.Errorf("unsupported AsyncAPI version %q: openbindings.asyncapi@1 accepts the 3.0.x line only (ASYNC-P-01)", doc.AsyncAPI)
 	}
 
 	resolveRefs(&doc)
 
 	return &doc, nil
+}
+
+// validateDocumentAddress checks ASYNC-D-02's location grammar offline,
+// without dereferencing: `location`, when present, is an absolute URI
+// addressing the AsyncAPI document itself. A bare filesystem path is a
+// relative reference in form (core OBI-D-05) and is refused — a local
+// artifact is addressed as file:// or embedded as the source's content.
+func validateDocumentAddress(location string) error {
+	u, err := url.Parse(location)
+	if err != nil || u.Scheme == "" || u.Opaque != "" {
+		return fmt.Errorf("asyncapi location %q is not an absolute URI addressing the document (ASYNC-D-02): a local artifact is addressed as file:// or embedded as the source's content", location)
+	}
+	return nil
 }
 
 func sourceToBytes(ctx context.Context, client *http.Client, location string, content any) ([]byte, error) {
@@ -156,6 +173,9 @@ func sourceToBytes(ctx context.Context, client *http.Client, location string, co
 	}
 	if location == "" {
 		return nil, fmt.Errorf("source must have location or content")
+	}
+	if err := validateDocumentAddress(location); err != nil {
+		return nil, err
 	}
 	if openbindings.IsHTTPURL(location) {
 		req, err := http.NewRequestWithContext(ctx, "GET", location, nil)
@@ -172,7 +192,11 @@ func sourceToBytes(ctx context.Context, client *http.Client, location string, co
 		}
 		return io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	}
-	return os.ReadFile(location)
+	u, _ := url.Parse(location)
+	if u.Scheme != "file" {
+		return nil, fmt.Errorf("asyncapi location scheme %q is not dereferenced by this processor (supported: file, http, https)", u.Scheme)
+	}
+	return os.ReadFile(u.Path)
 }
 
 func isJSON(data []byte) bool {

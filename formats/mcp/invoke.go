@@ -48,17 +48,10 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 
 	location := strings.TrimSpace(args.Source.Location)
-	if location == "" {
+	if err := validateEndpoint(location); err != nil {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: "MCP source requires a location (endpoint URL)",
-		})
-		return
-	}
-	if !openbindings.IsHTTPURL(location) {
-		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: fmt.Sprintf("MCP source location must be an HTTP or HTTPS URL, got %q", location),
+			Message: err.Error(),
 		})
 		return
 	}
@@ -652,6 +645,20 @@ func parseRef(ref string) (entityType string, name string, err error) {
 
 	return "", "", fmt.Errorf("MCP ref %q must start with %q, %q, or %q",
 		ref, refPrefixTools, refPrefixResources, refPrefixPrompts)
+}
+
+// validateEndpoint checks MCP-D-02's location requirement offline, without
+// connecting: `location` is REQUIRED — this family is service-addressed, so
+// a content-only source addresses nothing — and must be an absolute
+// http/https URI addressing a Streamable HTTP endpoint.
+func validateEndpoint(location string) error {
+	if location == "" {
+		return fmt.Errorf("MCP source requires a location (endpoint URL): a content-only source addresses nothing (MCP-D-02)")
+	}
+	if !openbindings.IsHTTPURL(location) {
+		return fmt.Errorf("MCP source location must be an absolute HTTP or HTTPS URL, got %q (MCP-D-02)", location)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

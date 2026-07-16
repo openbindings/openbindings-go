@@ -29,7 +29,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	usedKeys := map[string]bool{}
 	for _, opID := range opIDs {
 		asyncOp := doc.Operations[opID]
-		ref := "#/operations/" + opID
+		ref := operationRef(opID)
 		opKey := openbindings.UniqueKey(openbindings.SanitizeKey(opID), usedKeys)
 		usedKeys[opKey] = true
 		desc := operationDescription(asyncOp)

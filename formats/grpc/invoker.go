@@ -220,28 +220,12 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			})
 			return
 		}
-		// Byte-exact match against the schema's declared services (GRPC-D-03).
-		for _, svc := range disc.services {
-			if string(svc.FullName()) == svcName {
-				svcDesc = svc
-				break
-			}
-		}
-		if svcDesc == nil {
-			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeRefNotFound,
-				Message: fmt.Sprintf("service %q not found in embedded schema", svcName),
-			})
+		m, ie := resolveMethod(disc, svcName, methodName)
+		if ie != nil {
+			inv.FireError(ie)
 			return
 		}
-		methodDesc = svcDesc.Methods().ByName(protoreflect.Name(methodName))
-		if methodDesc == nil {
-			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeRefNotFound,
-				Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
-			})
-			return
-		}
+		methodDesc = m
 		if ie := preflightMethod(methodDesc); ie != nil {
 			inv.FireError(ie)
 			return

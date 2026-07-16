@@ -25,6 +25,20 @@ func resolveRefs(doc *document) {
 		return
 	}
 
+	// 0. Resolve operations-map entries that are Reference Objects: per
+	// ASYNC-D-03 an entry resolves through the reference before the
+	// operation-object test (the artifact's own reference rules). A
+	// reference that does not resolve keeps its Ref set — a dangling
+	// entry, refused downstream.
+	for opID, op := range doc.Operations {
+		if op.Ref == "" {
+			continue
+		}
+		if resolved := resolveOperationRefByPointer(op.Ref, rawDoc); resolved != nil {
+			doc.Operations[opID] = *resolved
+		}
+	}
+
 	// Resolve $refs in schema maps (map[string]any) throughout the document.
 	// Schemas live in: message payloads, component schemas, etc.
 
@@ -155,6 +169,34 @@ func resolveJSONPointer(root map[string]any, pointer string) any {
 		}
 	}
 	return current
+}
+
+// resolveOperationRefByPointer resolves an operations-map Reference Object's
+// pointer and returns the referenced operation object, or nil when the
+// pointer does not resolve to an object (a dangling reference). A resolved
+// entry that is itself a Reference Object is not chased further (no
+// multi-hop resolution; mirrors the message resolution posture).
+func resolveOperationRefByPointer(ref string, rawDoc map[string]any) *asyncOperation {
+	if !strings.HasPrefix(ref, "#/") {
+		return nil
+	}
+	resolved := resolveJSONPointer(rawDoc, ref)
+	resolvedMap, ok := resolved.(map[string]any)
+	if !ok {
+		return nil
+	}
+	data, err := json.Marshal(resolvedMap)
+	if err != nil {
+		return nil
+	}
+	var op asyncOperation
+	if err := json.Unmarshal(data, &op); err != nil {
+		return nil
+	}
+	if op.Ref != "" {
+		return nil
+	}
+	return &op
 }
 
 // resolveMessageRefByPointer resolves a message $ref pointer and returns a Message.

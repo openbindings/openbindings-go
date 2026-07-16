@@ -68,6 +68,13 @@ type wsChannelBinding struct {
 }
 
 type asyncOperation struct {
+	// Ref carries an operations-map entry that is a Reference Object: per
+	// ASYNC-D-03 it resolves through the reference before the
+	// operation-object test (the artifact's own reference rules). Resolved
+	// in place by resolveRefs; a non-empty Ref after resolution is a
+	// dangling reference.
+	Ref string `json:"$ref,omitempty" yaml:"$ref,omitempty"`
+
 	// Action is declared from the DESCRIBED APPLICATION's perspective
 	// (AsyncAPI 3.0's own rule): `send` = the application sends to the
 	// channel, `receive` = it expects to receive from it. An invocation is
@@ -180,5 +187,6 @@ type components struct {
 	Messages        map[string]message        `json:"messages,omitempty" yaml:"messages,omitempty"`
 	Schemas         map[string]any            `json:"schemas,omitempty" yaml:"schemas,omitempty"`
 	Channels        map[string]channel        `json:"channels,omitempty" yaml:"channels,omitempty"`
+	Operations      map[string]asyncOperation `json:"operations,omitempty" yaml:"operations,omitempty"`
 	SecuritySchemes map[string]securityScheme `json:"securitySchemes,omitempty" yaml:"securitySchemes,omitempty"`
 }

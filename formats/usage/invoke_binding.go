@@ -69,11 +69,13 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 
 	// The ref is the format's own grammar: a space-separated command path
-	// into the artifact ("context set"; empty = the root command).
+	// into the artifact ("context set"; absent = the root command). A
+	// whitespace-bearing ref is NOT the root spelling: it flows into
+	// findCommand, whose USAGE-D-03 grammar refuses empty segments.
 	var cmd *Command
 	var inherited []Flag
 	var cmdPath []string
-	if strings.TrimSpace(args.Ref) == "" {
+	if args.Ref == "" {
 		rc := rootCommand(spec)
 		if rc == nil {
 			rc = &Command{Flags: spec.Flags(), Args: spec.Args()}
@@ -254,7 +256,7 @@ func (e *Invoker) PlanContributions(args *openbindings.BindingInvocationArgs) (*
 	}
 	var cmd *Command
 	var inherited []Flag
-	if strings.TrimSpace(args.Ref) == "" {
+	if args.Ref == "" {
 		if rc := rootCommand(spec); rc != nil {
 			cmd = rc
 		}
@@ -412,12 +414,19 @@ type findCommandResult struct {
 }
 
 func findCommand(spec *Spec, ref string) (*findCommandResult, error) {
-	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return nil, fmt.Errorf("ref is empty")
+		return nil, fmt.Errorf("empty-string ref is not conformant (USAGE-D-03): the root command is addressed by omitting ref")
 	}
 
-	targetPath := strings.Fields(ref)
+	// USAGE-D-03: a ref is a space-separated command path — segments
+	// separated by SINGLE spaces, no quoting mechanism, whitespace never
+	// collapsed (parity with the direct-binary lane's grammar).
+	targetPath := strings.Split(ref, " ")
+	for _, seg := range targetPath {
+		if seg == "" {
+			return nil, fmt.Errorf("ref %q is malformed (USAGE-D-03): command-path segments are separated by single spaces", ref)
+		}
+	}
 	commands := spec.Commands()
 	var path []string
 

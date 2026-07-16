@@ -1,18 +1,35 @@
 package asyncapi
 
 import (
+	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestParseRef_BareID(t *testing.T) {
-	got, err := parseRef("sendMessage")
-	if err != nil {
-		t.Fatal(err)
+// TestParseRef_BareIDRefused pins ASYNC-D-03: the JSON Pointer
+// `#/operations/<operation-key>` is the ONLY conformant spelling — a bare
+// operation key (the former documented lenience) is refused loudly.
+func TestParseRef_BareIDRefused(t *testing.T) {
+	_, err := parseRef("sendMessage")
+	if err == nil {
+		t.Fatal("expected a refusal for a bare operation key (ASYNC-D-03)")
 	}
-	if got != "sendMessage" {
-		t.Errorf("parseRef(%q) = %q, want %q", "sendMessage", got, "sendMessage")
+	if !strings.Contains(err.Error(), "ASYNC-D-03") {
+		t.Errorf("refusal should cite ASYNC-D-03, got: %v", err)
+	}
+}
+
+// TestParseRef_UnescapedSlashRefused pins ASYNC-D-03's escaping clause: an
+// unescaped `/` after the pointer prefix addresses a deeper path, not an
+// operations-map entry.
+func TestParseRef_UnescapedSlashRefused(t *testing.T) {
+	_, err := parseRef("#/operations/tasks/create")
+	if err == nil {
+		t.Fatal("expected a refusal for an unescaped / in the operation-key position (ASYNC-D-03)")
+	}
+	if !strings.Contains(err.Error(), "ASYNC-D-03") {
+		t.Errorf("refusal should cite ASYNC-D-03, got: %v", err)
 	}
 }
 
