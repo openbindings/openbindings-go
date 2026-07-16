@@ -15,7 +15,7 @@ import (
 
 // Connect streaming wire format constants.
 //
-// Per the Connect protocol specification (https://connectrpc.com/docs/protocol),
+// Framing is the Connect protocol's JSON codec, incorporated (CONN-P-05):
 // streaming RPCs use an envelope-framed format. Each envelope is a 5-byte
 // header followed by a payload:
 //
@@ -24,29 +24,33 @@ import (
 //	| 1B    | 4B BE    | length B  |
 //	+-------+----------+-----------+
 //
-// The flags byte is a bitfield. We support two bits:
-//   - Bit 0 (0x01): COMPRESSED — payload is compressed (we do not support compression in v0.1)
-//   - Bit 1 (0x02): END_STREAM — this envelope terminates the stream
+// The flags byte is a bitfield. Two bits are defined:
+//   - Bit 0 (0x01): COMPRESSED — payload is compressed. This processor
+//     advertises only the encodings it implements (CONN-P-05), which is
+//     identity alone, so a compressed envelope is a negotiation violation.
+//   - Bit 1 (0x02): END_STREAM — this envelope terminates the stream.
 //
 // A server-streaming response is a sequence of zero or more data envelopes
-// (flags = 0) followed by exactly one end-stream envelope (flags = END_STREAM).
-// The end-stream payload is a JSON object with optional `error` and `metadata`
-// fields. An error in the end-stream payload indicates the stream terminated
-// abnormally.
+// (flags = 0) followed by exactly one end-stream envelope (flags =
+// END_STREAM) — the protocol closes EVERY stream with one. The end-stream
+// payload is a JSON object with optional `error` and `metadata` fields; an
+// `error` member classifies the invocation as a failure (CONN-P-06).
 const (
 	connectFlagCompressed = 0x01
 	connectFlagEndStream  = 0x02
 
-	// streamingContentType is the Content-Type for Connect streaming with JSON payloads.
+	// streamingContentType is the Content-Type for Connect streaming with
+	// the JSON codec.
 	streamingContentType = "application/connect+json"
 )
 
 // writeConnectEnvelope writes a single Connect envelope (5-byte header +
 // payload) to w. flags should be 0 for a normal data frame or
-// connectFlagEndStream for an end-stream frame. Compression is not supported.
+// connectFlagEndStream for an end-stream frame. This processor sends
+// identity-encoded frames only (it advertises no other encoding).
 func writeConnectEnvelope(w io.Writer, flags byte, payload []byte) error {
 	if flags&connectFlagCompressed != 0 {
-		return fmt.Errorf("connect: compression is not supported")
+		return fmt.Errorf("connect: compression is not implemented; this processor sends identity-encoded envelopes only")
 	}
 	header := make([]byte, 5)
 	header[0] = flags
@@ -62,10 +66,13 @@ func writeConnectEnvelope(w io.Writer, flags byte, payload []byte) error {
 	return nil
 }
 
-// readConnectEnvelope reads one Connect envelope from r and returns its flags
-// and payload. Returns io.EOF if the reader is exhausted before any header
-// bytes are read. Returns io.ErrUnexpectedEOF if a partial header or partial
-// payload is encountered. Refuses payloads larger than maxPayload bytes.
+// readConnectEnvelope reads one Connect envelope from r and returns its
+// flags and payload. Returns io.EOF if the reader is exhausted before any
+// header bytes are read. Refuses payloads larger than maxPayload bytes —
+// a per-envelope cap that is implementation policy (§2), not a spec rule.
+// A COMPRESSED envelope is refused: this processor advertises identity
+// only (CONN-P-05), so receiving one is the server violating the
+// protocol's compression negotiation.
 func readConnectEnvelope(r io.Reader, maxPayload int64) (flags byte, payload []byte, err error) {
 	header := make([]byte, 5)
 	n, err := io.ReadFull(r, header)
@@ -84,7 +91,7 @@ func readConnectEnvelope(r io.Reader, maxPayload int64) (flags byte, payload []b
 		return 0, nil, fmt.Errorf("connect: envelope payload size %d exceeds limit %d", length, maxPayload)
 	}
 	if flags&connectFlagCompressed != 0 {
-		return 0, nil, fmt.Errorf("connect: compressed envelopes are not supported")
+		return 0, nil, fmt.Errorf("connect: received a compressed envelope despite identity-only encoding negotiation (this processor advertises only the encodings it implements, openbindings.connect@1 §8 / CONN-P-05)")
 	}
 	if length == 0 {
 		return flags, nil, nil
@@ -108,25 +115,23 @@ type connectEndStream struct {
 	Metadata map[string][]string `json:"metadata,omitempty"`
 }
 
-// runStreaming sends a server-streaming Connect RPC and drives the handle:
-// leading headers from the HTTP response, one EmitOutput per data envelope,
-// trailing metadata from the end-stream envelope, then CloseOutput (clean
-// end) or FireError (end-stream error, stream failure).
+// runStreaming sends a server-streaming dispatch — a POST carrying one
+// enveloped request message (CONN-P-05; the GET lane is excluded from
+// revision 1, §2) — and drives the handle: leading headers from the HTTP
+// response, one EmitOutput per data envelope as frames arrive, trailing
+// metadata from the end-stream envelope, then CloseOutput (clean end) or
+// FireError.
 //
-// The Connect streaming wire format is described at:
-// https://connectrpc.com/docs/protocol#streaming-rpcs
+// Classification is protocol-native (CONN-P-06): a streaming invocation
+// succeeds IFF the stream rode HTTP 200 AND its END_STREAM envelope
+// carries no error member. Output values already emitted STAND; a late
+// failure classifies the invocation as a failure without retracting them.
 //
-// Only server-streaming is supported. Client-streaming and bidirectional
-// methods are out of the module's scope. ctx is already bound to the
-// invocation's lifetime (DoneContext), so caller Cancel() tears down the
-// in-flight request.
-func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHandle[any, any], baseURL, svcName, methodName string, input any, headers map[string]string, mi *methodInfo) {
-	msgBytes, ierr := marshalRequestMessage(input, mi)
-	if ierr != nil {
-		inv.FireError(ierr)
-		return
-	}
-
+// Streaming dispatch is schema-mode only: descriptorless mode is
+// unary-only by definition (CONN-P-04), so mi is always non-nil here. ctx
+// is already bound to the invocation's lifetime (DoneContext), so caller
+// Cancel() tears down the in-flight request.
+func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, msgBytes []byte, headers map[string]string, mi *methodInfo) {
 	// Build the framed request body: a single envelope with flags=0 carrying
 	// the request message, immediately followed by EOF (no end-stream envelope
 	// is required from the client side for server-streaming RPCs).
@@ -136,13 +141,17 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 		return
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, connectURL(baseURL, svcName, methodName), &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, &body)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
 		return
 	}
+	// Connect protocol headers. Connect-Protocol-Version: 1 rides EVERY
+	// request (CONN-P-05), and the processor advertises only the encodings
+	// it implements — identity alone — via Connect-Accept-Encoding.
 	req.Header.Set("Content-Type", streamingContentType)
 	req.Header.Set("Connect-Protocol-Version", "1")
+	req.Header.Set("Connect-Accept-Encoding", "identity")
 	req.Header.Set("Accept", streamingContentType)
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -158,11 +167,11 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 	}
 	defer resp.Body.Close()
 
-	// Transport-level failures surface via HTTP status BEFORE streaming
-	// begins. Connect streaming returns errors in the end-stream envelope
-	// rather than via HTTP status, but a 401/403 from a proxy or middleware
-	// can still appear at the HTTP layer.
-	if resp.StatusCode >= 400 {
+	// CONN-P-06: a streaming invocation succeeds only if the stream rode
+	// HTTP 200, as the protocol requires. Connect streaming reports its own
+	// errors in the END_STREAM envelope, but a proxy or middleware can
+	// still answer at the HTTP layer.
+	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 		_ = inv.SetHeader(headerMetadata(resp.Header))
 		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
@@ -171,12 +180,13 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 		return
 	}
 
-	// Streaming responses MUST use the streaming content type.
-	if gotCT := resp.Header.Get("Content-Type"); !strings.HasPrefix(gotCT, "application/connect+") {
+	// Streaming responses ride the JSON codec's enveloped content type
+	// (CONN-P-05); anything else is a loud protocol error.
+	if gotCT := resp.Header.Get("Content-Type"); !isStreamingJSONContentType(gotCT) {
 		_ = inv.SetHeader(headerMetadata(resp.Header))
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("expected Content-Type starting with application/connect+, got %q", gotCT),
+			Message: fmt.Sprintf("connect streaming 200 response carries Content-Type %q, not the JSON codec's %s (openbindings.connect@1 CONN-P-05)", gotCT, streamingContentType),
 		})
 		return
 	}
@@ -184,16 +194,20 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 	// Leading metadata precedes the first emit.
 	_ = inv.SetHeader(headerMetadata(resp.Header))
 
-	// readConnectEnvelope enforces a per-envelope cap rather than bounding the
-	// total stream size: a long-running subscription may legitimately produce
-	// more than maxResponseBytes total.
+	// readConnectEnvelope enforces a per-envelope cap rather than bounding
+	// the total stream size: a long-running subscription may legitimately
+	// produce more than maxResponseBytes total. (Implementation policy, §2.)
 	for {
 		flags, payload, err := readConnectEnvelope(resp.Body, maxResponseBytes)
 		if err == io.EOF {
-			// Stream ended without an end-stream envelope. This is a
-			// protocol violation, but we treat it as the stream simply
-			// finishing rather than an error, to remain lenient.
-			inv.CloseOutput()
+			// The protocol closes EVERY stream with an END_STREAM envelope
+			// (CONN-P-05); success requires an error-free END_STREAM
+			// (CONN-P-06), so a stream that ends without one cannot be
+			// classified a success. Loud failure; emitted values stand.
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeStreamError,
+				Message: "connect stream ended without an END_STREAM envelope (openbindings.connect@1 CONN-P-05 / CONN-P-06)",
+			})
 			return
 		}
 		if err != nil {
@@ -205,11 +219,23 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 		}
 		if flags&connectFlagEndStream != 0 {
 			// End-stream envelope: trailing metadata, then clean close or
-			// terminal error.
+			// terminal error. An empty payload carries nothing and is read
+			// as the empty object.
 			var endStream connectEndStream
 			if len(payload) > 0 {
-				_ = json.Unmarshal(payload, &endStream)
+				if uerr := json.Unmarshal(payload, &endStream); uerr != nil {
+					// Loud, never a silent drop: an unreadable END_STREAM
+					// cannot prove the stream error-free (CONN-P-06).
+					inv.FireError(&openbindings.InvocationError{
+						Code:    openbindings.ErrCodeStreamError,
+						Message: fmt.Sprintf("connect END_STREAM payload does not parse as JSON: %v (openbindings.connect@1 CONN-P-05)", uerr),
+					})
+					return
+				}
 			}
+			// Streaming trailing metadata rides the END_STREAM envelope
+			// (§9.4); it has no representation in the output value, and this
+			// handle-level surfacing is out of band.
 			if len(endStream.Metadata) > 0 {
 				inv.SetTrailer(openbindings.Metadata(endStream.Metadata))
 			}
@@ -227,19 +253,24 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 			inv.CloseOutput()
 			return
 		}
-		// Data envelope: decode payload as JSON and emit.
-		var data any
-		if len(payload) > 0 {
-			if err := json.Unmarshal(payload, &data); err != nil {
-				inv.FireError(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeResponseError,
-					Message: fmt.Sprintf("decode envelope payload: %v", err),
-				})
-				return
-			}
+		// Data envelope: the output value is the response message rendered
+		// by the canonical JSON mapping (CONN-P-02); a frame that fails to
+		// unmarshal against its descriptor is a loud failure outcome.
+		out, derr := decodeSchemaModeOutput(mi, payload)
+		if derr != nil {
+			inv.FireError(derr)
+			return
 		}
-		if err := inv.EmitOutput(data); err != nil {
+		if err := inv.EmitOutput(out); err != nil {
 			return // terminated while emitting; stop reading
 		}
 	}
+}
+
+// isStreamingJSONContentType reports whether a streaming response
+// Content-Type is the JSON codec's application/connect+json (media-type
+// parameters tolerated).
+func isStreamingJSONContentType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	return ct == streamingContentType || strings.HasPrefix(ct, streamingContentType+";")
 }

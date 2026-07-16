@@ -1,62 +1,15 @@
 package connect
 
 import (
-	"context"
 	"fmt"
 	"sort"
 
-	"github.com/bufbuild/protocompile"
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-type discovery struct {
-	services []protoreflect.ServiceDescriptor
-}
-
-// discoverFromProto parses a .proto file (or inline content) and extracts
-// service descriptors. Uses protocompile (the v2-native successor to jhump's
-// protoparse, maintained by Buf).
-func discoverFromProto(ctx context.Context, location string, content any) (*discovery, error) {
-	var compiler protocompile.Compiler
-	var fileName string
-
-	if content != nil {
-		raw, convErr := openbindings.ContentToBytes(content)
-		if convErr != nil {
-			return nil, fmt.Errorf("convert proto content: %w", convErr)
-		}
-		fileName = "inline.proto"
-		compiler = protocompile.Compiler{
-			Resolver: &protocompile.SourceResolver{
-				Accessor: protocompile.SourceAccessorFromMap(map[string]string{
-					fileName: string(raw),
-				}),
-			},
-		}
-	} else if location != "" {
-		fileName = location
-		compiler = protocompile.Compiler{
-			Resolver: &protocompile.SourceResolver{},
-		}
-	} else {
-		return nil, fmt.Errorf("proto source requires a location or content")
-	}
-
-	files, err := compiler.Compile(ctx, fileName)
-	if err != nil {
-		return nil, fmt.Errorf("parse proto: %w", err)
-	}
-
-	disc := &discovery{}
-	for _, fd := range files {
-		services := fd.Services()
-		for i := 0; i < services.Len(); i++ {
-			disc.services = append(disc.services, services.Get(i))
-		}
-	}
-	return disc, nil
-}
+// Source discovery (embedded content per CONN-D-01, .proto files on disk
+// for the synthesizer lane) lives in content.go.
 
 // convertToInterface converts protobuf service descriptors to an OpenBindings
 // interface with Connect format bindings.

@@ -305,9 +305,10 @@ func TestInvokeBinding_MissingBaseURL(t *testing.T) {
 }
 
 // An embed-mode Connect source carries the SCHEMA as content; the base URL
-// resolves from location, else context metadata.baseURL (the same override
-// key the grpc and openapi invokers honor for targeting the same OBI at a
-// different host), else a remedy-naming refusal.
+// resolves from location, else the target configuration point (§9.1,
+// context configuration.target — the same ruled point the grpc invoker
+// honors), else a remedy-naming refusal (a content-only source is not
+// conformant, CONN-D-02).
 func TestInvokeBinding_EmbedModeBaseURLResolution(t *testing.T) {
 	proto := `syntax = "proto3";
 package tiny;
@@ -317,27 +318,27 @@ message PingMsg { string msg = 1; }
 	ctx := testContext(t)
 	invoker := NewInvoker()
 
-	// No location, no metadata: refuse, naming both remedies. The message
-	// must be the embedded-content-aware variant, distinct from the
+	// No location, no configured target: refuse, naming both remedies. The
+	// message must be the embedded-content-aware variant, distinct from the
 	// no-content-at-all message.
 	h := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
 		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: proto},
 		Ref:    "tiny.Tiny/Ping",
 	})
 	ierr := mustTerminalError(t, ctx, h, openbindings.ErrCodeSourceConfigError)
-	for _, want := range []string{"embedded content", "location", "baseURL"} {
+	for _, want := range []string{"embedded content", "location", "configuration.target"} {
 		if !strings.Contains(ierr.Message, want) {
 			t.Errorf("refusal must mention %q, got: %s", want, ierr.Message)
 		}
 	}
 
-	// metadata.baseURL supplies the base URL: the invocation proceeds past
-	// the config gate (failing later at the unreachable endpoint, not at
-	// configuration).
+	// configuration.target supplies the base URL: the invocation proceeds
+	// past the config gate (failing later at the unreachable endpoint, not
+	// at configuration).
 	h2 := invokeWith(t, ctx, invoker, &openbindings.BindingInvocationArgs{
 		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: proto},
 		Ref:     "tiny.Tiny/Ping",
-		Context: map[string]any{"metadata": map[string]any{"baseURL": "http://127.0.0.1:1"}},
+		Context: map[string]any{"configuration": map[string]any{"target": "http://127.0.0.1:1"}},
 	}, map[string]any{"msg": "hi"})
 
 	_, ierr2 := collectOutputs(t, ctx, h2)
@@ -345,7 +346,7 @@ message PingMsg { string msg = 1; }
 		t.Fatal("dial of an unreachable base URL must fail")
 	}
 	if ierr2.Code == openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("baseURL must satisfy the config gate; still got config error: %s", ierr2.Message)
+		t.Fatalf("configuration.target must satisfy the config gate; still got config error: %s", ierr2.Message)
 	}
 }
 
@@ -408,15 +409,29 @@ func TestInvokeBinding_ClientStreamingRefused(t *testing.T) {
 	}
 }
 
-func TestInvokeBinding_MissingInput(t *testing.T) {
+func TestInvokeBinding_AbsentInputDispatchesEmptyMessage(t *testing.T) {
 	ctx := testContext(t)
-	srv := unreachableServer(t)
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"","name":"ok"}`)
+	}))
+	t.Cleanup(srv.Close)
 
-	// Close the input side without writing: GetItemRequest has fields, so the
-	// invoker cannot prove an empty request and must challenge with
-	// ERR_MISSING_INPUT before dispatching.
+	// A close-without-write is the ABSENT input value (§9.2 via GRPC-P-03):
+	// it marshals as the empty request message even for a fielded request
+	// type. This module no longer produces ERR_MISSING_INPUT.
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"))
-	mustTerminalError(t, ctx, inv, openbindings.ErrCodeMissingInput)
+
+	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+		t.Fatalf("absent input must dispatch the empty request message (CONN-P-02): %v", err)
+	}
+	if gotBody != "{}" {
+		t.Errorf("request body = %q, want {}", gotBody)
+	}
 }
 
 func TestInvokeBinding_EmptyRequestMessage(t *testing.T) {
@@ -446,15 +461,18 @@ func TestInvokeBinding_EmptyRequestMessage(t *testing.T) {
 	}
 }
 
-func TestInvokeBinding_NonObjectInput(t *testing.T) {
+func TestInvokeBinding_NonCanonicalInput(t *testing.T) {
 	ctx := testContext(t)
 	srv := unreachableServer(t)
 
+	// GetItemRequest's canonical JSON form is an object; a bare string is
+	// refused pre-dispatch (CONN-P-02 via GRPC-P-03: the accepted shape is
+	// the request type's canonical JSON form).
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		"just a string")
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeValidationFailed)
-	if !strings.Contains(ierr.Message, "JSON object") {
-		t.Errorf("error message = %q, want to mention JSON object", ierr.Message)
+	if !strings.Contains(ierr.Message, "canonical JSON form") {
+		t.Errorf("error message = %q, want to mention the canonical JSON form", ierr.Message)
 	}
 }
 
@@ -497,8 +515,8 @@ func TestInvokeBinding_NoProtoContent_GenericJSON(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	// Without proto content the invoker falls back to unary invocation with
-	// generic JSON marshaling.
+	// Without content the invoker operates in descriptorless mode
+	// (CONN-P-01): unary by definition, verbatim JSON values (§9.3).
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, nil, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
 	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {

@@ -1,13 +1,22 @@
-// Package connect implements the Connect (Buf) binding format for OpenBindings.
+// Package connect implements the openbindings.connect@1 binding
+// specification for OpenBindings: services speaking the Connect protocol
+// with the JSON codec.
 //
 // The package handles:
-//   - Discovering services from .proto files or inline protobuf definitions
+//   - Discovering services from embedded .proto source text, an embedded
+//     FileDescriptorSet in canonical JSON, or a .proto file on disk
 //   - Converting protobuf service descriptors to OpenBindings interfaces
-//   - Invoking unary RPCs via the Connect protocol (HTTP POST with JSON)
+//   - Invoking unary and server-streaming methods (client-streaming and
+//     bidirectional methods are refused pre-dispatch as this
+//     implementation's declared limitation, per CONN-P-04)
 //
-// Connect uses the same protobuf service definitions and ref convention as gRPC
-// (package.Service/Method) but communicates over HTTP/1.1 or HTTP/2 with a
-// simpler wire format. See https://connectrpc.com for protocol details.
+// The family has two modes, discriminated structurally by content
+// presence (CONN-P-01): schema mode (full fidelity, the shared
+// openbindings.grpc@1 schema layer) and descriptorless mode (unary-only BY
+// DEFINITION, verbatim JSON values). Three protocol variants are excluded
+// from revision 1 (§2): the binary proto codec, gRPC-Web, and the
+// protocol's GET dispatch lane — every dispatch under this identifier is a
+// POST. See https://connectrpc.com for the incorporated protocol.
 package connect
 
 import (
@@ -18,6 +27,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 const BindingSpec = "openbindings.connect@1"
@@ -25,7 +35,10 @@ const DefaultSourceName = "connectServer"
 
 // maxRedirects bounds the redirect chain a single request may follow.
 // Prevents redirect loops without imposing any total request timeout
-// (which is the caller's responsibility via context).
+// (which is the caller's responsibility via context). Like the response
+// size cap, this is reference-tool implementation policy, outside
+// openbindings.connect@1 (§2: resource policy is consumer and
+// implementation policy).
 const maxRedirects = 10
 
 // Invoker handles binding invocation for Connect sources.
@@ -43,7 +56,9 @@ func NewInvoker() *Invoker {
 // NewInvokerWithClient creates an Invoker that uses the supplied
 // *http.Client for all outbound requests. A nil client falls back to the
 // default. The caller is responsible for configuring redirect policy,
-// transport, and any other client-level behavior. No overall request
+// transport, and any other client-level behavior — consumer-supplied
+// channel security (a custom CA, a mutual-TLS identity) is consumer
+// configuration per §4, and this is where it plugs in. No overall request
 // timeout should be set on the client because the caller controls
 // cancellation via context.
 func NewInvokerWithClient(client *http.Client) *Invoker {
@@ -60,37 +75,35 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 	return &Invoker{client: client}
 }
 
-// Formats returns the source formats supported by the Connect invoker.
+// BindingSpecs returns the binding specifications supported by the
+// Connect invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Connect (Buf) via HTTP"}}
 }
 
 var _ openbindings.BindingInvoker = (*Invoker)(nil)
 
-// InvokeBinding invokes a Connect binding and returns the invocation handle
-// synchronously; the HTTP work runs on its own goroutine. The single request
-// message flows through the handle's Write channel (unary and
-// server-streaming methods both take exactly one input).
+// InvokeBinding invokes a Connect binding and returns the invocation
+// handle synchronously; the HTTP work runs on its own goroutine. The
+// single request message flows through the handle's Write channel (unary
+// and server-streaming methods both take exactly one input).
 //
-// For unary methods the invocation yields one output. For server-streaming
-// methods (detected via the inline proto descriptor) it yields one output per
-// server-streamed message and closes when the server's end-stream envelope is
-// received or the caller cancels.
+// In schema mode (embedded content, CONN-P-01) the interaction shape is
+// the method's declared kind: unary methods yield one output;
+// server-streaming methods yield one output per received frame and close
+// on the END_STREAM envelope. Client-streaming and bidirectional methods
+// are refused pre-dispatch as this implementation's declared limitation
+// (CONN-P-04).
 //
-// Server-streaming requires the source to provide inline proto `content` so
-// the invoker can determine that the method is streaming. If no proto content
-// is available, the invoker falls back to unary invocation and the binding
-// will fail at runtime if the method is actually streaming.
+// In descriptorless mode (no content) the mode is unary-only BY
+// DEFINITION (§8): one verbatim JSON input value, one verbatim JSON output
+// value, unary framing. A method that is in fact streaming is not
+// detected — the server's rejection of the framing is a failure outcome,
+// the mode's declared limit, not a guess about the method.
 //
-// Client-streaming and bidirectional methods are out of scope. When a
-// descriptor is available (inline proto `content`), a client-streaming or
-// bidi-streaming method is refused pre-dispatch with a clear invocation
-// error rather than misread as unary; without a descriptor this cardinality
-// is unknowable in advance and the unary-fallback behavior above applies.
-//
-// All pre-dispatch failures (bad ref, missing base URL, descriptor failures,
-// unsupported cardinality) terminate the handle before any network side
-// effect.
+// All pre-dispatch failures (bad ref, missing or non-conformant base URL,
+// schema load failures, schema-range and kind-coverage refusals, input
+// validation) terminate the handle before any network side effect.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
 	go e.run(ctx, args, inv)
@@ -113,23 +126,29 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	// The base URL: the source's location, else the context metadata
-	// override (`metadata.baseURL`, the same key the grpc and openapi
-	// invokers honor for targeting the same OBI at a different host). An
-	// embed-mode source carries the SCHEMA as content, so the base URL is
-	// the one thing the document cannot supply from the artifact itself.
-	baseURL := strings.TrimSpace(args.Source.Location)
-	if baseURL == "" {
-		if meta := openbindings.ContextMetadata(args.Context); meta != nil {
-			if v, ok := meta["baseURL"].(string); ok {
-				baseURL = strings.TrimSpace(v)
-			}
+	// Target configuration point (§9.1): this family's ONE named
+	// configuration point, consulted per-invocation configuration →
+	// consumer-level configuration (both tiers merged into
+	// context.configuration by the operation invoker) → the default, the
+	// source's location. A configured target replaces the location
+	// entirely, in the same §4 form. Nothing else is configurable.
+	cfg := openbindings.ContextConfiguration(args.Context)
+	target := strings.TrimSpace(args.Source.Location)
+	if raw, ok := cfg["target"]; ok && raw != nil {
+		s, isStr := raw.(string)
+		if !isStr || strings.TrimSpace(s) == "" {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeSourceConfigError,
+				Message: fmt.Sprintf("configuration.target must be a base URL string in the openbindings.connect@1 §4 form, got %T", raw),
+			})
+			return
 		}
+		target = strings.TrimSpace(s)
 	}
-	if baseURL == "" {
-		msg := "Connect source requires a base URL: set the source's location"
+	if target == "" {
+		msg := "Connect source requires a base URL: set the source's location to an absolute http/https base URL (openbindings.connect@1 CONN-D-02)"
 		if args.Source.Content != nil {
-			msg = "Connect source carries its schema as embedded content but no base URL: set the source's location to the service base URL, or provide baseURL in context metadata"
+			msg = "Connect source carries its schema as embedded content but no base URL (a content-only source is not conformant, openbindings.connect@1 CONN-D-02): set the source's location to the service base URL, or supply the target configuration point (context configuration.target)"
 		}
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceConfigError,
@@ -137,98 +156,142 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		})
 		return
 	}
+	if err := validateBaseURL(target); err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		return
+	}
 
-	// Resolve the method descriptor from inline content. The descriptor lets
-	// the invoker distinguish unary from server-streaming methods and lets it
-	// use proto-aware marshaling for accurate field names. If no content is
-	// provided, we fall through as unary with generic JSON marshaling.
-	var methodDesc *methodInfo
+	// Mode discrimination (CONN-P-01): schema mode with content,
+	// descriptorless mode without. In schema mode the embedded content is
+	// the artifact the processor interprets (§6, content primacy):
+	// resolution against the schema precedes dispatch, byte-exact
+	// (CONN-D-03), and a ref matching no method makes the binding
+	// unresolvable — offline-checkable, before any network I/O. In
+	// descriptorless mode there is nothing to resolve against: the ref
+	// segments ride verbatim into the request URL, and an unknown method
+	// surfaces as the server's own error — a failure outcome, a stated
+	// limit of the mode (§7).
+	var mi *methodInfo
 	if args.Source.Content != nil {
-		desc, parseErr := resolveMethod(bctx, args.Source.Content, svcName, methodName)
+		disc, parseErr := discoverFromContent(bctx, args.Source.Content)
 		if parseErr != nil {
 			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: parseErr.Error()})
 			return
 		}
-		methodDesc = desc
-	}
-
-	// A resolved descriptor exposes cardinality: refuse client-streaming and
-	// bidi-streaming methods loudly here, before any input is consumed or any
-	// network I/O, rather than silently mis-dispatching them as unary (which
-	// would read one input, drop the rest, and send a single unframed request
-	// the server never expects). Mirrors grpc's pre-dispatch refusal. Without
-	// a descriptor (no embedded proto content), cardinality is unknowable in
-	// advance; that case stays unary and fails at runtime if the method is
-	// actually streaming — the format's documented convention.
-	if methodDesc != nil && methodDesc.method != nil && methodDesc.method.IsStreamingClient() {
-		kind := "client-streaming"
-		if methodDesc.method.IsStreamingServer() {
-			kind = "bidi-streaming"
+		var svcDesc protoreflect.ServiceDescriptor
+		for _, svc := range disc.services {
+			if string(svc.FullName()) == svcName {
+				svcDesc = svc
+				break
+			}
 		}
-		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: fmt.Sprintf("Connect method %s/%s is %s; the connect invoker supports unary and server-streaming methods", svcName, methodName, kind),
-		})
-		return
-	}
-
-	// ----- Input flows through the handle, not the args. Unary and
-	// server-streaming both take exactly one request message. -----
-	//
-	// No-input convention: when the operation layer drives an operation that
-	// declares no input (Binding set, InputSchema nil), close input on entry
-	// and dispatch an empty request — a caller of a no-input operation never
-	// writes nor closes, so reading would park forever.
-	var input any
-	if args.Binding != nil && args.InputSchema == nil {
-		_ = inv.CloseInput()
-	} else {
-		in, gotInput, rerr := readFirstInput(bctx, inv)
-		if rerr != nil {
-			// Terminal (cancelled) or ctx error; FireError is an idempotent
-			// no-op when the invocation already terminated.
-			inv.FireError(openbindings.AsInvocationError(rerr))
-			return
-		}
-		if !gotInput && !emptyRequestMessage(methodDesc) {
+		if svcDesc == nil {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeMissingInput,
-				Message: fmt.Sprintf("Connect method %s/%s requires an input message", svcName, methodName),
+				Code:    openbindings.ErrCodeRefNotFound,
+				Message: fmt.Sprintf("service %q not found in embedded schema", svcName),
 			})
 			return
 		}
-		_ = inv.CloseInput()
-		input = in
+		m := svcDesc.Methods().ByName(protoreflect.Name(methodName))
+		if m == nil {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeRefNotFound,
+				Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
+			})
+			return
+		}
+		if ie := preflightMethod(m); ie != nil {
+			inv.FireError(ie)
+			return
+		}
+		mi = &methodInfo{method: m}
+	}
+
+	// ----- Input flows through the handle, not the args. One request
+	// message for unary and server-streaming alike. -----
+	input, gotInput, ok := readRequestValue(bctx, inv, args, mi)
+	if !ok {
+		return
+	}
+
+	var body []byte
+	var ierr *openbindings.InvocationError
+	if mi != nil {
+		body, ierr = buildSchemaModeBody(mi, input)
+	} else {
+		body, ierr = buildDescriptorlessBody(input, gotInput)
+	}
+	if ierr != nil {
+		inv.FireError(ierr)
+		return
 	}
 
 	headers := buildHTTPHeaders(args.Context)
+	reqURL := connectURL(target, svcName, methodName)
 
-	if methodDesc != nil && methodDesc.method != nil && methodDesc.method.IsStreamingServer() {
-		e.runStreaming(bctx, inv, baseURL, svcName, methodName, input, headers, methodDesc)
+	if mi != nil && mi.method.IsStreamingServer() {
+		e.runStreaming(bctx, inv, reqURL, body, headers, mi)
 		return
 	}
-	e.runUnary(bctx, inv, baseURL, svcName, methodName, input, headers, methodDesc)
+	e.runUnary(bctx, inv, reqURL, body, headers, mi)
 }
 
-// readFirstInput reads the single request message from the handle.
-// A bare close (io.EOF) reports gotInput=false with a nil error.
-func readFirstInput(ctx context.Context, inv openbindings.BindingHandle[any, any]) (input any, gotInput bool, err error) {
+// readRequestValue obtains the single request value from the handle.
+//
+// No-input operations (Binding set, InputSchema nil — the operation layer
+// driving an operation that declares no input) and schema-mode methods
+// whose request message has no fields close input on entry and dispatch
+// without waiting for a write: a caller of a no-input operation never
+// writes nor closes, so reading would park forever. Otherwise the first
+// written value is the request; a close-without-write is the ABSENT input
+// value — schema mode marshals it as the empty request message (§9.2 via
+// GRPC-P-03), descriptorless mode sends {} (§9.3). ok=false means the
+// invocation is already terminal.
+func readRequestValue(ctx context.Context, inv openbindings.BindingHandle[any, any], args *openbindings.BindingInvocationArgs, mi *methodInfo) (input any, gotInput bool, ok bool) {
+	noInput := args.Binding != nil && args.InputSchema == nil
+	if noInput || (mi != nil && mi.method.Input().Fields().Len() == 0) {
+		_ = inv.CloseInput()
+		return nil, false, true
+	}
 	v, err := inv.ReadInput(ctx)
 	if err == io.EOF {
-		return nil, false, nil
+		return nil, false, true
 	}
 	if err != nil {
-		return nil, false, err
+		// Terminal (cancelled) or ctx error; FireError is an idempotent
+		// no-op when the invocation already terminated.
+		inv.FireError(openbindings.AsInvocationError(err))
+		return nil, false, false
 	}
-	return v, true, nil
+	_ = inv.CloseInput() // one request message: close after the first read
+	return v, true, true
 }
 
-// emptyRequestMessage reports whether the method's request message is
-// provably empty (zero fields), in which case a bare input close is
-// acceptable and an empty message is dispatched. Without a descriptor the
-// invoker cannot prove emptiness and requires an input.
-func emptyRequestMessage(mi *methodInfo) bool {
-	return mi != nil && mi.method != nil && mi.method.Input().Fields().Len() == 0
+// preflightMethod applies the pre-dispatch gates that follow schema-mode
+// method resolution: the accepted schema range over the bound method's
+// transitive closure (openbindings.grpc@1 §3, via CONN-D-01), then
+// interaction-kind coverage (CONN-P-04). Client-streaming and
+// bidirectional methods are refused before dispatch as this
+// implementation's declared limitation — a coverage declaration, never a
+// reinterpretation of the shape.
+func preflightMethod(methodDesc protoreflect.MethodDescriptor) *openbindings.InvocationError {
+	if err := validateBoundClosure(methodDesc); err != nil {
+		return &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceLoadFailed,
+			Message: err.Error(),
+		}
+	}
+	if methodDesc.IsStreamingClient() {
+		kind := "client-streaming"
+		if methodDesc.IsStreamingServer() {
+			kind = "bidirectional-streaming"
+		}
+		return &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeExecutionFailed,
+			Message: fmt.Sprintf("Connect method %s/%s is %s; this invoker covers unary and server-streaming methods (implementation-declared limitation, openbindings.connect@1 §8 / CONN-P-04)", methodDesc.Parent().FullName(), methodDesc.Name(), kind),
+		}
+	}
+	return nil
 }
 
 // Synthesizer handles interface synthesis from protobuf definitions for the Connect format.
@@ -237,7 +300,8 @@ type Synthesizer struct{}
 // NewSynthesizer creates a new Connect interface synthesizer.
 func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
 
-// Formats returns the source formats supported by the Connect synthesizer.
+// BindingSpecs returns the binding specifications supported by the
+// Connect synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Connect (Buf) via HTTP"}}
 }

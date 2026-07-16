@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -17,15 +18,27 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
+// maxResponseBytes caps a unary response body (and, in streaming.go, each
+// envelope payload). This is reference-tool implementation policy, NOT a
+// rule of openbindings.connect@1 — the specification places resource
+// policy (response-size caps, redirect limits, timeouts) with the consumer
+// and the implementation (§2).
 const maxResponseBytes int64 = 10 * 1024 * 1024
 
-// methodInfo holds a resolved method descriptor for input/output marshaling.
+// methodInfo holds a resolved method descriptor for schema-mode input and
+// output correspondence. A nil *methodInfo marks descriptorless mode
+// (openbindings.connect@1 CONN-P-01).
 type methodInfo struct {
 	method protoreflect.MethodDescriptor
 }
 
-// parseRef extracts the service and method name from a Connect ref.
-// Same convention as gRPC: "package.Service/Method".
+// parseRef splits a binding ref per CONN-D-03 (§7), which takes exactly
+// openbindings.grpc@1 §7's grammar (GRPC-D-03), incorporated:
+// <fully-qualified-service>/<method> — the service's package-qualified
+// name, or its bare name when its file declares no package, one '/', and
+// the unqualified RPC name. Matching downstream is byte-exact in schema
+// mode; in descriptorless mode the segments ride verbatim into the
+// request URL.
 func parseRef(ref string) (string, string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -33,64 +46,104 @@ func parseRef(ref string) (string, string, error) {
 	}
 	idx := strings.LastIndex(ref, "/")
 	if idx < 0 || idx == 0 || idx == len(ref)-1 {
-		return "", "", fmt.Errorf("Connect ref %q must be in the form package.Service/Method", ref)
+		return "", "", fmt.Errorf("Connect ref %q must be <fully-qualified-service>/<method> (openbindings.connect@1 CONN-D-03)", ref)
 	}
 	return ref[:idx], ref[idx+1:], nil
 }
 
-// resolveMethod parses proto content and finds the method descriptor.
-func resolveMethod(ctx context.Context, content any, svcName, methodName string) (*methodInfo, error) {
-	disc, err := discoverFromProto(ctx, "", content)
+// validateBaseURL checks a base URL against §4's grammar (CONN-D-02): an
+// absolute http/https URI naming the service's base URL — scheme, host,
+// optional port (ordinary HTTP defaults), and an optional path prefix
+// WITHOUT a trailing '/'. Query, fragment, and userinfo components are not
+// part of a base URL. Transport security follows the scheme (schemes are
+// TLS-unambiguous here, so this family has no transport configuration
+// point).
+func validateBaseURL(raw string) error {
+	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf(
+			"connect base URL %q does not parse (openbindings.connect@1 CONN-D-02): %v", raw, err)
 	}
-	for _, svc := range disc.services {
-		if string(svc.FullName()) == svcName {
-			m := svc.Methods().ByName(protoreflect.Name(methodName))
-			if m == nil {
-				return nil, fmt.Errorf("method %q not found in service %q", methodName, svcName)
-			}
-			return &methodInfo{method: m}, nil
-		}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf(
+			"connect base URL %q must be an absolute http/https URI (openbindings.connect@1 CONN-D-02)", raw)
 	}
-	return nil, fmt.Errorf("service %q not found in proto definition", svcName)
+	if u.Host == "" {
+		return fmt.Errorf(
+			"connect base URL %q names no host (openbindings.connect@1 CONN-D-02)", raw)
+	}
+	if u.User != nil {
+		return fmt.Errorf(
+			"connect base URL %q carries a userinfo component, which is not part of a base URL (openbindings.connect@1 CONN-D-02)", raw)
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return fmt.Errorf(
+			"connect base URL %q carries a query component, which is not part of a base URL (openbindings.connect@1 CONN-D-02)", raw)
+	}
+	if u.Fragment != "" {
+		return fmt.Errorf(
+			"connect base URL %q carries a fragment component, which is not part of a base URL (openbindings.connect@1 CONN-D-02)", raw)
+	}
+	if strings.HasSuffix(u.Path, "/") {
+		return fmt.Errorf(
+			"connect base URL %q carries a trailing '/': a base URL's optional path prefix has no trailing slash (openbindings.connect@1 CONN-D-02)", raw)
+	}
+	return nil
 }
 
-// connectURL builds the Connect request URL: {baseURL}/{service}/{method}.
+// connectURL builds the request URL per §4: the Connect protocol's
+// routing, incorporated — the base URL STRING-CONCATENATED with
+// /<fully-qualified-service>/<method> from the binding's ref.
+// Concatenation, not RFC 3986 resolution, so a path prefix is preserved;
+// CONN-D-02 guarantees the base carries no trailing '/'.
 func connectURL(baseURL, svcName, methodName string) string {
-	return strings.TrimRight(baseURL, "/") + "/" + svcName + "/" + methodName
+	return baseURL + "/" + svcName + "/" + methodName
 }
 
-// marshalRequestMessage marshals the request message to JSON bytes. With a
-// method descriptor it round-trips through protojson so field names match the
-// proto3 JSON canonical names (camelCase) the synthesizer writes into OBI
-// schemas; without one it marshals the input directly. A nil input dispatches
-// an empty message.
-func marshalRequestMessage(input any, mi *methodInfo) ([]byte, *openbindings.InvocationError) {
-	if input == nil {
-		return []byte("{}"), nil
-	}
-	if mi != nil && mi.method != nil {
-		msg := dynamicpb.NewMessage(mi.method.Input())
-		inputMap, ok := input.(map[string]any)
-		if !ok {
+// buildSchemaModeBody marshals one caller-facing input value into the
+// request message body per §9.2 (CONN-P-02), which incorporates
+// openbindings.grpc@1 §9.1 (GRPC-P-03): the accepted shape is the request
+// type's CANONICAL JSON form — an object for ordinary messages, the
+// mapping's defined form where it differs (a string for a
+// google.protobuf.Duration-typed request, the wrapped value for wrapper
+// types, and so on). Unmarshalling follows the mapping's own rules,
+// including its default posture on unknown fields: they are refused
+// loudly, never silently discarded — and every refusal fires before
+// dispatch. A nil input is the absent input value and marshals as the
+// empty request message.
+func buildSchemaModeBody(mi *methodInfo, input any) ([]byte, *openbindings.InvocationError) {
+	msg := dynamicpb.NewMessage(mi.method.Input())
+	if input != nil {
+		jsonBytes, err := json.Marshal(input)
+		if err != nil {
 			return nil, &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeValidationFailed,
-				Message: fmt.Sprintf("input must be a JSON object, got %T", input),
+				Message: fmt.Sprintf("marshal input: %v", err),
 			}
 		}
-		jsonBytes, err := json.Marshal(inputMap)
-		if err != nil {
-			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		if err := protojson.Unmarshal(jsonBytes, msg); err != nil {
+			return nil, &openbindings.InvocationError{
+				Code:    openbindings.ErrCodeValidationFailed,
+				Message: fmt.Sprintf("input is not the canonical JSON form of %s: %v", mi.method.Input().FullName(), err),
+			}
 		}
-		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(jsonBytes, msg); err != nil {
-			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
-		}
-		body, err := protojson.Marshal(msg)
-		if err != nil {
-			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
-		}
-		return body, nil
+	}
+	body, err := protojson.Marshal(msg)
+	if err != nil {
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+	}
+	return body, nil
+}
+
+// buildDescriptorlessBody serializes the input for descriptorless mode per
+// §9.3 (CONN-P-03): the input value — ANY JSON value — is serialized
+// verbatim as the unary request body, and an ABSENT input value sends {},
+// the empty message's canonical form. An explicit JSON null is a value,
+// not absence, and rides as `null`. No field semantics exist in this mode,
+// and no unknown-field posture is implied.
+func buildDescriptorlessBody(input any, gotInput bool) ([]byte, *openbindings.InvocationError) {
+	if !gotInput {
+		return []byte("{}"), nil
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -99,8 +152,47 @@ func marshalRequestMessage(input any, mi *methodInfo) ([]byte, *openbindings.Inv
 	return body, nil
 }
 
+// decodeSchemaModeOutput renders one response payload per §9.2
+// (CONN-P-02, incorporating GRPC-P-05): the output value is the response
+// message rendered by the canonical JSON mapping. A payload that fails to
+// unmarshal against the response descriptor is a failure outcome — loud,
+// never a silently passed-through value.
+//
+// Unknown members in a RESPONSE are tolerated and dropped
+// (DiscardUnknown), matching the incorporated schema layer's wire
+// behavior: openbindings.grpc@1's binary decode preserves-and-ignores
+// unknown response fields, and §9.2's loud unknown-field posture is the
+// INPUT rule. The pin stays authoritative for interpretation (§6), so a
+// drifted-but-compatible server keeps answering.
+func decodeSchemaModeOutput(mi *methodInfo, payload []byte) (any, *openbindings.InvocationError) {
+	msg := dynamicpb.NewMessage(mi.method.Output())
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(payload, msg); err != nil {
+		return nil, &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeResponseError,
+			Message: fmt.Sprintf("response is not the canonical JSON form of %s: %v (openbindings.connect@1 CONN-P-02)", mi.method.Output().FullName(), err),
+		}
+	}
+	rendered, err := protojson.Marshal(msg)
+	if err != nil {
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: fmt.Sprintf("marshal response: %v", err)}
+	}
+	var out any
+	if err := json.Unmarshal(rendered, &out); err != nil {
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: fmt.Sprintf("parse response JSON: %v", err)}
+	}
+	return out, nil
+}
+
+// isJSONContentType reports whether a unary response Content-Type is the
+// Connect JSON codec's application/json (media-type parameters tolerated).
+func isJSONContentType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	return ct == "application/json" || strings.HasPrefix(ct, "application/json;")
+}
+
 // connectCodeToErrCode maps a Connect protocol error code to the standard
-// invocation error codes.
+// invocation error codes. Failure outcomes have no representation in the
+// specification (§9.5); this vocabulary is this consumer surface's own.
 func connectCodeToErrCode(code string) string {
 	switch code {
 	case "unauthenticated":
@@ -117,8 +209,8 @@ func connectCodeToErrCode(code string) string {
 }
 
 // applyConnectError refines an HTTP-status-derived terminal error with the
-// Connect error payload (a JSON object with `code` and `message` fields) when
-// the body parses as one.
+// Connect error payload (a JSON object with `code` and `message` fields)
+// when the body parses as one.
 func applyConnectError(ierr *openbindings.InvocationError, body []byte) {
 	if len(body) == 0 {
 		return
@@ -148,13 +240,17 @@ func headerMetadata(h http.Header) openbindings.Metadata {
 }
 
 // unaryTrailerPrefix marks trailing metadata in a Connect unary response:
-// the protocol carries unary trailers as "Trailer-"-prefixed HTTP headers.
+// the protocol carries unary trailing metadata as "Trailer-"-prefixed
+// response headers — unary Connect uses no HTTP trailers (§9.4).
 const unaryTrailerPrefix = "Trailer-"
 
 // splitUnaryMetadata separates a unary response's leading headers from its
-// trailing metadata: "Trailer-"-prefixed headers (the Connect unary trailer
-// convention, prefix stripped) plus any HTTP/1.1 trailers (resp.Trailer is
-// populated once the body has been fully read).
+// trailing metadata: "Trailer-"-prefixed headers (the Connect unary
+// trailer convention, prefix stripped) plus any HTTP/1.1 trailers a
+// protocol-violating server may have sent (resp.Trailer is populated once
+// the body has been fully read). Metadata has no representation in the
+// output VALUE (§9.4, a declared exclusion); this handle-level surfacing
+// is out of band, the implementation's own concern.
 func splitUnaryMetadata(resp *http.Response) (header, trailer openbindings.Metadata) {
 	header = make(openbindings.Metadata, len(resp.Header))
 	trailer = openbindings.Metadata{}
@@ -171,27 +267,32 @@ func splitUnaryMetadata(resp *http.Response) (header, trailer openbindings.Metad
 	return header, trailer
 }
 
-// runUnary sends a Connect protocol unary request (HTTP POST with JSON) and
-// drives the handle: leading headers, one output, trailing metadata, then
-// CloseOutput — or FireError with the mapped terminal error.
-func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[any, any], baseURL, svcName, methodName string, input any, headers map[string]string, mi *methodInfo) {
-	body, ierr := marshalRequestMessage(input, mi)
-	if ierr != nil {
-		inv.FireError(ierr)
-		return
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, connectURL(baseURL, svcName, methodName), bytes.NewReader(body))
+// runUnary sends one unary dispatch — a POST with a plain JSON body
+// (CONN-P-05; the protocol's GET lane for side-effect-free methods is
+// EXCLUDED from revision 1, §2: every dispatch under this identifier is a
+// POST) — and drives the handle: leading headers, one output, trailing
+// metadata, then CloseOutput — or FireError with the mapped terminal
+// error.
+//
+// Classification is protocol-native and not a configuration point
+// (CONN-P-06): a unary invocation succeeds IFF the final response status,
+// after any redirects, is 200 — the protocol makes every unary error
+// non-200, so this is Connect's own rule, not a 2xx heuristic.
+func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, body []byte, headers map[string]string, mi *methodInfo) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
 		return
 	}
 
-	// Connect protocol headers.
+	// Connect protocol headers. Connect-Protocol-Version: 1 rides EVERY
+	// request — the protocol makes sending it a SHOULD, and the
+	// specification fixes it (CONN-P-05).
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Connect-Protocol-Version", "1")
 
-	// Apply credentials and custom headers.
+	// Credentials and caller-supplied entries ride ordinary HTTP header
+	// fields (§9.6, CONN-P-07).
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -206,6 +307,7 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 	}
 	defer resp.Body.Close()
 
+	// The response-size cap is implementation policy (§2), not a spec rule.
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		if ctx.Err() != nil {
@@ -230,18 +332,51 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 		inv.SetTrailer(trailer)
 	}
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode != http.StatusOK {
+		// CONN-P-06: success iff the final status is 200; anything else —
+		// a Connect error, a proxy status, a 2xx that is not 200 — is a
+		// failure outcome.
 		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
 		applyConnectError(ierr, respBody)
 		inv.FireError(ierr)
 		return
 	}
 
+	// A 200 whose content type is not the JSON codec's application/json is
+	// a loud protocol error, never a passed-through value (§9.3; unary
+	// framing is the codec's plain JSON body, CONN-P-05).
+	if ct := resp.Header.Get("Content-Type"); !isJSONContentType(ct) {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeResponseError,
+			Message: fmt.Sprintf("connect unary 200 response carries Content-Type %q, not the JSON codec's application/json (openbindings.connect@1 §9.3 / CONN-P-05)", ct),
+		})
+		return
+	}
+
 	var output any
-	if len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, &output); err != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
+	if mi != nil {
+		// Schema mode (CONN-P-02): the output value is the response message
+		// rendered by the canonical JSON mapping; a body that fails to
+		// unmarshal against the descriptor is a loud failure outcome.
+		out, derr := decodeSchemaModeOutput(mi, respBody)
+		if derr != nil {
+			inv.FireError(derr)
 			return
+		}
+		output = out
+	} else {
+		// Descriptorless mode (CONN-P-03): the output value is the response
+		// body parsed as JSON, verbatim; an empty response body yields
+		// null; a body that fails to parse as JSON is a loud protocol-error
+		// failure outcome, never a string.
+		if len(respBody) > 0 {
+			if err := json.Unmarshal(respBody, &output); err != nil {
+				inv.FireError(&openbindings.InvocationError{
+					Code:    openbindings.ErrCodeResponseError,
+					Message: fmt.Sprintf("connect unary 200 response body does not parse as JSON: %v (openbindings.connect@1 §9.3)", err),
+				})
+				return
+			}
 		}
 	}
 
@@ -251,7 +386,11 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 	inv.CloseOutput()
 }
 
-// buildHTTPHeaders constructs HTTP headers from binding context.
+// buildHTTPHeaders constructs request headers from the binding context per
+// §9.6 (CONN-P-07): credentials ride as ordinary HTTP header fields — a
+// bearer token as `Authorization: Bearer`, any other credential naming a
+// header (Cookie included) on that header. No security metadata is ever
+// derived from the schema or written into OBI documents.
 func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 	headers := map[string]string{}
 
