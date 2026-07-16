@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"net/http"
 	"strconv"
@@ -11,60 +12,91 @@ import (
 )
 
 // sseMaxLineBytes bounds individual SSE line length to prevent runaway memory
-// use from a misbehaving server. The W3C SSE spec does not impose a line
+// use from a misbehaving server. The WHATWG SSE spec does not impose a line
 // limit, but a single 16 MB line is generous in practice.
 const sseMaxLineBytes = 16 * 1024 * 1024
 
 // isSSEContentType reports whether the given Content-Type header value
-// indicates a Server-Sent Events stream. Per the W3C SSE specification, the
-// MIME type is `text/event-stream`. Charset and other parameters may follow.
+// indicates a Server-Sent Events stream (`text/event-stream`). Charset and
+// other parameters may follow.
 func isSSEContentType(contentType string) bool {
-	if contentType == "" {
-		return false
-	}
-	mt := strings.ToLower(strings.TrimSpace(contentType))
-	if i := strings.IndexByte(mt, ';'); i >= 0 {
-		mt = strings.TrimSpace(mt[:i])
-	}
-	return mt == "text/event-stream"
+	return normalizeMediaType(contentType) == "text/event-stream"
 }
 
-// streamSSE reads a `text/event-stream` HTTP response body line by line per
-// the W3C Server-Sent Events specification, emitting each parsed event as one
-// output on the invocation handle. It takes ownership of closing the body and
-// the terminal transition: CloseOutput when the body is exhausted cleanly,
-// FireError(ERR_STREAM_ERROR) on a scan failure, and a clean return (the
-// handle is already terminal) when the caller cancels.
+// scanSSELines is a bufio.SplitFunc for the WHATWG event-stream line
+// grammar: lines end with CRLF, a lone LF, or a lone CR. A CR at the end of
+// the buffered data waits for more input (the LF of a CRLF pair may not have
+// arrived yet) unless the stream is at EOF.
+func scanSSELines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
+		if data[i] == '\n' {
+			return i + 1, data[:i], nil
+		}
+		// CR: swallow a following LF when it is available.
+		if i+1 < len(data) {
+			if data[i+1] == '\n' {
+				return i + 2, data[:i], nil
+			}
+			return i + 1, data[:i], nil
+		}
+		if atEOF {
+			return i + 1, data[:i], nil
+		}
+		return 0, nil, nil // need more data to decide CR vs CRLF
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+// streamSSE reads a `text/event-stream` HTTP response body per the WHATWG
+// server-sent events processing model (openbindings.openapi@1 §8,
+// OAPI-P-06), emitting one output per received event on the invocation
+// handle. It takes ownership of closing the body and the terminal
+// transition: CloseOutput when the body is exhausted cleanly,
+// FireError(ERR_STREAM_ERROR) on a scan failure (abnormal termination is a
+// failure outcome; output values already emitted stand), and a clean return
+// (the handle is already terminal) when the caller cancels.
 //
-// SSE event field handling:
+// Event extraction, per the WHATWG model:
 //
-//   - `data:` lines accumulate; multiple data lines for one event are joined
-//     with a literal newline (per the spec)
-//   - `event:`, `id:`, `retry:` fields are FRAMING: they ride the per-unit
-//     Meta (x-sse-event / x-sse-id / x-sse-retry), never the output value
-//     (the pre-hooks builtin wrapped them into the payload; that wrap left
-//     the builtin with the de-sniffing pass — hooks own any re-shaping)
-//   - Comment lines (starting with `:`) are ignored
-//   - Blank lines dispatch the accumulated event
+//   - `data:` lines accumulate; an event's data lines joined with U+000A
+//     form the event's text
+//   - comment-only and empty-`data` events emit no value (an event whose
+//     joined data text is empty is discarded, `event:`/`id:`-only events
+//     included)
+//   - `event`, `id`, and `retry` are FRAMING: they never enter the output
+//     value. This implementation surfaces them out of band on the per-unit
+//     Meta (x-sse-event / x-sse-id / x-sse-retry); the last event ID
+//     persists across events until changed, WHATWG lastEventId semantics
+//   - an incomplete final event (end of stream before its dispatching blank
+//     line) is discarded, never flushed
 //
 // Decode runs per delivery unit (event) through the consultation seam. The
-// builtin lane follows the response's Content-Type header — text/event-stream,
-// hence text — never payload sniffing; JSON event payloads are an
-// OutputDecoder case (the triage row teaches it). Status carries the initial
-// response's status on every unit (it is real and invocation-scoped, never
-// fabricated); classification ran once, at dispatch.
+// builtin lane is the per-event text default (OAPI-P-07): the event's
+// U+000A-joined data text itself — SSE events carry no per-event framing to
+// decide otherwise, so JSON-emitting endpoints decode via consumer
+// configuration at the decode point. Status carries the initial response's
+// status on every unit (it is real and invocation-scoped, never fabricated);
+// classification ran once, at dispatch.
 func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.BindingInvocationArgs, site openbindings.InvokeSite, inv openbindings.BindingHandle[any, any]) {
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
 	buf := make([]byte, 64*1024)
 	scanner.Buffer(buf, sseMaxLineBytes)
+	scanner.Split(scanSSELines)
 
 	var (
-		eventName string
-		eventID   string
-		dataLines []string
-		retryMs   int
+		eventName   string
+		lastEventID string
+		dataLines   []string
+		retryMs     int
+		firstLine   = true
 	)
 
 	// dispatch emits the accumulated event. It returns false when the emit
@@ -73,10 +105,16 @@ func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.Bind
 	status := resp.StatusCode
 	invocationMeta := headerMetadata(resp.Header)
 	dispatch := func() bool {
-		if len(dataLines) == 0 && eventName == "" && eventID == "" {
+		rawData := strings.Join(dataLines, "\n")
+		name := eventName
+		eventName = ""
+		dataLines = nil
+		// Comment-only and empty-data events emit no value: an event whose
+		// joined data text is empty is discarded (WHATWG step 2 plus the
+		// trailing-newline strip; the last event ID, already set, persists).
+		if rawData == "" {
 			return true
 		}
-		rawData := strings.Join(dataLines, "\n")
 
 		// Per-unit Meta: invocation-scoped headers merged with this
 		// event's framing fields.
@@ -84,14 +122,15 @@ func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.Bind
 		for k, v := range invocationMeta {
 			meta[k] = v
 		}
-		if eventName != "" {
-			meta["x-sse-event"] = []string{eventName}
+		if name != "" {
+			meta["x-sse-event"] = []string{name}
 		}
-		if eventID != "" {
-			meta["x-sse-id"] = []string{eventID}
+		if lastEventID != "" {
+			meta["x-sse-id"] = []string{lastEventID}
 		}
 		if retryMs != 0 {
 			meta["x-sse-retry"] = []string{strconv.Itoa(retryMs)}
+			retryMs = 0
 		}
 
 		raw := openbindings.RawResult{
@@ -107,11 +146,6 @@ func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.Bind
 			return false
 		}
 
-		eventName = ""
-		eventID = ""
-		dataLines = nil
-		retryMs = 0
-
 		return inv.EmitOutput(data) == nil
 	}
 
@@ -120,8 +154,11 @@ func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.Bind
 			return // cancelled; the handle is already terminal
 		}
 		line := scanner.Text()
-		// Strip optional trailing CR (servers may send CRLF).
-		line = strings.TrimSuffix(line, "\r")
+		if firstLine {
+			// One leading U+FEFF BOM is ignored per the WHATWG stream grammar.
+			line = strings.TrimPrefix(line, "\uFEFF")
+			firstLine = false
+		}
 
 		if line == "" {
 			if !dispatch() {
@@ -152,21 +189,26 @@ func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.Bind
 		case "event":
 			eventName = value
 		case "id":
-			eventID = value
+			// A value containing U+0000 NULL is ignored; otherwise it sets
+			// the last event ID (an empty value resets it), per WHATWG.
+			if !strings.ContainsRune(value, '\x00') {
+				lastEventID = value
+			}
 		case "data":
 			dataLines = append(dataLines, value)
 		case "retry":
-			if ms, err := strconv.Atoi(value); err == nil && ms >= 0 {
-				retryMs = ms
+			// ASCII digits only, per WHATWG; anything else is ignored.
+			if value != "" && strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+				if ms, err := strconv.Atoi(value); err == nil {
+					retryMs = ms
+				}
 			}
 		}
 		// Unknown fields are ignored per spec.
 	}
 
-	// Flush any pending event when the body ends without a trailing blank line.
-	if !dispatch() {
-		return
-	}
+	// End of stream: an incomplete final event (no dispatching blank line)
+	// is discarded per the WHATWG processing model — never flushed.
 
 	if err := scanner.Err(); err != nil {
 		if ctx.Err() != nil {

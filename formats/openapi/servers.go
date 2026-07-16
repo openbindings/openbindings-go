@@ -1,0 +1,230 @@
+package openapi
+
+import (
+	"fmt"
+	"net/url"
+	"sort"
+	"strings"
+
+	"github.com/getkin/kin-openapi/openapi3"
+	openbindings "github.com/openbindings/openbindings-go"
+)
+
+// This file implements §9.3 of openbindings.openapi@1 (OAPI-P-05): the
+// target URL's server half. Server resolution is a named configuration
+// point; consultation order (§9.4) is per-invocation configuration →
+// consumer-level configuration → the default. Both configuration tiers
+// arrive merged in the binding context's `configuration` field (the
+// operation invoker resolves consumer-level context into the same carrier),
+// so this file consults one merged value.
+
+// resolveServer resolves the operation's server per OAPI-P-05:
+//
+//   - The effective server list is the OAS's: the operation's `servers`,
+//     else the path item's, else the document's, else the implied
+//     `url: "/"`.
+//
+//   - The default selects the effective list's first entry with each server
+//     variable substituted by its declared default.
+//
+//   - Consumer configuration (context.configuration.server) may instead
+//     select another entry, supply variable values, or supply a complete
+//     base URL outright. Accepted shapes:
+//
+//     "https://api.example.com"                        // absolute base URL outright
+//     "https://{env}.example.com"                      // string matching a declared entry's url
+//     {"baseUrl": "https://api.example.com"}           // absolute base URL outright
+//     {"url": "https://{env}.example.com"}             // select the declared entry with that url
+//     {"index": 1}                                     // select the effective list's Nth entry
+//     {"variables": {"env": "staging"}}                // server-variable values (validated against enum)
+//
+//     `url`/`index` and `variables` compose; `baseUrl` stands alone.
+//
+//   - A relative effective-server URL (the implied "/" included) resolves
+//     against the artifact's base URI (§6: the source's location) per
+//     RFC 3986. The one pre-dispatch refusal is a server URL that cannot
+//     resolve to an absolute URL.
+//
+// The legacy context.metadata.baseURL override is honored below the
+// configuration point (the configuration point is the contract surface).
+func resolveServer(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Operation, bindCtx map[string]any, sourceLocation string) (string, error) {
+	servers := effectiveServers(doc, pathItem, op)
+
+	if cfg := openbindings.ContextConfiguration(bindCtx); cfg != nil {
+		if raw, ok := cfg["server"]; ok && raw != nil {
+			resolved, err := resolveServerConfig(raw, servers)
+			if err != nil {
+				return "", err
+			}
+			return absolutizeServerURL(resolved, sourceLocation)
+		}
+	}
+
+	if meta := openbindings.ContextMetadata(bindCtx); meta != nil {
+		if base, ok := meta["baseURL"].(string); ok && base != "" {
+			return absolutizeServerURL(base, sourceLocation)
+		}
+	}
+
+	substituted, err := substituteServerVariables(servers[0], nil)
+	if err != nil {
+		return "", err
+	}
+	return absolutizeServerURL(substituted, sourceLocation)
+}
+
+// effectiveServers returns the OAS effective server list: operation servers,
+// else path-item servers, else document servers, else the OAS-defined
+// implied server of url "/".
+func effectiveServers(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Operation) openapi3.Servers {
+	if op != nil && op.Servers != nil && len(*op.Servers) > 0 {
+		return *op.Servers
+	}
+	if pathItem != nil && len(pathItem.Servers) > 0 {
+		return pathItem.Servers
+	}
+	if doc != nil && len(doc.Servers) > 0 {
+		return doc.Servers
+	}
+	return openapi3.Servers{&openapi3.Server{URL: "/"}}
+}
+
+// resolveServerConfig applies one configured `server` value against the
+// effective list, returning the (possibly still relative) server URL.
+func resolveServerConfig(raw any, servers openapi3.Servers) (string, error) {
+	switch v := raw.(type) {
+	case string:
+		if srv := serverByURL(servers, v); srv != nil {
+			return substituteServerVariables(srv, nil)
+		}
+		if u, err := url.Parse(v); err == nil && u.IsAbs() {
+			return v, nil
+		}
+		return "", fmt.Errorf("configuration.server %q matches no declared server entry and is not an absolute base URL", v)
+	case map[string]any:
+		if base, ok := v["baseUrl"].(string); ok && base != "" {
+			if u, err := url.Parse(base); err != nil || !u.IsAbs() {
+				return "", fmt.Errorf("configuration.server.baseUrl %q is not an absolute URL", base)
+			}
+			return base, nil
+		}
+		srv := servers[0]
+		if entryURL, ok := v["url"].(string); ok && entryURL != "" {
+			srv = serverByURL(servers, entryURL)
+			if srv == nil {
+				return "", fmt.Errorf("configuration.server.url %q matches no declared server entry", entryURL)
+			}
+		} else if idxRaw, ok := v["index"]; ok {
+			idx, ok := configIndex(idxRaw)
+			if !ok || idx < 0 || idx >= len(servers) {
+				return "", fmt.Errorf("configuration.server.index %v is not a valid index into the effective server list (%d entries)", idxRaw, len(servers))
+			}
+			srv = servers[idx]
+		}
+		var vars map[string]string
+		if rawVars, ok := v["variables"].(map[string]any); ok {
+			vars = make(map[string]string, len(rawVars))
+			for name, val := range rawVars {
+				s, ok := val.(string)
+				if !ok {
+					return "", fmt.Errorf("configuration.server.variables[%q] must be a string, got %T", name, val)
+				}
+				vars[name] = s
+			}
+		}
+		return substituteServerVariables(srv, vars)
+	default:
+		return "", fmt.Errorf("configuration.server must be a string or an object, got %T", raw)
+	}
+}
+
+// serverByURL selects the declared entry whose url template matches exactly.
+func serverByURL(servers openapi3.Servers, u string) *openapi3.Server {
+	for _, srv := range servers {
+		if srv != nil && srv.URL == u {
+			return srv
+		}
+	}
+	return nil
+}
+
+func configIndex(raw any) (int, bool) {
+	switch n := raw.(type) {
+	case int:
+		return n, true
+	case float64:
+		if n == float64(int(n)) {
+			return int(n), true
+		}
+	}
+	return 0, false
+}
+
+// substituteServerVariables substitutes each declared server variable with
+// the supplied value (validated against the variable's enum, per the OAS)
+// or its declared default. A variable with neither a supplied value nor a
+// declared default, and a supplied variable the entry does not declare, are
+// loud errors.
+func substituteServerVariables(srv *openapi3.Server, supplied map[string]string) (string, error) {
+	u := srv.URL
+	names := make([]string, 0, len(srv.Variables))
+	for name := range srv.Variables {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		v := srv.Variables[name]
+		if v == nil {
+			continue
+		}
+		val, ok := supplied[name]
+		if !ok {
+			val = v.Default
+		}
+		if val == "" && v.Default == "" {
+			return "", fmt.Errorf("server %q: variable %q has no supplied value and no declared default", srv.URL, name)
+		}
+		if len(v.Enum) > 0 {
+			found := false
+			for _, e := range v.Enum {
+				if e == val {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return "", fmt.Errorf("server %q: variable %q value %q is not in the declared enum %v", srv.URL, name, val, v.Enum)
+			}
+		}
+		u = strings.ReplaceAll(u, "{"+name+"}", val)
+	}
+	for name := range supplied {
+		if _, declared := srv.Variables[name]; !declared {
+			return "", fmt.Errorf("server %q declares no variable %q", srv.URL, name)
+		}
+	}
+	return u, nil
+}
+
+// absolutizeServerURL resolves a (possibly relative) server URL to an
+// absolute URL: absolute URLs pass through; relative ones resolve against
+// the artifact's base URI — the source's location (§6) — per RFC 3986. A
+// server URL that cannot resolve to an absolute URL is the §9.3
+// pre-dispatch refusal. The returned URL carries no trailing slash, so
+// joining with the operation's path template is concatenation.
+func absolutizeServerURL(serverURL, sourceLocation string) (string, error) {
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return "", fmt.Errorf("server URL %q does not parse: %w", serverURL, err)
+	}
+	if u.IsAbs() {
+		return strings.TrimRight(serverURL, "/"), nil
+	}
+	if sourceLocation != "" {
+		base, berr := url.Parse(sourceLocation)
+		if berr == nil && base.IsAbs() {
+			return strings.TrimRight(base.ResolveReference(u).String(), "/"), nil
+		}
+	}
+	return "", fmt.Errorf("server URL %q cannot resolve to an absolute URL: the source has no absolute-URI location to serve as the artifact's base URI", serverURL)
+}

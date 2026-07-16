@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -25,16 +26,23 @@ func TestParseRef_StandardJSONPointer(t *testing.T) {
 	}
 }
 
-func TestParseRef_WithoutLeadingHashSlash(t *testing.T) {
-	path, method, err := parseRef("paths/~1users~1{id}/delete")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// OAPI-D-03: the ref MUST be a JSON Pointer of the exact form
+// #/paths/<escaped-path>/<method>. A prefix-less spelling was previously
+// accepted leniently; that acceptance was non-conformant.
+func TestParseRef_RefusesWithoutLeadingHashSlash(t *testing.T) {
+	_, _, err := parseRef("paths/~1users~1{id}/delete")
+	if err == nil {
+		t.Fatal("expected refusal for a ref without the #/paths/ prefix (OAPI-D-03)")
 	}
-	if path != "/users/{id}" {
-		t.Errorf("path = %q, want %q", path, "/users/{id}")
-	}
-	if method != "delete" {
-		t.Errorf("method = %q, want %q", method, "delete")
+}
+
+// OAPI-D-03: the path segment carries RFC 6901 escaping, so a conformant ref
+// has exactly one path token. Unescaped multi-token spellings were
+// previously accepted leniently; that acceptance was non-conformant.
+func TestParseRef_RefusesUnescapedPathTokens(t *testing.T) {
+	_, _, err := parseRef("#/paths/users/posts/get")
+	if err == nil {
+		t.Fatal("expected refusal for a ref with unescaped path tokens (OAPI-D-03)")
 	}
 }
 
@@ -51,13 +59,16 @@ func TestParseRef_TildeEscaping(t *testing.T) {
 	}
 }
 
-func TestParseRef_MethodLowercasing(t *testing.T) {
-	_, method, err := parseRef("#/paths/~1users/GET")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// OAPI-D-03: the method is lowercase exactly as the artifact spells it —
+// acceptance never case-folds. (This flips the previous lenient
+// upper-casing pin, which was non-conformant.)
+func TestParseRef_RefusesUppercaseMethod(t *testing.T) {
+	_, _, err := parseRef("#/paths/~1users/GET")
+	if err == nil {
+		t.Fatal("expected refusal for an uppercase method (OAPI-D-03: no case folding)")
 	}
-	if method != "get" {
-		t.Errorf("method = %q, want %q", method, "get")
+	if !strings.Contains(err.Error(), "lowercase") {
+		t.Errorf("error = %q, want it to explain the lowercase-exactly rule", err.Error())
 	}
 }
 
@@ -66,8 +77,8 @@ func TestParseRef_ErrorTooFewParts(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "must be in format") {
-		t.Errorf("error = %q, want it to contain %q", err.Error(), "must be in format")
+	if !strings.Contains(err.Error(), "must be a JSON Pointer") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "must be a JSON Pointer")
 	}
 }
 
@@ -76,8 +87,8 @@ func TestParseRef_ErrorNonPathsPrefix(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "must be in format") {
-		t.Errorf("error = %q, want it to contain %q", err.Error(), "must be in format")
+	if !strings.Contains(err.Error(), "must be a JSON Pointer") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "must be a JSON Pointer")
 	}
 }
 
@@ -133,7 +144,7 @@ func TestBuildJSONPointerRef_RoundTrip(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func contextKey(doc *openapi3.T, location string) (string, error) {
-	base, err := resolveBaseURLWithLocation(doc, nil, location)
+	base, err := resolveServer(doc, nil, nil, nil, location)
 	if err != nil {
 		return "", err
 	}
@@ -566,10 +577,10 @@ func TestRequiredContext_DigestOnlyAlternativeSurfaced(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// classifyInput
+// routeInput (§9.1, the flattened model's wire side)
 // ---------------------------------------------------------------------------
 
-func TestClassifyInput_PathQueryHeaderBody(t *testing.T) {
+func TestRouteInput_PathQueryHeaderBody(t *testing.T) {
 	params := openapi3.Parameters{
 		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "id", In: "path"}},
 		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "page", In: "query"}},
@@ -583,28 +594,33 @@ func TestClassifyInput_PathQueryHeaderBody(t *testing.T) {
 		"title":        "hello",
 	}
 
-	resolvedPath, query, headers, body := classifyInput(params, input, "/items/{id}", nil)
+	routed, err := routeInput(params, input, "/items/{id}", &bodyPlan{declared: true, family: familyJSON})
+	if err != nil {
+		t.Fatalf("routeInput: %v", err)
+	}
 
-	if resolvedPath != "/items/42" {
-		t.Errorf("resolvedPath = %q, want %q", resolvedPath, "/items/42")
+	if routed.resolvedPath != "/items/42" {
+		t.Errorf("resolvedPath = %q, want %q", routed.resolvedPath, "/items/42")
 	}
-	if query["page"] != 2 {
-		t.Errorf("query[page] = %v, want 2", query["page"])
+	if len(routed.queryUnits) != 1 || routed.queryUnits[0] != "page=2" {
+		t.Errorf("queryUnits = %v, want [page=2]", routed.queryUnits)
 	}
-	if headers["X-Request-Id"] != "abc" {
-		t.Errorf("headers[X-Request-Id] = %v, want %q", headers["X-Request-Id"], "abc")
+	if len(routed.headers) != 1 || routed.headers[0] != [2]string{"X-Request-Id", "abc"} {
+		t.Errorf("headers = %v, want X-Request-Id: abc", routed.headers)
 	}
-	if body["title"] != "hello" {
-		t.Errorf("body[title] = %v, want %q", body["title"], "hello")
+	if routed.bodyFields["title"] != "hello" {
+		t.Errorf("bodyFields[title] = %v, want %q", routed.bodyFields["title"], "hello")
 	}
-	if _, ok := body["id"]; ok {
+	if _, ok := routed.bodyFields["id"]; ok {
 		t.Error("body should not contain path parameter 'id'")
 	}
 }
 
-// TestClassifyInput_CookieParamsGoToCookieHeader verifies declared cookie
-// params travel in a Cookie header (sorted, "; "-joined), never in the body.
-func TestClassifyInput_CookieParamsGoToCookieHeader(t *testing.T) {
+// TestRouteInput_CookieParamsInDeclarationOrder verifies declared cookie
+// params become Cookie-header units in DECLARATION order (OAPI-P-10; the
+// previous sorted order was this implementation's own, not the spec's),
+// never body fields.
+func TestRouteInput_CookieParamsInDeclarationOrder(t *testing.T) {
 	params := openapi3.Parameters{
 		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "session_id", In: "cookie"}},
 		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "csrf", In: "cookie"}},
@@ -615,36 +631,53 @@ func TestClassifyInput_CookieParamsGoToCookieHeader(t *testing.T) {
 		"title":      "hello",
 	}
 
-	_, _, headers, body := classifyInput(params, input, "/session", nil)
-
-	if got := headers["Cookie"]; got != "csrf=c-2; session_id=s-1" {
-		t.Errorf("headers[Cookie] = %v, want %q", got, "csrf=c-2; session_id=s-1")
+	routed, err := routeInput(params, input, "/session", &bodyPlan{declared: true, family: familyJSON})
+	if err != nil {
+		t.Fatalf("routeInput: %v", err)
 	}
-	if _, ok := body["session_id"]; ok {
+	want := []string{"session_id=s-1", "csrf=c-2"}
+	if len(routed.cookieUnits) != 2 || routed.cookieUnits[0] != want[0] || routed.cookieUnits[1] != want[1] {
+		t.Errorf("cookieUnits = %v, want %v (declaration order)", routed.cookieUnits, want)
+	}
+	if _, ok := routed.bodyFields["session_id"]; ok {
 		t.Error("body should not contain cookie parameter 'session_id'")
 	}
-	if _, ok := body["csrf"]; ok {
-		t.Error("body should not contain cookie parameter 'csrf'")
-	}
-	if body["title"] != "hello" {
-		t.Errorf("body[title] = %v, want %q", body["title"], "hello")
+	if routed.bodyFields["title"] != "hello" {
+		t.Errorf("bodyFields[title] = %v, want %q", routed.bodyFields["title"], "hello")
 	}
 }
 
-// TestClassifyInput_PathValuesPercentEncoded pins the cross-SDK URL rule
+// TestRouteInput_PathValuesPercentEncoded pins the cross-SDK URL rule
 // (mirrors the TS invoker.test.ts pin): path parameter values are
 // percent-encoded with the encodeURIComponent byte set, so a value carrying
 // `/`, `?`, or `#` cannot corrupt the request URL's path/query structure.
-func TestClassifyInput_PathValuesPercentEncoded(t *testing.T) {
+func TestRouteInput_PathValuesPercentEncoded(t *testing.T) {
 	params := openapi3.Parameters{
 		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "id", In: "path"}},
 	}
 	input := map[string]any{"id": "a/b?c#d"}
 
-	resolvedPath, _, _, _ := classifyInput(params, input, "/users/{id}", nil)
+	routed, err := routeInput(params, input, "/users/{id}", &bodyPlan{})
+	if err != nil {
+		t.Fatalf("routeInput: %v", err)
+	}
+	if routed.resolvedPath != "/users/a%2Fb%3Fc%23d" {
+		t.Errorf("resolvedPath = %q, want %q", routed.resolvedPath, "/users/a%2Fb%3Fc%23d")
+	}
+}
 
-	if resolvedPath != "/users/a%2Fb%3Fc%23d" {
-		t.Errorf("resolvedPath = %q, want %q", resolvedPath, "/users/a%2Fb%3Fc%23d")
+// A supplied input missing a declared path parameter always refuses before
+// dispatch: the URL cannot be built without it (§9.1).
+func TestRouteInput_MissingPathParamRefuses(t *testing.T) {
+	params := openapi3.Parameters{
+		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "id", In: "path", Required: true}},
+	}
+	_, err := routeInput(params, map[string]any{"other": 1}, "/users/{id}", &bodyPlan{declared: true, family: familyJSON})
+	if err == nil {
+		t.Fatal("expected refusal for a missing path parameter")
+	}
+	if !errors.Is(err, errMissingPathParam) {
+		t.Errorf("error should be the missing-path-parameter refusal, got %v", err)
 	}
 }
 
@@ -667,232 +700,70 @@ func TestEncodePathValue_MatchesEncodeURIComponent(t *testing.T) {
 	}
 }
 
-func TestClassifyInput_UnknownParamsGoToBody(t *testing.T) {
-	params := openapi3.Parameters{}
+// A field matching no declared parameter passes through into the body when
+// the operation declares a request body (§9.1, evaluation-free routing) …
+func TestRouteInput_UnknownFieldsPassThroughWithDeclaredBody(t *testing.T) {
 	input := map[string]any{"foo": "bar", "baz": 1}
 
-	_, _, _, body := classifyInput(params, input, "/test", nil)
-
-	if len(body) != 2 {
-		t.Errorf("body has %d entries, want 2", len(body))
-	}
-	if body["foo"] != "bar" {
-		t.Errorf("body[foo] = %v, want %q", body["foo"], "bar")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// isMultipartFormData
-// ---------------------------------------------------------------------------
-
-func TestIsMultipartFormData_MultipartOnly(t *testing.T) {
-	op := &openapi3.Operation{
-		RequestBody: &openapi3.RequestBodyRef{
-			Value: &openapi3.RequestBody{
-				Content: openapi3.Content{
-					"multipart/form-data": &openapi3.MediaType{},
-				},
-			},
-		},
-	}
-	if !isMultipartFormData(op) {
-		t.Error("expected true for multipart/form-data only content")
-	}
-}
-
-func TestIsMultipartFormData_PrefersJSON(t *testing.T) {
-	op := &openapi3.Operation{
-		RequestBody: &openapi3.RequestBodyRef{
-			Value: &openapi3.RequestBody{
-				Content: openapi3.Content{
-					"application/json":    &openapi3.MediaType{},
-					"multipart/form-data": &openapi3.MediaType{},
-				},
-			},
-		},
-	}
-	if isMultipartFormData(op) {
-		t.Error("expected false when application/json is also available")
-	}
-}
-
-func TestIsMultipartFormData_JSONOnly(t *testing.T) {
-	op := &openapi3.Operation{
-		RequestBody: &openapi3.RequestBodyRef{
-			Value: &openapi3.RequestBody{
-				Content: openapi3.Content{
-					"application/json": &openapi3.MediaType{},
-				},
-			},
-		},
-	}
-	if isMultipartFormData(op) {
-		t.Error("expected false for application/json only")
-	}
-}
-
-func TestIsMultipartFormData_NoRequestBody(t *testing.T) {
-	op := &openapi3.Operation{}
-	if isMultipartFormData(op) {
-		t.Error("expected false for nil request body")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// buildMultipartBody
-// ---------------------------------------------------------------------------
-
-func TestBuildMultipartBody_StringFields(t *testing.T) {
-	op := &openapi3.Operation{
-		RequestBody: &openapi3.RequestBodyRef{
-			Value: &openapi3.RequestBody{
-				Content: openapi3.Content{
-					"multipart/form-data": &openapi3.MediaType{
-						Schema: &openapi3.SchemaRef{
-							Value: &openapi3.Schema{
-								Type: &openapi3.Types{"object"},
-								Properties: openapi3.Schemas{
-									"name": &openapi3.SchemaRef{
-										Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
-									},
-									"count": &openapi3.SchemaRef{
-										Value: &openapi3.Schema{Type: &openapi3.Types{"integer"}},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	fields := map[string]any{"name": "test", "count": 42}
-	buf, ct, err := buildMultipartBody(op, fields)
+	routed, err := routeInput(openapi3.Parameters{}, input, "/test", &bodyPlan{declared: true, family: familyJSON})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("routeInput: %v", err)
 	}
-	if !strings.Contains(ct, "multipart/form-data") {
-		t.Errorf("content type = %q, want multipart/form-data", ct)
+	if len(routed.bodyFields) != 2 {
+		t.Errorf("body has %d entries, want 2", len(routed.bodyFields))
 	}
-	if buf.Len() == 0 {
-		t.Error("expected non-empty body")
-	}
-	body := buf.String()
-	if !strings.Contains(body, "name") || !strings.Contains(body, "test") {
-		t.Error("body should contain the name field")
-	}
-	if !strings.Contains(body, "count") || !strings.Contains(body, "42") {
-		t.Error("body should contain the count field")
+	if routed.bodyFields["foo"] != "bar" {
+		t.Errorf("bodyFields[foo] = %v, want %q", routed.bodyFields["foo"], "bar")
 	}
 }
 
-func TestBuildMultipartBody_BinaryField(t *testing.T) {
-	op := &openapi3.Operation{
-		RequestBody: &openapi3.RequestBodyRef{
-			Value: &openapi3.RequestBody{
-				Content: openapi3.Content{
-					"multipart/form-data": &openapi3.MediaType{
-						Schema: &openapi3.SchemaRef{
-							Value: &openapi3.Schema{
-								Type: &openapi3.Types{"object"},
-								Properties: openapi3.Schemas{
-									"file": &openapi3.SchemaRef{
-										Value: &openapi3.Schema{
-											Type:   &openapi3.Types{"string"},
-											Format: "binary",
-										},
-									},
-									"description": &openapi3.SchemaRef{
-										Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+// … and is REFUSED before dispatch — loudly, naming the offenders — when
+// the operation declares no request body (§9.1; the previous silent body
+// invention was non-conformant).
+func TestRouteInput_UnknownFieldsRefusedWithoutBody(t *testing.T) {
+	input := map[string]any{"foo": "bar", "baz": 1}
 
-	fileContent := []byte("hello world")
-	fields := map[string]any{"file": fileContent, "description": "a test file"}
-	buf, ct, err := buildMultipartBody(op, fields)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(ct, "multipart/form-data") {
-		t.Errorf("content type = %q, want multipart/form-data", ct)
-	}
-	body := buf.String()
-	if !strings.Contains(body, "hello world") {
-		t.Error("body should contain the binary file content")
-	}
-	if !strings.Contains(body, "a test file") {
-		t.Error("body should contain the description field")
-	}
-}
-
-func TestBuildMultipartBody_BinaryFieldWrongType(t *testing.T) {
-	op := &openapi3.Operation{
-		RequestBody: &openapi3.RequestBodyRef{
-			Value: &openapi3.RequestBody{
-				Content: openapi3.Content{
-					"multipart/form-data": &openapi3.MediaType{
-						Schema: &openapi3.SchemaRef{
-							Value: &openapi3.Schema{
-								Type: &openapi3.Types{"object"},
-								Properties: openapi3.Schemas{
-									"file": &openapi3.SchemaRef{
-										Value: &openapi3.Schema{
-											Type:   &openapi3.Types{"string"},
-											Format: "binary",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	fields := map[string]any{"file": "not-bytes"}
-	_, _, err := buildMultipartBody(op, fields)
+	_, err := routeInput(openapi3.Parameters{}, input, "/test", &bodyPlan{})
 	if err == nil {
-		t.Fatal("expected error for non-[]byte binary field, got nil")
+		t.Fatal("expected refusal for unmatched fields on an operation without a request body")
 	}
-	if !strings.Contains(err.Error(), "expected []byte") {
-		t.Errorf("error = %q, want it to mention []byte", err.Error())
+	if !strings.Contains(err.Error(), "baz") || !strings.Contains(err.Error(), "foo") {
+		t.Errorf("refusal must list the offending field names, got %q", err.Error())
 	}
 }
 
-// TestClassifyInput_CollisionDeliversToBothLocations pins the
-// field-collision rule: a field declared as a parameter AND a body
-// property carries ONE value delivered to every declared wire location.
-func TestClassifyInput_CollisionDeliversToBothLocations(t *testing.T) {
+// TestRouteInput_CollisionDeliversToBothLocations pins the field-collision
+// rule: a field declared as a parameter AND a body property carries ONE
+// value delivered to every declared wire location.
+func TestRouteInput_CollisionDeliversToBothLocations(t *testing.T) {
 	params := openapi3.Parameters{
 		{Value: &openapi3.Parameter{Name: "id", In: "path", Required: true}},
 	}
 	input := map[string]any{"id": "u1", "name": "Ada"}
-	path, _, _, body := classifyInput(params, input, "/users/{id}", map[string]bool{"id": true, "name": true})
-	if path != "/users/u1" {
-		t.Fatalf("path = %q, want /users/u1", path)
+	routed, err := routeInput(params, input, "/users/{id}", &bodyPlan{
+		declared: true,
+		family:   familyJSON,
+		props:    map[string]bool{"id": true, "name": true},
+	})
+	if err != nil {
+		t.Fatalf("routeInput: %v", err)
 	}
-	if body["id"] != "u1" {
-		t.Fatalf("body must keep the colliding field, got %v", body)
+	if routed.resolvedPath != "/users/u1" {
+		t.Fatalf("path = %q, want /users/u1", routed.resolvedPath)
 	}
-	if body["name"] != "Ada" {
-		t.Fatalf("body missing name: %v", body)
+	if routed.bodyFields["id"] != "u1" {
+		t.Fatalf("body must keep the colliding field, got %v", routed.bodyFields)
+	}
+	if routed.bodyFields["name"] != "Ada" {
+		t.Fatalf("body missing name: %v", routed.bodyFields)
 	}
 }
 
-// TestBodyPropertyNames_MediaTypeParameters pins that media-type parameters
-// ("; charset=utf-8") never change whether a request body is JSON: the
-// collision rule still sees the body's property names (TS parity — TS
-// stripped parameters, Go compared the full content-type key and missed).
-func TestBodyPropertyNames_MediaTypeParameters(t *testing.T) {
+// TestPlanRequestBody_MediaTypeParameters pins that media-type parameters
+// ("; charset=utf-8") never change media matching (§9.2 compares type and
+// subtype, ignoring parameters): the collision rule still sees the body's
+// property names.
+func TestPlanRequestBody_MediaTypeParameters(t *testing.T) {
 	op := &openapi3.Operation{
 		RequestBody: &openapi3.RequestBodyRef{
 			Value: &openapi3.RequestBody{
@@ -912,20 +783,29 @@ func TestBodyPropertyNames_MediaTypeParameters(t *testing.T) {
 			},
 		},
 	}
-	names := bodyPropertyNames(op)
-	if !names["id"] || !names["name"] {
-		t.Fatalf("bodyPropertyNames must see through media-type parameters, got %v", names)
+	plan, err := planRequestBody(op)
+	if err != nil {
+		t.Fatalf("planRequestBody: %v", err)
+	}
+	if plan.family != familyJSON || plan.mediaType != "application/json" {
+		t.Fatalf("selection must see through media-type parameters, got %+v", plan)
+	}
+	if !plan.props["id"] || !plan.props["name"] {
+		t.Fatalf("body property names must survive parameterized content keys, got %v", plan.props)
 	}
 }
 
 // Without a body declaration the parameter stays exclusive (unchanged).
-func TestClassifyInput_ParamOnlyStaysExclusive(t *testing.T) {
+func TestRouteInput_ParamOnlyStaysExclusive(t *testing.T) {
 	params := openapi3.Parameters{
 		{Value: &openapi3.Parameter{Name: "id", In: "path", Required: true}},
 	}
 	input := map[string]any{"id": "u1"}
-	_, _, _, body := classifyInput(params, input, "/users/{id}", nil)
-	if _, ok := body["id"]; ok {
-		t.Fatalf("param-only field must not leak into the body: %v", body)
+	routed, err := routeInput(params, input, "/users/{id}", &bodyPlan{})
+	if err != nil {
+		t.Fatalf("routeInput: %v", err)
+	}
+	if _, ok := routed.bodyFields["id"]; ok {
+		t.Fatalf("param-only field must not leak into the body: %v", routed.bodyFields)
 	}
 }
