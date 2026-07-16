@@ -1,0 +1,175 @@
+package asyncapi
+
+import (
+	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+)
+
+// This file honors declared protocol `bindings` objects, which are
+// authoritative where they speak (openbindings.asyncapi@1 §8, ASYNC-P-02):
+// an http operation binding's `method` selects the request method; a
+// websockets channel binding's `method`, `query`, and `headers` govern the
+// upgrade request, with declared query and header values supplied like
+// address parameters (§9.2) and any unsatisfied required declaration a
+// pre-dispatch refusal. Where bindings are silent, the cell defaults apply
+// (POST for a unary publish, GET for an SSE subscription, a GET upgrade).
+
+// requestMethod returns the request method for an http-protocol cell: the
+// http operation binding's `method` where declared, else the cell's
+// default.
+func requestMethod(op *asyncOperation, cellDefault string) string {
+	if op != nil && op.Bindings != nil && op.Bindings.HTTP != nil && op.Bindings.HTTP.Method != "" {
+		return strings.ToUpper(strings.TrimSpace(op.Bindings.HTTP.Method))
+	}
+	return cellDefault
+}
+
+// wsUpgrade is the websockets channel binding's resolved contribution to
+// the upgrade request: query values (which join the dialed URL, and so the
+// pool key) and header values (applied to the upgrade request, and hashed
+// into the connection's credential identity).
+type wsUpgrade struct {
+	Query   url.Values
+	Headers map[string]string
+}
+
+// resolveWSUpgrade resolves the websockets channel binding against the
+// consumer-supplied values. Declared query and header property values come
+// from the address-parameter bag ("supplied like address parameters", §8) —
+// headers additionally from the context's generic header carriage, whose
+// values reach the upgrade request through applyHTTPContext — else the
+// property's declared `default`; a `required` declaration left unsatisfied
+// is a pre-dispatch refusal. A declared upgrade `method` other than GET is
+// refused loudly: RFC 6455 upgrades are GET requests and this platform
+// cannot apply another method — surfaced, never silently rerouted.
+func resolveWSUpgrade(ch *channel, channelName string, params map[string]string, ctxHeaders map[string]string) (wsUpgrade, error) {
+	var up wsUpgrade
+	if ch == nil || ch.Bindings == nil || ch.Bindings.WS == nil {
+		return up, nil
+	}
+	b := ch.Bindings.WS
+
+	if b.Method != "" && !strings.EqualFold(strings.TrimSpace(b.Method), http.MethodGet) {
+		return up, fmt.Errorf("channel %q: websockets binding declares upgrade method %q, which this platform cannot apply (RFC 6455 upgrades are GET) — refused rather than silently rerouted", channelName, b.Method)
+	}
+
+	queryVals, err := schemaPropertyValues(b.Query, params, nil,
+		fmt.Sprintf("channel %q: websockets binding query parameter", channelName))
+	if err != nil {
+		return up, err
+	}
+	if len(queryVals) > 0 {
+		up.Query = url.Values{}
+		for name, val := range queryVals {
+			up.Query.Set(name, val)
+		}
+	}
+
+	headerVals, err := schemaPropertyValues(b.Headers, params, ctxHeaders,
+		fmt.Sprintf("channel %q: websockets binding header", channelName))
+	if err != nil {
+		return up, err
+	}
+	up.Headers = headerVals
+	return up, nil
+}
+
+// schemaPropertyValues resolves the declared properties of a ws-binding
+// `query`/`headers` Schema Object: each declared property takes the
+// consumer-supplied value, else a satisfied generic-carriage value (headers
+// only; the value already rides the request, so it resolves the declaration
+// without being duplicated here), else the property's declared `default`.
+// A `required` property left unresolved is a pre-dispatch refusal
+// (ASYNC-P-02). Only scalar defaults map to a wire value.
+func schemaPropertyValues(schema map[string]any, supplied map[string]string, satisfiedElsewhere map[string]string, what string) (map[string]string, error) {
+	if schema == nil {
+		return nil, nil
+	}
+	props, _ := schema["properties"].(map[string]any)
+	required := map[string]bool{}
+	if rawReq, ok := schema["required"].([]any); ok {
+		for _, r := range rawReq {
+			if s, ok := r.(string); ok {
+				required[s] = true
+			}
+		}
+	}
+
+	names := make(map[string]bool, len(props)+len(required))
+	for name := range props {
+		names[name] = true
+	}
+	for name := range required {
+		names[name] = true
+	}
+
+	out := map[string]string{}
+	for name := range names {
+		if val, ok := supplied[name]; ok {
+			out[name] = val
+			continue
+		}
+		if hasCaseInsensitive(satisfiedElsewhere, name) {
+			continue // already riding the request via the generic carriage
+		}
+		if prop, ok := props[name].(map[string]any); ok {
+			if def, ok := stringifyScalar(prop["default"]); ok {
+				out[name] = def
+				continue
+			}
+		}
+		if required[name] {
+			return nil, fmt.Errorf("%s %q is required but has no supplied value and no declared default", what, name)
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// hasCaseInsensitive reports whether m carries key under HTTP header
+// case-insensitivity.
+func hasCaseInsensitive(m map[string]string, key string) bool {
+	for k := range m {
+		if strings.EqualFold(k, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// stringifyScalar renders a JSON-schema scalar default as a wire value.
+// Structured values (objects, arrays, null) resolve nothing.
+func stringifyScalar(v any) (string, bool) {
+	switch s := v.(type) {
+	case string:
+		return s, true
+	case bool:
+		return strconv.FormatBool(s), true
+	case float64:
+		return strconv.FormatFloat(s, 'f', -1, 64), true
+	case int:
+		return strconv.Itoa(s), true
+	case int64:
+		return strconv.FormatInt(s, 10), true
+	}
+	return "", false
+}
+
+// mergeQuery appends resolved ws-binding query values onto an expanded
+// address, keeping the result a single dialable path-and-query string (so
+// the pool key and the dialed URL always agree).
+func mergeQuery(address string, q url.Values) string {
+	if len(q) == 0 {
+		return address
+	}
+	sep := "?"
+	if strings.Contains(address, "?") {
+		sep = "&"
+	}
+	return address + sep + q.Encode()
+}

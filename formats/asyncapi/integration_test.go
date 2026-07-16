@@ -327,15 +327,18 @@ func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
 	}
 }
 
-// TestChannelAddressFallsBackToChannelName pins the current channel-name
-// fallback for a channel with no `address`. NOTE: openbindings.asyncapi@1
-// makes an absent/null address a PRE-DISPATCH REFUSAL (the address
-// configuration point, ASYNC-P-04 — never a guess); this fallback is slated
-// for removal with that punch-list item, and this test will flip to assert
-// the refusal.
-func TestChannelAddressFallsBackToChannelName(t *testing.T) {
+// TestChannelWithoutAddressIsRefusedPreDispatch pins the address
+// configuration point's refusal (ASYNC-P-04): an absent or null channel
+// `address` with no consumer-supplied address is a PRE-DISPATCH refusal —
+// this specification does not assume the channel key is an address, never a
+// guess. (Flipped from the pre-conformance channel-name fallback this test
+// used to pin.) A consumer-supplied concrete address at the configuration
+// point proceeds.
+func TestChannelWithoutAddressIsRefusedPreDispatch(t *testing.T) {
+	var requests atomic.Int32
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		gotPath = r.URL.Path
 		w.WriteHeader(202)
 	}))
@@ -363,11 +366,32 @@ func TestChannelAddressFallsBackToChannelName(t *testing.T) {
 	if err := call.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := drainOutputs(t, call); err != nil {
-		t.Fatalf("send failed: %v", err)
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for a channel with no address, got %v", err)
 	}
-	if gotPath != "/notify" {
-		t.Errorf("request path = %q, want /notify (the channel's own name, since it declares no address)", gotPath)
+	if got := requests.Load(); got != 0 {
+		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got)
+	}
+
+	// The consumer may supply the concrete address at the configuration
+	// point; the publish then dispatches to exactly that address.
+	call = binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: docJSON},
+		Ref:     "#/operations/notifyOp",
+		Context: map[string]any{"configuration": map[string]any{"address": "/inbox"}},
+	})
+	if err := call.Write(bg(), map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := call.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := drainOutputs(t, call); err != nil {
+		t.Fatalf("publish with a supplied address failed: %v", err)
+	}
+	if gotPath != "/inbox" {
+		t.Errorf("request path = %q, want the consumer-supplied /inbox", gotPath)
 	}
 }
 
@@ -950,20 +974,27 @@ func wsSource(srv *httptest.Server, scheme *securityScheme) openbindings.Invocat
 // WebSocket receive
 // ---------------------------------------------------------------------------
 
-// TestWebSocketBearerInFirstFrame verifies the WebSocket auth convention:
-// the bearer token is sent in the body of the first frame after the upgrade,
-// because browsers cannot set custom WebSocket upgrade headers.
-func TestWebSocketBearerInFirstFrame(t *testing.T) {
-	tokenCh := make(chan string, 1)
+// TestWebSocketBearerRidesUpgradeRequest verifies §9.5 (ASYNC-P-07): for
+// WebSocket connections a declared bearer credential rides the UPGRADE
+// REQUEST's Authorization header — and NO credential ever rides a message
+// body or a first frame. The server echoes every frame back, so the first
+// output proves no auth frame preceded the caller's own control frame.
+// (Flipped from the pre-conformance first-frame bearer convention this test
+// used to pin; in-band auth is consumer configuration riding the duplex
+// cell as an ordinary input frame, never a built-in.)
+func TestWebSocketBearerRidesUpgradeRequest(t *testing.T) {
+	authCh := make(chan string, 1)
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		first, err := readWSJSON(ctx, conn)
-		if err != nil {
-			return
+		authCh <- r.Header.Get("Authorization")
+		for {
+			msg, err := readWSJSON(ctx, conn)
+			if err != nil {
+				return
+			}
+			if err := writeWSJSON(ctx, conn, msg); err != nil {
+				return
+			}
 		}
-		tok, _ := first["bearerToken"].(string)
-		tokenCh <- tok
-		_ = writeWSJSON(ctx, conn, map[string]any{"id": "1", "msg": "first"})
-		_ = writeWSJSON(ctx, conn, map[string]any{"id": "2", "msg": "second"})
 	})
 
 	binv := NewInvoker()
@@ -974,29 +1005,38 @@ func TestWebSocketBearerInFirstFrame(t *testing.T) {
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "test-bearer-xyz"},
 	})
-	vals, err := drainOutputs(t, call)
+	out := call.Outputs()
+	if err := call.Write(bg(), map[string]any{"hello": true}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := out.Read(shortCtx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(vals) != 2 {
-		t.Fatalf("expected 2 stream events, got %d: %v", len(vals), vals)
+	got, _ := first.(map[string]any)
+	if _, leaked := got["bearerToken"]; leaked {
+		t.Fatal("bearer token rode a message frame: no credential ever rides in-band (ASYNC-P-07)")
+	}
+	if got["hello"] != true {
+		t.Fatalf("first echoed frame = %v, want the caller's own control frame (no auth frame precedes it)", got)
 	}
 	select {
-	case tok := <-tokenCh:
-		if tok != "test-bearer-xyz" {
-			t.Errorf("server received bearerToken = %q, want test-bearer-xyz", tok)
+	case auth := <-authCh:
+		if auth != "Bearer test-bearer-xyz" {
+			t.Errorf("upgrade Authorization = %q, want %q", auth, "Bearer test-bearer-xyz")
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("server never received the first frame")
+		t.Fatal("server never saw the upgrade")
 	}
+	out.Stop()
 }
 
-// TestWebSocketBearerFirstFrameRequiresDeclaredScheme verifies the gating of
-// the first-frame bearer convention: with no bearer-family scheme declared,
-// the token must NOT be volunteered into the message stream. The server
-// echoes every frame back, so the first output proves which frame arrived
-// first.
-func TestWebSocketBearerFirstFrameRequiresDeclaredScheme(t *testing.T) {
+// TestWebSocketNoInBandAuthWithoutDeclaredScheme verifies the token is
+// never volunteered into the message stream when no bearer-family scheme is
+// declared either (ASYNC-P-07: no credential rides in-band, and none is
+// invented). The server echoes every frame back, so the first output proves
+// which frame arrived first.
+func TestWebSocketNoInBandAuthWithoutDeclaredScheme(t *testing.T) {
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
 		for {
 			msg, err := readWSJSON(ctx, conn)
@@ -1036,9 +1076,11 @@ func TestWebSocketBearerFirstFrameRequiresDeclaredScheme(t *testing.T) {
 	out.Stop()
 }
 
-// TestWebSocketBearerFirstFrameOncePerConnection verifies the auth frame is
-// sent once per pooled connection, not once per invocation reusing it.
-func TestWebSocketBearerFirstFrameOncePerConnection(t *testing.T) {
+// TestWebSocketNoAuthFrameOnPooledConnections verifies no auth frame is
+// ever sent — on a fresh dial or a pooled reuse (§9.5: no credential rides
+// a first frame; the upgrade request authenticates the connection) — and
+// that same-credential subscriptions still share one upgrade.
+func TestWebSocketNoAuthFrameOnPooledConnections(t *testing.T) {
 	var upgrades atomic.Int32
 	frames := make(chan map[string]any, 16)
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
@@ -1063,14 +1105,17 @@ func TestWebSocketBearerFirstFrameOncePerConnection(t *testing.T) {
 	if err := sub1.Write(bg(), map[string]any{"n": 1}); err != nil {
 		t.Fatal(err)
 	}
-	got := collectFrames(t, frames, 2) // auth frame, then n=1
-	if tok, _ := got[0]["bearerToken"].(string); tok != "tok" {
-		t.Fatalf("first frame on a fresh socket must be the auth frame, got %v", got[0])
+	got := collectFrames(t, frames, 1)
+	if _, hasToken := got[0]["bearerToken"]; hasToken {
+		t.Fatal("auth frame sent on a fresh socket: no credential ever rides a first frame")
+	}
+	if n, _ := got[0]["n"].(float64); n != 1 {
+		t.Fatalf("first frame = %v, want the caller's n=1 control frame", got[0])
 	}
 	sub1.Outputs().Stop()
 
-	// Second subscription reuses the pooled (already authenticated) socket:
-	// no second auth frame may precede its control frame.
+	// Second subscription reuses the pooled socket (same credential
+	// identity): its first frame is likewise its own control frame.
 	sub2 := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
 		Source: source, Ref: "#/operations/subscribe", Context: bindCtx,
 	})
@@ -1079,7 +1124,7 @@ func TestWebSocketBearerFirstFrameOncePerConnection(t *testing.T) {
 	}
 	next := collectFrames(t, frames, 1)
 	if _, hasToken := next[0]["bearerToken"]; hasToken {
-		t.Fatal("auth frame re-sent on a reused connection")
+		t.Fatal("auth frame sent on a reused connection")
 	}
 	if n, _ := next[0]["n"].(float64); n != 2 {
 		t.Fatalf("frame = %v, want the n=2 control frame", next[0])
@@ -1169,7 +1214,6 @@ func TestWebSocketQueryParamApiKey_NamedViaApiKeysMap(t *testing.T) {
 // one bare output in arrival order, and a clean server close ends the stream.
 func TestWebSocketStreamingMultipleEvents(t *testing.T) {
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		_, _ = readWSJSON(ctx, conn) // bearer first-frame
 		for i := 1; i <= 5; i++ {
 			_ = writeWSJSON(ctx, conn, map[string]any{"seq": i})
 		}
@@ -1201,7 +1245,6 @@ func TestWebSocketStreamingMultipleEvents(t *testing.T) {
 // stream cancels the invocation without stranding goroutines.
 func TestWebSocketStopCancelsSubscription(t *testing.T) {
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		_, _ = readWSJSON(ctx, conn)
 		_ = writeWSJSON(ctx, conn, map[string]any{"id": "1"})
 		<-ctx.Done() // hold the connection open; the client cancels
 	})
@@ -1229,7 +1272,6 @@ func TestWebSocketStopCancelsSubscription(t *testing.T) {
 // terminal ERR_STREAM_ERROR carrying the server's message.
 func TestWebSocketServerErrorFrame(t *testing.T) {
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		_, _ = readWSJSON(ctx, conn)
 		_ = writeWSJSON(ctx, conn, map[string]any{"data": map[string]any{"ok": true}})
 		_ = writeWSJSON(ctx, conn, map[string]any{"error": map[string]any{"message": "boom"}})
 	})
