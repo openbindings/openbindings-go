@@ -256,6 +256,7 @@ func buildJSONPointerRef(path, method string) string {
 func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, refRegistry map[string]any, opKey string, warn func(openbindings.SynthesizerWarning)) map[string]any {
 	properties := map[string]any{}
 	var required []string
+	hasOpenBody := false
 
 	allParams := mergeParameters(pathParams, op.Parameters)
 
@@ -309,6 +310,15 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 					properties[k] = v
 				}
 				required = append(required, stringSlice(bodySchema["required"])...)
+			} else if isObjectTypedSchema(bodySchema) {
+				// A free-form object body (type object, no named
+				// properties): the flattened model passes unmatched input
+				// fields through into the body (openbindings.openapi@1
+				// §9.1), so the flattened surface stays an OPEN object —
+				// the synthetic `body` wrap is reserved for NON-object
+				// body schemas, and wrapping here would describe a field
+				// the conformant invoker refuses as unmatched.
+				hasOpenBody = true
 			} else {
 				properties["body"] = bodySchema
 				if rb.Required {
@@ -319,6 +329,9 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 	}
 
 	if len(properties) == 0 {
+		if hasOpenBody {
+			return map[string]any{"type": "object"}
+		}
 		return nil
 	}
 
@@ -590,4 +603,17 @@ func majorMinor(version string) string {
 		return parts[0] + "." + parts[1]
 	}
 	return version
+}
+
+// isObjectTypedSchema reports whether a body schema is explicitly
+// object-typed (3.0 string form or a single-element 3.1 type array): the
+// flattened model's passthrough case, never the synthetic-body wrap.
+func isObjectTypedSchema(schema map[string]any) bool {
+	switch ty := schema["type"].(type) {
+	case string:
+		return ty == "object"
+	case []any:
+		return len(ty) == 1 && ty[0] == "object"
+	}
+	return false
 }
