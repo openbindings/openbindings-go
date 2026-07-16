@@ -178,26 +178,9 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: parseErr.Error()})
 			return
 		}
-		var svcDesc protoreflect.ServiceDescriptor
-		for _, svc := range disc.services {
-			if string(svc.FullName()) == svcName {
-				svcDesc = svc
-				break
-			}
-		}
-		if svcDesc == nil {
-			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeRefNotFound,
-				Message: fmt.Sprintf("service %q not found in embedded schema", svcName),
-			})
-			return
-		}
-		m := svcDesc.Methods().ByName(protoreflect.Name(methodName))
-		if m == nil {
-			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeRefNotFound,
-				Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
-			})
+		m, ie := resolveMethod(disc, svcName, methodName)
+		if ie != nil {
+			inv.FireError(ie)
 			return
 		}
 		if ie := preflightMethod(m); ie != nil {

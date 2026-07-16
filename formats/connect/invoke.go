@@ -100,6 +100,34 @@ func connectURL(baseURL, svcName, methodName string) string {
 	return baseURL + "/" + svcName + "/" + methodName
 }
 
+// resolveMethod resolves <fully-qualified-service>/<method> against a
+// discovered embedded schema (schema mode). Matching is byte-exact, no
+// case folding (CONN-D-03, incorporating GRPC-D-03's grammar); a ref
+// matching no service or method makes the binding unresolvable.
+func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.MethodDescriptor, *openbindings.InvocationError) {
+	var svcDesc protoreflect.ServiceDescriptor
+	for _, svc := range disc.services {
+		if string(svc.FullName()) == svcName {
+			svcDesc = svc
+			break
+		}
+	}
+	if svcDesc == nil {
+		return nil, &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeRefNotFound,
+			Message: fmt.Sprintf("service %q not found in embedded schema", svcName),
+		}
+	}
+	m := svcDesc.Methods().ByName(protoreflect.Name(methodName))
+	if m == nil {
+		return nil, &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeRefNotFound,
+			Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
+		}
+	}
+	return m, nil
+}
+
 // buildSchemaModeBody marshals one caller-facing input value into the
 // request message body per §9.2 (CONN-P-02), which incorporates
 // openbindings.grpc@1 §9.1 (GRPC-P-03): the accepted shape is the request

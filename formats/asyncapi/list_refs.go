@@ -10,7 +10,13 @@ import (
 
 // InspectSource returns all bindable targets (operation IDs) from an AsyncAPI document.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
-	doc, err := loadDocument(ctx, c.httpClient, source.Location, source.Content)
+	// Authoring convenience: a bare filesystem path loads as its file://
+	// spelling (the strict loader refuses bare paths, ASYNC-D-02).
+	loadLocation, err := absolutizeArtifactLocation(source.Location)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := loadDocument(ctx, c.httpClient, loadLocation, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load AsyncAPI document: %w", err)
 	}
@@ -29,7 +35,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	usedKeys := map[string]bool{}
 	for _, opID := range opIDs {
 		asyncOp := doc.Operations[opID]
-		ref := "#/operations/" + opID
+		ref := operationRef(opID)
 		opKey := openbindings.UniqueKey(openbindings.SanitizeKey(opID), usedKeys)
 		usedKeys[opKey] = true
 		desc := operationDescription(asyncOp)

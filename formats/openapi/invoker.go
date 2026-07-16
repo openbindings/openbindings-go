@@ -237,7 +237,14 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	doc, err := loadDocument(src.Location, src.Content)
+	// Authoring convenience: a bare filesystem path loads as its file://
+	// spelling (the strict loader refuses bare paths, OAPI-D-02); the
+	// original spelling still rides emission below.
+	loadLocation, err := absolutizeArtifactLocation(src.Location)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := loadDocument(loadLocation, src.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}

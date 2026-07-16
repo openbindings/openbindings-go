@@ -222,6 +222,34 @@ func parseRef(ref string) (string, string, error) {
 	return ref[:idx], ref[idx+1:], nil
 }
 
+// resolveMethod resolves <fully-qualified-service>/<method> against a
+// discovered embedded schema. Matching against the schema's declared
+// services is byte-exact, no case folding (GRPC-D-03); a ref matching no
+// service or method makes the binding unresolvable.
+func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.MethodDescriptor, *openbindings.InvocationError) {
+	var svcDesc protoreflect.ServiceDescriptor
+	for _, svc := range disc.services {
+		if string(svc.FullName()) == svcName {
+			svcDesc = svc
+			break
+		}
+	}
+	if svcDesc == nil {
+		return nil, &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeRefNotFound,
+			Message: fmt.Sprintf("service %q not found in embedded schema", svcName),
+		}
+	}
+	m := svcDesc.Methods().ByName(protoreflect.Name(methodName))
+	if m == nil {
+		return nil, &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeRefNotFound,
+			Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
+		}
+	}
+	return m, nil
+}
+
 // buildRequest unmarshals one caller-facing input value into the request
 // message per §9.1 (GRPC-P-03): the accepted shape is the request type's
 // CANONICAL JSON form — an object for ordinary messages, the mapping's

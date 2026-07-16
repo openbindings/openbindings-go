@@ -215,7 +215,14 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	doc, err := loadDocument(ctx, c.httpClient, src.Location, src.Content)
+	// Authoring convenience: a bare filesystem path loads as its file://
+	// spelling (the strict loader refuses bare paths, ASYNC-D-02); the
+	// original spelling still rides emission below.
+	loadLocation, err := absolutizeArtifactLocation(src.Location)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := loadDocument(ctx, c.httpClient, loadLocation, src.Content)
 	if err != nil {
 		return nil, err
 	}

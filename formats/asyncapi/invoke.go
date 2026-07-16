@@ -73,6 +73,16 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		})
 		return
 	}
+	if asyncOp.Ref != "" {
+		// An operations-map entry that is a Reference Object resolves
+		// through it before the operation-object test (ASYNC-D-03);
+		// resolveRefs leaves Ref set only when the reference dangles.
+		h.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeRefNotFound,
+			Message: fmt.Sprintf("operation %q is a Reference Object whose target %q does not resolve in the AsyncAPI doc", opID, asyncOp.Ref),
+		})
+		return
+	}
 
 	// The binding target is the addressed operation's channel (§8), reached
 	// through a resolved server and expanded address (§9.2).
@@ -158,26 +168,42 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 // Ref parsing & server resolution
 // ---------------------------------------------------------------------------
 
+// parseRef parses a binding ref per ASYNC-D-03: a JSON Pointer
+// `#/operations/<operation-key>` addressing an operations-map entry is the
+// ONLY conformant spelling. A bare operation key without the pointer prefix
+// is refused (the former lenience is gone), and an unescaped `/` after the
+// prefix addresses a deeper path — never an operations-map entry — so it is
+// refused too. Operation keys containing `/` or `~` carry RFC 6901 escaping
+// in the pointer: ~1 → /, ~0 → ~, decoded in that order.
 func parseRef(ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return "", fmt.Errorf("empty ref")
+		return "", fmt.Errorf("ref is required and must be a JSON Pointer #/operations/<operation-key> (ASYNC-D-03)")
 	}
 
 	const prefix = "#/operations/"
-	if strings.HasPrefix(ref, prefix) {
-		opID := strings.TrimPrefix(ref, prefix)
-		if opID == "" {
-			return "", fmt.Errorf("empty operation ID in ref %q", ref)
-		}
-		// Operation keys containing `/` or `~` carry RFC 6901 escaping in
-		// the pointer (ASYNC-D-03): ~1 → /, ~0 → ~, in that order.
-		opID = strings.ReplaceAll(opID, "~1", "/")
-		opID = strings.ReplaceAll(opID, "~0", "~")
-		return opID, nil
+	if !strings.HasPrefix(ref, prefix) {
+		return "", fmt.Errorf("ref %q is not a JSON Pointer #/operations/<operation-key>: the pointer is the only conformant spelling — a bare operation key is not accepted (ASYNC-D-03)", ref)
 	}
+	token := ref[len(prefix):]
+	if token == "" {
+		return "", fmt.Errorf("empty operation key in ref %q (ASYNC-D-03)", ref)
+	}
+	if strings.Contains(token, "/") {
+		return "", fmt.Errorf("ref %q addresses a deeper path, not an operations-map entry: an operation key containing / carries RFC 6901 escaping (~1) (ASYNC-D-03)", ref)
+	}
+	opID := strings.ReplaceAll(token, "~1", "/")
+	opID = strings.ReplaceAll(opID, "~0", "~")
+	return opID, nil
+}
 
-	return ref, nil
+// operationRef builds the conformant ASYNC-D-03 spelling for an operation
+// key: `#/operations/` + the RFC 6901-escaped key (~ → ~0 first, then
+// / → ~1 — escape order is the reverse of decode order).
+func operationRef(opID string) string {
+	escaped := strings.ReplaceAll(opID, "~", "~0")
+	escaped = strings.ReplaceAll(escaped, "/", "~1")
+	return "#/operations/" + escaped
 }
 
 // Server and address resolution (the §9.2 configuration points) live in

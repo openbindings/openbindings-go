@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -141,7 +142,53 @@ func loadDocument(location string, content any) (*openapi3.T, error) {
 	return doc, nil
 }
 
+// absolutizeArtifactLocation lifts a bare filesystem path to the file://
+// document address the strict loader accepts — authoring-time operator
+// convenience at the SYNTHESIS entries only, the usage family's posture
+// (one loader for every lane, no bare-path lane). The invoke/binding lanes
+// never absolutize: a document's own bare-path location is a relative
+// reference in form and is refused (OAPI-D-02). Emission is untouched —
+// what a synthesized document may carry as its location is the
+// embed-default ruling's territory, not this helper's.
+func absolutizeArtifactLocation(location string) (string, error) {
+	if location == "" || strings.Contains(location, "://") {
+		return location, nil
+	}
+	abs := location
+	if !filepath.IsAbs(location) {
+		var err error
+		abs, err = filepath.Abs(location)
+		if err != nil {
+			return "", fmt.Errorf("resolve OpenAPI artifact path: %w", err)
+		}
+	}
+	return "file://" + abs, nil
+}
+
+// validateDocumentAddress checks OAPI-D-02's location grammar offline,
+// without dereferencing: `location`, when present, is an absolute URI
+// addressing the OpenAPI document itself. A bare filesystem path is a
+// relative reference in form (core OBI-D-05) and is refused — a local
+// artifact is addressed as file:// or embedded as the source's content.
+func validateDocumentAddress(location string) error {
+	u, err := url.Parse(location)
+	if err != nil || u.Scheme == "" || u.Opaque != "" {
+		return fmt.Errorf("openapi location %q is not an absolute URI addressing the document (OAPI-D-02): a local artifact is addressed as file:// or embedded as the source's content", location)
+	}
+	return nil
+}
+
 func loadDocumentRaw(loader *openapi3.Loader, location string, content any) (*openapi3.T, error) {
+	// `location`, when present, must be an absolute URI (OAPI-D-02) —
+	// whether it is the fetch target or only the embedded content's base.
+	// The former bare-path lenience ("for local tooling") is gone: the
+	// usage family's posture, applied here.
+	if location != "" {
+		if err := validateDocumentAddress(location); err != nil {
+			return nil, err
+		}
+	}
+
 	if content != nil {
 		data, err := openbindings.ContentToBytes(content)
 		if err != nil {
@@ -174,8 +221,7 @@ func loadDocumentRaw(loader *openapi3.Loader, location string, content any) (*op
 	}
 
 	// A file:// location (the conformant absolute-URI spelling, OAPI-D-02)
-	// loads from its path; bare filesystem paths are accepted leniently for
-	// local tooling.
+	// loads from its path.
 	if strings.HasPrefix(location, "file://") {
 		loc, err := url.Parse(location)
 		if err != nil {
@@ -183,7 +229,8 @@ func loadDocumentRaw(loader *openapi3.Loader, location string, content any) (*op
 		}
 		return loader.LoadFromFile(loc.Path)
 	}
-	return loader.LoadFromFile(location)
+	u, _ := url.Parse(location) // validated above: absolute, non-opaque
+	return nil, fmt.Errorf("openapi location scheme %q is not dereferenced by this processor (supported: file, http, https)", u.Scheme)
 }
 
 // selfContainedReadFunc allows absolute http(s) reference targets (they

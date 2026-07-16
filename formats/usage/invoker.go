@@ -105,6 +105,9 @@ func artifactText(ctx context.Context, location string, content any, authorizeEx
 	if location == "" {
 		return "", fmt.Errorf("source must have location or content")
 	}
+	if err := validateLocation(location); err != nil {
+		return "", err
+	}
 	if strings.HasPrefix(location, "exec:") {
 		argv, err := ParseExecAddress(location)
 		if err != nil {
@@ -117,21 +120,35 @@ func artifactText(ctx context.Context, location string, content any, authorizeEx
 		}
 		return resolveCommandArtifact(ctx, argv)
 	}
-	if u, err := url.Parse(location); err == nil && u.Scheme != "" && u.Opaque == "" {
-		switch u.Scheme {
-		case "file":
-			data, rerr := os.ReadFile(u.Path)
-			if rerr != nil {
-				return "", fmt.Errorf("read usage artifact: %w", rerr)
-			}
-			return string(data), nil
-		case "http", "https":
-			return fetchArtifact(ctx, location)
-		default:
-			return "", fmt.Errorf("usage location scheme %q is not dereferenced by this processor (supported: file, http, https, exec addresses)", u.Scheme)
+	u, _ := url.Parse(location) // validated above: absolute, non-opaque
+	switch u.Scheme {
+	case "file":
+		data, rerr := os.ReadFile(u.Path)
+		if rerr != nil {
+			return "", fmt.Errorf("read usage artifact: %w", rerr)
 		}
+		return string(data), nil
+	case "http", "https":
+		return fetchArtifact(ctx, location)
+	default:
+		return "", fmt.Errorf("usage location scheme %q is not dereferenced by this processor (supported: file, http, https, exec addresses)", u.Scheme)
 	}
-	return "", fmt.Errorf("usage location %q is not a document address or exec address (USAGE-D-02): a local artifact is addressed as file:// or embedded as the source's content", location)
+}
+
+// validateLocation checks USAGE-D-02's two address forms offline, without
+// dereferencing: a document address (an absolute URI) or an exec address
+// (`exec:` + a single-space-separated argv vector, no quoting mechanism).
+// A bare filesystem path is a relative reference in form (core OBI-D-05)
+// and is not a conformant location.
+func validateLocation(location string) error {
+	if strings.HasPrefix(location, "exec:") {
+		_, err := ParseExecAddress(location)
+		return err
+	}
+	if u, err := url.Parse(location); err == nil && u.Scheme != "" && u.Opaque == "" {
+		return nil
+	}
+	return fmt.Errorf("usage location %q is not a document address or exec address (USAGE-D-02): a local artifact is addressed as file:// or embedded as the source's content", location)
 }
 
 // fetchArtifact dereferences an http(s) document address, capped at the
