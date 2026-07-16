@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"nhooyr.io/websocket"
 )
 
@@ -72,12 +71,6 @@ type pooledWS struct {
 	// writeMu serializes frame writes from concurrent operations.
 	writeMu sync.Mutex
 
-	// authMu guards firstFrameAuthSent: the first-frame bearer convention
-	// authenticates a connection exactly once, not once per invocation that
-	// reuses the pooled socket.
-	authMu             sync.Mutex
-	firstFrameAuthSent bool
-
 	// Listener registry and close state, guarded by lmu.
 	lmu        sync.Mutex
 	listeners  map[int]*wsListener
@@ -96,23 +89,29 @@ func newWSPool(httpClient *http.Client) *wsPool {
 	}
 }
 
-// wsPoolKey builds a cache key from the server URL, channel address, and a
-// digest of the credential identity the dial would use. Two invocations with
-// different credentials must never share an authenticated socket
-// (cross-tenant credential leak); identical credentials still pool.
-func wsPoolKey(serverURL, address string, doc *document, asyncOp *asyncOperation, bindCtx map[string]any) string {
-	return serverURL + "|" + address + "|" + credentialDigest(serverURL, address, doc, asyncOp, bindCtx)
+// wsPoolKey builds a cache key from the server URL, dial address (ws-binding
+// query included), and a digest of the credential identity the dial would
+// use. A pooled connection is never shared across differing credential
+// identities (ASYNC-P-07: cross-tenant credential leak); identical
+// credentials still pool.
+func wsPoolKey(serverURL, address string, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any, extraHeaders map[string]string) string {
+	return serverURL + "|" + address + "|" + credentialDigest(serverURL, address, doc, secSrv, asyncOp, bindCtx, extraHeaders)
 }
 
 // credentialDigest summarizes the auth-relevant material a dial for this
 // binding would use: the upgrade headers and query credentials that
-// applyHTTPContext places (spec-driven schemes, fallback credentials, context
-// headers/cookies) plus the first-frame bearer token. The digest — not the
-// raw material — goes into the pool key so credentials never sit in map keys.
-func credentialDigest(serverURL, address string, doc *document, asyncOp *asyncOperation, bindCtx map[string]any) string {
+// applyHTTPContext places (spec-driven schemes, fallback credentials,
+// context headers/cookies) plus the resolved ws-binding header values. No
+// credential rides in-band (§9.5), so the upgrade request IS the
+// connection's credential identity. The digest — not the raw material —
+// goes into the pool key so credentials never sit in map keys.
+func credentialDigest(serverURL, address string, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any, extraHeaders map[string]string) string {
 	h := sha256.New()
-	if req, err := http.NewRequest(http.MethodGet, serverURL+"/"+trimLeadingSlash(address), nil); err == nil {
-		applyHTTPContext(req, doc, asyncOp, bindCtx)
+	if req, err := http.NewRequest(http.MethodGet, joinURL(serverURL, address), nil); err == nil {
+		applyHTTPContext(req, doc, secSrv, asyncOp, bindCtx)
+		for name, val := range extraHeaders {
+			req.Header.Set(name, val)
+		}
 		names := make([]string, 0, len(req.Header))
 		for name := range req.Header {
 			names = append(names, name)
@@ -127,25 +126,7 @@ func credentialDigest(serverURL, address string, doc *document, asyncOp *asyncOp
 		h.Write([]byte(req.URL.RawQuery))
 		h.Write([]byte{0})
 	}
-	// The first-frame bearer token authenticates the connection itself even
-	// when no scheme placed it on the upgrade request.
-	h.Write([]byte(openbindings.ContextBearerToken(bindCtx)))
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// sendFirstFrameAuth sends the first-frame auth message exactly once per
-// pooled connection; a reused socket that already authenticated skips it.
-func (pw *pooledWS) sendFirstFrameAuth(ctx context.Context, frame []byte) error {
-	pw.authMu.Lock()
-	defer pw.authMu.Unlock()
-	if pw.firstFrameAuthSent {
-		return nil
-	}
-	if err := pw.send(ctx, frame); err != nil {
-		return err
-	}
-	pw.firstFrameAuthSent = true
-	return nil
 }
 
 // acquire returns a pooled WebSocket connection for the given server URL and
@@ -159,8 +140,8 @@ func (pw *pooledWS) sendFirstFrameAuth(ctx context.Context, frame []byte) error 
 //
 // If multiple goroutines call acquire for the same key concurrently, only one
 // creates the connection while the others wait.
-func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *document, asyncOp *asyncOperation, bindCtx map[string]any, l *wsListener) (*pooledWS, func(), error) {
-	key := wsPoolKey(serverURL, address, doc, asyncOp, bindCtx)
+func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any, extraHeaders map[string]string, l *wsListener) (*pooledWS, func(), error) {
+	key := wsPoolKey(serverURL, address, doc, secSrv, asyncOp, bindCtx, extraHeaders)
 
 	for {
 		p.mu.Lock()
@@ -199,7 +180,7 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *do
 		p.creating[key] = waitCh
 		p.mu.Unlock()
 
-		pw, remove, err := p.createConn(ctx, serverURL, address, key, doc, asyncOp, bindCtx, l)
+		pw, remove, err := p.createConn(ctx, serverURL, address, key, doc, secSrv, asyncOp, bindCtx, extraHeaders, l)
 
 		p.mu.Lock()
 		delete(p.creating, key)
@@ -221,16 +202,20 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *do
 // createConn establishes a new WebSocket connection with auth applied via
 // applyHTTPContext on the upgrade request (headers AND query parameters:
 // spec-driven apiKey credentials placed in the query must reach the dialed
-// URL, because browsers cannot set custom WebSocket upgrade headers), then
-// starts the broadcast reader goroutine.
-func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *document, asyncOp *asyncOperation, bindCtx map[string]any, l *wsListener) (*pooledWS, func(), error) {
-	wsURL := serverURL + "/" + trimLeadingSlash(address)
+// URL, because browsers cannot set custom WebSocket upgrade headers) and
+// the resolved ws-binding header values (§8) set after it, then starts the
+// broadcast reader goroutine.
+func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any, extraHeaders map[string]string, l *wsListener) (*pooledWS, func(), error) {
+	wsURL := joinURL(serverURL, address)
 
 	upgradeReq, err := http.NewRequestWithContext(ctx, http.MethodGet, wsURL, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	applyHTTPContext(upgradeReq, doc, asyncOp, bindCtx)
+	applyHTTPContext(upgradeReq, doc, secSrv, asyncOp, bindCtx)
+	for name, val := range extraHeaders {
+		upgradeReq.Header.Set(name, val)
+	}
 
 	dialOpts := &websocket.DialOptions{
 		HTTPHeader: upgradeReq.Header,
@@ -430,12 +415,4 @@ func (p *wsPool) closeAll() {
 	for _, pw := range conns {
 		pw.closeConn("pool closed")
 	}
-}
-
-// trimLeadingSlash trims a leading slash from a string if present.
-func trimLeadingSlash(s string) string {
-	if len(s) > 0 && s[0] == '/' {
-		return s[1:]
-	}
-	return s
 }

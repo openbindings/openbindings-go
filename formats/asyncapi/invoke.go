@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -36,9 +37,11 @@ import (
 //	send + ws/wss         streaming subscription (bidi-capable): socket
 //	                      frames -> outputs, caller inputs forward as frames
 //
-// All pre-dispatch failures (bad ref, missing server, missing context,
-// missing publish input) are raised via FireError BEFORE any network I/O,
-// per the binding-author contract.
+// All pre-dispatch failures (bad ref, no resolvable server, missing
+// context, an unresolved address or server variable, an unsatisfied
+// ws-binding declaration, an excluded input content family, missing publish
+// input) are raised via FireError BEFORE any network I/O, per the
+// binding-author contract and ASYNC-P-02/-03/-04's pre-dispatch refusals.
 
 const maxResponseBytes = 10 * 1024 * 1024 // 10 MB
 
@@ -71,57 +74,82 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		return
 	}
 
-	serverURL, protocol, err := resolveServer(doc, args.Context)
+	// The binding target is the addressed operation's channel (§8), reached
+	// through a resolved server and expanded address (§9.2).
+	channelName := extractRefName(asyncOp.Channel.Ref)
+	var ch *channel
+	if c, ok := doc.Channels[channelName]; ok {
+		ch = &c
+	}
+
+	target, err := resolveTarget(doc, ch, args.Context)
 	if err != nil {
 		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
 		return
 	}
 
 	// Context negotiation: challenge BEFORE any connection is opened.
-	if details := requiredContext(doc, &asyncOp, serverURL, args.Context); details != nil {
+	if details := requiredContext(doc, &asyncOp, target.SecurityServer, target.ServerURL, args.Context); details != nil {
 		h.FireError(openbindings.NewContextRequiredError(
 			fmt.Sprintf("operation %q requires credentials the context does not provide", opID), details))
 		return
 	}
 
-	channelName := extractRefName(asyncOp.Channel.Ref)
-	address := channelName
-	if channel, hasChannel := doc.Channels[channelName]; hasChannel && channel.Address != "" {
-		address = channel.Address
+	// The address configuration point (ASYNC-P-04): the declared address
+	// with every {name} expression expanded — an absent address or an
+	// unresolved expression is a pre-dispatch refusal, never a guess.
+	addrCfg, err := addressConfiguration(args.Context)
+	if err != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		return
+	}
+	address, err := resolveAddress(ch, channelName, addrCfg)
+	if err != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		return
 	}
 
 	// The complementary perspective (ASYNC-P-02): `receive` means the
 	// described application receives, so invoking PUBLISHES; `send` means
 	// it sends, so invoking SUBSCRIBES.
 	switch asyncOp.Action {
-	case "receive":
-		switch protocol {
-		case "ws", "wss":
-			runWSPublish(ctx, pool, serverURL, address, doc, &asyncOp, args, h)
-		case "http", "https":
-			runUnaryPublish(ctx, client, serverURL, address, doc, &asyncOp, args, h)
-		default:
-			h.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeSourceConfigError,
-				Message: fmt.Sprintf("receive (publish) not supported for protocol %q (supported: http, https, ws, wss)", protocol),
-			})
-		}
-	case "send":
-		switch protocol {
-		case "ws", "wss":
-			runWSSubscribe(ctx, pool, serverURL, address, doc, &asyncOp, args, h)
-		case "http", "https":
-			runSSESubscribe(ctx, client, serverURL, address, doc, &asyncOp, args, h)
-		default:
-			h.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeSourceConfigError,
-				Message: fmt.Sprintf("send (subscribe) not supported for protocol %q (supported: http, https, ws, wss)", protocol),
-			})
-		}
+	case "receive", "send":
 	default:
 		h.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceConfigError,
 			Message: fmt.Sprintf("unknown action %q", asyncOp.Action),
+		})
+		return
+	}
+
+	switch target.Protocol {
+	case "ws", "wss":
+		// The websockets channel binding governs the upgrade request where
+		// it speaks (§8): declared query and header values, supplied like
+		// address parameters, with unsatisfied required declarations a
+		// pre-dispatch refusal.
+		up, uerr := resolveWSUpgrade(ch, channelName, addrCfg.Parameters, openbindings.ContextHeaders(args.Context))
+		if uerr != nil {
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: uerr.Error()})
+			return
+		}
+		dialAddress := mergeQuery(address, up.Query)
+		if asyncOp.Action == "receive" {
+			runWSPublish(ctx, pool, target, dialAddress, up.Headers, doc, ch, &asyncOp, args, h)
+		} else {
+			runWSSubscribe(ctx, pool, target, dialAddress, up.Headers, doc, ch, &asyncOp, args, h)
+		}
+	case "http", "https":
+		if asyncOp.Action == "receive" {
+			runUnaryPublish(ctx, client, target, address, doc, ch, &asyncOp, args, h)
+		} else {
+			runSSESubscribe(ctx, client, target, address, doc, ch, &asyncOp, args, h)
+		}
+	default:
+		// resolveTarget only yields bound protocols; defensive.
+		h.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: fmt.Sprintf("protocol %q is not bound by openbindings.asyncapi@1 (supported: http, https, ws, wss)", target.Protocol),
 		})
 	}
 }
@@ -142,60 +170,19 @@ func parseRef(ref string) (string, error) {
 		if opID == "" {
 			return "", fmt.Errorf("empty operation ID in ref %q", ref)
 		}
+		// Operation keys containing `/` or `~` carry RFC 6901 escaping in
+		// the pointer (ASYNC-D-03): ~1 → /, ~0 → ~, in that order.
+		opID = strings.ReplaceAll(opID, "~1", "/")
+		opID = strings.ReplaceAll(opID, "~0", "~")
 		return opID, nil
 	}
 
 	return ref, nil
 }
 
-func resolveServer(doc *document, ctx map[string]any) (url string, protocol string, err error) {
-	if meta := openbindings.ContextMetadata(ctx); meta != nil {
-		if base, ok := meta["baseURL"].(string); ok && base != "" {
-			proto := "http"
-			if strings.HasPrefix(base, "https://") {
-				proto = "https"
-			} else if strings.HasPrefix(base, "wss://") {
-				proto = "wss"
-			} else if strings.HasPrefix(base, "ws://") {
-				proto = "ws"
-			}
-			return strings.TrimRight(base, "/"), proto, nil
-		}
-	}
-
-	if server := pickDocServer(doc); server != nil {
-		proto := strings.ToLower(server.Protocol)
-		url := proto + "://" + server.Host
-		if server.PathName != "" {
-			url += server.PathName
-		}
-		return strings.TrimRight(url, "/"), proto, nil
-	}
-
-	return "", "", fmt.Errorf("no supported server found (need http, https, ws, or wss protocol)")
-}
-
-// pickDocServer returns the doc server a connection targets: the first
-// (sorted by name) server with a supported protocol, or nil when none
-// exists. Security derivation MUST consult this same server so the
-// requirements always describe the server actually dialed, never some other
-// server that happens to declare security.
-func pickDocServer(doc *document) *server {
-	serverNames := make([]string, 0, len(doc.Servers))
-	for name := range doc.Servers {
-		serverNames = append(serverNames, name)
-	}
-	sort.Strings(serverNames)
-
-	for _, name := range serverNames {
-		server := doc.Servers[name]
-		switch strings.ToLower(server.Protocol) {
-		case "http", "https", "ws", "wss":
-			return &server
-		}
-	}
-	return nil
-}
+// Server and address resolution (the §9.2 configuration points) live in
+// target.go; protocol-bindings honoring in bindings.go; governing
+// content-type resolution in content.go.
 
 // ---------------------------------------------------------------------------
 // Context requirements (CONTEXT_REQUIRED negotiation)
@@ -261,8 +248,13 @@ func unmappedRequirementType(s securityScheme) string {
 // derived type (R2.c ruling) rather than dropped, so the alternative stays
 // discoverable to a runtime with a resolver for it. Side-effect-free;
 // shared by runBinding and PrepareBinding.
-func requiredContext(doc *document, asyncOp *asyncOperation, serverURL string, ctx map[string]any) *openbindings.ContextRequiredDetails {
-	serverReqs := resolveRequirementList(doc, serverSecurityRequirements(doc), serverURL)
+//
+// secSrv is the server whose declared security applies (§9.5): the server
+// the connection actually goes to — or, under a full-URL override, the
+// server the default selection would have targeted (resolveTarget's
+// SecurityServer). nil means the artifact declares no such server.
+func requiredContext(doc *document, asyncOp *asyncOperation, secSrv *server, serverURL string, ctx map[string]any) *openbindings.ContextRequiredDetails {
+	serverReqs := resolveRequirementList(doc, serverSecurityRequirements(secSrv), serverURL)
 	opReqs := resolveRequirementList(doc, operationSecurityRequirements(asyncOp), serverURL)
 
 	var alternatives []openbindings.ContextAlternative
@@ -368,12 +360,14 @@ func absolutizeURL(ref, baseURL string) string {
 	return base.ResolveReference(u).String()
 }
 
-// serverSecurityRequirements returns the security list of the doc server the
-// connection targets (the same server pickDocServer selects), so the
-// requirements always describe the server actually dialed.
-func serverSecurityRequirements(doc *document) []securityRequirement {
-	if server := pickDocServer(doc); server != nil {
-		return server.Security
+// serverSecurityRequirements returns the security list of the server whose
+// declared security applies (§9.5, ASYNC-P-07) — resolveTarget's
+// SecurityServer, so the requirements always describe the server the
+// connection targets (or, under a full-URL override, the server the default
+// selection would have targeted).
+func serverSecurityRequirements(secSrv *server) []securityRequirement {
+	if secSrv != nil {
+		return secSrv.Security
 	}
 	return nil
 }
@@ -457,7 +451,7 @@ func securityRequirementName(req securityRequirement) string {
 // Publish over HTTP (`receive` action): unary POST
 // ---------------------------------------------------------------------------
 
-func runUnaryPublish(ctx context.Context, client *http.Client, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTarget, address string, doc *document, ch *channel, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
 	// Unary: the one input IS the message payload (ASYNC-P-03). A publish
 	// invocation requires an input value — this family defines no empty
 	// message, so absence is a pre-dispatch refusal, never an empty-object
@@ -471,6 +465,15 @@ func runUnaryPublish(ctx context.Context, client *http.Client, serverURL, addres
 		})
 		return
 	}
+
+	// Input encoding follows the governing request-side declaration
+	// (ASYNC-P-03); an excluded declared family refuses BEFORE dispatch.
+	codec, cerr := resolveInputCodec(doc, governingMessages(doc, asyncOp, ch))
+	if cerr != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: cerr.Error()})
+		return
+	}
+
 	first, rerr := h.ReadInput(ctx)
 	if rerr == io.EOF {
 		h.FireError(&openbindings.InvocationError{
@@ -484,21 +487,30 @@ func runUnaryPublish(ctx context.Context, client *http.Client, serverURL, addres
 	}
 	_ = h.CloseInput()
 
-	body, err := json.Marshal(first)
+	body, err := encodeInput(codec, first)
 	if err != nil {
-		h.FireError(openbindings.AsInvocationError(err))
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
 		return
 	}
 
-	url := serverURL + "/" + strings.TrimLeft(address, "/")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	// The request method is the http operation binding's `method` where
+	// declared, else POST (§8, ASYNC-P-02).
+	req, err := http.NewRequestWithContext(ctx, requestMethod(asyncOp, http.MethodPost), joinURL(target.ServerURL, address), bytes.NewReader(body))
 	if err != nil {
 		h.FireError(openbindings.AsInvocationError(err))
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	applyHTTPContext(req, doc, asyncOp, args.Context)
+	if codec.ContentType != "" {
+		req.Header.Set("Content-Type", codec.ContentType)
+	}
+	// Direction-correct Accept: the reply-side governing declaration, when
+	// it names exactly one type (ASYNC-P-05); nothing is advertised when
+	// the declaration names none.
+	replyDecode := decodeContentType(doc, replyGoverningMessages(doc, asyncOp))
+	if replyDecode != "" {
+		req.Header.Set("Accept", replyDecode)
+	}
+	applyHTTPContext(req, doc, target.SecurityServer, asyncOp, args.Context)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -517,12 +529,6 @@ func runUnaryPublish(ctx context.Context, client *http.Client, serverURL, addres
 
 	_ = h.SetHeader(headerMetadata(resp.Header))
 
-	if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusNoContent {
-		// Accepted with no payload: a publish acknowledgment, not an output.
-		h.CloseOutput()
-		return
-	}
-
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		if ctx.Err() != nil {
@@ -540,14 +546,16 @@ func runUnaryPublish(ctx context.Context, client *http.Client, serverURL, addres
 	}
 
 	if len(respBody) == 0 {
+		// An empty body (202/204 acknowledgments included) yields no output
+		// value: an acknowledgment is not a message and emits no value (§8).
 		h.CloseOutput()
 		return
 	}
 
 	status := resp.StatusCode
 	raw := openbindings.RawResult{Status: &status, Body: respBody, Meta: headerMetadata(resp.Header)}
-	output, derr := args.Hooks.DecodeOutput(siteFor(args, serverURL), raw,
-		builtinDecodeFor(replyContentType(doc, asyncOp)))
+	output, derr := args.Hooks.DecodeOutput(siteFor(args, target.ServerURL), raw,
+		builtinDecodeFor(replyDecode))
 	if derr != nil {
 		h.FireError(openbindings.AsInvocationError(derr))
 		return
@@ -569,20 +577,22 @@ func runUnaryPublish(ctx context.Context, client *http.Client, serverURL, addres
 // Subscribe over HTTP (`send` action): SSE
 // ---------------------------------------------------------------------------
 
-func runSSESubscribe(ctx context.Context, client *http.Client, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+func runSSESubscribe(ctx context.Context, client *http.Client, target resolvedTarget, address string, doc *document, ch *channel, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
 	// The described application sends; we subscribe. An SSE subscription
 	// takes no input: input closes on entry, and a late write rejects
 	// non-terminally at the handle (the refusal surface for supplied input).
 	_ = h.CloseInput()
 
-	url := serverURL + "/" + strings.TrimLeft(address, "/")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// The subscription framing is this specification's own pin (§8): the
+	// request is a GET unless the http operation binding declares otherwise
+	// (ASYNC-P-02: bindings are authoritative where they speak).
+	req, err := http.NewRequestWithContext(ctx, requestMethod(asyncOp, http.MethodGet), joinURL(target.ServerURL, address), nil)
 	if err != nil {
 		h.FireError(openbindings.AsInvocationError(err))
 		return
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	applyHTTPContext(req, doc, asyncOp, args.Context)
+	applyHTTPContext(req, doc, target.SecurityServer, asyncOp, args.Context)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -594,20 +604,121 @@ func runSSESubscribe(ctx context.Context, client *http.Client, serverURL, addres
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// Establishment (§8, ASYNC-P-06): a 2xx response bearing the
+	// text/event-stream content type, judged on the FINAL response after
+	// any redirects (the client followed them; resp is final). Anything
+	// else is a failure — non-2xx classifies as the transport status does;
+	// a 2xx without the pinned framing is a protocol error, never a silent
+	// reclassification.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		h.FireError(httpStatusError(resp))
+		return
+	}
+	if ct := resp.Header.Get("Content-Type"); normalizeMediaType(ct) != "text/event-stream" {
+		h.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeProtocol,
+			Message: fmt.Sprintf("SSE subscription establishment requires a text/event-stream response, got content type %q (openbindings.asyncapi@1 §8)", ct),
+		})
 		return
 	}
 
 	_ = h.SetHeader(headerMetadata(resp.Header))
 
+	// One transport, one invocation: transport close COMPLETES the
+	// subscription — reconnection (`retry`, `Last-Event-ID`) is excluded
+	// from revision 1 (§8), so no reconnect is ever attempted here.
+	streamSSE(ctx, resp, decodeContentType(doc, governingMessages(doc, asyncOp, ch)), args, siteFor(args, target.ServerURL), h)
+}
+
+// streamSSE reads an established text/event-stream response per the WHATWG
+// server-sent events processing model — incorporated for EVENT FRAMING ONLY
+// (§8) — emitting one output value per event as units arrive (ASYNC-P-05).
+// Owns the terminal transition: CloseOutput on clean transport close (which
+// COMPLETES the subscription), ERR_STREAM_ERROR on a read failure, a clean
+// return when the caller cancels. decodeCT is the governing declared
+// content type (decode point default; "" = the text lane).
+//
+// Event extraction, per the WHATWG model (mirrors openapi/sse.go — format
+// packages do not share private helpers):
+//
+//   - `data:` lines accumulate; an event's data lines joined with U+000A
+//     form the event's text
+//   - comment-only and empty-`data` events emit nothing
+//   - `event`, `id`, and `retry` are FRAMING: they never enter the output
+//     value; they surface out of band on the per-unit Meta
+//     (x-sse-event / x-sse-id / x-sse-retry). `retry` is never acted on:
+//     reconnection is a revision-1 exclusion
+//   - an incomplete final event (end of stream before its dispatching
+//     blank line) is discarded, never flushed
+func streamSSE(ctx context.Context, resp *http.Response, decodeCT string, args *openbindings.BindingInvocationArgs, site openbindings.InvokeSite, h handle) {
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), sseMaxLineBytes)
-	var dataLines []string
-	var eventBytes int
+	scanner.Split(scanSSELines)
+
+	var (
+		eventName   string
+		lastEventID string
+		dataLines   []string
+		retryMs     int
+		eventBytes  int
+		firstLine   = true
+	)
+
+	status := resp.StatusCode
+	invocationMeta := headerMetadata(resp.Header)
+
+	// dispatch emits the accumulated event; false stops the read loop (the
+	// invocation terminated, or decode failed terminally).
+	dispatch := func() bool {
+		rawData := strings.Join(dataLines, "\n")
+		name := eventName
+		eventName = ""
+		dataLines = nil
+		// Comment-only and empty-data events emit nothing (§8): an event
+		// whose joined data text is empty is discarded.
+		if rawData == "" {
+			return true
+		}
+
+		// Per-unit Meta: invocation-scoped headers merged with this event's
+		// framing fields (out of band — never the output value).
+		meta := make(openbindings.Metadata, len(invocationMeta)+3)
+		for k, v := range invocationMeta {
+			meta[k] = v
+		}
+		if name != "" {
+			meta["x-sse-event"] = []string{name}
+		}
+		if lastEventID != "" {
+			meta["x-sse-id"] = []string{lastEventID}
+		}
+		if retryMs != 0 {
+			meta["x-sse-retry"] = []string{strconv.Itoa(retryMs)}
+			retryMs = 0
+		}
+
+		raw := openbindings.RawResult{Status: &status, Body: []byte(rawData), Meta: meta}
+		ev, derr := args.Hooks.DecodeOutput(site, raw, builtinDecodeFor(decodeCT))
+		if derr != nil {
+			// A decode error mid-stream is terminal; already-emitted
+			// outputs stand (drain-before-terminal).
+			h.FireError(openbindings.AsInvocationError(derr))
+			return false
+		}
+		return h.EmitOutput(ev) == nil
+	}
 
 	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return // cancelled; the handle is already terminal
+		}
 		line := scanner.Text()
+		if firstLine {
+			// One leading U+FEFF BOM is ignored per the WHATWG grammar.
+			line = strings.TrimPrefix(line, "\uFEFF")
+			firstLine = false
+		}
+
 		// The size cap is PER EVENT, not cumulative: a long-lived
 		// subscription legitimately streams more than maxResponseBytes in
 		// total (the same choice connect/streaming.go documents for its
@@ -621,37 +732,56 @@ func runSSESubscribe(ctx context.Context, client *http.Client, serverURL, addres
 			return
 		}
 
-		if strings.HasPrefix(line, "data:") {
-			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-			continue
-		}
-
 		if line == "" {
 			eventBytes = 0
-			if len(dataLines) > 0 {
-				ev, derr := decodeSSEEvent(args, siteFor(args, serverURL), doc, asyncOp, resp, dataLines)
-				dataLines = dataLines[:0]
-				if derr != nil {
-					h.FireError(openbindings.AsInvocationError(derr))
-					return
-				}
-				if h.EmitOutput(ev) != nil {
-					return // invocation terminated while the emit was parked
+			if !dispatch() {
+				return
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue // comment line; ignored per spec
+		}
+
+		var field, value string
+		if i := strings.IndexByte(line, ':'); i >= 0 {
+			field = line[:i]
+			value = line[i+1:]
+			// Exactly one leading space in the value is stripped, per spec.
+			if strings.HasPrefix(value, " ") {
+				value = value[1:]
+			}
+		} else {
+			// A line with no colon is a field with an empty value.
+			field = line
+			value = ""
+		}
+
+		switch field {
+		case "event":
+			eventName = value
+		case "id":
+			// A value containing U+0000 NULL is ignored; otherwise it sets
+			// the last event ID (an empty value resets it), per WHATWG.
+			if !strings.ContainsRune(value, '\x00') {
+				lastEventID = value
+			}
+		case "data":
+			dataLines = append(dataLines, value)
+		case "retry":
+			// ASCII digits only, per WHATWG; recorded on Meta only — never
+			// acted on (reconnection is excluded from revision 1).
+			if value != "" && strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+				if ms, err := strconv.Atoi(value); err == nil {
+					retryMs = ms
 				}
 			}
 		}
+		// Unknown fields are ignored per spec.
 	}
 
-	if len(dataLines) > 0 {
-		ev, derr := decodeSSEEvent(args, siteFor(args, serverURL), doc, asyncOp, resp, dataLines)
-		if derr != nil {
-			h.FireError(openbindings.AsInvocationError(derr))
-			return
-		}
-		if h.EmitOutput(ev) != nil {
-			return
-		}
-	}
+	// End of stream: an incomplete final event (no dispatching blank line)
+	// is discarded per the WHATWG processing model — never flushed.
 
 	if serr := scanner.Err(); serr != nil {
 		if ctx.Err() == nil {
@@ -660,6 +790,36 @@ func runSSESubscribe(ctx context.Context, client *http.Client, serverURL, addres
 		return
 	}
 	h.CloseOutput()
+}
+
+// scanSSELines is a bufio.SplitFunc for the WHATWG event-stream line
+// grammar: lines end with CRLF, a lone LF, or a lone CR. A CR at the end of
+// the buffered data waits for more input (the LF of a CRLF pair may not
+// have arrived yet) unless the stream is at EOF. Mirrors openapi/sse.go.
+func scanSSELines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
+		if data[i] == '\n' {
+			return i + 1, data[:i], nil
+		}
+		// CR: swallow a following LF when it is available.
+		if i+1 < len(data) {
+			if data[i+1] == '\n' {
+				return i + 2, data[:i], nil
+			}
+			return i + 1, data[:i], nil
+		}
+		if atEOF {
+			return i + 1, data[:i], nil
+		}
+		return 0, nil, nil // need more data to decide CR vs CRLF
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -682,11 +842,19 @@ func decodeWSFrame(args *openbindings.BindingInvocationArgs, site openbindings.I
 // Subscribe over WebSocket (`send` action): bidi-capable, on a pooled socket
 // ---------------------------------------------------------------------------
 
-func runWSSubscribe(ctx context.Context, pool *wsPool, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+func runWSSubscribe(ctx context.Context, pool *wsPool, target resolvedTarget, address string, extraHeaders map[string]string, doc *document, ch *channel, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+	// Outputs decode by the operation's own message declarations
+	// (direction-correct decode, ASYNC-P-05); forwarded input frames use the
+	// same governing declaration (§9.1). An excluded declared family refuses
+	// only when an input frame actually arrives — a duplex subscription's
+	// inputs are optional, and the exclusion belongs to the input lane.
+	decodeCT := decodeContentType(doc, governingMessages(doc, asyncOp, ch))
+	codec, codecErr := resolveInputCodec(doc, governingMessages(doc, asyncOp, ch))
+
 	// The subscription is registered inside acquire (before the reader
 	// starts on a fresh dial) so no early server push can be lost.
 	sub := newWSSubscription()
-	pw, unsubscribe, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, args.Context,
+	pw, unsubscribe, err := pool.acquire(ctx, target.ServerURL, address, doc, target.SecurityServer, asyncOp, args.Context, extraHeaders,
 		&wsListener{onFrame: sub.push, onClose: sub.close})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -698,26 +866,11 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, serverURL, address string
 	defer pw.release()
 	defer unsubscribe()
 
-	// First-frame bearer convention: browsers cannot set headers on WebSocket
-	// upgrades, so the token travels in the first message body — but only
-	// when the resolved server's security declares a bearer-family scheme,
-	// and only once per pooled connection (a reused socket has already
-	// authenticated; re-sending would leak the frame into the message stream).
-	if token := openbindings.ContextBearerToken(args.Context); token != "" && declaresBearerScheme(doc, asyncOp) {
-		frame, merr := json.Marshal(map[string]any{"bearerToken": token})
-		if merr != nil {
-			// A failed marshal must not silently skip auth.
-			h.FireError(openbindings.AsInvocationError(merr))
-			return
-		}
-		if werr := pw.sendFirstFrameAuth(ctx, frame); werr != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
-			return
-		}
-	}
+	// NO in-band auth: no credential ever rides a message body or a first
+	// frame under this specification (§9.5, ASYNC-P-07) — credentials ride
+	// the upgrade request. In-band auth conventions (a first-frame bearer
+	// message) are consumer configuration riding this duplex cell as an
+	// ordinary input frame, never a built-in.
 
 	// Inputs -> socket: the duplex lane — caller-supplied input values
 	// forward as frames, and the caller closing input does NOT end the
@@ -730,9 +883,13 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, serverURL, address string
 			if rerr != nil {
 				return
 			}
-			frame, merr := json.Marshal(msg)
+			if codecErr != nil {
+				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: codecErr.Error()})
+				return
+			}
+			frame, merr := encodeInput(codec, msg)
 			if merr != nil {
-				h.FireError(openbindings.AsInvocationError(merr))
+				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: merr.Error()})
 				return
 			}
 			if pw.send(ctx, frame) != nil {
@@ -762,7 +919,7 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, serverURL, address string
 			}
 			return
 		}
-		out, derr := decodeWSFrame(args, siteFor(args, serverURL), messageContentType(doc, asyncOp), res.Frame)
+		out, derr := decodeWSFrame(args, siteFor(args, target.ServerURL), decodeCT, res.Frame)
 		if derr != nil {
 			// A decode error mid-stream is terminal; already-emitted
 			// outputs stand (drain-before-terminal).
@@ -773,22 +930,6 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, serverURL, address string
 			return // invocation terminated while the emit was parked
 		}
 	}
-}
-
-// declaresBearerScheme reports whether the security applicable to the
-// operation (resolved against the same server the connection targets)
-// declares a bearer-family scheme — http bearer, httpBearer, or oauth2, the
-// schemes whose credential is a bearer token. Gates the first-frame bearer
-// convention so the token is never volunteered to servers that do not
-// declare bearer auth.
-func declaresBearerScheme(doc *document, asyncOp *asyncOperation) bool {
-	for _, named := range resolveSecuritySchemes(doc, asyncOp) {
-		switch requirementType(named.Scheme) {
-		case "auth.bearer", "auth.oauth2":
-			return true
-		}
-	}
-	return false
 }
 
 // Backpressure bounds for the undelivered-frame buffer between a pooled
@@ -917,7 +1058,7 @@ func (s *wsSubscription) next(ctx context.Context) (res wsSubResult, ok bool) {
 // Publish over WebSocket (`receive` action): client-streaming, pooled socket
 // ---------------------------------------------------------------------------
 
-func runWSPublish(ctx context.Context, pool *wsPool, serverURL, address string, doc *document, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, address string, extraHeaders map[string]string, doc *document, ch *channel, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
 	// A publish invocation requires input — the input IS the message
 	// (ASYNC-P-03); this family defines no empty message. An operation-layer
 	// call for an operation declaring no input is refused before dispatch
@@ -930,7 +1071,16 @@ func runWSPublish(ctx context.Context, pool *wsPool, serverURL, address string, 
 		return
 	}
 
-	pw, _, err := pool.acquire(ctx, serverURL, address, doc, asyncOp, args.Context, nil)
+	// Input encoding follows the governing request-side declaration
+	// (ASYNC-P-03); an excluded declared family refuses BEFORE dispatch —
+	// before any socket is dialed.
+	codec, cerr := resolveInputCodec(doc, governingMessages(doc, asyncOp, ch))
+	if cerr != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: cerr.Error()})
+		return
+	}
+
+	pw, _, err := pool.acquire(ctx, target.ServerURL, address, doc, target.SecurityServer, asyncOp, args.Context, extraHeaders, nil)
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -963,9 +1113,9 @@ func runWSPublish(ctx context.Context, pool *wsPool, serverURL, address string, 
 		if rerr != nil {
 			return // invocation already terminal (or cancelled)
 		}
-		frame, merr := json.Marshal(msg)
+		frame, merr := encodeInput(codec, msg)
 		if merr != nil {
-			h.FireError(openbindings.AsInvocationError(merr))
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: merr.Error()})
 			return
 		}
 		if werr := pw.send(ctx, frame); werr != nil {
@@ -984,20 +1134,6 @@ func runWSPublish(ctx context.Context, pool *wsPool, serverURL, address string, 
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
-
-// decodeSSEEvent decodes one SSE event through the consultation seam: the
-// builtin follows the DECLARED message contentType (never payload
-// sniffing); Status carries the initial response's status on every unit
-// (real and invocation-scoped, never fabricated).
-func decodeSSEEvent(args *openbindings.BindingInvocationArgs, site openbindings.InvokeSite, doc *document, asyncOp *asyncOperation, resp *http.Response, dataLines []string) (any, error) {
-	status := resp.StatusCode
-	raw := openbindings.RawResult{
-		Status: &status,
-		Body:   []byte(strings.Join(dataLines, "\n")),
-		Meta:   headerMetadata(resp.Header),
-	}
-	return args.Hooks.DecodeOutput(site, raw, builtinDecodeFor(messageContentType(doc, asyncOp)))
-}
 
 // headerMetadata converts HTTP response headers to invocation metadata.
 // Keys are lowercased for cross-SDK portability (the TS SDK's Headers
@@ -1037,10 +1173,11 @@ func httpStatusError(resp *http.Response) *openbindings.InvocationError {
 
 // applyHTTPContext applies opaque binding context (credentials via well-known
 // fields) and execution options (headers, cookies) to an HTTP request, using
-// AsyncAPI securitySchemes for spec-driven credential placement.
-func applyHTTPContext(req *http.Request, doc *document, asyncOp *asyncOperation, bindCtx map[string]any) {
+// AsyncAPI securitySchemes for spec-driven credential placement. secSrv is
+// the server whose declared security applies (§9.5).
+func applyHTTPContext(req *http.Request, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any) {
 	if len(bindCtx) > 0 {
-		applied, queryParams := applyCredentialsViaSecuritySchemes(req, doc, asyncOp, bindCtx)
+		applied, queryParams := applyCredentialsViaSecuritySchemes(req, doc, secSrv, asyncOp, bindCtx)
 		if !applied {
 			applyCredentialsFallback(req, bindCtx)
 		}
@@ -1079,10 +1216,10 @@ type namedSecurityScheme struct {
 // then the operation's list, in declaration order — both apply, the
 // conjunctive reading (ASYNC-P-07) — with a scheme declared on both levels
 // placed once. An entry that fails to resolve (a dangling $ref) is dropped.
-func resolveSecuritySchemes(doc *document, asyncOp *asyncOperation) []namedSecurityScheme {
+func resolveSecuritySchemes(doc *document, secSrv *server, asyncOp *asyncOperation) []namedSecurityScheme {
 	var result []namedSecurityScheme
 	seen := map[string]bool{}
-	for _, requirements := range [][]securityRequirement{serverSecurityRequirements(doc), operationSecurityRequirements(asyncOp)} {
+	for _, requirements := range [][]securityRequirement{serverSecurityRequirements(secSrv), operationSecurityRequirements(asyncOp)} {
 		for _, req := range requirements {
 			if scheme, ok := resolveSecurityRequirement(doc, req); ok {
 				key := scheme.Type + "\x00" + scheme.Scheme + "\x00" + securityRequirementName(req)
@@ -1103,8 +1240,8 @@ func resolveSecuritySchemes(doc *document, asyncOp *asyncOperation) []namedSecur
 // An apiKey/httpApiKey scheme looks up its credential by the
 // securitySchemes key first (R2.d ruling: context.apiKeys[name]), falling
 // back to the single context.apiKey.
-func applyCredentialsViaSecuritySchemes(req *http.Request, doc *document, asyncOp *asyncOperation, bindCtx map[string]any) (applied bool, queryParams url.Values) {
-	schemes := resolveSecuritySchemes(doc, asyncOp)
+func applyCredentialsViaSecuritySchemes(req *http.Request, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any) (applied bool, queryParams url.Values) {
+	schemes := resolveSecuritySchemes(doc, secSrv, asyncOp)
 	if len(schemes) == 0 {
 		return false, nil
 	}
@@ -1192,42 +1329,6 @@ func applyCredentialsFallback(req *http.Request, bindCtx map[string]any) {
 	}
 }
 
-// messageContentType returns the effective content type of the operation's
-// own messages — the declarations governing a subscription's outputs and a
-// publish's input encoding (direction-correct decode, ASYNC-P-05) —
-// falling back to the document default, else "" (the text lane). This is
-// the SPEC answer; it never reads payload bytes.
-func messageContentType(doc *document, asyncOp *asyncOperation) string {
-	if asyncOp == nil {
-		return ""
-	}
-	for _, ref := range asyncOp.Messages {
-		if m := resolveMessageRef(doc, ref); m != nil && m.ContentType != "" {
-			return m.ContentType
-		}
-	}
-	return doc.DefaultContentType
-}
-
-// replyContentType returns the effective content type of the operation's
-// REPLY-side messages — the declarations governing a publish invocation's
-// output: the response decodes by the reply side (direction-correct
-// decode, ASYNC-P-05) — falling back to the document default, else ""
-// (the text lane).
-func replyContentType(doc *document, asyncOp *asyncOperation) string {
-	if asyncOp == nil {
-		return ""
-	}
-	if asyncOp.Reply != nil {
-		for _, ref := range asyncOp.Reply.Messages {
-			if m := resolveMessageRef(doc, ref); m != nil && m.ContentType != "" {
-				return m.ContentType
-			}
-		}
-	}
-	return doc.DefaultContentType
-}
-
 // builtinDecodeFor is the asyncapi builtin decoder: strict JSON when the
 // DECLARED message contentType is application/json or a +json suffix
 // (a declared-JSON payload that fails to parse is a lying producer — a
@@ -1275,10 +1376,7 @@ func decodeTrailer(hooks *openbindings.InvokeHooks, builtinDecode string) openbi
 // +json structured-suffix type; absent/unparseable → NOT JSON. Never
 // sniffed.
 func isJSONContentType(contentType string) bool {
-	mt := strings.ToLower(strings.TrimSpace(contentType))
-	if i := strings.Index(mt, ";"); i >= 0 {
-		mt = strings.TrimSpace(mt[:i])
-	}
+	mt := normalizeMediaType(contentType)
 	return mt == "application/json" || strings.HasSuffix(mt, "+json")
 }
 

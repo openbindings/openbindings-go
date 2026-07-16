@@ -173,11 +173,15 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.Binding
 	if !ok {
 		return nil, nil
 	}
-	serverURL, _, err := resolveServer(doc, args.Context)
+	var ch *channel
+	if c, ok := doc.Channels[extractRefName(asyncOp.Channel.Ref)]; ok {
+		ch = &c
+	}
+	target, err := resolveTarget(doc, ch, args.Context)
 	if err != nil {
 		return nil, nil
 	}
-	return requiredContext(doc, &asyncOp, serverURL, args.Context), nil
+	return requiredContext(doc, &asyncOp, target.SecurityServer, target.ServerURL, args.Context), nil
 }
 
 // Synthesizer handles interface synthesis from AsyncAPI documents.

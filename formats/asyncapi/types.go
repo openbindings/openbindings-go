@@ -19,12 +19,23 @@ type info struct {
 }
 
 type server struct {
-	Host        string                `json:"host" yaml:"host"`
-	Protocol    string                `json:"protocol" yaml:"protocol"`
-	PathName    string                `json:"pathname,omitempty" yaml:"pathname,omitempty"`
-	Description string                `json:"description,omitempty" yaml:"description,omitempty"`
-	Tags        []tag                 `json:"tags,omitempty" yaml:"tags,omitempty"`
-	Security    []securityRequirement `json:"security,omitempty" yaml:"security,omitempty"`
+	Host        string                    `json:"host" yaml:"host"`
+	Protocol    string                    `json:"protocol" yaml:"protocol"`
+	PathName    string                    `json:"pathname,omitempty" yaml:"pathname,omitempty"`
+	Description string                    `json:"description,omitempty" yaml:"description,omitempty"`
+	Variables   map[string]serverVariable `json:"variables,omitempty" yaml:"variables,omitempty"`
+	Tags        []tag                     `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Security    []securityRequirement     `json:"security,omitempty" yaml:"security,omitempty"`
+}
+
+// serverVariable is an AsyncAPI Server Variable Object: a declared `{name}`
+// expression in a server's host or pathname, substituted per ASYNC-P-04
+// (consumer-supplied value, else the declared default; unresolved is a
+// pre-dispatch refusal).
+type serverVariable struct {
+	Enum        []string `json:"enum,omitempty" yaml:"enum,omitempty"`
+	Default     string   `json:"default,omitempty" yaml:"default,omitempty"`
+	Description string   `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
 type channel struct {
@@ -33,7 +44,27 @@ type channel struct {
 	Description string               `json:"description,omitempty" yaml:"description,omitempty"`
 	Servers     []serverRef          `json:"servers,omitempty" yaml:"servers,omitempty"`
 	Parameters  map[string]parameter `json:"parameters,omitempty" yaml:"parameters,omitempty"`
+	Bindings    *channelBindings     `json:"bindings,omitempty" yaml:"bindings,omitempty"`
 	Ref         string               `json:"$ref,omitempty" yaml:"$ref,omitempty"`
+}
+
+// channelBindings models the protocol entries of a channel's `bindings`
+// object this specification incorporates (§8: bindings are authoritative
+// where they speak). Only the websockets binding speaks at channel level in
+// revision 1.
+type channelBindings struct {
+	WS *wsChannelBinding `json:"ws,omitempty" yaml:"ws,omitempty"`
+}
+
+// wsChannelBinding is the AsyncAPI WebSockets channel binding: `method`
+// selects the upgrade request's method, and `query`/`headers` are Schema
+// Objects declaring the upgrade request's query parameters and headers
+// (ASYNC-P-02: values supplied like address parameters, any unsatisfied
+// required declaration a pre-dispatch refusal).
+type wsChannelBinding struct {
+	Method  string         `json:"method,omitempty" yaml:"method,omitempty"`
+	Query   map[string]any `json:"query,omitempty" yaml:"query,omitempty"`
+	Headers map[string]any `json:"headers,omitempty" yaml:"headers,omitempty"`
 }
 
 type asyncOperation struct {
@@ -49,7 +80,22 @@ type asyncOperation struct {
 	Messages    []messageRef          `json:"messages,omitempty" yaml:"messages,omitempty"`
 	Tags        []tag                 `json:"tags,omitempty" yaml:"tags,omitempty"`
 	Reply       *operationReply       `json:"reply,omitempty" yaml:"reply,omitempty"`
+	Bindings    *operationBindings    `json:"bindings,omitempty" yaml:"bindings,omitempty"`
 	Security    []securityRequirement `json:"security,omitempty" yaml:"security,omitempty"`
+}
+
+// operationBindings models the protocol entries of an operation's `bindings`
+// object this specification incorporates. Only the http binding speaks at
+// operation level in revision 1.
+type operationBindings struct {
+	HTTP *httpOperationBinding `json:"http,omitempty" yaml:"http,omitempty"`
+}
+
+// httpOperationBinding is the AsyncAPI HTTP operation binding: its `method`
+// selects the request method (§8 — authoritative where it speaks; where
+// silent, POST for a publish, GET for an SSE subscription).
+type httpOperationBinding struct {
+	Method string `json:"method,omitempty" yaml:"method,omitempty"`
 }
 
 type operationReply struct {

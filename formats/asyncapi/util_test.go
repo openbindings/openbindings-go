@@ -33,49 +33,78 @@ func TestParseRef_Empty(t *testing.T) {
 	}
 }
 
-func TestResolveServer_HTTPServer(t *testing.T) {
+// TestParseRef_RFC6901Escaping verifies ASYNC-D-03: operation keys
+// containing `/` or `~` carry RFC 6901 escaping in the pointer (~1 → /,
+// ~0 → ~).
+func TestParseRef_RFC6901Escaping(t *testing.T) {
+	got, err := parseRef("#/operations/orders~1create~0v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "orders/create~v2" {
+		t.Errorf("parseRef = %q, want %q", got, "orders/create~v2")
+	}
+}
+
+func TestResolveTarget_HTTPServer(t *testing.T) {
 	doc := &document{
 		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https"},
 		},
 	}
-	url, proto, err := resolveServer(doc, nil)
+	target, err := resolveTarget(doc, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proto != "https" {
-		t.Errorf("protocol = %q, want https", proto)
+	if target.Protocol != "https" {
+		t.Errorf("protocol = %q, want https", target.Protocol)
 	}
-	if url != "https://api.example.com" {
-		t.Errorf("url = %q, want https://api.example.com", url)
+	if target.ServerURL != "https://api.example.com" {
+		t.Errorf("url = %q, want https://api.example.com", target.ServerURL)
+	}
+	if target.SecurityServer == nil || target.SecurityServer.Host != "api.example.com" {
+		t.Errorf("SecurityServer = %+v, want the selected server", target.SecurityServer)
 	}
 }
 
-func TestResolveServer_MetadataOverride(t *testing.T) {
+func TestResolveTarget_MetadataOverride(t *testing.T) {
 	doc := &document{
 		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https"},
 		},
 	}
 	ctx := map[string]any{"metadata": map[string]any{"baseURL": "http://localhost:8080"}}
-	url, proto, err := resolveServer(doc, ctx)
+	target, err := resolveTarget(doc, nil, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proto != "http" {
-		t.Errorf("protocol = %q, want http", proto)
+	if target.Protocol != "http" {
+		t.Errorf("protocol = %q, want http", target.Protocol)
 	}
-	if url != "http://localhost:8080" {
-		t.Errorf("url = %q, want http://localhost:8080", url)
+	if target.ServerURL != "http://localhost:8080" {
+		t.Errorf("url = %q, want http://localhost:8080", target.ServerURL)
+	}
+	// Under a full-URL override the declared security of the server the
+	// default selection would have targeted still applies (§9.5).
+	if target.SecurityServer == nil || target.SecurityServer.Host != "api.example.com" {
+		t.Errorf("SecurityServer = %+v, want the default-selected server", target.SecurityServer)
 	}
 }
 
-func TestResolveServer_NoServers(t *testing.T) {
+func TestResolveTarget_NoServers(t *testing.T) {
 	doc := &document{}
-	_, _, err := resolveServer(doc, nil)
+	_, err := resolveTarget(doc, nil, nil)
 	if err == nil {
 		t.Error("expected error for doc with no servers")
 	}
+}
+
+// prodServer returns the doc's "prod" server — the server secureDoc
+// declares, i.e. the one resolveTarget's default selection targets and
+// whose security applies (§9.5).
+func prodServer(doc *document) *server {
+	s := doc.Servers["prod"]
+	return &s
 }
 
 // secureDoc builds a doc whose server declares the named security schemes.
@@ -104,7 +133,7 @@ func TestRequiredContext_BearerRequirement(t *testing.T) {
 	}, "bearer")
 	op := doc.Operations["op"]
 
-	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	details := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
 	if details == nil {
 		t.Fatal("expected CONTEXT_REQUIRED details, got nil")
 	}
@@ -123,7 +152,7 @@ func TestRequiredContext_BearerRequirement(t *testing.T) {
 	}
 
 	// Context carrying the bearer token satisfies the requirement.
-	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t"}); got != nil {
+	if got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", map[string]any{"bearerToken": "t"}); got != nil {
 		t.Errorf("expected nil when context satisfies, got %+v", got)
 	}
 }
@@ -135,7 +164,7 @@ func TestRequiredContext_AlternativesAnyOneSuffices(t *testing.T) {
 	}, "key", "basic")
 	op := doc.Operations["op"]
 
-	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	details := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
 	if details == nil || len(details.Alternatives) != 2 {
 		t.Fatalf("expected 2 alternatives, got %+v", details)
 	}
@@ -148,7 +177,7 @@ func TestRequiredContext_AlternativesAnyOneSuffices(t *testing.T) {
 	}
 
 	// Satisfying any one alternative suffices.
-	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"apiKey": "k-123"}); got != nil {
+	if got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", map[string]any{"apiKey": "k-123"}); got != nil {
 		t.Errorf("apiKey alone should satisfy, got %+v", got)
 	}
 }
@@ -167,7 +196,7 @@ func TestRequiredContext_ServerAndOperationAreConjunctive(t *testing.T) {
 	op := doc.Operations["op"]
 	op.Security = []securityRequirement{{Ref: "#/components/securitySchemes/key"}}
 
-	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	details := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
 	if details == nil || len(details.Alternatives) != 1 {
 		t.Fatalf("expected 1 alternative (1 server entry x 1 op entry), got %+v", details)
 	}
@@ -177,15 +206,15 @@ func TestRequiredContext_ServerAndOperationAreConjunctive(t *testing.T) {
 	}
 
 	// Either credential alone must NOT satisfy the conjunction.
-	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t"}); got == nil {
+	if got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", map[string]any{"bearerToken": "t"}); got == nil {
 		t.Error("bearer alone must not satisfy server AND operation security")
 	}
-	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"apiKeys": map[string]any{"key": "k"}}); got == nil {
+	if got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", map[string]any{"apiKeys": map[string]any{"key": "k"}}); got == nil {
 		t.Error("apiKey alone must not satisfy server AND operation security")
 	}
 	// Both together satisfy.
 	both := map[string]any{"bearerToken": "t", "apiKeys": map[string]any{"key": "k"}}
-	if got := requiredContext(doc, &op, "https://api.example.com", both); got != nil {
+	if got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", both); got != nil {
 		t.Errorf("bearer+apiKey should satisfy the conjunction, got %+v", got)
 	}
 }
@@ -200,14 +229,14 @@ func TestRequiredContext_SameSchemeBothLevelsIsOneRequirement(t *testing.T) {
 	op := doc.Operations["op"]
 	op.Security = []securityRequirement{{Ref: "#/components/securitySchemes/bearer"}}
 
-	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	details := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
 	if details == nil || len(details.Alternatives) != 1 {
 		t.Fatalf("expected 1 alternative, got %+v", details)
 	}
 	if reqs := details.Alternatives[0].Requirements; len(reqs) != 1 || reqs[0].Type != "auth.bearer" {
 		t.Fatalf("expected the shared scheme deduplicated to one requirement, got %+v", reqs)
 	}
-	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t"}); got != nil {
+	if got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", map[string]any{"bearerToken": "t"}); got != nil {
 		t.Errorf("the one bearer credential should satisfy, got %+v", got)
 	}
 }
@@ -234,7 +263,7 @@ func TestRequiredContext_MultipleEntriesAreIndependentAlternatives(t *testing.T)
 	}
 	op := doc.Operations["op"]
 
-	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	details := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
 	if details == nil || len(details.Alternatives) != 2 {
 		t.Fatalf("expected 2 independent alternatives, got %+v", details)
 	}
@@ -245,10 +274,10 @@ func TestRequiredContext_MultipleEntriesAreIndependentAlternatives(t *testing.T)
 	}
 
 	// Either credential alone suffices (pure OR, never a conjunction).
-	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"bearerToken": "t"}); got != nil {
+	if got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", map[string]any{"bearerToken": "t"}); got != nil {
 		t.Errorf("bearer alone should satisfy one of the alternatives, got %+v", got)
 	}
-	if got := requiredContext(doc, &op, "https://api.example.com", map[string]any{"apiKey": "k"}); got != nil {
+	if got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", map[string]any{"apiKey": "k"}); got != nil {
 		t.Errorf("apiKey alone should satisfy one of the alternatives, got %+v", got)
 	}
 }
@@ -270,7 +299,7 @@ func TestRequiredContext_InlineSchemeObject(t *testing.T) {
 	}
 	op := doc.Operations["op"]
 
-	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	details := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
 	if details == nil || len(details.Alternatives) != 1 {
 		t.Fatalf("expected 1 alternative from the inline scheme, got %+v", details)
 	}
@@ -299,7 +328,7 @@ func TestRequiredContext_UnresolvableRefSkipsEntry(t *testing.T) {
 		}},
 	}
 	op := doc.Operations["op"]
-	details := requiredContext(doc, &op, "https://api.example.com", nil)
+	details := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
 	if details == nil || len(details.Alternatives) != 1 {
 		t.Fatalf("expected exactly 1 alternative (the resolvable bearer entry), got %+v", details)
 	}
@@ -309,8 +338,10 @@ func TestRequiredContext_UnresolvableRefSkipsEntry(t *testing.T) {
 }
 
 // TestRequiredContext_DerivesFromConnectionServer verifies the requirements
-// come from the SAME server the connection targets (first sorted supported
-// server), never from another server that happens to declare security.
+// come from the SAME server the connection targets (resolveTarget's
+// SecurityServer: the effective set's first bound-protocol candidate, doc
+// servers in lexicographic key order), never from another server that
+// happens to declare security.
 func TestRequiredContext_DerivesFromConnectionServer(t *testing.T) {
 	doc := &document{
 		Servers: map[string]server{
@@ -325,7 +356,14 @@ func TestRequiredContext_DerivesFromConnectionServer(t *testing.T) {
 		}},
 	}
 	op := doc.Operations["op"]
-	if got := requiredContext(doc, &op, "https://open.example.com", nil); got != nil {
+	target, err := resolveTarget(doc, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.ServerURL != "https://open.example.com" {
+		t.Fatalf("default selection = %q, want the lexicographically first bound server", target.ServerURL)
+	}
+	if got := requiredContext(doc, &op, target.SecurityServer, target.ServerURL, nil); got != nil {
 		t.Errorf("requirements must derive from the connection's server (no security), got %+v", got)
 	}
 }
@@ -336,7 +374,7 @@ func TestRequiredContext_NoDeclaredSecurity(t *testing.T) {
 		Operations: map[string]asyncOperation{"op": {Action: "send"}},
 	}
 	op := doc.Operations["op"]
-	if got := requiredContext(doc, &op, "https://api.example.com", nil); got != nil {
+	if got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil); got != nil {
 		t.Errorf("expected nil without declared security, got %+v", got)
 	}
 }
@@ -353,7 +391,7 @@ func TestRequiredContext_UnknownSchemeSurfaced(t *testing.T) {
 		"custom": {Type: "scramSha256"},
 	}, "custom")
 	op := doc.Operations["op"]
-	got := requiredContext(doc, &op, "https://api.example.com", nil)
+	got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
 	if got == nil {
 		t.Fatal("expected a challenge surfacing the unmapped scheme, got nil")
 	}
@@ -382,7 +420,7 @@ func TestRequiredContext_UnmappedHTTPSchemeSurfaced(t *testing.T) {
 		"digestAuth": {Type: "http", Scheme: "digest"},
 	}, "digestAuth")
 	op := doc.Operations["op"]
-	got := requiredContext(doc, &op, "https://api.example.com", nil)
+	got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
 	if got == nil || len(got.Alternatives) != 1 {
 		t.Fatalf("expected a surfaced challenge, got %+v", got)
 	}
@@ -404,7 +442,7 @@ func TestRequiredContext_NameFromRefVsInline(t *testing.T) {
 		"bearer": {Type: "http", Scheme: "bearer"},
 	}, "bearer")
 	op := doc.Operations["op"]
-	got := requiredContext(doc, &op, "https://api.example.com", nil)
+	got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
 	if got == nil || len(got.Alternatives) != 1 {
 		t.Fatalf("expected 1 alternative, got %+v", got)
 	}
@@ -421,7 +459,7 @@ func TestRequiredContext_NameFromRefVsInline(t *testing.T) {
 		Operations: map[string]asyncOperation{"op": {Action: "send"}},
 	}
 	inlineOp := inlineDoc.Operations["op"]
-	gotInline := requiredContext(inlineDoc, &inlineOp, "https://api.example.com", nil)
+	gotInline := requiredContext(inlineDoc, &inlineOp, prodServer(inlineDoc), "https://api.example.com", nil)
 	if gotInline == nil || len(gotInline.Alternatives) != 1 {
 		t.Fatalf("expected 1 alternative, got %+v", gotInline)
 	}
@@ -555,10 +593,11 @@ func TestOAuth2Requirement_NoFlows(t *testing.T) {
 }
 
 // AsyncAPI 3.0: a message that omits contentType takes the document's
-// defaultContentType — still the declared lane, never payload sniffing.
+// defaultContentType (the per-message EFFECTIVE content-type rule,
+// ASYNC-P-05) — still the declared lane, never payload sniffing.
 // Regression: the model didn't parse defaultContentType, so JSON events
 // from documents relying on it decoded as strings and failed OBI-T-08.
-func TestMessageContentType_FallsBackToDocumentDefault(t *testing.T) {
+func TestEffectiveContentType_FallsBackToDocumentDefault(t *testing.T) {
 	doc := &document{
 		AsyncAPI:           "3.0.0",
 		DefaultContentType: "application/json",
@@ -570,20 +609,20 @@ func TestMessageContentType_FallsBackToDocumentDefault(t *testing.T) {
 		},
 	}
 	op := doc.Operations["sub"]
-	if got := messageContentType(doc, &op); got != "application/json" {
-		t.Errorf("messageContentType = %q, want the document default", got)
+	if got := decodeContentType(doc, governingMessages(doc, &op, nil)); got != "application/json" {
+		t.Errorf("decodeContentType = %q, want the document default", got)
 	}
 	// A per-message declaration still wins over the default.
 	doc.Components.Messages["plain"] = message{Name: "plain", ContentType: "text/plain"}
-	if got := messageContentType(doc, &op); got != "text/plain" {
-		t.Errorf("messageContentType = %q, want the per-message declaration", got)
+	if got := decodeContentType(doc, governingMessages(doc, &op, nil)); got != "text/plain" {
+		t.Errorf("decodeContentType = %q, want the per-message declaration", got)
 	}
 }
 
 // Direction-correct decode (ASYNC-P-05): a publish invocation's output (the
 // response) decodes by the REPLY-side declarations, never the operation's
 // own request-side messages.
-func TestReplyContentType_UsesReplySideDeclarations(t *testing.T) {
+func TestDecodeContentType_UsesReplySideDeclarations(t *testing.T) {
 	doc := &document{
 		AsyncAPI: "3.0.0",
 		Operations: map[string]asyncOperation{
@@ -601,10 +640,122 @@ func TestReplyContentType_UsesReplySideDeclarations(t *testing.T) {
 		},
 	}
 	op := doc.Operations["pub"]
-	if got := replyContentType(doc, &op); got != "application/json" {
-		t.Errorf("replyContentType = %q, want the reply-side declaration", got)
+	if got := decodeContentType(doc, replyGoverningMessages(doc, &op)); got != "application/json" {
+		t.Errorf("reply decode type = %q, want the reply-side declaration", got)
 	}
-	if got := messageContentType(doc, &op); got != "text/plain" {
-		t.Errorf("messageContentType = %q, want the request-side declaration", got)
+	if got := decodeContentType(doc, governingMessages(doc, &op, nil)); got != "text/plain" {
+		t.Errorf("request-side type = %q, want the request-side declaration", got)
+	}
+}
+
+// TestDistinctEffectiveTypes_AmbiguityFallsToTextLane pins §9.3's conflict
+// rule (ASYNC-P-05): a governing set resolving to MORE than one distinct
+// effective content type is ambiguous, and decode falls to the text lane
+// ("") rather than guessing — a mixed declared/undeclared set included.
+func TestDistinctEffectiveTypes_AmbiguityFallsToTextLane(t *testing.T) {
+	doc := &document{
+		AsyncAPI: "3.0.0",
+		Operations: map[string]asyncOperation{
+			"sub": {Action: "send", Messages: []messageRef{
+				{Ref: "#/components/messages/a"},
+				{Ref: "#/components/messages/b"},
+			}},
+		},
+		Components: &components{
+			Messages: map[string]message{
+				"a": {Name: "a", ContentType: "application/json"},
+				"b": {Name: "b", ContentType: "text/plain"},
+			},
+		},
+	}
+	op := doc.Operations["sub"]
+	if got := decodeContentType(doc, governingMessages(doc, &op, nil)); got != "" {
+		t.Errorf("two distinct effective types must fall to the text lane, got %q", got)
+	}
+
+	// A charset parameter never makes a type distinct.
+	doc.Components.Messages["b"] = message{Name: "b", ContentType: "application/json; charset=utf-8"}
+	if got := decodeContentType(doc, governingMessages(doc, &op, nil)); got != "application/json" {
+		t.Errorf("parameter-only variation is ONE distinct type, got %q", got)
+	}
+
+	// A declared message alongside an undeclared one (no contentType, no
+	// document default) is a mixed set: ambiguous, text lane.
+	doc.Components.Messages["b"] = message{Name: "b"}
+	if got := decodeContentType(doc, governingMessages(doc, &op, nil)); got != "" {
+		t.Errorf("mixed declared/undeclared set must fall to the text lane, got %q", got)
+	}
+}
+
+// TestGoverningMessages_ChannelFallback verifies the AsyncAPI rule: an
+// operation that declares no `messages` supports ALL the channel's
+// messages — the channel's set governs its lanes.
+func TestGoverningMessages_ChannelFallback(t *testing.T) {
+	doc := &document{AsyncAPI: "3.0.0"}
+	ch := &channel{Messages: map[string]message{
+		"one": {Name: "one", ContentType: "application/json"},
+		"two": {Name: "two", ContentType: "application/json"},
+	}}
+	op := &asyncOperation{Action: "send"}
+	msgs := governingMessages(doc, op, ch)
+	if len(msgs) != 2 {
+		t.Fatalf("expected the channel's 2 messages, got %d", len(msgs))
+	}
+	if got := decodeContentType(doc, msgs); got != "application/json" {
+		t.Errorf("decodeContentType = %q, want application/json", got)
+	}
+}
+
+// TestResolveInputCodec pins §9.1 (ASYNC-P-03): JSON family → JSON; no
+// declaration → JSON (the specification's default); text family → the raw
+// text lane; ambiguity → the text lane; any other declared family is an @1
+// exclusion refused before dispatch.
+func TestResolveInputCodec(t *testing.T) {
+	mk := func(cts ...string) (*document, []message) {
+		doc := &document{AsyncAPI: "3.0.0"}
+		msgs := make([]message, 0, len(cts))
+		for i, ct := range cts {
+			msgs = append(msgs, message{Name: string(rune('a' + i)), ContentType: ct})
+		}
+		return doc, msgs
+	}
+
+	doc, msgs := mk("application/json")
+	codec, err := resolveInputCodec(doc, msgs)
+	if err != nil || !codec.JSON || codec.ContentType != "application/json" {
+		t.Errorf("json family: codec = %+v, err = %v", codec, err)
+	}
+
+	doc, msgs = mk()
+	codec, err = resolveInputCodec(doc, msgs)
+	if err != nil || !codec.JSON || codec.ContentType != "application/json" {
+		t.Errorf("no declaration: codec = %+v, err = %v (JSON is the spec default)", codec, err)
+	}
+
+	doc, msgs = mk("text/plain")
+	codec, err = resolveInputCodec(doc, msgs)
+	if err != nil || codec.JSON || codec.ContentType != "text/plain" {
+		t.Errorf("text family: codec = %+v, err = %v", codec, err)
+	}
+	if _, verr := encodeInput(codec, map[string]any{"not": "a string"}); verr == nil {
+		t.Error("text lane must refuse a non-string value")
+	}
+	if b, verr := encodeInput(codec, "raw text"); verr != nil || string(b) != "raw text" {
+		t.Errorf("text lane must send a string raw, got %q err %v", b, verr)
+	}
+
+	doc, msgs = mk("application/json", "text/plain")
+	codec, err = resolveInputCodec(doc, msgs)
+	if err != nil || codec.JSON || codec.ContentType != "" {
+		t.Errorf("ambiguous set: codec = %+v, err = %v (text lane, no one declared type)", codec, err)
+	}
+
+	doc, msgs = mk("avro/binary")
+	if _, err = resolveInputCodec(doc, msgs); err == nil {
+		t.Error("an excluded declared family (avro) must refuse before dispatch")
+	}
+	doc, msgs = mk("application/octet-stream")
+	if _, err = resolveInputCodec(doc, msgs); err == nil {
+		t.Error("an excluded declared family (binary) must refuse before dispatch")
 	}
 }
