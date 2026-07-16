@@ -1,6 +1,7 @@
 package openbindings
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -56,7 +57,14 @@ func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityI
 	}
 
 	var issues []CompatibilityIssue
-	norm := &schemaprofile.Normalizer{}
+
+	// Each side's schemas resolve $ref pointers (e.g. "#/schemas/Foo")
+	// against their OWN containing document, so a required and a provided
+	// interface that both use the schemas section compare correctly. One
+	// shared normalizer would resolve both sides' refs against a single
+	// root — wrong document for one side, RefError for both when unrooted.
+	reqNorm := &schemaprofile.Normalizer{Root: interfaceDocView(required)}
+	provNorm := &schemaprofile.Normalizer{Root: interfaceDocView(provided)}
 
 	opKeys := make([]string, 0, len(required.Operations))
 	for k := range required.Operations {
@@ -89,7 +97,7 @@ func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityI
 					Kind:      CompatibilityOutputIncompatible,
 					Detail:    "output schema check failed: schema is not a JSON Schema object or boolean",
 				})
-			} else if compatible, reason, err := norm.OutputCompatible(reqOut, provOut); err != nil {
+			} else if compatible, reason, err := normalizedCompatible(reqNorm, provNorm, reqOut, provOut, false); err != nil {
 				issues = append(issues, CompatibilityIssue{
 					Operation: opKey,
 					Kind:      CompatibilityOutputIncompatible,
@@ -117,7 +125,7 @@ func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityI
 					Kind:      CompatibilityInputIncompatible,
 					Detail:    "input schema check failed: schema is not a JSON Schema object or boolean",
 				})
-			} else if compatible, reason, err := norm.InputCompatible(reqIn, provIn); err != nil {
+			} else if compatible, reason, err := normalizedCompatible(reqNorm, provNorm, reqIn, provIn, true); err != nil {
 				issues = append(issues, CompatibilityIssue{
 					Operation: opKey,
 					Kind:      CompatibilityInputIncompatible,
@@ -138,6 +146,41 @@ func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityI
 	}
 
 	return issues
+}
+
+// normalizedCompatible normalizes each schema against its own side's rooted
+// normalizer, then runs the directional check on the results (the TypeScript
+// SDK's checkInterfaceCompatibility dance). Normalization errors surface as
+// the check's error.
+func normalizedCompatible(reqNorm, provNorm *schemaprofile.Normalizer, req, prov map[string]any, isInput bool) (bool, string, error) {
+	reqN, err := reqNorm.Normalize(req)
+	if err != nil {
+		return false, "", err
+	}
+	provN, err := provNorm.Normalize(prov)
+	if err != nil {
+		return false, "", err
+	}
+	if isInput {
+		return schemaprofile.InputCompatible(reqN, provN)
+	}
+	return schemaprofile.OutputCompatible(reqN, provN)
+}
+
+// interfaceDocView renders an Interface as its plain decoded-JSON document
+// view (the shape JSON Pointer fragments resolve against). Returns nil when
+// the interface cannot round-trip, leaving fragment refs unresolvable —
+// which then surfaces as the schema check's RefError.
+func interfaceDocView(i *Interface) any {
+	data, err := json.Marshal(i)
+	if err != nil {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return nil
+	}
+	return v
 }
 
 // IsOBInterface returns true if the given map looks like a valid OpenBindings

@@ -124,7 +124,7 @@ import "google/protobuf/duration.proto";
 service Clock { rpc Wait(google.protobuf.Duration) returns (WaitReply); }
 message WaitReply { string status = 1; }
 `
-	disc, err := discoverFromContent(context.Background(), proto)
+	disc, err := discoverFromContent(context.Background(), openbindings.TextContent(proto))
 	if err != nil {
 		t.Fatalf("google/protobuf/* imports must resolve from bundled copies (§3): %v", err)
 	}
@@ -140,7 +140,7 @@ import "corp/shared.proto";
 service S { rpc Do(Req) returns (Req); }
 message Req { string id = 1; }
 `
-	_, err := discoverFromContent(context.Background(), proto)
+	_, err := discoverFromContent(context.Background(), openbindings.TextContent(proto))
 	if err == nil {
 		t.Fatal("a non-google/protobuf import must refuse loudly at load (§3)")
 	}
@@ -184,7 +184,7 @@ func TestConformance_D01_DescriptorSetJSON_InvokesEndToEnd(t *testing.T) {
 		Source: openbindings.InvocationSource{
 			BindingSpec: BindingSpec,
 			Location:    bufconnLocation,
-			Content:     descriptorSetJSON(t, durationFDP(), testItemsFDP()),
+			Content:     mustContent(descriptorSetJSON(t, durationFDP(), testItemsFDP())),
 		},
 		Ref: "testpkg.ItemService/GetItem",
 	})
@@ -203,7 +203,7 @@ func TestConformance_D01_DescriptorSetJSON_InvokesEndToEnd(t *testing.T) {
 func TestConformance_D01_DescriptorSetJSON_UnknownMemberRefused(t *testing.T) {
 	content := descriptorSetJSON(t, durationFDP(), testItemsFDP())
 	content["sizzle"] = true
-	_, err := discoverFromContent(context.Background(), content)
+	_, err := discoverFromContent(context.Background(), mustContent(content))
 	if err == nil {
 		t.Fatal("unknown members in descriptor-set content must refuse loudly (§3)")
 	}
@@ -218,7 +218,7 @@ func TestConformance_D01_DescriptorSetJSON_BracketKeyedExtensionRefused(t *testi
 	// into the first file's options.
 	file0 := content["file"].([]any)[0].(map[string]any)
 	file0["options"] = map[string]any{"[corp.build_tag]": "v1"}
-	_, err := discoverFromContent(context.Background(), content)
+	_, err := discoverFromContent(context.Background(), mustContent(content))
 	if err == nil {
 		t.Fatal("bracket-keyed extension members must refuse loudly (§3): a conformant pin carries option-stripped descriptors")
 	}
@@ -232,7 +232,7 @@ func TestConformance_D01_DescriptorSetJSON_BracketKeyedExtensionRefused(t *testi
 func TestConformance_D01_DescriptorSetJSON_MissingDependencyRefused(t *testing.T) {
 	// The test schema imports google/protobuf/duration.proto; a set carried
 	// without it is not the compiled, self-contained closure §3 pins.
-	_, err := discoverFromContent(context.Background(), descriptorSetJSON(t, testItemsFDP()))
+	_, err := discoverFromContent(context.Background(), mustContent(descriptorSetJSON(t, testItemsFDP())))
 	if err == nil {
 		t.Fatal("a descriptor set missing a dependency must refuse loudly (§3: self-contained closure)")
 	}
@@ -244,7 +244,7 @@ func TestConformance_D01_DescriptorSetJSON_MissingDependencyRefused(t *testing.T
 // No other JSON type or shape is an accepted content value (§5).
 func TestConformance_D01_OtherContentTypesRefused(t *testing.T) {
 	for _, content := range []any{42.0, true, []any{"x"}} {
-		_, err := discoverFromContent(context.Background(), content)
+		_, err := discoverFromContent(context.Background(), mustContent(content))
 		if err == nil {
 			t.Errorf("content %T must refuse (GRPC-D-01: string, object, or absent)", content)
 		}
@@ -265,7 +265,7 @@ message Menu { string items = 1; }
 	if err != nil {
 		t.Fatalf("a packageless ref is legal (GRPC-D-03): %v", err)
 	}
-	disc, err := discoverFromContent(context.Background(), proto)
+	disc, err := discoverFromContent(context.Background(), openbindings.TextContent(proto))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ message PingMsg { string msg = 1; }
 		inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
 			// The location is a valid form but unreachable: the refusal must
 			// fire from offline resolution, never a dial.
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "203.0.113.9:50051", Content: proto},
+			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "203.0.113.9:50051", Content: openbindings.TextContent(proto)},
 			Ref:    ref,
 		})
 		_, terr := drainInvocation(t, inv)
@@ -521,7 +521,7 @@ func TestConformance_P03_WellKnownTypeCanonicalFormRequest(t *testing.T) {
 // methodFromContent compiles embedded content and resolves one method.
 func methodFromContent(t *testing.T, content any, svcName, methodName string) protoreflect.MethodDescriptor {
 	t.Helper()
-	disc, err := discoverFromContent(context.Background(), content)
+	disc, err := discoverFromContent(context.Background(), mustContent(content))
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -680,7 +680,7 @@ service S { rpc Do(Req) returns (Resp); }
 	defer invoker.Close()
 
 	inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "203.0.113.9:50051", Content: proto},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "203.0.113.9:50051", Content: openbindings.TextContent(proto)},
 		Ref:    "p2.S/Do",
 	})
 	_, terr := drainInvocation(t, inv)
@@ -718,7 +718,7 @@ func TestConformance_SchemaRange_InertCarriageNotRefused(t *testing.T) {
 		Source: openbindings.InvocationSource{
 			BindingSpec: BindingSpec,
 			Location:    bufconnLocation,
-			Content:     descriptorSetJSON(t, durationFDP(), testItemsFDP(), dirty),
+			Content:     mustContent(descriptorSetJSON(t, durationFDP(), testItemsFDP(), dirty)),
 		},
 		Ref: "testpkg.ItemService/GetItem",
 	})
@@ -823,4 +823,14 @@ func TestConformance_P07_ValidMetadataKeysPlace(t *testing.T) {
 			t.Errorf("key %q must be placeable: %v", key, err)
 		}
 	}
+}
+
+// mustContent marshals a Go value into the raw-JSON content carriage
+// (Source.Content presence semantics: raw JSON, nil = absent).
+func mustContent(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }

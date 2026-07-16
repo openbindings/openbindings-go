@@ -8,6 +8,7 @@ package asyncapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -82,7 +83,7 @@ func (e *Invoker) Close() error {
 
 // cachedLoadDocument loads an AsyncAPI doc, caching by location within a process.
 // When content is provided, the cache is bypassed and updated with the fresh parse.
-func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, content any) (*document, error) {
+func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, content json.RawMessage) (*document, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
 		if doc, ok := e.docCache[location]; ok {
@@ -239,7 +240,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 			if cerr != nil {
 				return nil, fmt.Errorf("embed source content: %w", cerr)
 			}
-			entry.Content = string(data)
+			entry.Content = openbindings.TextContent(string(data))
 			iface.Sources[DefaultSourceName] = entry
 		}
 	}

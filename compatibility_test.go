@@ -483,3 +483,70 @@ func TestIsOBInterface(t *testing.T) {
 		})
 	}
 }
+
+// Schema $refs resolve against each interface's OWN document: the required
+// and provided sides both point through their schemas section (different
+// names per side, so a shared root could not resolve both), and the
+// comparison sees the dereferenced shapes. Regression: an unrooted shared
+// normalizer turned every "#/schemas/..." ref into a RefError and reported
+// the pair incompatible.
+func TestCheckInterfaceCompatibility_SchemaRefsResolvePerSide(t *testing.T) {
+	required := &Interface{
+		OpenBindings: "0.2.0",
+		Schemas: map[string]JSONSchema{
+			"ReqStatus": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"status": map[string]any{"type": "string"},
+				},
+				"required": []any{"status"},
+			},
+			"ReqInput": map[string]any{"type": "string"},
+		},
+		Operations: map[string]Operation{
+			"getStatus": {
+				Input:  map[string]any{"$ref": "#/schemas/ReqInput"},
+				Output: map[string]any{"$ref": "#/schemas/ReqStatus"},
+			},
+		},
+	}
+	provided := &Interface{
+		OpenBindings: "0.2.0",
+		Schemas: map[string]JSONSchema{
+			"ProvStatus": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"status": map[string]any{"type": "string"},
+				},
+				"required": []any{"status"},
+			},
+			"ProvInput": map[string]any{"type": "string"},
+		},
+		Operations: map[string]Operation{
+			"getStatus": {
+				Input:  map[string]any{"$ref": "#/schemas/ProvInput"},
+				Output: map[string]any{"$ref": "#/schemas/ProvStatus"},
+			},
+		},
+	}
+
+	issues := CheckInterfaceCompatibility(required, provided)
+	if len(issues) != 0 {
+		t.Fatalf("expected no issues (per-side $ref resolution), got %d: %+v", len(issues), issues)
+	}
+
+	// The refs must actually DEREFERENCE (a check that silently skipped
+	// unresolvable refs would also report zero issues): an incompatible
+	// shape behind the provided ref is caught.
+	provided.Schemas["ProvStatus"] = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"status": map[string]any{"type": "number"},
+		},
+		"required": []any{"status"},
+	}
+	issues = CheckInterfaceCompatibility(required, provided)
+	if len(issues) != 1 || issues[0].Kind != CompatibilityOutputIncompatible {
+		t.Fatalf("expected one output_incompatible issue through the refs, got %+v", issues)
+	}
+}

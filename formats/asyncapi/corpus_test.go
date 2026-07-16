@@ -129,11 +129,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 		// content branch performs no I/O (the nil client is never used).
 		var doc *document
 		if src.Content != nil {
-			var content any
-			if err := json.Unmarshal(src.Content, &content); err != nil {
-				t.Fatalf("fixture content does not parse: %v", err)
-			}
-			d, err := loadDocument(context.Background(), nil, "", content)
+			d, err := loadDocument(context.Background(), nil, "", src.Content)
 			if err != nil {
 				return err
 			}

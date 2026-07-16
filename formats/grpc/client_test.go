@@ -49,7 +49,7 @@ message PingMsg { string msg = 1; }
 
 	// No location, no configuration.target: refuse, naming both remedies.
 	h := inv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: proto},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
 		Ref:    "tiny.Tiny/Ping",
 	})
 	_, err := openbindings.Single(context.Background(), h.Outputs())
@@ -72,7 +72,7 @@ message PingMsg { string msg = 1; }
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	h2 := inv.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: proto},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
 		Ref:     "tiny.Tiny/Ping",
 		Context: map[string]any{"configuration": map[string]any{"target": "127.0.0.1:1"}},
 	})

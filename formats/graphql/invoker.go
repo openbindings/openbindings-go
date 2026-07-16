@@ -370,7 +370,7 @@ func introspectionCacheKey(endpoint string) string {
 // parseIntrospectionContent parses inline Source.Content as a GraphQL
 // introspection result. Accepts the __schema object directly or wrapped
 // in {"data": {"__schema": ...}} (the standard introspection response shape).
-func parseIntrospectionContent(content any) (*introspectionSchema, error) {
+func parseIntrospectionContent(content json.RawMessage) (*introspectionSchema, error) {
 	raw, err := openbindings.ContentToBytes(content)
 	if err != nil {
 		return nil, fmt.Errorf("convert content: %w", err)

@@ -16,7 +16,7 @@ cmd "farewell" help="Say goodbye"
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ cmd "config" {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ arg "<pattern>" help="Search pattern"
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +113,7 @@ cmd "mike" help="M"
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ cmd "farewell" help="Say goodbye"
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ cmd "config" subcommand_required=#true {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestInspectSource_EmptySpec(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)

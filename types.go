@@ -265,17 +265,28 @@ type Source struct {
 	// range-matched).
 	BindingSpec string `json:"bindingSpec"`
 	Location    string `json:"location,omitempty"`
-	Content     any    `json:"content,omitempty"`
-	Description string `json:"description,omitempty"`
+	// Content is the embedded source material: ANY JSON value, carried as
+	// raw JSON because member PRESENCE is distinct from value (core §7) —
+	// nil means the member is absent, a `null` literal is a PRESENT null.
+	// The core carries content opaquely; the governing binding-spec family
+	// interprets it per its own pins (see ContentToBytes).
+	Content     json.RawMessage `json:"content,omitempty"`
+	Description string          `json:"description,omitempty"`
 
 	LosslessFields
 }
 
+// ContentPresent reports whether the content member is present at all —
+// including a present `null` (distinct from an absent member, core §7).
+func (s Source) ContentPresent() bool {
+	return s.Content != nil
+}
+
 type sourceWire struct {
-	BindingSpec string `json:"bindingSpec"`
-	Location    string `json:"location,omitempty"`
-	Content     any    `json:"content,omitempty"`
-	Description string `json:"description,omitempty"`
+	BindingSpec string          `json:"bindingSpec"`
+	Location    string          `json:"location,omitempty"`
+	Content     json.RawMessage `json:"content,omitempty"`
+	Description string          `json:"description,omitempty"`
 }
 
 func (s *Source) UnmarshalJSON(b []byte) error {

@@ -23,7 +23,7 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: protoContent,
+		Content: openbindings.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: protoContent,
+		Content: openbindings.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -91,13 +91,13 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: protoContent,
+		Content: openbindings.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	disc, err := discoverFromProto(context.Background(), "", protoContent)
+	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(protoContent))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: protoContent,
+		Content: openbindings.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: protoContent,
+		Content: openbindings.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)

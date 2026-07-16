@@ -125,7 +125,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 // declarations and surfaced via CONTEXT_REQUIRED negotiation (see
 // requiredContext in invoke.go and Invoker.PrepareBinding).
 
-func loadDocument(ctx context.Context, client *http.Client, location string, content any) (*document, error) {
+func loadDocument(ctx context.Context, client *http.Client, location string, content json.RawMessage) (*document, error) {
 	data, err := sourceToBytes(ctx, client, location, content)
 	if err != nil {
 		return nil, err
@@ -191,7 +191,7 @@ func validateDocumentAddress(location string) error {
 	return nil
 }
 
-func sourceToBytes(ctx context.Context, client *http.Client, location string, content any) ([]byte, error) {
+func sourceToBytes(ctx context.Context, client *http.Client, location string, content json.RawMessage) ([]byte, error) {
 	if content != nil {
 		return openbindings.ContentToBytes(content)
 	}

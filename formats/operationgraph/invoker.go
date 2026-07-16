@@ -200,7 +200,9 @@ func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocatio
 // loadDocument loads and parses an operation graph source document into a
 // generic JSON value (the host document's shape is unconstrained by the
 // format). Parsed documents are cached by location when content is absent.
-func (e *Invoker) loadDocument(ctx context.Context, location string, content any) (any, error) {
+// Content arrives as raw JSON (a JSON string is the document's text, any
+// other present value is the document itself — ContentToBytes' lanes).
+func (e *Invoker) loadDocument(ctx context.Context, location string, content json.RawMessage) (any, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
 		if doc, ok := e.docCache[location]; ok {
@@ -211,20 +213,11 @@ func (e *Invoker) loadDocument(ctx context.Context, location string, content any
 	}
 
 	var data []byte
-	switch v := content.(type) {
-	case []byte:
-		data = v
-	case string:
-		data = []byte(v)
-	case json.RawMessage:
-		data = []byte(v)
-	default:
-		if content != nil {
-			var err error
-			data, err = json.Marshal(content)
-			if err != nil {
-				return nil, fmt.Errorf("marshal content: %w", err)
-			}
+	if content != nil {
+		var err error
+		data, err = openbindings.ContentToBytes(content)
+		if err != nil {
+			return nil, fmt.Errorf("decode content: %w", err)
 		}
 	}
 

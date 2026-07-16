@@ -339,7 +339,7 @@ func TestIntegrationSourceContent(t *testing.T) {
 	})
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL, Content: string(schemaJSON)},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL, Content: openbindings.TextContent(string(schemaJSON))},
 		Ref:    "Query/users",
 	})
 	out, ierr := driveSingle(t, call, nil)
@@ -976,7 +976,7 @@ func TestNewInvokerWithClient(t *testing.T) {
 
 	schemaJSON, _ := json.Marshal(map[string]any{"data": map[string]any{"__schema": testSchema}})
 	call := NewInvokerWithClient(custom).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: "http://example.test/graphql", Content: string(schemaJSON)},
+		Source: openbindings.InvocationSource{BindingSpec: "graphql", Location: "http://example.test/graphql", Content: openbindings.TextContent(string(schemaJSON))},
 		Ref:    "Query/users",
 	})
 	out, ierr := driveSingle(t, call, nil)

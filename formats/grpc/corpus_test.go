@@ -128,11 +128,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 		// FileDescriptorSet — compiled/validated offline.
 		var disc *discovery
 		if src.Content != nil {
-			var content any
-			if err := json.Unmarshal(src.Content, &content); err != nil {
-				t.Fatalf("fixture content does not parse: %v", err)
-			}
-			d, err := discoverFromContent(context.Background(), content)
+			d, err := discoverFromContent(context.Background(), src.Content)
 			if err != nil {
 				return err
 			}

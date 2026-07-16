@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	openbindings "github.com/openbindings/openbindings-go"
 	"io"
 	"net"
 	"os"
@@ -382,22 +383,21 @@ func isInfraService(name string) bool {
 }
 
 // discoverFromContent interprets an embedded content value per GRPC-D-01's
-// structural discrimination (§3, §5): a string is single-file .proto
-// source text; an object is a google.protobuf.FileDescriptorSet in
+// structural discrimination (§3, §5): a JSON string is single-file .proto
+// source text; a JSON object is a google.protobuf.FileDescriptorSet in
 // canonical protobuf JSON. No other JSON type or shape is an accepted
-// content value. ([]byte is the string carriage arriving from a Go caller.)
-func discoverFromContent(ctx context.Context, content any) (*discovery, error) {
-	switch c := content.(type) {
-	case string:
-		return compileProtoText(ctx, []byte(c))
-	case []byte:
-		return compileProtoText(ctx, c)
-	case map[string]any:
-		return discoverFromDescriptorSet(c)
-	default:
-		return nil, fmt.Errorf(
-			"grpc content must be single-file .proto source text (string) or a google.protobuf.FileDescriptorSet in canonical JSON (object), got %T (openbindings.grpc@1 GRPC-D-01)", content)
+// content value — a present null included.
+func discoverFromContent(ctx context.Context, content json.RawMessage) (*discovery, error) {
+	var text string
+	if err := json.Unmarshal(content, &text); err == nil {
+		return compileProtoText(ctx, []byte(text))
 	}
+	var set map[string]any
+	if err := json.Unmarshal(content, &set); err == nil && set != nil {
+		return discoverFromDescriptorSet(set)
+	}
+	return nil, fmt.Errorf(
+		"grpc content must be single-file .proto source text (string) or a google.protobuf.FileDescriptorSet in canonical JSON (object), got %s (openbindings.grpc@1 GRPC-D-01)", openbindings.ContentKind(content))
 }
 
 // compileProtoText compiles embedded single-file .proto source text (§3
@@ -506,7 +506,7 @@ func collectServices(disc *discovery, fd protoreflect.FileDescriptor) {
 // discoverFromProto parses embedded content (per GRPC-D-01) or a .proto
 // file on disk (a synthesizer-lane convenience) and extracts service
 // descriptors without connecting to a live server.
-func discoverFromProto(ctx context.Context, location string, content any) (*discovery, error) {
+func discoverFromProto(ctx context.Context, location string, content json.RawMessage) (*discovery, error) {
 	if content != nil {
 		return discoverFromContent(ctx, content)
 	}

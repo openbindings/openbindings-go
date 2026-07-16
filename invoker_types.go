@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -80,11 +81,14 @@ type PlatformCallbacks struct {
 // Invocation argument types
 // ---------------------------------------------------------------------------
 
-// InvocationSource identifies the binding source for invocation.
+// InvocationSource identifies the binding source for invocation. Content is
+// raw JSON with presence semantics, exactly as on Source: nil = absent, a
+// `null` literal = present null; the format interprets a present value per
+// its own pins.
 type InvocationSource struct {
-	BindingSpec string `json:"bindingSpec"`
-	Location    string `json:"location,omitempty"`
-	Content     any    `json:"content,omitempty"`
+	BindingSpec string          `json:"bindingSpec"`
+	Location    string          `json:"location,omitempty"`
+	Content     json.RawMessage `json:"content,omitempty"`
 }
 
 // BindingInvocationArgs are the arguments for invoking a resolved binding
@@ -125,14 +129,15 @@ type BindingInvocationArgs struct {
 }
 
 // SynthesizeSource describes a binding source for interface synthesis.
+// Content carries raw JSON with the same presence semantics as Source.
 type SynthesizeSource struct {
-	BindingSpec    string `json:"bindingSpec"`
-	Name           string `json:"name,omitempty"`
-	Location       string `json:"location,omitempty"`
-	Content        any    `json:"content,omitempty"`
-	OutputLocation string `json:"outputLocation,omitempty"`
-	Embed          bool   `json:"embed,omitempty"`
-	Description    string `json:"description,omitempty"`
+	BindingSpec    string          `json:"bindingSpec"`
+	Name           string          `json:"name,omitempty"`
+	Location       string          `json:"location,omitempty"`
+	Content        json.RawMessage `json:"content,omitempty"`
+	OutputLocation string          `json:"outputLocation,omitempty"`
+	Embed          bool            `json:"embed,omitempty"`
+	Description    string          `json:"description,omitempty"`
 }
 
 // SynthesizeInput is the input for synthesizing an OpenBindings interface from format-specific sources.
