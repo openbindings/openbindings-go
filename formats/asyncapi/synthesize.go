@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -152,6 +153,29 @@ func loadDocument(ctx context.Context, client *http.Client, location string, con
 	resolveRefs(&doc)
 
 	return &doc, nil
+}
+
+// absolutizeArtifactLocation lifts a bare filesystem path to the file://
+// document address the strict loader accepts — authoring-time operator
+// convenience at the SYNTHESIS entries only, the usage family's posture
+// (one loader for every lane, no bare-path lane). The invoke/binding lanes
+// never absolutize: a document's own bare-path location is a relative
+// reference in form and is refused (ASYNC-D-02). Emission is untouched —
+// what a synthesized document may carry as its location is the
+// embed-default ruling's territory, not this helper's.
+func absolutizeArtifactLocation(location string) (string, error) {
+	if location == "" || strings.Contains(location, "://") {
+		return location, nil
+	}
+	abs := location
+	if !filepath.IsAbs(location) {
+		var err error
+		abs, err = filepath.Abs(location)
+		if err != nil {
+			return "", fmt.Errorf("resolve AsyncAPI artifact path: %w", err)
+		}
+	}
+	return "file://" + abs, nil
 }
 
 // validateDocumentAddress checks ASYNC-D-02's location grammar offline,

@@ -12,7 +12,13 @@ import (
 // InspectSource returns all bindable targets (path+method combinations) from
 // an OpenAPI document. Each ref is a JSON Pointer into the paths object.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
-	doc, err := loadDocument(source.Location, source.Content)
+	// Authoring convenience: a bare filesystem path loads as its file://
+	// spelling (the strict loader refuses bare paths, OAPI-D-02).
+	loadLocation, err := absolutizeArtifactLocation(source.Location)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := loadDocument(loadLocation, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
