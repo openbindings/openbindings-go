@@ -197,7 +197,12 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Model Context Protocol"}}
 }
 
-// SynthesizeInterface discovers an MCP server's capabilities and converts to an OpenBindings interface.
+// SynthesizeInterface converts an MCP server's capabilities to an
+// OpenBindings interface. A source carrying content is a pinned listing
+// (MCP-D-01): the pin is the artifact (§6 content primacy), synthesis is
+// offline, and the server is never dialed — MCP-D-02 still requires the
+// location (content does not waive it), and an invalid pin is refused
+// loudly before any I/O. Without content, discovery connects live.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		return nil, openbindings.ErrNoSources
@@ -207,9 +212,22 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	}
 	src := in.Sources[0]
 
-	disc, err := discover(ctx, c.clientVersion, c.httpClient, src.Location)
-	if err != nil {
-		return nil, fmt.Errorf("MCP discovery: %w", err)
+	var disc *discovery
+	if src.Content != nil {
+		if err := validateEndpoint(src.Location); err != nil {
+			return nil, err
+		}
+		d, err := pinnedDiscovery(src.Content)
+		if err != nil {
+			return nil, err
+		}
+		disc = d
+	} else {
+		d, err := discover(ctx, c.clientVersion, c.httpClient, src.Location)
+		if err != nil {
+			return nil, fmt.Errorf("MCP discovery: %w", err)
+		}
+		disc = d
 	}
 
 	iface, err := convertToInterface(disc, src.Location)
