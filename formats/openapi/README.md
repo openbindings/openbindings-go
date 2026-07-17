@@ -31,7 +31,7 @@ The invoker declares the binding specification `openbindings.openapi@1` — it h
 
 ### Invoke a binding
 
-Typically you don't call the invoker directly — the `OperationInvoker` routes operations to it based on the OBI's source format. But direct use is straightforward:
+Typically you don't call the invoker directly — the `OperationInvoker` routes operations to it based on the OBI source's binding specification. But direct use is straightforward:
 
 ```go
 invoker := openapi.NewInvoker()
@@ -123,6 +123,20 @@ Credentials are applied based on the OpenAPI spec's `securitySchemes`:
 
 When no security schemes are defined, falls back to bearer, then basic, then apiKey.
 
+When declared security is unsatisfied by the context, the invoker challenges `CONTEXT_REQUIRED` before any input is read or network touched, deriving the challenge from the artifact's `securitySchemes` (the negotiation surface is the [binding-invoker interface](https://openbindings.com/interfaces/binding-invoker); the challenge's `target` is the resolved base URL):
+
+| Scheme | Requirement type | Carried fields |
+| --- | --- | --- |
+| `http` / `basic` | `auth.basic` | — |
+| `http` / `bearer` | `auth.bearer` | — |
+| `apiKey` | `auth.apiKey` | — |
+| `oauth2` | `auth.oauth2` | `grantType`, `authorizeUrl`, `tokenUrl`, `scopes` from the selected flow |
+| `openIdConnect` | `auth.oauth2` | `openIdConnectUrl` |
+
+An `oauth2` scheme declaring several flows selects one by fixed preference — `authorizationCode`, then `implicit`, then `password`, then `clientCredentials` — and `grantType` names the selection in its RFC 6749 spelling (`authorization_code`, `implicit`, `password`, `client_credentials`). Every requirement carries the scheme's declared name (its `securitySchemes` key), which disambiguates ANDed requirements of one type and keys the scheme-scoped credential lookup: an API-key scheme named `N` resolves `apiKeys[N]` first, falling back to the single `apiKey` convenience.
+
+A scheme outside this table is **surfaced, never dropped**: it emits a requirement typed from the artifact's own scheme (`http`/`digest` → `auth.http.digest`; any other type `T` → `auth.<T>`, e.g. `auth.mutualTLS`) that this package cannot itself apply. The alternative stays discoverable — unselectable only for runtimes without a resolver for that family — and a document whose every alternative is unmapped produces a readable challenge instead of an unauthenticated dispatch into a blind 401.
+
 ### Consumer hooks
 
 HTTP leaves wire questions the OpenAPI document does not settle: which bytes-to-value rule to apply, whether a given response counts as success, and where the payload lives. This format **consults the consumer hooks seam** (`InvokeHooks`) for all three:
@@ -135,11 +149,15 @@ Each invocation records how the decision was made in its trailer metadata (`buil
 
 ### Interface synthesis
 
-- Operation keys derived from `operationId` when present, otherwise from path + method
-- Paths iterated alphabetically, methods in fixed order: get, put, post, delete, options, head, patch, trace
-- Input schemas built from parameters (path, query, header) and request body
-- Output schemas built from success responses (200, 201, 202)
-- No security metadata written to the OBI; `securitySchemes` are honored at invocation time via context negotiation (`CONTEXT_REQUIRED` challenges and the `BindingPreparer` preflight)
+Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@1` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
+
+- **Operation keys** come from `operationId` when present, sanitized to the OBI key grammar (non-key characters become `_`, leading/trailing `_` trimmed, a leading non-letter gets an `_` prefix). An `operationId` whose sanitized key is already taken falls through to path+method derivation: template segments (`{id}`) dropped, remaining segments joined with `.`, the lowercased method appended (`/users/{id}` + `GET` → `users.get`), then deduplicated deterministically with `_2`, `_3`, … suffixes.
+- **Iteration order is fixed**: paths alphabetically, methods in the order get, put, post, delete, options, head, patch, trace.
+- **Input schemas** merge path-level and operation-level parameters (path, query, header) with the request body's properties into the flattened contract. Cookie parameters are excluded from synthesized input schemas.
+- **Output schemas** come from the first declared success response of `200`, `201`, `202` (in that order), reading the JSON-preferring media type: exact `application/json` first, else the lexicographically least declared media type containing `json`, else the lexicographically least declared media type.
+- **Schema translation** targets JSON Schema 2020-12 (spec OBI-D-06), keyed on the artifact's declared `openapi` version: 3.0.x schemas are normalized out of the Draft-4 subset dialect; 3.1.x schemas pass through unchanged.
+- **Param/body collisions**: a field declared as both a parameter and a body property is one name, one value, delivered to every declared wire location at invocation (`openbindings.openapi@1` §9.1); synthesis surfaces the merge as the `openapi.param_body_collision` warning.
+- **No security metadata is written to the OBI**; `securitySchemes` are honored at invocation time via context negotiation (`CONTEXT_REQUIRED` challenges and the `BindingPreparer` preflight).
 
 ## How it works
 
@@ -165,12 +183,7 @@ When no security schemes are defined, falls back to bearer -> basic -> apiKey in
 
 ### Interface synthesis
 
-Converts an OpenAPI 3.x document into an OBI by:
-- Extracting operations from each path + method combination
-- Building input schemas from parameters and request bodies
-- Building output schemas from success responses (200, 201, 202)
-- Generating JSON Pointer refs for each binding
-- Deriving operation keys from `operationId` or path + method
+Converts an OpenAPI 3.x document into an OBI: operations extracted from each path + method combination, input/output schemas from parameters, request bodies, and success responses, and a JSON Pointer ref per binding. The derivation conventions (key derivation, iteration order, media selection, schema translation) are specified under [Behavior → Interface synthesis](#interface-synthesis) above.
 
 ## License
 
