@@ -23,7 +23,23 @@ func HTTPError(statusCode int, status string) *InvocationError {
 	return &InvocationError{
 		Code:    HTTPErrorCode(statusCode),
 		Message: fmt.Sprintf("HTTP %d %s", statusCode, reason),
+		Effects: httpErrorEffects(statusCode),
 		Details: map[string]any{"status": statusCode},
+	}
+}
+
+// httpErrorEffects reports what an HTTP error status proves about side
+// effects. A 429 or 503 is the server refusing the request before it executed
+// (rate-limited / unavailable), so the call provably did not take hold —
+// EffectsNone licenses a backoff-retry. Every other status is left unset:
+// classify() supplies EffectsPossible for the transport-transient codes, and a
+// 5xx that may already have executed is conservatively treated as possible.
+func httpErrorEffects(statusCode int) Effects {
+	switch statusCode {
+	case http.StatusTooManyRequests, http.StatusServiceUnavailable: // 429, 503
+		return EffectsNone
+	default:
+		return ""
 	}
 }
 

@@ -119,7 +119,9 @@ type ContextRequiredDetails struct {
 
 // NewContextRequiredError constructs the canonical CONTEXT_REQUIRED terminal error.
 func NewContextRequiredError(message string, details *ContextRequiredDetails) *InvocationError {
-	return &InvocationError{Code: ErrCodeContextRequired, Message: message, Details: details}
+	e := &InvocationError{Code: ErrCodeContextRequired, Message: message, Details: details}
+	e.classify()
+	return e
 }
 
 // ContextRequiredFrom narrows a terminal error to a CONTEXT_REQUIRED
@@ -430,9 +432,9 @@ func (i *InvocationImpl[I, O]) Write(ctx context.Context, input I) error {
 		case state == stateErrored:
 			return terr
 		case state == stateClosed:
-			return &InvocationError{Code: ErrCodeInvocationClosed, Message: "invocation is closed"}
+			return classifiedError(ErrCodeInvocationClosed, "invocation is closed")
 		default:
-			return &InvocationError{Code: ErrCodeInputClosed, Message: "input is closed"}
+			return classifiedError(ErrCodeInputClosed, "input is closed")
 		}
 	case <-i.done:
 		return i.terminalOrClosedErr()
@@ -448,10 +450,10 @@ func (i *InvocationImpl[I, O]) writableErr() error {
 		if i.terminalErr != nil {
 			return i.terminalErr
 		}
-		return &InvocationError{Code: ErrCodeInvocationClosed, Message: "invocation is closed"}
+		return classifiedError(ErrCodeInvocationClosed, "invocation is closed")
 	}
 	if i.inputClosed {
-		return &InvocationError{Code: ErrCodeInputClosed, Message: "input is closed"}
+		return classifiedError(ErrCodeInputClosed, "input is closed")
 	}
 	return nil
 }
@@ -462,7 +464,7 @@ func (i *InvocationImpl[I, O]) terminalOrClosedErr() *InvocationError {
 	if i.terminalErr != nil {
 		return i.terminalErr
 	}
-	return &InvocationError{Code: ErrCodeInvocationClosed, Message: "invocation is closed"}
+	return classifiedError(ErrCodeInvocationClosed, "invocation is closed")
 }
 
 // Close signals that no more input is coming (graceful; idempotent). The
@@ -618,7 +620,7 @@ func (i *InvocationImpl[I, O]) EmitOutput(output O) error {
 		if err != nil {
 			return err
 		}
-		return &InvocationError{Code: ErrCodeInvocationClosed, Message: "invocation is closed"}
+		return classifiedError(ErrCodeInvocationClosed, "invocation is closed")
 	}
 	// Header settles with the first output if the binding never set it.
 	i.settleHeaderLocked()
@@ -661,6 +663,10 @@ func (i *InvocationImpl[I, O]) FireError(err *InvocationError) {
 	if err == nil {
 		err = &InvocationError{Code: ErrCodeRuntime, Message: "unknown error"}
 	}
+	// Stamp the classification at the one terminal chokepoint: every format's
+	// FireError'd error (connect/timeout/stream/etc.) gets its Category and
+	// transport-code Effects here, so no per-site wiring is needed.
+	err.classify()
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.state != stateOpen {
@@ -803,7 +809,7 @@ func Single[O any](ctx context.Context, out OutputStream[O]) (O, error) {
 	first, err := out.Read(ctx)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
-			return zero, &InvocationError{Code: ErrCodeExpectedSingle, Message: "expected one output, got none"}
+			return zero, classifiedError(ErrCodeExpectedSingle, "expected one output, got none")
 		}
 		// Errors pass through without Stop: a terminal already ended the
 		// invocation (Stop would be a no-op), and a per-call ctx error
@@ -812,7 +818,7 @@ func Single[O any](ctx context.Context, out OutputStream[O]) (O, error) {
 	}
 	if _, err := out.Read(ctx); err == nil {
 		out.Stop() // abandon -> cancel: the one Stop Single owns
-		return zero, &InvocationError{Code: ErrCodeExpectedSingle, Message: "expected one output, got more"}
+		return zero, classifiedError(ErrCodeExpectedSingle, "expected one output, got more")
 	} else if !errors.Is(err, io.EOF) {
 		// A real terminal error after the first output surfaces as-is.
 		return zero, err
@@ -850,17 +856,13 @@ func (t *TypedInvocation[I, O]) Write(ctx context.Context, input I) error {
 	// non-JSON-encodable value is rejected here rather than reaching the binding.
 	b, err := json.Marshal(input)
 	if err != nil {
-		return &InvocationError{
-			Code:    ErrCodeTypeMismatch,
-			Message: fmt.Sprintf("openbindings: input %T is not JSON-encodable: %v", input, err),
-		}
+		return classifiedError(ErrCodeTypeMismatch,
+			fmt.Sprintf("openbindings: input %T is not JSON-encodable: %v", input, err))
 	}
 	var generic any
 	if err := json.Unmarshal(b, &generic); err != nil {
-		return &InvocationError{
-			Code:    ErrCodeTypeMismatch,
-			Message: fmt.Sprintf("openbindings: input %T round-trip failed: %v", input, err),
-		}
+		return classifiedError(ErrCodeTypeMismatch,
+			fmt.Sprintf("openbindings: input %T round-trip failed: %v", input, err))
 	}
 	return t.inner.Write(ctx, generic)
 }
@@ -906,10 +908,8 @@ func (s *typedOutputStream[O]) Read(ctx context.Context) (O, error) {
 			return typed, nil
 		}
 	}
-	return zero, &InvocationError{
-		Code:    ErrCodeTypeMismatch,
-		Message: fmt.Sprintf("openbindings: expected %T, got %T", zero, raw),
-	}
+	return zero, classifiedError(ErrCodeTypeMismatch,
+		fmt.Sprintf("openbindings: expected %T, got %T", zero, raw))
 }
 
 // ---------------------------------------------------------------------------
@@ -954,7 +954,7 @@ func AsInvocationError(err error) *InvocationError {
 		return ie
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return &InvocationError{Code: ErrCodeCancelled, Message: err.Error()}
+		return classifiedError(ErrCodeCancelled, err.Error())
 	}
-	return &InvocationError{Code: ErrCodeRuntime, Message: err.Error()}
+	return classifiedError(ErrCodeRuntime, err.Error())
 }

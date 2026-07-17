@@ -203,11 +203,57 @@ type BindableTarget struct {
 }
 
 // InvocationError is the structured error type for all terminal invocation
-// failures.
+// failures. Every emitted error carries a Category (the normative
+// classification axis consumers branch on) and, where retry is in question, an
+// Effects marker. Both derive from Code through the canonical map in
+// classification.go; the invocation machinery stamps them at the terminal
+// chokepoint (FireError) and MarshalJSON derives them on the wire, so Category
+// is always present on a serialized error even for a bare struct literal.
 type InvocationError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
-	Details any    `json:"details,omitempty"`
+	// Category is the normative classification axis (context, auth, cancelled,
+	// transient, service, validation, protocol, permanent). Left unset by an
+	// emission site, it is derived from Code.
+	Category Category `json:"category"`
+	// Effects reports whether the call's side effects may have taken hold,
+	// gating safe retry. Present only where retry is in question (the
+	// transient and service categories); an absent value is treated as
+	// EffectsPossible by consumers.
+	Effects Effects `json:"effects,omitempty"`
+	Details any     `json:"details,omitempty"`
+}
+
+// MarshalJSON guarantees the required Category field is present and accurate on
+// the wire regardless of how the error was constructed: a bare struct literal
+// with only Code and Message still serializes with a derived category (and the
+// transport-code effects default), so no emission site can produce a
+// category-less wire form. The receiver is a value (not a pointer) so the
+// guarantee holds whether the error is marshaled by value or by pointer,
+// including as a non-addressable frame field. It does not mutate the receiver.
+func (e InvocationError) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Code     string   `json:"code"`
+		Message  string   `json:"message"`
+		Category Category `json:"category"`
+		Effects  Effects  `json:"effects,omitempty"`
+		Details  any      `json:"details,omitempty"`
+	}
+	cat := e.Category
+	if cat == "" {
+		cat = categoryForCode(e.Code)
+	}
+	eff := e.Effects
+	if eff == "" {
+		eff = codeEffectsDefault[e.Code] // "" (omitted) when the code has no default
+	}
+	return json.Marshal(wire{
+		Code:     e.Code,
+		Message:  e.Message,
+		Category: cat,
+		Effects:  eff,
+		Details:  e.Details,
+	})
 }
 
 // ValidationFailure is a single schema-validation failure (OBI-T-16 claim semantics)
