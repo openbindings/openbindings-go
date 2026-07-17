@@ -167,8 +167,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 	if !ok {
 		// The format's NATIVE failure: hooks change the verdict, never the
-		// error vocabulary. Provenance: the deciding layer is named per
-		// the diagnostics contract.
+		// error vocabulary. Provenance: the deciding layer is named on the
+		// error's decidedBy stamp.
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeExecutionFailed,
 			Message: fmt.Sprintf("command exited with status %d", res.exitCode),
@@ -239,44 +239,6 @@ func resultMeta(res *cliResult, record map[string]string) openbindings.Metadata 
 // vocabulary; the assumptions shrink if jdx grows one).
 func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.ResultClassifier) {
 	return builtinDecodeText, builtinClassify
-}
-
-// PlanContributions reports the exec chain leaves: every axis is a
-// documented assumption (nothing here is spec-covered — the honest
-// signal of the format's completeness), with per-field route answers
-// enumerated from the artifact where it is loadable.
-func (e *Invoker) PlanContributions(args *openbindings.BindingInvocationArgs) (*openbindings.BindingPlan, error) {
-	plan := &openbindings.BindingPlan{
-		Decode:   openbindings.PlanAxis{Chain: []string{"assumption/text"}},
-		Classify: openbindings.PlanAxis{Chain: []string{"assumption/exit-0"}},
-	}
-	spec, err := e.cachedLoadSpec(context.Background(), args.Source.Location, args.Source.Content)
-	if err != nil {
-		return plan, nil // axes stand; per-field routes need the artifact
-	}
-	var cmd *Command
-	var inherited []Flag
-	if args.Ref == "" {
-		if rc := rootCommand(spec); rc != nil {
-			cmd = rc
-		}
-	} else if found, ferr := findCommand(spec, args.Ref); ferr == nil {
-		cmd = found.cmd
-		inherited = found.inheritedFlags
-	}
-	if cmd == nil {
-		return plan, nil
-	}
-	plan.Route = map[string]openbindings.PlanAxis{}
-	for _, f := range cmd.AllFlags(inherited) {
-		if name := f.PrimaryName(); name != "" {
-			plan.Route[name] = openbindings.PlanAxis{Chain: []string{"assumption/argv"}}
-		}
-	}
-	for _, a := range cmd.Args {
-		plan.Route[a.CleanName()] = openbindings.PlanAxis{Chain: []string{"assumption/argv"}}
-	}
-	return plan, nil
 }
 
 // emitWithDiagnostics stamps the diagnostics trailer and emits the output.

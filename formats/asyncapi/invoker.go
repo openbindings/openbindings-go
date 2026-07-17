@@ -266,13 +266,3 @@ func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.Resul
 	}
 	return decode, nil
 }
-
-// PlanContributions: decode is a spec answer (the declared message
-// contentType, else the text assumption); classify and route are not
-// consulted on this format.
-func (e *Invoker) PlanContributions(_ *openbindings.BindingInvocationArgs) (*openbindings.BindingPlan, error) {
-	return &openbindings.BindingPlan{
-		Decode:   openbindings.PlanAxis{Chain: []string{"spec/content-type"}},
-		Classify: openbindings.PlanAxis{Chain: []string{"not-consulted"}},
-	}, nil
-}

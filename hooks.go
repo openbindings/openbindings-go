@@ -102,57 +102,19 @@ type ResultClassifier func(site InvokeSite, raw RawResult) (bool, error)
 type FieldRouter func(site InvokeSite, field string, value any) string
 
 // ---------------------------------------------------------------------------
-// The optional format interface (Builtin* + plan halves)
+// The optional format interface (Builtin* dispatch)
 // ---------------------------------------------------------------------------
-
-// PlanAxis reports, for one wire question at one site, the CONSULTATION
-// CHAIN — never a predicted outcome (hooks are opaque and decline on data
-// that does not exist at plan time). Enumerated chain tokens (stable, for
-// machine consumers): "hook" (opaque consumer hook, may decline),
-// "spec/<detail>", "assumption/<detail>", "header/<detail>",
-// "not-consulted", "delegated". Declarative, data-face-synthesized hooks
-// are not opaque: they populate Detail and drop the decline caveat.
-type PlanAxis struct {
-	Chain  []string `json:"chain"`
-	Detail string   `json:"detail,omitempty"`
-}
-
-// InvocationPlan is PlanOperation's answer: per axis (route per-field),
-// how the wire questions WOULD be answered at this site, by consultation
-// chain. Process-local: it reports THIS process's configuration.
-type InvocationPlan struct {
-	Operation   string              `json:"operation"`
-	BindingKey  string              `json:"bindingKey"`
-	BindingSpec string              `json:"bindingSpec"`
-	Ref         string              `json:"ref,omitempty"`
-	Target      string              `json:"target,omitempty"`
-	Route       map[string]PlanAxis `json:"route,omitempty"`
-	Classify    PlanAxis            `json:"classify"`
-	Decode      PlanAxis            `json:"decode"`
-}
-
-// BindingPlan is the format package's contribution to an InvocationPlan:
-// the leaf tokens of each axis's chain (what answers the question when
-// every hook declines) and the per-field route answers.
-type BindingPlan struct {
-	Decode   PlanAxis
-	Classify PlanAxis
-	Route    map[string]PlanAxis
-}
 
 // BuiltinHooksProvider is the optional interface a format invoker
 // implements to expose its builtin decode/classify (the Builtin* dispatch
-// half) and its plan contributions (the PlanOperation half). Asserted the
-// way TransformEvaluatorWithBindings is. A format that does not consult
-// an axis (per its consultation matrix row) returns nil for that builtin;
-// core never fabricates one.
+// half) to the consultation seam. Asserted the way
+// TransformEvaluatorWithBindings is. A format that does not consult an axis
+// (per its consultation matrix row) returns nil for that builtin; core
+// never fabricates one.
 type BuiltinHooksProvider interface {
 	// BuiltinHooks returns the format's builtin decode and classify for
 	// the axes it consults; nil for axes it does not.
 	BuiltinHooks() (OutputDecoder, ResultClassifier)
-	// PlanContributions reports the axis chain leaves and per-field route
-	// answers for the binding identified by args, without invoking.
-	PlanContributions(args *BindingInvocationArgs) (*BindingPlan, error)
 }
 
 // ---------------------------------------------------------------------------

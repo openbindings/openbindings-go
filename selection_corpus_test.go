@@ -10,17 +10,19 @@ package openbindings
 // path (openbindings/interfaces next to openbindings/openbindings-go); the
 // tests skip when it is absent.
 //
-// Each fixture drives the real selection path through the public API:
-// the fixture's `supported` set is presented by a stub BindingInvoker (the
+// Each fixture drives the real selection path through the public API: the
+// fixture's `supported` set is presented by a stub BindingInvoker (the
 // candidate set is formed from the invoker's registered binding
-// specifications), and PlanOperation — which shares Invoke's resolution
-// (OBI-T-12 name resolution, override, pinning, default policy) — reports
-// the selected binding key without invoking anything.
+// specifications) and Invoke runs the shared resolution (OBI-T-12 name
+// resolution, override, pinning, default policy). Selection is decided
+// before the binding layer runs, so the selected key is observed via the
+// invocation-site carriage the invoke path stamps on the binding-layer args
+// (args.Site.BindingKey) — public contract surface, no test seam added.
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"sync"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,10 +61,14 @@ type selectionCase struct {
 }
 
 // selectionSpecStub presents the fixture's `supported` set as its registered
-// binding specifications. Selection never invokes, so InvokeBinding is a
-// guard against accidental invocation, not a mock.
+// binding specifications and records the invocation site of the binding it
+// is handed. Selection is decided before the binding layer runs, so the stub
+// completes the invocation immediately without emitting.
 type selectionSpecStub struct {
 	specs []string
+
+	mu       sync.Mutex
+	lastSite *InvokeSite
 }
 
 func (s *selectionSpecStub) BindingSpecs() []BindingSpecInfo {
@@ -74,10 +80,24 @@ func (s *selectionSpecStub) BindingSpecs() []BindingSpecInfo {
 }
 
 func (s *selectionSpecStub) InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any] {
-	return NewErroredInvocation[any, any](&InvocationError{
-		Code:    "ERR_NO_MOCK",
-		Message: "selection corpus fixtures must not invoke bindings",
-	})
+	s.mu.Lock()
+	s.lastSite = args.Site
+	s.mu.Unlock()
+	inv := NewInvocationImpl[any, any](ctx)
+	go func() {
+		_ = inv.CloseInput()
+		inv.CloseOutput()
+	}()
+	return inv
+}
+
+func (s *selectionSpecStub) selectedBindingKey() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastSite == nil {
+		return ""
+	}
+	return s.lastSite.BindingKey
 }
 
 func TestSelectionCorpus(t *testing.T) {
@@ -122,7 +142,8 @@ func runSelectionFixture(t *testing.T, tc *selectionCase) {
 		t.Fatalf("fixture document does not validate: %v", err)
 	}
 
-	invoker := NewOperationInvoker(&selectionSpecStub{specs: tc.Supported})
+	stub := &selectionSpecStub{specs: tc.Supported}
+	invoker := NewOperationInvoker(stub)
 
 	var opts []InvokeOption
 	if tc.Binding != "" {
@@ -134,20 +155,17 @@ func runSelectionFixture(t *testing.T, tc *selectionCase) {
 		}))
 	}
 
-	plan, err := invoker.PlanOperation(context.Background(), iface, tc.Operation, opts...)
+	call := Invoke(context.Background(), invoker, iface, NewOperationSignature[any, any](tc.Operation), opts...)
+	_, err = collectStream(t, call.Outputs())
 
 	if tc.Expected.Error {
 		if err == nil {
-			t.Fatalf("expected selection error (%s), selected %q", tc.Expected.Kind, plan.BindingKey)
+			t.Fatalf("expected selection error (%s), selected %q", tc.Expected.Kind, stub.selectedBindingKey())
 		}
 		// Both error kinds — unknown explicit binding key and no invocable
 		// candidate — are contract-named ERR_BINDING_NOT_FOUND.
-		var ie *InvocationError
-		if !errors.As(err, &ie) {
-			t.Fatalf("expected *InvocationError, got %T: %v", err, err)
-		}
-		if ie.Code != ErrCodeBindingNotFound {
-			t.Fatalf("error code = %q, want %q (err: %v)", ie.Code, ErrCodeBindingNotFound, err)
+		if code := codeOf(t, err); code != ErrCodeBindingNotFound {
+			t.Fatalf("error code = %q, want %q (err: %v)", code, ErrCodeBindingNotFound, err)
 		}
 		return
 	}
@@ -155,7 +173,7 @@ func runSelectionFixture(t *testing.T, tc *selectionCase) {
 	if err != nil {
 		t.Fatalf("expected %q, got error: %v", tc.Expected.Binding, err)
 	}
-	if plan.BindingKey != tc.Expected.Binding {
-		t.Fatalf("selected %q, want %q", plan.BindingKey, tc.Expected.Binding)
+	if got := stub.selectedBindingKey(); got != tc.Expected.Binding {
+		t.Fatalf("selected %q, want %q", got, tc.Expected.Binding)
 	}
 }

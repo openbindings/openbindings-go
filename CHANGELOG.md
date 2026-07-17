@@ -17,9 +17,8 @@
   failures carry tier provenance. `SnapshotHooks` exposes the both-tier
   snapshot to direct binding-layer callers; `WithRuntime` carries hook fields.
   Diagnostics ride invocation metadata: `x-ob-decode`/`x-ob-classify`/
-  `x-ob-route` success stamps, the unvalidated-assumption warning
-  (`x-ob-warning`), and the `PlanOperation` probe reporting each axis's
-  consultation chain without invoking.
+  `x-ob-route` success stamps and the unvalidated-assumption warning
+  (`x-ob-warning`).
 
 - **BREAKING: content-independent decode/classify in the openapi and asyncapi
   invokers (de-sniffed).** openapi now decodes by the response's Content-Type
