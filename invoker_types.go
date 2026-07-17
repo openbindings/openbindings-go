@@ -12,7 +12,7 @@ import (
 // Context store
 // ---------------------------------------------------------------------------
 
-// ContextStore is a key-value store for binding invocation context.
+// ContextStore is a document store for binding invocation context.
 // Keys are invoker-determined strings (typically a normalized API origin).
 // Values are opaque context records — credentials, headers, cookies,
 // environment, metadata — using well-known field names for cross-invoker
@@ -34,7 +34,7 @@ import (
 // The SDK stores and retrieves context but never inspects its contents.
 // Setting a nil value removes the entry (the published contract pins
 // set-null ≡ delete, so Get's nil uniformly means "no entry").
-// The published openbindings.key-value-store interface standardizes this
+// The published openbindings.document-store interface standardizes this
 // same get/set/delete capability where a store sits across a wire.
 type ContextStore interface {
 	Get(ctx context.Context, key string) (map[string]any, error)
