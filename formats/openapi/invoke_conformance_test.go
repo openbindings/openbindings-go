@@ -19,7 +19,7 @@ import (
 func invokeWith(t *testing.T, spec, ref string, input any) (any, *openbindings.InvocationError) {
 	t.Helper()
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: spec},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    ref,
 	})
 	return driveSingle(t, call, input)
@@ -89,7 +89,7 @@ func TestLoadDocument_VersionDiscrimination(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := loadDocument("", tc.content)
+			_, err := loadDocument("", openbindings.TextContent(tc.content))
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("loadDocument = %v, want loud OAPI-P-01 refusal", err)
 			}
@@ -97,7 +97,7 @@ func TestLoadDocument_VersionDiscrimination(t *testing.T) {
 	}
 	// Accepted lines load.
 	for _, v := range []string{"3.0.3", "3.1.0"} {
-		doc, err := loadDocument("", fmt.Sprintf(`{"openapi": %q, "info": {"title": "t", "version": "1"}, "paths": {}}`, v))
+		doc, err := loadDocument("", openbindings.TextContent(fmt.Sprintf(`{"openapi": %q, "info": {"title": "t", "version": "1"}, "paths": {}}`, v)))
 		if err != nil || doc == nil {
 			t.Errorf("version %s must load, got %v", v, err)
 		}
@@ -108,7 +108,7 @@ func TestLoadDocument_VersionDiscrimination(t *testing.T) {
 // 1.2 layer enforces this).
 func TestLoadDocument_DuplicateYAMLKeysRefused(t *testing.T) {
 	content := "openapi: 3.0.3\ninfo: {title: t, version: '1'}\npaths:\n  /a:\n    get:\n      operationId: one\n      responses: {'200': {description: ok}}\n  /a:\n    post:\n      operationId: two\n      responses: {'200': {description: ok}}\n"
-	if _, err := loadDocument("", content); err == nil {
+	if _, err := loadDocument("", openbindings.TextContent(content)); err == nil {
 		t.Fatal("duplicate mapping keys must refuse loudly (OAPI-P-01/§3)")
 	}
 }
@@ -120,7 +120,7 @@ func TestLoadDocument_NoLocationRelativeRefReadableError(t *testing.T) {
 	content := `{"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
 	  "paths": {"/a": {"get": {"operationId": "x", "responses": {"200": {"description": "ok",
 	    "content": {"application/json": {"schema": {"$ref": "shared.json#/Thing"}}}}}}}}}`
-	_, err := loadDocument("", content)
+	_, err := loadDocument("", openbindings.TextContent(content))
 	if err == nil {
 		t.Fatal("a relative external $ref with no base URI must fail")
 	}
@@ -534,7 +534,7 @@ func TestInvoke_DeclaredBothShapesSelectByFraming(t *testing.T) {
 	}))
 	defer sseSrv.Close()
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: dualSpec(sseSrv.URL)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(dualSpec(sseSrv.URL))},
 		Ref:    "#/paths/~1dual/get",
 	})
 	events, ierr := driveOutputs(context.Background(), call, nil)
@@ -665,7 +665,7 @@ func TestInvoke_CookieChannelAssembly(t *testing.T) {
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: spec},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:     "#/paths/~1sess/get",
 		Context: map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 	})
@@ -709,7 +709,7 @@ func TestInvoke_CredentialCollisionRefused(t *testing.T) {
 			}`, srv.URL, tc.param, tc.in, tc.in, tc.param)
 
 			call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-				Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: spec},
+				Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 				Ref:     "#/paths/~1x/get",
 				Context: map[string]any{"apiKey": "cred"},
 			})
@@ -749,7 +749,7 @@ func TestInvoke_ServerConfigurationPoint(t *testing.T) {
 	  "paths": {"/ping": {"get": {"operationId": "ping", "responses": {"200": {"description": "ok"}}}}}
 	}`
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: spec},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:     "#/paths/~1ping/get",
 		Context: map[string]any{"configuration": map[string]any{"server": map[string]any{"baseUrl": srv.URL}}},
 	})

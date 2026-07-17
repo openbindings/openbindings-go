@@ -159,7 +159,7 @@ func deadEndServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 
 func pinArgs(url, ref string, pin map[string]any, bindCtx map[string]any) *openbindings.BindingInvocationArgs {
 	args := invocationArgs(url, ref, bindCtx)
-	args.Source.Content = pin
+	args.Source.Content = mustContent(pin)
 	return args
 }
 
@@ -202,7 +202,7 @@ func TestPin_InvalidRefusedLoudly(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			args := invocationArgs(ts.URL, "tools/probe", nil)
-			args.Source.Content = tc.pin
+			args.Source.Content = mustContent(tc.pin)
 			call := invoker.InvokeBinding(bg(), args)
 			vals, err := drainOutputs(t, call)
 			if len(vals) != 0 {
@@ -786,4 +786,14 @@ func TestTemplate_InputRefusals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// mustContent marshals a Go value into the raw-JSON content carriage
+// (Source.Content presence semantics: raw JSON, nil = absent).
+func mustContent(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }

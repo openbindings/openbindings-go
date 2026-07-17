@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,7 @@ func synthesizeFromArtifactText(text string) (openbindings.Interface, error) {
 	}
 	return buildInterfaceFromSpec(spec, openbindings.Source{
 		BindingSpec: BindingSpec,
-		Content:     text,
+		Content:     openbindings.TextContent(text),
 	})
 }
 
@@ -37,7 +38,7 @@ func synthesizeFromArtifactText(text string) (openbindings.Interface, error) {
 // however absolute the filesystem considers it — is a relative reference
 // under OBI-D-05 and is never emitted as a document location; see
 // emittableAsLocation.
-func absolutizeArtifactLocation(location string, content any) (string, error) {
+func absolutizeArtifactLocation(location string, content json.RawMessage) (string, error) {
 	if content != nil || location == "" ||
 		strings.HasPrefix(location, "exec:") || strings.Contains(location, "://") {
 		return location, nil

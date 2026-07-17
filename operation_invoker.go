@@ -387,15 +387,13 @@ func (e *OperationInvoker) run(
 			Source: InvocationSource{
 				BindingSpec: source.BindingSpec,
 				Location:    source.Location,
+				Content:     source.Content,
 			},
 			Ref:         binding.Ref,
 			Binding:     binding,
 			Context:     contextData,
 			Interface:   iface,
 			InputSchema: op.Input,
-		}
-		if source.Content != nil {
-			a.Source.Content = source.Content
 		}
 		a.Hooks = hooks
 		site := &InvokeSite{
@@ -1031,11 +1029,8 @@ func (e *OperationInvoker) PlanOperation(ctx context.Context, obi *Interface, op
 		if p, ok := inv.(BuiltinHooksProvider); ok {
 			consultsSeam = true
 			args := &BindingInvocationArgs{
-				Source: InvocationSource{BindingSpec: source.BindingSpec, Location: source.Location},
+				Source: InvocationSource{BindingSpec: source.BindingSpec, Location: source.Location, Content: source.Content},
 				Ref:    binding.Ref,
-			}
-			if source.Content != nil {
-				args.Source.Content = source.Content
 			}
 			if c, err := p.PlanContributions(args); err == nil {
 				contrib = c

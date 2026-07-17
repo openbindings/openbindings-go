@@ -48,11 +48,23 @@ func testContext(t *testing.T) context.Context {
 }
 
 func unaryArgs(location string, content any, ref string) *openbindings.BindingInvocationArgs {
+	// nil means ABSENT content (descriptorless mode), never a present null;
+	// a string is .proto source text (the family's string carriage).
+	var raw json.RawMessage
+	switch c := content.(type) {
+	case nil:
+	case string:
+		raw = openbindings.TextContent(c)
+	case json.RawMessage:
+		raw = c
+	default:
+		raw = mustContent(content)
+	}
 	return &openbindings.BindingInvocationArgs{
 		Source: openbindings.InvocationSource{
 			BindingSpec: BindingSpec,
 			Location:    location,
-			Content:     content,
+			Content:     raw,
 		},
 		Ref: ref,
 	}
@@ -322,7 +334,7 @@ message PingMsg { string msg = 1; }
 	// message must be the embedded-content-aware variant, distinct from the
 	// no-content-at-all message.
 	h := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: proto},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
 		Ref:    "tiny.Tiny/Ping",
 	})
 	ierr := mustTerminalError(t, ctx, h, openbindings.ErrCodeSourceConfigError)
@@ -336,7 +348,7 @@ message PingMsg { string msg = 1; }
 	// past the config gate (failing later at the unreachable endpoint, not
 	// at configuration).
 	h2 := invokeWith(t, ctx, invoker, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: proto},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
 		Ref:     "tiny.Tiny/Ping",
 		Context: map[string]any{"configuration": map[string]any{"target": "http://127.0.0.1:1"}},
 	}, map[string]any{"msg": "hi"})

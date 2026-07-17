@@ -312,7 +312,7 @@ paths:
 func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	content := `{"openapi":"3.0.3","info":{"title":"T","version":"1.0.0"},"paths":{"/x":{"get":{"operationId":"getX","responses":{"200":{"description":"ok"}}}}}}`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: "openapi@3.0", Content: content}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: "openapi@3.0", Content: openbindings.TextContent(content)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
@@ -327,7 +327,7 @@ func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	if src.Content == nil {
 		t.Fatal("content-fed synthesis must embed the artifact")
 	}
-	if s, _ := src.Content.(string); s != content {
+	if got, err := openbindings.ContentToBytes(src.Content); err != nil || string(got) != content {
 		t.Error("embedded content must be the provided artifact verbatim")
 	}
 }
@@ -337,8 +337,8 @@ func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 func TestSynthesizeInterface_RefusesMultipleSources(t *testing.T) {
 	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{
-			{BindingSpec: "openapi@3.0", Content: "{}"},
-			{BindingSpec: "openapi@3.0", Content: "{}"},
+			{BindingSpec: "openapi@3.0", Content: openbindings.TextContent("{}")},
+			{BindingSpec: "openapi@3.0", Content: openbindings.TextContent("{}")},
 		},
 	})
 	if !errors.Is(err, openbindings.ErrMultipleSources) {
@@ -371,7 +371,7 @@ func TestSynthesize_ParamBodyCollisionWarns(t *testing.T) {
 	var warnings []openbindings.SynthesizerWarning
 	synth := NewSynthesizer()
 	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources:   []openbindings.SynthesizeSource{{Content: spec}},
+		Sources:   []openbindings.SynthesizeSource{{Content: openbindings.TextContent(spec)}},
 		OnWarning: func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
 	if err != nil {

@@ -71,7 +71,7 @@ func TestAddressParameterExpansion(t *testing.T) {
 
 	publish := func(bindCtx map[string]any) error {
 		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: paramDoc(srv)},
+			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(paramDoc(srv))},
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
@@ -132,7 +132,7 @@ func TestAddressParameterEnumViolationRefused(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/post",
 		Context: map[string]any{"configuration": map[string]any{
 			"address": map[string]any{"parameters": map[string]any{"roomId": "backstage"}},
@@ -192,7 +192,7 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	defer binv.Close()
 	publish := func(bindCtx map[string]any) error {
 		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
+			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
@@ -239,7 +239,7 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	}
 	before := requests.Load()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: &docNoDefault},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docNoDefault)},
 		Ref:    "#/operations/post",
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
@@ -299,7 +299,7 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 	defer binv.Close()
 	publish := func(doc *document, bindCtx map[string]any) error {
 		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
+			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
@@ -366,7 +366,7 @@ func TestOnlyUnboundProtocolServersIsRefused(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/post",
 	})
 	_, err := drainOutputs(t, call)
@@ -405,7 +405,7 @@ func TestFullURLOverride(t *testing.T) {
 	defer binv.Close()
 	publish := func(bindCtx map[string]any) error {
 		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
+			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
@@ -493,7 +493,7 @@ func TestHTTPBindingMethodOverride(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/post",
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
@@ -510,7 +510,7 @@ func TestHTTPBindingMethodOverride(t *testing.T) {
 	}
 
 	sub := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/sub",
 	})
 	vals, err := drainOutputs(t, sub)
@@ -592,7 +592,7 @@ func TestWSBindingQueryAndHeadersGovernUpgrade(t *testing.T) {
 	defer binv.Close()
 	publish := func(bindCtx map[string]any) error {
 		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: wsBindingDoc(srv)},
+			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsBindingDoc(srv))},
 			Ref:     "#/operations/publish",
 			Context: bindCtx,
 		})
@@ -671,7 +671,7 @@ func TestWSBindingNonGETMethodRefused(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/publish",
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
@@ -707,7 +707,7 @@ func TestSSEEstablishmentRequiresEventStreamContentType(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: sseEventDoc(srv.URL, "/")},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
 		Ref:    "#/operations/receiveCaps",
 	})
 	_, err := drainOutputs(t, call)
@@ -746,7 +746,7 @@ func TestSSEWHATWGFraming(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: sseEventDoc(srv.URL, "/")},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
 		Ref:    "#/operations/receiveCaps",
 	})
 	vals, err := drainOutputs(t, call)
@@ -812,7 +812,7 @@ func TestInputTextLane(t *testing.T) {
 	defer binv.Close()
 	publish := func(v any) error {
 		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: laneDoc(srv, "http", "text/plain")},
+			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(laneDoc(srv, "http", "text/plain"))},
 			Ref:    "#/operations/post",
 		})
 		if err := call.Write(bg(), v); err != nil {
@@ -860,7 +860,7 @@ func TestInputExcludedFamilyRefusedPreDispatch(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: laneDoc(srv, "http", "avro/binary")},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(laneDoc(srv, "http", "avro/binary"))},
 		Ref:    "#/operations/post",
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
@@ -888,7 +888,7 @@ func TestInputExcludedFamilyRefusedPreDispatch(t *testing.T) {
 	c.Address = "/ws"
 	wsDoc.Channels["c"] = c
 	wsCall := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: wsDoc},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsDoc)},
 		Ref:    "#/operations/post",
 	})
 	if err := wsCall.Write(bg(), map[string]any{"m": 1}); err != nil {
@@ -930,7 +930,7 @@ func TestDecodeTextLaneAndReplyDirection(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/post",
 	})
 	if err := call.Write(bg(), "ping"); err != nil {
@@ -967,7 +967,7 @@ func TestDecodeTextLaneAndReplyDirection(t *testing.T) {
 		},
 	}
 	sub := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mixed},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(mixed)},
 		Ref:    "#/operations/sub",
 	})
 	events, err := drainOutputs(t, sub)
@@ -980,4 +980,14 @@ func TestDecodeTextLaneAndReplyDirection(t *testing.T) {
 	if events[0] != `{"seq":1}` {
 		t.Errorf("ambiguous declaration must decode on the text lane, got %v (%T)", events[0], events[0])
 	}
+}
+
+// mustContent marshals a Go value into the raw-JSON content carriage
+// (Source.Content presence semantics: raw JSON, nil = absent).
+func mustContent(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }

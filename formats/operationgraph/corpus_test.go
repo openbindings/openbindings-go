@@ -332,7 +332,7 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]openbindings.Operation{},
 		Sources: map[string]openbindings.Source{
-			"mock": {BindingSpec: mockFormat, Content: map[string]any{}},
+			"mock": {BindingSpec: mockFormat, Content: mustContent(map[string]any{})},
 		},
 		Bindings: map[string]openbindings.BindingEntry{},
 	}
@@ -352,7 +352,7 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 	doc := map[string]any{"graphs": map[string]any{"g": graphValue}}
 
 	call := opInvoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:    openbindings.InvocationSource{BindingSpec: BindingSpec, Content: doc},
+		Source:    openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:       "#/graphs/g",
 		Interface: iface,
 	})
@@ -484,4 +484,14 @@ func TestCorpusValidation(t *testing.T) {
 			})
 		}
 	}
+}
+
+// mustContent marshals a Go value into the raw-JSON content carriage
+// (Source.Content presence semantics: raw JSON, nil = absent).
+func mustContent(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }

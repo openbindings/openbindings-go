@@ -8,6 +8,8 @@ import (
 	"io"
 	"strings"
 
+	openbindings "github.com/openbindings/openbindings-go"
+
 	"github.com/bufbuild/protocompile"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -28,23 +30,22 @@ type discovery struct {
 }
 
 // discoverFromContent interprets an embedded content value per CONN-D-01's
-// structural discrimination (incorporating GRPC-D-01, §3, §5): a string is
-// single-file .proto source text; an object is a
+// structural discrimination (incorporating GRPC-D-01, §3, §5): a JSON
+// string is single-file .proto source text; a JSON object is a
 // google.protobuf.FileDescriptorSet in canonical protobuf JSON. No other
 // JSON type or shape is an accepted content value under this
-// specification. ([]byte is the string carriage arriving from a Go caller.)
-func discoverFromContent(ctx context.Context, content any) (*discovery, error) {
-	switch c := content.(type) {
-	case string:
-		return compileProtoText(ctx, []byte(c))
-	case []byte:
-		return compileProtoText(ctx, c)
-	case map[string]any:
-		return discoverFromDescriptorSet(c)
-	default:
-		return nil, fmt.Errorf(
-			"connect content must be single-file .proto source text (string) or a google.protobuf.FileDescriptorSet in canonical JSON (object), got %T (openbindings.connect@1 CONN-D-01)", content)
+// specification — a present null included.
+func discoverFromContent(ctx context.Context, content json.RawMessage) (*discovery, error) {
+	var text string
+	if err := json.Unmarshal(content, &text); err == nil {
+		return compileProtoText(ctx, []byte(text))
 	}
+	var set map[string]any
+	if err := json.Unmarshal(content, &set); err == nil && set != nil {
+		return discoverFromDescriptorSet(set)
+	}
+	return nil, fmt.Errorf(
+		"connect content must be single-file .proto source text (string) or a google.protobuf.FileDescriptorSet in canonical JSON (object), got %s (openbindings.connect@1 CONN-D-01)", openbindings.ContentKind(content))
 }
 
 // compileProtoText compiles embedded single-file .proto source text (the
@@ -151,7 +152,7 @@ func collectServices(disc *discovery, fd protoreflect.FileDescriptor) {
 // discoverFromProto parses embedded content (per CONN-D-01) or a .proto
 // file on disk (a synthesizer-lane convenience) and extracts service
 // descriptors.
-func discoverFromProto(ctx context.Context, location string, content any) (*discovery, error) {
+func discoverFromProto(ctx context.Context, location string, content json.RawMessage) (*discovery, error) {
 	if content != nil {
 		return discoverFromContent(ctx, content)
 	}

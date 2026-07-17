@@ -9,6 +9,7 @@ package openapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -90,7 +91,7 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 
 // cachedLoadDocument loads an OpenAPI doc, caching by location within a process.
 // When content is provided, the cache is bypassed and updated with the fresh parse.
-func (e *Invoker) cachedLoadDocument(location string, content any) (*openapi3.T, error) {
+func (e *Invoker) cachedLoadDocument(location string, content json.RawMessage) (*openapi3.T, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
 		if doc, ok := e.docCache[location]; ok {
@@ -189,7 +190,7 @@ func (e *Invoker) PrepareBinding(_ context.Context, args *openbindings.BindingIn
 // inline source content is parsed locally (external refs disabled so the
 // parse cannot fetch), and a location-only source is served from the warm
 // document cache. Returns nil when the document is not knowable without I/O.
-func (e *Invoker) prepareDoc(location string, content any) *openapi3.T {
+func (e *Invoker) prepareDoc(location string, content json.RawMessage) *openapi3.T {
 	if content != nil {
 		data, err := openbindings.ContentToBytes(content)
 		if err != nil {
@@ -263,7 +264,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 			if cerr != nil {
 				return nil, fmt.Errorf("embed source content: %w", cerr)
 			}
-			entry.Content = string(data)
+			entry.Content = openbindings.TextContent(string(data))
 			iface.Sources[DefaultSourceName] = entry
 		}
 	}

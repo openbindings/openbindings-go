@@ -271,7 +271,7 @@ func TestInterfaceValidate_SourceAcceptsBothLocationAndContent(t *testing.T) {
 			"both": {
 				BindingSpec: "openapi@3.1",
 				Location:    "https://api.example.com/api.json",
-				Content:     map[string]any{"openapi": "3.1.0"},
+				Content:     json.RawMessage(`{"openapi": "3.1.0"}`),
 			},
 		},
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 func TestConvertToInterface_CreatesOperations(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", `
+	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -22,7 +22,7 @@ service TestService {
   rpc GetItem(Request) returns (Response);
   rpc ListItems(Request) returns (Response);
 }
-`)
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ service TestService {
 }
 
 func TestConvertToInterface_CreatesBindingsWithRefs(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", `
+	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -54,7 +54,7 @@ message Response { string value = 1; }
 service TestService {
   rpc GetItem(Request) returns (Response);
 }
-`)
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ service TestService {
 }
 
 func TestConvertToInterface_SkipsClientStreaming(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", `
+	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -89,7 +89,7 @@ service TestService {
   rpc GetItem(Request) returns (Response);
   rpc StreamUpload(stream Request) returns (Response);
 }
-`)
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ service TestService {
 }
 
 func TestConvertToInterface_SourceEntry(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", `
+	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -118,7 +118,7 @@ message Response {}
 service TestService {
   rpc DoSomething(Request) returns (Response);
 }
-`)
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestConvertToInterface_NilDiscovery(t *testing.T) {
 }
 
 func TestConvertToInterface_InputOutputSchemas(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", `
+	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -158,7 +158,7 @@ message GetItemResponse { string name = 1; }
 service TestService {
   rpc GetItem(GetItemRequest) returns (GetItemResponse);
 }
-`)
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +350,7 @@ func TestConvertToInterface_WellKnownTimestampField(t *testing.T) {
 // int64-family fields must emit {"type":"integer","format":"int64"}, matching
 // grpc — not the bare {"type":"string"} connect previously emitted.
 func TestConvertToInterface_Int64Field(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", `
+	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -360,7 +360,7 @@ message Response { string value = 1; }
 service TestService {
   rpc GetItem(Request) returns (Response);
 }
-`)
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ service TestService {
 }
 
 func TestConvertToInterface_OneofSingleGroup(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", `
+	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -402,7 +402,7 @@ message Response { string value = 1; }
 service TestService {
   rpc GetItem(Request) returns (Response);
 }
-`)
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +452,7 @@ service TestService {
 // independent optional properties and a warning surfaces the loss, exactly
 // as formats/grpc does.
 func TestConvertToInterface_OneofMultipleGroupsFallsBackToProperties(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", `
+	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -471,7 +471,7 @@ message Response { string value = 1; }
 service TestService {
   rpc GetItem(Request) returns (Response);
 }
-`)
+`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +533,7 @@ service TestService {
 	var warnings []openbindings.SynthesizerWarning
 	c := NewSynthesizer()
 	_, err := c.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: proto}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)}},
 		OnWarning: func(w openbindings.SynthesizerWarning) {
 			warnings = append(warnings, w)
 		},

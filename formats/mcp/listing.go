@@ -50,15 +50,11 @@ var pinIdentityMember = map[string]string{
 // pagination-exhausted entity array in the 2025-11-25 result shapes.
 // Pagination members (nextCursor, _meta) and any other member are not part
 // of the representation: their presence makes the content invalid, refused
-// loudly here. Content is normalized through JSON so a Go-typed carriage and
-// a JSON-decoded one validate identically.
-func parsePinnedListing(content any) (*listing, error) {
-	raw, err := json.Marshal(content)
-	if err != nil {
-		return nil, fmt.Errorf("MCP source content is not JSON-representable: %v", err)
-	}
+// loudly here. Content arrives as raw JSON (presence-aware); any present
+// value that is not an object — a present null included — is refused.
+func parsePinnedListing(content json.RawMessage) (*listing, error) {
 	var members map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &members); err != nil || members == nil {
+	if err := json.Unmarshal(content, &members); err != nil || members == nil {
 		return nil, fmt.Errorf("MCP source content must be a pinned-listing object (MCP-D-01): a JSON object with entity arrays under tools/resources/resourceTemplates/prompts")
 	}
 

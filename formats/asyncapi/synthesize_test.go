@@ -119,7 +119,7 @@ func TestSynthesizeInterface_BindingSpec(t *testing.T) {
 func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	content := `{"asyncapi":"3.0.0","info":{"title":"T","version":"1.0.0"},"operations":{}}`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: "asyncapi@3.0", Content: content}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: "asyncapi@3.0", Content: openbindings.TextContent(content)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
@@ -134,7 +134,7 @@ func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	if src.Content == nil {
 		t.Fatal("content-fed synthesis must embed the artifact")
 	}
-	if s, _ := src.Content.(string); s != content {
+	if got, err := openbindings.ContentToBytes(src.Content); err != nil || string(got) != content {
 		t.Error("embedded content must be the provided artifact verbatim")
 	}
 }

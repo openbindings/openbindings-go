@@ -128,7 +128,7 @@ var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "p
 // String content parses as YAML 1.2 (JSON being a valid subset); duplicate
 // mapping keys are refused loudly by the YAML layer itself, satisfying the
 // §3 duplicate-key pin.
-func loadDocument(location string, content any) (*openapi3.T, error) {
+func loadDocument(location string, content json.RawMessage) (*openapi3.T, error) {
 	loader := openapi3.NewLoader()
 	loader.IsExternalRefsAllowed = true
 
@@ -178,7 +178,7 @@ func validateDocumentAddress(location string) error {
 	return nil
 }
 
-func loadDocumentRaw(loader *openapi3.Loader, location string, content any) (*openapi3.T, error) {
+func loadDocumentRaw(loader *openapi3.Loader, location string, content json.RawMessage) (*openapi3.T, error) {
 	// `location`, when present, must be an absolute URI (OAPI-D-02) —
 	// whether it is the fetch target or only the embedded content's base.
 	// The former bare-path lenience ("for local tooling") is gone: the

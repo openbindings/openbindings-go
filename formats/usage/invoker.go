@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,7 +56,7 @@ var _ openbindings.BuiltinHooksProvider = (*Invoker)(nil)
 // binary) — caching by location within a process. The artifact's declared
 // min_usage_version is checked against this implementation's supported
 // range (dropping that check would be silent).
-func (e *Invoker) cachedLoadSpec(ctx context.Context, location string, content any) (*Spec, error) {
+func (e *Invoker) cachedLoadSpec(ctx context.Context, location string, content json.RawMessage) (*Spec, error) {
 	if location != "" && content == nil {
 		if cached, ok := e.specCache.Load(location); ok {
 			return cached.(*Spec), nil
@@ -91,16 +92,18 @@ func (e *Invoker) cachedLoadSpec(ctx context.Context, location string, content a
 // document address (absolute URI: file, http, https) is dereferenced. A
 // bare filesystem path is a relative reference in form and is refused —
 // point it at file:// or embed the artifact as content.
-func artifactText(ctx context.Context, location string, content any, authorizeExec func([]string) bool) (string, error) {
+//
+// Content arrives as raw JSON (presence-aware: nil = absent, `null` =
+// present null); this family pins a PRESENT content to a JSON string
+// carrying the usage descriptor text (USAGE-D-01) and refuses anything
+// else — a present null included.
+func artifactText(ctx context.Context, location string, content json.RawMessage, authorizeExec func([]string) bool) (string, error) {
 	if content != nil {
-		switch c := content.(type) {
-		case string:
-			return c, nil
-		case []byte:
-			return string(c), nil
-		default:
-			return "", fmt.Errorf("usage source content must be the artifact text, got %T", content)
+		var text string
+		if err := json.Unmarshal(content, &text); err != nil {
+			return "", fmt.Errorf("usage source content must be the artifact text (a JSON string), got %s", openbindings.ContentKind(content))
 		}
+		return text, nil
 	}
 	if location == "" {
 		return "", fmt.Errorf("source must have location or content")
@@ -275,7 +278,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	if emittableAsLocation(location) {
 		sourceEntry.Location = location
 	} else {
-		sourceEntry.Content = text
+		sourceEntry.Content = openbindings.TextContent(text)
 	}
 
 	iface, err := buildInterfaceFromSpec(spec, sourceEntry)

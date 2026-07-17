@@ -41,7 +41,7 @@ func TestInspectSource_BasicRefs(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestInspectSource_JSONPointerFormat(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestInspectSource_DescriptionFromSummary(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +175,7 @@ func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +209,7 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
   }
 }`
 
-	doc, err := loadDocument("", content)
+	doc, err := loadDocument("", openbindings.TextContent(content))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 		createKeyByRef[b.Ref] = b.Operation
 	}
 
-	result, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{Content: content})
+	result, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{Content: openbindings.TextContent(content)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestInspectSource_NoPaths(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: content,
+		Content: openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -108,7 +108,7 @@ func TestInvokeBinding_CrossGraphRecursionBounded(t *testing.T) {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]openbindings.Operation{"recurse": {}},
 		Sources: map[string]openbindings.Source{
-			"g": {BindingSpec: BindingSpec, Content: graphDoc},
+			"g": {BindingSpec: BindingSpec, Content: mustContent(graphDoc)},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
 			"recurse.g": {Operation: "recurse", Source: "g", Ref: "#/graphs/loop"},
@@ -120,7 +120,7 @@ func TestInvokeBinding_CrossGraphRecursionBounded(t *testing.T) {
 	opInvoker.AddBindingInvoker(NewInvoker(opInvoker))
 
 	call := opInvoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:    openbindings.InvocationSource{BindingSpec: BindingSpec, Content: graphDoc},
+		Source:    openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(graphDoc)},
 		Ref:       "#/graphs/loop",
 		Interface: iface,
 	})

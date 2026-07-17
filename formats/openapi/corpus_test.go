@@ -131,11 +131,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 		// artifacts are self-contained, so the load performs no I/O.
 		var doc *openapi3.T
 		if src.Content != nil {
-			var content any
-			if err := json.Unmarshal(src.Content, &content); err != nil {
-				t.Fatalf("fixture content does not parse: %v", err)
-			}
-			d, err := loadDocument("", content)
+			d, err := loadDocument("", src.Content)
 			if err != nil {
 				return err
 			}

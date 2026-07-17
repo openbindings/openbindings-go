@@ -420,7 +420,7 @@ service ItemService {
 	synthesizer := NewSynthesizer()
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{
-			{BindingSpec: BindingSpec, Location: "localhost:50051", Content: proto},
+			{BindingSpec: BindingSpec, Location: "localhost:50051", Content: openbindings.TextContent(proto)},
 		},
 	})
 	if err != nil {

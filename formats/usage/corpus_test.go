@@ -124,14 +124,12 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 		}
 
 		// Content lane (USAGE-D-01): a present member — null included —
-		// must be a JSON string carrying usage descriptor source text.
+		// must be a JSON string carrying usage descriptor source text. The
+		// typed model now carries content as raw JSON with presence intact,
+		// so the fixture bytes feed the family lane directly.
 		var spec *Spec
 		if src.Content != nil {
-			var content any
-			if err := json.Unmarshal(src.Content, &content); err != nil {
-				t.Fatalf("fixture content does not parse: %v", err)
-			}
-			text, err := artifactText(context.Background(), "", content, nil)
+			text, err := artifactText(context.Background(), "", src.Content, nil)
 			if err != nil {
 				return err
 			}

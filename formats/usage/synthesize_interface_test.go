@@ -194,8 +194,8 @@ func TestConvertToInterface_SourceEntry(t *testing.T) {
 	if src.BindingSpec != BindingSpec {
 		t.Errorf("bindingSpec = %q, want %q", src.BindingSpec, BindingSpec)
 	}
-	if src.Content != `name "mycli"` {
-		t.Errorf("expected the pristine kdl text, got %v", src.Content)
+	if got, err := openbindings.ContentToBytes(src.Content); err != nil || string(got) != `name "mycli"` {
+		t.Errorf("expected the pristine kdl text, got %s", src.Content)
 	}
 }
 
@@ -372,8 +372,8 @@ func TestSynthesizeInterface_FilePathEmitsEmbeddedContent(t *testing.T) {
 			if src.Location != "" {
 				t.Errorf("emitted location = %q, want empty (a file path is not a conformant OBI-D-05 location)", src.Location)
 			}
-			if src.Content != emissionTestKDL {
-				t.Errorf("emitted content must be the pristine artifact text, got %v", src.Content)
+			if got, err := openbindings.ContentToBytes(src.Content); err != nil || string(got) != emissionTestKDL {
+				t.Errorf("emitted content must be the pristine artifact text, got %s", src.Content)
 			}
 			if err := iface.Validate(); err != nil {
 				t.Errorf("synthesized document must pass Interface.Validate: %v", err)

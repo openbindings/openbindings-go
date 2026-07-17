@@ -1,9 +1,17 @@
 package schemaprofile
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
-// inputCompatible implements profile v0.1 input rules (interface schema <= candidate schema).
-func inputCompatible(tgt, cand map[string]any) (bool, string, error) {
+// InputCompatible implements profile v0.1 input rules (interface schema <=
+// candidate schema). Both schemas MUST already be normalized (see
+// Normalizer.Normalize): $refs are not resolved here. Callers comparing
+// schemas from two documents normalize each side against its own root and
+// then call this — the same shape the TypeScript SDK's free
+// inputCompatible/outputCompatible functions have.
+func InputCompatible(tgt, cand map[string]any) (bool, string, error) {
 	// Trivial schema: {} is Top.
 	if len(cand) == 0 {
 		return true, "", nil
@@ -11,8 +19,10 @@ func inputCompatible(tgt, cand map[string]any) (bool, string, error) {
 	return compat(tgt, cand, true)
 }
 
-// outputCompatible implements profile v0.1 output/payload rules (candidate schema <= interface schema).
-func outputCompatible(tgt, cand map[string]any) (bool, string, error) {
+// OutputCompatible implements profile v0.1 output/payload rules (candidate
+// schema <= interface schema). Both schemas MUST already be normalized (see
+// Normalizer.Normalize); see InputCompatible.
+func OutputCompatible(tgt, cand map[string]any) (bool, string, error) {
 	// Trivial schema: {} is Top; allowed only if interface is also Top.
 	if len(cand) == 0 {
 		if len(tgt) == 0 {
@@ -123,7 +133,9 @@ func compat(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 	return true, "", nil
 }
 
-// missingTypes returns a quoted comma-separated list of types in a that are not in b.
+// missingTypes returns a quoted comma-separated list of types in a that are
+// not in b, sorted lexicographically so the reason string is deterministic
+// (type sets are Go maps; iteration order must never leak into diagnostics).
 func missingTypes(a, b map[string]struct{}) string {
 	if a == nil {
 		return "all types"
@@ -144,6 +156,7 @@ func missingTypes(a, b map[string]struct{}) string {
 		}
 		missing = append(missing, fmt.Sprintf("%q", k))
 	}
+	sort.Strings(missing)
 	if len(missing) == 1 {
 		return missing[0]
 	}
@@ -215,6 +228,12 @@ func hasUnion(schema map[string]any) bool {
 	return ok1 || ok2
 }
 
+// compatConstEnum applies the const/enum rules. Reason prefixes follow the
+// deciding-keyword convention: the prefix names the keyword whose constraint
+// rejects the flowing value — for inputs the CANDIDATE's keyword (the target
+// sends, the candidate refuses), for outputs the TARGET's (the candidate
+// produces, the target refuses). Mirrored byte-for-byte in the TypeScript
+// SDK's compat.ts.
 func compatConstEnum(tgt, cand map[string]any, isInput bool) (bool, string) {
 	tgtConst, tgtHasConst := tgt["const"]
 	candConst, candHasConst := cand["const"]
@@ -233,7 +252,7 @@ func compatConstEnum(tgt, cand map[string]any, isInput bool) (bool, string) {
 			if candHasEnum {
 				_, ok := candEnum[canonicalKey(tgtConst)]
 				if !ok {
-					return false, fmt.Sprintf("const: target const %s not in candidate enum", canonicalKey(tgtConst))
+					return false, fmt.Sprintf("enum: target const %s not in candidate enum", canonicalKey(tgtConst))
 				}
 				return true, ""
 			}
@@ -245,16 +264,16 @@ func compatConstEnum(tgt, cand map[string]any, isInput bool) (bool, string) {
 			if candHasConst {
 				// single const must cover all enum values
 				if len(tgtEnum) != 1 {
-					return false, fmt.Sprintf("enum: candidate const %s cannot cover %d target enum values", canonicalKey(candConst), len(tgtEnum))
+					return false, fmt.Sprintf("const: candidate const %s cannot cover %d target enum values", canonicalKey(candConst), len(tgtEnum))
 				}
 				_, ok := tgtEnum[canonicalKey(candConst)]
 				if !ok {
-					return false, fmt.Sprintf("enum: candidate const %s not in target enum", canonicalKey(candConst))
+					return false, fmt.Sprintf("const: candidate const %s not in target enum", canonicalKey(candConst))
 				}
 				return true, ""
 			}
 			if candHasEnum {
-				for k := range tgtEnum {
+				for _, k := range sortedSetKeys(tgtEnum) {
 					if _, ok := candEnum[k]; !ok {
 						return false, fmt.Sprintf("enum: target value %s not in candidate enum", k)
 					}
@@ -272,12 +291,12 @@ func compatConstEnum(tgt, cand map[string]any, isInput bool) (bool, string) {
 		if candHasConst {
 			_, ok := tgtEnum[canonicalKey(candConst)]
 			if !ok {
-				return false, fmt.Sprintf("const: candidate const %s not in target enum", canonicalKey(candConst))
+				return false, fmt.Sprintf("enum: candidate const %s not in target enum", canonicalKey(candConst))
 			}
 			return true, ""
 		}
 		if candHasEnum {
-			for k := range candEnum {
+			for _, k := range sortedSetKeys(candEnum) {
 				if _, ok := tgtEnum[k]; !ok {
 					return false, fmt.Sprintf("enum: candidate value %s not in target enum", k)
 				}
@@ -328,6 +347,9 @@ func enumSet(schema map[string]any) (map[string]struct{}, bool) {
 	return set, true
 }
 
+// compatObject applies the object rules. Set and property iteration is
+// SORTED so the first-failing member named in the reason is deterministic
+// (and byte-identical across the reference SDKs) when several members fail.
 func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 	tgtReq := stringSet(tgt["required"])
 	candReq := stringSet(cand["required"])
@@ -337,14 +359,14 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 
 	if isInput {
 		// required(cand) <= required(tgt)
-		for k := range candReq {
+		for _, k := range sortedSetKeys(candReq) {
 			if _, ok := tgtReq[k]; !ok {
 				return false, fmt.Sprintf("required: candidate requires %q but target does not", k)
 			}
 		}
 		// For each p in properties(tgt):
-		for p, tv := range tgtProps {
-			tvm, ok := asMap(tv)
+		for _, p := range sortedMapKeys(tgtProps) {
+			tvm, ok := asMap(tgtProps[p])
 			if !ok {
 				continue
 			}
@@ -370,7 +392,7 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 
 	// Outputs/payloads:
 	// required(tgt) <= required(cand)
-	for k := range tgtReq {
+	for _, k := range sortedSetKeys(tgtReq) {
 		if _, ok := candReq[k]; !ok {
 			return false, fmt.Sprintf("required: target requires %q but candidate does not", k)
 		}
@@ -379,7 +401,8 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 	tgtAP := tgt["additionalProperties"]
 
 	// For each property p in properties(cand):
-	for p, cv := range candProps {
+	for _, p := range sortedMapKeys(candProps) {
+		cv := candProps[p]
 		// If p not in properties(tgt), then additionalProperties(tgt) MUST NOT be false.
 		if _, ok := tgtProps[p]; !ok {
 			if b, ok := tgtAP.(bool); ok && b == false {
@@ -544,6 +567,28 @@ func unionVariants(schema map[string]any) ([]map[string]any, bool) {
 	return out, true
 }
 
+// sortedSetKeys returns a set's keys in lexicographic order — reason
+// strings must never leak Go map iteration order.
+func sortedSetKeys(set map[string]struct{}) []string {
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// sortedMapKeys returns a map's keys in lexicographic order (see
+// sortedSetKeys).
+func sortedMapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func stringSet(v any) map[string]struct{} {
 	arr, ok := asSlice(v)
 	if !ok {
@@ -570,6 +615,14 @@ func canonicalKey(v any) string {
 	return s
 }
 
+// fmtNum renders a numeric bound the way JCS (RFC 8785) serializes numbers
+// (ECMAScript Number::toString), so bound reasons are byte-identical across
+// the reference SDKs — the same rendering canonicalKey already gives
+// const/enum values.
+func fmtNum(v float64) string {
+	return canonicalKey(v)
+}
+
 func equalJSONValue(a, b any) bool {
 	return canonicalKey(a) == canonicalKey(b)
 }
@@ -589,9 +642,9 @@ func compatNumericBounds(tgt, cand map[string]any, isInput bool) (bool, string) 
 
 	fmtBound := func(v float64, excl bool) string {
 		if excl {
-			return fmt.Sprintf("exclusive %g", v)
+			return "exclusive " + fmtNum(v)
 		}
-		return fmt.Sprintf("%g", v)
+		return fmtNum(v)
 	}
 
 	if isInput {
@@ -749,32 +802,32 @@ func compatSimpleBounds(tgt, cand map[string]any, isInput bool, minKey, maxKey s
 		// min(cand) <= min(tgt). Absent cand = unconstrained (compatible).
 		if hasKey(tgt, minKey) && hasKey(cand, minKey) {
 			if toFloat64(cand[minKey]) > toFloat64(tgt[minKey]) {
-				return false, fmt.Sprintf("%s: candidate %s %g is greater than target %s %g", minKey, minKey, toFloat64(cand[minKey]), minKey, toFloat64(tgt[minKey]))
+				return false, fmt.Sprintf("%s: candidate %s %s is greater than target %s %s", minKey, minKey, fmtNum(toFloat64(cand[minKey])), minKey, fmtNum(toFloat64(tgt[minKey])))
 			}
 		}
 		// max(cand) >= max(tgt). Absent cand = unconstrained (compatible).
 		if hasKey(tgt, maxKey) && hasKey(cand, maxKey) {
 			if toFloat64(cand[maxKey]) < toFloat64(tgt[maxKey]) {
-				return false, fmt.Sprintf("%s: candidate %s %g is less than target %s %g", maxKey, maxKey, toFloat64(cand[maxKey]), maxKey, toFloat64(tgt[maxKey]))
+				return false, fmt.Sprintf("%s: candidate %s %s is less than target %s %s", maxKey, maxKey, fmtNum(toFloat64(cand[maxKey])), maxKey, fmtNum(toFloat64(tgt[maxKey])))
 			}
 		}
 	} else {
 		// min(cand) >= min(tgt). Absent cand when tgt present = incompatible.
 		if hasKey(tgt, minKey) {
 			if !hasKey(cand, minKey) {
-				return false, fmt.Sprintf("%s: target has %s %g but candidate has none", minKey, minKey, toFloat64(tgt[minKey]))
+				return false, fmt.Sprintf("%s: target has %s %s but candidate has none", minKey, minKey, fmtNum(toFloat64(tgt[minKey])))
 			}
 			if toFloat64(cand[minKey]) < toFloat64(tgt[minKey]) {
-				return false, fmt.Sprintf("%s: candidate %s %g is less than target %s %g", minKey, minKey, toFloat64(cand[minKey]), minKey, toFloat64(tgt[minKey]))
+				return false, fmt.Sprintf("%s: candidate %s %s is less than target %s %s", minKey, minKey, fmtNum(toFloat64(cand[minKey])), minKey, fmtNum(toFloat64(tgt[minKey])))
 			}
 		}
 		// max(cand) <= max(tgt). Absent cand when tgt present = incompatible.
 		if hasKey(tgt, maxKey) {
 			if !hasKey(cand, maxKey) {
-				return false, fmt.Sprintf("%s: target has %s %g but candidate has none", maxKey, maxKey, toFloat64(tgt[maxKey]))
+				return false, fmt.Sprintf("%s: target has %s %s but candidate has none", maxKey, maxKey, fmtNum(toFloat64(tgt[maxKey])))
 			}
 			if toFloat64(cand[maxKey]) > toFloat64(tgt[maxKey]) {
-				return false, fmt.Sprintf("%s: candidate %s %g is greater than target %s %g", maxKey, maxKey, toFloat64(cand[maxKey]), maxKey, toFloat64(tgt[maxKey]))
+				return false, fmt.Sprintf("%s: candidate %s %s is greater than target %s %s", maxKey, maxKey, fmtNum(toFloat64(cand[maxKey])), maxKey, fmtNum(toFloat64(tgt[maxKey])))
 			}
 		}
 	}

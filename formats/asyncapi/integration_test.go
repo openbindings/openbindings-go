@@ -195,7 +195,7 @@ func newHTTPFixture(t *testing.T) (*httptest.Server, *atomic.Int32) {
 }
 
 func httpSource(srv *httptest.Server) openbindings.InvocationSource {
-	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: makeAsyncAPISpec(srv.URL)}
+	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeAsyncAPISpec(srv.URL))}
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +295,7 @@ func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
 	for _, opRef := range []string{"#/operations/refScheme", "#/operations/inlineScheme"} {
 		t.Run(opRef, func(t *testing.T) {
 			details, err := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
-				Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: docJSON},
+				Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
 				Ref:    opRef,
 			})
 			if err != nil {
@@ -313,7 +313,7 @@ func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
 
 			// A bearer token in context satisfies the challenge.
 			ok, err := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
-				Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: docJSON},
+				Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
 				Ref:     opRef,
 				Context: map[string]any{"bearerToken": "t"},
 			})
@@ -357,7 +357,7 @@ func TestChannelWithoutAddressIsRefusedPreDispatch(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: docJSON},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
 		Ref:    "#/operations/notifyOp",
 	})
 	if err := call.Write(bg(), map[string]any{}); err != nil {
@@ -377,7 +377,7 @@ func TestChannelWithoutAddressIsRefusedPreDispatch(t *testing.T) {
 	// The consumer may supply the concrete address at the configuration
 	// point; the publish then dispatches to exactly that address.
 	call = binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: docJSON},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
 		Ref:     "#/operations/notifyOp",
 		Context: map[string]any{"configuration": map[string]any{"address": "/inbox"}},
 	})
@@ -637,7 +637,7 @@ func TestSSEReceiveCapIsPerEvent(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: sseEventDoc(srv.URL, "/")},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
 		Ref:    "#/operations/receiveCaps",
 	})
 	vals, err := drainOutputs(t, call)
@@ -662,7 +662,7 @@ func TestSSEReceiveSingleOversizedEventErrors(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: sseEventDoc(srv.URL, "/")},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
 		Ref:    "#/operations/receiveCaps",
 	})
 	_, err := drainOutputs(t, call)
@@ -717,7 +717,7 @@ func TestWiringErrors(t *testing.T) {
 			Source: httpSource(srv), Ref: "",
 		}, openbindings.ErrCodeInvalidRef},
 		{"unparsable source", &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: "not asyncapi"},
+			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent("not asyncapi")},
 			Ref:    "#/operations/sendMessage",
 		}, openbindings.ErrCodeSourceLoadFailed},
 	}
@@ -858,7 +858,7 @@ func TestOperationInvokerResolvesChallengeFromStore(t *testing.T) {
 			"sendMessage": {Input: map[string]any{"type": "object"}},
 		},
 		Sources: map[string]openbindings.Source{
-			DefaultSourceName: {BindingSpec: BindingSpec, Content: makeAsyncAPISpec(srv.URL)},
+			DefaultSourceName: {BindingSpec: BindingSpec, Content: mustContent(makeAsyncAPISpec(srv.URL))},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
 			"sendMessage." + DefaultSourceName: {
@@ -967,7 +967,7 @@ func writeWSJSON(ctx context.Context, conn *websocket.Conn, msg any) error {
 }
 
 func wsSource(srv *httptest.Server, scheme *securityScheme) openbindings.InvocationSource {
-	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: makeWSAsyncAPISpec(srv.URL, scheme)}
+	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeWSAsyncAPISpec(srv.URL, scheme))}
 }
 
 // ---------------------------------------------------------------------------
@@ -1406,7 +1406,7 @@ func TestNewInvokerWithClient(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: makeAsyncAPISpec("http://example.test")},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeAsyncAPISpec("http://example.test"))},
 		Ref:    "#/operations/sendOpenMessage",
 	})
 	if err := call.Write(bg(), map[string]any{"text": "hi"}); err != nil {

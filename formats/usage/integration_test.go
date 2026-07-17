@@ -79,7 +79,7 @@ cmd "prose" {
 
 // testSource is the bare-kdl fixture source: the artifact IS the source.
 func testSource() openbindings.InvocationSource {
-	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: testSpecKDL()}
+	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(testSpecKDL())}
 }
 
 // driver abstracts the two entry points tests exercise: the format
@@ -272,7 +272,7 @@ cmd "config" subcommand_required=#true {
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
 			BindingSpec: BindingSpec,
-			Content:     spec,
+			Content:     openbindings.TextContent(spec),
 		}},
 	})
 	if err != nil {
@@ -317,7 +317,7 @@ cmd "config" subcommand_required=#true {
 	if src.BindingSpec != BindingSpec {
 		t.Errorf("source format = %q, want the bare usage token", src.BindingSpec)
 	}
-	if src.Content != spec {
+	if string(src.Content) != string(openbindings.TextContent(spec)) {
 		t.Fatal("expected the pristine kdl text as embedded content")
 	}
 	binding := iface.Bindings["config.get."+DefaultSourceName]
@@ -387,7 +387,7 @@ arg "<words>..." help="Words to echo"
 `
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: rootKDL},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rootKDL)},
 		Ref:    "",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {

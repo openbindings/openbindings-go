@@ -49,6 +49,9 @@ func (n *Normalizer) Normalize(schema map[string]any) (map[string]any, error) {
 
 // InputCompatible reports whether candidate can stand in for target as an input schema.
 // When compatible is false and err is nil, reason describes why the schemas are incompatible.
+// Both schemas normalize against THIS normalizer's Root; when the two sides
+// come from different documents, normalize each with its own rooted
+// Normalizer and compare the results with the package-level InputCompatible.
 func (n *Normalizer) InputCompatible(target, candidate map[string]any) (bool, string, error) {
 	if n == nil {
 		return false, "", errors.New("schemaprofile: nil normalizer")
@@ -62,11 +65,13 @@ func (n *Normalizer) InputCompatible(target, candidate map[string]any) (bool, st
 	if err != nil {
 		return false, "", err
 	}
-	return inputCompatible(ti, tc)
+	return InputCompatible(ti, tc)
 }
 
 // OutputCompatible reports whether candidate can stand in for target as an output/payload schema.
 // When compatible is false and err is nil, reason describes why the schemas are incompatible.
+// Both schemas normalize against THIS normalizer's Root; for two-document
+// comparisons see the package-level OutputCompatible (per-side roots).
 func (n *Normalizer) OutputCompatible(target, candidate map[string]any) (bool, string, error) {
 	if n == nil {
 		return false, "", errors.New("schemaprofile: nil normalizer")
@@ -80,7 +85,7 @@ func (n *Normalizer) OutputCompatible(target, candidate map[string]any) (bool, s
 	if err != nil {
 		return false, "", err
 	}
-	return outputCompatible(ti, tc)
+	return OutputCompatible(ti, tc)
 }
 
 // CanonicalString returns the RFC 8785 (JCS) canonical JSON string of v.
