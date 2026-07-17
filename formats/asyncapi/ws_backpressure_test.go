@@ -13,7 +13,7 @@ import (
 	"nhooyr.io/websocket"
 )
 
-// WS slow-consumer backpressure (spec/formats/asyncapi.md, "WS slow-consumer
+// WS slow-consumer backpressure (spec/binding-specs/asyncapi/openbindings.asyncapi.md, "WS slow-consumer
 // backpressure" open point, settled 2026-07-11): the receive path bounds
 // undelivered frames between the shared socket reader and one subscription's
 // consumer at maxWSBufferedFrames frames or maxWSBufferedBytes in-flight

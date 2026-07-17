@@ -297,7 +297,7 @@ func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.Resul
 }
 
 // PlanContributions reports the openapi axis chain leaves: both built-in
-// default rules (the conventions record, spec/formats/README.md) are
+// default rules (the conventions record, spec/binding-specs/README.md) are
 // spec/wire answers, and routing is spec-covered (in:/requestBody) —
 // the FieldRouter is consulted but decline-only in v1.
 func (e *Invoker) PlanContributions(_ *openbindings.BindingInvocationArgs) (*openbindings.BindingPlan, error) {

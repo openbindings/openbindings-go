@@ -3,7 +3,7 @@
 ## 0.2.0 (working draft)
 
 **The openbindings.usage binding-unit format** (ratified 2026-07-06;
-authority: the companion spec at spec/formats/usage/openbindings.usage.md).
+authority: the companion spec at spec/binding-specs/usage/openbindings.usage.md).
 The format's source is now a JSON wrapper document embedding a pristine jdx
 usage.kdl plus per-command invocation units {command, delivery, stdout,
 exit}; OBI binding entries carry only {operation, source, ref} with refs as

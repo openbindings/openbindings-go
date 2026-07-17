@@ -916,7 +916,7 @@ func (eng *engine) evalOrFail(
 	return result, false
 }
 
-// isTruthy implements JSONata 2.0's boolean cast ($boolean) for filter
+// isTruthy implements JSONata 2.1's boolean cast ($boolean) for filter
 // expression results: empty composites are false, and an array is true only
 // if some member casts to true. (Undefined never reaches here: it fails the
 // node with TRANSFORM_UNDEFINED per the Transforms rule.)

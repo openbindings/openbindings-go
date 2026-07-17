@@ -588,7 +588,7 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	}
 
 	// Success provenance stamps (the conventions record,
-	// spec/formats/README.md): decode is spec/content-type (the message's
+	// spec/binding-specs/README.md): decode is spec/content-type (the message's
 	// declared contentType decides the lane), hook when overridden;
 	// classify is not-consulted (asyncapi runs no result classifier — the
 	// HTTP 4xx guard above is transport, not a format verdict).
@@ -961,7 +961,7 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, target resolvedTarget, ad
 // Backpressure bounds for the undelivered-frame buffer between a pooled
 // socket's broadcast and one subscription's consumer: whichever
 // bound trips first fails THAT subscription loudly rather than buffering
-// unboundedly (bounded-queue-fail-loud, per spec/formats/asyncapi.md's WS
+// unboundedly (bounded-queue-fail-loud, per spec/binding-specs/asyncapi/openbindings.asyncapi.md's WS
 // slow-consumer ruling — Redis client-output-buffer-limit, NATS
 // slow-consumer, and MQTT max_queued_messages are the pub/sub-ecosystem
 // precedent, and NATS pairs a count bound with a byte bound the same way).
@@ -1384,7 +1384,7 @@ func builtinDecodeFor(contentType string) openbindings.OutputDecoder {
 }
 
 // decodeTrailer builds the x-ob-decode provenance stamp (the conventions
-// record, spec/formats/README.md) — and the fixed x-ob-classify
+// record, spec/binding-specs/README.md) — and the fixed x-ob-classify
 // not-consulted stamp, asyncapi runs no classifier — for a
 // successful message decode, given the builtin decode provenance token.
 func decodeTrailer(hooks *openbindings.InvokeHooks, builtinDecode string) openbindings.Metadata {

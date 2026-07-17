@@ -1,8 +1,17 @@
-// Package operationgraph implements the openbindings.operation-graph binding
-// format (the transparency rewrite, openbindings.operation-graph@0.2.0). It
-// executes operation graphs: directed graphs of typed nodes that compose OBI
-// operations, governed by the identity law — `input → operation(y) → output`
-// is observationally indistinguishable from invoking y directly.
+// Package operationgraph implements the openbindings.operation-graph@1 binding
+// specification. It executes operation graphs: directed graphs of typed nodes
+// that compose OBI operations, governed by the identity law —
+// `input → operation(y) → output` is observationally indistinguishable from
+// invoking y directly.
+//
+// Two versions travel together and must not be confused. The binding
+// specification identifier is openbindings.operation-graph@1 — opaque and
+// exact, carried in a source's bindingSpec field (see BindingSpec). The
+// graph-unit format has its own edition, which each graph declares in its
+// openbindings.operation-graph field; this package targets edition 0.2.0, the
+// ground-up rewrite around the transparency principle. The
+// openbindings.operation-graph@0.2.0 token is not the identifier: it is the
+// pre-bindingSpec form the @1 identifier replaced.
 package operationgraph
 
 import (

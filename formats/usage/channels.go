@@ -39,7 +39,7 @@ const maxRouteBytes = maxCLIOutputBytes
 // stdin payload (nil when no field rides stdin), a cleanup for any
 // materialized temp files, and the per-field routing record (for
 // x-ob-route provenance and tests). Record values are provenance-qualified
-// per the conventions record's x-ob-route stamps (spec/formats/README.md):
+// per the conventions record's x-ob-route stamps (spec/binding-specs/README.md):
 // "assumption/argv" when the chain declined to the
 // default, "hook/<token>" when a hook elected the channel (tier-blind on
 // purpose — success provenance is).

@@ -202,7 +202,7 @@ func Example_canonicaljson() {
 }
 
 func ExampleTransform() {
-	// Per v0.2 §6.5, transforms are JSONata 2.0 expression strings.
+	// Per v0.2 §5.5, transforms are JSONata 2.1 expression strings.
 	iface := openbindings.Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]openbindings.Operation{

@@ -281,7 +281,7 @@ func (e *Invoker) PlanContributions(args *openbindings.BindingInvocationArgs) (*
 
 // emitWithDiagnostics stamps the diagnostics trailer and emits the output.
 // The trailer carries the success provenance stamps (the conventions
-// record, spec/formats/README.md) — x-ob-decode
+// record, spec/binding-specs/README.md) — x-ob-decode
 // ("assumption/text" | "hook"), x-ob-classify ("assumption/exit-0" |
 // "hook"), and the provenance-qualified per-field x-ob-route — plus the
 // exec carrier facts (x-exit-code, tail-capped x-stderr). Tier-blind on
