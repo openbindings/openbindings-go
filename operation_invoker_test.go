@@ -39,6 +39,19 @@ type mockBindingInvoker struct {
 	prepares int
 	reads    [][]any // inputs read per attempt
 	contexts []map[string]any
+	lastSite *InvokeSite
+}
+
+// lastBindingKey reports the binding key of the most recent invocation's
+// site — the selection outcome the operation layer stamps on the
+// binding-layer args.
+func (m *mockBindingInvoker) lastBindingKey() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastSite == nil {
+		return ""
+	}
+	return m.lastSite.BindingKey
 }
 
 func (m *mockBindingInvoker) BindingSpecs() []BindingSpecInfo {
@@ -60,6 +73,7 @@ func (m *mockBindingInvoker) InvokeBinding(ctx context.Context, args *BindingInv
 	m.mu.Lock()
 	m.attempts++
 	m.contexts = append(m.contexts, args.Context)
+	m.lastSite = args.Site
 	idx := len(m.reads)
 	m.reads = append(m.reads, nil)
 	m.mu.Unlock()
@@ -1063,59 +1077,31 @@ func TestInvoke_SelectionOverrideViaConfiguration(t *testing.T) {
 
 	// Default policy: ping.alt declares a preference, ping.main does not —
 	// the declared one wins.
-	plan, err := op.PlanOperation(bg(), iface, "ping")
-	if err != nil {
+	if _, err := drainOutputs(t, Invoke(bg(), op, iface, NewOperationSignature[any, any]("ping"))); err != nil {
 		t.Fatal(err)
 	}
-	if plan.BindingKey != "ping.alt" {
-		t.Fatalf("declared preference must win by default, got %q", plan.BindingKey)
+	if got := mock.lastBindingKey(); got != "ping.alt" {
+		t.Fatalf("declared preference must win by default, got %q", got)
 	}
 
 	// The consumer override displaces the policy.
-	plan, err = op.PlanOperation(bg(), iface, "ping",
+	call := Invoke(bg(), op, iface, NewOperationSignature[any, any]("ping"),
 		WithContext(map[string]any{"configuration": map[string]any{"selection": []any{"ping.main"}}}))
-	if err != nil {
+	if _, err := drainOutputs(t, call); err != nil {
 		t.Fatal(err)
 	}
-	if plan.BindingKey != "ping.main" {
-		t.Fatalf("configuration.selection must displace the default, got %q", plan.BindingKey)
+	if got := mock.lastBindingKey(); got != "ping.main" {
+		t.Fatalf("configuration.selection must displace the default, got %q", got)
 	}
 
 	// An explicit binding key bypasses selection (and the override) entirely.
-	plan, err = op.PlanOperation(bg(), iface, "ping",
+	call = Invoke(bg(), op, iface, NewOperationSignature[any, any]("ping"),
 		WithBindingKey("ping.alt"),
 		WithContext(map[string]any{"configuration": map[string]any{"selection": []any{"ping.main"}}}))
-	if err != nil {
+	if _, err := drainOutputs(t, call); err != nil {
 		t.Fatal(err)
 	}
-	if plan.BindingKey != "ping.alt" {
-		t.Fatalf("an explicit binding key bypasses the override, got %q", plan.BindingKey)
-	}
-}
-
-// A format outside the consultation seam (not a BuiltinHooksProvider) must
-// plan as not-consulted on the decode/classify axes even when an
-// invoker-level hook is attached — the plan is the one diagnostic surface
-// for "will my hook run?", and claiming "hook" for a format that ignores
-// the seam is exactly the wrong answer.
-func TestPlanOperation_NonSeamFormatReportsNotConsulted(t *testing.T) {
-	iface := &Interface{
-		OpenBindings: "0.2.0",
-		Operations:   map[string]Operation{"op": {}},
-		Sources:      map[string]Source{"s": {BindingSpec: "mock@1.0", Location: "mem://x"}},
-		Bindings:     map[string]BindingEntry{"op.s": {Operation: "op", Source: "s", Ref: "op"}},
-	}
-	opInv := NewOperationInvoker(&mockBindingInvoker{}) // no BuiltinHooksProvider
-	opInv.OutputDecoder = func(InvokeSite, RawResult) (any, error) { return nil, nil }
-
-	plan, err := opInv.PlanOperation(context.Background(), iface, "op")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.Decode.Chain) != 1 || plan.Decode.Chain[0] != "not-consulted" {
-		t.Errorf("Decode.Chain = %v, want [not-consulted]", plan.Decode.Chain)
-	}
-	if len(plan.Classify.Chain) != 1 || plan.Classify.Chain[0] != "not-consulted" {
-		t.Errorf("Classify.Chain = %v, want [not-consulted]", plan.Classify.Chain)
+	if got := mock.lastBindingKey(); got != "ping.alt" {
+		t.Fatalf("an explicit binding key bypasses the override, got %q", got)
 	}
 }

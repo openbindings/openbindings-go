@@ -717,10 +717,10 @@ func (e *OperationInvoker) runOutputs(
 				inner.Cancel()
 				lines := splitSchemaError(verr)
 				msg := fmt.Sprintf("openbindings: output validation failed for %q: %s", bindingKey, strings.Join(lines, "; "))
-				// Contract-decided teaching (the diagnostics contract): a
-				// hook-decoded value failing against a floor-stamped
-				// derived schema means the CONTRACT still declares the
-				// floor — the remedy is the schema election, not the hook.
+				// Contract-decided teaching: a hook-decoded value failing
+				// against a floor-stamped derived schema means the CONTRACT
+				// still declares the floor — the remedy is the schema
+				// election, not the hook.
 				if FloorStamped(outputSchema) && hooks.DecodeDecidedBy() == "hook" {
 					msg += " — the synthesized schema still declares the floor's string; elect the real output schema (a stored output-schema election on the operation)"
 				} else if tier := hooks.DecodeDecidedBy(); tier != "" {
@@ -993,81 +993,4 @@ func applyTransformRef(eval TransformEvaluator, transforms map[string]Transform,
 	}
 
 	return eval.Evaluate(expr, data)
-}
-
-// PlanOperation is the side-effect-free invocation plan (the diagnostics
-// contract's probe): per axis (route per-field), the CONSULTATION CHAIN —
-// which tiers would be asked, in order, and the format's leaf answer —
-// never a predicted outcome (hooks are opaque and decline on data that
-// does not exist at plan time). Per-invocation opts are visible to it.
-// Process-local: it reports THIS process's configuration.
-func (e *OperationInvoker) PlanOperation(ctx context.Context, obi *Interface, operation string, opts ...InvokeOption) (*InvocationPlan, error) {
-	var cfg invokeConfig
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-	_, bindingKey, binding, source, ierr := e.resolveBinding(obi, operation, cfg.bindingKey, cfg.context)
-	if ierr != nil {
-		return nil, ierr
-	}
-
-	plan := &InvocationPlan{
-		Operation:   binding.Operation,
-		BindingKey:  bindingKey,
-		BindingSpec: source.BindingSpec,
-		Ref:         binding.Ref,
-	}
-
-	// The format's contribution: axis leaves + per-field route answers.
-	// A format that does not participate in the consultation seam (not a
-	// BuiltinHooksProvider — machine formats answer their own wire
-	// questions) contributes "not-consulted" on every axis, so the plan
-	// never claims a hook will run where the format ignores the seam.
-	var contrib *BindingPlan
-	consultsSeam := false
-	if inv := e.invoker.findInvoker(source.BindingSpec); inv != nil {
-		if p, ok := inv.(BuiltinHooksProvider); ok {
-			consultsSeam = true
-			args := &BindingInvocationArgs{
-				Source: InvocationSource{BindingSpec: source.BindingSpec, Location: source.Location, Content: source.Content},
-				Ref:    binding.Ref,
-			}
-			if c, err := p.PlanContributions(args); err == nil {
-				contrib = c
-			}
-		}
-	}
-	if contrib == nil {
-		contrib = &BindingPlan{}
-	}
-	if !consultsSeam {
-		notConsulted := PlanAxis{Chain: []string{"not-consulted"}}
-		if len(contrib.Decode.Chain) == 0 {
-			contrib.Decode = notConsulted
-		}
-		if len(contrib.Classify.Chain) == 0 {
-			contrib.Classify = notConsulted
-		}
-	}
-
-	hookAttached := func(perInv, invoker bool) bool { return perInv || invoker }
-	chain := func(leaf PlanAxis, attached bool) PlanAxis {
-		axis := PlanAxis{Detail: leaf.Detail}
-		if attached && (len(leaf.Chain) == 0 || leaf.Chain[0] != "not-consulted") {
-			axis.Chain = append(axis.Chain, "hook")
-		}
-		axis.Chain = append(axis.Chain, leaf.Chain...)
-		return axis
-	}
-
-	plan.Decode = chain(contrib.Decode, hookAttached(cfg.hooks.decode != nil, e.OutputDecoder != nil))
-	plan.Classify = chain(contrib.Classify, hookAttached(cfg.hooks.classify != nil, e.ResultClassifier != nil))
-	if len(contrib.Route) > 0 {
-		plan.Route = make(map[string]PlanAxis, len(contrib.Route))
-		routeHooked := hookAttached(cfg.hooks.route != nil, e.FieldRouter != nil)
-		for field, leaf := range contrib.Route {
-			plan.Route[field] = chain(leaf, routeHooked)
-		}
-	}
-	return plan, nil
 }
