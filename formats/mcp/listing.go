@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -114,6 +115,35 @@ func pinEntityIdentities(raw json.RawMessage, member, idKey string) ([]string, e
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+// pinnedDiscovery decodes a pinned listing (MCP-D-01) into the synthesis
+// lanes' discovery view. The same grammar validation parsePinnedListing
+// applies — stray members, entity-array shapes, identity members, all
+// refused loudly — followed by decoding the full 2025-11-25 entity shapes
+// the synthesis lanes read (descriptions, schemas, prompt arguments). The
+// pin is authoritative (§6 content primacy): the server is never dialed. A
+// pin carries no serverInfo, so ServerInfo stays nil — the interface's
+// name/version, when wanted, come from SynthesizeInput.
+func pinnedDiscovery(content json.RawMessage) (*discovery, error) {
+	if _, err := parsePinnedListing(content); err != nil {
+		return nil, err
+	}
+	var pin struct {
+		Tools             []*gomcp.Tool             `json:"tools"`
+		Resources         []*gomcp.Resource         `json:"resources"`
+		ResourceTemplates []*gomcp.ResourceTemplate `json:"resourceTemplates"`
+		Prompts           []*gomcp.Prompt           `json:"prompts"`
+	}
+	if err := json.Unmarshal(content, &pin); err != nil {
+		return nil, fmt.Errorf("MCP pinned listing entities do not decode as the 2025-11-25 result shapes (MCP-D-01): %v", err)
+	}
+	return &discovery{
+		Tools:             pin.Tools,
+		Resources:         pin.Resources,
+		ResourceTemplates: pin.ResourceTemplates,
+		Prompts:           pin.Prompts,
+	}, nil
 }
 
 // liveListing obtains the entity family a ref needs from the addressed

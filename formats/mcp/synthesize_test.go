@@ -1,9 +1,12 @@
 package mcp
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func TestConvertToInterface_CopiesServerInfo(t *testing.T) {
@@ -308,5 +311,163 @@ func TestConvertToInterface_ToolFallsBackToTitle(t *testing.T) {
 	}
 	if iface.Operations["my_tool"].Description != "My Tool Title" {
 		t.Errorf("description = %q, want My Tool Title", iface.Operations["my_tool"].Description)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pinned-listing synthesis (MCP-D-01, §6 content primacy)
+// ---------------------------------------------------------------------------
+
+// A source carrying content is a pinned listing: synthesis reads the pin
+// OFFLINE — the server is never dialed (the dead-end counter proves it) —
+// and the emitted OBI matches what the same live listing would produce.
+func TestSynthesizeInterface_PinnedListingIsOffline(t *testing.T) {
+	ts, requests := deadEndServer(t)
+
+	pin := map[string]any{
+		"tools": []any{map[string]any{
+			"name":        "get_weather",
+			"description": "Get weather",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"city": map[string]any{"type": "string"}},
+			},
+		}},
+		"resources": []any{map[string]any{
+			"uri": "app://status", "name": "status", "description": "Application status",
+		}},
+		"resourceTemplates": []any{map[string]any{
+			"uriTemplate": "file:///{path}", "name": "file",
+		}},
+		"prompts": []any{map[string]any{
+			"name":      "greet",
+			"arguments": []any{map[string]any{"name": "name", "required": true}},
+		}},
+	}
+
+	synth := NewSynthesizer()
+	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Location:    ts.URL,
+			Content:     mustContent(pin),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantRefs := map[string]string{
+		"get_weather." + DefaultSourceName: "tools/get_weather",
+		"status." + DefaultSourceName:      "resources/app://status",
+		"file." + DefaultSourceName:        "resources/file:///{path}",
+		"greet." + DefaultSourceName:       "prompts/greet",
+	}
+	if len(iface.Operations) != 4 {
+		t.Fatalf("expected 4 operations, got %d (%v)", len(iface.Operations), iface.Operations)
+	}
+	for key, ref := range wantRefs {
+		b, ok := iface.Bindings[key]
+		if !ok {
+			t.Errorf("expected binding %q", key)
+			continue
+		}
+		if b.Ref != ref {
+			t.Errorf("binding %q ref = %q, want %q", key, b.Ref, ref)
+		}
+	}
+
+	if in, ok := iface.Operations["get_weather"].Input.(map[string]any); !ok || in["type"] != "object" {
+		t.Errorf("get_weather input schema not decoded from the pin: %v", iface.Operations["get_weather"].Input)
+	}
+	greetIn, ok := iface.Operations["greet"].Input.(map[string]any)
+	if !ok {
+		t.Fatalf("greet input schema not derived from pinned prompt arguments: %v", iface.Operations["greet"].Input)
+	}
+	if req, _ := greetIn["required"].([]string); len(req) != 1 || req[0] != "name" {
+		t.Errorf("greet required = %v, want [name]", greetIn["required"])
+	}
+	if src := iface.Sources[DefaultSourceName]; src.Location != ts.URL {
+		t.Errorf("source location = %q, want %q", src.Location, ts.URL)
+	}
+
+	if n := requests.Load(); n != 0 {
+		t.Errorf("pinned synthesis must be offline; server saw %d requests", n)
+	}
+}
+
+// An invalid pin is refused loudly before any I/O: the pin grammar
+// (stray members included) and the 2025-11-25 entity shapes both gate the
+// synthesis lane exactly as they gate invocation.
+func TestSynthesizeInterface_InvalidPinRefusedLoudly(t *testing.T) {
+	ts, requests := deadEndServer(t)
+
+	synth := NewSynthesizer()
+	cases := []struct {
+		name string
+		pin  any
+	}{
+		{"stray nextCursor", map[string]any{
+			"tools":      []any{map[string]any{"name": "probe"}},
+			"nextCursor": "page2",
+		}},
+		{"non-object content", "not a listing"},
+		{"entry missing identity", map[string]any{"tools": []any{map[string]any{"description": "no name"}}}},
+		{"entity shape mismatch", map[string]any{"tools": []any{map[string]any{"name": "probe", "description": 5}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+				Sources: []openbindings.SynthesizeSource{{
+					BindingSpec: BindingSpec,
+					Location:    ts.URL,
+					Content:     mustContent(tc.pin),
+				}},
+			})
+			if err == nil {
+				t.Fatal("expected an invalid-pin refusal")
+			}
+			if !strings.Contains(err.Error(), "MCP-D-01") {
+				t.Errorf("refusal should cite MCP-D-01, got: %v", err)
+			}
+		})
+	}
+
+	if n := requests.Load(); n != 0 {
+		t.Errorf("invalid pins must be refused before network I/O; server saw %d requests", n)
+	}
+}
+
+// Content does not waive MCP-D-02: a pinned source still requires the
+// location, refused offline.
+func TestSynthesizeInterface_PinWithoutLocationRefused(t *testing.T) {
+	synth := NewSynthesizer()
+	_, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Content:     mustContent(map[string]any{"tools": []any{map[string]any{"name": "probe"}}}),
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "MCP-D-02") {
+		t.Fatalf("expected an MCP-D-02 refusal, got: %v", err)
+	}
+}
+
+// Without content there is no pin: synthesis still dials the live server.
+func TestSynthesizeInterface_AbsentContentDialsLive(t *testing.T) {
+	ts, requests := deadEndServer(t)
+
+	synth := NewSynthesizer()
+	_, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Location:    ts.URL,
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected discovery against a dead-end server to fail")
+	}
+	if n := requests.Load(); n == 0 {
+		t.Error("absent content must dial the live server; server saw no requests")
 	}
 }

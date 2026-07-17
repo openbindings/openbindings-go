@@ -985,4 +985,3 @@ func contentToMap(c gomcp.Content) map[string]any {
 		return map[string]any{"type": "unknown"}
 	}
 }
-

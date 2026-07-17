@@ -8,16 +8,32 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// InspectSource connects to an MCP server and returns all bindable targets
-// (tools, resources, resource templates, and prompts).
+// InspectSource returns all bindable targets (tools, resources, resource
+// templates, and prompts). A source carrying content is a pinned listing
+// (MCP-D-01): inspection reads the pin offline (§6 content primacy) and the
+// server is never dialed — MCP-D-02 still requires the location, and an
+// invalid pin is refused loudly before any I/O. Without content, discovery
+// connects live.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
-	if source.Location == "" {
-		return nil, fmt.Errorf("MCP source requires a location (server URL)")
-	}
-
-	disc, err := discover(ctx, c.clientVersion, c.httpClient, source.Location)
-	if err != nil {
-		return nil, fmt.Errorf("MCP discovery: %w", err)
+	var disc *discovery
+	if source.Content != nil {
+		if err := validateEndpoint(source.Location); err != nil {
+			return nil, err
+		}
+		d, err := pinnedDiscovery(source.Content)
+		if err != nil {
+			return nil, err
+		}
+		disc = d
+	} else {
+		if source.Location == "" {
+			return nil, fmt.Errorf("MCP source requires a location (server URL)")
+		}
+		d, err := discover(ctx, c.clientVersion, c.httpClient, source.Location)
+		if err != nil {
+			return nil, fmt.Errorf("MCP discovery: %w", err)
+		}
+		disc = d
 	}
 
 	var targets []openbindings.BindableTarget
