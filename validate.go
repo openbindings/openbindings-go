@@ -57,13 +57,13 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 	} else if higher, err := IsHigherMajorOrPre1MinorThanMaxTested(i.OpenBindings); err != nil {
 		errs = append(errs, fmt.Sprintf("openbindings: %v (OBI-T-04)", err))
 	} else if higher {
-		errs = append(errs, fmt.Sprintf("openbindings: %q exceeds this SDK's MaxTestedVersion %q (OBI-T-04)", i.OpenBindings, MaxTestedVersion))
+		errs = append(errs, fmt.Sprintf("openbindings: document declares version %q, newer than the latest version this implementation supports (%s) (OBI-T-04)", i.OpenBindings, MaxTestedVersion))
 	} else if lower, _ := IsLowerThanMinSupported(i.OpenBindings); lower {
 		// Reachable only when the version parsed, so the error is ignored.
-		errs = append(errs, fmt.Sprintf("openbindings: %q is below this SDK's MinSupportedVersion %q (OBI-T-04)", i.OpenBindings, MinSupportedVersion))
+		errs = append(errs, fmt.Sprintf("openbindings: document declares version %q, older than the oldest version this implementation supports (%s) (OBI-T-04)", i.OpenBindings, MinSupportedVersion))
 	} else if pre, _ := IsUnsupportedPrerelease(i.OpenBindings); pre {
 		// Reachable only when the version parsed (IsValidSemver passed above), so the error is ignored.
-		errs = append(errs, fmt.Sprintf("openbindings: %q is a pre-release this SDK does not declare support for (OBI-T-04)", i.OpenBindings))
+		errs = append(errs, fmt.Sprintf("openbindings: document declares version %q, a pre-release this implementation does not support (OBI-T-04)", i.OpenBindings))
 	}
 
 	// Generic-JSON view of the whole document for OBI-D-16 pointer

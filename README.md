@@ -214,7 +214,7 @@ opInv := openbindings.NewOperationInvoker(
 
 Invokers implement `BindingInvoker`. Interface synthesizers (which synthesize OBIs from raw specs) implement `InterfaceSynthesizer`. Source inspectors (which enumerate refs in a source) implement `SourceInspector`. A single type may implement any combination.
 
-Every HTTP-speaking invoker accepts an injected `*http.Client` via `NewInvokerWithClient` (it also rides WebSocket upgrade handshakes), and invokers that pool resources — grpc connections, asyncapi WebSockets, mcp sessions — implement `io.Closer`.
+Most HTTP-speaking invokers (openapi, asyncapi, graphql, connect) accept an injected `*http.Client` via `NewInvokerWithClient` (it also rides WebSocket upgrade handshakes); mcp takes one through the `WithHTTPClient` option; grpc, which is not `*http.Client`-based, injects transport via `WithDialOptions`/`WithTransportCredentials`. Invokers that pool resources — grpc connections, asyncapi WebSockets, mcp sessions — implement `io.Closer`.
 
 ## Context and authentication
 
@@ -270,7 +270,7 @@ side-effect-free `BindingPreparer` preflight.
 
 ## Transforms (invoking tools only)
 
-OpenBindings mandates JSONata 2.0 as the transform language for tools that
+OpenBindings mandates JSONata 2.1 as the transform language for tools that
 evaluate `inputTransform`/`outputTransform` (OBI-T-10). This SDK does not
 bundle a JSONata runtime — tools that only parse, validate, inspect, or
 generate code do not need one — and it does not pick a Go implementation

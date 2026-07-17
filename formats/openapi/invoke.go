@@ -377,7 +377,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 }
 
 // decodeClassifyTrailer builds the x-ob-decode/x-ob-classify success
-// provenance stamps (the conventions record, spec/formats/README.md) for
+// provenance stamps (the conventions record, spec/binding-specs/README.md) for
 // an HTTP-lane invoker, given the axis's builtin provenance token. A hook
 // decision on either axis stamps "hook".
 func decodeClassifyTrailer(hooks *openbindings.InvokeHooks, builtinDecode string) openbindings.Metadata {

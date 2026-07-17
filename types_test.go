@@ -391,7 +391,7 @@ func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingFields(t *te
 }
 
 func TestTransform_StringRoundTrip(t *testing.T) {
-	// Per v0.2 spec §6.5, transforms are JSONata 2.0 expression strings.
+	// Per v0.2 spec §5.5, transforms are JSONata 2.1 expression strings.
 	// The previous object form ({type, expression, x-*, unknown}) is gone.
 	in := []byte(`"{ amount: total }"`)
 
@@ -528,7 +528,7 @@ func TestTransformOrRef_RefIgnoresExtraFields(t *testing.T) {
 }
 
 func TestTransformOrRef_InlineTransform(t *testing.T) {
-	// Per v0.2 spec §6.5, an inline transform is a bare JSONata expression string.
+	// Per v0.2 spec §5.5, an inline transform is a bare JSONata expression string.
 	in := []byte(`"{ charge_amount: amount }"`)
 
 	var tor TransformOrRef

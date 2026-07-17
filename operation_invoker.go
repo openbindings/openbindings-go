@@ -497,7 +497,7 @@ func (e *OperationInvoker) run(
 		for k, v := range inner.Trailer() {
 			merged[k] = v
 		}
-		// Per the conventions record (spec/formats/README.md), the
+		// Per the conventions record (spec/binding-specs/README.md), the
 		// unvalidated-assumption warning rides the trailer on
 		// SUCCESS only (failures carry tier-precise provenance already),
 		// keyed on the format's own decode stamp — only an assumption

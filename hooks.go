@@ -183,7 +183,7 @@ type InvokeHooks struct {
 	decodeDecidedBy string
 	// classifyDecidedBy mirrors decodeDecidedBy for the classify axis —
 	// read by the x-ob-classify success provenance stamp (the conventions
-	// record, spec/formats/README.md).
+	// record, spec/binding-specs/README.md).
 	classifyDecidedBy string
 }
 
@@ -507,7 +507,7 @@ func FloorStamped(schema JSONSchema) bool {
 }
 
 // AssumptionWarning composes the unvalidated/undiscriminating-assumption
-// warning recommended by the conventions record (spec/formats/README.md):
+// warning recommended by the conventions record (spec/binding-specs/README.md):
 // it fires when an ASSUMPTION decoded the output
 // (decodeStamp is the format's x-ob-decode provenance trailer stamp —
 // "assumption/<detail>" means the documented default ran; "hook",

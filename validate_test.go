@@ -55,7 +55,7 @@ func TestInterfaceValidate_RefusesHigherMajorVersion_OBI_T_04(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for higher-major version")
 	}
-	if !containsProblem(err, `openbindings: "1.0.0" exceeds this SDK's MaxTestedVersion "0.2.0" (OBI-T-04)`) {
+	if !containsProblem(err, `openbindings: document declares version "1.0.0", newer than the latest version this implementation supports (0.2.0) (OBI-T-04)`) {
 		t.Fatalf("expected OBI-T-04 problem, got %v", err)
 	}
 }
@@ -70,7 +70,7 @@ func TestInterfaceValidate_RefusesPre1HigherMinor_OBI_T_04(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for pre-1.0 higher-minor version")
 	}
-	if !containsProblem(err, `openbindings: "0.99.0" exceeds this SDK's MaxTestedVersion "0.2.0" (OBI-T-04)`) {
+	if !containsProblem(err, `openbindings: document declares version "0.99.0", newer than the latest version this implementation supports (0.2.0) (OBI-T-04)`) {
 		t.Fatalf("expected OBI-T-04 problem, got %v", err)
 	}
 }
@@ -1096,7 +1096,7 @@ func TestInterfaceValidate_RefusesBelowMinSupported(t *testing.T) {
 		t.Fatal("a document below MinSupportedVersion must refuse")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "below this SDK's MinSupportedVersion") || !strings.Contains(msg, "OBI-T-04") {
+	if !strings.Contains(msg, "older than the oldest version this implementation supports") || !strings.Contains(msg, "OBI-T-04") {
 		t.Errorf("refusal must cite the floor and the rule, got: %s", msg)
 	}
 }

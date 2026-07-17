@@ -37,11 +37,19 @@ func TestConformanceCorpus(t *testing.T) {
 	}
 }
 
+// findConformanceCorpus locates the spec repo's conformance/ root. It honors
+// OB_SPEC_CORPUS first, then falls back to the local-dev sibling path —
+// mirroring the family/selection/comparison harnesses.
 func findConformanceCorpus() string {
-	for _, candidate := range []string{
+	candidates := make([]string, 0, 3)
+	if env := os.Getenv("OB_SPEC_CORPUS"); env != "" {
+		candidates = append(candidates, env)
+	}
+	candidates = append(candidates,
 		filepath.Join("..", "spec", "conformance"),
 		filepath.Join("spec", "conformance"),
-	} {
+	)
+	for _, candidate := range candidates {
 		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
 			return candidate
 		}

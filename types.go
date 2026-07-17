@@ -321,15 +321,15 @@ func (s Source) MarshalJSON() ([]byte, error) {
 	return marshalLossless(s.Unknown, s.Extensions, w)
 }
 
-// Transform is a JSONata 2.0 expression string per OpenBindings v0.2 spec §6.5.
-// Tools that evaluate transforms MUST do so according to the JSONata 2.0
+// Transform is a JSONata 2.1 expression string per OpenBindings v0.2 spec §5.5.
+// Tools that evaluate transforms MUST do so according to the JSONata 2.1
 // specification (OBI-T-10).
 type Transform = string
 
 // TransformOrRef represents either an inline JSONata transform expression or
 // a $ref to a named transform in the document's `transforms` map.
 //
-// Per the v0.2 spec §6.5, the inline form is a JSONata expression string;
+// Per the v0.2 spec §5.5, the inline form is a JSONata expression string;
 // the reference form is an object {"$ref": "#/transforms/<name>"} with no
 // additional properties.
 type TransformOrRef struct {

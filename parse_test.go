@@ -13,10 +13,10 @@ func TestParseDocument_VersionRefusalBothDirections(t *testing.T) {
 	doc := func(v string) []byte {
 		return []byte(fmt.Sprintf(`{"openbindings": %q, "operations": {}}`, v))
 	}
-	if _, err := ParseDocument(doc("0.1.0")); err == nil || !strings.Contains(err.Error(), "below this SDK's MinSupportedVersion") {
+	if _, err := ParseDocument(doc("0.1.0")); err == nil || !strings.Contains(err.Error(), "older than the oldest version this implementation supports") {
 		t.Fatalf("0.1.0 should refuse downward on parse, got %v", err)
 	}
-	if _, err := ParseDocument(doc("0.2.0-rc.1")); err == nil || !strings.Contains(err.Error(), "pre-release this SDK does not declare support for") {
+	if _, err := ParseDocument(doc("0.2.0-rc.1")); err == nil || !strings.Contains(err.Error(), "a pre-release this implementation does not support") {
 		t.Fatalf("prerelease should refuse on parse, got %v", err)
 	}
 	if _, err := ParseDocument(doc("0.2.9")); err != nil {
