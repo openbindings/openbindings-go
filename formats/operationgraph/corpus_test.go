@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	jsonata "github.com/blues/jsonata-go"
+	"github.com/recolabs/gnata"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -214,25 +214,32 @@ func (j *jsonataEvaluator) Evaluate(expression string, data any) (any, error) {
 }
 
 func (j *jsonataEvaluator) EvaluateWithBindings(expression string, data any, bindings map[string]any) (any, error) {
-	expr, err := jsonata.Compile(expression)
+	expr, err := gnata.Compile(expression)
 	if err != nil {
 		return nil, fmt.Errorf("compile jsonata: %w", err)
 	}
+	input, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("marshal transform input: %w", err)
+	}
+	var result any
 	if len(bindings) > 0 {
 		vars := make(map[string]any, len(bindings))
 		for k, v := range bindings {
 			vars[k] = normalizeJSON(v)
 		}
-		if err := expr.RegisterVars(vars); err != nil {
-			return nil, fmt.Errorf("register jsonata vars: %w", err)
-		}
+		result, err = expr.EvalBytesWithVars(context.Background(), input, vars)
+	} else {
+		result, err = expr.EvalBytes(context.Background(), input)
 	}
-	result, err := expr.Eval(normalizeJSON(data))
 	if err != nil {
-		if errors.Is(err, jsonata.ErrUndefined) {
-			return nil, openbindings.ErrTransformUndefined
-		}
 		return nil, fmt.Errorf("evaluate jsonata: %w", err)
+	}
+	// gnata signals an undefined result as (nil, nil); a JSON null result is a
+	// non-nil sentinel. Map undefined to the SDK sentinel so the engine fails
+	// the node with TRANSFORM_UNDEFINED while null flows downstream.
+	if result == nil {
+		return nil, openbindings.ErrTransformUndefined
 	}
 	return normalizeJSON(result), nil
 }
