@@ -48,26 +48,18 @@ func ParseDocument(data []byte) (*Interface, error) {
 	// emitted identically to Interface.Validate so the diagnostic is the same
 	// regardless of entry point. Because ParseDocument fails first, callers
 	// that go on to Interface.Validate never double-report.
-	if higher, err := IsHigherMajorOrPre1MinorThanMaxTested(iface.OpenBindings); err != nil {
+	// The higher/lower/prerelease refusal (below MinSupported and pre-1.0
+	// lower minor as well as the upward direction, plus unsupported
+	// prereleases) is the same ordered decision Interface.Validate and
+	// IsSupportedVersion make, via the shared versionRefusal predicate, with
+	// identical messages.
+	if msg, refused, err := versionRefusal(iface.OpenBindings); err != nil {
 		return nil, &ValidationError{
 			Problems: []string{fmt.Sprintf("openbindings: %v (OBI-T-04)", err)},
 		}
-	} else if higher {
+	} else if refused {
 		return nil, &ValidationError{
-			Problems: []string{fmt.Sprintf("openbindings: document declares version %q, newer than the latest version this implementation supports (%s) (OBI-T-04)", iface.OpenBindings, MaxTestedVersion)},
-		}
-	}
-	// The refusal runs downward too (below MinSupported; pre-1.0 lower
-	// minor), and prereleases refuse absent declared support — the same
-	// gates Interface.Validate applies, with identical messages.
-	if lower, err := IsLowerThanMinSupported(iface.OpenBindings); err == nil && lower {
-		return nil, &ValidationError{
-			Problems: []string{fmt.Sprintf("openbindings: document declares version %q, older than the oldest version this implementation supports (%s) (OBI-T-04)", iface.OpenBindings, MinSupportedVersion)},
-		}
-	}
-	if pre, _ := IsUnsupportedPrerelease(iface.OpenBindings); pre {
-		return nil, &ValidationError{
-			Problems: []string{fmt.Sprintf("openbindings: document declares version %q, a pre-release this implementation does not support (OBI-T-04)", iface.OpenBindings)},
+			Problems: []string{fmt.Sprintf("openbindings: %s (OBI-T-04)", msg)},
 		}
 	}
 

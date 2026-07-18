@@ -1,7 +1,9 @@
 package openbindings
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -29,10 +31,17 @@ func TestIsSupportedVersion(t *testing.T) {
 	}{
 		{name: "exact min version", version: MinSupportedVersion, want: true},
 		{name: "exact max version", version: MaxTestedVersion, want: true},
+		// OBI-T-04 acceptance is patch-lenient within a supported minor line:
+		// a higher patch than MaxTestedVersion is accepted (it is what
+		// Validate/ParseDocument do), even though it is outside the tested range.
+		{name: "higher patch is accepted", version: "0.2.1", want: true},
+		{name: "much higher patch is accepted", version: "0.2.99", want: true},
 		{name: "below min", version: "0.1.0", want: false},
+		{name: "below min minor pre-1", version: "0.1.9", want: false},
 		{name: "much below min", version: "0.0.1", want: false},
 		{name: "above max major", version: "1.0.0", want: false},
 		{name: "above max pre-1 minor", version: "0.3.0", want: false},
+		{name: "unsupported prerelease", version: "0.2.0-rc.1", want: false},
 		{name: "invalid empty", version: "", wantErr: true},
 		{name: "invalid 1.0", version: "1.0", wantErr: true},
 		{name: "invalid letters", version: "a.b.c", wantErr: true},
@@ -49,6 +58,48 @@ func TestIsSupportedVersion(t *testing.T) {
 			}
 			if !tt.wantErr && got != tt.want {
 				t.Errorf("IsSupportedVersion(%q) = %v, want %v", tt.version, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsSupportedVersion_MatchesValidateAndParseRefusal pins IsSupportedVersion
+// to the ACTUAL accept/refuse outcome of ParseDocument and Interface.Validate
+// for the same versions, so the acceptance oracle can never drift from the
+// paths it is promoted to predict (README, `ob create`). The minimal document
+// is otherwise schema-valid, so on a well-formed version any refusal is the
+// OBI-T-04 version refusal, tagged "(OBI-T-04)".
+func TestIsSupportedVersion_MatchesValidateAndParseRefusal(t *testing.T) {
+	doc := func(v string) []byte {
+		return []byte(fmt.Sprintf(`{"openbindings": %q, "operations": {}}`, v))
+	}
+	versions := []string{
+		"0.2.0", "0.2.1", "0.2.99", "0.1.0", "0.1.9",
+		"0.0.1", "0.3.0", "1.0.0", "0.2.0-rc.1", "0.3.0-rc.1",
+	}
+	for _, v := range versions {
+		t.Run(v, func(t *testing.T) {
+			accepted, err := IsSupportedVersion(v)
+			if err != nil {
+				t.Fatalf("IsSupportedVersion(%q) unexpected error: %v", v, err)
+			}
+
+			// ParseDocument path.
+			_, perr := ParseDocument(doc(v))
+			parseRefuses := perr != nil
+			if parseRefuses && !strings.Contains(perr.Error(), "(OBI-T-04)") {
+				t.Fatalf("ParseDocument(%q) failed for a non-version reason: %v", v, perr)
+			}
+			if accepted == parseRefuses {
+				t.Errorf("drift: IsSupportedVersion(%q)=%v but ParseDocument refuses=%v", v, accepted, parseRefuses)
+			}
+
+			// Interface.Validate path: only the version decision is tagged
+			// "(OBI-T-04)", so it is isolable from any other shape problems.
+			verr := (Interface{OpenBindings: v, Operations: map[string]Operation{}}).Validate()
+			validateVersionRefuses := verr != nil && strings.Contains(verr.Error(), "(OBI-T-04)")
+			if accepted == validateVersionRefuses {
+				t.Errorf("drift: IsSupportedVersion(%q)=%v but Validate version-refuses=%v (%v)", v, accepted, validateVersionRefuses, verr)
 			}
 		})
 	}
