@@ -699,7 +699,15 @@ func mapMCPError(err error, hc *headerCapture, fallback string) *openbindings.In
 		return openbindings.HTTPError(status, statusText)
 	}
 
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		// A deadline is a TIMEOUT (transient / effects: possible), agreeing with
+		// the handle's AfterFunc so a deadline that races both terminals settles
+		// deterministically as ERR_TIMEOUT. An explicit cancel stays ERR_CANCELLED.
+		return &openbindings.InvocationError{
+			Code: openbindings.ErrCodeTimeout, Message: err.Error(),
+		}
+	}
+	if errors.Is(err, context.Canceled) {
 		return &openbindings.InvocationError{
 			Code: openbindings.ErrCodeCancelled, Message: err.Error(),
 		}

@@ -132,7 +132,10 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// (idempotent) covers the error paths above.
 	routed.cleanup()
 	if bctx.Err() != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeCancelled, Message: "operation cancelled"})
+		// The invocation lifetime ended (caller cancel or deadline): defer to
+		// the handle, which classifies a deadline as ERR_TIMEOUT and a cancel as
+		// ERR_CANCELLED. Firing our own terminal here would race that one
+		// (mirrors the openapi/connect/asyncapi ctx.Err() defer).
 		return
 	}
 	if runErr != nil {
@@ -297,7 +300,8 @@ func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvoc
 	}
 	res, runErr := runCLI(ctx, binary, cmdArgs, args.Context, nil)
 	if ctx.Err() != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeCancelled, Message: "operation cancelled"})
+		// Defer to the handle for the lifetime terminal (deadline → ERR_TIMEOUT,
+		// cancel → ERR_CANCELLED); firing here would race it.
 		return
 	}
 	if runErr != nil {

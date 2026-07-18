@@ -676,6 +676,111 @@ func TestIntegration_CancelMidStream(t *testing.T) {
 	}
 }
 
+// A mid-stream lifetime DEADLINE on a server-streaming RPC: already-emitted
+// outputs stand, then exactly one terminal ERR_TIMEOUT (transient / possible).
+// A deadline is not a caller cancel — outputs may have flowed, so retry-safety
+// is "may have executed". Contrast TestIntegration_CancelMidStream (cancelled).
+func TestIntegration_DeadlineMidStream(t *testing.T) {
+	dialer, _ := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	// The invocation LIFETIME carries the deadline; reads use a separate ctx.
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	// WatchItems emits one item then blocks until the stream is torn down —
+	// here by the lifetime deadline while RecvMsg is parked.
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/WatchItems", nil))
+
+	out := inv.Outputs()
+	first, err := out.Read(testCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.(map[string]any)["id"] != "w1" {
+		t.Fatalf("first = %v", first)
+	}
+
+	_, err = out.Read(testCtx(t))
+	var terr *openbindings.InvocationError
+	if !errors.As(err, &terr) {
+		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
+	}
+	if terr.Code != openbindings.ErrCodeTimeout {
+		t.Fatalf("code = %q, want ERR_TIMEOUT", terr.Code)
+	}
+	if terr.Category != openbindings.CategoryTransient {
+		t.Errorf("category = %q, want transient", terr.Category)
+	}
+	if terr.Effects != openbindings.EffectsPossible {
+		t.Errorf("effects = %q, want possible", terr.Effects)
+	}
+}
+
+// readToTerminal drains an invocation to its terminal from a non-test
+// goroutine, returning the terminal error (nil on clean EOF). It never touches
+// *testing.T, so it is safe to run concurrently.
+func readToTerminal(ctx context.Context, inv openbindings.Invocation[any, any]) *openbindings.InvocationError {
+	out := inv.Outputs()
+	for {
+		_, err := out.Read(ctx)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			var ie *openbindings.InvocationError
+			errors.As(err, &ie)
+			return ie
+		}
+	}
+}
+
+// Stress the server-stream deadline race (RecvMsg-error terminal vs. the
+// handle's AfterFunc terminal off the same deadline wakeup). Before the fix
+// this split ~284× ERR_CANCELLED / ~16× ERR_TIMEOUT; now every run must be a
+// deterministic ERR_TIMEOUT. Run under -race.
+func TestIntegration_DeadlineMidStream_Deterministic(t *testing.T) {
+	dialer, _ := setupTestServer(t)
+	invoker := newTestInvoker(t, dialer)
+	defer invoker.Close()
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelRead()
+
+	const runs = 300
+	results := make(chan *openbindings.InvocationError, runs)
+	var wg sync.WaitGroup
+	for i := 0; i < runs; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+			defer cancel()
+			inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/WatchItems", nil))
+			results <- readToTerminal(readCtx, inv)
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	counts := map[string]int{}
+	for terr := range results {
+		if terr == nil {
+			counts["<clean-eof>"]++
+			continue
+		}
+		counts[terr.Code]++
+		if terr.Code == openbindings.ErrCodeTimeout {
+			if terr.Category != openbindings.CategoryTransient || terr.Effects != openbindings.EffectsPossible {
+				t.Errorf("timeout misclassified: category=%q effects=%q", terr.Category, terr.Effects)
+			}
+		}
+	}
+	if counts[openbindings.ErrCodeTimeout] != runs {
+		t.Fatalf("expected all %d runs ERR_TIMEOUT (deterministic), got distribution %v", runs, counts)
+	}
+}
+
 func TestIntegration_InvalidRef(t *testing.T) {
 	dialer, _ := setupTestServer(t)
 	invoker := newTestInvoker(t, dialer)

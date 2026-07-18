@@ -377,10 +377,26 @@ func NewInvocationImpl[I, O any](ctx context.Context) *InvocationImpl[I, O] {
 	}
 	if ctx != nil {
 		if ctx.Err() != nil {
-			i.FireError(&InvocationError{Code: ErrCodeCancelled, Message: "invocation cancelled"})
+			// An already-expired lifetime is classified the same way a mid-flight
+			// one is: a deadline is a TIMEOUT, an explicit cancel is CANCELLED.
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				i.FireError(&InvocationError{Code: ErrCodeTimeout, Message: "invocation deadline exceeded"})
+			} else {
+				i.FireError(&InvocationError{Code: ErrCodeCancelled, Message: "invocation cancelled"})
+			}
 			return i
 		}
 		i.stopWatch = context.AfterFunc(ctx, func() {
+			// Distinguish a lifetime deadline from a caller cancel: a deadline
+			// is a TIMEOUT (transient, effects: possible — outputs may already
+			// have flowed, so the honest retry-safety answer is "may have
+			// executed"), while an explicit cancel is genuinely caller-initiated
+			// (cancelled). The classification (category + effects) is stamped by
+			// FireError → classify().
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				i.FireError(&InvocationError{Code: ErrCodeTimeout, Message: "invocation deadline exceeded"})
+				return
+			}
 			i.FireError(&InvocationError{Code: ErrCodeCancelled, Message: i.cancelMessage()})
 		})
 	}
@@ -953,7 +969,12 @@ func AsInvocationError(err error) *InvocationError {
 	if errors.As(err, &ie) {
 		return ie
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		// A deadline is a TIMEOUT (transient / effects: possible), not a
+		// caller-initiated cancel — outputs may already have flowed.
+		return classifiedError(ErrCodeTimeout, err.Error())
+	}
+	if errors.Is(err, context.Canceled) {
 		return classifiedError(ErrCodeCancelled, err.Error())
 	}
 	return classifiedError(ErrCodeRuntime, err.Error())
