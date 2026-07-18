@@ -1,6 +1,6 @@
 module github.com/openbindings/openbindings-go/formats/grpc
 
-go 1.25.0
+go 1.25.6
 
 require (
 	github.com/bufbuild/protocompile v0.14.1
@@ -11,7 +11,6 @@ require (
 )
 
 require (
-	github.com/blues/jsonata-go v1.5.4 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	golang.org/x/net v0.56.0 // indirect

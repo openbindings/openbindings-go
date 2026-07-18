@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	jsonata "github.com/blues/jsonata-go"
+	"github.com/recolabs/gnata"
 )
 
 type validateOptions struct {
@@ -356,16 +356,17 @@ func validateTransformExpression(errs *[]string, prefix, expr string) {
 }
 
 // jsonataParses reports whether expr parses under the bundled JSONata
-// parser. The parser is only ever handed document-supplied strings, so a
-// parser panic is treated as a parse failure rather than crashing document
-// validation.
+// parser (gnata, a JSONata 2.x engine — closer to the normative jsonata-js
+// 2.1.1 parse acceptance than the prior 1.5 port). The parser is only ever
+// handed document-supplied strings, so a parser panic is treated as a parse
+// failure rather than crashing document validation.
 func jsonataParses(expr string) (ok bool) {
 	defer func() {
 		if recover() != nil {
 			ok = false
 		}
 	}()
-	_, err := jsonata.Compile(expr)
+	_, err := gnata.Compile(expr)
 	return err == nil
 }
 
