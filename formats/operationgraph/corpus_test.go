@@ -163,14 +163,20 @@ func (m *mockBindingInvoker) serve(ctx context.Context, handle openbindings.Bind
 		})
 		return
 	}
+	// A response may emit, fail, or emit-then-fail. Emitted events are the
+	// outputs produced before any terminal, so they go out first; a fail then
+	// terminates the invocation (fatal at a conduit unless onError, per-event
+	// at an each node).
+	if resp.Emit != nil {
+		for _, v := range *resp.Emit {
+			if err := handle.EmitOutput(v); err != nil {
+				return
+			}
+		}
+	}
 	if resp.Fail != nil {
 		handle.FireError(&openbindings.InvocationError{Code: *resp.Fail, Message: *resp.Fail})
 		return
-	}
-	for _, v := range *resp.Emit {
-		if err := handle.EmitOutput(v); err != nil {
-			return
-		}
 	}
 	handle.CloseOutput()
 }
