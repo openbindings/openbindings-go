@@ -4,8 +4,11 @@ package operationgraph
 // operation-graph corpus unmodified (execution fixtures with mocked
 // per-invocation operation behavior, and the OG-V validation fixtures).
 //
-// The corpus is located via OB_SPEC_CORPUS or the local-dev sibling path
-// (openbindings/spec next to openbindings/openbindings-go); the tests skip
+// The corpus ROOT is located via OB_SPEC_CORPUS (the spec repo's
+// conformance/ directory, the convention shared by every other format
+// harness) or the local-dev sibling path (openbindings/spec next to
+// openbindings/openbindings-go); this engine's fixtures live under the
+// operation-graph subcorpus, which the adapter appends. The tests skip
 // when it is absent.
 
 import (
@@ -30,10 +33,18 @@ import (
 
 func corpusDir(t *testing.T) string {
 	t.Helper()
-	if env := os.Getenv("OB_SPEC_CORPUS"); env != "" {
-		return env
+	root := os.Getenv("OB_SPEC_CORPUS")
+	if root == "" {
+		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
-	dir := filepath.Join("..", "..", "..", "spec", "conformance", "operation-graph")
+	// OB_SPEC_CORPUS names the conformance corpus ROOT; this engine's
+	// fixtures live under the operation-graph subcorpus, which the adapter
+	// appends. Tolerate an env var that already points at the subpath (an
+	// older invocation) so both forms resolve.
+	dir := root
+	if filepath.Base(root) != "operation-graph" {
+		dir = filepath.Join(root, "operation-graph")
+	}
 	if _, err := os.Stat(dir); err != nil {
 		t.Skipf("spec conformance corpus not found at %s (set OB_SPEC_CORPUS)", dir)
 	}
