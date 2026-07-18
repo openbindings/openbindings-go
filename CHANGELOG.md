@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **New transient error code `ErrCodeUnavailable` (`ERR_UNAVAILABLE`) and the
+  transport status→code tables realigned to the binding-invoker contract.**
+  The service was reached but refused the request as retryable — distinct from
+  `ErrCodeConnectFailed`, which never reached a server. `HTTPErrorCode` now
+  implements the full contract table: `429`/`502`/`503` → `ERR_UNAVAILABLE`,
+  `408`/`504` → `ERR_TIMEOUT`, `401`/`403` → the auth codes, and every other
+  4xx/5xx → `ERR_EXECUTION_FAILED` (previously only 401/403 were mapped and
+  everything else defaulted to `ERR_EXECUTION_FAILED`, overclaiming vs. the
+  contract). `effects` is per-status: `429`/`503` are `none` (refused before
+  execution), `502` is left possible. The gRPC invoker maps
+  `UNAVAILABLE`/`RESOURCE_EXHAUSTED` → `ERR_UNAVAILABLE` (`effects: none`) and
+  `CANCELLED` → `ERR_CANCELLED`. A new status→category table test guards the
+  mapping against future drift.
+
 - **The consumer hook seam (specification + configuration = complete
   invocation).** New core types `OutputDecoder`, `ResultClassifier`, and
   `FieldRouter` — generic callbacks consulted by every format invoker for the

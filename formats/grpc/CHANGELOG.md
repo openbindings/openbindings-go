@@ -4,6 +4,16 @@
 
 ### Changed
 
+- **gRPC status→code mapping realigned to the binding-invoker contract's
+  pinned table.** `Unavailable` and `ResourceExhausted` now map to the new
+  transient `ERR_UNAVAILABLE` (`effects: none` — the server answered, refusing
+  the request before executing) instead of `ERR_CONNECT_FAILED` (which is a
+  transport failure that never reached a server); `Canceled` now maps to
+  `ERR_CANCELLED`. `Unauthenticated`/`PermissionDenied`/`DeadlineExceeded` and
+  the unmapped-status fallback (`ERR_EXECUTION_FAILED`) are unchanged. A
+  reflection-time `Unavailable` (reflection dial/resolve failure) likewise now
+  surfaces as `ERR_UNAVAILABLE`.
+
 - **Conformance to the published `openbindings.grpc@1` binding
   specification.** The invoker now implements the spec's rules end to end;
   breaking changes from the pre-spec behavior:

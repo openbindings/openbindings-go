@@ -96,6 +96,7 @@ var codeCategory = map[string]Category{
 	ErrCodeResponseError:            CategoryService,
 	ErrCodeStreamError:              CategoryTransient,
 	ErrCodeTimeout:                  CategoryTransient,
+	ErrCodeUnavailable:              CategoryTransient,
 	ErrCodeOperationNotFound:        CategoryPermanent,
 	ErrCodeUnknownSource:            CategoryPermanent,
 	ErrCodeTransformError:           CategoryValidation,
@@ -113,7 +114,9 @@ var codeCategory = map[string]Category{
 
 	// Format-specific promotion: the operation-graph per-node budget timeout
 	// (operationgraph.TimeoutExceeded) can surface as a terminal invocation
-	// error. A timeout is transient, never permanent.
+	// error. A timeout is transient, never permanent. This is exactly the
+	// registry's open-code rule — additional codes MAY be defined, each mapped
+	// to a normative category — applied to a format-minted code.
 	"TIMEOUT_EXCEEDED": CategoryTransient,
 }
 

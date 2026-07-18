@@ -126,6 +126,14 @@ const (
 	// ErrCodeTimeout indicates the operation timed out.
 	ErrCodeTimeout = "ERR_TIMEOUT"
 
+	// ErrCodeUnavailable indicates the service was reached but refused the
+	// request as retryable (HTTP 429/502/503, gRPC UNAVAILABLE/
+	// RESOURCE_EXHAUSTED). Transient. Distinct from ErrCodeConnectFailed,
+	// which is a transport failure that never reached a server: here the
+	// server answered, declining the request rather than failing to receive
+	// it. Retry with backoff.
+	ErrCodeUnavailable = "ERR_UNAVAILABLE"
+
 	// ErrCodeTransformError indicates a transform evaluation failed.
 	ErrCodeTransformError = "ERR_TRANSFORM_ERROR"
 

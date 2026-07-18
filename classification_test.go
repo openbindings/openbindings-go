@@ -32,6 +32,7 @@ var readmeCategories = map[string]Category{
 	"ERR_RESPONSE_ERROR":             CategoryService,
 	"ERR_STREAM_ERROR":               CategoryTransient,
 	"ERR_TIMEOUT":                    CategoryTransient,
+	"ERR_UNAVAILABLE":                CategoryTransient,
 	"ERR_OPERATION_NOT_FOUND":        CategoryPermanent,
 	"ERR_UNKNOWN_SOURCE":             CategoryPermanent,
 	"ERR_TRANSFORM_ERROR":            CategoryValidation,
@@ -81,7 +82,7 @@ func TestEveryEmittedCodeIsClassified(t *testing.T) {
 		ErrCodePermissionDenied, ErrCodeInvalidRef, ErrCodeRefNotFound,
 		ErrCodeSourceLoadFailed, ErrCodeSourceConfigError, ErrCodeConnectFailed,
 		ErrCodeExecutionFailed, ErrCodeResponseError, ErrCodeStreamError,
-		ErrCodeTimeout, ErrCodeTransformError, ErrCodeValidationFailed,
+		ErrCodeTimeout, ErrCodeUnavailable, ErrCodeTransformError, ErrCodeValidationFailed,
 		ErrCodeSchemaUnresolved, ErrCodeRuntime, ErrCodeEventLimitExceeded,
 		ErrCodeOperationGraphExit, ErrCodeUnsupportedFormatVersion,
 		"TIMEOUT_EXCEEDED",
@@ -162,8 +163,9 @@ func TestFireError_TimeoutIsPossible(t *testing.T) {
 	}
 }
 
-// TestHTTPError_Effects: a 429/503 proves non-execution (none); a 500 is left
-// unset (treated as possible); a 401 is auth and carries no effects.
+// TestHTTPError_Effects: a 429/503 proves non-execution (transient/none); a
+// 502 is left unset (transient, treated as possible); a 500 is service/possible;
+// a 401 is auth and carries no effects.
 func TestHTTPError_Effects(t *testing.T) {
 	cases := []struct {
 		status   int
@@ -171,8 +173,9 @@ func TestHTTPError_Effects(t *testing.T) {
 		wantCat  Category
 		wantEff  Effects
 	}{
-		{429, ErrCodeExecutionFailed, CategoryService, EffectsNone},
-		{503, ErrCodeExecutionFailed, CategoryService, EffectsNone},
+		{429, ErrCodeUnavailable, CategoryTransient, EffectsNone},
+		{503, ErrCodeUnavailable, CategoryTransient, EffectsNone},
+		{502, ErrCodeUnavailable, CategoryTransient, ""}, // reached a bad gateway; may have executed
 		{500, ErrCodeExecutionFailed, CategoryService, ""},
 		{404, ErrCodeExecutionFailed, CategoryService, ""},
 		{401, ErrCodeAuthRequired, CategoryAuth, ""},
@@ -190,6 +193,52 @@ func TestHTTPError_Effects(t *testing.T) {
 		if e.Effects != c.wantEff {
 			t.Errorf("HTTPError(%d).Effects = %q, want %q", c.status, e.Effects, c.wantEff)
 		}
+	}
+}
+
+// TestHTTPStatusMapping_CodeAndCategory pins the full HTTP status→code→category
+// table of the binding-invoker contract at the source. This is the guard that
+// would have caught the ERR_UNAVAILABLE drift: it asserts both halves of the
+// mapping — HTTPErrorCode(status) and categoryForCode(that code) — for every
+// status the contract calls out (and the plain 4xx/5xx that fall through to
+// service), plus the per-status Effects that the code alone cannot carry.
+func TestHTTPStatusMapping_CodeAndCategory(t *testing.T) {
+	cases := []struct {
+		status   int
+		wantCode string
+		wantCat  Category
+	}{
+		{401, ErrCodeAuthRequired, CategoryAuth},
+		{403, ErrCodePermissionDenied, CategoryAuth},
+		{408, ErrCodeTimeout, CategoryTransient},
+		{429, ErrCodeUnavailable, CategoryTransient},
+		{502, ErrCodeUnavailable, CategoryTransient},
+		{503, ErrCodeUnavailable, CategoryTransient},
+		{504, ErrCodeTimeout, CategoryTransient},
+		{404, ErrCodeExecutionFailed, CategoryService},
+		{422, ErrCodeExecutionFailed, CategoryService},
+		{500, ErrCodeExecutionFailed, CategoryService},
+	}
+	for _, c := range cases {
+		if got := HTTPErrorCode(c.status); got != c.wantCode {
+			t.Errorf("HTTPErrorCode(%d) = %q, want %q", c.status, got, c.wantCode)
+		}
+		if got := categoryForCode(c.wantCode); got != c.wantCat {
+			t.Errorf("categoryForCode(%q) = %q, want %q (status %d)", c.wantCode, got, c.wantCat, c.status)
+		}
+	}
+
+	// Effects the code alone cannot carry: a refused-before-execution 429/503
+	// proves non-execution (none); a 502 may have reached the backend, so it
+	// is left unset (→ possible) rather than none.
+	if got := httpErrorEffects(429); got != EffectsNone {
+		t.Errorf("httpErrorEffects(429) = %q, want none", got)
+	}
+	if got := httpErrorEffects(503); got != EffectsNone {
+		t.Errorf("httpErrorEffects(503) = %q, want none", got)
+	}
+	if got := httpErrorEffects(502); got != "" {
+		t.Errorf("httpErrorEffects(502) = %q, want unset (possible)", got)
 	}
 }
 
