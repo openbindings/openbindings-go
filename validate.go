@@ -54,16 +54,12 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		errs = append(errs, "openbindings: required (OBI-D-12)")
 	} else if !IsValidSemver(i.OpenBindings) {
 		errs = append(errs, fmt.Sprintf("openbindings: %q is not a valid SemVer 2.0.0 string (OBI-D-12)", i.OpenBindings))
-	} else if higher, err := IsHigherMajorOrPre1MinorThanMaxTested(i.OpenBindings); err != nil {
+	} else if msg, refused, err := versionRefusal(i.OpenBindings); err != nil {
+		// Reachable only if the version failed to parse, which IsValidSemver
+		// above already screened out; kept as a defensive branch.
 		errs = append(errs, fmt.Sprintf("openbindings: %v (OBI-T-04)", err))
-	} else if higher {
-		errs = append(errs, fmt.Sprintf("openbindings: document declares version %q, newer than the latest version this implementation supports (%s) (OBI-T-04)", i.OpenBindings, MaxTestedVersion))
-	} else if lower, _ := IsLowerThanMinSupported(i.OpenBindings); lower {
-		// Reachable only when the version parsed, so the error is ignored.
-		errs = append(errs, fmt.Sprintf("openbindings: document declares version %q, older than the oldest version this implementation supports (%s) (OBI-T-04)", i.OpenBindings, MinSupportedVersion))
-	} else if pre, _ := IsUnsupportedPrerelease(i.OpenBindings); pre {
-		// Reachable only when the version parsed (IsValidSemver passed above), so the error is ignored.
-		errs = append(errs, fmt.Sprintf("openbindings: document declares version %q, a pre-release this implementation does not support (OBI-T-04)", i.OpenBindings))
+	} else if refused {
+		errs = append(errs, fmt.Sprintf("openbindings: %s (OBI-T-04)", msg))
 	}
 
 	// Generic-JSON view of the whole document for OBI-D-16 pointer

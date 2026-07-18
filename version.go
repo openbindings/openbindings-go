@@ -36,13 +36,57 @@ func init() {
 	}
 }
 
-// IsSupportedVersion reports whether the provided OpenBindings version is within the supported range.
+// IsSupportedVersion reports whether this SDK will ACCEPT (process rather than
+// refuse) a document declaring OpenBindings version v — the OBI-T-04 acceptance
+// question, not a tested-range membership test. It returns true iff Validate /
+// ParseDocument would NOT emit a version refusal for v: a different major is
+// refused; while pre-1.0 a different minor is refused; a higher or lower PATCH
+// is never a refusal; a prerelease is accepted only when explicitly supported.
+// So a 0.2.0 SDK accepts 0.2.1, 0.2.99, etc. and refuses 0.1.x / 0.3.x. This is
+// distinct from — and wider than — the maintainer-tested range reported by
+// MinSupportedVersion / MaxTestedVersion / SupportedRange: a version can be
+// accepted without being inside the tested range.
+//
+// It shares the single refusal predicate (versionRefusal) that Validate and
+// ParseDocument use, so the oracle cannot drift from the actual accept/refuse
+// decision. A malformed (non-SemVer) v is refused and returns a parse error.
 func IsSupportedVersion(v string) (bool, error) {
-	parsed, err := parseSemverStrict(v)
+	if _, err := parseSemverStrict(v); err != nil {
+		return false, err
+	}
+	_, refused, err := versionRefusal(v)
 	if err != nil {
 		return false, err
 	}
-	return compareSemver(parsed, minSupportedSemver) >= 0 && compareSemver(parsed, maxTestedSemver) <= 0, nil
+	return !refused, nil
+}
+
+// versionRefusal is the single OBI-T-04 accept/refuse evaluation shared by
+// Interface.Validate, ParseDocument, and IsSupportedVersion, so the diagnostic
+// path and the acceptance oracle consult the same ordered predicate chain and
+// cannot diverge. When this SDK MUST refuse to process a document declaring
+// SemVer version v it returns (msg, true, nil), where msg is the diagnostic
+// core to which callers add the "openbindings:" prefix and "(OBI-T-04)" suffix;
+// when the SDK accepts v it returns ("", false, nil). v MUST be well-formed
+// SemVer (callers gate on IsValidSemver or the schema pattern first); an
+// unparseable v yields a non-nil error.
+func versionRefusal(v string) (msg string, refused bool, err error) {
+	if higher, err := IsHigherMajorOrPre1MinorThanMaxTested(v); err != nil {
+		return "", false, err
+	} else if higher {
+		return fmt.Sprintf("document declares version %q, newer than the latest version this implementation supports (%s)", v, MaxTestedVersion), true, nil
+	}
+	if lower, err := IsLowerThanMinSupported(v); err != nil {
+		return "", false, err
+	} else if lower {
+		return fmt.Sprintf("document declares version %q, older than the oldest version this implementation supports (%s)", v, MinSupportedVersion), true, nil
+	}
+	if pre, err := IsUnsupportedPrerelease(v); err != nil {
+		return "", false, err
+	} else if pre {
+		return fmt.Sprintf("document declares version %q, a pre-release this implementation does not support", v), true, nil
+	}
+	return "", false, nil
 }
 
 // IsHigherMajorOrPre1MinorThanMaxTested reports whether v is "higher" than the SDK's MaxTestedVersion

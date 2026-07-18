@@ -4,6 +4,17 @@
 
 ### Changed
 
+- **`IsSupportedVersion` now answers OBI-T-04 acceptance (patch-lenient within a
+  supported minor line), matching `Validate`/`ParseDocument`; previously it was
+  the strict tested-range check.** A 0.2.0 SDK now reports `true` for `0.2.1`,
+  `0.2.99`, etc. — the versions `Validate`/`ParseDocument` actually process —
+  and continues to report `false` for a different major, a pre-1.0 different
+  minor, and unsupported prereleases. The oracle now shares the single refusal
+  predicate the validation paths use, so it cannot drift from them.
+  `MinSupportedVersion`/`MaxTestedVersion`/`SupportedRange()` are unchanged and
+  remain the maintainer-*tested* range — a distinct, narrower notion (a version
+  can be accepted without being inside the tested range).
+
 - **New transient error code `ErrCodeUnavailable` (`ERR_UNAVAILABLE`) and the
   transport status→code tables realigned to the binding-invoker contract.**
   The service was reached but refused the request as retryable — distinct from
