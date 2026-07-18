@@ -32,6 +32,11 @@ type event struct {
 	lineage    map[string]int // per-each-node invocation counts for maxIterations
 	complete   bool           // completion marker, not a data event
 	errorDepth int            // onError chain depth (defense-in-depth cap)
+
+	// fatal is a conduit-fatal terminal marker (not a data event). When set,
+	// the dispatcher fires it as the graph terminal — routed through the FIFO
+	// so the failing conduit's already-enqueued outputs drain first.
+	fatal *openbindings.InvocationError
 }
 
 func cloneEvent(ev *event) *event {
@@ -361,6 +366,19 @@ func (eng *engine) run(ctx context.Context) {
 		}
 	}
 
+	// sendFatal routes a conduit's unhandled terminal error through the global
+	// FIFO instead of firing it out-of-band. Enqueued (from the conduit's pump
+	// goroutine) behind the outputs that conduit already produced, it lets the
+	// dispatcher emit those outputs before the terminal fires — the identity
+	// law's ordering (the terminal follows the stream it terminates). This
+	// mirrors the onError path, which likewise routes through the queue. It is
+	// deliberately NOT accompanied by exitFlag/cancel here: doing that would
+	// let the dispatcher halt at its exitFlag check and discard the conduit's
+	// own queued outputs (the bug this replaces).
+	sendFatal := func(ie *openbindings.InvocationError) {
+		queue.push("", &event{fatal: ie})
+	}
+
 	// sendPerEventError routes a per-event failure ({error, event}) to the
 	// node's onError target, or drops it. The error event inherits the
 	// failing event's lineage and root.
@@ -488,10 +506,13 @@ func (eng *engine) run(ctx context.Context) {
 						return
 					}
 					// Fatal default: the graph invocation terminates with the
-					// inner terminal error, verbatim.
-					eng.exitFlag.Store(true)
-					eng.handle.FireError(ie)
-					cancel()
+					// inner terminal error, verbatim — but routed through the
+					// global FIFO so the outputs this conduit already enqueued
+					// are drained and emitted before the terminal fires (the
+					// identity law). Firing out-of-band here (exitFlag +
+					// FireError + cancel) let the dispatcher halt at its
+					// exitFlag check and discard those queued outputs.
+					sendFatal(ie)
 					return
 				}
 				if eng.exitFlag.Load() {
@@ -648,6 +669,17 @@ func (eng *engine) run(ctx context.Context) {
 				}
 				continue
 			}
+		}
+		if item.ev.fatal != nil {
+			// A conduit's unhandled terminal, reached in FIFO order after the
+			// outputs it produced (which the dispatcher has now emitted): fire
+			// it as the graph terminal and tear down. cancel() runs after the
+			// loop breaks. Exactly one fatal marker is ever processed — the
+			// break stops the dispatcher, and the top-of-loop exitFlag check
+			// short-circuits any later marker.
+			eng.exitFlag.Store(true)
+			eng.handle.FireError(item.ev.fatal)
+			break
 		}
 		if item.to == eng.inputKey && !item.ev.complete {
 			<-inputTokens // release the pump's backpressure slot
