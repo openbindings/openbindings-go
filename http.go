@@ -31,9 +31,14 @@ func HTTPError(statusCode int, status string) *InvocationError {
 // httpErrorEffects reports what an HTTP error status proves about side
 // effects. A 429 or 503 is the server refusing the request before it executed
 // (rate-limited / unavailable), so the call provably did not take hold —
-// EffectsNone licenses a backoff-retry. Every other status is left unset:
-// classify() supplies EffectsPossible for the transport-transient codes, and a
-// 5xx that may already have executed is conservatively treated as possible.
+// EffectsNone licenses a backoff-retry. Every other status is left unset and
+// so is treated as EffectsPossible by consumers: a 502 Bad Gateway may already
+// have reached the backend, a 408/504 timeout was dispatched, and any other
+// 5xx may have executed — none is safe to blind-retry for a non-idempotent
+// operation. (ERR_UNAVAILABLE deliberately carries no effects default of its
+// own, because its effects are per-status: none for 429/503, possible for 502;
+// classify() supplies EffectsPossible for the transport-transient ERR_TIMEOUT
+// that 408/504 map to.)
 func httpErrorEffects(statusCode int) Effects {
 	switch statusCode {
 	case http.StatusTooManyRequests, http.StatusServiceUnavailable: // 429, 503
@@ -43,25 +48,43 @@ func httpErrorEffects(statusCode int) Effects {
 	}
 }
 
-// HTTPErrorCode maps an HTTP status code to a standard error code constant.
+// HTTPErrorCode maps an HTTP status code to a standard error code constant,
+// implementing the binding-invoker contract's HTTP status→code table. The
+// category follows from the returned code via the canonical code→category map.
 // Shared utility for format invokers that handle HTTP responses.
+//
+//   - 401 Unauthorized          → ERR_AUTH_REQUIRED     (auth)
+//   - 403 Forbidden             → ERR_PERMISSION_DENIED (auth)
+//   - 408, 504                  → ERR_TIMEOUT           (transient)
+//   - 429, 502, 503             → ERR_UNAVAILABLE       (transient)
+//   - every other 4xx and 5xx   → ERR_EXECUTION_FAILED  (service)
+//
+// The numeric status is preserved on the error's Details, so callers can still
+// branch on 404, 422, and the like via HTTPStatus.
 func HTTPErrorCode(statusCode int) string {
 	switch statusCode {
-	case 401:
+	case http.StatusUnauthorized: // 401
 		return ErrCodeAuthRequired
-	case 403:
+	case http.StatusForbidden: // 403
 		return ErrCodePermissionDenied
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout: // 408, 504
+		return ErrCodeTimeout
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable: // 429, 502, 503
+		return ErrCodeUnavailable
 	default:
+		// Every other 4xx and every 5xx: the request reached the server and
+		// was refused on its merits — a service error, not a blind-retry.
 		return ErrCodeExecutionFailed
 	}
 }
 
 // HTTPStatus extracts the HTTP status code from an invocation error whose
-// binding spoke HTTP. ErrCodeExecutionFailed is the catch-all above the
-// auth codes (401/403 get their own), so real REST error handling branches
-// on the status — 404 not-found vs 422 caller bug vs 429/503 retry — and
-// this accessor is the supported way to reach it (the Details shape is not
-// a contract).
+// binding spoke HTTP. The status→code table folds several statuses onto a
+// shared code (429/502/503 → ERR_UNAVAILABLE, 408/504 → ERR_TIMEOUT, every
+// other 4xx/5xx → ERR_EXECUTION_FAILED, and 401/403 to the auth codes), so
+// real REST error handling still branches on the numeric status — 404
+// not-found vs 422 caller bug vs a specific retry backoff — and this accessor
+// is the supported way to reach it (the Details shape is not a contract).
 func HTTPStatus(err error) (int, bool) {
 	m := detailsMap(err)
 	if m == nil {

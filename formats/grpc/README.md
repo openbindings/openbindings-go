@@ -210,7 +210,7 @@ protobuf framing is unambiguous: the response message type and the gRPC status c
 5. Applies credentials from the context as gRPC metadata (bearer, basic, apiKey)
 6. Invokes the RPC: unary methods emit one output then close; server-streaming methods emit per received message, with backpressure flow-controlling the stream
 
-gRPC status errors terminate the invocation with a mapped code (`Unauthenticated` → `ERR_AUTH_REQUIRED`, `PermissionDenied` → `ERR_PERMISSION_DENIED`, `Unavailable` → `ERR_CONNECT_FAILED`, `DeadlineExceeded` → `ERR_TIMEOUT`); the gRPC code and any status details ride in the error's `Details`. Leading/trailing gRPC metadata maps onto `Header(ctx)`/`Trailer()`. Cancelling the handle (or the invocation context) tears down the underlying stream.
+gRPC status errors terminate the invocation with a mapped code (`Unauthenticated` → `ERR_AUTH_REQUIRED`, `PermissionDenied` → `ERR_PERMISSION_DENIED`, `Unavailable`/`ResourceExhausted` → `ERR_UNAVAILABLE` (transient, `effects: none` — the server refused before executing), `DeadlineExceeded` → `ERR_TIMEOUT`, `Canceled` → `ERR_CANCELLED`, every other status → `ERR_EXECUTION_FAILED`); the gRPC code and any status details ride in the error's `Details`. Leading/trailing gRPC metadata maps onto `Header(ctx)`/`Trailer()`. Cancelling the handle (or the invocation context) tears down the underlying stream.
 
 Client-streaming and bidi methods are not supported and terminate pre-dispatch with `ERR_EXECUTION_FAILED`.
 
