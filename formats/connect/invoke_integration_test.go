@@ -246,8 +246,10 @@ func TestInvokeBinding_ConnectErrorCodeMapping(t *testing.T) {
 	}{
 		{"unauthenticated", http.StatusUnauthorized, `{"code":"unauthenticated","message":"need token"}`, openbindings.ErrCodeAuthRequired},
 		{"permission_denied", http.StatusForbidden, `{"code":"permission_denied","message":"nope"}`, openbindings.ErrCodePermissionDenied},
-		{"unavailable", http.StatusServiceUnavailable, `{"code":"unavailable","message":"down"}`, openbindings.ErrCodeConnectFailed},
+		{"unavailable", http.StatusServiceUnavailable, `{"code":"unavailable","message":"down"}`, openbindings.ErrCodeUnavailable},
+		{"resource_exhausted", http.StatusTooManyRequests, `{"code":"resource_exhausted","message":"slow down"}`, openbindings.ErrCodeUnavailable},
 		{"deadline_exceeded", http.StatusGatewayTimeout, `{"code":"deadline_exceeded","message":"too slow"}`, openbindings.ErrCodeTimeout},
+		{"canceled", http.StatusInternalServerError, `{"code":"canceled","message":"client went away"}`, openbindings.ErrCodeCancelled},
 		{"internal", http.StatusInternalServerError, `{"code":"internal","message":"broke"}`, openbindings.ErrCodeExecutionFailed},
 		{"plain 401 no connect body", http.StatusUnauthorized, ``, openbindings.ErrCodeAuthRequired},
 		{"plain 403 no connect body", http.StatusForbidden, ``, openbindings.ErrCodePermissionDenied},

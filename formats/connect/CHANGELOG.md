@@ -4,6 +4,13 @@
 
 ### Changed
 
+- **Error-code mapping aligned to the binding-invoker contract.** Connect
+  protocol error codes now map `unavailable`/`resource_exhausted` →
+  `ERR_UNAVAILABLE` (transient; the server answered but refused as retryable,
+  distinct from the transport-failure `ERR_CONNECT_FAILED`) and `canceled` →
+  `ERR_CANCELLED`, mirroring the gRPC family. Previously `unavailable` →
+  `ERR_CONNECT_FAILED` and `resource_exhausted`/`canceled` fell to
+  `ERR_EXECUTION_FAILED`.
 - **Conformance to the published `openbindings.connect@1` binding
   specification.** The invoker now implements the spec's rules end to end
   (connect@1 incorporates `openbindings.grpc@1` as its schema layer by

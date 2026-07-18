@@ -121,7 +121,7 @@ The invoker sends requests as HTTP POST with:
 - `Content-Type: application/json`
 - `Connect-Protocol-Version: 1`
 
-Responses are parsed as JSON. Connect error responses (with `code` and `message` fields) are mapped to standard error codes: `unauthenticated` → `ERR_AUTH_REQUIRED`, `permission_denied` → `ERR_PERMISSION_DENIED`, `unavailable` → `ERR_CONNECT_FAILED`, `deadline_exceeded` → `ERR_TIMEOUT`, anything else → `ERR_EXECUTION_FAILED`.
+Responses are parsed as JSON. Connect error responses (with `code` and `message` fields) are mapped to standard error codes, mirroring the gRPC family per the binding-invoker contract: `unauthenticated` → `ERR_AUTH_REQUIRED`, `permission_denied` → `ERR_PERMISSION_DENIED`, `unavailable`/`resource_exhausted` → `ERR_UNAVAILABLE` (the server answered but refused as retryable — not a transport failure), `deadline_exceeded` → `ERR_TIMEOUT`, `canceled` → `ERR_CANCELLED`, anything else → `ERR_EXECUTION_FAILED`.
 
 Leading metadata (HTTP response headers) is available via the handle's `Header`; trailing metadata (Connect unary `Trailer-`-prefixed headers, or the streaming end-stream envelope's `metadata` field) via `Trailer`.
 
