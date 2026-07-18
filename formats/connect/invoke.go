@@ -227,10 +227,15 @@ func connectCodeToErrCode(code string) string {
 		return openbindings.ErrCodeAuthRequired
 	case "permission_denied":
 		return openbindings.ErrCodePermissionDenied
-	case "unavailable":
-		return openbindings.ErrCodeConnectFailed
+	case "unavailable", "resource_exhausted":
+		// The server answered but refused the request as retryable — not a
+		// transport failure that never reached a server (ErrCodeConnectFailed).
+		// Same family mapping as gRPC; the binding-invoker contract pins it.
+		return openbindings.ErrCodeUnavailable
 	case "deadline_exceeded":
 		return openbindings.ErrCodeTimeout
+	case "canceled":
+		return openbindings.ErrCodeCancelled
 	default:
 		return openbindings.ErrCodeExecutionFailed
 	}
