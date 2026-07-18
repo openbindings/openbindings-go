@@ -876,6 +876,63 @@ func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
 	}
 }
 
+// A mid-stream lifetime DEADLINE on an SSE (server-streaming) response:
+// already-emitted events stand, then exactly one terminal ERR_TIMEOUT
+// (transient / possible). This must agree with the gRPC server-stream deadline
+// terminal (cross-format consistency, audit finding 2.3): both formats classify
+// a mid-stream deadline as ERR_TIMEOUT, never ERR_CANCELLED.
+func TestIntegration_SSEResponse_MidStreamDeadlineIsTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		_, _ = io.WriteString(w, "data: {\"id\":\"1\",\"msg\":\"first\"}\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		// Hold the stream open until the client's lifetime deadline tears it
+		// down (mirrors gRPC WatchItems).
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	// The invocation LIFETIME carries the deadline; reads use a separate ctx.
+	lifeCtx, cancelLife := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancelLife()
+	call := NewInvoker().InvokeBinding(lifeCtx, &openbindings.BindingInvocationArgs{
+		Ref:    "#/paths/~1events/get",
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+	})
+	_ = call.Close()
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelRead()
+	out := call.Outputs()
+
+	first, err := out.Read(readCtx)
+	if err != nil {
+		t.Fatalf("first event must stand, got %v", err)
+	}
+	if first == nil {
+		t.Fatal("first event must be non-nil (an output flowed before the deadline)")
+	}
+
+	_, err = out.Read(readCtx)
+	var terr *openbindings.InvocationError
+	if !errors.As(err, &terr) {
+		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
+	}
+	if terr.Code != openbindings.ErrCodeTimeout {
+		t.Fatalf("code = %q, want ERR_TIMEOUT", terr.Code)
+	}
+	if terr.Category != openbindings.CategoryTransient {
+		t.Errorf("category = %q, want transient", terr.Category)
+	}
+	if terr.Effects != openbindings.EffectsPossible {
+		t.Errorf("effects = %q, want possible", terr.Effects)
+	}
+}
+
 func TestIntegration_SSEResponse_NotSSE_StaysUnary(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -4,6 +4,21 @@
 
 ### Changed
 
+- **A mid-stream deadline is now classified `ERR_TIMEOUT` (transient / effects:
+  possible), deterministically and uniformly across formats, rather than
+  `ERR_CANCELLED` — restoring the retry-safety signal.** An explicit caller
+  cancel remains `ERR_CANCELLED`. The invocation handle's lifetime watcher now
+  branches on `ctx.Err()`: `context.DeadlineExceeded` fires `ERR_TIMEOUT` (a
+  deadline may fire after outputs have flowed, so retry-safety is "may have
+  executed"), `context.Canceled` fires `ERR_CANCELLED`. `AsInvocationError`
+  makes the same distinction. The gRPC server-stream path now guards its
+  `RecvMsg`-error terminal with `ctx.Err()` (mirroring the OpenAPI SSE path), so
+  a deadline that races the handle's terminal settles deterministically as
+  `ERR_TIMEOUT` (previously ~284/300 `ERR_CANCELLED` / ~16/300 `ERR_TIMEOUT`).
+  The `usage` and `mcp` invokers, which fired their own cancel terminal on a
+  context error, now defer to (usage) or agree with (mcp) the handle's
+  classification so they cannot race a deadline to `ERR_CANCELLED`.
+
 - **`IsSupportedVersion` now answers OBI-T-04 acceptance (patch-lenient within a
   supported minor line), matching `Validate`/`ParseDocument`; previously it was
   the strict tested-range check.** A 0.2.0 SDK now reports `true` for `0.2.1`,

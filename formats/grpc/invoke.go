@@ -120,6 +120,16 @@ func runServerStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 				inv.CloseOutput()
 				return
 			}
+			// When the invocation context is done (caller cancel or lifetime
+			// deadline), the handle owns the terminal classification via its
+			// AfterFunc — a deadline as ERR_TIMEOUT, a cancel as ERR_CANCELLED.
+			// Defer to it rather than racing a stream-error terminal off the
+			// same RecvMsg wakeup, mirroring the OpenAPI SSE path. Both racers
+			// already agree on ERR_TIMEOUT for a deadline once the handle
+			// classifies it; this guard makes the outcome deterministic.
+			if rpcCtx.Err() != nil {
+				return
+			}
 			inv.FireError(grpcError(rerr, openbindings.ErrCodeStreamError))
 			return
 		}

@@ -536,6 +536,113 @@ func TestStopCancelsInvocation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Deadline vs. cancel classification (mid-stream) — parity with TS
+// invocation.test.ts. A lifetime DEADLINE is a TIMEOUT (transient / effects
+// possible: outputs may already have flowed, so retry-safety is "may have
+// executed"); an explicit cancel() is genuinely caller-initiated (cancelled).
+// ---------------------------------------------------------------------------
+
+func invErrOf(t *testing.T, err error) *InvocationError {
+	t.Helper()
+	var ie *InvocationError
+	if !errors.As(err, &ie) {
+		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
+	}
+	return ie
+}
+
+// A mid-stream lifetime deadline: already-emitted outputs STAND, then exactly
+// one terminal ERR_TIMEOUT (transient / possible). Deterministic classification.
+func TestMidStreamDeadlineIsTimeout(t *testing.T) { // SS
+	ctx, cancel := context.WithTimeout(bg(), 60*time.Millisecond)
+	t.Cleanup(cancel)
+	inv := NewInvocationImpl[any, int](ctx)
+
+	// Two outputs flow before the deadline fires (buffered; non-blocking).
+	if err := inv.EmitOutput(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := inv.EmitOutput(2); err != nil {
+		t.Fatal(err)
+	}
+
+	<-inv.Done() // the lifetime deadline drives the terminal
+
+	vals, err := collectStream(t, inv.Outputs())
+	if len(vals) != 2 || vals[0] != 1 || vals[1] != 2 {
+		t.Fatalf("previously-emitted outputs must stand, got %v", vals)
+	}
+	ie := invErrOf(t, err)
+	if ie.Code != ErrCodeTimeout {
+		t.Fatalf("code = %q, want ERR_TIMEOUT", ie.Code)
+	}
+	if ie.Category != CategoryTransient {
+		t.Errorf("category = %q, want transient", ie.Category)
+	}
+	if ie.Effects != EffectsPossible {
+		t.Errorf("effects = %q, want possible", ie.Effects)
+	}
+}
+
+// An explicit cancel() mid-stream: outputs stand, then exactly one
+// ERR_CANCELLED (cancelled). Unchanged by the deadline fix.
+func TestMidStreamCancelStaysCancelled(t *testing.T) { // SS
+	inv := NewInvocationImpl[any, int](bg())
+	if err := inv.EmitOutput(1); err != nil {
+		t.Fatal(err)
+	}
+	inv.Cancel()
+
+	vals, err := collectStream(t, inv.Outputs())
+	if len(vals) != 1 || vals[0] != 1 {
+		t.Fatalf("previously-emitted output must stand, got %v", vals)
+	}
+	ie := invErrOf(t, err)
+	if ie.Code != ErrCodeCancelled {
+		t.Fatalf("code = %q, want ERR_CANCELLED", ie.Code)
+	}
+	if ie.Category != CategoryCancelled {
+		t.Errorf("category = %q, want cancelled", ie.Category)
+	}
+}
+
+// A caller-supplied deadline that fires via the AfterFunc classifies as a
+// TIMEOUT even with no output in flight (parity: the code, not the presence
+// of outputs, decides).
+func TestDeadlineWithoutOutputIsTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(bg(), 20*time.Millisecond)
+	t.Cleanup(cancel)
+	inv := NewInvocationImpl[any, int](ctx)
+	_, err := collectStream(t, inv.Outputs())
+	ie := invErrOf(t, err)
+	if ie.Code != ErrCodeTimeout || ie.Category != CategoryTransient || ie.Effects != EffectsPossible {
+		t.Fatalf("deadline terminal = {%s %s %s}, want {ERR_TIMEOUT transient possible}", ie.Code, ie.Category, ie.Effects)
+	}
+}
+
+// An already-expired lifetime is classified the same way a mid-flight one is:
+// a deadline is a TIMEOUT, an explicit cancel is CANCELLED.
+func TestPreExpiredDeadlineIsTimeout(t *testing.T) {
+	ctx, cancel := context.WithDeadline(bg(), time.Now().Add(-time.Second))
+	t.Cleanup(cancel)
+	inv := NewInvocationImpl[any, int](ctx)
+	_, err := collectStream(t, inv.Outputs())
+	if ie := invErrOf(t, err); ie.Code != ErrCodeTimeout {
+		t.Fatalf("pre-expired deadline code = %q, want ERR_TIMEOUT", ie.Code)
+	}
+}
+
+// AsInvocationError distinguishes a deadline (TIMEOUT) from a cancel (CANCELLED).
+func TestAsInvocationErrorDeadlineIsTimeout(t *testing.T) {
+	if ie := AsInvocationError(context.DeadlineExceeded); ie.Code != ErrCodeTimeout || ie.Category != CategoryTransient || ie.Effects != EffectsPossible {
+		t.Errorf("DeadlineExceeded → {%s %s %s}, want {ERR_TIMEOUT transient possible}", ie.Code, ie.Category, ie.Effects)
+	}
+	if ie := AsInvocationError(context.Canceled); ie.Code != ErrCodeCancelled || ie.Category != CategoryCancelled {
+		t.Errorf("Canceled → {%s %s}, want {ERR_CANCELLED cancelled}", ie.Code, ie.Category)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Metadata
 // ---------------------------------------------------------------------------
 
