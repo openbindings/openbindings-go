@@ -275,21 +275,28 @@ evaluate `inputTransform`/`outputTransform` (OBI-T-10). This SDK does not
 bundle a JSONata runtime — tools that only parse, validate, inspect, or
 generate code do not need one — and it does not pick a Go implementation
 for you: you supply any JSONata library behind the `TransformEvaluator`
-seam on `OperationInvoker`. A complete adapter (this one over
-[`blues/jsonata-go`](https://github.com/blues/jsonata-go), the library the
-`ob` CLI happens to use — a worked example, not an endorsement):
+seam on `OperationInvoker`. A worked adapter (this one over
+[`recolabs/gnata`](https://github.com/recolabs/gnata), the pure-Go JSONata 2.x
+engine the `ob` CLI uses — an example, not an endorsement):
 
 ```go
-import jsonata "github.com/blues/jsonata-go"
+import "github.com/recolabs/gnata"
 
 type jsonataEvaluator struct{}
 
 func (jsonataEvaluator) Evaluate(expression string, data any) (any, error) {
-	expr, err := jsonata.Compile(expression)
+	expr, err := gnata.Compile(expression)
 	if err != nil {
 		return nil, err
 	}
-	return expr.Eval(data)
+	// EvalBytes (feed marshaled JSON) preserves object member order; Eval on a
+	// Go map re-sorts keys. gnata signals an undefined result as (nil, nil) —
+	// map it to your undefined sentinel if you drive operation-graph transforms.
+	input, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	return expr.EvalBytes(context.Background(), input)
 }
 
 invoker.TransformEvaluator = jsonataEvaluator{}
