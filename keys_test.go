@@ -13,8 +13,9 @@ func TestSanitizeKey(t *testing.T) {
 		{"_private", "private"},
 		{"", "unnamed"},
 		{"***", "unnamed"},
-		// OBI-D-03 requires ^[A-Za-z_]: digit-leading sanitized keys are
-		// prefixed with an underscore.
+		// Key-derivation conservatism (not an OBI-D-03 requirement — the
+		// grammar permits a leading digit): digit-leading sanitized keys are
+		// still prefixed with an underscore.
 		{"2fa.enable", "_2fa.enable"},
 		{"42", "_42"},
 		{"123 go", "_123_go"},

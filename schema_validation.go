@@ -363,7 +363,7 @@ func summarizeValidationError(ve *jsonschema.ValidationError) string {
 // ValidateAgainstSchema validates a value against an operation-level JSON
 // Schema, resolving #/schemas/ references against the interface's named
 // schema pool. This is the same compilation and validation the operation
-// invoker applies to outputs under OBI-T-08, exported so tools can enforce
+// invoker applies to outputs under OBI-T-16, exported so tools can enforce
 // or test wire conformance on values they carry themselves.
 func ValidateAgainstSchema(value any, schema JSONSchema, schemas map[string]JSONSchema) error {
 	compiled, err := compileExampleSchema(schema, buildSchemaDefs(schemas))

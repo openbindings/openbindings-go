@@ -305,15 +305,13 @@ func appendUnknownFieldProblems(errs *[]string, prefix string, unknown map[strin
 // generic-JSON view of the whole OBI document. Existence only: OBI-D-16 does
 // not type-check the target.
 func docPointerResolves(doc any, pointer string) bool {
-	// The fragment is the pointer's URI-fragment representation (RFC 6901
-	// §6): percent-decode the whole fragment first, then evaluate the
-	// result as a JSON Pointer (§10). Malformed percent-encoding simply
-	// fails to resolve — it is already a D-05 char-screen violation upstream.
-	decoded, err := url.PathUnescape(pointer)
-	if err != nil {
-		return false
-	}
-	pointer = decoded
+	// Same-document OBI fragments are in literal form (§7): the pointer's
+	// characters are written unencoded, so the fragment is evaluated as an
+	// RFC 6901 JSON Pointer directly, with no percent-decoding. A
+	// percent-encoded fragment is not a conformant OBI reference and is
+	// rejected upstream by walkSchema's literal-form gate before it reaches
+	// this resolver — so this function never honors that non-conformant
+	// spelling. Only RFC 6901's own ~0/~1 escaping is unescaped below.
 	if pointer == "" {
 		return true // bare # addresses the document root
 	}
@@ -386,13 +384,16 @@ func validateTransformRef(ref string, transforms map[string]Transform) error {
 	return nil
 }
 
-// identPattern enforces OBI-D-03: every map key and every operation alias must match.
-var identPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
+// identPattern enforces OBI-D-03: every map key and every operation alias must
+// match. The grammar permits a leading digit (2fa.verify): names are opaque data
+// labels, not host-language identifiers, so only the start character is
+// constrained to an alphanumeric or underscore.
+var identPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 
 // validateIdent appends an OBI-D-03 violation if id does not match the identifier pattern.
 func validateIdent(errs *[]string, prefix, id string) {
 	if !identPattern.MatchString(id) {
-		*errs = append(*errs, fmt.Sprintf("%s: %q does not match identifier pattern ^[A-Za-z_][A-Za-z0-9_.-]*$ (OBI-D-03)", prefix, id))
+		*errs = append(*errs, fmt.Sprintf("%s: %q does not match identifier pattern ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ (OBI-D-03)", prefix, id))
 	}
 }
 
@@ -663,6 +664,16 @@ func walkSchema(errs *[]string, prefix string, schema any, doc any, inID bool) {
 			validateURIRef(errs, prefix+".$ref", str)
 			if !strings.HasPrefix(str, "#") && !referenceIsAbsolute(str) {
 				*errs = append(*errs, fmt.Sprintf("%s.$ref: %q must be a same-document fragment or an absolute URI, not a relative reference (OBI-D-05)", prefix, str))
+			} else if strings.HasPrefix(str, "#") && !inID && strings.Contains(str, "%") {
+				// Literal form (§7): same-document fragments are written with
+				// the pointer's characters unencoded, so every addressable
+				// location has exactly one conformant spelling. A percent-encoded
+				// fragment is not a conformant OBI-defined reference — reported
+				// here rather than silently decoded and resolved. Inside a schema
+				// declaring its own $id the fragment is resource-internal and
+				// resolves per JSON Schema 2020-12, so this gate is OBI-position
+				// only (!inID).
+				*errs = append(*errs, fmt.Sprintf("%s.$ref: %q is not in literal form; a same-document fragment is written with the pointer's characters unencoded (percent-encoding is not a conformant OBI reference) (OBI-D-05)", prefix, str))
 			} else if strings.HasPrefix(str, "#") && str != "#" && !strings.HasPrefix(str, "#/") && !inID {
 				// Inside a schema declaring its own $id, fragments resolve
 				// against that resource's base per JSON Schema — the same
