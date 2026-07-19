@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 )
 
 // The consumer hook surface: specification + configuration = complete
@@ -133,20 +134,61 @@ type BuiltinHooksProvider interface {
 //
 // Hooks may run multiple times per Invoke (per attempt, per delivery
 // unit) and must be effectively pure.
+//
+// Concurrency contract for the decode/classify success provenance
+// (DecodeDecidedBy, ClassifyDecidedBy): the hook chain writes it on the
+// BINDING goroutine and core reads it from the RUN goroutine. The pair is
+// published atomically, so a reader never observes a torn pair and the read
+// needs no external synchronization. A provenance value is readable and
+// meaningful only AFTER the corresponding axis has been consulted for the
+// delivery unit in hand — both the write (consultation) and the load-bearing
+// read (the emit-time output-validation failure teaching) happen on the emit
+// path; before the first decode/classify the axis reads "".
 type InvokeHooks struct {
 	perInvocation hookSlots
 	invokerLevel  hookSlots
-	// decodeDecidedBy records the tier that produced the most recent
-	// decode ("hook" or "builtin") — tier-blind on purpose (the failure
-	// paths are tier-precise; success provenance is not). Read by core's
-	// contract-decided teaching (an output-validation failure against a floor-stamped
-	// schema after a hook decode names the schema election, not the
-	// hook). Hooks run on a single binding goroutine per invocation.
-	decodeDecidedBy string
-	// classifyDecidedBy mirrors decodeDecidedBy for the classify axis —
-	// read by the x-ob-classify success provenance stamp (the conventions
-	// record, spec/binding-specs/README.md).
-	classifyDecidedBy string
+	// decidedBy holds the decode/classify success-provenance pair — the tiers
+	// ("hook" or "builtin") that produced the most recent decode and
+	// classification. Tier-blind on purpose (the failure paths are
+	// tier-precise; success provenance is not). The decode axis is read by
+	// core's contract-decided teaching (an output-validation failure against a
+	// floor-stamped schema after a hook decode names the schema election, not
+	// the hook); the classify axis by the x-ob-classify success provenance
+	// stamp (the conventions record, spec/binding-specs/README.md). Published
+	// as one immutable value through an atomic pointer (see the type doc's
+	// concurrency contract), so the cross-goroutine read is race-free by
+	// construction rather than by an incidental emit-path mutex edge.
+	decidedBy atomic.Pointer[decidedTiers]
+}
+
+// decidedTiers is the immutable decode/classify provenance pair published
+// atomically by InvokeHooks. It is never mutated after Store — each write
+// builds a fresh value carrying the other axis forward.
+type decidedTiers struct {
+	decode   string
+	classify string
+}
+
+// setDecodeTier records the decode provenance, carrying the classify axis
+// forward. Called only on the binding goroutine (a single writer per
+// invocation), so the load-then-store is race-free against itself; the atomic
+// store is what publishes the pair to the run-goroutine reader.
+func (h *InvokeHooks) setDecodeTier(tier string) {
+	next := decidedTiers{decode: tier}
+	if cur := h.decidedBy.Load(); cur != nil {
+		next.classify = cur.classify
+	}
+	h.decidedBy.Store(&next)
+}
+
+// setClassifyTier records the classify provenance, carrying the decode axis
+// forward. Same single-writer contract as setDecodeTier.
+func (h *InvokeHooks) setClassifyTier(tier string) {
+	next := decidedTiers{classify: tier}
+	if cur := h.decidedBy.Load(); cur != nil {
+		next.decode = cur.decode
+	}
+	h.decidedBy.Store(&next)
 }
 
 // DecodeDecidedBy reports which tier produced the most recent decode:
@@ -155,7 +197,10 @@ func (h *InvokeHooks) DecodeDecidedBy() string {
 	if h == nil {
 		return "builtin"
 	}
-	return h.decodeDecidedBy
+	if d := h.decidedBy.Load(); d != nil {
+		return d.decode
+	}
+	return ""
 }
 
 // ClassifyDecidedBy reports which tier produced the most recent
@@ -164,7 +209,10 @@ func (h *InvokeHooks) ClassifyDecidedBy() string {
 	if h == nil {
 		return "builtin"
 	}
-	return h.classifyDecidedBy
+	if d := h.decidedBy.Load(); d != nil {
+		return d.classify
+	}
+	return ""
 }
 
 type hookSlots struct {
@@ -253,7 +301,7 @@ func (h *InvokeHooks) DecodeOutput(site InvokeSite, raw RawResult, builtin Outpu
 		}
 		v, derr := runDecodeHook(t.name, t.fn, site, raw)
 		if derr == nil {
-			h.decodeDecidedBy = "hook"
+			h.setDecodeTier("hook")
 			return v, nil
 		}
 		if errors.Is(derr, ErrUseDefault) {
@@ -262,7 +310,7 @@ func (h *InvokeHooks) DecodeOutput(site InvokeSite, raw RawResult, builtin Outpu
 		return nil, derr
 	}
 	if h != nil {
-		h.decodeDecidedBy = "builtin"
+		h.setDecodeTier("builtin")
 	}
 	if builtin == nil {
 		return nil, &InvocationError{
@@ -321,7 +369,7 @@ func (h *InvokeHooks) Classify(site InvokeSite, raw RawResult, builtin ResultCla
 		}
 		v, cerr := runClassifyHook(t.name, t.fn, site, raw)
 		if cerr == nil {
-			h.classifyDecidedBy = "hook"
+			h.setClassifyTier("hook")
 			return v, nil
 		}
 		if errors.Is(cerr, ErrUseDefault) {
@@ -330,7 +378,7 @@ func (h *InvokeHooks) Classify(site InvokeSite, raw RawResult, builtin ResultCla
 		return false, cerr
 	}
 	if h != nil {
-		h.classifyDecidedBy = "builtin"
+		h.setClassifyTier("builtin")
 	}
 	if builtin == nil {
 		return false, &InvocationError{
