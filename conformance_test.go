@@ -27,6 +27,12 @@ func TestConformanceCorpus(t *testing.T) {
 	corpusDir := findConformanceCorpus()
 
 	if corpusDir == "" {
+		// OB_CORPUS_REQUIRED (set in CI) turns a missing corpus into a hard
+		// failure so a mis-wired path turns CI red instead of silently green;
+		// unset (local dev) it still skips.
+		if os.Getenv("OB_CORPUS_REQUIRED") != "" {
+			t.Fatal("spec conformance corpus not found (OB_CORPUS_REQUIRED is set; set OB_SPEC_CORPUS to the spec repo's conformance dir)")
+		}
 		t.Skip("spec conformance corpus not found")
 	}
 
