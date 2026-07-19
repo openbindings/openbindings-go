@@ -241,9 +241,19 @@ func (n *Normalizer) normalizeAt(schema map[string]any, path string) (map[string
 		out[k] = v
 	}
 
-	// Flatten allOf before anything else.
+	// Flatten allOf before anything else. The schema's own sibling keywords
+	// (everything beside allOf that survives stripping) are constraints that
+	// apply conjunctively with the branches, so they merge as one additional
+	// branch (profile normalization step 5).
 	if allOf, ok := out["allOf"]; ok {
-		merged, err := n.flattenAllOf(allOf, path)
+		siblings := make(map[string]any, len(out)-1)
+		for k, v := range out {
+			if k == "allOf" {
+				continue
+			}
+			siblings[k] = v
+		}
+		merged, err := n.flattenAllOf(allOf, siblings, path)
 		if err != nil {
 			return nil, err
 		}
