@@ -386,7 +386,7 @@ func NewInvocationImpl[I, O any](ctx context.Context) *InvocationImpl[I, O] {
 			}
 			return i
 		}
-		i.stopWatch = context.AfterFunc(ctx, func() {
+		stop := context.AfterFunc(ctx, func() {
 			// Distinguish a lifetime deadline from a caller cancel: a deadline
 			// is a TIMEOUT (transient, effects: possible — outputs may already
 			// have flowed, so the honest retry-safety answer is "may have
@@ -399,6 +399,15 @@ func NewInvocationImpl[I, O any](ctx context.Context) *InvocationImpl[I, O] {
 			}
 			i.FireError(&InvocationError{Code: ErrCodeCancelled, Message: i.cancelMessage()})
 		})
+		// The store must hold i.mu: ctx can be cancelled in the window between
+		// the Err check above and this registration, and context.AfterFunc then
+		// runs the callback immediately on its own goroutine. That callback's
+		// FireError reads i.stopWatch under i.mu, so an unlocked write here
+		// races it. Storing after the callback has already fired is harmless —
+		// the watcher has done its work and stop() is then a no-op.
+		i.mu.Lock()
+		i.stopWatch = stop
+		i.mu.Unlock()
 	}
 	return i
 }
