@@ -174,6 +174,12 @@ func (w *schemaWalker) message(msg protoreflect.MessageDescriptor) map[string]an
 	}
 
 	w.visited[fqn] = true
+	// Delete on unwind so `visited` tracks only the types on the current
+	// recursion stack (a genuine cycle), never every type seen anywhere in
+	// the walk. Left permanently set, it would truncate a message reused in
+	// sibling (non-cyclic) positions to a bare {"type":"object"}. This is the
+	// same delete-on-unwind discipline formats/openapi's inlineRefs uses.
+	defer delete(w.visited, fqn)
 
 	schema := map[string]any{
 		"type": "object",
