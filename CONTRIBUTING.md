@@ -10,6 +10,29 @@
 
 All changes land on `main` via squash-merged PRs. No direct commits to `main`.
 
+## Working on this repo
+
+The repo is a multi-module workspace: the core SDK at the root plus one
+sub-module per format under `formats/`. `go.work` is gitignored, so bootstrap
+a local workspace once after cloning:
+
+```bash
+go work init . formats/*/
+ver=$(awk '/github.com\/openbindings\/openbindings-go v/ {print $NF}' formats/openapi/go.mod)
+go work edit -replace "github.com/openbindings/openbindings-go@${ver}=."
+```
+
+The version-pinned `replace` is required, not a nicety: the format modules
+require the core at a version that is not tagged yet, and module-graph
+loading still fetches that version's go.mod even under `go work use`
+("unknown revision" otherwise). CI constructs the same workspace per module
+row (see `.github/workflows/ci.yml`); the replace is harmless after the tag
+lands — it then maps the tagged version to your checkout.
+
+After a `go` directive bump in the modules, refresh an existing workspace
+with `go work use . formats/*/` (it re-syncs `go.work`'s own `go` line); a
+stale `go.work` fails loudly otherwise.
+
 ## Testing
 
 ```bash
