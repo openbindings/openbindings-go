@@ -23,7 +23,7 @@ jobs:
           - formats/operationgraph
           - formats/workersrpc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The conformance corpora are normative and live in the sibling spec and
       # interfaces repos; without these checkouts the corpus gates skip
       # silently (which is how the family + interface corpora went unverified
@@ -32,16 +32,16 @@ jobs:
       # and drift should be loud. Every row needs the spec corpus (core + each
       # family lane); only the root module runs the interface corpora
       # (selection + comparison), so interfaces is checked out on that row only.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: openbindings/spec
           path: spec
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: matrix.module == '.'
         with:
           repository: openbindings/interfaces
           path: interfaces
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.module }}/go.mod
           cache: false
