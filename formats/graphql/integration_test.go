@@ -12,7 +12,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // ---------------------------------------------------------------------------
@@ -1036,11 +1036,13 @@ func TestIntegrationInvokeMutation_Accepts2xxStatus(t *testing.T) {
 	}
 }
 
-// TestIntegrationInvokeQuery_OversizedResponseRefused verifies the Go
-// response-size cap (10MB) refuses an oversized query response rather than
-// buffering it unbounded.
+// TestIntegrationInvokeQuery_OversizedResponseRefused verifies the
+// delivery-unit bound refuses an oversized query response rather than
+// buffering it unbounded: a tiny consumer bound set via
+// BindingInvocationArgs.MaxDeliveryUnitBytes trips on a ~2KB body, with the
+// lane's unchanged error identity.
 func TestIntegrationInvokeQuery_OversizedResponseRefused(t *testing.T) {
-	huge := strings.Repeat("x", int(maxResponseBytes)+16)
+	huge := strings.Repeat("x", 2048)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":{"ping":"`))
@@ -1056,9 +1058,10 @@ func TestIntegrationInvokeQuery_OversizedResponseRefused(t *testing.T) {
 		"properties": map[string]any{"_query": map[string]any{"type": "string", "const": "query { ping }"}},
 	}
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:      openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
-		Ref:         "Query/ping",
-		InputSchema: inputSchema,
+		Source:               openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
+		Ref:                  "Query/ping",
+		InputSchema:          inputSchema,
+		MaxDeliveryUnitBytes: 1024,
 	})
 	_, ierr := driveSingle(t, call, nil)
 	if ierr == nil {
@@ -1067,8 +1070,8 @@ func TestIntegrationInvokeQuery_OversizedResponseRefused(t *testing.T) {
 	if ierr.Code != openbindings.ErrCodeExecutionFailed {
 		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeExecutionFailed)
 	}
-	if !strings.Contains(ierr.Message, "byte limit") {
-		t.Errorf("error message = %q, want to contain %q", ierr.Message, "byte limit")
+	if !strings.Contains(ierr.Message, "exceeds 1024 byte limit") {
+		t.Errorf("error message = %q, want to contain %q", ierr.Message, "exceeds 1024 byte limit")
 	}
 }
 

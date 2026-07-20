@@ -176,6 +176,18 @@ Converts an AsyncAPI 3.x document into an OBI by:
 - Generating `#/operations/<id>` refs for each binding
 - Deriving operation keys from operation IDs
 
+## Resource bounds
+
+Delivery units — the unary publish reply body, one SSE event, and one
+WebSocket message (the socket's per-message read limit) — are
+consumer-bounded: set `MaxDeliveryUnitBytes` on the `OperationInvoker` (or
+per invocation on `BindingInvocationArgs`); zero selects
+`openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). On a pooled WebSocket
+the read limit only ever rises: a later acquirer with a larger bound raises
+it, a smaller one never lowers it mid-life. Deliberately fixed: the HTTP
+error-body diagnostics capture, the SSE line-scanner guard, and the
+synthesis-lane artifact-fetch guard — none is a delivery unit.
+
 ## License
 
 Apache-2.0

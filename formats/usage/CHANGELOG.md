@@ -2,6 +2,16 @@
 
 ## 0.2.0 (working draft)
 
+### Added
+
+- **Configurable delivery-unit bound**: the invocation lane's captured
+  stdout honors `BindingInvocationArgs.MaxDeliveryUnitBytes` (default
+  `openbindings.DefaultMaxDeliveryUnitBytes`, 10 MiB — the previous fixed
+  cap). Overflow error identity is unchanged (`ERR_EXECUTION_FAILED`, same
+  message template, dynamic value). The stderr tail, `x-stderr` trailer
+  bound, artifact-fetch guard, and field-routing cap stay fixed (not
+  delivery units).
+
 **The openbindings.usage binding-unit format** (ratified 2026-07-06;
 authority: the companion spec at spec/binding-specs/usage/openbindings.usage.md).
 The format's source is now a JSON wrapper document embedding a pristine jdx

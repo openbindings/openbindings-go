@@ -70,6 +70,10 @@ func NewInvokerWithClient(invoker *openbindings.OperationInvoker, client *http.C
 }
 
 // maxGraphDocBytes bounds a graph document fetched from a remote location.
+// Deliberately fixed (named exclusion): an artifact-fetch guard on the
+// source document, not a delivery unit —
+// BindingInvocationArgs.MaxDeliveryUnitBytes does not apply here; the
+// sub-operations a graph invokes are bounded by their own formats.
 const maxGraphDocBytes = 8 << 20 // 8 MiB
 
 // Formats returns the binding format tokens this invoker supports.

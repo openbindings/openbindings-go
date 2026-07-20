@@ -14,7 +14,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 const testSecret = "test-token-123"

@@ -18,11 +18,13 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// maxResponseBytes caps a unary response body (and, in streaming.go, each
-// envelope payload). This is reference-tool implementation policy, NOT a
-// rule of openbindings.connect@1 — the specification places resource
-// policy (response-size caps, redirect limits, timeouts) with the consumer
-// and the implementation (§2).
+// maxResponseBytes caps the HTTP ERROR body captured into failure details on
+// the streaming dispatch path (streaming.go). Deliberately fixed: a
+// diagnostics capture on the error path, not a delivery unit —
+// BindingInvocationArgs.MaxDeliveryUnitBytes does not apply here. The
+// delivery-unit bounds (unary body, per-envelope payload) are
+// consumer-configured via that field; resource policy stays with the
+// consumer and the implementation, never openbindings.connect@1 (§2).
 const maxResponseBytes int64 = 10 * 1024 * 1024
 
 // methodInfo holds a resolved method descriptor for schema-mode input and
@@ -311,7 +313,7 @@ func splitUnaryMetadata(resp *http.Response) (header, trailer openbindings.Metad
 // (CONN-P-06): a unary invocation succeeds IFF the final response status,
 // after any redirects, is 200 — the protocol makes every unary error
 // non-200, so this is Connect's own rule, not a 2xx heuristic.
-func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, body []byte, headers map[string]string, mi *methodInfo) {
+func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, body []byte, headers map[string]string, mi *methodInfo, maxUnit int64) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
@@ -340,8 +342,10 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 	}
 	defer resp.Body.Close()
 
-	// The response-size cap is implementation policy (§2), not a spec rule.
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	// The response-size cap is implementation policy (§2), not a spec rule:
+	// the unary body is one delivery unit, consumer-bounded via
+	// BindingInvocationArgs.MaxDeliveryUnitBytes (default 10 MiB).
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUnit+1))
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -349,10 +353,10 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
 		return
 	}
-	if int64(len(respBody)) > maxResponseBytes {
+	if int64(len(respBody)) > maxUnit {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes),
+			Message: fmt.Sprintf("response exceeds %d byte limit", maxUnit),
 		})
 		return
 	}

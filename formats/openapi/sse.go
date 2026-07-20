@@ -14,6 +14,10 @@ import (
 // sseMaxLineBytes bounds individual SSE line length to prevent runaway memory
 // use from a misbehaving server. The WHATWG SSE spec does not impose a line
 // limit, but a single 16 MB line is generous in practice.
+//
+// Deliberately fixed: this is a line-scanner internal guard, not the
+// delivery-unit bound — BindingInvocationArgs.MaxDeliveryUnitBytes does not
+// apply here.
 const sseMaxLineBytes = 16 * 1024 * 1024
 
 // isSSEContentType reports whether the given Content-Type header value

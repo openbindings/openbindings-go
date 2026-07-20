@@ -10,7 +10,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // WS slow-consumer backpressure (spec/binding-specs/asyncapi/openbindings.asyncapi.md, "WS slow-consumer

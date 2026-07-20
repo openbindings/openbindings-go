@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func TestRunCLI_OutputCapEnforced(t *testing.T) {
@@ -14,7 +16,8 @@ func TestRunCLI_OutputCapEnforced(t *testing.T) {
 	// Emit ~27MB of printable text (base64 of 20MB of zeros), exceeding the
 	// 10MB cap. base64 avoids NUL bytes that BSD tr mishandles.
 	_, err := runCLI(context.Background(), "sh",
-		[]string{"-c", "head -c 20000000 /dev/zero | base64"}, nil, nil)
+		[]string{"-c", "head -c 20000000 /dev/zero | base64"}, nil, nil,
+		openbindings.DefaultMaxDeliveryUnitBytes)
 	if err == nil {
 		t.Fatal("expected an overflow error for oversized output")
 	}

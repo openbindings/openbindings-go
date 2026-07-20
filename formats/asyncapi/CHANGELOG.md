@@ -2,6 +2,30 @@
 
 ## 0.2.0 (working draft)
 
+### Added
+
+- **Configurable delivery-unit bound**: the unary publish reply body, each
+  SSE event, and each WebSocket message honor
+  `BindingInvocationArgs.MaxDeliveryUnitBytes` (default
+  `openbindings.DefaultMaxDeliveryUnitBytes`, 10 MiB). Overflow error
+  identity is unchanged. On a pooled WebSocket the per-message read limit
+  only ever rises across acquirers (a smaller sibling bound never severs an
+  in-flight subscription). The HTTP error-body capture, SSE line-scanner
+  guard, and synthesis artifact-fetch guard stay fixed (not delivery units).
+
+### Fixed
+
+- **WebSocket messages were accidentally capped at ~32 KiB**: no read limit
+  was ever set on pooled sockets, so the websocket library's 32768-byte
+  default applied per message — ~300x below the documented 10 MiB
+  convention. The delivery-unit bound is now applied as the socket's read
+  limit on every connection.
+
+### Changed
+
+- **WebSocket library migrated** from the archived `nhooyr.io/websocket` to
+  its maintained rename `github.com/coder/websocket` (API-compatible).
+
 - **Unary publish success is strict 2xx (ASYNC-P-06)**: a 3xx final status is
   now a failure, matching the SSE path's classification.
 - **Pooled-WebSocket writes are detached from the invocation context**:

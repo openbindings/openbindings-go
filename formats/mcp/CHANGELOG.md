@@ -2,6 +2,13 @@
 
 ## 0.2.0 (working draft)
 
+### Added
+
+- **Delivery-unit bound named exclusion documented** (README "Resource
+  bounds"): the official MCP Go SDK exposes no read-bound seam, so
+  `BindingInvocationArgs.MaxDeliveryUnitBytes` wires no read site in this
+  format; re-examine when the SDK exports a message-size limit.
+
 This release tracks the spec 0.2.0 alignment of `openbindings-go`, including the rewritten invoker core. See the root `openbindings-go` CHANGELOG for the full table.
 
 ### Changed

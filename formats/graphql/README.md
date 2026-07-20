@@ -175,6 +175,16 @@ The synthesizer introspects the endpoint, extracts all Query/Mutation/Subscripti
 - A `_query` const on each operation's input schema containing the pre-built query string
 - A binding per operation with a `{RootType}/{fieldName}` ref
 
+## Resource bounds
+
+Delivery units — the query/mutation response body and each subscription
+WebSocket message (the socket's per-message read limit) — are
+consumer-bounded: set `MaxDeliveryUnitBytes` on the `OperationInvoker` (or
+per invocation on `BindingInvocationArgs`); zero selects
+`openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). The discovery-lane
+introspection fetch is deliberately fixed at the default — an artifact-side
+fetch, not a delivery unit.
+
 ## License
 
 Apache-2.0

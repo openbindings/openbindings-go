@@ -146,6 +146,16 @@ Connect and gRPC are separate wire protocols that share protobuf service definit
 
 Like gRPC, protobuf framing plus the Connect envelope status fully determine decode and success. This format **does not consult the consumer hooks seam** (`InvokeHooks`); a `DecodeOutput`, `Classify`, or `Route` hook has no effect, and `ob plan` reports it as `not-consulted`.
 
+## Resource bounds
+
+Delivery units — the unary response body and each streaming envelope
+payload — are consumer-bounded: set `MaxDeliveryUnitBytes` on the
+`OperationInvoker` (or per invocation on `BindingInvocationArgs`); zero
+selects `openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). The streaming
+dispatch path's HTTP error-body capture is deliberately fixed — a
+diagnostics capture, not a delivery unit. Size caps are consumer and
+implementation policy under openbindings.connect@1 §2, never spec rules.
+
 ## License
 
 Apache-2.0

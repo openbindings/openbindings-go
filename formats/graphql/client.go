@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // introspectionSchema holds a parsed GraphQL introspection result.
@@ -111,7 +111,9 @@ func discover(ctx context.Context, client *http.Client, endpointURL string, head
 
 // introspect sends the standard introspection query and parses the result.
 func introspect(ctx context.Context, client *http.Client, endpointURL string, headers map[string]string) (*introspectionSchema, error) {
-	data, _, errors, err := doGraphQLHTTP(ctx, client, endpointURL, introspectionQuery, nil, headers)
+	// Discovery lane: an artifact-side introspection fetch, not a delivery
+	// unit — it stays at the fixed default rather than any consumer bound.
+	data, _, errors, err := doGraphQLHTTP(ctx, client, endpointURL, introspectionQuery, nil, headers, openbindings.DefaultMaxDeliveryUnitBytes)
 	if err != nil {
 		return nil, fmt.Errorf("introspection: %w", err)
 	}
@@ -139,8 +141,11 @@ func introspect(ctx context.Context, client *http.Client, endpointURL string, he
 }
 
 // doGraphQLHTTP sends a GraphQL query over HTTP POST and returns the parsed
-// data and errors from the response.
-func doGraphQLHTTP(ctx context.Context, client *http.Client, endpointURL, query string, variables map[string]any, headers map[string]string) (map[string]any, http.Header, []graphqlError, error) {
+// data and errors from the response. maxBytes bounds the response body — for
+// the invocation lane it is the resolved delivery-unit bound
+// (BindingInvocationArgs.DeliveryUnitLimit); the discovery lane passes the
+// fixed default.
+func doGraphQLHTTP(ctx context.Context, client *http.Client, endpointURL, query string, variables map[string]any, headers map[string]string, maxBytes int64) (map[string]any, http.Header, []graphqlError, error) {
 	body := map[string]any{"query": query}
 	if variables != nil {
 		body["variables"] = variables
@@ -170,12 +175,12 @@ func doGraphQLHTTP(ctx context.Context, client *http.Client, endpointURL, query 
 
 	// The +1 sentinel distinguishes an at-limit response from an over-limit
 	// one (parity with openapi/connect).
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return nil, resp.Header, nil, fmt.Errorf("read response: %w", err)
 	}
-	if int64(len(respBody)) > maxResponseBytes {
-		return nil, resp.Header, nil, fmt.Errorf("response exceeds %d byte limit", maxResponseBytes)
+	if int64(len(respBody)) > maxBytes {
+		return nil, resp.Header, nil, fmt.Errorf("response exceeds %d byte limit", maxBytes)
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -214,7 +219,7 @@ func (e *httpError) Error() string {
 // is emitted as one output, a `complete` closes the output side, and an
 // `error`/transport failure fires a terminal error. The dial/handshake run
 // under ctx so a cancelled invocation tears the connection down.
-func streamSubscription(ctx context.Context, client *http.Client, endpointURL, query string, variables map[string]any, headers map[string]string, inv openbindings.BindingHandle[any, any]) {
+func streamSubscription(ctx context.Context, client *http.Client, endpointURL, query string, variables map[string]any, headers map[string]string, maxUnit int64, inv openbindings.BindingHandle[any, any]) {
 	wsURL := httpToWS(endpointURL)
 
 	wsHeaders := http.Header{}
@@ -232,6 +237,11 @@ func streamSubscription(ctx context.Context, client *http.Client, endpointURL, q
 		return
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
+	// One WebSocket message is one delivery unit: apply the resolved bound
+	// as the per-message read limit (the library default is ~32 KiB — far
+	// below the documented 10 MiB convention). An over-limit message errors
+	// the read below and surfaces as ERR_STREAM_ERROR.
+	conn.SetReadLimit(maxUnit)
 
 	if err := writeJSON(ctx, conn, map[string]any{"type": "connection_init"}); err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("connection_init: %v", err)})
@@ -411,8 +421,6 @@ func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 func basicAuth(username, password string) string {
 	return base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 }
-
-const maxResponseBytes int64 = 10 * 1024 * 1024
 
 const introspectionQuery = `query IntrospectionQuery {
   __schema {

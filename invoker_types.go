@@ -126,6 +126,34 @@ type BindingInvocationArgs struct {
 	// operation invoker; the FORMAT completes Target on its copy before
 	// consulting hooks. Process-local — never wire.
 	Site *InvokeSite `json:"-"`
+	// MaxDeliveryUnitBytes bounds ONE DELIVERY UNIT: the bytes materialized
+	// to produce one emitted output value (a unary response body, one SSE
+	// event, one streaming envelope, one WebSocket message, one captured
+	// stdout). Zero or negative selects DefaultMaxDeliveryUnitBytes; there
+	// is no unlimited sentinel — an effectively-unlimited bound is set
+	// explicitly huge. Consumer policy, process-local — never wire; the
+	// operation invoker stamps its own MaxDeliveryUnitBytes here when the
+	// caller left it unset, and direct binding-layer callers set it per
+	// invocation. Formats resolve it via DeliveryUnitLimit, never directly.
+	MaxDeliveryUnitBytes int64 `json:"-"`
+}
+
+// DefaultMaxDeliveryUnitBytes is the delivery-unit bound applied when
+// neither the operation invoker nor the binding-layer caller sets
+// BindingInvocationArgs.MaxDeliveryUnitBytes: 10 MiB, the SDK's historical
+// per-lane cap (cross-SDK parity value).
+const DefaultMaxDeliveryUnitBytes = 10 << 20 // 10 MiB
+
+// DeliveryUnitLimit resolves the effective delivery-unit bound for these
+// args: MaxDeliveryUnitBytes when positive, DefaultMaxDeliveryUnitBytes
+// otherwise. This is the single semantics point for the default — format
+// invokers call it at every delivery-unit read site and never re-derive
+// the fallback.
+func (a *BindingInvocationArgs) DeliveryUnitLimit() int64 {
+	if a != nil && a.MaxDeliveryUnitBytes > 0 {
+		return a.MaxDeliveryUnitBytes
+	}
+	return DefaultMaxDeliveryUnitBytes
 }
 
 // SynthesizeSource describes a binding source for interface synthesis.

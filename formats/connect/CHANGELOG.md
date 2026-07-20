@@ -2,6 +2,15 @@
 
 ## 0.2.0 (working draft)
 
+### Added
+
+- **Configurable delivery-unit bound**: the unary response body and each
+  streaming envelope payload honor
+  `BindingInvocationArgs.MaxDeliveryUnitBytes` (default
+  `openbindings.DefaultMaxDeliveryUnitBytes`, 10 MiB — the previous fixed
+  cap). Overflow error identity is unchanged. The streaming dispatch path's
+  HTTP error-body capture stays fixed (diagnostics, not a delivery unit).
+
 > A 0.1.1 patch release was prepared 2026-04 but never tagged or published; its entries are folded into this section.
 
 ### Changed

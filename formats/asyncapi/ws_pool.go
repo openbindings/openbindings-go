@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // WebSocket connection pool for the AsyncAPI invoker.
@@ -64,9 +64,16 @@ type pooledWS struct {
 	key  string
 	pool *wsPool
 
-	// refCount and idleTimer are guarded by the pool's mu.
+	// refCount, idleTimer, and readLimit are guarded by the pool's mu.
 	refCount  int
 	idleTimer *time.Timer
+	// readLimit is the per-message read limit currently applied to the
+	// socket (one WebSocket message is one delivery unit). It only ever
+	// rises over the connection's life: a later acquirer with a larger
+	// resolved bound raises it, but a smaller one never lowers it — a
+	// shared socket must not retroactively sever a sibling subscription's
+	// in-flight bound.
+	readLimit int64
 
 	// writeMu serializes frame writes from concurrent operations.
 	writeMu sync.Mutex
@@ -133,6 +140,12 @@ func credentialDigest(serverURL, address string, doc *document, secSrv *server, 
 // address, creating one if none exists. The returned connection has its ref
 // count incremented; the caller must call release() when done.
 //
+// readLimit is the acquirer's resolved delivery-unit bound
+// (BindingInvocationArgs.DeliveryUnitLimit): one WebSocket message is one
+// delivery unit. A fresh dial applies it as the socket's per-message read
+// limit; on reuse it can only RAISE the shared socket's limit (see
+// pooledWS.readLimit).
+//
 // When l is non-nil it is registered as a frame listener: on a fresh dial it
 // is registered BEFORE the reader goroutine starts, so no frame the server
 // pushes right after the handshake can be lost. The returned remove function
@@ -140,7 +153,7 @@ func credentialDigest(serverURL, address string, doc *document, secSrv *server, 
 //
 // If multiple goroutines call acquire for the same key concurrently, only one
 // creates the connection while the others wait.
-func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any, extraHeaders map[string]string, l *wsListener) (*pooledWS, func(), error) {
+func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any, extraHeaders map[string]string, readLimit int64, l *wsListener) (*pooledWS, func(), error) {
 	key := wsPoolKey(serverURL, address, doc, secSrv, asyncOp, bindCtx, extraHeaders)
 
 	for {
@@ -154,6 +167,11 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *do
 				pw.idleTimer = nil
 			}
 			pw.refCount++
+			if readLimit > pw.readLimit {
+				pw.readLimit = readLimit
+				// Safe on a live connection: SetReadLimit stores atomically.
+				pw.conn.SetReadLimit(readLimit)
+			}
 			p.mu.Unlock()
 			remove := func() {}
 			if l != nil {
@@ -180,7 +198,7 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *do
 		p.creating[key] = waitCh
 		p.mu.Unlock()
 
-		pw, remove, err := p.createConn(ctx, serverURL, address, key, doc, secSrv, asyncOp, bindCtx, extraHeaders, l)
+		pw, remove, err := p.createConn(ctx, serverURL, address, key, doc, secSrv, asyncOp, bindCtx, extraHeaders, readLimit, l)
 
 		p.mu.Lock()
 		delete(p.creating, key)
@@ -205,7 +223,7 @@ func (p *wsPool) acquire(ctx context.Context, serverURL, address string, doc *do
 // URL, because browsers cannot set custom WebSocket upgrade headers) and
 // the resolved ws-binding header values (§8) set after it, then starts the
 // broadcast reader goroutine.
-func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any, extraHeaders map[string]string, l *wsListener) (*pooledWS, func(), error) {
+func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any, extraHeaders map[string]string, readLimit int64, l *wsListener) (*pooledWS, func(), error) {
 	wsURL := joinURL(serverURL, address)
 
 	upgradeReq, err := http.NewRequestWithContext(ctx, http.MethodGet, wsURL, nil)
@@ -229,11 +247,18 @@ func (p *wsPool) createConn(ctx context.Context, serverURL, address, key string,
 	if err != nil {
 		return nil, nil, err
 	}
+	// One WebSocket message is one delivery unit: apply the acquirer's
+	// resolved bound as the per-message read limit (the library default is
+	// ~32 KiB — far below the documented 10 MiB convention). An over-limit
+	// message errors the read and closes the socket with
+	// StatusMessageTooBig, surfacing to listeners as a stream error.
+	conn.SetReadLimit(readLimit)
 
 	pw := &pooledWS{
 		conn:      conn,
 		key:       key,
 		pool:      p,
+		readLimit: readLimit,
 		listeners: make(map[int]*wsListener),
 	}
 	remove := func() {}

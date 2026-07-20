@@ -131,7 +131,7 @@ type connectEndStream struct {
 // unary-only by definition (CONN-P-04), so mi is always non-nil here. ctx
 // is already bound to the invocation's lifetime (DoneContext), so caller
 // Cancel() tears down the in-flight request.
-func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, msgBytes []byte, headers map[string]string, mi *methodInfo) {
+func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, msgBytes []byte, headers map[string]string, mi *methodInfo, maxUnit int64) {
 	// Build the framed request body: a single envelope with flags=0 carrying
 	// the request message, immediately followed by EOF (no end-stream envelope
 	// is required from the client side for server-streaming RPCs).
@@ -172,11 +172,14 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 	// errors in the END_STREAM envelope, but a proxy or middleware can
 	// still answer at the HTTP layer.
 	if resp.StatusCode != http.StatusOK {
-		// Read up to the cap PLUS ONE byte, matching the unary error path
-		// (invoke.go): LimitReader(n) yields at most n bytes, so bounding at
-		// maxResponseBytes truncates an error body of exactly the cap by one
-		// byte, which can break the Connect error JSON that applyConnectError
-		// parses. +1 lets a cap-sized error payload be read whole.
+		// Deliberately fixed at maxResponseBytes: a diagnostics capture on
+		// the error path, not a delivery unit —
+		// BindingInvocationArgs.MaxDeliveryUnitBytes does not apply here.
+		// Read up to the cap PLUS ONE byte: LimitReader(n) yields at most n
+		// bytes, so bounding at maxResponseBytes truncates an error body of
+		// exactly the cap by one byte, which can break the Connect error
+		// JSON that applyConnectError parses. +1 lets a cap-sized error
+		// payload be read whole.
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 		_ = inv.SetHeader(headerMetadata(resp.Header))
 		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
@@ -201,9 +204,11 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 
 	// readConnectEnvelope enforces a per-envelope cap rather than bounding
 	// the total stream size: a long-running subscription may legitimately
-	// produce more than maxResponseBytes total. (Implementation policy, §2.)
+	// produce more than one delivery unit's bytes in total. One envelope is
+	// one delivery unit, consumer-bounded via
+	// BindingInvocationArgs.MaxDeliveryUnitBytes. (Implementation policy, §2.)
 	for {
-		flags, payload, err := readConnectEnvelope(resp.Body, maxResponseBytes)
+		flags, payload, err := readConnectEnvelope(resp.Body, maxUnit)
 		if err == io.EOF {
 			// The protocol closes EVERY stream with an END_STREAM envelope
 			// (CONN-P-05); success requires an error-free END_STREAM

@@ -269,6 +269,28 @@
 
 ### Added
 
+- **Configurable delivery-unit bound.** `BindingInvocationArgs.MaxDeliveryUnitBytes`
+  bounds ONE DELIVERY UNIT — the bytes materialized to produce one emitted
+  output value (a unary response body, one SSE event, one streaming envelope,
+  one WebSocket message, one captured stdout). `OperationInvoker` gains the
+  matching public policy field, stamped into args exactly like the hook
+  fields; direct binding-layer callers set it per invocation on args. Zero or
+  negative selects the exported `DefaultMaxDeliveryUnitBytes` (10 MiB —
+  byte-identical to the per-lane constants it replaces; no unlimited
+  sentinel, set an explicitly huge bound instead);
+  `BindingInvocationArgs.DeliveryUnitLimit()` is the single resolution point
+  formats call. Overflow error identity per lane is unchanged — same codes,
+  same message templates, the value is now dynamic. Read sites: openapi
+  (unary body), asyncapi (unary reply, SSE per-event, WebSocket per-message),
+  connect (unary body, per-envelope), graphql (response body, subscription
+  per-message), usage (stdout capture). Named exclusions, documented in each
+  format README's "Resource bounds" note: grpc (message size rides grpc-go's
+  native `MaxCallRecvMsgSize` via the `WithDialOptions` pass-through), mcp
+  (no read-bound seam in the official MCP Go SDK), operationgraph doc-fetch
+  (artifact guard). Diagnostics and artifact-side bounds (error-body
+  captures, stderr tail, SSE line-scanner guards, artifact fetches, routing
+  caps) stay fixed by design.
+
 - **Transforms compile-lane conformance gate**: the spec
   `conformance/transforms` agreement corpus runs through `gnata.Compile` — the
   exact parse surface `Validate` ships.

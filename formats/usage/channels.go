@@ -31,7 +31,9 @@ const (
 	RouteFile = "file"
 )
 
-// maxRouteBytes bounds a routed field's materialized bytes.
+// maxRouteBytes bounds a routed field's materialized bytes. Deliberately
+// fixed: an input-side routing guard, not a delivery unit —
+// BindingInvocationArgs.MaxDeliveryUnitBytes does not apply here.
 const maxRouteBytes = maxCLIOutputBytes
 
 // routedInput is the result of routing one invocation's input fields:

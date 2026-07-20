@@ -127,7 +127,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	res, runErr := runCLI(bctx, binName, cmdArgs, args.Context, routed.stdin)
+	res, runErr := runCLI(bctx, binName, cmdArgs, args.Context, routed.stdin, args.DeliveryUnitLimit())
 	// Materialized files only need to outlive the process; the deferred call
 	// (idempotent) covers the error paths above.
 	routed.cleanup()
@@ -298,7 +298,7 @@ func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvoc
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
 		return
 	}
-	res, runErr := runCLI(ctx, binary, cmdArgs, args.Context, nil)
+	res, runErr := runCLI(ctx, binary, cmdArgs, args.Context, nil, args.DeliveryUnitLimit())
 	if ctx.Err() != nil {
 		// Defer to the handle for the lifetime terminal (deadline → ERR_TIMEOUT,
 		// cancel → ERR_CANCELLED); firing here would race it.
@@ -639,7 +639,7 @@ type cliResult struct {
 	stderrTruncated bool
 }
 
-func runCLI(ctx context.Context, binName string, args []string, bindCtx map[string]any, stdin []byte) (*cliResult, error) {
+func runCLI(ctx context.Context, binName string, args []string, bindCtx map[string]any, stdin []byte, maxStdoutBytes int64) (*cliResult, error) {
 	cmd := exec.CommandContext(ctx, binName, args...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
@@ -652,7 +652,11 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 		}
 	}
 
-	stdout := &cappedBuffer{limit: maxCLIOutputBytes}
+	// The captured stdout is one delivery unit, consumer-bounded via
+	// BindingInvocationArgs.MaxDeliveryUnitBytes (default 10 MiB). The
+	// stderr tail is deliberately fixed at maxCLIOutputBytes: diagnostics
+	// capture (truncate-and-mark), not a delivery unit.
+	stdout := &cappedBuffer{limit: int(maxStdoutBytes)}
 	stderr := &tailBuffer{limit: maxCLIOutputBytes}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -669,7 +673,7 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 	}
 
 	if stdout.overflow {
-		return nil, fmt.Errorf("command %q output exceeded %d bytes", binName, maxCLIOutputBytes)
+		return nil, fmt.Errorf("command %q output exceeded %d bytes", binName, maxStdoutBytes)
 	}
 
 	return &cliResult{
@@ -694,6 +698,9 @@ func resolveCommandArtifact(ctx context.Context, argv []string) (string, error) 
 	args := argv[1:]
 
 	cmd := exec.CommandContext(ctx, binName, args...)
+	// Deliberately fixed: an artifact-fetch guard on the usage document
+	// produced by the command, not a delivery unit —
+	// BindingInvocationArgs.MaxDeliveryUnitBytes does not apply here.
 	stdout := &cappedBuffer{limit: maxCLIOutputBytes}
 	cmd.Stdout = stdout
 
@@ -707,8 +714,13 @@ func resolveCommandArtifact(ctx context.Context, argv []string) (string, error) 
 	return stdout.String(), nil
 }
 
-// maxCLIOutputBytes bounds stdout/stderr captured from a spawned command, so a
-// runaway process cannot exhaust memory.
+// maxCLIOutputBytes bounds the fixed capture lanes: the stderr tail
+// (diagnostics, truncate-and-mark), the artifact-fetch guard
+// (resolveCommandArtifact), and the input-side routing cap (channels.go) —
+// none of which are delivery units, so
+// BindingInvocationArgs.MaxDeliveryUnitBytes does not apply to them. The
+// invocation lane's stdout capture IS a delivery unit and is
+// consumer-bounded (runCLI's maxStdoutBytes).
 const maxCLIOutputBytes = 10 << 20 // 10 MiB
 
 // maxStderrTrailerBytes bounds the x-stderr trailer value. Trailing metadata

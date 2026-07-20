@@ -2,6 +2,27 @@
 
 ## 0.2.0 (working draft)
 
+### Added
+
+- **Configurable delivery-unit bound**: the query/mutation response body and
+  each subscription WebSocket message honor
+  `BindingInvocationArgs.MaxDeliveryUnitBytes` (default
+  `openbindings.DefaultMaxDeliveryUnitBytes`, 10 MiB). Overflow error
+  identity is unchanged. The discovery-lane introspection fetch stays at the
+  fixed default (artifact-side, not a delivery unit).
+
+### Fixed
+
+- **Subscription WebSocket messages were accidentally capped at ~32 KiB**:
+  no read limit was ever set on the subscription socket, so the websocket
+  library's 32768-byte default applied per message. The delivery-unit bound
+  is now applied as the socket's read limit.
+
+### Changed
+
+- **WebSocket library migrated** from the archived `nhooyr.io/websocket` to
+  its maintained rename `github.com/coder/websocket` (API-compatible).
+
 - **Synthesizer: shared object/input-object types synthesize in full in
   sibling positions** (delete-on-unwind), output parity-pinned with the TS
   package.
