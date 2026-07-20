@@ -39,6 +39,34 @@ func TestCheckInterfaceCompatibility_FullyCompatible(t *testing.T) {
 	}
 }
 
+func TestCheckInterfaceCompatibility_NilProvidedIssuesSorted(t *testing.T) {
+	// The nil-provided lane must emit missing issues in sorted operation
+	// order, like the main lane — issue order must never leak Go map
+	// iteration order. Repeated runs make map-order leakage overwhelmingly
+	// likely to surface.
+	required := &Interface{
+		OpenBindings: "0.1.0",
+		Operations: map[string]Operation{
+			"epsilon": {}, "delta": {}, "charlie": {}, "bravo": {}, "alpha": {},
+		},
+	}
+	want := []string{"alpha", "bravo", "charlie", "delta", "epsilon"}
+	for run := 0; run < 20; run++ {
+		issues := CheckInterfaceCompatibility(required, nil)
+		if len(issues) != len(want) {
+			t.Fatalf("expected %d issues, got %d: %+v", len(want), len(issues), issues)
+		}
+		for i, issue := range issues {
+			if issue.Kind != CompatibilityMissing {
+				t.Fatalf("expected missing, got %s", issue.Kind)
+			}
+			if issue.Operation != want[i] {
+				t.Fatalf("run %d: issue %d: expected operation %q, got %q (issues must be sorted)", run, i, want[i], issue.Operation)
+			}
+		}
+	}
+}
+
 func TestCheckInterfaceCompatibility_MissingOperation(t *testing.T) {
 	required := &Interface{
 		OpenBindings: "0.1.0",
