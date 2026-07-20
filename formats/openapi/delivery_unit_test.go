@@ -3,6 +3,7 @@ package openapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,5 +53,69 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	}
 	if ierr.Message != "response exceeds 1024 byte limit" {
 		t.Errorf("error message = %q, want %q", ierr.Message, "response exceeds 1024 byte limit")
+	}
+}
+
+// TestDeliveryUnitBound_SSEPerEventNotCumulative verifies the SSE bound
+// applies per event, never cumulatively (each event is one delivery unit;
+// mirrors asyncapi's TestSSEReceiveCapIsPerEvent): events well over 1 KiB
+// each — and more than the 10 MiB default in total — keep flowing under
+// the default bound.
+func TestDeliveryUnitBound_SSEPerEventNotCumulative(t *testing.T) {
+	const eventSize = 2 * 1024 * 1024 // 2 MiB per event, 6 events = 12 MiB total
+	payload := strings.Repeat("x", eventSize)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for i := 0; i < 6; i++ {
+			fmt.Fprintf(w, "data: %s\n\n", payload)
+			flusher.Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Ref:    "#/paths/~1events/get",
+	})
+	vals, ierr := driveOutputs(context.Background(), call, nil)
+	if ierr != nil {
+		t.Fatalf("a >10MiB cumulative stream of under-bound events must not error: %v", ierr)
+	}
+	if len(vals) != 6 {
+		t.Fatalf("expected 6 events, got %d", len(vals))
+	}
+}
+
+// TestDeliveryUnitBound_SSETinyBoundRefusesLoudly verifies the consumer
+// delivery-unit bound is live on the SSE lane: with a 1 KiB bound set via
+// BindingInvocationArgs.MaxDeliveryUnitBytes, a ~4 KiB event refuses loudly
+// with the delivery-unit overflow identity (ERR_RESPONSE_ERROR, the same
+// message template as asyncapi's per-event cap).
+func TestDeliveryUnitBound_SSETinyBoundRefusesLoudly(t *testing.T) {
+	payload := strings.Repeat("x", 4096)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\n", payload)
+	}))
+	t.Cleanup(srv.Close)
+
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source:               openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Ref:                  "#/paths/~1events/get",
+		MaxDeliveryUnitBytes: 1024,
+	})
+	vals, ierr := driveOutputs(context.Background(), call, nil)
+	if len(vals) != 0 {
+		t.Fatalf("expected no outputs, got %d", len(vals))
+	}
+	if ierr == nil {
+		t.Fatal("expected an overflow error, got none")
+	}
+	if ierr.Code != openbindings.ErrCodeResponseError {
+		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeResponseError)
+	}
+	if ierr.Message != "SSE event exceeds 1024 byte limit" {
+		t.Errorf("error message = %q, want %q", ierr.Message, "SSE event exceeds 1024 byte limit")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -100,8 +101,10 @@ func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.Bind
 		lastEventID string
 		dataLines   []string
 		retryMs     int
+		eventBytes  int64
 		firstLine   = true
 	)
+	maxUnit := args.DeliveryUnitLimit()
 
 	// dispatch emits the accumulated event. It returns false when the emit
 	// fails (the invocation terminated while parked), signalling the caller
@@ -164,7 +167,22 @@ func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.Bind
 			firstLine = false
 		}
 
+		// The size cap is PER EVENT, not cumulative: a long-lived stream
+		// legitimately delivers more than one delivery unit in total (the
+		// same choice asyncapi's streamSSE documents for its per-event cap).
+		// One event is one delivery unit, consumer-bounded via
+		// BindingInvocationArgs.MaxDeliveryUnitBytes (default 10 MiB).
+		eventBytes += int64(len(line)) + 1 // +1 for newline
+		if eventBytes > maxUnit {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeResponseError,
+				Message: fmt.Sprintf("SSE event exceeds %d byte limit", maxUnit),
+			})
+			return
+		}
+
 		if line == "" {
+			eventBytes = 0
 			if !dispatch() {
 				return
 			}
