@@ -6,6 +6,8 @@ package openbindings
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -235,17 +237,75 @@ func TestWithRuntimeSwapsResolver(t *testing.T) {
 func TestRedactContext(t *testing.T) {
 	red := RedactContext(map[string]any{
 		"bearerToken": "secret",
+		"apiKey":      "flat-secret",
+		"apiKeys":     map[string]any{"stripe": "sk_live_SECRET"},
 		"basic":       map[string]any{"username": "u", "password": "pw"},
 		"plain":       "visible",
 	})
 	if red["bearerToken"] != "[REDACTED]" {
 		t.Fatalf("bearer not redacted: %v", red)
 	}
+	if red["apiKey"] != "[REDACTED]" {
+		t.Fatalf("flat apiKey not redacted: %v", red)
+	}
+	if red["apiKeys"].(map[string]any)["stripe"] != "[REDACTED]" {
+		t.Fatalf("scheme-scoped apiKeys[stripe] not redacted: %v", red)
+	}
 	if red["basic"].(map[string]any)["password"] != "[REDACTED]" {
 		t.Fatalf("password not redacted: %v", red)
 	}
 	if red["basic"].(map[string]any)["username"] != "u" || red["plain"] != "visible" {
 		t.Fatalf("non-secrets must survive: %v", red)
+	}
+}
+
+// TestRedactContext_CoversEveryCredentialField is the drift guard whose
+// absence let the TS apiKeys leak ship: for EVERY field the credential
+// registry (credentialFieldNames — the one source ScopeContext consumes)
+// classifies as secret, place a distinctive sentinel in that field's proper
+// shape, redact, serialize, and assert the sentinel appears NOWHERE. Adding a
+// credential family to the registry without teaching RedactContext its shape
+// fails this automatically. Mirrored by the TS redactContext.test.ts.
+func TestRedactContext_CoversEveryCredentialField(t *testing.T) {
+	// The secret's proper carriage per field; unlisted fields are flat.
+	shaped := func(field, sentinel string) any {
+		switch field {
+		case "basic":
+			return map[string]any{"username": "visible-user", "password": sentinel}
+		case "apiKeys":
+			return map[string]any{"stripe": sentinel, "twilio": sentinel + "-b"}
+		default:
+			return sentinel
+		}
+	}
+	for field := range credentialFieldNames {
+		sentinel := "SENTINEL_" + field + "_9f3ac1"
+		ctx := map[string]any{
+			field:      shaped(field, sentinel),
+			"plainCfg": "keepme",
+		}
+		out, err := json.Marshal(RedactContext(ctx))
+		if err != nil {
+			t.Fatalf("marshal redacted %s context: %v", field, err)
+		}
+		if strings.Contains(string(out), sentinel) {
+			t.Errorf("RedactContext leaked a %q secret: sentinel survived in %s", field, out)
+		}
+		if !strings.Contains(string(out), "keepme") {
+			t.Errorf("RedactContext dropped non-secret config for %q: %s", field, out)
+		}
+	}
+	// Non-secret structure of nested credential fields survives (scheme names,
+	// basic username), only the values are scrubbed.
+	red := RedactContext(map[string]any{
+		"apiKeys": map[string]any{"stripe": "sk"},
+		"basic":   map[string]any{"username": "alice", "password": "pw"},
+	})
+	if _, ok := red["apiKeys"].(map[string]any)["stripe"]; !ok {
+		t.Errorf("apiKeys scheme name 'stripe' must survive redaction: %v", red)
+	}
+	if red["basic"].(map[string]any)["username"] != "alice" {
+		t.Errorf("basic username must survive redaction: %v", red)
 	}
 }
 
@@ -261,6 +321,63 @@ func TestNormalizeContextKey(t *testing.T) {
 	for in, want := range cases {
 		if got := NormalizeContextKey(in); got != want {
 			t.Fatalf("NormalizeContextKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestNormalizeContextKey_StripsUserinfoAndFoldsCase pins the keying rule the
+// binding-invoker README owns: normalize to the host — lowercased, userinfo
+// excluded (RFC 3986). A password in userinfo must never ride into a store
+// key (the one surface RedactContext cannot reach), and a case-variant host
+// must derive the same key (DNS is case-insensitive) so a credential is not
+// silently fragmented across casings.
+func TestNormalizeContextKey_StripsUserinfoAndFoldsCase(t *testing.T) {
+	cases := map[string]string{
+		"https://API.example.com/v1/users":         "api.example.com",
+		"https://alice:hunter2@API.example.com/v1": "api.example.com",
+		"https://alice:hunter2@api.example.com":    "api.example.com",
+		"https://u:p@Host.Example.COM:8443/x":      "host.example.com:8443",
+		"https://user@API.example.com:443":         "api.example.com",
+		"https://u:p@[2001:DB8::1]:8080":           "[2001:db8::1]:8080",
+	}
+	for in, want := range cases {
+		got := NormalizeContextKey(in)
+		if got != want {
+			t.Errorf("NormalizeContextKey(%q) = %q, want %q", in, got, want)
+		}
+		// A userinfo password must never survive into the key.
+		if strings.Contains(got, "hunter2") || strings.Contains(got, ":p@") {
+			t.Errorf("NormalizeContextKey(%q) leaked userinfo into the key: %q", in, got)
+		}
+	}
+}
+
+// TestNormalizeKey_WriteReadAgree pins that the write helper
+// (NormalizeContextKey) and the read/resolver helper (NormalizeEndpoint)
+// derive the IDENTICAL key for the same input across mixed-case hosts,
+// userinfo-bearing URLs, and port variants — otherwise a credential written
+// one way is silently never resolved. The expected VALUES are also the
+// cross-SDK contract, pinned identically in the TS normalizeContextKey tests.
+func TestNormalizeKey_WriteReadAgree(t *testing.T) {
+	// input → the one key both normalizers must produce (the cross-SDK value).
+	cases := map[string]string{
+		"https://API.example.com/v1":               "api.example.com",
+		"https://alice:hunter2@API.example.com/v1": "api.example.com",
+		"https://API.example.com:443":              "api.example.com",
+		"https://API.example.com:8443/x":           "api.example.com:8443",
+		"http://User@Host.EXAMPLE.com:80":          "host.example.com",
+	}
+	for in, want := range cases {
+		k := NormalizeContextKey(in)
+		e := NormalizeEndpoint(in)
+		if k != want {
+			t.Errorf("NormalizeContextKey(%q) = %q, want %q", in, k, want)
+		}
+		if e != want {
+			t.Errorf("NormalizeEndpoint(%q) = %q, want %q", in, e, want)
+		}
+		if k != e {
+			t.Errorf("write/read key mismatch for %q: NormalizeContextKey=%q NormalizeEndpoint=%q", in, k, e)
 		}
 	}
 }

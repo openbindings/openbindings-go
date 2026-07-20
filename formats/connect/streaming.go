@@ -172,7 +172,12 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 	// errors in the END_STREAM envelope, but a proxy or middleware can
 	// still answer at the HTTP layer.
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+		// Read up to the cap PLUS ONE byte, matching the unary error path
+		// (invoke.go): LimitReader(n) yields at most n bytes, so bounding at
+		// maxResponseBytes truncates an error body of exactly the cap by one
+		// byte, which can break the Connect error JSON that applyConnectError
+		// parses. +1 lets a cap-sized error payload be read whole.
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 		_ = inv.SetHeader(headerMetadata(resp.Header))
 		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
 		applyConnectError(ierr, bodyBytes)

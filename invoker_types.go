@@ -329,15 +329,31 @@ func contextRequirementSummary(d *ContextRequiredDetails) string {
 // RedactContext returns a shallow copy of ctx with well-known credential
 // fields replaced by "[REDACTED]". Safe for logging and error messages.
 // Returns nil for nil input.
+//
+// The context-confidentiality invariant: no context value the credential
+// taxonomy classifies as secret survives, in cleartext, to any diagnostic
+// surface. The set of secret fields is single-sourced on credentialFieldNames
+// — the one registry ScopeContext already consumes — so redaction and scoping
+// can never disagree about what is secret. The credential-field list itself is
+// owned by the binding-invoker interface's context table (its confidentiality
+// clause); this SDK implements that contract. Flat credential fields redact to
+// "[REDACTED]"; nested credential fields keep their non-secret structure
+// (basic keeps its username, apiKeys keeps its scheme names) and redact only
+// the secret values. (Store KEYS are the one surface this cannot reach — see
+// NormalizeContextKey, which strips userinfo so no secret rides into a key.)
 func RedactContext(ctx map[string]any) map[string]any {
 	if ctx == nil {
 		return nil
 	}
 	redacted := make(map[string]any, len(ctx))
 	for k, v := range ctx {
+		if !isCredentialField(k) {
+			// Non-secret configuration (headers, cookies, environment,
+			// metadata, ...) passes through unchanged.
+			redacted[k] = v
+			continue
+		}
 		switch k {
-		case "bearerToken", "apiKey", "refreshToken", "accessToken", "clientSecret":
-			redacted[k] = "[REDACTED]"
 		case "basic":
 			if m, ok := v.(map[string]any); ok {
 				rc := make(map[string]any, len(m))
@@ -354,7 +370,8 @@ func RedactContext(ctx map[string]any) map[string]any {
 			}
 		case "apiKeys":
 			// Scheme-scoped API keys (R2.d ruling): every named entry is
-			// credential material, same as the single 'apiKey' field.
+			// credential material, same as the single 'apiKey' field. Scheme
+			// names stay; values are redacted.
 			if m, ok := v.(map[string]any); ok {
 				rc := make(map[string]any, len(m))
 				for name := range m {
@@ -365,7 +382,9 @@ func RedactContext(ctx map[string]any) map[string]any {
 				redacted[k] = v
 			}
 		default:
-			redacted[k] = v
+			// Flat credential fields: bearerToken, apiKey, accessToken,
+			// refreshToken, clientSecret.
+			redacted[k] = "[REDACTED]"
 		}
 	}
 	return redacted
@@ -544,14 +563,23 @@ func NormalizeEndpoint(raw string) string {
 
 // NormalizeContextKey normalizes a URL to a stable context store key.
 // The key is host[:port] (scheme, path, query, and fragment are stripped)
-// to enable cross-invoker credential sharing for the same API origin. When
-// the input carries a scheme, an explicit port matching that scheme's
-// default (443 for https/wss, 80 for http/ws) is elided, so a key written
-// with the default port and one written without it collide; any other
-// explicit port is kept as-is. Strings without a scheme (e.g. a gRPC
-// "host:port" format-defined address) are returned as-is: with no scheme
-// there is no known default, and eliding a port there would corrupt a
-// format-defined address.
+// to enable cross-invoker credential sharing for the same API origin. The
+// host is lowercased and any userinfo (user[:password]@) is stripped: DNS
+// hosts are case-insensitive and userinfo is not part of a host (RFC 3986
+// §3.2.2/§6.2.2.1), and a secret in a store key is the one confidentiality
+// leak RedactContext cannot reach. When the input carries a scheme, an
+// explicit port matching that scheme's default (443 for https/wss, 80 for
+// http/ws) is elided, so a key written with the default port and one written
+// without it collide; any other explicit port is kept as-is. Strings without
+// a scheme (e.g. a gRPC "host:port" format-defined address) are returned
+// as-is: with no scheme there is no known default, and eliding a port there
+// would corrupt a format-defined address.
+//
+// The keying rule (normalize to the host — lowercased, userinfo excluded) is
+// owned by the binding-invoker interface's context table; this is its
+// implementation, shared with NormalizeEndpoint (the read path) so write and
+// read derive identical keys, and pinned byte-for-byte to the TypeScript
+// SDK's normalizeContextKey.
 func NormalizeContextKey(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -574,6 +602,17 @@ func NormalizeContextKey(raw string) string {
 	if hIdx := strings.Index(host, "#"); hIdx >= 0 {
 		host = host[:hIdx]
 	}
+	// Strip userinfo (user[:password]@): it is not part of a host, and a
+	// password must never ride into a store key — the one surface redaction
+	// cannot scrub. There is at most one '@' in a conformant authority.
+	if at := strings.LastIndex(host, "@"); at >= 0 {
+		host = host[at+1:]
+	}
+	// Case-fold the host: DNS hostnames are case-insensitive, so
+	// API.example.com and api.example.com are one origin and derive one key.
+	// The port is numeric, so lowercasing the whole authority leaves it
+	// unchanged; an IPv6 literal folds to its canonical lowercase form.
+	host = strings.ToLower(host)
 	return elideDefaultPort(scheme, host)
 }
 

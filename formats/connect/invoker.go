@@ -190,6 +190,19 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		mi = &methodInfo{method: m}
 	}
 
+	// Credentials ride ordinary HTTP header fields (§9.6, CONN-P-07). An
+	// inexpressible credential (an apiKey with no consumer-named header) is
+	// surfaced here — pre-dispatch AND before any input is consumed, so a
+	// no-input-consumed retry stays safe — never silently skipped.
+	headers, hdrErr := buildHTTPHeaders(args.Context)
+	if hdrErr != nil {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: hdrErr.Error(),
+		})
+		return
+	}
+
 	// ----- Input flows through the handle, not the args. One request
 	// message for unary and server-streaming alike. -----
 	input, gotInput, ok := readRequestValue(bctx, inv, args, mi)
@@ -209,7 +222,6 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	headers := buildHTTPHeaders(args.Context)
 	reqURL := connectURL(target, svcName, methodName)
 
 	if mi != nil && mi.method.IsStreamingServer() {
