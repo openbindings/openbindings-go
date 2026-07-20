@@ -574,3 +574,194 @@ func TestNormalize_NullableInAllOfBranch(t *testing.T) {
 		t.Fatalf("expected type array with null and string, got %v", types)
 	}
 }
+
+// --- allOf soundness: mirrored unit tests ------------------------------------
+//
+// These pin the defect family of the allOf unsoundness (sibling keywords,
+// nested allOf, $ref in overlapping-property merges, $ref-carried
+// out-of-profile keywords) plus the sibling-union refusal, mirrored with
+// packages/sdk/src/schema-profile/normalize.test.ts in the TS SDK: same
+// shapes, same expected canonical forms, byte-identical error and reason
+// strings. The SchemaError lane is pinned HERE because it is not
+// corpus-expressible: comparison fixture format 1.0 has no error verdict
+// (compatible|incompatible|indeterminate only).
+
+func mustUnmarshal(t *testing.T, s string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	return m
+}
+
+func mustCanonical(t *testing.T, v any) string {
+	t.Helper()
+	c, err := CanonicalString(v)
+	if err != nil {
+		t.Fatalf("canonicalize: %v", err)
+	}
+	return c
+}
+
+func TestAllOf_SiblingKeywordsMergeAsBranch(t *testing.T) {
+	n := &Normalizer{Root: map[string]any{}}
+	target := mustUnmarshal(t, `{"type":"object","required":["id"],"allOf":[{"properties":{"id":{"type":"string"}}}]}`)
+
+	out, err := n.Normalize(target)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	want := `{"properties":{"id":{"type":["string"]}},"required":["id"],"type":["object"]}`
+	if got := mustCanonical(t, out); got != want {
+		t.Fatalf("normalized form mismatch:\n  got:  %s\n  want: %s", got, want)
+	}
+
+	// The false-compatible polarity of the original defect: a candidate that
+	// omits the sibling-carried required must be output-incompatible.
+	candidate := mustUnmarshal(t, `{"type":"object","properties":{"id":{"type":"string"}}}`)
+	ok, reason, err := n.OutputCompatible(target, candidate)
+	if err != nil {
+		t.Fatalf("output compatible: %v", err)
+	}
+	if ok {
+		t.Fatal("expected incompatible: candidate omits sibling-carried required")
+	}
+	wantReason := `required: target requires "id" but candidate does not`
+	if reason != wantReason {
+		t.Fatalf("reason mismatch:\n  got:  %q\n  want: %q", reason, wantReason)
+	}
+}
+
+func TestAllOf_SiblingEnumIntersectsInSiblingFirstOrder(t *testing.T) {
+	n := &Normalizer{Root: map[string]any{}}
+	out, err := n.Normalize(mustUnmarshal(t, `{"type":"string","enum":["a","b","c"],"allOf":[{"enum":["c","b","d"]}]}`))
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	// The sibling branch merges first, and enum intersection preserves the
+	// first branch's value order: ["b","c"], not ["c","b"].
+	want := `{"enum":["b","c"],"type":["string"]}`
+	if got := mustCanonical(t, out); got != want {
+		t.Fatalf("normalized form mismatch:\n  got:  %s\n  want: %s", got, want)
+	}
+}
+
+func TestAllOf_NestedAllOfFlattensRecursively(t *testing.T) {
+	n := &Normalizer{Root: map[string]any{}}
+	target := mustUnmarshal(t, `{"allOf":[{"allOf":[{"type":"string","minLength":3}]}]}`)
+
+	out, err := n.Normalize(target)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	want := `{"minLength":3,"type":["string"]}`
+	if got := mustCanonical(t, out); got != want {
+		t.Fatalf("normalized form mismatch:\n  got:  %s\n  want: %s", got, want)
+	}
+
+	// Previously this normalized to Top and reported any candidate compatible.
+	ok, reason, err := n.OutputCompatible(target, mustUnmarshal(t, `{"type":"number"}`))
+	if err != nil {
+		t.Fatalf("output compatible: %v", err)
+	}
+	if ok {
+		t.Fatal("expected incompatible: nested-allOf constraints must bind")
+	}
+	wantReason := `type: candidate allows "number" but target does not`
+	if reason != wantReason {
+		t.Fatalf("reason mismatch:\n  got:  %q\n  want: %q", reason, wantReason)
+	}
+}
+
+func TestAllOf_RefCarriedUnionRefused(t *testing.T) {
+	n := &Normalizer{Root: mustUnmarshal(t, `{"$defs":{"U":{"oneOf":[{"type":"string"},{"type":"number"}]}}}`)}
+	_, err := n.Normalize(mustUnmarshal(t, `{"allOf":[{"$ref":"#/$defs/U"},{"type":"string"}]}`))
+	if err == nil {
+		t.Fatal("expected OutsideProfileError for ref-carried oneOf inside allOf")
+	}
+	var ope *OutsideProfileError
+	if !errors.As(err, &ope) {
+		t.Fatalf("expected OutsideProfileError, got %T: %v", err, err)
+	}
+	want := `outside profile at allOf[0]: keyword "oneOf inside allOf"`
+	if err.Error() != want {
+		t.Fatalf("error mismatch:\n  got:  %q\n  want: %q", err.Error(), want)
+	}
+}
+
+func TestAllOf_RefCarriedOutOfProfileKeywordRefused(t *testing.T) {
+	n := &Normalizer{Root: mustUnmarshal(t, `{"$defs":{"P":{"type":"string","pattern":"^a+$"}}}`)}
+	_, err := n.Normalize(mustUnmarshal(t, `{"allOf":[{"$ref":"#/$defs/P"}]}`))
+	if err == nil {
+		t.Fatal("expected OutsideProfileError for ref-carried pattern inside allOf")
+	}
+	var ope *OutsideProfileError
+	if !errors.As(err, &ope) {
+		t.Fatalf("expected OutsideProfileError, got %T: %v", err, err)
+	}
+	want := `outside profile at allOf[0]: keyword "pattern"`
+	if err.Error() != want {
+		t.Fatalf("error mismatch:\n  got:  %q\n  want: %q", err.Error(), want)
+	}
+}
+
+func TestAllOf_RefInOverlappingPropertyMergePreserved(t *testing.T) {
+	n := &Normalizer{Root: mustUnmarshal(t, `{"schemas":{"ShortString":{"type":"string","minLength":2}}}`)}
+	out, err := n.Normalize(mustUnmarshal(t, `{"allOf":[{"type":"object","properties":{"p":{"type":"string","maxLength":10}}},{"properties":{"p":{"$ref":"#/schemas/ShortString"}}}]}`))
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	want := `{"properties":{"p":{"maxLength":10,"minLength":2,"type":["string"]}},"type":["object"]}`
+	if got := mustCanonical(t, out); got != want {
+		t.Fatalf("normalized form mismatch:\n  got:  %s\n  want: %s", got, want)
+	}
+}
+
+func TestAllOf_RefInOverlappingPropertyMergeUnsatisfiable_SchemaError(t *testing.T) {
+	// The schema-error lane of the ref-in-overlapping-property-merge shape:
+	// not corpus-expressible (fixture format 1.0 has no error verdict), so
+	// the pin lives here, mirrored in the TS SDK's normalize.test.ts.
+	n := &Normalizer{Root: mustUnmarshal(t, `{"schemas":{"S":{"type":"string"}}}`)}
+	_, err := n.Normalize(mustUnmarshal(t, `{"allOf":[{"properties":{"p":{"type":"number"}}},{"properties":{"p":{"$ref":"#/schemas/S"}}}]}`))
+	if err == nil {
+		t.Fatal("expected SchemaError for ref-carried empty type intersection")
+	}
+	var se *SchemaError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected SchemaError, got %T: %v", err, err)
+	}
+	want := `schema error at allOf[1].properties["p"]: allOf type intersection is empty`
+	if err.Error() != want {
+		t.Fatalf("error mismatch:\n  got:  %q\n  want: %q", err.Error(), want)
+	}
+}
+
+func TestAllOf_SiblingUnionAlongsideAllOfRefused(t *testing.T) {
+	n := &Normalizer{Root: map[string]any{}}
+
+	_, err := n.Normalize(mustUnmarshal(t, `{"oneOf":[{"type":"string"}],"allOf":[{"minLength":1}]}`))
+	if err == nil {
+		t.Fatal("expected OutsideProfileError for oneOf alongside allOf")
+	}
+	var ope *OutsideProfileError
+	if !errors.As(err, &ope) {
+		t.Fatalf("expected OutsideProfileError, got %T: %v", err, err)
+	}
+	want := `outside profile: keyword "oneOf alongside allOf"`
+	if err.Error() != want {
+		t.Fatalf("error mismatch:\n  got:  %q\n  want: %q", err.Error(), want)
+	}
+
+	_, err = n.Normalize(mustUnmarshal(t, `{"anyOf":[{"type":"string"}],"allOf":[{"minLength":1}]}`))
+	if err == nil {
+		t.Fatal("expected OutsideProfileError for anyOf alongside allOf")
+	}
+	if !errors.As(err, &ope) {
+		t.Fatalf("expected OutsideProfileError, got %T: %v", err, err)
+	}
+	want = `outside profile: keyword "anyOf alongside allOf"`
+	if err.Error() != want {
+		t.Fatalf("error mismatch:\n  got:  %q\n  want: %q", err.Error(), want)
+	}
+}
