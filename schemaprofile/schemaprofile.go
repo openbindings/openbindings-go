@@ -113,6 +113,26 @@ func (e *OutsideProfileError) Error() string {
 	return fmt.Sprintf("outside profile at %s: keyword %q", e.Path, e.Keyword)
 }
 
+// NotNormalizedError indicates a schema handed to a package-level
+// directional check (InputCompatible / OutputCompatible) was not
+// pre-normalized: the check found a shape the Normalizer never emits. Path
+// names the offending location ("target" or "candidate", then the nested
+// path), Keyword the offending keyword, and Requirement the normalization
+// invariant it violates. The message is byte-identical with the TypeScript
+// SDK's NotNormalizedError.
+type NotNormalizedError struct {
+	Path        string
+	Keyword     string
+	Requirement string
+}
+
+func (e *NotNormalizedError) Error() string {
+	if e == nil {
+		return "not normalized"
+	}
+	return fmt.Sprintf("not normalized at %s: keyword %q must be %s", e.Path, e.Keyword, e.Requirement)
+}
+
 // RefError indicates a $ref resolution problem.
 type RefError struct {
 	Path string

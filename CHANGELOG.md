@@ -6,6 +6,27 @@
 
 ### Changed
 
+- **Comparison-engine cross-SDK canon (three rulings, 2026-07-20).**
+  (1) `CheckInterfaceCompatibility`'s issue ordering — sorted
+  required-operation-key order, output before input within an operation — is
+  now a documented, pinned contract (the TS SDK changed to match; the Go
+  order is unchanged). (2) Property/`required` member names in reason
+  strings now interpolate in JCS (RFC 8785) rendering — the same rendering
+  values already get — instead of Go `%q`; visible only for names carrying
+  quotes, backslashes, or control characters (e.g. a name carrying U+0001
+  now renders it as `\u0001`, not Go's `\x01`); plain names render
+  byte-identically to before.
+  (3) The package-level `schemaprofile.InputCompatible` /
+  `OutputCompatible` now refuse tell-tale non-normalized inputs loudly with
+  the new `NotNormalizedError` (`not normalized at <path>: keyword "<kw>"
+  must be <requirement>`) instead of risking silently divergent verdicts:
+  a scalar `type`, an unresolved `$ref`, or an unflattened `allOf`,
+  anywhere the comparison would recurse. Normalized-path callers
+  (`Normalizer` methods, `CheckInterfaceCompatibility`) are unaffected.
+  All three are pinned byte-for-byte against the TS SDK in the mirrored
+  alignment tables (`schemaprofile/reasons_test.go` ↔
+  `packages/sdk/src/schema-profile/reasons.test.ts`).
+
 - **OBI-D-05 literal form is enforced.** A percent-encoded same-document
   fragment (`#/schemas/T%61sk`) now fails validation at OBI positions, and the
   OBI-D-16 resolver no longer percent-decodes — the non-conformant spelling is

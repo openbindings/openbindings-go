@@ -44,6 +44,10 @@ type CompatibilityIssue struct {
 //   - Input schemas must be compatible (required input satisfies provided input).
 //
 // Returns an empty slice when the provided interface is fully compatible.
+// Issues appear in sorted required-operation-key order (never map or
+// document order), with the output issue before the input issue within an
+// operation — the same order the TypeScript SDK's
+// checkInterfaceCompatibility emits.
 func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityIssue {
 	if required == nil {
 		return nil

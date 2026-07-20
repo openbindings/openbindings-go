@@ -15,10 +15,17 @@ package schemaprofile
 //   - exclusive bounds are marked ("exclusive 0");
 //   - unions carry the real union key and the failing variant index;
 //   - multi-member faults (types, enum values, required, properties) name
-//     the lexicographically FIRST failing member.
+//     the lexicographically FIRST failing member;
+//   - property/required member names interpolate in the same JCS rendering
+//     as values (quoted, JSON-string escaping) — visible only for names
+//     carrying quotes, backslashes, or control characters; plain names
+//     render exactly as before;
+//   - tell-tale non-normalized inputs (scalar type, unresolved $ref,
+//     unflattened allOf) are refused loudly — see refusalCases below.
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -159,6 +166,20 @@ var reasonCases = []reasonCase{
 		`{"type":["array"],"maxItems":5}`, `{"type":["array"]}`,
 		`maxItems: target has maxItems 5 but candidate has none`},
 
+	// --- member-name escaping (JCS) ---
+	{"property name with quote and backslash escapes as JCS", "input",
+		`{"type":["object"],"properties":{"wei\"rd\\name":{"type":["integer"]}}}`,
+		`{"type":["object"],"properties":{"wei\"rd\\name":{"type":["string"]}}}`,
+		`properties["wei\"rd\\name"]: type: candidate does not allow "integer"`},
+	{"property name with control character escapes as JCS", "input",
+		`{"type":["object"],"properties":{"bad\u0001name":{"type":["integer"]}}}`,
+		`{"type":["object"],"properties":{"bad\u0001name":{"type":["string"]}}}`,
+		`properties["bad\u0001name"]: type: candidate does not allow "integer"`},
+	{"required name with quote escapes as JCS", "input",
+		`{"type":["object"]}`,
+		`{"type":["object"],"required":["say\"cheese"]}`,
+		`required: candidate requires "say\"cheese" but target does not`},
+
 	// --- unions ---
 	{"input union real key and index", "input",
 		`{"anyOf":[{"type":["string"]},{"type":["number"]}]}`,
@@ -215,6 +236,77 @@ func TestReasonStringAlignment(t *testing.T) {
 			}
 			if reason != tc.reason {
 				t.Fatalf("reason mismatch:\n  got:  %q\n  want: %q", reason, tc.reason)
+			}
+		})
+	}
+}
+
+// Non-normalized-input refusal table: pins the EXACT error each directional
+// check raises when handed a schema the Normalizer never emits (the inputs
+// MUST be pre-normalized contract). Byte-identical with the TypeScript SDK's
+// table in reasons.test.ts. The target is checked before the candidate;
+// nested walks visit properties (sorted), additionalProperties, items, then
+// oneOf/anyOf variants.
+type refusalCase struct {
+	name      string
+	direction string // "input" or "output"
+	target    string // schema JSON
+	candidate string
+	err       string // expected exact error message
+}
+
+var refusalCases = []refusalCase{
+	{"scalar type target refused", "input",
+		`{"type":"string"}`, `{"type":["string"]}`,
+		`not normalized at target: keyword "type" must be an array`},
+	{"scalar type candidate refused", "output",
+		`{"type":["string"]}`, `{"type":"string"}`,
+		`not normalized at candidate: keyword "type" must be an array`},
+	{"unresolved nested $ref refused", "input",
+		`{"type":["object"],"properties":{"a":{"$ref":"#/schemas/A"}}}`,
+		`{"type":["object"]}`,
+		`not normalized at target.properties["a"]: keyword "$ref" must be resolved`},
+	{"unflattened allOf refused", "output",
+		`{"type":["object"]}`, `{"allOf":[{"type":["object"]}]}`,
+		`not normalized at candidate: keyword "allOf" must be flattened`},
+}
+
+func TestNotNormalizedRefusalAlignment(t *testing.T) {
+	for _, tc := range refusalCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			var tgt, cand map[string]any
+			if err := json.Unmarshal([]byte(tc.target), &tgt); err != nil {
+				t.Fatalf("target fixture: %v", err)
+			}
+			if err := json.Unmarshal([]byte(tc.candidate), &cand); err != nil {
+				t.Fatalf("candidate fixture: %v", err)
+			}
+
+			var (
+				ok  bool
+				err error
+			)
+			switch tc.direction {
+			case "input":
+				ok, _, err = InputCompatible(tgt, cand)
+			case "output":
+				ok, _, err = OutputCompatible(tgt, cand)
+			default:
+				t.Fatalf("unknown direction %q", tc.direction)
+			}
+			if err == nil {
+				t.Fatalf("expected error %q, got none (ok=%v)", tc.err, ok)
+			}
+			var nne *NotNormalizedError
+			if !errors.As(err, &nne) {
+				t.Fatalf("expected *NotNormalizedError, got %T: %v", err, err)
+			}
+			if err.Error() != tc.err {
+				t.Fatalf("error mismatch:\n  got:  %q\n  want: %q", err.Error(), tc.err)
+			}
+			if ok {
+				t.Fatal("refusal must report not compatible")
 			}
 		})
 	}
