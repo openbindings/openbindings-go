@@ -354,7 +354,10 @@ func buildDirectArgsFromRef(ref string, input any) ([]string, error) {
 
 	inputMap, ok := openbindings.ToStringAnyMap(input)
 	if !ok {
-		return args, nil
+		// A present non-object input is out of contract on the direct lane
+		// too (§9.1 / USAGE-P-04): refuse loudly rather than run the bare
+		// command with the payload silently dropped.
+		return nil, fmt.Errorf("input must be a JSON object; got %s (openbindings.usage@1 §9.1)", jsonKindOf(input))
 	}
 
 	names := make([]string, 0, len(inputMap))

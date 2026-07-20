@@ -548,7 +548,12 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode >= 400 {
+	// Classification (§9.4, ASYNC-P-06): a unary publish succeeds IFF the
+	// final status, after any redirects, is 2xx. Mirrors the SSE
+	// establishment path's strict-2xx test in this same file — a 3xx final
+	// (304, or a Location-less redirect fetch/net.http does not follow) is a
+	// publish the server plausibly did not accept, never a success.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		h.FireError(httpStatusError(resp))
 		return
 	}

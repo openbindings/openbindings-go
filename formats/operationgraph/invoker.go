@@ -175,10 +175,15 @@ func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocatio
 		}
 	}
 
-	// OG-T-01: validate before acting; fail the binding rather than execute
-	// an invalid graph. When Interface is absent (direct binding invocation)
-	// the OG-V-11 reference check is skipped; bad references fail at runtime.
-	var opKeys map[string]bool
+	// OG-T-01 / OG-V-11: validate before acting; fail the binding rather than
+	// execute an invalid graph. When Interface is absent (direct binding
+	// invocation) no operations map is supplied, so operation and each nodes
+	// — which resolve ONLY against the containing OBI's operations map
+	// (OG-V-11, §281) — cannot resolve; validate against an EMPTY (non-nil)
+	// set so such a graph is refused pre-execution rather than passing an
+	// absent interface downstream. A graph with no operation/each nodes
+	// validates vacuously and runs.
+	opKeys := map[string]bool{}
 	if args.Interface != nil {
 		opKeys = make(map[string]bool, len(args.Interface.Operations))
 		for k := range args.Interface.Operations {

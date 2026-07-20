@@ -30,6 +30,16 @@ func setupDecodeServer(t *testing.T) *httptest.Server {
 		}, nil, nil
 	})
 	gomcp.AddTool(server, &gomcp.Tool{
+		Name: "multiText", Description: "returns two text content blocks (any-other-shape passthrough, MCP-P-05)",
+	}, func(ctx context.Context, req *gomcp.CallToolRequest, args emptyInput) (*gomcp.CallToolResult, any, error) {
+		return &gomcp.CallToolResult{
+			Content: []gomcp.Content{
+				&gomcp.TextContent{Text: "note:"},
+				&gomcp.TextContent{Text: `{"a":1}`},
+			},
+		}, nil, nil
+	})
+	gomcp.AddTool(server, &gomcp.Tool{
 		Name: "structured", Description: "returns structuredContent plus its compatibility text shadow",
 	}, func(ctx context.Context, req *gomcp.CallToolRequest, args emptyInput) (*gomcp.CallToolResult, any, error) {
 		return &gomcp.CallToolResult{
@@ -107,6 +117,38 @@ func TestDecode_JSONAsTextIsAString(t *testing.T) {
 	}
 	if s, ok := v.(string); !ok || s != `{"temperature": 22.5}` {
 		t.Fatalf("text content must be the string verbatim, got %T: %v", v, v)
+	}
+}
+
+// TestDecode_MultiTextBlockIsContentArray pins MCP-P-05 / §9.3: a single text
+// block decodes to that text verbatim, but ANY OTHER content shape — two text
+// blocks included — passes through as the content array, verbatim in MCP's
+// block shapes, never a "\n"-joined string with an invented separator. The
+// input mirrors the TS SDK's cross-checked test (blocks "note:" and
+// `{"a":1}`), which yields the same array shape.
+func TestDecode_MultiTextBlockIsContentArray(t *testing.T) {
+	ts := setupDecodeServer(t)
+	inv := NewInvoker()
+	defer inv.Close()
+
+	v, err := invokeAndRead(t, inv, ts.URL, "tools/multiText", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		t.Fatalf("two text blocks must decode to the content array, got %T: %v", v, v)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("expected 2 content items, got %d: %v", len(arr), arr)
+	}
+	first, _ := arr[0].(map[string]any)
+	second, _ := arr[1].(map[string]any)
+	if first["type"] != "text" || first["text"] != "note:" {
+		t.Errorf("item 0 = %v, want {type:text, text:note:}", arr[0])
+	}
+	if second["type"] != "text" || second["text"] != `{"a":1}` {
+		t.Errorf("item 1 = %v, want {type:text, text:{\"a\":1}}", arr[1])
 	}
 }
 

@@ -65,6 +65,10 @@ cmd "readfile" {
     help "Emit a file's path and content as JSON"
     arg "<doc>" help="File path"
 }
+cmd "statfile" {
+    help "Emit a file's path, content, and mode as JSON"
+    arg "<doc>" help="File path"
+}
 cmd "drink" {
     help "Read stdin, no args"
 }

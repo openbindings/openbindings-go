@@ -71,9 +71,16 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 	}
 	inputMap, ok := openbindings.ToStringAnyMap(input)
 	if !ok {
-		// Non-object input is rejected downstream by field mapping.
-		out.fields = nil
-		return out, nil
+		// A present non-object input is out of contract: §9.1 pins the
+		// caller-facing input as one JSON object (or absent), and
+		// USAGE-P-04 refuses it BEFORE spawn — loudly, never silently
+		// dropped. Leaving out.fields nil here would let the bare command
+		// run with the payload discarded: the typed-nil map slips past
+		// buildCLIArgs's object guard (input != nil, ToStringAnyMap ok).
+		return nil, &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeValidationFailed,
+			Message: fmt.Sprintf("input must be a JSON object; got %s (openbindings.usage@1 §9.1)", jsonKindOf(input)),
+		}
 	}
 
 	fields := make(map[string]any, len(inputMap))
@@ -205,6 +212,26 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		out.record[field] = "hook/" + route
 	}
 	return out, nil
+}
+
+// jsonKindOf names the JSON kind of a non-object input for a refusal
+// message (§9.1: the input is one JSON object, or absent).
+func jsonKindOf(v any) string {
+	switch v.(type) {
+	case string:
+		return "a string"
+	case bool:
+		return "a boolean"
+	case float64, float32, int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, json.Number:
+		return "a number"
+	case []any:
+		return "an array"
+	case nil:
+		return "null"
+	default:
+		return fmt.Sprintf("%T", v)
+	}
 }
 
 // routeBytes renders a routed value as channel bytes: strings raw, any
