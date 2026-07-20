@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +22,41 @@ type conformanceTest struct {
 	Violates             []string        `json:"violates,omitempty"`
 	RequiresMaxTested    string          `json:"requiresMaxTested,omitempty"`
 	RequiresMinSupported string          `json:"requiresMinSupported,omitempty"`
+	RequiresSupports     string          `json:"requiresSupports,omitempty"`
+}
+
+// conformanceSkip evaluates a test's version-gate annotations against this
+// SDK's version constants. A non-empty result means the test must not be
+// administered to this SDK; the harness reports it via t.Skip. Skips are
+// never failures — they surface separately in the test output. An
+// annotation that fails to parse gates nothing (the test runs), matching
+// the annotations' pre-existing behavior.
+func conformanceSkip(tt conformanceTest) (reason string, skip bool) {
+	if tt.RequiresMaxTested != "" {
+		higher, err := IsHigherMajorOrPre1MinorThanMaxTested(tt.RequiresMaxTested)
+		if err == nil && higher {
+			return fmt.Sprintf("requires MaxTested >= %s", tt.RequiresMaxTested), true
+		}
+	}
+	if tt.RequiresMinSupported != "" {
+		// Downward-refusal tests apply only when the SDK's minimum
+		// supported version is at or above the annotation's value.
+		lower, err := IsLowerThanMinSupported(tt.RequiresMinSupported)
+		if err == nil && !lower && tt.RequiresMinSupported != MinSupportedVersion {
+			return fmt.Sprintf("requires MinSupported >= %s", tt.RequiresMinSupported), true
+		}
+	}
+	if tt.RequiresSupports != "" {
+		// Administer the test only to tools whose OBI-T-04
+		// version-acceptance predicate accepts the annotated version; for
+		// this SDK that predicate is IsSupportedVersion. Anything the SDK
+		// would refuse to process is a skip.
+		accepted, err := IsSupportedVersion(tt.RequiresSupports)
+		if err == nil && !accepted {
+			return fmt.Sprintf("requires supported version %s", tt.RequiresSupports), true
+		}
+	}
+	return "", false
 }
 
 func TestConformanceCorpus(t *testing.T) {
@@ -88,19 +124,8 @@ func runConformanceDir(t *testing.T, dir string) {
 			tt := tt
 			name := fix.Rule + "/" + tt.Description
 			t.Run(name, func(t *testing.T) {
-				if tt.RequiresMaxTested != "" {
-					higher, err := IsHigherMajorOrPre1MinorThanMaxTested(tt.RequiresMaxTested)
-					if err == nil && higher {
-						t.Skip("requires MaxTested >=", tt.RequiresMaxTested)
-					}
-				}
-				if tt.RequiresMinSupported != "" {
-					// Downward-refusal tests apply only when the SDK's minimum
-					// supported version is at or above the annotation's value.
-					lower, err := IsLowerThanMinSupported(tt.RequiresMinSupported)
-					if err == nil && !lower && tt.RequiresMinSupported != MinSupportedVersion {
-						t.Skip("requires MinSupported >=", tt.RequiresMinSupported)
-					}
+				if reason, skip := conformanceSkip(tt); skip {
+					t.Skip(reason)
 				}
 
 				iface, parseErr := ParseDocument(tt.Document)
@@ -124,4 +149,82 @@ func runConformanceDir(t *testing.T, dir string) {
 			})
 		}
 	}
+}
+
+// TestConformanceRequiresSupportsGate exercises the requiresSupports
+// annotation with a synthetic fixture, independent of the live spec corpus
+// (which need not carry the annotation; an absent annotation gates nothing).
+//
+// Contract: `requiresSupports: "X.Y.Z"` — administer this test only to tools
+// whose OBI-T-04 version-acceptance predicate accepts X.Y.Z; otherwise skip
+// and report the skip separately (skips are never failures). For this SDK
+// the predicate is IsSupportedVersion.
+//
+// Annotation versions are derived from the SDK's own constants so the test
+// stays correct across version bumps.
+func TestConformanceRequiresSupportsGate(t *testing.T) {
+	// Always outside acceptance: the next major is refused pre- and
+	// post-1.0 alike. Always inside acceptance: a higher patch within the
+	// supported minor line is accepted per OBI-T-04 — note it lies ABOVE
+	// MaxTestedVersion, pinning that the gate is the acceptance predicate,
+	// not tested-range membership.
+	nextMajor := fmt.Sprintf("%d.0.0", maxTestedSemver.major+1)
+	higherPatch := fmt.Sprintf("%d.%d.%d",
+		maxTestedSemver.major, maxTestedSemver.minor, maxTestedSemver.patch+1)
+
+	cases := []struct {
+		annotation string
+		wantSkip   bool
+	}{
+		{MinSupportedVersion, false}, // in range exactly → administer
+		{higherPatch, false},         // above MaxTested but accepted → administer
+		{nextMajor, true},            // refused major → skip
+	}
+	if maxTestedSemver.major == 0 {
+		// While pre-1.0, the next minor is refused too.
+		nextMinor := fmt.Sprintf("0.%d.0", maxTestedSemver.minor+1)
+		cases = append(cases, struct {
+			annotation string
+			wantSkip   bool
+		}{nextMinor, true})
+	}
+	for _, tc := range cases {
+		reason, skip := conformanceSkip(conformanceTest{RequiresSupports: tc.annotation})
+		if skip != tc.wantSkip {
+			t.Errorf("requiresSupports %s: skip = %v, want %v (reason %q)",
+				tc.annotation, skip, tc.wantSkip, reason)
+		}
+	}
+
+	// End-to-end through the harness with a fixture file in a temp dir. The
+	// out-of-acceptance test is poisoned: {} is an invalid document but the
+	// fixture claims valid, so it FAILS if administered. Passing therefore
+	// proves the annotation was parsed from the file and honored as a skip.
+	// The in-acceptance test is administered and passes ({} is correctly
+	// rejected).
+	fixture := fmt.Sprintf(`{
+		"rule": "synthetic-requires-supports",
+		"section": "harness-self-test",
+		"description": "requiresSupports gating",
+		"tests": [
+			{
+				"description": "outside acceptance is skipped (poisoned: fails if administered)",
+				"document": {},
+				"valid": true,
+				"requiresSupports": %q
+			},
+			{
+				"description": "inside acceptance is administered",
+				"document": {},
+				"valid": false,
+				"requiresSupports": %q
+			}
+		]
+	}`, nextMajor, higherPatch)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "requires-supports.json"), []byte(fixture), 0o644); err != nil {
+		t.Fatalf("writing synthetic fixture: %v", err)
+	}
+	runConformanceDir(t, dir)
 }

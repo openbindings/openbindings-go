@@ -320,6 +320,14 @@
   (spec + interfaces) and every corpus locator fails loudly when a corpus is
   required and absent; local skip-if-absent behavior is unchanged.
 
+- **Conformance-runner `requiresSupports` annotation**: the corpus harness
+  honors the per-test `requiresSupports: "X.Y.Z"` annotation — the test is
+  administered only when this SDK's OBI-T-04 version-acceptance predicate
+  (`IsSupportedVersion`) accepts X.Y.Z; otherwise it is skipped and reported
+  as a skip, never a failure, alongside the existing `requiresMaxTested` /
+  `requiresMinSupported` gates. A corpus without the annotation runs
+  unchanged.
+
 - **`Invocation.InputClosed()`** — a channel closed once the invocation's input side has closed: by the caller's `Close`, by the binding from below (a unary binding after its first read), or by a terminal transition. Lets consumers that pipe a stream into an invocation (the operation-graph conduit) observe non-acceptance without probing with a failing `Write`. Implemented by `InvocationImpl` and forwarded by `TypedInvocation`.
 
 - **`ErrTransformUndefined`** sentinel — evaluators return it (possibly wrapped) when an expression yields no result, since Go's `any` cannot distinguish JSONata's undefined from JSON null. The operation-graph engine maps it to the spec's `TRANSFORM_UNDEFINED` node failure; null flows downstream normally.
