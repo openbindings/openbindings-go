@@ -30,11 +30,17 @@ import (
 
 func selectionCorpusDir(t *testing.T) string {
 	t.Helper()
-	if env := os.Getenv("OB_INTERFACES_CORPUS"); env != "" {
-		return env
+	dir := os.Getenv("OB_INTERFACES_CORPUS")
+	if dir == "" {
+		dir = filepath.Join("..", "interfaces", "conformance")
 	}
-	dir := filepath.Join("..", "interfaces", "conformance")
 	if _, err := os.Stat(dir); err != nil {
+		// OB_CORPUS_REQUIRED (set in CI) turns a missing corpus into a hard
+		// failure so a mis-wired path turns CI red instead of silently green;
+		// unset (local dev) it still skips.
+		if os.Getenv("OB_CORPUS_REQUIRED") != "" {
+			t.Fatalf("interfaces conformance corpus not found at %s (OB_CORPUS_REQUIRED is set; set OB_INTERFACES_CORPUS)", dir)
+		}
 		t.Skipf("interfaces conformance corpus not found at %s (set OB_INTERFACES_CORPUS)", dir)
 	}
 	return dir

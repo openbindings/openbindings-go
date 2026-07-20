@@ -31,6 +31,12 @@ func bindingSpecCorpusDir(t *testing.T) string {
 	}
 	dir := filepath.Join(root, "binding-specs", "connect")
 	if _, err := os.Stat(dir); err != nil {
+		// OB_CORPUS_REQUIRED (set in CI) turns a missing corpus into a hard
+		// failure so a mis-wired path turns CI red instead of silently green;
+		// unset (local dev) it still skips.
+		if os.Getenv("OB_CORPUS_REQUIRED") != "" {
+			t.Fatalf("binding-specs conformance corpus not found at %s (OB_CORPUS_REQUIRED is set; set OB_SPEC_CORPUS)", dir)
+		}
 		t.Skipf("binding-specs conformance corpus not found at %s (set OB_SPEC_CORPUS)", dir)
 	}
 	return dir

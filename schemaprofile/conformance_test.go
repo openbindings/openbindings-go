@@ -84,14 +84,26 @@ func (o *obInterface) UnmarshalJSON(data []byte) error {
 // checkout. Same convention as selection_corpus_test.go at the module root.
 func comparisonCorpusDir(t *testing.T) string {
 	t.Helper()
-	if env := os.Getenv("OB_INTERFACES_CORPUS"); env != "" {
-		return env
+	dir := os.Getenv("OB_INTERFACES_CORPUS")
+	if dir == "" {
+		dir = filepath.Join("..", "..", "interfaces", "conformance")
 	}
-	dir := filepath.Join("..", "..", "interfaces", "conformance")
 	if _, err := os.Stat(dir); err != nil {
-		t.Skipf("interfaces conformance corpus not found at %s (set OB_INTERFACES_CORPUS)", dir)
+		corpusUnavailable(t, "interfaces conformance corpus not found at %s (set OB_INTERFACES_CORPUS)", dir)
 	}
 	return dir
+}
+
+// corpusUnavailable skips a corpus-backed test when the corpus is absent —
+// unless OB_CORPUS_REQUIRED is set (CI), in which case absence is a hard
+// failure so a mis-wired path turns CI red instead of silently green. Unset
+// (local dev) absence still skips, exactly as before.
+func corpusUnavailable(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if os.Getenv("OB_CORPUS_REQUIRED") != "" {
+		t.Fatalf(format+" (OB_CORPUS_REQUIRED is set)", args...)
+	}
+	t.Skipf(format, args...)
 }
 
 // fixtureSchemaObjectForm maps a fixture schema value to the object form the
@@ -132,7 +144,7 @@ func TestConformance(t *testing.T) {
 	manifestPath := filepath.Join(dir, "manifest.json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		t.Skipf("comparison corpus not available at %s: %v", dir, err)
+		corpusUnavailable(t, "comparison corpus not available at %s: %v", dir, err)
 	}
 
 	var m manifest
@@ -373,7 +385,7 @@ func TestConformance_ManifestComplete(t *testing.T) {
 	dir := filepath.Join(comparisonCorpusDir(t), "comparison")
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
-		t.Skipf("comparison corpus not available: %v", err)
+		corpusUnavailable(t, "comparison corpus not available: %v", err)
 	}
 
 	var m manifest
@@ -396,7 +408,7 @@ func TestConformance_FixtureVerdictConsistency(t *testing.T) {
 	dir := filepath.Join(comparisonCorpusDir(t), "comparison")
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
-		t.Skipf("comparison corpus not available: %v", err)
+		corpusUnavailable(t, "comparison corpus not available: %v", err)
 	}
 
 	var m manifest
