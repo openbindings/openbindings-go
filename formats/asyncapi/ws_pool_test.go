@@ -11,7 +11,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // sendOnce drives one ws publish invocation: write one message, close input,

@@ -1,4 +1,4 @@
+github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
+github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/openbindings/openbindings-go v0.1.0 h1:gFRvMzeAUhDs+Hdn6aBNq5oRFV5GS71cuKMvD6oh+eo=
 github.com/openbindings/openbindings-go v0.1.0/go.mod h1:vFSygz6qy5HtYu9JIINYQkKErUO71SJYWAW3C7l+EOo=
-nhooyr.io/websocket v1.8.17 h1:KEVeLJkUywCKVsnLIDlD/5gtayKp8VoCkksHCGGfT9Y=
-nhooyr.io/websocket v1.8.17/go.mod h1:rN9OFWIUwuxg4fR5tELlYC04bXYowCP9GX47ivo2l+c=

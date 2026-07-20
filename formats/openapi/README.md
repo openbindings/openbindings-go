@@ -185,6 +185,14 @@ When no security schemes are defined, falls back to bearer -> basic -> apiKey in
 
 Converts an OpenAPI 3.x document into an OBI: operations extracted from each path + method combination, input/output schemas from parameters, request bodies, and success responses, and a JSON Pointer ref per binding. The derivation conventions (key derivation, iteration order, media selection, schema translation) are specified under [Behavior → Interface synthesis](#interface-synthesis) above.
 
+## Resource bounds
+
+The unary response body is one **delivery unit** and is consumer-bounded:
+set `MaxDeliveryUnitBytes` on the `OperationInvoker` (or per invocation on
+`BindingInvocationArgs`); zero selects `openbindings.DefaultMaxDeliveryUnitBytes`
+(10 MiB). The SSE line-scanner's internal 16 MB line guard is deliberately
+fixed — a parser guard, not a delivery-unit bound.
+
 ## License
 
 Apache-2.0

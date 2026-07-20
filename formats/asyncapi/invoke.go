@@ -43,10 +43,17 @@ import (
 // input) are raised via FireError BEFORE any network I/O, per the
 // binding-author contract and ASYNC-P-02/-03/-04's pre-dispatch refusals.
 
+// maxResponseBytes bounds the HTTP ERROR body captured into failure details
+// (httpStatusError). Deliberately fixed: a diagnostics capture on the error
+// path, not a delivery unit — BindingInvocationArgs.MaxDeliveryUnitBytes
+// does not apply here.
 const maxResponseBytes = 10 * 1024 * 1024 // 10 MB
 
 // sseMaxLineBytes bounds individual SSE line length to prevent runaway memory
 // use from a misbehaving server (parity with openapi/sse.go).
+//
+// Deliberately fixed: a line-scanner internal guard, not the delivery-unit
+// bound — BindingInvocationArgs.MaxDeliveryUnitBytes does not apply here.
 const sseMaxLineBytes = 16 * 1024 * 1024
 
 type handle = openbindings.BindingHandle[any, any]
@@ -560,7 +567,11 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 
 	_ = h.SetHeader(headerMetadata(resp.Header))
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	// The unary reply body is one delivery unit: consumer-bounded via
+	// BindingInvocationArgs.MaxDeliveryUnitBytes (default 10 MiB). The +1
+	// sentinel distinguishes an at-limit response from an over-limit one.
+	maxUnit := args.DeliveryUnitLimit()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUnit+1))
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -568,10 +579,10 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
 		return
 	}
-	if len(respBody) > maxResponseBytes {
+	if int64(len(respBody)) > maxUnit {
 		h.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes),
+			Message: fmt.Sprintf("response exceeds %d byte limit", maxUnit),
 		})
 		return
 	}
@@ -691,9 +702,10 @@ func streamSSE(ctx context.Context, resp *http.Response, decodeCT string, args *
 		lastEventID string
 		dataLines   []string
 		retryMs     int
-		eventBytes  int
+		eventBytes  int64
 		firstLine   = true
 	)
+	maxUnit := args.DeliveryUnitLimit()
 
 	status := resp.StatusCode
 	invocationMeta := headerMetadata(resp.Header)
@@ -751,14 +763,15 @@ func streamSSE(ctx context.Context, resp *http.Response, decodeCT string, args *
 		}
 
 		// The size cap is PER EVENT, not cumulative: a long-lived
-		// subscription legitimately streams more than maxResponseBytes in
+		// subscription legitimately streams more than one delivery unit in
 		// total (the same choice connect/streaming.go documents for its
-		// per-envelope cap).
-		eventBytes += len(line) + 1 // +1 for newline
-		if eventBytes > maxResponseBytes {
+		// per-envelope cap). One event is one delivery unit, consumer-bounded
+		// via BindingInvocationArgs.MaxDeliveryUnitBytes (default 10 MiB).
+		eventBytes += int64(len(line)) + 1 // +1 for newline
+		if eventBytes > maxUnit {
 			h.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeResponseError,
-				Message: fmt.Sprintf("SSE event exceeds %d byte limit", maxResponseBytes),
+				Message: fmt.Sprintf("SSE event exceeds %d byte limit", maxUnit),
 			})
 			return
 		}
@@ -886,7 +899,7 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, target resolvedTarget, ad
 	// starts on a fresh dial) so no early server push can be lost.
 	sub := newWSSubscription()
 	pw, unsubscribe, err := pool.acquire(ctx, target.ServerURL, address, doc, target.SecurityServer, asyncOp, args.Context, extraHeaders,
-		&wsListener{onFrame: sub.push, onClose: sub.close})
+		args.DeliveryUnitLimit(), &wsListener{onFrame: sub.push, onClose: sub.close})
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -1111,7 +1124,7 @@ func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, addr
 		return
 	}
 
-	pw, _, err := pool.acquire(ctx, target.ServerURL, address, doc, target.SecurityServer, asyncOp, args.Context, extraHeaders, nil)
+	pw, _, err := pool.acquire(ctx, target.ServerURL, address, doc, target.SecurityServer, asyncOp, args.Context, extraHeaders, args.DeliveryUnitLimit(), nil)
 	if err != nil {
 		if ctx.Err() != nil {
 			return

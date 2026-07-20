@@ -235,6 +235,14 @@ Converts a live gRPC server into an OBI by:
 - Generating `package.Service/Method` refs for each binding
 - Sorting services and methods alphabetically for deterministic output
 
+## Resource bounds
+
+Named exclusion: this format wires no `MaxDeliveryUnitBytes` read site.
+Message size rides grpc-go's native idiom — `MaxCallRecvMsgSize` (4 MB
+default) via the existing `WithDialOptions` pass-through — and
+openbindings.grpc@1 places size caps with the consumer and the
+implementation, outside the binding document.
+
 ## License
 
 Apache-2.0

@@ -214,6 +214,9 @@ func sourceToBytes(ctx context.Context, client *http.Client, location string, co
 		if resp.StatusCode >= 400 {
 			return nil, fmt.Errorf("fetch %q: HTTP %d", location, resp.StatusCode)
 		}
+		// Deliberately fixed: an artifact-fetch guard on the source document,
+		// not a delivery unit — BindingInvocationArgs.MaxDeliveryUnitBytes
+		// does not apply here.
 		return io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	}
 	u, _ := url.Parse(location)

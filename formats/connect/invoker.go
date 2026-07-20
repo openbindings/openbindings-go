@@ -225,10 +225,10 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	reqURL := connectURL(target, svcName, methodName)
 
 	if mi != nil && mi.method.IsStreamingServer() {
-		e.runStreaming(bctx, inv, reqURL, body, headers, mi)
+		e.runStreaming(bctx, inv, reqURL, body, headers, mi, args.DeliveryUnitLimit())
 		return
 	}
-	e.runUnary(bctx, inv, reqURL, body, headers, mi)
+	e.runUnary(bctx, inv, reqURL, body, headers, mi, args.DeliveryUnitLimit())
 }
 
 // readRequestValue obtains the single request value from the handle.

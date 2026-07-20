@@ -2,6 +2,15 @@
 
 ## 0.2.0 (working draft)
 
+### Added
+
+- **Configurable delivery-unit bound**: the unary response body honors
+  `BindingInvocationArgs.MaxDeliveryUnitBytes` (default
+  `openbindings.DefaultMaxDeliveryUnitBytes`, 10 MiB — the previous fixed
+  cap). Overflow error identity is unchanged (`ERR_RESPONSE_ERROR`, same
+  message template, dynamic value). The SSE line-scanner guard stays fixed
+  (parser internal, not a delivery unit).
+
 **Conformance to the published `openbindings.openapi@1` binding specification.** The invoker now implements the normative rules end to end; behavior that predated the specification and diverged from it changed:
 
 - **Input mapping (OAPI-P-02/P-03).** Parameter serialization follows the OAS `style`/`explode`/`allowReserved` rules wholesale (matrix/label/simple, form/spaceDelimited/pipeDelimited/deepObject, per-location defaults, `content`-form parameters). Cross-location same-name declarations refuse as unflattenable; unmatched input fields refuse loudly when no request body is declared (previously silently sent as a body); a missing declared path parameter refuses pre-dispatch; non-object body schemas ride the synthetic `body` property, unwrapped at the wire.

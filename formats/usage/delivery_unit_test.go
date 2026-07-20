@@ -1,0 +1,34 @@
+package usage
+
+import (
+	"strings"
+	"testing"
+
+	openbindings "github.com/openbindings/openbindings-go"
+)
+
+// TestDeliveryUnitBound_StdoutOverflowRefused verifies the consumer
+// delivery-unit bound on the invocation lane's stdout capture: a tiny bound
+// set via BindingInvocationArgs.MaxDeliveryUnitBytes refuses a ~2.5KB stdout
+// with the lane's unchanged error identity (ERR_EXECUTION_FAILED, same
+// message template with the dynamic value).
+func TestDeliveryUnitBound_StdoutOverflowRefused(t *testing.T) {
+	words := make([]any, 300)
+	for i := range words {
+		words[i] = strings.Repeat("a", 8)
+	}
+	_, ierr := invokeUsage(t, NewInvoker(), &openbindings.BindingInvocationArgs{
+		Source:               testSource(),
+		Ref:                  "echo",
+		MaxDeliveryUnitBytes: 1024,
+	}, map[string]any{"words": words})
+	if ierr == nil {
+		t.Fatal("expected an overflow error, got none")
+	}
+	if ierr.Code != openbindings.ErrCodeExecutionFailed {
+		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeExecutionFailed)
+	}
+	if !strings.Contains(ierr.Message, "output exceeded 1024 bytes") {
+		t.Errorf("error message = %q, want to contain %q", ierr.Message, "output exceeded 1024 bytes")
+	}
+}

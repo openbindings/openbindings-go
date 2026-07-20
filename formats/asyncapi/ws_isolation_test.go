@@ -9,7 +9,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // TestWSPool_WriteCancelDoesNotTearDownSiblings pins C5f: a pooled socket's

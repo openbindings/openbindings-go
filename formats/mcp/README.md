@@ -202,6 +202,18 @@ MCP exposes three entity types, each mapped to OBI operations differently:
 
 Tools map cleanly to OBI operations. Resources and prompts have different semantics -- resources are read-only data access points, and prompts return LLM-oriented message templates rather than traditional API results.
 
+## Resource bounds
+
+Named exclusion: this format wires no `MaxDeliveryUnitBytes` read site.
+Response reading is delegated to the official MCP Go SDK
+(`modelcontextprotocol/go-sdk`), which exposes no read-bound seam: JSON
+response bodies are read unbounded, a body-read failure fails the whole
+client connection (not just the one call), and SSE event assembly is
+internal and unbounded. An HTTP-middleware whole-body bound would not be a
+delivery-unit bound either — a Streamable HTTP POST response is
+content-negotiated between one JSON message and a session-long SSE stream.
+Re-examine when the SDK exports a message-size limit.
+
 ## License
 
 Apache-2.0

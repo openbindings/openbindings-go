@@ -62,6 +62,14 @@ The test suite runs the spec repository's conformance corpus unmodified
 at `spec/conformance/operation-graph` (or keep the local-dev sibling layout)
 and run `go test ./...`.
 
+## Resource bounds
+
+Named exclusion: the remote graph-document fetch guard (8 MiB) is an
+artifact-fetch bound, not a delivery unit —
+`BindingInvocationArgs.MaxDeliveryUnitBytes` does not apply to it. The
+sub-operations a graph invokes are bounded by their own formats' delivery
+units.
+
 ## Links
 
 - [OpenBindings specification](https://openbindings.com/spec)

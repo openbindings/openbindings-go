@@ -255,6 +255,16 @@ err := spec.Validate(
 Note: For tooling, prefer calling `Validate()` before traversing the spec to
 avoid propagating invalid or empty command names.
 
+## Resource bounds
+
+The captured stdout of one spawned command is one **delivery unit** and is
+consumer-bounded: set `MaxDeliveryUnitBytes` on the `OperationInvoker` (or
+per invocation on `BindingInvocationArgs`); zero selects
+`openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). Deliberately fixed:
+the stderr tail capture (diagnostics, truncate-and-mark), the `x-stderr`
+trailer bound, the artifact-fetch guard on command-produced usage
+documents, and the input-side field-routing cap — none is a delivery unit.
+
 ## Status
 
 Early development. API may change before v1.0.

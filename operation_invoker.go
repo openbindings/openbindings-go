@@ -101,6 +101,15 @@ type OperationInvoker struct {
 	OutputDecoder    OutputDecoder
 	ResultClassifier ResultClassifier
 	FieldRouter      FieldRouter
+	// MaxDeliveryUnitBytes bounds one delivery unit — the bytes materialized
+	// to produce one emitted output value — for every invocation this
+	// invoker dispatches, stamped into BindingInvocationArgs like the hook
+	// fields. Zero or negative selects DefaultMaxDeliveryUnitBytes; an
+	// effectively-unlimited bound is set explicitly huge (no sentinel). Set
+	// before concurrent use, like the other policy fields. The
+	// per-invocation lever is BindingInvocationArgs.MaxDeliveryUnitBytes on
+	// a direct binding-layer call.
+	MaxDeliveryUnitBytes int64
 
 	invoker *combinedInvoker
 }
@@ -192,6 +201,9 @@ func (e *OperationInvoker) fillBindingArgs(args *BindingInvocationArgs) {
 	}
 	if args.Hooks == nil {
 		args.Hooks = e.snapshotHooks(hookSlots{})
+	}
+	if args.MaxDeliveryUnitBytes <= 0 {
+		args.MaxDeliveryUnitBytes = e.MaxDeliveryUnitBytes
 	}
 	if args.Site == nil {
 		site := &InvokeSite{
@@ -396,6 +408,7 @@ func (e *OperationInvoker) run(
 			InputSchema: op.Input,
 		}
 		a.Hooks = hooks
+		a.MaxDeliveryUnitBytes = e.MaxDeliveryUnitBytes
 		site := &InvokeSite{
 			Operation:   binding.Operation,
 			InvokedAs:   invokedAs,

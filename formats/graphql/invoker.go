@@ -217,12 +217,13 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 
 	if rootType == "Subscription" {
-		streamSubscription(bctx, e.client, args.Source.Location, query, variables, headers, inv)
+		streamSubscription(bctx, e.client, args.Source.Location, query, variables, headers, args.DeliveryUnitLimit(), inv)
 		return
 	}
 
-	// Query / mutation: unary HTTP dispatch.
-	data, respHeaders, gqlErrors, err := doGraphQLHTTP(bctx, e.client, args.Source.Location, query, variables, headers)
+	// Query / mutation: unary HTTP dispatch. The response body is one
+	// delivery unit, consumer-bounded via args.MaxDeliveryUnitBytes.
+	data, respHeaders, gqlErrors, err := doGraphQLHTTP(bctx, e.client, args.Source.Location, query, variables, headers, args.DeliveryUnitLimit())
 	if err != nil {
 		if bctx.Err() != nil {
 			return

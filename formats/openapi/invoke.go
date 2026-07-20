@@ -19,8 +19,6 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-const maxResponseBytes = 10 * 1024 * 1024 // 10 MB
-
 // classifyHTTPError maps a transport-level error from http.Client.Do to a
 // standard SDK error code. Cancellation and deadlines from the caller's context
 // are surfaced as cancelled/timeout, network errors as connect_failed, and
@@ -311,7 +309,11 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	// The unary body is one delivery unit: consumer-bounded via
+	// BindingInvocationArgs.MaxDeliveryUnitBytes (default 10 MiB). The +1
+	// sentinel distinguishes an at-limit response from an over-limit one.
+	maxUnit := args.DeliveryUnitLimit()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUnit+1))
 	if err != nil {
 		if bctx.Err() != nil {
 			return
@@ -319,10 +321,10 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
 		return
 	}
-	if len(respBody) > maxResponseBytes {
+	if int64(len(respBody)) > maxUnit {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes),
+			Message: fmt.Sprintf("response exceeds %d byte limit", maxUnit),
 		})
 		return
 	}
