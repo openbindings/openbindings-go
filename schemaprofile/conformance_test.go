@@ -277,22 +277,29 @@ func compareOperation(t *testing.T, direction string, leftOp, rightOp obOperatio
 		t.Fatalf("operation %q: right %s schema is neither object nor boolean", opKey, direction)
 	}
 
-	// Each schema resolves $ref against its own interface document.
-	// InputCompatible/OutputCompatible normalize both schemas internally,
-	// so we use the left document as Root. For fixtures with cross-document
-	// $ref resolution this would need separate normalizers, so corpus
-	// fixtures only carry $refs that resolve against the left document.
-	n := &Normalizer{Root: leftRoot}
+	// Each schema resolves $ref against its OWN interface document: the
+	// left schema normalizes against the left document root, the right
+	// schema against the right document root, and the pre-normalized pair
+	// runs the package-level directional check — the same per-side rooting
+	// CheckInterfaceCompatibility applies.
+	nLeft := &Normalizer{Root: leftRoot}
+	nRight := &Normalizer{Root: rightRoot}
 
 	var (
 		compatible bool
-		compErr    error
+		rightNorm  map[string]any
 	)
-	switch direction {
-	case "input":
-		compatible, _, compErr = n.InputCompatible(leftSchema, rightSchema)
-	case "output":
-		compatible, _, compErr = n.OutputCompatible(leftSchema, rightSchema)
+	leftNorm, compErr := nLeft.Normalize(leftSchema)
+	if compErr == nil {
+		rightNorm, compErr = nRight.Normalize(rightSchema)
+	}
+	if compErr == nil {
+		switch direction {
+		case "input":
+			compatible, _, compErr = InputCompatible(leftNorm, rightNorm)
+		case "output":
+			compatible, _, compErr = OutputCompatible(leftNorm, rightNorm)
+		}
 	}
 
 	if compErr != nil {

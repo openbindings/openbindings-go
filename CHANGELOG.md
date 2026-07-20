@@ -224,6 +224,25 @@
   `allOf`. Closes the false-`compatible` family; red-proven against the seven
   new comparison-corpus fixture families.
 
+- **Interface compatibility resolves each side's `#/schemas/` refs against its
+  own document.** `CheckInterfaceCompatibility` normalized both sides with a
+  single unrooted normalizer, so any fragment-only `$ref` on either side
+  failed resolution and surfaced as a spurious
+  `output_incompatible`/`input_incompatible` issue — an interface using the
+  `schemas` section got a different verdict here than from the TS SDK, which
+  roots per side. Each side now normalizes against its own document view and
+  the pre-normalized pair runs the package-level directional check. The
+  comparison-corpus harness applies the same per-side rooting (it previously
+  resolved the right document's refs against the left document), pinned by
+  the corpus's `subsumption/schemas-root-per-side-*` fixtures.
+
+- **Comparison reason strings are deterministic and TS-aligned.** Multi-member
+  diagnostics no longer leak Go map iteration order into the detail string:
+  missing-type lists render sorted lexicographically, and enum/required/
+  properties faults name the lexicographically first failing member —
+  byte-identical with the TS SDK, pinned by the mirrored reason-string table
+  (`schemaprofile/reasons_test.go`).
+
 - **`Validate` accepts leading-digit identifiers (`2fa.verify`) per the
   committed OBI-D-03 grammar**, so `ParseDocument` and `Validate` agree again.
 
