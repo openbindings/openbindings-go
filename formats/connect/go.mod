@@ -1,6 +1,6 @@
 module github.com/openbindings/openbindings-go/formats/connect
 
-go 1.25.6
+go 1.25.12
 
 require (
 	github.com/bufbuild/protocompile v0.14.1

@@ -1,6 +1,6 @@
 module github.com/openbindings/openbindings-go/formats/openapi
 
-go 1.25.6
+go 1.25.12
 
 require (
 	github.com/getkin/kin-openapi v0.133.0

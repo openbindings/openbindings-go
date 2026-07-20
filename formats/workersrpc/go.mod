@@ -1,5 +1,5 @@
 module github.com/openbindings/openbindings-go/formats/workersrpc
 
-go 1.25.6
+go 1.25.12
 
 require github.com/openbindings/openbindings-go v0.2.0

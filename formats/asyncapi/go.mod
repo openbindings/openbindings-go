@@ -1,6 +1,6 @@
 module github.com/openbindings/openbindings-go/formats/asyncapi
 
-go 1.25.6
+go 1.25.12
 
 require (
 	github.com/coder/websocket v1.8.15
