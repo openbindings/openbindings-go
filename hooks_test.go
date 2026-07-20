@@ -3,6 +3,7 @@ package openbindings
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -251,5 +252,54 @@ func TestAssumptionWarning(t *testing.T) {
 	}
 	if w := AssumptionWarning("", nil); w != "" {
 		t.Fatalf("no stamp means no decode ran — must not warn, got %q", w)
+	}
+}
+
+// TestInvokeHooks_DecidedByCrossGoroutineRace pins the structural safety of
+// the decode/classify provenance pair. operation_invoker consults
+// DecodeDecidedBy/ClassifyDecidedBy from the RUN goroutine while the BINDING
+// goroutine is still running the hook chain that writes them; today the two
+// paths only avoid a data race by an incidental InvocationImpl.mu edge on the
+// emit path — a format that decodes off the emit path (pipelined SSE unit
+// N+1) would race on the plain fields. This test drives the write and the
+// read from two goroutines with NO shared mutex; under `-race` the plain-string
+// fields fail here and the atomically-published pair passes.
+func TestInvokeHooks_DecidedByCrossGoroutineRace(t *testing.T) {
+	h := newInvokeHooks(
+		hookSlots{
+			decode:   func(InvokeSite, RawResult) (any, error) { return "v", nil },
+			classify: func(InvokeSite, RawResult) (bool, error) { return true, nil },
+		},
+		hookSlots{},
+	)
+	site := testSite()
+
+	const iters = 3000
+	var wg sync.WaitGroup
+	wg.Add(1)
+	stop := make(chan struct{})
+	// Binding goroutine: consult decode + classify, writing the provenance.
+	go func() {
+		defer wg.Done()
+		defer close(stop)
+		for i := 0; i < iters; i++ {
+			_, _ = h.DecodeOutput(site, RawResult{}, nil)
+			_, _ = h.Classify(site, RawResult{Status: intp(0)}, nil)
+		}
+	}()
+	// Run goroutine: read the provenance concurrently, unsynchronized, for the
+	// full lifetime of the writer.
+	for {
+		select {
+		case <-stop:
+			wg.Wait()
+			if h.DecodeDecidedBy() != "hook" || h.ClassifyDecidedBy() != "hook" {
+				t.Fatalf("decidedBy = (%q,%q), want (hook,hook)", h.DecodeDecidedBy(), h.ClassifyDecidedBy())
+			}
+			return
+		default:
+			_ = h.DecodeDecidedBy()
+			_ = h.ClassifyDecidedBy()
+		}
 	}
 }
