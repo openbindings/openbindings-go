@@ -49,8 +49,15 @@ func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityI
 		return nil
 	}
 	if provided == nil {
-		var issues []CompatibilityIssue
+		// Sorted like the main lane below: issue order must never leak Go
+		// map iteration order.
+		opKeys := make([]string, 0, len(required.Operations))
 		for opKey := range required.Operations {
+			opKeys = append(opKeys, opKey)
+		}
+		sort.Strings(opKeys)
+		var issues []CompatibilityIssue
+		for _, opKey := range opKeys {
 			issues = append(issues, CompatibilityIssue{Operation: opKey, Kind: CompatibilityMissing})
 		}
 		return issues
