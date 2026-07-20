@@ -340,7 +340,7 @@ func (e *OperationInvoker) PrepareOperation(ctx context.Context, obi *Interface,
 
 // run drives the binding-layer invocation(s) behind one caller-facing
 // handle: an input pump forwarding (transformed) caller inputs, an output
-// loop forwarding (transformed, T-08-validated) binding outputs, and the
+// loop forwarding (transformed, T-16-validated) binding outputs, and the
 // CONTEXT_REQUIRED resolve-replay-retry machinery between attempts.
 func (e *OperationInvoker) run(
 	ctx context.Context,
@@ -665,7 +665,7 @@ func (e *OperationInvoker) pumpInputs(
 }
 
 // runOutputs consumes one binding attempt's outputs, forwarding them
-// (transformed, T-08-validated) to the caller. Returns a terminal error to
+// (transformed, T-16-validated) to the caller. Returns a terminal error to
 // surface, or retry details for a resolvable CONTEXT_REQUIRED challenge.
 func (e *OperationInvoker) runOutputs(
 	innerCtx context.Context,
@@ -710,7 +710,7 @@ func (e *OperationInvoker) runOutputs(
 			data = transformed
 		}
 
-		// OBI-T-08: an invalid output is not emitted; the invocation
+		// OBI-T-16: an invalid output is not emitted; the invocation
 		// terminates. Per-item for streaming bindings.
 		if compiledOutput != nil {
 			if verr := compiledOutput.Validate(data); verr != nil {

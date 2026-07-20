@@ -271,13 +271,16 @@ side-effect-free `BindingPreparer` preflight.
 ## Transforms (invoking tools only)
 
 OpenBindings mandates JSONata 2.1 as the transform language for tools that
-evaluate `inputTransform`/`outputTransform` (OBI-T-10). This SDK does not
-bundle a JSONata runtime — tools that only parse, validate, inspect, or
-generate code do not need one — and it does not pick a Go implementation
-for you: you supply any JSONata library behind the `TransformEvaluator`
-seam on `OperationInvoker`. A worked adapter (this one over
-[`recolabs/gnata`](https://github.com/recolabs/gnata), the pure-Go JSONata 2.x
-engine the `ob` CLI uses — an example, not an endorsement):
+evaluate `inputTransform`/`outputTransform` (OBI-T-10). Document validation
+bundles a pinned JSONata 2.x parser ([`recolabs/gnata`](https://github.com/recolabs/gnata))
+to parse-check every transform expression for syntactic validity (OBI-D-18) —
+a validate-time check only. It does **not** bundle a JSONata *evaluation*
+runtime, and it does not pick a Go implementation to run transforms for you:
+to actually evaluate a transform when invoking, you supply any JSONata library
+behind the `TransformEvaluator` seam on `OperationInvoker`. A worked adapter
+(this one over the same `recolabs/gnata` engine the `ob` CLI uses — an example
+evaluator choice, not an endorsement; the bundled parser above uses it only to
+parse-check, never to run your transforms):
 
 ```go
 import "github.com/recolabs/gnata"

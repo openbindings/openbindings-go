@@ -393,10 +393,12 @@ func TestInterfaceValidate_DanglingSchemaRefRejected(t *testing.T) {
 	}
 }
 
-func TestInterfaceValidate_PercentEncodedFragmentResolves(t *testing.T) {
-	// RFC 6901 §6 / OBI-D-16: the fragment is percent-decoded first, then
-	// evaluated as a JSON Pointer — "#/schemas/T%61sk" addresses the
-	// schemas key "Task", exactly as "#/schemas/Task" does.
+func TestInterfaceValidate_PercentEncodedFragmentRejected(t *testing.T) {
+	// Literal form (§7 / OBI-D-05): same-document fragments are written with
+	// the pointer's characters unencoded, so a percent-encoded fragment is
+	// not a conformant OBI reference — even though "#/schemas/T%61sk" would
+	// decode to the existing "Task" schema. The literal-form violation is
+	// reported rather than silently decoded and resolved.
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -404,15 +406,19 @@ func TestInterfaceValidate_PercentEncodedFragmentResolves(t *testing.T) {
 		},
 		Schemas: map[string]JSONSchema{"Task": map[string]any{"type": "object"}},
 	}
-	if err := i.Validate(); err != nil {
-		t.Fatalf("percent-encoded fragment should resolve, got %v", err)
+	err := i.Validate()
+	if err == nil {
+		t.Fatal("percent-encoded fragment should be rejected as not in literal form")
+	}
+	if !strings.Contains(err.Error(), "is not in literal form") || !strings.Contains(err.Error(), "(OBI-D-05)") {
+		t.Fatalf("expected OBI-D-05 literal-form error, got %v", err)
 	}
 }
 
 func TestInterfaceValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) {
-	// A percent-encoded fragment that decodes to a genuinely-missing
-	// location still fails OBI-D-16 — decoding does not weaken the
-	// referential-integrity check.
+	// A percent-encoded fragment is non-conformant regardless of whether it
+	// would decode to a present location: the literal-form gate (OBI-D-05)
+	// fires before the referential-integrity check (OBI-D-16).
 	i := Interface{
 		OpenBindings: "0.2.0",
 		Operations: map[string]Operation{
@@ -424,8 +430,8 @@ func TestInterfaceValidate_DanglingPercentEncodedFragmentRejected(t *testing.T) 
 	if err == nil {
 		t.Fatal("dangling percent-encoded $ref should be rejected")
 	}
-	if !strings.Contains(err.Error(), "does not resolve within the document (OBI-D-16)") {
-		t.Fatalf("expected OBI-D-16 error, got %v", err)
+	if !strings.Contains(err.Error(), "is not in literal form") || !strings.Contains(err.Error(), "(OBI-D-05)") {
+		t.Fatalf("expected OBI-D-05 literal-form error, got %v", err)
 	}
 }
 
