@@ -235,6 +235,13 @@ func objectToJSONSchema(name string, tm map[string]*fullType, visited map[string
 		return map[string]any{"type": "object"}
 	}
 	visited[name] = true
+	// Delete on unwind so `visited` tracks only the types on the current
+	// recursion stack (a genuine cycle), never every type seen anywhere in
+	// the walk. Left permanently set, it would truncate a type reused in
+	// sibling (non-cyclic) positions to a bare {"type":"object"} — the same
+	// delete-on-unwind discipline this package's own query builder uses
+	// (invoke.go's buildObjectSelectionSet: `defer visited=false`).
+	defer delete(visited, name)
 
 	ft, ok := tm[name]
 	if !ok || len(ft.Fields) == 0 {
@@ -263,6 +270,10 @@ func inputObjectToJSONSchema(name string, tm map[string]*fullType, visited map[s
 		return map[string]any{"type": "object"}
 	}
 	visited[name] = true
+	// Delete on unwind (see objectToJSONSchema): `visited` must track only the
+	// recursion stack, so an input type reused across sibling input fields
+	// keeps its full schema in every position.
+	defer delete(visited, name)
 
 	ft, ok := tm[name]
 	if !ok || len(ft.InputFields) == 0 {
