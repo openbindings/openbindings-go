@@ -22,16 +22,8 @@ for d in formats/*/; do (cd "$d" && go test ./...) || exit 1; done
 
 ## Releasing
 
-This is a Go multi-module monorepo. Each module tags independently.
-
-- Core SDK: `git tag vX.Y.Z && git push origin vX.Y.Z`
-- Format sub-module: `git tag formats/<name>/vX.Y.Z && git push origin formats/<name>/vX.Y.Z`
-
-`pkg.go.dev` auto-discovers tags; no publish step needed.
-
-Pre-1.0, minor versions may include breaking changes; document under **Changed**
-or **Removed** in `CHANGELOG.md`. When bumping `MaxTestedVersion` in
-`version.go`, call that out in the CHANGELOG entry.
+See [RELEASING.md](RELEASING.md) for tags, ordering, changelog conventions,
+and the pre-1.0 version policy.
 
 ## Spec compatibility
 

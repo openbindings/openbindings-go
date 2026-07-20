@@ -2,6 +2,8 @@
 
 ## 0.2.0 (working draft)
 
+> A 0.1.1 patch release was prepared 2026-04 but never tagged or published; its entries are folded into this section.
+
 ### Changed
 
 - **gRPC status→code mapping realigned to the binding-invoker contract's
@@ -96,14 +98,12 @@
   resolution happens above the binding (operation-layer context
   negotiation).
 
-## 0.1.1 — 2026-04-20
-
-This release fixes several schema-emission issues that prevented
-real-world proto services from round-tripping through OB. OBI schemas
-now describe semantic types; wire encoding (JSON number vs string,
-proto varint, base64) is treated as an executor concern.
-
 ### Fixed
+
+Schema-emission fixes that prevented real-world proto services from
+round-tripping through OB. OBI schemas now describe semantic types; wire
+encoding (JSON number vs string, proto varint, base64) is treated as an
+invoker concern.
 
 - Well-known proto types (`google.protobuf.Timestamp`, `Duration`,
   `FieldMask`, `Struct`, `Value`, `ListValue`, `Any`, `Empty`, and all
@@ -146,10 +146,10 @@ proto varint, base64) is treated as an executor concern.
 ### Added
 
 - Messages with multiple `oneof` groups emit a `grpc.multi_group_oneof`
-  creator warning. The emitted OBI is still valid and executable;
+  synthesizer warning. The emitted OBI is still valid and executable;
   exclusivity among members cannot be expressed by the v0.1 schema
   profile, so members are emitted as independent optional properties.
-  Callers wire the warning sink via the new `CreateInput.OnWarning`
+  Callers wire the warning sink via the new `SynthesizeInput.OnWarning`
   handler in the core SDK. The warning carries the containing
   message's fully-qualified name and the list of affected oneof group
   names for programmatic handling.
