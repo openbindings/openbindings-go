@@ -8,8 +8,13 @@
   `BindingInvocationArgs.MaxDeliveryUnitBytes` (default
   `openbindings.DefaultMaxDeliveryUnitBytes`, 10 MiB — the previous fixed
   cap). Overflow error identity is unchanged (`ERR_RESPONSE_ERROR`, same
-  message template, dynamic value). The SSE line-scanner guard stays fixed
-  (parser internal, not a delivery unit).
+  message template, dynamic value). The SSE lane now enforces the same
+  bound per event — one event is one delivery unit, `ERR_RESPONSE_ERROR`
+  `SSE event exceeds N byte limit` (asyncapi parity); the bound is
+  per-emission, never cumulative, so a long-lived stream legitimately
+  delivers more than the bound in total (previously the lane had no
+  per-event bound at all, only the line-scanner guard). The SSE
+  line-scanner guard stays fixed (parser internal, not a delivery unit).
 
 **Conformance to the published `openbindings.openapi@1` binding specification.** The invoker now implements the normative rules end to end; behavior that predated the specification and diverged from it changed:
 
