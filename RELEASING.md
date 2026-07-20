@@ -13,12 +13,19 @@ internal: core before formats (below).
 - Core SDK: `vX.Y.Z`
 - Format sub-module: `formats/<name>/vX.Y.Z`
 
-All release tags are annotated:
+All release tags are annotated (from 0.2.0 on; the ten 0.1.0 tags
+predate this convention and are lightweight):
 
 ```bash
 git tag -a vX.Y.Z -m "openbindings-go vX.Y.Z"
+git push origin vX.Y.Z
 git tag -a formats/<name>/vX.Y.Z -m "formats/<name> vX.Y.Z"
+git push origin formats/<name>/vX.Y.Z
 ```
+
+Push each tag as it is cut: the pre-tag check below resolves against
+*published* tags, so the core tag must be pushed — not merely created
+locally — before any format module is tagged.
 
 `pkg.go.dev` auto-discovers pushed tags; there is no publish step.
 
@@ -43,6 +50,10 @@ Note: `go.mod` tidying that depends on the new core tag happens at tag time.
 During development the `go.work` workspace masks module resolution, so a
 format module's requirement on a new core version only resolves (and
 `go mod tidy` only runs meaningfully) once the core tag is published.
+Consequence: between bumping a format's core requirement and cutting the
+core tag, that format module on `main` is unresolvable for non-workspace
+consumers (`go get .../formats/<name>@main` fails with `unknown
+revision`); resolvability returns when the release's tags land.
 
 ## Changelogs
 
