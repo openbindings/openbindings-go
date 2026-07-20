@@ -420,20 +420,38 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 }
 
 // buildHTTPHeaders constructs request headers from the binding context per
-// §9.6 (CONN-P-07): credentials ride as ordinary HTTP header fields — a
-// bearer token as `Authorization: Bearer`, any other credential naming a
-// header (Cookie included) on that header. No security metadata is ever
-// derived from the schema or written into OBI documents.
-func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
+// §9.6 (CONN-P-07): credentials ride as ordinary HTTP header fields.
+//
+// Bearer and basic credentials share the single `Authorization` header and
+// are therefore mutually exclusive — at most one is placed, bearer taking
+// precedence over basic. An API KEY rides the header the credential NAMES:
+// HTTP defines no single standard header for one (unlike the gRPC family's
+// fixed `authorization` metadata key), so the naming is the consumer's,
+// carried through context.headers. This is the deliberate connect@1
+// divergence from grpc@1 §9.5 — connect does NOT place an API key on
+// `Authorization: ApiKey`, and an API key co-exists with a bearer token
+// (each rides its own header) rather than being excluded by it.
+//
+// A well-known apiKey/apiKeys field with no consumer-named header is a
+// credential that cannot be expressed as a request header under this family;
+// §9.6 requires it to be SURFACED to the consumer, never silently skipped
+// and never placed on an invented header. It is surfaced here as a
+// pre-dispatch refusal (returned error) — mirroring grpc's unplaceable-key
+// surfacing (applyGRPCContext) so the failure class is consistent across the
+// family. The honest signal is: name the header via context.headers.
+func buildHTTPHeaders(bindCtx map[string]any) (map[string]string, error) {
 	headers := map[string]string{}
 
 	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
 		headers["Authorization"] = "Bearer " + token
-	} else if key := openbindings.ContextAPIKey(bindCtx); key != "" {
-		headers["Authorization"] = "ApiKey " + key
 	} else if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
 		encoded := base64.StdEncoding.EncodeToString([]byte(u + ":" + p))
 		headers["Authorization"] = "Basic " + encoded
+	}
+
+	if apiKeyPresent(bindCtx) {
+		return nil, fmt.Errorf(
+			"an API key is present in context but openbindings.connect@1 defines no standard header for one (unlike the gRPC family's fixed authorization metadata key, §9.6): name the header the key rides via context.headers — an inexpressible credential is surfaced, never placed on Authorization and never silently skipped (openbindings.connect@1 §9.6 / CONN-P-07)")
 	}
 
 	for k, v := range openbindings.ContextHeaders(bindCtx) {
@@ -448,5 +466,25 @@ func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 		headers["Cookie"] = strings.Join(pairs, "; ")
 	}
 
-	return headers
+	return headers, nil
+}
+
+// apiKeyPresent reports whether the binding context carries a well-known API
+// key credential — the flat `apiKey` field or any non-empty scheme-scoped
+// `apiKeys[name]` entry. Connect derives no API-key security requirement
+// (CONN-P-07), so such a field appears only when a consumer set it directly;
+// under §9.6 it is inexpressible without a consumer-named header and must be
+// surfaced rather than placed on an invented `Authorization: ApiKey`.
+func apiKeyPresent(bindCtx map[string]any) bool {
+	if openbindings.ContextAPIKey(bindCtx) != "" {
+		return true
+	}
+	if m, ok := bindCtx["apiKeys"].(map[string]any); ok {
+		for _, v := range m {
+			if s, ok := v.(string); ok && s != "" {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -983,6 +983,124 @@ func TestConformance_P07_CredentialsRideRequestHeaders(t *testing.T) {
 	}
 }
 
+// An API key rides the header the credential NAMES (§9.6): connect defines
+// no standard header for one, unlike grpc@1 §9.5's fixed authorization
+// metadata key, so the consumer names it via context.headers. It therefore
+// co-exists with a bearer token (each on its own header) rather than being
+// excluded by it — the deliberate connect divergence from the grpc family.
+func TestConformance_P07_APIKeyRidesConsumerNamedHeaderCoexistsWithBearer(t *testing.T) {
+	ctx := testContext(t)
+	var gotAuth, gotAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotAPIKey = r.Header.Get("X-API-Key")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"a","name":"b"}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
+	args.Context = map[string]any{
+		"bearerToken": "tok-1",
+		"headers":     map[string]any{"X-API-Key": "k-9"},
+	}
+	inv := invokeWith(t, ctx, NewInvoker(), args, map[string]any{"id": "a"})
+	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+		t.Fatalf("Single: %v", err)
+	}
+	if gotAuth != "Bearer tok-1" {
+		t.Errorf("Authorization = %q, want Bearer tok-1 (bearer and a consumer-named apiKey co-exist, §9.6)", gotAuth)
+	}
+	if gotAPIKey != "k-9" {
+		t.Errorf("X-API-Key = %q, want k-9 (an API key rides the header the consumer names, §9.6)", gotAPIKey)
+	}
+}
+
+// A well-known apiKey field with no consumer-named header cannot be expressed
+// as a request header under connect (§9.6): it is SURFACED to the consumer
+// pre-dispatch, never placed on an invented Authorization: ApiKey (grpc@1's
+// rule, which connect@1 §9.6 declines) and never silently skipped.
+func TestConformance_P07_BareAPIKeyFieldSurfacedLoudly(t *testing.T) {
+	ctx := testContext(t)
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"a","name":"b"}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
+	args.Context = map[string]any{"apiKey": "k-secret"}
+	inv := NewInvoker().InvokeBinding(ctx, args)
+	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
+	if hit {
+		t.Error("server was contacted; an inexpressible apiKey must be surfaced BEFORE dispatch (§9.6)")
+	}
+	if !strings.Contains(ierr.Message, "context.headers") {
+		t.Errorf("error message %q should tell the consumer to name the header via context.headers", ierr.Message)
+	}
+	if strings.Contains(ierr.Message, "k-secret") {
+		t.Errorf("error message %q leaked the apiKey value", ierr.Message)
+	}
+}
+
+// A bearer token present alongside a bare apiKey field must not silently drop
+// the apiKey (the grpc-transcribed else-if did): the inexpressible apiKey is
+// surfaced pre-dispatch, §9.6.
+func TestConformance_P07_BearerDoesNotSilentlyDropAPIKeyField(t *testing.T) {
+	ctx := testContext(t)
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"a","name":"b"}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
+	args.Context = map[string]any{"bearerToken": "tok-1", "apiKey": "k-secret"}
+	inv := NewInvoker().InvokeBinding(ctx, args)
+	_ = mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
+	if hit {
+		t.Error("server was contacted; a bearer must not let a bare apiKey be silently dropped — the apiKey is surfaced pre-dispatch (§9.6)")
+	}
+}
+
+// A non-200 streaming response's Connect error body is read whole so
+// applyConnectError can refine the terminal code, even when the body is
+// exactly the response cap: streaming.go reads maxResponseBytes+1 (matching
+// the unary path), so a cap-sized error payload is not truncated by one byte
+// into invalid JSON. Red before the +1 fix: the truncated body fails to parse
+// and the terminal code stays the HTTP-status-derived one.
+func TestConformance_P06_StreamingErrorBodyReadWholeAtCapBoundary(t *testing.T) {
+	ctx := testContext(t)
+	// A Connect error body of exactly maxResponseBytes+1 (one byte over the
+	// old cap): valid JSON only when the final '}' is read. The pre-fix read,
+	// LimitReader(maxResponseBytes), drops that byte and the JSON is invalid;
+	// the +1 read reads it whole.
+	const prefix = `{"code":"unauthenticated","message":"`
+	const suffix = `"}`
+	padLen := int(maxResponseBytes) + 1 - len(prefix) - len(suffix) // total == maxResponseBytes+1
+	body := prefix + strings.Repeat("x", padLen) + suffix
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 500 → HTTPError gives ERR_EXECUTION_FAILED; the Connect body code
+		// "unauthenticated" maps to ERR_AUTH_REQUIRED — distinct, so a read
+		// that parses the body changes the terminal code observably.
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	args := streamingArgs(srv.URL)
+	inv := invokeWith(t, ctx, NewInvoker(), args, map[string]any{"source": "s"})
+	_ = mustTerminalError(t, ctx, inv, openbindings.ErrCodeAuthRequired)
+}
+
 // mustContent marshals a Go value into the raw-JSON content carriage
 // (Source.Content presence semantics: raw JSON, nil = absent).
 func mustContent(v any) json.RawMessage {
