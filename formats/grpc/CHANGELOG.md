@@ -6,6 +6,9 @@
 
 ### Changed
 
+- **Synthesizer: a type reused in sibling positions synthesizes in full**
+  (delete-on-unwind visited tracking); true cycles keep their placeholder.
+
 - **gRPC status→code mapping realigned to the binding-invoker contract's
   pinned table.** `Unavailable` and `ResourceExhausted` now map to the new
   transient `ERR_UNAVAILABLE` (`effects: none` — the server answered, refusing

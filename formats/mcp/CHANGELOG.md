@@ -6,6 +6,13 @@ This release tracks the spec 0.2.0 alignment of `openbindings-go`, including the
 
 ### Changed
 
+- **Multi-block tool content returns the verbatim content array (MCP-P-05)**
+  instead of a `"\n"`-joined string — the value's type changes for multi-text
+  results.
+
+- **Pagination is bounded**: a repeated or endless `nextCursor` sequence
+  refuses with `ERR_PROTOCOL` instead of looping.
+
 - **Breaking**: conformance to the published `openbindings.mcp@1` binding specification:
   - **Pinned listings** (MCP-D-01): a source may carry `content` — pagination-exhausted entity arrays under `tools`/`resources`/`resourceTemplates`/`prompts` in the 2025-11-25 result shapes. A pin makes ref resolution offline and displaces the list requests entirely; stray members (`nextCursor`, `_meta`, anything else) are refused loudly (`ERR_SOURCE_LOAD_FAILED`).
   - **Resolution before dispatch** (MCP-P-02, §7): every ref resolves byte-exactly against the pinned or live listing (each list request followed to pagination exhaustion, capability-gated) before the entity request is sent; unresolvable and ambiguous refs are refused (`ERR_REF_NOT_FOUND`). An unknown tool no longer surfaces as the server's JSON-RPC error.
