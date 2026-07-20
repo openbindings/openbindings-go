@@ -6,6 +6,16 @@
 
 ### Changed
 
+- **OBI-D-05 literal form is enforced.** A percent-encoded same-document
+  fragment (`#/schemas/T%61sk`) now fails validation at OBI positions, and the
+  OBI-D-16 resolver no longer percent-decodes — the non-conformant spelling is
+  never honored.
+
+- **One endpoint-key derivation.** `NormalizeContextKey` strips URL userinfo
+  and case-folds the host, and the resolver read path (`NormalizeEndpoint`)
+  delegates to it. Derived context-store keys change for URLs with mixed-case
+  hosts or userinfo; they now match the TS SDK byte-for-byte.
+
 - **A mid-stream deadline is now classified `ERR_TIMEOUT` (transient / effects:
   possible), deterministically and uniformly across formats, rather than
   `ERR_CANCELLED` — restoring the retry-safety signal.** An explicit caller
@@ -207,6 +217,28 @@
 
 ### Fixed
 
+- **Schema-comparison `allOf` normalization is sound.** Branches normalize
+  fully before merging (`$ref` branches resolved and profile-checked, nested
+  `allOf` flattened), sibling keywords merge as one additional branch, and
+  `oneOf`/`anyOf` are refused whether inline, ref-carried, or alongside
+  `allOf`. Closes the false-`compatible` family; red-proven against the seven
+  new comparison-corpus fixture families.
+
+- **`Validate` accepts leading-digit identifiers (`2fa.verify`) per the
+  committed OBI-D-03 grammar**, so `ParseDocument` and `Validate` agree again.
+
+- **Scheme-scoped `apiKeys` redact like every other credential field.**
+  Redaction and scoping single-source the one credential registry, pinned by a
+  per-field sentinel drift-guard test.
+
+- **`InvokeHooks` decode/classify provenance is published atomically**, with
+  the concurrency contract stated in godoc (previously it rode an incidental
+  happens-before edge through the emit path).
+
+- **README**: the module bundles a JSONata 2.x parser (gnata) for OBI-D-18
+  parse-checks — the "no bundled JSONata runtime" claim was stale. Retired-rule
+  citations repointed (OBI-T-08 → OBI-T-16).
+
 - **Schema validation failure rendering.** `splitSchemaError` and
   `collectValidationFailures` formatted jsonschema/v6 `ErrorKind` leaves with
   `%v`, printing the raw struct (`&{[customer]}` for a missing required
@@ -217,6 +249,14 @@
   readable messages. Leaves now render via `ErrorKind.LocalizedString`.
 
 ### Added
+
+- **Transforms compile-lane conformance gate**: the spec
+  `conformance/transforms` agreement corpus runs through `gnata.Compile` — the
+  exact parse surface `Validate` ships.
+
+- **CI corpus gating (`OB_CORPUS_REQUIRED`)**: CI checks out both corpus roots
+  (spec + interfaces) and every corpus locator fails loudly when a corpus is
+  required and absent; local skip-if-absent behavior is unchanged.
 
 - **`Invocation.InputClosed()`** — a channel closed once the invocation's input side has closed: by the caller's `Close`, by the binding from below (a unary binding after its first read), or by a terminal transition. Lets consumers that pipe a stream into an invocation (the operation-graph conduit) observe non-acceptance without probing with a failing `Write`. Implemented by `InvocationImpl` and forwarded by `TypedInvocation`.
 

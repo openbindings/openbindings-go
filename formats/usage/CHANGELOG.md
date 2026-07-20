@@ -69,6 +69,10 @@ This release tracks the spec 0.2.0 alignment of `openbindings-go`. The public AP
 
 **Invocation handle migration.** `InvokeBinding` now returns the cardinality-agnostic `Invocation[I, O]` handle (input via `Write`, outputs via `Outputs().Read` to `io.EOF`/terminal) instead of `(<-chan InvocationOutput, error)`. Auth moved off the removed `SecurityMethod`/`ContextStore` path to context (credentials in the binding context; `CONTEXT_REQUIRED` where the source declares requirements). Error codes use the new SCREAMING wire values. See the root CHANGELOG for the full shape.
 
+- **A present non-object input is refused loudly (usage@1 §9.1)** instead of
+  silently running the bare command (a typed-nil map slipped past the object
+  guard); the routing/HookTable subsystem gained direct tests.
+
 ## 0.1.0 — 2026-03-31
 
 Initial public release.

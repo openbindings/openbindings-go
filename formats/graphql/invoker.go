@@ -132,8 +132,9 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// Pre-dispatch validation: fail before any network I/O or input read, so
 	// a caller retry after resolving the location never re-sends
 	// already-consumed input (TS parity). `content` pins the schema but
-	// execution always POSTs to `location` (OBI-T-15 service-addressed
-	// pairing), so this check is unconditional.
+	// execution always POSTs to `location` — location/content composition is
+	// this binding specification's to define, within the content-primacy
+	// floor of core §5.4 — so this check is unconditional.
 	if args.Source.Location == "" {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: "GraphQL source requires a location (endpoint URL)"})
 		return

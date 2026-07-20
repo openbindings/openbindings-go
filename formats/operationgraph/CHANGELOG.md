@@ -4,6 +4,10 @@
 
 ### Changed
 
+- **Pre-execution refusal (OG-V-11)**: an operation-node graph invoked without
+  an interface fails `ERR_VALIDATION_FAILED` instead of reaching the operation
+  invoker with no interface.
+
 - **Transparency rewrite.** The engine now implements the rewritten
   `openbindings.operation-graph@0.2.0` spec, governed by the identity law
   (`input → operation(y) → output` is observationally indistinguishable from

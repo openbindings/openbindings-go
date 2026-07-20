@@ -6,6 +6,15 @@
 
 ### Changed
 
+- **apiKey rides the consumer-named header per connect@1 §9.6.** The
+  grpc-transcribed fixed `Authorization: ApiKey` placement is gone; bearer and
+  apiKey coexist; a bare apiKey with no consumer-named header refuses
+  pre-dispatch with `ERR_SOURCE_CONFIG_ERROR` (mirroring grpc's
+  unplaceable-credential surfacing).
+
+- **Synthesizer: a type reused in sibling positions synthesizes in full**
+  (delete-on-unwind visited tracking); true cycles keep their placeholder.
+
 - **Error-code mapping aligned to the binding-invoker contract.** Connect
   protocol error codes now map `unavailable`/`resource_exhausted` →
   `ERR_UNAVAILABLE` (transient; the server answered but refused as retryable,
@@ -87,6 +96,9 @@
 
 ### Fixed
 
+- **Non-2xx streaming error bodies read the full cap**: an off-by-one
+  truncated a cap-sized Connect error body into invalid JSON, misclassifying
+  the refusal.
 - Bytes fields (`bytes`) now emit as `{"type":"string"}` without a
   `contentEncoding` annotation. The v0.1 schema profile rejects
   `contentEncoding` as outside its supported keyword set; emitting it
