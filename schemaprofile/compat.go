@@ -10,8 +10,14 @@ import (
 // Normalizer.Normalize): $refs are not resolved here. Callers comparing
 // schemas from two documents normalize each side against its own root and
 // then call this — the same shape the TypeScript SDK's free
-// inputCompatible/outputCompatible functions have.
+// inputCompatible/outputCompatible functions have. Tell-tale non-normalized
+// shapes (a scalar type, an unresolved $ref, an unflattened allOf) are
+// refused with a NotNormalizedError rather than risking a silently
+// divergent verdict.
 func InputCompatible(tgt, cand map[string]any) (bool, string, error) {
+	if err := assertNormalizedPair(tgt, cand); err != nil {
+		return false, "", err
+	}
 	// Trivial schema: {} is Top.
 	if len(cand) == 0 {
 		return true, "", nil
@@ -21,8 +27,12 @@ func InputCompatible(tgt, cand map[string]any) (bool, string, error) {
 
 // OutputCompatible implements profile v0.1 output/payload rules (candidate
 // schema <= interface schema). Both schemas MUST already be normalized (see
-// Normalizer.Normalize); see InputCompatible.
+// Normalizer.Normalize); see InputCompatible, including the loud
+// NotNormalizedError refusal of tell-tale non-normalized shapes.
 func OutputCompatible(tgt, cand map[string]any) (bool, string, error) {
+	if err := assertNormalizedPair(tgt, cand); err != nil {
+		return false, "", err
+	}
 	// Trivial schema: {} is Top; allowed only if interface is also Top.
 	if len(cand) == 0 {
 		if len(tgt) == 0 {
@@ -31,6 +41,72 @@ func OutputCompatible(tgt, cand map[string]any) (bool, string, error) {
 		return false, "candidate is unconstrained but target is not", nil
 	}
 	return compat(tgt, cand, false)
+}
+
+// assertNormalizedPair guards the pre-normalization contract of the two
+// package-level directional checks: the target is checked first, then the
+// candidate, so a violation on both sides reports deterministically.
+func assertNormalizedPair(tgt, cand map[string]any) error {
+	if err := assertNormalized(tgt, "target"); err != nil {
+		return err
+	}
+	return assertNormalized(cand, "candidate")
+}
+
+// assertNormalized refuses the cheap, unambiguous shapes the Normalizer can
+// never emit: an unresolved $ref (always inlined), an unflattened allOf
+// (always merged away), and a non-array type (always canonicalized to a
+// sorted array). These are exactly the shapes that would otherwise decide
+// verdicts silently — most notably a raw scalar type, which the two
+// reference SDKs historically read differently. This is NOT a full
+// normalized-form validator; anything subtler stays the caller's contract.
+// Nested walks visit properties (sorted), additionalProperties, items, then
+// oneOf/anyOf variants — mirrored in the TypeScript SDK's assertNormalized.
+func assertNormalized(schema map[string]any, path string) error {
+	if _, ok := schema["$ref"]; ok {
+		return &NotNormalizedError{Path: path, Keyword: "$ref", Requirement: "resolved"}
+	}
+	if _, ok := schema["allOf"]; ok {
+		return &NotNormalizedError{Path: path, Keyword: "allOf", Requirement: "flattened"}
+	}
+	if v, ok := schema["type"]; ok {
+		if _, isArr := asSlice(v); !isArr {
+			return &NotNormalizedError{Path: path, Keyword: "type", Requirement: "an array"}
+		}
+	}
+	if props, ok := asMap(schema["properties"]); ok {
+		for _, k := range sortedMapKeys(props) {
+			if vm, ok := asMap(props[k]); ok {
+				if err := assertNormalized(vm, ptrJoin(path, fmt.Sprintf("properties[%s]", canonicalKey(k)))); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if ap, ok := asMap(schema["additionalProperties"]); ok {
+		if err := assertNormalized(ap, ptrJoin(path, "additionalProperties")); err != nil {
+			return err
+		}
+	}
+	if items, ok := asMap(schema["items"]); ok {
+		if err := assertNormalized(items, ptrJoin(path, "items")); err != nil {
+			return err
+		}
+	}
+	for _, key := range []string{"oneOf", "anyOf"} {
+		arr, ok := asSlice(schema[key])
+		if !ok {
+			continue
+		}
+		for i, it := range arr {
+			if vm, ok := asMap(it); ok {
+				if err := assertNormalized(vm, ptrJoin(path, fmt.Sprintf("%s[%d]", key, i))); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func compat(tgt, cand map[string]any, isInput bool) (bool, string, error) {
@@ -350,6 +426,10 @@ func enumSet(schema map[string]any) (map[string]struct{}, bool) {
 // compatObject applies the object rules. Set and property iteration is
 // SORTED so the first-failing member named in the reason is deterministic
 // (and byte-identical across the reference SDKs) when several members fail.
+// Property and required member names interpolate via canonicalKey — the
+// same JCS rendering values get — so names carrying quotes, backslashes, or
+// control characters escape identically across the reference SDKs (plain
+// names render exactly as a bare quoted spelling).
 func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 	tgtReq := stringSet(tgt["required"])
 	candReq := stringSet(cand["required"])
@@ -361,7 +441,7 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 		// required(cand) <= required(tgt)
 		for _, k := range sortedSetKeys(candReq) {
 			if _, ok := tgtReq[k]; !ok {
-				return false, fmt.Sprintf("required: candidate requires %q but target does not", k)
+				return false, fmt.Sprintf("required: candidate requires %s but target does not", canonicalKey(k))
 			}
 		}
 		// For each p in properties(tgt):
@@ -378,10 +458,10 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 				ok2, reason, err := compat(tvm, cvm, true)
 				if err != nil {
 					// Wrap error as reason (should not happen in practice).
-					return false, fmt.Sprintf("properties[%q]: error: %v", p, err)
+					return false, fmt.Sprintf("properties[%s]: error: %v", canonicalKey(p), err)
 				}
 				if !ok2 {
-					return false, fmt.Sprintf("properties[%q]: %s", p, reason)
+					return false, fmt.Sprintf("properties[%s]: %s", canonicalKey(p), reason)
 				}
 			}
 			// If cand lacks property schema, treated as unconstrained (compatible).
@@ -394,7 +474,7 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 	// required(tgt) <= required(cand)
 	for _, k := range sortedSetKeys(tgtReq) {
 		if _, ok := candReq[k]; !ok {
-			return false, fmt.Sprintf("required: target requires %q but candidate does not", k)
+			return false, fmt.Sprintf("required: target requires %s but candidate does not", canonicalKey(k))
 		}
 	}
 
@@ -406,7 +486,7 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 		// If p not in properties(tgt), then additionalProperties(tgt) MUST NOT be false.
 		if _, ok := tgtProps[p]; !ok {
 			if b, ok := tgtAP.(bool); ok && b == false {
-				return false, fmt.Sprintf("properties[%q]: target forbids additional properties", p)
+				return false, fmt.Sprintf("properties[%s]: target forbids additional properties", canonicalKey(p))
 			}
 		}
 		// If both present, OutputCompatible must hold.
@@ -421,10 +501,10 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 			}
 			ok2, reason, err := compat(tvm, cvm, false)
 			if err != nil {
-				return false, fmt.Sprintf("properties[%q]: error: %v", p, err)
+				return false, fmt.Sprintf("properties[%s]: error: %v", canonicalKey(p), err)
 			}
 			if !ok2 {
-				return false, fmt.Sprintf("properties[%q]: %s", p, reason)
+				return false, fmt.Sprintf("properties[%s]: %s", canonicalKey(p), reason)
 			}
 		}
 	}

@@ -67,6 +67,63 @@ func TestCheckInterfaceCompatibility_NilProvidedIssuesSorted(t *testing.T) {
 	}
 }
 
+func TestCheckInterfaceCompatibility_IssueOrderSortedByOperationKey(t *testing.T) {
+	// Pins the issue-ordering contract, mirrored byte-for-byte in the TS
+	// SDK's compatibility.test.ts: issues appear in sorted operation-key
+	// order (never declaration or map order), with the output issue before
+	// the input issue within an operation. Repeated runs make map-order
+	// leakage overwhelmingly likely to surface.
+	required := &Interface{
+		OpenBindings: "0.1.0",
+		Operations: map[string]Operation{
+			"zulu": {
+				Input:  map[string]any{"type": []any{"string"}},
+				Output: map[string]any{"type": []any{"string"}},
+			},
+			"alpha": {},
+			"mike": {
+				Input:  map[string]any{"type": []any{"string"}},
+				Output: map[string]any{"type": []any{"string"}},
+			},
+		},
+	}
+	provided := &Interface{
+		OpenBindings: "0.1.0",
+		Operations: map[string]Operation{
+			"zulu": {
+				Input:  map[string]any{"type": []any{"number"}},
+				Output: map[string]any{"type": []any{"number"}},
+			},
+			"mike": {
+				Input:  map[string]any{"type": []any{"number"}},
+				Output: map[string]any{"type": []any{"number"}},
+			},
+		},
+	}
+	want := []struct {
+		op   string
+		kind CompatibilityIssueKind
+	}{
+		{"alpha", CompatibilityMissing},
+		{"mike", CompatibilityOutputIncompatible},
+		{"mike", CompatibilityInputIncompatible},
+		{"zulu", CompatibilityOutputIncompatible},
+		{"zulu", CompatibilityInputIncompatible},
+	}
+	for run := 0; run < 20; run++ {
+		issues := CheckInterfaceCompatibility(required, provided)
+		if len(issues) != len(want) {
+			t.Fatalf("expected %d issues, got %d: %+v", len(want), len(issues), issues)
+		}
+		for i, w := range want {
+			if issues[i].Operation != w.op || issues[i].Kind != w.kind {
+				t.Fatalf("run %d: issue %d: expected %s/%s, got %s/%s (issues must be in sorted operation-key order, output before input)",
+					run, i, w.op, w.kind, issues[i].Operation, issues[i].Kind)
+			}
+		}
+	}
+}
+
 func TestCheckInterfaceCompatibility_MissingOperation(t *testing.T) {
 	required := &Interface{
 		OpenBindings: "0.1.0",
