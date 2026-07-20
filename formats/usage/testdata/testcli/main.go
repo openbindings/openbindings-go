@@ -76,6 +76,32 @@ func main() {
 		out, _ := json.Marshal(map[string]any{"path": rest[0], "content": string(data)})
 		fmt.Println(string(out))
 
+	case "statfile":
+		// Read the file named by the first arg and emit its path, content,
+		// and octal permission bits as JSON. Exercises temp-file
+		// materialization AND lets a test assert the 0600 mode the routing
+		// lane creates it with.
+		if len(rest) == 0 {
+			fmt.Fprintln(os.Stderr, "statfile: missing path")
+			os.Exit(1)
+		}
+		info, err := os.Stat(rest[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "statfile:", err)
+			os.Exit(1)
+		}
+		data, err := os.ReadFile(rest[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "statfile:", err)
+			os.Exit(1)
+		}
+		out, _ := json.Marshal(map[string]any{
+			"path":    rest[0],
+			"content": string(data),
+			"mode":    fmt.Sprintf("%#o", info.Mode().Perm()),
+		})
+		fmt.Println(string(out))
+
 	case "drink":
 		// Read stdin only; takes no args. Exercises slotless stdin delivery.
 		data, err := io.ReadAll(os.Stdin)

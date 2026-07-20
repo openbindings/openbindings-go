@@ -326,12 +326,30 @@ func (pw *pooledWS) subscribe(l *wsListener) (remove func()) {
 	}
 }
 
+// writeDeadline bounds a single frame write on a pooled socket. It joins the
+// F3 hardcoded-caps family; generous, in the order of idleTimeout.
+const writeDeadline = 30 * time.Second
+
 // send writes one text frame on the shared socket. Writes from concurrent
 // operations are serialized.
+//
+// The write rides a DETACHED, deadline-bounded context — deliberately NOT the
+// caller's per-invocation ctx. nhooyr closes the WHOLE shared connection when
+// a write's context is cancelled (its timeoutLoop calls c.close on
+// writeCtx.Done), so binding the write to a per-invocation ctx let one
+// invocation cancelling mid-frame tear down every sibling subscription on the
+// pooled socket — defeating the pool's fault-isolation purpose. This mirrors
+// the read loop's context.Background decoupling (readLoop). A genuinely stuck
+// write is still interruptible: exceeding writeDeadline trips the context and
+// closes a truly wedged socket (dead for every listener anyway) — but only a
+// real stall, never a voluntary sibling cancel.
 func (pw *pooledWS) send(ctx context.Context, data []byte) error {
 	pw.writeMu.Lock()
 	defer pw.writeMu.Unlock()
-	return pw.conn.Write(ctx, websocket.MessageText, data)
+	_ = ctx // the per-invocation ctx never bounds the shared-socket write
+	writeCtx, cancel := context.WithTimeout(context.Background(), writeDeadline)
+	defer cancel()
+	return pw.conn.Write(writeCtx, websocket.MessageText, data)
 }
 
 // closeConn closes the underlying socket, marking the close as

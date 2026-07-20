@@ -153,11 +153,37 @@ func pinnedDiscovery(content json.RawMessage) (*discovery, error) {
 // ref addresses is fetched — resolution consults nothing else, so the other
 // families cannot affect it. The resources capability gates both resource
 // lists.
+// maxListItems is a defensive backstop on live-listing pagination. MCP-P-02
+// mandates exhaustion, not unbounded trust: go-mcp owns the nextCursor loop
+// (the iterators below page internally), so this module cannot see cursors to
+// detect a repeat; instead it bounds the TOTAL items a family's exhausted
+// listing may yield. A server whose pagination never terminates would
+// otherwise iterate until the caller's context is cancelled. The ceiling is
+// absurdly high — no real MCP server lists this many entities — so it fires
+// only on a non-terminating server, refusing with the same ERR_PROTOCOL the
+// TS SDK's exhaustPages backstop uses. A package var so tests can lower it.
+var maxListItems = 1_000_000
+
+func paginationOverflow() error {
+	return &openbindings.InvocationError{
+		Code:    openbindings.ErrCodeProtocol,
+		Message: fmt.Sprintf("MCP server did not terminate pagination: exceeded %d items (openbindings.mcp@1 MCP-P-02)", maxListItems),
+	}
+}
+
 func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listing, error) {
 	l := &listing{}
 	init := s.session.InitializeResult()
 	if init == nil {
 		return l, nil
+	}
+	items := 0
+	bound := func() error {
+		items++
+		if items > maxListItems {
+			return paginationOverflow()
+		}
+		return nil
 	}
 	switch entityType {
 	case "tools":
@@ -167,6 +193,9 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 		for tool, err := range s.session.Tools(ctx, nil) {
 			if err != nil {
 				return nil, fmt.Errorf("list tools: %w", err)
+			}
+			if berr := bound(); berr != nil {
+				return nil, berr
 			}
 			l.tools = append(l.tools, tool.Name)
 		}
@@ -178,6 +207,9 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 			if err != nil {
 				return nil, fmt.Errorf("list prompts: %w", err)
 			}
+			if berr := bound(); berr != nil {
+				return nil, berr
+			}
 			l.prompts = append(l.prompts, prompt.Name)
 		}
 	default: // resources
@@ -188,11 +220,17 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 			if err != nil {
 				return nil, fmt.Errorf("list resources: %w", err)
 			}
+			if berr := bound(); berr != nil {
+				return nil, berr
+			}
 			l.resources = append(l.resources, resource.URI)
 		}
 		for tmpl, err := range s.session.ResourceTemplates(ctx, nil) {
 			if err != nil {
 				return nil, fmt.Errorf("list resource templates: %w", err)
+			}
+			if berr := bound(); berr != nil {
+				return nil, berr
 			}
 			l.templates = append(l.templates, tmpl.URITemplate)
 		}

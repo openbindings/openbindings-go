@@ -927,21 +927,10 @@ func extractContent(content []gomcp.Content) any {
 		}
 	}
 
-	allText := true
-	for _, c := range content {
-		if _, ok := c.(*gomcp.TextContent); !ok {
-			allText = false
-			break
-		}
-	}
-	if allText {
-		var texts []string
-		for _, c := range content {
-			texts = append(texts, c.(*gomcp.TextContent).Text)
-		}
-		return strings.Join(texts, "\n")
-	}
-
+	// MCP-P-05 / §9.3: a single text block is the string above; ANY OTHER
+	// content shape — two or more text blocks included — passes through as
+	// the content array, verbatim in MCP's block shapes. Never a "\n"-joined
+	// string with an invented separator (the shape the TS SDK also produces).
 	var items []any
 	for _, c := range content {
 		items = append(items, contentToMap(c))
