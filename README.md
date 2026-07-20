@@ -363,7 +363,6 @@ The profile handles: type sets, const/enum, object properties and required field
 | Package | Purpose |
 |---------|---------|
 | `canonicaljson` | RFC 8785 (JCS) deterministic JSON serialization |
-| `formattoken` | Parse and match `name@version` format tokens with semver range support |
 | `schemaprofile` | Schema Compatibility Profile v0.1 — normalization and directional comparison |
 
 ## License
