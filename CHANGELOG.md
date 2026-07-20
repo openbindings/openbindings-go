@@ -2,6 +2,8 @@
 
 ## 0.2.0 (working draft)
 
+> A 0.1.1 patch release was prepared 2026-04 but never tagged or published; its entries are folded into this section.
+
 ### Changed
 
 - **A mid-stream deadline is now classified `ERR_TIMEOUT` (transient / effects:
@@ -226,24 +228,23 @@
 
 - **`drainStream` helper** extracted in `operation_invoker.go` so the producer-drain pattern used by transform short-circuits and stream cancellation is named once and reused.
 
+- **`SynthesizeInput.OnWarning` handler and the `SynthesizerWarning` type**
+  (folded from the unpublished 0.1.1, where they were introduced as
+  `CreateInput.OnWarning` and `CreatorWarning`, before the
+  Creator → Synthesizer rename) for surfacing non-fatal limitations
+  encountered during interface construction (e.g., a source-side feature the
+  schema profile cannot fully express). Synthesizers that hit such a
+  limitation still produce a valid `Interface`; the warning describes what
+  was lost or approximated. The handler is optional; when nil, warnings are
+  dropped silently, preserving prior behavior for callers who do not opt in.
+
 ### Format submodules
 
 - **`formats/grpc` and `formats/connect` migrated to protobuf v2.** Direct dependencies on `github.com/jhump/protoreflect` (v1) and `github.com/golang/protobuf/jsonpb` are gone; both modules now consume `github.com/jhump/protoreflect/v2/grpcdynamic`, `github.com/jhump/protoreflect/v2/grpcreflect`, `google.golang.org/protobuf/types/dynamicpb`, `google.golang.org/protobuf/encoding/protojson`, and `google.golang.org/protobuf/reflect/protoreflect` directly. `formats/connect` additionally moved off `jhump/protoreflect/desc/protoparse` to `github.com/bufbuild/protocompile`. Behavior is preserved across the change; the two integration suites pass against the same fixtures.
 
-## 0.1.1 — 2026-04-20
-
-### Added
-
-- `CreatorWarning` type and `CreateInput.OnWarning` handler for
-  surfacing non-fatal limitations encountered during interface
-  construction (e.g., a source-side feature the schema profile cannot
-  fully express). Creators that hit such a limitation still produce a
-  valid `Interface`; the warning describes what was lost or
-  approximated. The handler is optional; when nil, warnings are
-  dropped silently, preserving prior behavior for callers who do not
-  opt in.
-
 ## 0.1.0 — 2026-03-31
+
+> The date reflects the content freeze; the v0.1.0 tags were created 2026-04-15. From 0.2.0 on, entry dates are tag dates.
 
 Initial public release.
 

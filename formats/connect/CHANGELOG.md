@@ -2,6 +2,8 @@
 
 ## 0.2.0 (working draft)
 
+> A 0.1.1 patch release was prepared 2026-04 but never tagged or published; its entries are folded into this section.
+
 ### Changed
 
 - **Error-code mapping aligned to the binding-invoker contract.** Connect
@@ -83,28 +85,18 @@
 
 - **Migrated to protobuf v2 + protocompile.** Direct dependencies on `github.com/jhump/protoreflect` (v1) and `github.com/golang/protobuf` are gone. Proto file parsing moved from `jhump/protoreflect/desc/protoparse` to `github.com/bufbuild/protocompile`, the v2-native successor maintained by Buf. Dynamic message construction now uses `google.golang.org/protobuf/types/dynamicpb`; JSON marshaling uses `google.golang.org/protobuf/encoding/protojson`. The unary and server-streaming integration tests pass against the same fixtures.
 
-## 0.1.1 — 2026-04-20
-
 ### Fixed
 
 - Bytes fields (`bytes`) now emit as `{"type":"string"}` without a
   `contentEncoding` annotation. The v0.1 schema profile rejects
   `contentEncoding` as outside its supported keyword set; emitting it
   silently produced OBIs that failed compatibility checks. The base64
-  wire encoding is an executor-side concern, not a schema contract.
+  wire encoding is an invoker-side concern, not a schema contract.
 - Request field names now use the proto3 JSON canonical form
   (camelCase) rather than the original proto names (snake_case). The
   executor previously serialized requests with `OrigName: true`, which
-  disagreed with the creator's use of `field.GetJSONName()` and broke
+  disagreed with the synthesizer's use of `field.GetJSONName()` and broke
   any field whose proto name contained an underscore.
-
-### Known limitations
-
-- Well-known proto types, proto `oneof` groups, and 64-bit integer
-  precision are not handled with the same fidelity as in the `grpc`
-  format. Callers using Connect servers should prefer the `grpc`
-  format binding when available until Connect catches up in a future
-  release.
 
 ## 0.1.0
 
