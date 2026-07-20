@@ -1,6 +1,6 @@
 module github.com/openbindings/openbindings-go/formats/mcp
 
-go 1.25.6
+go 1.25.12
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.4.1

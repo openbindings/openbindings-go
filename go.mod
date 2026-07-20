@@ -1,6 +1,6 @@
 module github.com/openbindings/openbindings-go
 
-go 1.25.6
+go 1.25.12
 
 require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
