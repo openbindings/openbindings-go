@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Endpoint-resolution export** (`ParseDocument`,
+  `Document.ResolveEndpoint`, `Endpoint`): the §9.2 server and address
+  configuration points (ASYNC-P-04) resolved for one operation without
+  dispatching — for consumers that dial an AsyncAPI-described endpoint with
+  their own transport instead of re-deriving server selection outside the
+  format seam (the ob CLI's delegate frame lane is the consumer). The same
+  code path the invoker runs before dispatch; refs per ASYNC-D-03; pure, no
+  I/O. Go-only by design — a named gap, not an oversight: the TS package
+  keeps its target resolution internal because ob is this seam's sole
+  consumer (see README "Endpoint resolution").
+
 - **Configurable delivery-unit bound**: the unary publish reply body, each
   SSE event, and each WebSocket message honor
   `BindingInvocationArgs.MaxDeliveryUnitBytes` (default

@@ -130,7 +130,14 @@ func loadDocument(ctx context.Context, client *http.Client, location string, con
 	if err != nil {
 		return nil, err
 	}
+	return parseDocument(data)
+}
 
+// parseDocument parses AsyncAPI document bytes (JSON or YAML), enforces the
+// accepted-line discrimination, and resolves internal references. Pure: no
+// I/O. The shared parse tail behind loadDocument and the exported
+// ParseDocument.
+func parseDocument(data []byte) (*document, error) {
 	var doc document
 
 	if isJSON(data) {

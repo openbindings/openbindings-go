@@ -184,6 +184,30 @@ Converts an AsyncAPI 3.x document into an OBI by:
 - Generating `#/operations/<id>` refs for each binding
 - Deriving operation keys from operation IDs
 
+## Endpoint resolution
+
+`ParseDocument` and `Document.ResolveEndpoint` export the server and address
+configuration points of `openbindings.asyncapi@1` §9.2 (ASYNC-P-04) for
+consumers that dial an AsyncAPI-described endpoint with their own transport:
+parse the document bytes (no I/O — fetching is the caller's business),
+resolve one operation's connection URL and deciding protocol per the
+specification's pinned rules — effective-set ordering, server-variable
+substitution, address-parameter expansion, the concatenation URL-assembly
+rule, every unresolvable input a refusal, never a guess. The resolution is
+the same code path the invoker runs before dispatch, so an exported
+resolution and an invocation can never disagree. Not carried: declared
+protocol `bindings` governing the upgrade request, and credential
+application — those are the invoker's business at dispatch.
+
+**Go-only — a named gap, not an oversight.** The TS
+`@openbindings/asyncapi` package keeps its document model and target
+resolution internal: this seam's sole consumer is the ob CLI's delegate
+frame lane (resolving a delegate's advertised `invokeBinding` endpoint from
+its AsyncAPI document), and ob is Go. A TS consumer with the same need
+delegates to a running `ob start` instead, per the delegate model. If a
+second, non-ob consumer appears on the TS side, port the seam there rather
+than re-deriving server selection outside the format package.
+
 ## Resource bounds
 
 Delivery units — the unary publish reply body, one SSE event, and one

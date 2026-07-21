@@ -2,8 +2,10 @@
 // synthesizer for the OpenBindings Go SDK: HTTP (request + SSE) and
 // WebSocket channels behind the SDK's cardinality-agnostic Invocation
 // handle. The public surface is the format contract (Invoker, Synthesizer,
-// their constructors, and the format token); the document model the
-// synthesizer reads is internal.
+// their constructors, and the format token) plus the endpoint-resolution
+// seam (ParseDocument, Document.ResolveEndpoint — §9.2's server and address
+// configuration points for consumers that dial with their own transport);
+// the rest of the document model is internal.
 package asyncapi
 
 import (
