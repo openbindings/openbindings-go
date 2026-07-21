@@ -34,6 +34,27 @@ func isBoundProtocol(p string) bool {
 	return false
 }
 
+// configRequired is the typed signal a resolution helper returns when a named
+// configuration point cannot resolve because a value is absent (no default,
+// no supplied value) — a resolvable-missing value, not a malformed one. The
+// invoke path turns it into a config.value CONTEXT_REQUIRED challenge
+// (retryable after resolution) rather than a terminal ERR_SOURCE_CONFIG_ERROR
+// (R1a). It implements error so it rides the existing (…, error) returns and
+// the exported ResolveEndpoint seam still surfaces it as a plain error to
+// consumers (e.g. ob) that do not negotiate. hostHint is a best-effort stable
+// target for storage keying when no server URL has resolved yet; config values
+// are non-secret, so it need not carry credential-grade keying rigor.
+type configRequired struct {
+	point       string
+	key         string
+	description string
+	choices     []string
+	durable     *bool
+	hostHint    string
+}
+
+func (c *configRequired) Error() string { return c.description }
+
 // namedServer pairs a doc server with its `servers`-map key, so consumer
 // configuration can select a member by key and so security derivation can
 // name the server it describes.
@@ -145,7 +166,11 @@ func resolveTarget(doc *document, ch *channel, bindCtx map[string]any) (resolved
 	}
 
 	if def == nil {
-		return resolvedTarget{}, fmt.Errorf("no resolvable server: the effective server set declares no server with a supported protocol (http, https, ws, wss)")
+		return resolvedTarget{}, &configRequired{
+			point:       "server",
+			key:         "url",
+			description: "the effective server set declares no server with a supported protocol (http, https, ws, wss); supply a connection URL at the server configuration point",
+		}
 	}
 	return assembleServer(def, nil)
 }
@@ -351,7 +376,17 @@ func substituteServerVariables(member *namedServer, template string, supplied ma
 			if v, declared := member.Server.Variables[name]; declared && v.Default != "" {
 				val = v.Default
 			} else {
-				return "", fmt.Errorf(`server %q: variable %q has no supplied value and no declared default (supply one at the server configuration point's "variables" member)`, member.Name, name)
+				var choices []string
+				if v, declared := member.Server.Variables[name]; declared {
+					choices = v.Enum
+				}
+				return "", &configRequired{
+					point:       "server",
+					key:         name,
+					description: fmt.Sprintf("server %q: variable %q has no supplied value and no declared default (supply one at the server configuration point's \"variables\" member)", member.Name, name),
+					choices:     choices,
+					hostHint:    member.Server.Host,
+				}
 			}
 		}
 		out = strings.ReplaceAll(out, "{"+name+"}", val)
@@ -432,7 +467,15 @@ func resolveAddress(ch *channel, channelName string, cfg addressConfig) (string,
 		return cfg.Address, nil
 	}
 	if ch == nil || ch.Address == "" {
-		return "", fmt.Errorf("channel %q declares no address and none was supplied at the address configuration point: an absent address is a refusal, never a guess", channelName)
+		// AsyncAPI's address:null "generated dynamically at runtime" case:
+		// resolvable by consumer supply, and per-invocation (not persisted).
+		no := false
+		return "", &configRequired{
+			point:       "address",
+			key:         "address",
+			description: fmt.Sprintf("channel %q declares no address and none was supplied at the address configuration point (AsyncAPI's runtime-generated address); supply one", channelName),
+			durable:     &no,
+		}
 	}
 	return expandAddress(ch, channelName, cfg.Parameters)
 }
@@ -450,7 +493,16 @@ func expandAddress(ch *channel, channelName string, supplied map[string]string) 
 			if p, declared := ch.Parameters[name]; declared && p.Default != "" {
 				val = p.Default
 			} else {
-				return "", fmt.Errorf("channel %q: address parameter %q has no supplied value and no declared default", channelName, name)
+				var choices []string
+				if p, declared := ch.Parameters[name]; declared {
+					choices = p.Enum
+				}
+				return "", &configRequired{
+					point:       "address",
+					key:         name,
+					description: fmt.Sprintf("channel %q: address parameter %q has no supplied value and no declared default", channelName, name),
+					choices:     choices,
+				}
 			}
 		}
 		out = strings.ReplaceAll(out, "{"+name+"}", val)

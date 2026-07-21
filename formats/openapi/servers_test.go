@@ -176,3 +176,56 @@ func TestResolveServer_MissingVariableDefault(t *testing.T) {
 		t.Errorf("expected a loud missing-default error naming the variable, got %v", err)
 	}
 }
+
+// TestResolveServer_ConfigRequired pins R1a: a resolvable-missing server value
+// surfaces as a *configRequired (point "server"), which the invoke path turns
+// into a config.value CONTEXT_REQUIRED — not a terminal error. An undefaulted,
+// unsupplied server variable and a server URL with no absolute base are both
+// resolvable by consumer supply.
+func TestResolveServer_ConfigRequired(t *testing.T) {
+	// Undefaulted, unsupplied variable → config.value on the server point.
+	doc := &openapi3.T{
+		OpenAPI: "3.0.3",
+		Servers: openapi3.Servers{{
+			URL:       "https://{env}.example.com",
+			Variables: map[string]*openapi3.ServerVariable{"env": {Enum: []string{"prod", "staging"}}},
+		}},
+	}
+	_, err := resolveServer(doc, nil, nil, nil, "")
+	var cr *configRequired
+	if !errorsAsConfigRequired(err, &cr) {
+		t.Fatalf("expected *configRequired for an undefaulted server variable, got %v", err)
+	}
+	if cr.point != "server" || cr.key != "env" {
+		t.Errorf("configRequired = {point:%q key:%q}, want {server env}", cr.point, cr.key)
+	}
+	if len(cr.choices) != 2 {
+		t.Errorf("choices = %v, want the declared enum", cr.choices)
+	}
+
+	// Relative server URL with no absolute base → config.value, key "url".
+	docRel := &openapi3.T{OpenAPI: "3.0.3", Servers: openapi3.Servers{{URL: "/"}}}
+	_, err = resolveServer(docRel, nil, nil, nil, "")
+	if !errorsAsConfigRequired(err, &cr) {
+		t.Fatalf("expected *configRequired for an unresolvable server URL, got %v", err)
+	}
+	if cr.point != "server" || cr.key != "url" {
+		t.Errorf("configRequired = {point:%q key:%q}, want {server url}", cr.point, cr.key)
+	}
+}
+
+func errorsAsConfigRequired(err error, target **configRequired) bool {
+	for err != nil {
+		if cr, ok := err.(*configRequired); ok {
+			*target = cr
+			return true
+		}
+		type unwrapper interface{ Unwrap() error }
+		u, ok := err.(unwrapper)
+		if !ok {
+			return false
+		}
+		err = u.Unwrap()
+	}
+	return false
+}

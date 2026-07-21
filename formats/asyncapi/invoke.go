@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,33 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
+
+// configOrSourceError maps a resolution error to the right terminal. A
+// resolvable-missing configuration value (a configRequired signal) becomes a
+// config.value CONTEXT_REQUIRED challenge — retryable after resolution (R1a) —
+// while any other error stays a terminal ERR_SOURCE_CONFIG_ERROR for source
+// misconfiguration no runtime can fix. resolveTarget/resolveAddress already
+// consulted the supplied context and found the value absent, so the challenge
+// fires unconditionally; the operation-invoker's bounded resolve-and-retry
+// loop is the backstop against a resolver that keeps supplying an insufficient
+// value. serverURL is the resolved target when known (empty when server
+// resolution itself failed), used as the challenge target for storage keying;
+// config values are non-secret, so a best-effort target suffices.
+func configOrSourceError(err error, serverURL string) *openbindings.InvocationError {
+	var cr *configRequired
+	if errors.As(err, &cr) {
+		target := serverURL
+		if target == "" {
+			target = cr.hostHint
+		}
+		req := openbindings.NewConfigValueRequirement(cr.point, cr.key, cr.description, cr.choices, cr.durable)
+		return openbindings.NewContextRequiredError(cr.description, &openbindings.ContextRequiredDetails{
+			Target:       target,
+			Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{req}}},
+		})
+	}
+	return &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()}
+}
 
 // AsyncAPI binding execution over the cardinality-agnostic invocation handle.
 //
@@ -101,7 +129,7 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 
 	target, err := resolveTarget(doc, ch, args.Context)
 	if err != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		h.FireError(configOrSourceError(err, ""))
 		return
 	}
 
@@ -122,7 +150,7 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 	}
 	address, err := resolveAddress(ch, channelName, addrCfg)
 	if err != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		h.FireError(configOrSourceError(err, target.ServerURL))
 		return
 	}
 

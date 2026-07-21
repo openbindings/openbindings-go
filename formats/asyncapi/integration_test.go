@@ -367,8 +367,12 @@ func TestChannelWithoutAddressIsRefusedPreDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for a channel with no address, got %v", err)
+	// R1a: AsyncAPI's absent (runtime-generated) address is resolvable by
+	// consumer supply — a config.value CONTEXT_REQUIRED (address point,
+	// non-durable), not a terminal ERR_SOURCE_CONFIG_ERROR.
+	req := assertConfigValue(t, err, "address", "address")
+	if req.Durable == nil || *req.Durable {
+		t.Errorf("a runtime-generated address must be non-durable, got durable=%v", req.Durable)
 	}
 	if got := requests.Load(); got != 0 {
 		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got)

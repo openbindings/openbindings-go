@@ -25,10 +25,11 @@ var bearerDetails = &ContextRequiredDetails{
 }
 
 type mockOpts struct {
-	token           string
-	requireBearer   bool // getUser challenges when context lacks bearerToken (after reading input)
-	challengeAlways bool // getUser challenges unconditionally (tests the retry cap)
-	preflight       bool // expose PrepareBinding reporting the bearer requirement
+	token               string
+	requireBearer       bool // getUser challenges when context lacks bearerToken (after reading input)
+	requireServerConfig bool // getUser challenges with config.value until context.configuration.server is present
+	challengeAlways     bool // getUser challenges unconditionally (tests the retry cap)
+	preflight           bool // expose PrepareBinding reporting the bearer requirement
 }
 
 type mockBindingInvoker struct {
@@ -125,6 +126,16 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 		record(first)
 		if m.opts.challengeAlways || (m.opts.requireBearer && ContextBearerToken(args.Context) == "") {
 			h.FireError(NewContextRequiredError("bearer token required", bearerDetails))
+			return nil
+		}
+		if m.opts.requireServerConfig && !hasServerConfig(args.Context) {
+			h.FireError(NewContextRequiredError("server address required",
+				&ContextRequiredDetails{
+					Target: "api.example.com",
+					Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{
+						NewConfigValueRequirement("server", "url", "supply a connection URL", nil, nil),
+					}}},
+				}))
 			return nil
 		}
 		_ = h.CloseInput()
@@ -730,6 +741,53 @@ func TestOpResolveAndRetryReplaysInput(t *testing.T) { // U — read ≠ consume
 	}
 	if ContextBearerToken(contexts[1]) != "tok-123" {
 		t.Fatalf("retry context missing token: %v", contexts[1])
+	}
+}
+
+func hasServerConfig(ctx map[string]any) bool {
+	cfg, _ := ctx["configuration"].(map[string]any)
+	_, ok := cfg["server"]
+	return ok
+}
+
+// TestOpResolveAndRetryConfigValue proves the R1a config.value path end to
+// end: a binding challenges with a config.value requirement, a resolver
+// supplies the value into context.configuration under its point, and the
+// retry carries it — while a configuration point the caller already supplied
+// (decode) survives the point-wise merge rather than being clobbered.
+func TestOpResolveAndRetryConfigValue(t *testing.T) {
+	mock := &mockBindingInvoker{opts: mockOpts{requireServerConfig: true}}
+	var got map[string]any
+	resolver := func(_ context.Context, details *ContextRequiredDetails) (map[string]any, error) {
+		req := details.Alternatives[0].Requirements[0]
+		if req.Type != "config.value" || req.Extra["point"] != "server" {
+			return nil, fmt.Errorf("unexpected requirement %+v", req)
+		}
+		return map[string]any{"configuration": map[string]any{"server": map[string]any{"url": "https://api.example.com"}}}, nil
+	}
+	op := newOpInvoker(mock, resolver)
+	// The caller pre-supplies a DIFFERENT configuration point (decode); it must
+	// survive the resolve-and-retry merge.
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"),
+		WithContext(map[string]any{"configuration": map[string]any{"decode": map[string]any{"lane": "text"}}}))
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatalf("resolve-and-retry did not dispatch: %v", err)
+	}
+	if v.(map[string]any)["name"] != "Ada" {
+		t.Fatalf("got %v", v)
+	}
+	_, _, _, contexts := mock.snapshot()
+	got = contexts[1]
+	cfg, _ := got["configuration"].(map[string]any)
+	if _, ok := cfg["server"]; !ok {
+		t.Errorf("retry context missing resolved server config: %v", cfg)
+	}
+	if dec, _ := cfg["decode"].(map[string]any); dec["lane"] != "text" {
+		t.Errorf("caller's decode config point was clobbered by the merge: %v", cfg)
 	}
 }
 

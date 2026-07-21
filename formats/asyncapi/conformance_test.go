@@ -105,12 +105,12 @@ func TestAddressParameterExpansion(t *testing.T) {
 		t.Errorf("path = %q, want /rooms/ops/audit", gotPath)
 	}
 
-	// Unresolved after defaults: pre-dispatch refusal, braces never dialed.
+	// Unresolved after defaults: braces never dialed. R1a: a resolvable-
+	// missing address parameter is a config.value CONTEXT_REQUIRED, not a
+	// terminal ERR_SOURCE_CONFIG_ERROR.
 	before := requests.Load()
 	err := publish(nil)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for an unresolved address parameter, got %v", err)
-	}
+	assertConfigValue(t, err, "address", "roomId")
 	if got := requests.Load(); got != before {
 		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got-before)
 	}
@@ -279,9 +279,10 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for an unsubstitutable server variable, got %v", err)
-	}
+	// R1a: an unsubstitutable server variable is a resolvable-missing config
+	// value, surfaced as a config.value CONTEXT_REQUIRED (retryable), not a
+	// terminal ERR_SOURCE_CONFIG_ERROR.
+	assertConfigValue(t, err, "server", "version")
 	if got := requests.Load(); got != before {
 		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got-before)
 	}
@@ -506,9 +507,10 @@ func TestOnlyUnboundProtocolServersIsRefused(t *testing.T) {
 		Ref:    "#/operations/post",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR with only unbound protocols declared, got %v", err)
-	}
+	// R1a: no server with a supported protocol is resolvable by supplying a
+	// connection URL at the server point — a config.value CONTEXT_REQUIRED,
+	// not a terminal ERR_SOURCE_CONFIG_ERROR.
+	assertConfigValue(t, err, "server", "url")
 }
 
 // TestFullURLOverride verifies the full-URL override lane: the URL's scheme

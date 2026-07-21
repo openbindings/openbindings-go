@@ -185,7 +185,12 @@ func substituteServerVariables(srv *openapi3.Server, supplied map[string]string)
 			val = v.Default
 		}
 		if val == "" && v.Default == "" {
-			return "", fmt.Errorf("server %q: variable %q has no supplied value and no declared default", srv.URL, name)
+			return "", &configRequired{
+				point:       "server",
+				key:         name,
+				description: fmt.Sprintf("server %q: variable %q has no supplied value and no declared default", srv.URL, name),
+				choices:     v.Enum,
+			}
 		}
 		u = strings.ReplaceAll(u, "{"+name+"}", val)
 	}
@@ -217,5 +222,27 @@ func absolutizeServerURL(serverURL, sourceLocation string) (string, error) {
 			return strings.TrimRight(base.ResolveReference(u).String(), "/"), nil
 		}
 	}
-	return "", fmt.Errorf("server URL %q cannot resolve to an absolute URL: the source has no absolute-URI location to serve as the artifact's base URI", serverURL)
+	return "", &configRequired{
+		point:       "server",
+		key:         "url",
+		description: fmt.Sprintf("server URL %q cannot resolve to an absolute URL: the source has no absolute-URI location to serve as the artifact's base URI; supply a base URL at the server configuration point", serverURL),
+	}
 }
+
+// configRequired is the typed signal a resolution helper returns when a named
+// configuration point cannot resolve because a value is absent (no default,
+// no supplied value) — a resolvable-missing value, not a malformed one. The
+// invoke path turns it into a config.value CONTEXT_REQUIRED challenge
+// (retryable after resolution, R1a) rather than a terminal
+// ERR_SOURCE_CONFIG_ERROR. It implements error so it rides the existing
+// (…, error) returns unchanged. config values are non-secret, so no
+// credential-grade target keying is needed.
+type configRequired struct {
+	point       string
+	key         string
+	description string
+	choices     []string
+	durable     *bool
+}
+
+func (c *configRequired) Error() string { return c.description }

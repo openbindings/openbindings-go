@@ -1,6 +1,7 @@
 package asyncapi
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -988,4 +989,33 @@ func TestResolveInputCodec(t *testing.T) {
 	if _, err = resolveInputCodec(doc, msgs); err == nil {
 		t.Error("an excluded declared family (binary) must refuse before dispatch")
 	}
+}
+
+// assertConfigValue narrows err to a config.value CONTEXT_REQUIRED challenge
+// (R1a) and checks its point and key. Returns the requirement for further
+// assertions (choices, durable).
+func assertConfigValue(t *testing.T, err error, point, key string) openbindings.ContextRequirement {
+	t.Helper()
+	var ie *openbindings.InvocationError
+	if !errors.As(err, &ie) {
+		t.Fatalf("expected *InvocationError, got %v", err)
+	}
+	details := openbindings.ContextRequiredFrom(ie)
+	if details == nil {
+		t.Fatalf("expected a CONTEXT_REQUIRED challenge, got %v", err)
+	}
+	if len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 {
+		t.Fatalf("expected one alternative with one requirement, got %+v", details.Alternatives)
+	}
+	req := details.Alternatives[0].Requirements[0]
+	if req.Type != "config.value" {
+		t.Fatalf("requirement type = %q, want config.value", req.Type)
+	}
+	if got, _ := req.Extra["point"].(string); got != point {
+		t.Errorf("config.value point = %q, want %q", got, point)
+	}
+	if got, _ := req.Extra["key"].(string); got != key {
+		t.Errorf("config.value key = %q, want %q", got, key)
+	}
+	return req
 }
