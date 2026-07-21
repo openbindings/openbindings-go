@@ -144,18 +144,21 @@ func planRequestBody(op *openapi3.Operation) (*bodyPlan, error) {
 	}
 
 	// Flatten mode. text/plain bodies are scalar by nature: they always ride
-	// the synthetic `body` property. JSON-family bodies are synthetic when
-	// the declared schema's type is non-object (array or scalar, §9.1);
-	// multipart and urlencoded bodies are field maps by construction.
+	// the synthetic `body` property. JSON-family bodies route through the
+	// §9.1 determination SHARED with synthesis (bodySchemaFlattens,
+	// synthesize.go): synthetic exactly when the declared schema neither
+	// declares `properties` nor an explicit object type — a TYPELESS schema
+	// included — so the wire always agrees with the published contract.
+	// Multipart and urlencoded bodies are field maps by construction. The
+	// two declaration facts here mirror isObjectTypedSchema's raw-map
+	// reading in kin-openapi's typed form: Types.Is("object") is true for
+	// the 3.0 string form and the single-element 3.1 type array only.
 	switch family {
 	case familyText:
 		plan.synthetic = true
 	case familyJSON:
-		if schema := mediaSchema(plan.media); schema != nil && schema.Type != nil {
-			types := schema.Type.Slice()
-			if len(types) > 0 && !schema.Type.Is("object") {
-				plan.synthetic = true
-			}
+		if schema := mediaSchema(plan.media); schema != nil {
+			plan.synthetic = !bodySchemaFlattens(schema.Properties != nil, schema.Type.Is("object"))
 		}
 	}
 	if !plan.synthetic {

@@ -385,3 +385,60 @@ func TestSynthesize_ParamBodyCollisionWarns(t *testing.T) {
 		t.Fatalf("flattened input must carry one id field, got %v", props)
 	}
 }
+
+// TestSynthesize_TypelessBodyWrapsSynthetic pins the contract half of the
+// §9.1 declaration-only object determination: a TYPELESS request-body
+// schema — neither `properties` nor an explicit object type — is
+// non-object, so the published contract carries it under the synthetic
+// `body` property (required when the artifact declares the body required);
+// a schema declaring `properties` WITHOUT a type is object by declaration
+// and flattens by property name. planRequestBody (media.go) routes the wire
+// with the same predicate (bodySchemaFlattens), so contract and wire cannot
+// disagree.
+func TestSynthesize_TypelessBodyWrapsSynthetic(t *testing.T) {
+	spec := `{
+	  "openapi": "3.1.0",
+	  "info": {"title": "t", "version": "1"},
+	  "paths": {
+	    "/opaque": {
+	      "post": {
+	        "operationId": "sendOpaque",
+	        "requestBody": {"required": true, "content": {"application/json": {"schema": {"description": "opaque payload"}}}},
+	        "responses": {"200": {"description": "ok"}}
+	      }
+	    },
+	    "/named": {
+	      "post": {
+	        "operationId": "sendNamed",
+	        "requestBody": {"required": true, "content": {"application/json": {"schema": {"properties": {"name": {"type": "string"}}}}}},
+	        "responses": {"200": {"description": "ok"}}
+	      }
+	    }
+	  }
+	}`
+	synth := NewSynthesizer()
+	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{Content: openbindings.TextContent(spec)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opaque, _ := iface.Operations["sendOpaque"].Input.(map[string]any)
+	opaqueProps, _ := opaque["properties"].(map[string]any)
+	if _, ok := opaqueProps["body"]; !ok || len(opaqueProps) != 1 {
+		t.Errorf("typeless body must wrap under the synthetic body property alone, got %v", opaqueProps)
+	}
+	if req := stringSlice(opaque["required"]); len(req) != 1 || req[0] != "body" {
+		t.Errorf("required-body artifact must require the synthetic body property, got %v", req)
+	}
+
+	named, _ := iface.Operations["sendNamed"].Input.(map[string]any)
+	namedProps, _ := named["properties"].(map[string]any)
+	if _, ok := namedProps["name"]; !ok {
+		t.Errorf("properties-without-type body must flatten by property name, got %v", namedProps)
+	}
+	if _, ok := namedProps["body"]; ok {
+		t.Errorf("properties-without-type body must not wrap synthetically, got %v", namedProps)
+	}
+}

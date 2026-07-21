@@ -340,7 +340,19 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 					bodySchema = resolved
 				}
 			}
-			if bodyProps, ok := bodySchema["properties"].(map[string]any); ok {
+			bodyProps, hasProps := bodySchema["properties"].(map[string]any)
+			switch {
+			case !bodySchemaFlattens(hasProps, isObjectTypedSchema(bodySchema)):
+				// A non-object body schema — array, scalar, binary, or
+				// TYPELESS (neither `properties` nor an explicit object
+				// type; §9.1's determination is declaration-only): the
+				// flattened contract carries it under the synthetic
+				// `body` property, unwrapped at the wire.
+				properties["body"] = bodySchema
+				if rb.Required {
+					required = append(required, "body")
+				}
+			case hasProps:
 				for k, v := range bodyProps {
 					// Field-collision rule: a name declared as a parameter
 					// AND a body property flattens to ONE input field (the
@@ -357,7 +369,7 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 					properties[k] = v
 				}
 				required = append(required, stringSlice(bodySchema["required"])...)
-			} else if isObjectTypedSchema(bodySchema) {
+			default:
 				// A free-form object body (type object, no named
 				// properties): the flattened model passes unmatched input
 				// fields through into the body (openbindings.openapi@1
@@ -366,11 +378,6 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 				// body schemas, and wrapping here would describe a field
 				// the conformant invoker refuses as unmatched.
 				hasOpenBody = true
-			} else {
-				properties["body"] = bodySchema
-				if rb.Required {
-					required = append(required, "body")
-				}
 			}
 		}
 	}
@@ -652,9 +659,27 @@ func majorMinor(version string) string {
 	return version
 }
 
+// bodySchemaFlattens is THE §9.1 flatten-vs-synthetic determination, in one
+// place for the two sites that must never disagree: buildInputSchema, which
+// publishes the flattened contract, and planRequestBody (media.go), which
+// routes the wire. A declared request-body schema participates in the
+// flattened model by property name iff it declares `properties` or an
+// explicit object type; ANY other schema — array, scalar, binary, and the
+// TYPELESS schema that declares neither — rides the synthetic `body`
+// property, unwrapped at the wire. The determination is declaration-only:
+// what the schema might admit at runtime never participates. Each caller
+// extracts the two declaration facts from its own schema representation
+// (the raw map here, kin-openapi's typed form in media.go) and routes the
+// decision through this one predicate, so the published contract and the
+// wire cannot diverge again.
+func bodySchemaFlattens(hasProperties, objectTyped bool) bool {
+	return hasProperties || objectTyped
+}
+
 // isObjectTypedSchema reports whether a body schema is explicitly
 // object-typed (3.0 string form or a single-element 3.1 type array): the
-// flattened model's passthrough case, never the synthetic-body wrap.
+// object half of bodySchemaFlattens' declaration facts, in the raw-map
+// representation.
 func isObjectTypedSchema(schema map[string]any) bool {
 	switch ty := schema["type"].(type) {
 	case string:

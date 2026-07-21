@@ -16,6 +16,23 @@
   per-event bound at all, only the line-scanner guard). The SSE
   line-scanner guard stays fixed (parser internal, not a delivery unit).
 
+### Fixed
+
+- **A typeless request-body schema rides the synthetic `body` property on
+  the wire, matching the published contract** (`openbindings.openapi@1`
+  §9.1's declaration-only object determination: a body schema is object
+  iff it declares `properties` or an explicit `object` type). The
+  synthesizer wrapped a typeless body (a bare `{}` or a description-only
+  schema) under the synthetic `body` property while the invoker treated it
+  as flattened, so a caller following the published contract got
+  `{"body": X}` on the wire instead of `X` — and the §9.1 unmatched-field
+  refusal for non-object bodies did not fire. Both sites now route through
+  one shared predicate (`bodySchemaFlattens`), so the contract and the
+  wire cannot diverge. Red-proven in the mirrored §9.1 conformance tests;
+  behavior matches the TS SDK, where the same fix also makes a 3.1
+  two-element `type: ["object", "null"]` body (not an *explicit* object
+  type) synthetic at the invoker.
+
 **Conformance to the published `openbindings.openapi@1` binding specification.** The invoker now implements the normative rules end to end; behavior that predated the specification and diverged from it changed:
 
 - **Input mapping (OAPI-P-02/P-03).** Parameter serialization follows the OAS `style`/`explode`/`allowReserved` rules wholesale (matrix/label/simple, form/spaceDelimited/pipeDelimited/deepObject, per-location defaults, `content`-form parameters). Cross-location same-name declarations refuse as unflattenable; unmatched input fields refuse loudly when no request body is declared (previously silently sent as a body); a missing declared path parameter refuses pre-dispatch; non-object body schemas ride the synthetic `body` property, unwrapped at the wire.

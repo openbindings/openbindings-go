@@ -192,6 +192,12 @@ func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
 		{"array JSON body", `{"application/json": {"schema": {"type": "array", "items": {"type": "integer"}}}}`},
 		{"binary-in-JSON body (3.1 contentEncoding)", `{"application/json": {"schema": {"type": "string", "contentEncoding": "base64"}}}`},
 		{"text/plain body", `{"text/plain": {"schema": {"type": "string"}}}`},
+		// §9.1's object determination is by declaration alone: a TYPELESS
+		// schema — neither `properties` nor an explicit object type — is
+		// non-object, so the refusal fires for it exactly as for arrays
+		// and scalars.
+		{"typeless JSON body (bare schema)", `{"application/json": {"schema": {}}}`},
+		{"typeless JSON body (description-only schema)", `{"application/json": {"schema": {"description": "opaque payload"}}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -216,6 +222,84 @@ func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
 				t.Error("refusal must precede dispatch")
 			}
 		})
+	}
+}
+
+// §9.1 (OAPI-P-03): a TYPELESS request-body schema — declaring neither
+// `properties` nor an explicit object type; a bare {} or a description-only
+// schema — is non-object by declaration alone, so the flattened contract
+// carries the synthetic `body` property and, at the wire, that property's
+// value IS the request body, unwrapped. The published contract and the
+// invoker share one determination (bodySchemaFlattens): a caller following
+// the contract must never see its value double-wrapped as {"body": X}.
+func TestInvoke_TypelessBodyRidesSyntheticBodyUnwrapped(t *testing.T) {
+	cases := []struct {
+		name   string
+		schema string
+	}{
+		{"bare schema", `{}`},
+		{"description-only schema", `{"description": "opaque payload"}`},
+		// A 3.1 two-element type array is not an EXPLICIT object type
+		// (only the single-element form is): synthetic, like typeless.
+		{"nullable object without properties", `{"type": ["object", "null"]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotBody []byte
+			srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+				gotBody, _ = io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{}`))
+			})
+			spec := fmt.Sprintf(`{
+			  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+			  "servers": [{"url": %q}],
+			  "paths": {"/echo": {"post": {
+			    "operationId": "echo",
+			    "requestBody": {"required": true, "content": {"application/json": {"schema": %s}}},
+			    "responses": {"200": {"description": "ok"}}
+			  }}}
+			}`, srv.URL, tc.schema)
+			_, ierr := invokeWith(t, spec, "#/paths/~1echo/post", map[string]any{"body": map[string]any{"k": "v"}})
+			if ierr != nil {
+				t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+			}
+			if string(gotBody) != `{"k":"v"}` {
+				t.Errorf("wire body = %s, want the synthetic body property's value unwrapped: {\"k\":\"v\"}", gotBody)
+			}
+		})
+	}
+}
+
+// §9.1 (OAPI-P-03): the other half of the declaration-only determination —
+// a schema declaring `properties` WITHOUT a type is object by declaration,
+// so it flattens by property name exactly as the synthesized contract
+// publishes it; the fix for the typeless case must not overshoot into
+// wrapping properties-carrying schemas.
+func TestInvoke_PropertiesWithoutTypeStillFlattens(t *testing.T) {
+	var gotBody []byte
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/w": {"post": {
+	    "operationId": "makeW",
+	    "requestBody": {"required": true, "content": {"application/json": {"schema": {
+	      "properties": {"name": {"type": "string"}}
+	    }}}},
+	    "responses": {"200": {"description": "ok"}}
+	  }}}
+	}`, srv.URL)
+	_, ierr := invokeWith(t, spec, "#/paths/~1w/post", map[string]any{"name": "x"})
+	if ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	if string(gotBody) != `{"name":"x"}` {
+		t.Errorf("wire body = %s, want the flattened property carried by name: {\"name\":\"x\"}", gotBody)
 	}
 }
 
