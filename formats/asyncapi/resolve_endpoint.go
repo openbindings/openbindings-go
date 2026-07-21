@@ -74,11 +74,14 @@ type Endpoint struct {
 // declared `servers` subset when present and non-empty (in the artifact's
 // own array order), else the document's `servers` map in lexicographic key
 // order, this specification's determinism rule. Consumer configuration
-// (bindingContext's `configuration.server`) may select another member of the
-// effective set or supply a complete connection URL outright; under a
-// full-URL override the URL's scheme decides the protocol, out-of-revision
-// schemes refused. Server variables substitute from consumer-supplied
-// values, else declared defaults — an unsubstitutable variable is a refusal.
+// (bindingContext's `configuration.server`) carries one of §9.2's two
+// pinned, mutually exclusive value shapes: {"key": "<server-name>"} selects
+// a member of the effective set, xor {"url": "<connection-url>"} overrides
+// with a complete URL whose scheme decides the protocol, out-of-revision
+// schemes refused; any other spelling is refused with a teaching error.
+// Server variables substitute from declared defaults — an unsubstitutable
+// variable is a refusal (the pin carries no per-variable values; full
+// control is the url form).
 //
 // The address point: the channel's declared `address` with every `{name}`
 // expression expanded from consumer-supplied parameter values
