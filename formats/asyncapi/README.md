@@ -164,7 +164,7 @@ The transport comes from the resolved server's protocol; the cell comes from the
 
 1. Loads and caches the AsyncAPI document (JSON or YAML, local or remote)
 2. Parses the ref to extract the operation ID (`#/operations/receiveOrder` -> `receiveOrder`)
-3. Resolves the server URL and protocol from the document (consumer `configuration.server` carries one of the two §9.2-pinned value shapes — `{"key": "<server-name>"}` selects a member of the effective server set, xor `{"url": "<connection-url>"}` supplies a complete connection URL; any other spelling is refused with a teaching error, and an unresolvable server, address, or `{name}` expression is a pre-dispatch refusal, never a guess)
+3. Resolves the server URL and protocol from the document (consumer `configuration.server` carries one of the two §9.2-pinned value shapes — `{"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?}` selects a member of the effective server set, the optional `variables` member supplying values for its declared server variables (substitution is supplied-else-default; an undeclared supplied name and a supplied out-of-enum value are refused), xor `{"url": "<connection-url>"}` supplies a complete connection URL; any other spelling is refused with a teaching error, and an unresolvable server, address, or `{name}` expression is a pre-dispatch refusal, never a guess)
 4. Challenges `CONTEXT_REQUIRED` when declared security isn't satisfied (before any connection is opened)
 5. Dispatches based on action and protocol:
    - **receive + http/https**: unary POST publish — the one input is the message body; an empty-body response (202/204 acknowledgments included) yields zero outputs, otherwise the decoded response body is the single output

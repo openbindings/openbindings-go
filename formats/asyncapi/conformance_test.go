@@ -155,12 +155,11 @@ func TestAddressParameterEnumViolationRefused(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestServerVariablesAndPathnameAssembly verifies the target URL assembly:
-// server variables substitute from declared defaults (§9.2 pins no carriage
-// for consumer-supplied server-variable values — full control is the
-// {"url": ...} override); the path is the pathname concatenated with the
-// expanded address, exactly one `/` at the join; an unsubstitutable
-// variable is a pre-dispatch refusal, and so is a retired `variables`
-// member at the server configuration point.
+// server variables substitute from consumer-supplied values (the key form's
+// `variables` member, §9.2), else declared defaults; the path is the
+// pathname concatenated with the expanded address, exactly one `/` at the
+// join; an unsubstitutable variable and a supplied value outside the
+// declared enum are pre-dispatch refusals.
 func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	var requests atomic.Int32
 	var gotPath string
@@ -216,14 +215,30 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 		t.Errorf("path = %q, want /v1/events (default-substituted pathname + address, one slash at the join)", gotPath)
 	}
 
-	// The retired `variables` member is refused with the teaching error —
-	// §9.2 pins {"key": ...} xor {"url": ...} and nothing else.
+	// A supplied value at the key form's `variables` member wins over the
+	// declared default (§9.2's supplied-else-default substitution).
 	if err := publish(map[string]any{"configuration": map[string]any{
-		"server": map[string]any{"variables": map[string]any{"version": "v2"}},
+		"server": map[string]any{"key": "test", "variables": map[string]any{"version": "v2"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v2/events" {
+		t.Errorf("path = %q, want /v2/events (supplied-substituted pathname + address)", gotPath)
+	}
+
+	// A supplied value outside the variable's declared enum is a
+	// pre-dispatch refusal (upstream SHOULD, hardened to a refusal — the
+	// specification's own pin).
+	beforeEnum := requests.Load()
+	if err := publish(map[string]any{"configuration": map[string]any{
+		"server": map[string]any{"key": "test", "variables": map[string]any{"version": "v9"}},
 	}}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for the retired variables member, got %v", err)
-	} else if !strings.Contains(err.Error(), `member "variables" is not pinned`) {
-		t.Fatalf("the refusal must teach the pin, got %v", err)
+		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for a supplied out-of-enum value, got %v", err)
+	} else if !strings.Contains(err.Error(), "is not in the declared enum") {
+		t.Fatalf("the refusal must name the enum constraint, got %v", err)
+	}
+	if got := requests.Load(); got != beforeEnum {
+		t.Errorf("the enum refusal is pre-dispatch: %d requests dispatched", got-beforeEnum)
 	}
 
 	// A declared default outside the variable's own declared enum is refused
@@ -272,6 +287,30 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	}
 	if got := requests.Load(); got != before {
 		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got-before)
+	}
+
+	// The same undefaulted variable IS satisfiable by supply — AsyncAPI
+	// declares Server Variable defaults OPTIONAL, so consumer supply is the
+	// only way to satisfy it (the carriage §9.2's assembly rule
+	// presupposes).
+	callSupplied := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docNoDefault)},
+		Ref:    "#/operations/post",
+		Context: map[string]any{"configuration": map[string]any{
+			"server": map[string]any{"key": "test", "variables": map[string]any{"version": "v7"}},
+		}},
+	})
+	if err := callSupplied.Write(bg(), map[string]any{"m": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := callSupplied.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := drainOutputs(t, callSupplied); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v7/events" {
+		t.Errorf("path = %q, want /v7/events (undefaulted variable satisfied by supply)", gotPath)
 	}
 }
 
@@ -369,10 +408,11 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 }
 
 // TestServerConfigurationPinnedShapesOnly verifies §9.2's configuration
-// value shapes end to end: the server point accepts {"key": ...} xor
-// {"url": ...} and NOTHING else — the retired name/bare-string/variables
-// spellings and a key+url combination are pre-dispatch refusals carrying
-// the teaching error, so no bytes ever leave under a non-pinned form.
+// value shapes end to end: the server point accepts {"key": ...,
+// "variables": {...}?} xor {"url": ...} and NOTHING else — the retired
+// name/bare-string spellings, a key+url combination, and variables riding
+// the url form are pre-dispatch refusals carrying the teaching error, so
+// no bytes ever leave under a non-pinned form.
 func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -418,6 +458,7 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 		{"retired name member", map[string]any{"name": "test"}, `member "name" is not pinned`},
 		{"both pinned members", map[string]any{"key": "test", "url": srv.URL}, `carries both "key" and "url"`},
 		{"neither pinned member", map[string]any{}, `carries neither "key" nor "url"`},
+		{"variables with url", map[string]any{"url": srv.URL, "variables": map[string]any{"env": "staging"}}, `carries "variables" with "url"`},
 	}
 	for _, tc := range refused {
 		before := requests.Load()
@@ -428,7 +469,7 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 		if !strings.Contains(err.Error(), tc.teach) {
 			t.Errorf("%s: refusal must teach the pin (%q), got %v", tc.name, tc.teach, err)
 		}
-		if !strings.Contains(err.Error(), `{"key": "<server-name>"}`) || !strings.Contains(err.Error(), `{"url": "<connection-url>"}`) {
+		if !strings.Contains(err.Error(), `{"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?}`) || !strings.Contains(err.Error(), `{"url": "<connection-url>"}`) {
 			t.Errorf("%s: refusal must name both pinned forms, got %v", tc.name, err)
 		}
 		if got := requests.Load(); got != before {

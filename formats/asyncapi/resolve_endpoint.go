@@ -75,13 +75,18 @@ type Endpoint struct {
 // own array order), else the document's `servers` map in lexicographic key
 // order, this specification's determinism rule. Consumer configuration
 // (bindingContext's `configuration.server`) carries one of §9.2's two
-// pinned, mutually exclusive value shapes: {"key": "<server-name>"} selects
-// a member of the effective set, xor {"url": "<connection-url>"} overrides
-// with a complete URL whose scheme decides the protocol, out-of-revision
-// schemes refused; any other spelling is refused with a teaching error.
-// Server variables substitute from declared defaults — an unsubstitutable
-// variable is a refusal (the pin carries no per-variable values; full
-// control is the url form).
+// pinned, mutually exclusive value shapes: {"key": "<server-name>",
+// "variables": {"<variable-name>": "<string-value>"}?} selects a member of
+// the effective set, the optional `variables` member supplying values for
+// the selected server's own declared variables; xor
+// {"url": "<connection-url>"} overrides with a complete URL whose scheme
+// decides the protocol, out-of-revision schemes refused; any other spelling
+// is refused with a teaching error, and `variables` composes only with
+// `key`. Server variables substitute supplied-else-default — unsupplied and
+// undefaulted is a refusal (AsyncAPI declares Server Variable defaults
+// OPTIONAL, so an undefaulted variable is satisfiable only by supply), an
+// undeclared supplied name is refused, never ignored, and a supplied value
+// outside the variable's declared enum is refused.
 //
 // The address point: the channel's declared `address` with every `{name}`
 // expression expanded from consumer-supplied parameter values
