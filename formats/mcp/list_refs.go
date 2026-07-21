@@ -74,7 +74,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		}
 		opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(tmpl.Name), "resource_template", usedKeys)
 		usedKeys[opKey] = "resource_template"
-		targets = append(targets, bindableTarget(refPrefixResources+tmpl.URITemplate, opKey, desc))
+		targets = append(targets, bindableTarget(refPrefixResourceTemplates+tmpl.URITemplate, opKey, desc))
 	}
 
 	sort.Slice(disc.Prompts, func(i, j int) bool { return disc.Prompts[i].Name < disc.Prompts[j].Name })

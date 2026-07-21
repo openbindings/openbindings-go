@@ -182,16 +182,22 @@ func ValidateGraph(g *Graph, operationKeys map[string]bool) []GraphValidationIss
 			continue
 		}
 
-		// Per-type field whitelist (schema-enforced in the format's JSON
-		// Schema; OG-V-17 falls out of the boundary nodes' empty whitelists).
+		// Field placement. The only field-placement failure is the explicit
+		// prohibition OG-V-17 (onError on a boundary node), enforced here as a
+		// rule (R10 — the format's schema no longer closes objects, so this
+		// cannot ride the schema). Any OTHER field the node type does not
+		// define is tolerated, not a failure: per R3 (§20) an unknown or
+		// misplaced field is ignored the way core OBI-T-02 treats one — a
+		// defined field on the wrong node type (maxIterations on operation)
+		// included. A diagnostic MAY be surfaced; it is never a refusal.
 		for _, f := range presentFields(node) {
-			if !fields.allowed[f] {
-				rule := ""
-				if f == "onError" && (node.Type == "input" || node.Type == "output") {
-					rule = "OG-V-17"
-				}
-				addIssue(rule, fmt.Sprintf("node %q (%s) does not permit field %q", key, node.Type, f), key)
+			if fields.allowed[f] {
+				continue
 			}
+			if f == "onError" && (node.Type == "input" || node.Type == "output") {
+				addIssue("OG-V-17", fmt.Sprintf("node %q (%s node) must not declare onError", key, node.Type), key)
+			}
+			// else: tolerated per R3, no issue.
 		}
 		for _, f := range fields.required {
 			if !hasField(node, f) {

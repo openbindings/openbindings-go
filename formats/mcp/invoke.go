@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	refPrefixTools     = "tools/"
-	refPrefixResources = "resources/"
-	refPrefixPrompts   = "prompts/"
+	refPrefixTools             = "tools/"
+	refPrefixResources         = "resources/"
+	refPrefixResourceTemplates = "resourceTemplates/"
+	refPrefixPrompts           = "prompts/"
 )
 
 // nextProgressToken provides a unique progress token per tool invocation.
@@ -109,7 +110,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	noInput := args.Binding != nil && args.InputSchema == nil
 	var toolArgs map[string]any      // nil means absent: the arguments member is omitted (§9.1)
 	var promptArgs map[string]string // nil means absent: the arguments member is omitted (§9.1)
-	if entityType != "resources" {
+	if entityType != "resources" && entityType != "resourceTemplates" {
 		if noInput {
 			_ = inv.CloseInput()
 		} else {
@@ -192,7 +193,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// --- Resource input (post-resolution: static vs template decides the
 	// interaction shape, §8/§9.1). ---
 	targetURI := name
-	if entityType == "resources" {
+	if entityType == "resources" || entityType == "resourceTemplates" {
 		switch kind {
 		case targetStaticResource:
 			// Static resources take no input (§9.1): the input side closes
@@ -623,16 +624,23 @@ func promptArguments(v any) (map[string]string, *openbindings.InvocationError) {
 // Returns (entityType, name, error).
 // Examples:
 //
-//	"tools/get_weather"              → ("tools", "get_weather", nil)
-//	"resources/file:///src/main.rs"  → ("resources", "file:///src/main.rs", nil)
-//	"prompts/code_review"            → ("prompts", "code_review", nil)
+//	"tools/get_weather"                        → ("tools", "get_weather", nil)
+//	"resources/file:///src/main.rs"            → ("resources", "file:///src/main.rs", nil)
+//	"resourceTemplates/file:///logs/{date}"    → ("resourceTemplates", "file:///logs/{date}", nil)
+//	"prompts/code_review"                      → ("prompts", "code_review", nil)
+//
+// The four entities mirror MCP's four listable collections (§7). resources and
+// resourceTemplates are distinct namespaces, so a resource URI and a
+// byte-identical template string never collide. (resourceTemplates/ is checked
+// before resources/ though the two cannot prefix-collide, "resources/" not
+// being a prefix of "resourceTemplates/".)
 func parseRef(ref string) (entityType string, name string, err error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return "", "", fmt.Errorf("empty MCP ref")
 	}
 
-	for _, prefix := range []string{refPrefixTools, refPrefixResources, refPrefixPrompts} {
+	for _, prefix := range []string{refPrefixTools, refPrefixResourceTemplates, refPrefixResources, refPrefixPrompts} {
 		if strings.HasPrefix(ref, prefix) {
 			name := strings.TrimPrefix(ref, prefix)
 			if name == "" {
@@ -643,8 +651,8 @@ func parseRef(ref string) (entityType string, name string, err error) {
 		}
 	}
 
-	return "", "", fmt.Errorf("MCP ref %q must start with %q, %q, or %q",
-		ref, refPrefixTools, refPrefixResources, refPrefixPrompts)
+	return "", "", fmt.Errorf("MCP ref %q must start with %q, %q, %q, or %q",
+		ref, refPrefixTools, refPrefixResources, refPrefixResourceTemplates, refPrefixPrompts)
 }
 
 // validateEndpoint checks MCP-D-02's location requirement offline, without

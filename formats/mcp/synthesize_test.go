@@ -360,7 +360,7 @@ func TestSynthesizeInterface_PinnedListingIsOffline(t *testing.T) {
 	wantRefs := map[string]string{
 		"get_weather." + DefaultSourceName: "tools/get_weather",
 		"status." + DefaultSourceName:      "resources/app://status",
-		"file." + DefaultSourceName:        "resources/file:///{path}",
+		"file." + DefaultSourceName:        "resourceTemplates/file:///{path}",
 		"greet." + DefaultSourceName:       "prompts/greet",
 	}
 	if len(iface.Operations) != 4 {

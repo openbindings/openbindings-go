@@ -275,7 +275,7 @@ func TestPin_ResolutionRefusalsAreOffline(t *testing.T) {
 		},
 		{
 			"ambiguous template",
-			"resources/file:///x/{id}",
+			"resourceTemplates/file:///x/{id}",
 			map[string]any{"resourceTemplates": []any{
 				map[string]any{"uriTemplate": "file:///x/{id}"},
 				map[string]any{"uriTemplate": "file:///x/{id}"},
@@ -341,7 +341,7 @@ func TestPin_TemplateExpansion(t *testing.T) {
 	defer invoker.Close()
 
 	pin := map[string]any{"resourceTemplates": []any{map[string]any{"uriTemplate": "file:///logs/{date}"}}}
-	call := invoker.InvokeBinding(bg(), pinArgs(ts.URL, "resources/file:///logs/{date}", pin, nil))
+	call := invoker.InvokeBinding(bg(), pinArgs(ts.URL, "resourceTemplates/file:///logs/{date}", pin, nil))
 	if err := call.Write(bg(), map[string]any{"date": "2026-07-15"}); err != nil {
 		t.Fatal(err)
 	}
@@ -706,7 +706,7 @@ func TestTemplate_LiveExpansion(t *testing.T) {
 	invoker := NewInvoker()
 	defer invoker.Close()
 
-	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "resources/file:///logs/{date}", nil))
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "resourceTemplates/file:///logs/{date}", nil))
 	if err := call.Write(bg(), map[string]any{"date": "2026-07-15"}); err != nil {
 		t.Fatal(err)
 	}
@@ -736,7 +736,7 @@ func TestTemplate_AbsentInputExpandsUndefined(t *testing.T) {
 	invoker := NewInvoker()
 	defer invoker.Close()
 
-	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "resources/file:///logs/{date}", nil))
+	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "resourceTemplates/file:///logs/{date}", nil))
 	_ = call.Close() // absent input
 	v, err := openbindings.Single(shortCtx(t), call.Outputs())
 	if err != nil {
@@ -770,7 +770,7 @@ func TestTemplate_InputRefusals(t *testing.T) {
 			invoker := NewInvoker()
 			defer invoker.Close()
 
-			call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "resources/file:///logs/{date}", nil))
+			call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "resourceTemplates/file:///logs/{date}", nil))
 			if err := call.Write(bg(), tc.input); err != nil {
 				t.Fatal(err)
 			}
