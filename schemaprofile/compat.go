@@ -209,9 +209,13 @@ func compat(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 	return true, "", nil
 }
 
-// missingTypes returns a quoted comma-separated list of types in a that are
-// not in b, sorted lexicographically so the reason string is deterministic
-// (type sets are Go maps; iteration order must never leak into diagnostics).
+// missingTypes returns a comma-separated list of types in a that are not in
+// b, sorted lexicographically so the reason string is deterministic (type
+// sets are Go maps; iteration order must never leak into diagnostics). Type
+// names render via canonicalKey — the JCS (RFC 8785) string rendering member
+// names and values use. For the seven legitimate JSON Schema type names this
+// is byte-identical to the former %q; only pathological names reachable via
+// non-normalized input render differently.
 func missingTypes(a, b map[string]struct{}) string {
 	if a == nil {
 		return "all types"
@@ -219,7 +223,7 @@ func missingTypes(a, b map[string]struct{}) string {
 	var missing []string
 	for k := range a {
 		if b == nil {
-			missing = append(missing, fmt.Sprintf("%q", k))
+			missing = append(missing, canonicalKey(k))
 			continue
 		}
 		if _, ok := b[k]; ok {
@@ -230,7 +234,7 @@ func missingTypes(a, b map[string]struct{}) string {
 				continue
 			}
 		}
-		missing = append(missing, fmt.Sprintf("%q", k))
+		missing = append(missing, canonicalKey(k))
 	}
 	sort.Strings(missing)
 	if len(missing) == 1 {

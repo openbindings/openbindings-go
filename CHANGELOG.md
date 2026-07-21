@@ -27,6 +27,18 @@
   alignment tables (`schemaprofile/reasons_test.go` ↔
   `packages/sdk/src/schema-profile/reasons.test.ts`).
 
+- **Type names in comparison reason strings join the JCS canon** (a direct
+  extension of ruling (2) above). The missing-type diagnostics (`type:
+  candidate does not allow ...` / `type: candidate allows ... but target
+  does not`) now render type names via the same JCS (RFC 8785) string
+  rendering member names and values use, instead of Go `%q`. For the seven
+  legitimate JSON Schema type names the output is byte-identical to before
+  (verified, not assumed); the change is visible only for pathological type
+  names reachable via non-normalized input (a name carrying a quote,
+  backslash, or control character — e.g. U+0001 now renders `\u0001`, not
+  Go's `\x01`). Pinned byte-for-byte against the TS SDK in the mirrored
+  alignment tables.
+
 - **OBI-D-05 literal form is enforced.** A percent-encoded same-document
   fragment (`#/schemas/T%61sk`) now fails validation at OBI positions, and the
   OBI-D-16 resolver no longer percent-decodes — the non-conformant spelling is
@@ -319,6 +331,14 @@
 - **CI corpus gating (`OB_CORPUS_REQUIRED`)**: CI checks out both corpus roots
   (spec + interfaces) and every corpus locator fails loudly when a corpus is
   required and absent; local skip-if-absent behavior is unchanged.
+
+- **Conformance-runner `requiresSupports` annotation**: the corpus harness
+  honors the per-test `requiresSupports: "X.Y.Z"` annotation — the test is
+  administered only when this SDK's OBI-T-04 version-acceptance predicate
+  (`IsSupportedVersion`) accepts X.Y.Z; otherwise it is skipped and reported
+  as a skip, never a failure, alongside the existing `requiresMaxTested` /
+  `requiresMinSupported` gates. A corpus without the annotation runs
+  unchanged.
 
 - **`Invocation.InputClosed()`** — a channel closed once the invocation's input side has closed: by the caller's `Close`, by the binding from below (a unary binding after its first read), or by a terminal transition. Lets consumers that pipe a stream into an invocation (the operation-graph conduit) observe non-acceptance without probing with a failing `Write`. Implemented by `InvocationImpl` and forwarded by `TypedInvocation`.
 

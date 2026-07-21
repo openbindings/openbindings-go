@@ -54,6 +54,12 @@ var reasonCases = []reasonCase{
 	{"output untyped candidate vs typed target", "output",
 		`{"type":["string"]}`, `{"minimum":1}`,
 		`type: candidate allows all types but target does not`},
+	// Type names join the JCS canon (extension of the member-name escaping
+	// ruling): the expected string derives from JSON.stringify semantics
+	// (canonicalKey), not Go %q. The TS table carries the identical case.
+	{"pathological type name renders as JCS", "input",
+		`{"type":["string","weird\"type"]}`, `{"type":["string"]}`,
+		`type: candidate does not allow "weird\"type"`},
 
 	// --- const/enum: input (deciding keyword = candidate's) ---
 	{"input const vs const mismatch", "input",
