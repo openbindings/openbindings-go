@@ -161,10 +161,13 @@ func configIndex(raw any) (int, bool) {
 }
 
 // substituteServerVariables substitutes each declared server variable with
-// the supplied value (validated against the variable's enum, per the OAS)
-// or its declared default. A variable with neither a supplied value nor a
-// declared default, and a supplied variable the entry does not declare, are
-// loud errors.
+// the supplied value or its declared default. A variable with neither a
+// supplied value nor a declared default, and a supplied variable the entry
+// does not declare, are loud errors. A declared enum does NOT gate: it is the
+// author's expectation, not a boundary (openbindings.openapi@1 §9.3) — the
+// same configuration point admits a complete base-URL override that bypasses
+// the declaration entirely, so refusing a narrower substitution would be
+// incoherent. A caller MAY surface the enum as choice metadata.
 func substituteServerVariables(srv *openapi3.Server, supplied map[string]string) (string, error) {
 	u := srv.URL
 	names := make([]string, 0, len(srv.Variables))
@@ -183,18 +186,6 @@ func substituteServerVariables(srv *openapi3.Server, supplied map[string]string)
 		}
 		if val == "" && v.Default == "" {
 			return "", fmt.Errorf("server %q: variable %q has no supplied value and no declared default", srv.URL, name)
-		}
-		if len(v.Enum) > 0 {
-			found := false
-			for _, e := range v.Enum {
-				if e == val {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return "", fmt.Errorf("server %q: variable %q value %q is not in the declared enum %v", srv.URL, name, val, v.Enum)
-			}
 		}
 		u = strings.ReplaceAll(u, "{"+name+"}", val)
 	}

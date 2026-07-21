@@ -237,15 +237,16 @@ func TestResolveTarget_ServerVariablesCarriage(t *testing.T) {
 		t.Errorf("undefaulted refusal = %q\n                 want %q", err.Error(), want)
 	}
 
-	// A supplied value outside the declared enum is refused loudly.
-	_, err = resolveTarget(doc, nil, cfg(map[string]any{
+	// A supplied value outside the declared enum is NOT refused (§9.2, R1):
+	// the enum is the author's expectation, not a boundary. It substitutes.
+	target, err = resolveTarget(doc, nil, cfg(map[string]any{
 		"key": "tiered", "variables": map[string]any{"env": "qa"},
 	}))
-	if err == nil {
-		t.Fatal("a supplied value outside the declared enum must refuse")
+	if err != nil {
+		t.Fatalf("an out-of-enum value must not be refused: %v", err)
 	}
-	if want := `server "tiered": variable "env" value "qa" is not in the declared enum [prod staging]`; err.Error() != want {
-		t.Errorf("enum refusal = %q, want %q", err.Error(), want)
+	if target.ServerURL != "wss://qa.example.com/v1" {
+		t.Errorf("out-of-enum substitution: url = %q, want wss://qa.example.com/v1", target.ServerURL)
 	}
 
 	// A supplied name the selected server does not declare is refused,
@@ -267,7 +268,7 @@ func TestResolveTarget_ServerVariablesCarriage(t *testing.T) {
 // implementations carry it identically", and silently tolerating extra
 // spellings would defeat it.
 func TestResolveTarget_ShapeTeachingErrors(t *testing.T) {
-	const tail = `the pinned shapes (openbindings.asyncapi@1 §9.2) are {"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?} (select a member of the effective server set, "variables" optionally supplying its declared server variables) xor {"url": "<connection-url>"} (override with a complete connection URL); the two forms are mutually exclusive and "variables" composes only with "key"`
+	const tail = `this implementation's accepted shapes (openbindings.asyncapi@1 §9.2 semantics) are {"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?} (select a member of the effective server set, "variables" optionally supplying its declared server variables) xor {"url": "<connection-url>"} (override with a complete connection URL); the two forms are mutually exclusive and "variables" composes only with "key"`
 	doc := &document{
 		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https"},

@@ -105,9 +105,13 @@ func defaultServer(candidates []namedServer) *namedServer {
 // would have selected still applies (§9.5). No resolvable server is a
 // pre-dispatch refusal.
 //
-// The `configuration.server` value is pinned by §9.2 ("Configuration value
-// shapes") so two implementations carry it identically — an object, exactly
-// one of two mutually exclusive forms:
+// The `configuration.server` value SHAPE is this SDK's own carriage, not
+// specification content: §9.2 pins what may be supplied and the refusals, but
+// the concrete value a consumer hands to the point is implementation surface
+// (R1). This SDK carries it as an object in exactly one of two mutually
+// exclusive forms, and validates that shape as hygiene (a mistyped member is
+// worth a loud error, not silent tolerance) — another implementation may
+// carry it however it likes:
 //
 //	{"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?}
 //	                               // select a member of the effective server set,
@@ -116,12 +120,11 @@ func defaultServer(candidates []namedServer) *namedServer {
 //
 // Every other spelling (a bare string, the retired `name` member, key+url
 // together, variables riding the url form) is refused loudly with a
-// teaching error naming the two pinned forms. Under {"key": ...} selection,
+// teaching error naming the two forms. Under {"key": ...} selection,
 // server variables substitute supplied-else-default-else-refusal: names are
 // the selected server's own declared variable names (an undeclared supplied
-// name is refused, never ignored), values are strings, and a supplied value
-// outside the variable's declared enum is refused (upstream SHOULD,
-// hardened to a refusal — the specification's own pin).
+// name is refused, never ignored), values are strings. A declared enum does
+// not gate the value — it is the author's expectation, not a boundary (§9.2).
 //
 // The legacy context.metadata.baseURL override is honored below the
 // configuration point (the configuration point is the contract surface).
@@ -147,21 +150,23 @@ func resolveTarget(doc *document, ch *channel, bindCtx map[string]any) (resolved
 	return assembleServer(def, nil)
 }
 
-// serverConfigPinnedShapes is the teaching tail of every non-pinned-form
-// refusal, byte-identical to the TS SDK's: §9.2 pins the value "so two
-// implementations carry it identically", and silently tolerating extra
-// spellings would defeat the pin.
-const serverConfigPinnedShapes = `the pinned shapes (openbindings.asyncapi@1 §9.2) are {"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?} (select a member of the effective server set, "variables" optionally supplying its declared server variables) xor {"url": "<connection-url>"} (override with a complete connection URL); the two forms are mutually exclusive and "variables" composes only with "key"`
+// serverConfigShapes is the teaching tail of every unrecognized-form refusal.
+// The shape is this SDK's own carriage (§9.2 pins the semantics, not the
+// value shape — R1); this SDK and the TS SDK keep the same shape by choice for
+// a consistent developer experience, not because the specification requires
+// it. Rejecting an unrecognized spelling is hygiene: a mistyped member should
+// fail loudly, not be silently tolerated.
+const serverConfigShapes = `this implementation's accepted shapes (openbindings.asyncapi@1 §9.2 semantics) are {"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?} (select a member of the effective server set, "variables" optionally supplying its declared server variables) xor {"url": "<connection-url>"} (override with a complete connection URL); the two forms are mutually exclusive and "variables" composes only with "key"`
 
 // resolveServerConfig applies one configured `server` value against the
 // effective set, accepting exactly §9.2's pinned value shapes:
 // {"key": "<server-name>", "variables": {...}?} xor
 // {"url": "<connection-url>"}. Every other form is a loud refusal carrying
-// serverConfigPinnedShapes.
+// serverConfigShapes.
 func resolveServerConfig(raw any, candidates []namedServer, def *namedServer) (resolvedTarget, error) {
 	v, ok := raw.(map[string]any)
 	if !ok {
-		return resolvedTarget{}, fmt.Errorf("configuration.server must be an object: %s", serverConfigPinnedShapes)
+		return resolvedTarget{}, fmt.Errorf("configuration.server must be an object: %s", serverConfigShapes)
 	}
 
 	var unpinned []string
@@ -180,7 +185,7 @@ func resolveServerConfig(raw any, candidates []namedServer, def *namedServer) (r
 		if len(unpinned) > 1 {
 			noun, verb = "members", "are"
 		}
-		return resolvedTarget{}, fmt.Errorf("configuration.server %s %s %s not pinned: %s", noun, strings.Join(quoted, ", "), verb, serverConfigPinnedShapes)
+		return resolvedTarget{}, fmt.Errorf("configuration.server %s %s %s not pinned: %s", noun, strings.Join(quoted, ", "), verb, serverConfigShapes)
 	}
 
 	rawKey, hasKey := v["key"]
@@ -188,15 +193,15 @@ func resolveServerConfig(raw any, candidates []namedServer, def *namedServer) (r
 	_, hasVars := v["variables"]
 	switch {
 	case hasKey && hasURL:
-		return resolvedTarget{}, fmt.Errorf(`configuration.server carries both "key" and "url": %s`, serverConfigPinnedShapes)
+		return resolvedTarget{}, fmt.Errorf(`configuration.server carries both "key" and "url": %s`, serverConfigShapes)
 	case !hasKey && !hasURL:
-		return resolvedTarget{}, fmt.Errorf(`configuration.server carries neither "key" nor "url": %s`, serverConfigPinnedShapes)
+		return resolvedTarget{}, fmt.Errorf(`configuration.server carries neither "key" nor "url": %s`, serverConfigShapes)
 	case hasVars && hasURL:
-		return resolvedTarget{}, fmt.Errorf(`configuration.server carries "variables" with "url": %s`, serverConfigPinnedShapes)
+		return resolvedTarget{}, fmt.Errorf(`configuration.server carries "variables" with "url": %s`, serverConfigShapes)
 	case hasKey:
 		key, ok := rawKey.(string)
 		if !ok || key == "" {
-			return resolvedTarget{}, fmt.Errorf("configuration.server.key must be a non-empty string: %s", serverConfigPinnedShapes)
+			return resolvedTarget{}, fmt.Errorf("configuration.server.key must be a non-empty string: %s", serverConfigShapes)
 		}
 		supplied, err := suppliedServerVariables(v)
 		if err != nil {
@@ -210,7 +215,7 @@ func resolveServerConfig(raw any, candidates []namedServer, def *namedServer) (r
 	default:
 		full, ok := rawURL.(string)
 		if !ok || full == "" {
-			return resolvedTarget{}, fmt.Errorf("configuration.server.url must be a non-empty string: %s", serverConfigPinnedShapes)
+			return resolvedTarget{}, fmt.Errorf("configuration.server.url must be a non-empty string: %s", serverConfigShapes)
 		}
 		return fullURLOverride(full, def)
 	}
@@ -219,7 +224,7 @@ func resolveServerConfig(raw any, candidates []namedServer, def *namedServer) (r
 // suppliedServerVariables decodes the key form's optional `variables`
 // member: an object of string values (§9.2 — upstream's Server Variable
 // value space), any other shape a loud refusal carrying
-// serverConfigPinnedShapes. Which NAMES are admissible is the selected
+// serverConfigShapes. Which NAMES are admissible is the selected
 // server's business, checked in assembleServer.
 func suppliedServerVariables(v map[string]any) (map[string]string, error) {
 	rawVars, hasVars := v["variables"]
@@ -228,7 +233,7 @@ func suppliedServerVariables(v map[string]any) (map[string]string, error) {
 	}
 	m, ok := rawVars.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("configuration.server.variables must be an object of string values: %s", serverConfigPinnedShapes)
+		return nil, fmt.Errorf("configuration.server.variables must be an object of string values: %s", serverConfigShapes)
 	}
 	supplied := make(map[string]string, len(m))
 	names := make([]string, 0, len(m))
@@ -239,7 +244,7 @@ func suppliedServerVariables(v map[string]any) (map[string]string, error) {
 	for _, name := range names {
 		s, ok := m[name].(string)
 		if !ok {
-			return nil, fmt.Errorf("configuration.server.variables[%q] must be a string value: %s", name, serverConfigPinnedShapes)
+			return nil, fmt.Errorf("configuration.server.variables[%q] must be a string value: %s", name, serverConfigShapes)
 		}
 		supplied[name] = s
 	}
@@ -300,13 +305,13 @@ func assembleServer(member *namedServer, supplied map[string]string) (resolvedTa
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		v, declared := srv.Variables[name]
-		if !declared {
+		if _, declared := srv.Variables[name]; !declared {
 			return resolvedTarget{}, fmt.Errorf("configuration.server.variables[%q] names no declared variable of server %q", name, member.Name)
 		}
-		if len(v.Enum) > 0 && !containsString(v.Enum, supplied[name]) {
-			return resolvedTarget{}, fmt.Errorf("server %q: variable %q value %q is not in the declared enum %v", member.Name, name, supplied[name], v.Enum)
-		}
+		// A declared enum does not gate the supplied value (§9.2): it is the
+		// author's expectation, not a boundary, and the same point admits a
+		// full-URL override that bypasses the declaration. Undeclared names
+		// still refuse (above); enum values do not.
 	}
 
 	host, err := substituteServerVariables(member, srv.Host, supplied)
@@ -335,9 +340,9 @@ func assembleServer(member *namedServer, supplied map[string]string) (resolvedTa
 // (ASYNC-P-04). AsyncAPI declares a Server Variable's default OPTIONAL, so
 // an undefaulted variable is satisfiable only by supply; unsupplied and
 // undefaulted is a pre-dispatch refusal, and literal braces never reach the
-// wire. A value outside the variable's declared non-empty enum is refused
-// loudly — supplied values per §9.2's hardened pin, declared defaults per
-// the declaration's own constraint, incorporated.
+// wire. A declared enum does not gate the value (§9.2): it is the author's
+// expectation, not a boundary, and the same configuration point admits a
+// full-URL override that bypasses the declaration entirely.
 func substituteServerVariables(member *namedServer, template string, supplied map[string]string) (string, error) {
 	out := template
 	for _, name := range templateExpressions(template) {
@@ -348,9 +353,6 @@ func substituteServerVariables(member *namedServer, template string, supplied ma
 			} else {
 				return "", fmt.Errorf(`server %q: variable %q has no supplied value and no declared default (supply one at the server configuration point's "variables" member)`, member.Name, name)
 			}
-		}
-		if v, declared := member.Server.Variables[name]; declared && len(v.Enum) > 0 && !containsString(v.Enum, val) {
-			return "", fmt.Errorf("server %q: variable %q value %q is not in the declared enum %v", member.Name, name, val, v.Enum)
 		}
 		out = strings.ReplaceAll(out, "{"+name+"}", val)
 	}
@@ -438,8 +440,8 @@ func resolveAddress(ch *channel, channelName string, cfg addressConfig) (string,
 // expandAddress expands every `{name}` expression in the channel's declared
 // address from the consumer-supplied parameter value, else the declared
 // parameter's `default`; anything left unresolved is a pre-dispatch
-// refusal. A supplied value outside a declared non-empty enum is refused
-// loudly (the Parameter Object's own constraint, incorporated).
+// refusal. A declared enum does not gate the value (§9.2): it is the author's
+// expectation, not a boundary, consistent with the server-variable point.
 func expandAddress(ch *channel, channelName string, supplied map[string]string) (string, error) {
 	out := ch.Address
 	for _, name := range templateExpressions(ch.Address) {
@@ -450,9 +452,6 @@ func expandAddress(ch *channel, channelName string, supplied map[string]string) 
 			} else {
 				return "", fmt.Errorf("channel %q: address parameter %q has no supplied value and no declared default", channelName, name)
 			}
-		}
-		if p, declared := ch.Parameters[name]; declared && len(p.Enum) > 0 && !containsString(p.Enum, val) {
-			return "", fmt.Errorf("channel %q: address parameter %q value %q is not in the declared enum %v", channelName, name, val, p.Enum)
 		}
 		out = strings.ReplaceAll(out, "{"+name+"}", val)
 	}
@@ -493,11 +492,3 @@ func joinURL(base, path string) string {
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
 }
 
-func containsString(list []string, v string) bool {
-	for _, s := range list {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}

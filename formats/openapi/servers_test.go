@@ -103,8 +103,11 @@ func TestResolveServer_ConfigurationPoint(t *testing.T) {
 	if got, _ := resolveServer(doc, nil, nil, ctxWith(map[string]any{"variables": map[string]any{"env": "staging"}}), ""); got != "https://staging.example.com" {
 		t.Errorf("variables = %q", got)
 	}
-	if _, err := resolveServer(doc, nil, nil, ctxWith(map[string]any{"variables": map[string]any{"env": "prod"}}), ""); err == nil {
-		t.Error("an enum-violating variable value must refuse loudly")
+	// An out-of-enum value is NOT refused (§9.3, R1): the enum is the
+	// author's expectation, not a boundary; a full base-URL override bypasses
+	// the declaration anyway.
+	if got, err := resolveServer(doc, nil, nil, ctxWith(map[string]any{"variables": map[string]any{"env": "prod"}}), ""); err != nil || got != "https://prod.example.com" {
+		t.Errorf("out-of-enum value must substitute, got %q err %v", got, err)
 	}
 	if _, err := resolveServer(doc, nil, nil, ctxWith(map[string]any{"variables": map[string]any{"nope": "x"}}), ""); err == nil {
 		t.Error("an undeclared variable name must refuse loudly")
