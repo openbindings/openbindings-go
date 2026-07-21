@@ -586,6 +586,113 @@ func TestInvoke_BinaryOnlyBodyRefused(t *testing.T) {
 	}
 }
 
+// §9.2 (OAPI-P-04): a degenerate media/schema combination — selection
+// landing on multipart/form-data or application/x-www-form-urlencoded
+// while the declared body schema does not flatten (§9.1's declaration-only
+// determination: no properties and no explicit object type), or on
+// text/plain while it does — has no OAS-defined wire form and refuses
+// pre-dispatch rather than inventing carriage.
+func TestInvoke_DegenerateMediaSchemaCombinationRefused(t *testing.T) {
+	const multipartMsg = `request media selection (OAPI-P-04) lands on multipart/form-data, but the declared body schema does not flatten (no properties and no explicit object type): openbindings.openapi@1 defines no request carriage for this combination`
+	const urlencodedMsg = `request media selection (OAPI-P-04) lands on application/x-www-form-urlencoded, but the declared body schema does not flatten (no properties and no explicit object type): openbindings.openapi@1 defines no request carriage for this combination`
+	const textMsg = `request media selection (OAPI-P-04) lands on text/plain, but the declared body schema flattens (an object contract): openbindings.openapi@1 defines no request carriage for this combination`
+	cases := []struct {
+		name    string
+		content string
+		input   map[string]any
+		wantMsg string
+	}{
+		{
+			"multipart-only with a scalar schema",
+			`{"multipart/form-data": {"schema": {"type": "string"}}}`,
+			map[string]any{"body": "x"},
+			multipartMsg,
+		},
+		{
+			// §9.1's determination is declaration-only: a TYPELESS schema
+			// (neither `properties` nor an explicit object type) does not
+			// flatten, so the refusal fires for it exactly as for scalars.
+			"multipart-only with a typeless schema",
+			`{"multipart/form-data": {"schema": {"description": "opaque"}}}`,
+			map[string]any{"body": "x"},
+			multipartMsg,
+		},
+		{
+			"urlencoded-only with a scalar schema",
+			`{"application/x-www-form-urlencoded": {"schema": {"type": "integer"}}}`,
+			map[string]any{"body": float64(1)},
+			urlencodedMsg,
+		},
+		{
+			"text-only with an object schema",
+			`{"text/plain": {"schema": {"type": "object", "properties": {"a": {"type": "string"}}}}}`,
+			map[string]any{"a": "x"},
+			textMsg,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+			spec := fmt.Sprintf(`{
+			  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+			  "servers": [{"url": %q}],
+			  "paths": {"/op": {"post": {
+			    "operationId": "op",
+			    "requestBody": {"required": true, "content": %s},
+			    "responses": {"200": {"description": "ok"}}
+			  }}}
+			}`, srv.URL, tc.content)
+			_, ierr := invokeWith(t, spec, "#/paths/~1op/post", tc.input)
+			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
+				t.Fatalf("expected the degenerate-combination refusal, got %v", ierr)
+			}
+			if ierr.Message != tc.wantMsg {
+				t.Errorf("refusal message = %q, want %q", ierr.Message, tc.wantMsg)
+			}
+			if requests.Load() != 0 {
+				t.Error("refusal must precede dispatch")
+			}
+		})
+	}
+}
+
+// The degenerate-combination refusal reaches only artifacts declaring NO
+// JSON-family request media: a co-declared JSON media type is selected
+// first (JSON carries any shape), so the same scalar schema dispatches
+// over JSON with no refusal.
+func TestInvoke_DegenerateCombinationUnreachableWithJSONCoDeclared(t *testing.T) {
+	var gotCT string
+	var gotBody []byte
+	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/op": {"post": {
+	    "operationId": "op",
+	    "requestBody": {"required": true, "content": {
+	      "multipart/form-data": {"schema": {"type": "string"}},
+	      "application/json": {"schema": {"type": "string"}}
+	    }},
+	    "responses": {"200": {"description": "ok"}}
+	  }}}
+	}`, srv.URL)
+	_, ierr := invokeWith(t, spec, "#/paths/~1op/post", map[string]any{"body": "x"})
+	if ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	if gotCT != "application/json" || string(gotBody) != `"x"` {
+		t.Errorf("request = (%q, %q), want application/json with the synthetic body %q", gotCT, gotBody, `"x"`)
+	}
+	if requests.Load() != 1 {
+		t.Errorf("requests = %d, want 1", requests.Load())
+	}
+}
+
 // urlencoded selection serializes fields per the OAS encoding rules.
 func TestInvoke_URLEncodedBodyOnTheWire(t *testing.T) {
 	var gotCT string

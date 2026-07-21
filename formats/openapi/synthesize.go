@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -329,6 +330,24 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 
 	if op.RequestBody != nil && op.RequestBody.Value != nil {
 		rb := op.RequestBody.Value
+		// §9.2's degenerate media/schema combination (OAPI-P-04), surfaced
+		// at synthesis time: when the operation's declared request media
+		// cannot carry the contract this schema publishes, a conformant
+		// invoker refuses the operation before dispatch — warn here so
+		// authors hear it when the contract is produced, not at first
+		// dispatch. The selection is not re-derived: planRequestBody
+		// (media.go) is the one deciding site, and its typed refusal is the
+		// warning's trigger.
+		if warn != nil {
+			var dme *degenerateMediaError
+			if _, err := planRequestBody(op); errors.As(err, &dme) {
+				warn(openbindings.SynthesizerWarning{
+					Code:    "openapi.media_schema_mismatch",
+					Message: dme.msg + "; a conformant invoker refuses this operation before dispatch",
+					Path:    fmt.Sprintf("operations.%s.input", opKey),
+				})
+			}
+		}
 		bodySchema := requestBodyToSchema(rb)
 		if bodySchema != nil {
 			// Resolve a $ref body BEFORE the flatten decision: bodies

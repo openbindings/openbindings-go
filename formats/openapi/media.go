@@ -68,14 +68,24 @@ type bodyPlan struct {
 	props     map[string]bool // declared top-level body property names (object mode)
 }
 
+// degenerateMediaError is §9.2's degenerate media/schema combination
+// refusal (OAPI-P-04): the selected request media type has no OAS-defined
+// wire form for the declared body schema. A distinct type so synthesis
+// (synthesize.go) can surface the same fact as the
+// openapi.media_schema_mismatch warning without re-deriving the selection.
+type degenerateMediaError struct{ msg string }
+
+func (e *degenerateMediaError) Error() string { return e.msg }
+
 // planRequestBody selects the request media type from the operation's
 // DECLARED requestBody.content per OAPI-P-04's preference order: exact
 // application/json, then the lexicographically least +json type, then
 // multipart/form-data, then application/x-www-form-urlencoded, then
 // text/plain (whose string-value condition is checked after routing, when
-// the body value exists). An operation declaring only media types outside
-// these families is refused loudly before dispatch: its request carriage is
-// undefined in revision 1.
+// the body value exists). Two refusals are loud and pre-dispatch: an
+// operation declaring only media types outside these families (its request
+// carriage is undefined in revision 1), and a degenerate media/schema
+// combination the OAS defines no wire form for (§9.2).
 func planRequestBody(op *openapi3.Operation) (*bodyPlan, error) {
 	if !hasRequestBody(op) {
 		return &bodyPlan{}, nil
@@ -143,23 +153,40 @@ func planRequestBody(op *openapi3.Operation) (*bodyPlan, error) {
 		family:    family,
 	}
 
-	// Flatten mode. text/plain bodies are scalar by nature: they always ride
-	// the synthetic `body` property. JSON-family bodies route through the
-	// §9.1 determination SHARED with synthesis (bodySchemaFlattens,
-	// synthesize.go): synthetic exactly when the declared schema neither
-	// declares `properties` nor an explicit object type — a TYPELESS schema
-	// included — so the wire always agrees with the published contract.
-	// Multipart and urlencoded bodies are field maps by construction. The
-	// two declaration facts here mirror isObjectTypedSchema's raw-map
-	// reading in kin-openapi's typed form: Types.Is("object") is true for
-	// the 3.0 string form and the single-element 3.1 type array only.
+	// Flatten mode and the degenerate-combination refusal (§9.2). The
+	// flatten determination is §9.1's, SHARED with synthesis
+	// (bodySchemaFlattens, synthesize.go): a declared schema flattens iff
+	// it declares `properties` or an explicit object type — a TYPELESS
+	// schema does not — so the wire always agrees with the published
+	// contract. The two declaration facts here mirror isObjectTypedSchema's
+	// raw-map reading in kin-openapi's typed form: Types.Is("object") is
+	// true for the 3.0 string form and the single-element 3.1 type array
+	// only.
+	//
+	// A combination the OAS defines no wire form for refuses pre-dispatch
+	// rather than inventing one (OAPI-P-04): multipart and form-urlencoded
+	// serialize exclusively over object properties, so a non-flattening
+	// schema gives them nothing to implement; the text lane is a
+	// single-string wire, so a flattening schema's object contract cannot
+	// ride it. Reachable only when no JSON-family media is declared — JSON
+	// is preferred and carries any shape.
+	schema := mediaSchema(plan.media)
+	flattens := true // no declared schema: an open object body
+	if schema != nil {
+		flattens = bodySchemaFlattens(schema.Properties != nil, schema.Type.Is("object"))
+	}
 	switch family {
-	case familyText:
-		plan.synthetic = true
 	case familyJSON:
-		if schema := mediaSchema(plan.media); schema != nil {
-			plan.synthetic = !bodySchemaFlattens(schema.Properties != nil, schema.Type.Is("object"))
+		plan.synthetic = !flattens
+	case familyMultipart, familyURLEncoded:
+		if schema != nil && !flattens {
+			return nil, &degenerateMediaError{msg: fmt.Sprintf("request media selection (OAPI-P-04) lands on %s, but the declared body schema does not flatten (no properties and no explicit object type): openbindings.openapi@1 defines no request carriage for this combination", plan.mediaType)}
 		}
+	case familyText:
+		if schema != nil && flattens {
+			return nil, &degenerateMediaError{msg: "request media selection (OAPI-P-04) lands on text/plain, but the declared body schema flattens (an object contract): openbindings.openapi@1 defines no request carriage for this combination"}
+		}
+		plan.synthetic = true
 	}
 	if !plan.synthetic {
 		plan.props = mediaSchemaProps(plan.media)
