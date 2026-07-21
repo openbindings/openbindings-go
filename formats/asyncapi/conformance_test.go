@@ -155,10 +155,12 @@ func TestAddressParameterEnumViolationRefused(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestServerVariablesAndPathnameAssembly verifies the target URL assembly:
-// server variables substitute into host and pathname from consumer-supplied
-// values, else declared defaults; the path is the pathname concatenated
-// with the expanded address, exactly one `/` at the join; an
-// unsubstitutable variable is a pre-dispatch refusal.
+// server variables substitute from declared defaults (§9.2 pins no carriage
+// for consumer-supplied server-variable values — full control is the
+// {"url": ...} override); the path is the pathname concatenated with the
+// expanded address, exactly one `/` at the join; an unsubstitutable
+// variable is a pre-dispatch refusal, and so is a retired `variables`
+// member at the server configuration point.
 func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	var requests atomic.Int32
 	var gotPath string
@@ -214,21 +216,37 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 		t.Errorf("path = %q, want /v1/events (default-substituted pathname + address, one slash at the join)", gotPath)
 	}
 
-	// Consumer-supplied variable value via the server configuration point.
+	// The retired `variables` member is refused with the teaching error —
+	// §9.2 pins {"key": ...} xor {"url": ...} and nothing else.
 	if err := publish(map[string]any{"configuration": map[string]any{
 		"server": map[string]any{"variables": map[string]any{"version": "v2"}},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if gotPath != "/v2/events" {
-		t.Errorf("path = %q, want /v2/events (consumer-supplied server variable)", gotPath)
+	}}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for the retired variables member, got %v", err)
+	} else if !strings.Contains(err.Error(), `member "variables" is not pinned`) {
+		t.Fatalf("the refusal must teach the pin, got %v", err)
 	}
 
-	// A supplied value outside the declared enum is refused.
-	if err := publish(map[string]any{"configuration": map[string]any{
-		"server": map[string]any{"variables": map[string]any{"version": "v3"}},
-	}}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for an out-of-enum server variable, got %v", err)
+	// A declared default outside the variable's own declared enum is refused
+	// (the declaration's own constraint, incorporated).
+	docBadDefault := *doc
+	docBadDefault.Servers = map[string]server{
+		"test": {Host: hostOf(srv), Protocol: "http", PathName: "/{version}",
+			Variables: map[string]serverVariable{
+				"version": {Default: "v9", Enum: []string{"v1", "v2"}},
+			}},
+	}
+	callBad := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docBadDefault)},
+		Ref:    "#/operations/post",
+	})
+	if err := callBad.Write(bg(), map[string]any{"m": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := callBad.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := drainOutputs(t, callBad); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for an out-of-enum declared default, got %v", err)
 	}
 
 	// No default and no supplied value: pre-dispatch refusal.
@@ -332,21 +350,101 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 	}
 
 	// Consumer configuration selects another member of the effective set by
-	// name.
+	// its servers-map key ({"key": ...}, the §9.2 pinned selection form).
 	if err := publish(mkDoc(nil), map[string]any{"configuration": map[string]any{
-		"server": map[string]any{"name": "zHTTP"},
+		"server": map[string]any{"key": "zHTTP"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	if hitsB.Load() != 2 {
-		t.Fatalf("configuration.server.name must select the named member: hits A=%d B=%d", hitsA.Load(), hitsB.Load())
+		t.Fatalf("configuration.server.key must select the named member: hits A=%d B=%d", hitsA.Load(), hitsB.Load())
 	}
 
-	// A name outside the effective set is a refusal.
+	// A key outside the effective set is a refusal.
 	if err := publish(mkDoc([]serverRef{{Ref: "#/servers/zHTTP"}}), map[string]any{"configuration": map[string]any{
-		"server": map[string]any{"name": "bHTTP"},
+		"server": map[string]any{"key": "bHTTP"},
 	}}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("expected refusal selecting a server outside the channel's effective set, got %v", err)
+	}
+}
+
+// TestServerConfigurationPinnedShapesOnly verifies §9.2's configuration
+// value shapes end to end: the server point accepts {"key": ...} xor
+// {"url": ...} and NOTHING else — the retired name/bare-string/variables
+// spellings and a key+url combination are pre-dispatch refusals carrying
+// the teaching error, so no bytes ever leave under a non-pinned form.
+func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(202)
+	}))
+	t.Cleanup(srv.Close)
+
+	doc := &document{
+		AsyncAPI: "3.0.0",
+		Info:     info{Title: "t", Version: "1"},
+		Servers: map[string]server{
+			"test": {Host: hostOf(srv), Protocol: "http"},
+		},
+		Channels:   map[string]channel{"c": {Address: "/c"}},
+		Operations: map[string]asyncOperation{"post": {Action: "receive", Channel: channelRef{Ref: "#/channels/c"}}},
+	}
+
+	binv := NewInvoker()
+	defer binv.Close()
+	publish := func(serverCfg any) error {
+		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+			Ref:     "#/operations/post",
+			Context: map[string]any{"configuration": map[string]any{"server": serverCfg}},
+		})
+		if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
+			return err
+		}
+		if err := call.Close(); err != nil {
+			return err
+		}
+		_, err := drainOutputs(t, call)
+		return err
+	}
+
+	refused := []struct {
+		name  string
+		cfg   any
+		teach string
+	}{
+		{"bare string", "test", "must be an object"},
+		{"retired name member", map[string]any{"name": "test"}, `member "name" is not pinned`},
+		{"both pinned members", map[string]any{"key": "test", "url": srv.URL}, `carries both "key" and "url"`},
+		{"neither pinned member", map[string]any{}, `carries neither "key" nor "url"`},
+	}
+	for _, tc := range refused {
+		before := requests.Load()
+		err := publish(tc.cfg)
+		if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+			t.Fatalf("%s: expected ERR_SOURCE_CONFIG_ERROR, got %v", tc.name, err)
+		}
+		if !strings.Contains(err.Error(), tc.teach) {
+			t.Errorf("%s: refusal must teach the pin (%q), got %v", tc.name, tc.teach, err)
+		}
+		if !strings.Contains(err.Error(), `{"key": "<server-name>"}`) || !strings.Contains(err.Error(), `{"url": "<connection-url>"}`) {
+			t.Errorf("%s: refusal must name both pinned forms, got %v", tc.name, err)
+		}
+		if got := requests.Load(); got != before {
+			t.Errorf("%s: the refusal is pre-dispatch, %d requests dispatched", tc.name, got-before)
+		}
+	}
+
+	// The two pinned forms dispatch.
+	if err := publish(map[string]any{"key": "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := publish(map[string]any{"url": srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Errorf("expected exactly the two pinned-form dispatches, got %d", got)
 	}
 }
 

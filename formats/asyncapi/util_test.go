@@ -116,6 +116,105 @@ func TestResolveTarget_NoServers(t *testing.T) {
 	}
 }
 
+// TestResolveTarget_PinnedShapes pins §9.2's configuration value shapes for
+// the server point: {"key": "<server-name>"} selects a member of the
+// effective server set, xor {"url": "<connection-url>"} overrides with a
+// complete URL whose scheme picks the protocol.
+func TestResolveTarget_PinnedShapes(t *testing.T) {
+	doc := &document{
+		Servers: map[string]server{
+			"backup": {Host: "backup.example.com", Protocol: "wss"},
+			"prod":   {Host: "api.example.com", Protocol: "https"},
+		},
+	}
+
+	// {"key": ...}: member selection by servers-map key.
+	target, err := resolveTarget(doc, nil, map[string]any{"configuration": map[string]any{
+		"server": map[string]any{"key": "backup"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.ServerURL != "wss://backup.example.com" || target.Protocol != "wss" {
+		t.Errorf("key selection: got %+v", target)
+	}
+	if target.SecurityServer == nil || target.SecurityServer.Host != "backup.example.com" {
+		t.Errorf("SecurityServer = %+v, want the selected server", target.SecurityServer)
+	}
+
+	// {"url": ...}: complete connection URL, scheme decides the protocol,
+	// the default-selected server's declared security still applies (§9.5).
+	target, err = resolveTarget(doc, nil, map[string]any{"configuration": map[string]any{
+		"server": map[string]any{"url": "ws://localhost:9090/base"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.ServerURL != "ws://localhost:9090/base" || target.Protocol != "ws" {
+		t.Errorf("url override: got %+v", target)
+	}
+	if target.SecurityServer == nil || target.SecurityServer.Host != "backup.example.com" {
+		t.Errorf("SecurityServer = %+v, want the default-selected server", target.SecurityServer)
+	}
+}
+
+// TestResolveTarget_ShapeTeachingErrors pins the refusal text for every
+// non-pinned `configuration.server` form, byte-identical to the TS SDK's
+// (target.test.ts carries the same table): the §9.2 pin exists "so two
+// implementations carry it identically", and silently tolerating extra
+// spellings would defeat it.
+func TestResolveTarget_ShapeTeachingErrors(t *testing.T) {
+	const tail = `the pinned shapes (openbindings.asyncapi@1 §9.2) are {"key": "<server-name>"} (select a member of the effective server set) xor {"url": "<connection-url>"} (override with a complete connection URL); the two forms are mutually exclusive`
+	doc := &document{
+		Servers: map[string]server{
+			"prod": {Host: "api.example.com", Protocol: "https"},
+		},
+	}
+	cases := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"bare string (retired member-name form)", "prod",
+			"configuration.server must be an object: " + tail},
+		{"bare string (retired URL form)", "wss://api.example.com/v2",
+			"configuration.server must be an object: " + tail},
+		{"array", []any{"prod"},
+			"configuration.server must be an object: " + tail},
+		{"retired name member", map[string]any{"name": "prod"},
+			`configuration.server member "name" is not pinned: ` + tail},
+		{"retired variables member", map[string]any{"key": "prod", "variables": map[string]any{"env": "staging"}},
+			`configuration.server member "variables" is not pinned: ` + tail},
+		{"two retired members", map[string]any{"name": "prod", "variables": map[string]any{"env": "staging"}},
+			`configuration.server members "name", "variables" are not pinned: ` + tail},
+		{"both pinned members", map[string]any{"key": "prod", "url": "wss://api.example.com/v2"},
+			`configuration.server carries both "key" and "url": ` + tail},
+		{"neither pinned member", map[string]any{},
+			`configuration.server carries neither "key" nor "url": ` + tail},
+		{"key not a string", map[string]any{"key": 3},
+			`configuration.server.key must be a non-empty string: ` + tail},
+		{"key empty", map[string]any{"key": ""},
+			`configuration.server.key must be a non-empty string: ` + tail},
+		{"url not a string", map[string]any{"url": 3},
+			`configuration.server.url must be a non-empty string: ` + tail},
+		{"url empty", map[string]any{"url": ""},
+			`configuration.server.url must be a non-empty string: ` + tail},
+		{"key names no member", map[string]any{"key": "nope"},
+			`configuration.server.key "nope" names no member of the effective server set`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := resolveTarget(doc, nil, map[string]any{"configuration": map[string]any{"server": tc.value}})
+			if err == nil {
+				t.Fatalf("expected a loud refusal for the non-pinned form %#v", tc.value)
+			}
+			if err.Error() != tc.want {
+				t.Errorf("error = %q\n     want %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
 // prodServer returns the doc's "prod" server — the server secureDoc
 // declares, i.e. the one resolveTarget's default selection targets and
 // whose security applies (§9.5).

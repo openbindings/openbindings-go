@@ -228,8 +228,9 @@ operations:
 `
 
 // TestResolveEndpoint_ServerVariables: substitution from declared defaults;
-// consumer-supplied values via configuration.server; refusals for an
-// undefaulted variable and an out-of-enum value (ASYNC-P-04).
+// the refusals for an undefaulted variable and for the retired `variables`
+// member (§9.2 pins no carriage for consumer-supplied server-variable
+// values — full control is the {"url": ...} override) (ASYNC-P-04).
 func TestResolveEndpoint_ServerVariables(t *testing.T) {
 	d := mustParse(t, variableDoc)
 
@@ -239,9 +240,9 @@ func TestResolveEndpoint_ServerVariables(t *testing.T) {
 		t.Fatal("an unsubstitutable variable must refuse, never guess")
 	}
 
-	// Selecting "tiered" by name resolves its declared default.
+	// Selecting "tiered" by key resolves its declared default.
 	ep, err := d.ResolveEndpoint("#/operations/op",
-		configuration(map[string]any{"server": map[string]any{"name": "tiered"}}))
+		configuration(map[string]any{"server": map[string]any{"key": "tiered"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,32 +250,32 @@ func TestResolveEndpoint_ServerVariables(t *testing.T) {
 		t.Errorf("URL = %q", ep.URL)
 	}
 
-	// A supplied value composes with the name selection.
-	ep, err = d.ResolveEndpoint("#/operations/op",
+	// The retired `variables` member is refused with the teaching error.
+	if _, err := d.ResolveEndpoint("#/operations/op",
 		configuration(map[string]any{"server": map[string]any{
-			"name":      "tiered",
+			"key":       "tiered",
 			"variables": map[string]any{"env": "staging"},
-		}}))
+		}})); err == nil {
+		t.Error("the retired variables member must be refused")
+	} else if !strings.Contains(err.Error(), `member "variables" is not pinned`) {
+		t.Errorf("the refusal must teach the pin, got %v", err)
+	}
+
+	// Full control over server variables is the url-override form.
+	ep, err = d.ResolveEndpoint("#/operations/op",
+		configuration(map[string]any{"server": map[string]any{"url": "wss://staging.example.com"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ep.URL != "wss://staging.example.com/c" {
 		t.Errorf("URL = %q", ep.URL)
 	}
-
-	// A supplied value outside the declared enum is refused loudly.
-	if _, err := d.ResolveEndpoint("#/operations/op",
-		configuration(map[string]any{"server": map[string]any{
-			"name":      "tiered",
-			"variables": map[string]any{"env": "dev"},
-		}})); err == nil {
-		t.Error("an out-of-enum variable value must be refused")
-	}
 }
 
-// TestResolveEndpoint_ServerConfiguration: the configuration.server forms —
-// member selection by name (string and object) and the full connection-URL
-// override (string and object), out-of-revision schemes refused.
+// TestResolveEndpoint_ServerConfiguration: the §9.2 pinned
+// configuration.server value shapes — {"key": ...} member selection xor
+// {"url": ...} full connection-URL override, out-of-revision schemes
+// refused, every other spelling refused with the teaching error.
 func TestResolveEndpoint_ServerConfiguration(t *testing.T) {
 	d := mustParse(t, `asyncapi: "3.0.0"
 info: {title: t, version: "1"}
@@ -289,23 +290,33 @@ operations:
     channel: {$ref: "#/channels/c"}
 `)
 
-	// Member selection by name, string form.
-	ep, err := d.ResolveEndpoint("#/operations/op", configuration(map[string]any{"server": "b"}))
+	// Member selection by servers-map key, the pinned form.
+	ep, err := d.ResolveEndpoint("#/operations/op",
+		configuration(map[string]any{"server": map[string]any{"key": "b"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ep.URL != "wss://b.example/c" || ep.Protocol != "wss" {
-		t.Errorf("string name selection: got %+v", ep)
+		t.Errorf("key selection: got %+v", ep)
 	}
 
-	// Member selection by name, object form.
-	ep, err = d.ResolveEndpoint("#/operations/op",
-		configuration(map[string]any{"server": map[string]any{"name": "b"}}))
-	if err != nil {
-		t.Fatal(err)
+	// The retired bare-string form is refused with the teaching error.
+	if _, err := d.ResolveEndpoint("#/operations/op",
+		configuration(map[string]any{"server": "b"})); err == nil {
+		t.Error("the retired bare-string form must be refused")
+	} else if !strings.Contains(err.Error(), "must be an object") {
+		t.Errorf("the refusal must teach the pin, got %v", err)
 	}
-	if ep.URL != "wss://b.example/c" {
-		t.Errorf("object name selection: got %+v", ep)
+
+	// The two pinned forms are mutually exclusive.
+	if _, err := d.ResolveEndpoint("#/operations/op",
+		configuration(map[string]any{"server": map[string]any{
+			"key": "b",
+			"url": "wss://override.example",
+		}})); err == nil {
+		t.Error("key and url together must be refused")
+	} else if !strings.Contains(err.Error(), `carries both "key" and "url"`) {
+		t.Errorf("the refusal must name the mutual exclusion, got %v", err)
 	}
 
 	// Full connection-URL override: the URL's scheme decides the protocol,
@@ -325,10 +336,10 @@ operations:
 		t.Error("an out-of-revision override scheme must be refused")
 	}
 
-	// A name that matches no effective-set member is refused.
+	// A key that matches no effective-set member is refused.
 	if _, err := d.ResolveEndpoint("#/operations/op",
-		configuration(map[string]any{"server": map[string]any{"name": "nope"}})); err == nil {
-		t.Error("a non-member server name must be refused")
+		configuration(map[string]any{"server": map[string]any{"key": "nope"}})); err == nil {
+		t.Error("a non-member server key must be refused")
 	}
 }
 
