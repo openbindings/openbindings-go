@@ -137,6 +137,43 @@ func TestPlanRequestBody_SyntheticModes(t *testing.T) {
 	if err != nil || !plan.synthetic {
 		t.Errorf("text/plain must be synthetic, got %+v (%v)", plan, err)
 	}
+
+	// §9.1's object determination is declaration-only, one predicate shared
+	// with synthesis (bodySchemaFlattens): a TYPELESS schema — neither
+	// `properties` nor an explicit object type — is non-object, so the plan
+	// is synthetic exactly as the synthesized contract wraps it.
+	typelessSchema := &openapi3.SchemaRef{Value: &openapi3.Schema{}}
+	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{
+		"application/json": &openapi3.MediaType{Schema: typelessSchema},
+	}, false))
+	if err != nil || !plan.synthetic {
+		t.Errorf("typeless body schema must be synthetic, got %+v (%v)", plan, err)
+	}
+
+	// The other half of the declaration: `properties` without a type is
+	// object by declaration — flattened, never synthetic.
+	propsNoTypeSchema := &openapi3.SchemaRef{Value: &openapi3.Schema{
+		Properties: openapi3.Schemas{"a": {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}},
+	}}
+	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{
+		"application/json": &openapi3.MediaType{Schema: propsNoTypeSchema},
+	}, false))
+	if err != nil || plan.synthetic {
+		t.Errorf("properties-without-type schema must not be synthetic, got %+v (%v)", plan, err)
+	}
+	if !plan.props["a"] {
+		t.Errorf("properties-without-type plan must carry declared property names, got %v", plan.props)
+	}
+
+	// A 3.1 two-element type array is not an EXPLICIT object type (only
+	// the single-element form is): synthetic without properties.
+	nullableObjectSchema := &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"object", "null"}}}
+	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{
+		"application/json": &openapi3.MediaType{Schema: nullableObjectSchema},
+	}, false))
+	if err != nil || !plan.synthetic {
+		t.Errorf("nullable-object schema without properties must be synthetic, got %+v (%v)", plan, err)
+	}
 }
 
 // The remaining-body rule (§9.1): JSON-family selection with every field
