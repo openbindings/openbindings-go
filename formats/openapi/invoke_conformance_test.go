@@ -177,6 +177,163 @@ func TestInvoke_UnmatchedFieldsRefusedWithoutBody(t *testing.T) {
 	}
 }
 
+// §9.1 (OAPI-P-03): with a NON-OBJECT declared request body, the flattened
+// contract carries only parameters and the synthetic `body` property — an
+// input field matching neither has no destination and refuses pre-dispatch,
+// loudly, naming the unroutable field (same species of refusal as the
+// no-body unmatched case above).
+func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
+	const wantMsg = `field(s) stray match no declared parameter, and the declared request body is non-object (its flattened contract carries only the synthetic "body" property)`
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"string JSON body", `{"application/json": {"schema": {"type": "string"}}}`},
+		{"array JSON body", `{"application/json": {"schema": {"type": "array", "items": {"type": "integer"}}}}`},
+		{"binary-in-JSON body (3.1 contentEncoding)", `{"application/json": {"schema": {"type": "string", "contentEncoding": "base64"}}}`},
+		{"text/plain body", `{"text/plain": {"schema": {"type": "string"}}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+			spec := fmt.Sprintf(`{
+			  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+			  "servers": [{"url": %q}],
+			  "paths": {"/echo": {"post": {
+			    "operationId": "echo",
+			    "requestBody": {"required": true, "content": %s},
+			    "responses": {"200": {"description": "ok"}}
+			  }}}
+			}`, srv.URL, tc.content)
+			_, ierr := invokeWith(t, spec, "#/paths/~1echo/post", map[string]any{"body": "x", "stray": 1})
+			if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+				t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
+			}
+			if ierr.Message != wantMsg {
+				t.Errorf("refusal message = %q, want %q", ierr.Message, wantMsg)
+			}
+			if requests.Load() != 0 {
+				t.Error("refusal must precede dispatch")
+			}
+		})
+	}
+}
+
+// §9.1 (OAPI-P-03): with an OBJECT body, a field matching no declared
+// parameter or body property joins the body value BEFORE encoding selection
+// and rides whatever encoding the body rides — JSON here, exactly like
+// declared fields.
+func TestInvoke_PassthroughRidesJSONBodyEncoding(t *testing.T) {
+	var gotCT string
+	var gotBody []byte
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/w": {"post": {
+	    "operationId": "makeW",
+	    "requestBody": {"required": true, "content": {"application/json": {"schema": {
+	      "type": "object", "properties": {"name": {"type": "string"}}
+	    }}}},
+	    "responses": {"200": {"description": "ok"}}
+	  }}}
+	}`, srv.URL)
+	_, ierr := invokeWith(t, spec, "#/paths/~1w/post", map[string]any{"name": "x", "extra": "y"})
+	if ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q", gotCT)
+	}
+	if string(gotBody) != `{"extra":"y","name":"x"}` {
+		t.Errorf("body = %s, want the passthrough field joined into the JSON body", gotBody)
+	}
+}
+
+// §9.1 (OAPI-P-03): passthrough rides the body's encoding — multipart here.
+// A primitive passthrough field rides as a text part; an object passthrough
+// field rides as an application/json part, per the same §9.2 part rules as
+// declared fields.
+func TestInvoke_PassthroughRidesMultipartEncoding(t *testing.T) {
+	var gotCT, gotDescription, gotNote, gotMeta string
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotDescription = r.FormValue("description")
+		gotNote = r.FormValue("note")
+		gotMeta = r.FormValue("meta")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/upload": {"post": {
+	    "operationId": "upload",
+	    "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {
+	      "type": "object", "properties": {"description": {"type": "string"}}
+	    }}}},
+	    "responses": {"200": {"description": "ok"}}
+	  }}}
+	}`, srv.URL)
+	_, ierr := invokeWith(t, spec, "#/paths/~1upload/post", map[string]any{
+		"description": "d", "note": "urgent", "meta": map[string]any{"k": "v"},
+	})
+	if ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	if !strings.Contains(gotCT, "multipart/form-data") {
+		t.Errorf("Content-Type = %q, want multipart/form-data", gotCT)
+	}
+	if gotDescription != "d" {
+		t.Errorf("declared part description = %q, want %q", gotDescription, "d")
+	}
+	if gotNote != "urgent" {
+		t.Errorf("passthrough part note = %q, want %q", gotNote, "urgent")
+	}
+	if gotMeta != `{"k":"v"}` {
+		t.Errorf("passthrough object part meta = %q, want %q", gotMeta, `{"k":"v"}`)
+	}
+}
+
+// §9.1 (OAPI-P-03): passthrough rides the body's encoding —
+// application/x-www-form-urlencoded here, serialized like declared fields.
+func TestInvoke_PassthroughRidesURLEncodedEncoding(t *testing.T) {
+	var gotCT string
+	var gotBody []byte
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/form": {"post": {
+	    "operationId": "postForm",
+	    "requestBody": {"required": true, "content": {"application/x-www-form-urlencoded": {"schema": {
+	      "type": "object", "properties": {"name": {"type": "string"}}
+	    }}}},
+	    "responses": {"200": {"description": "ok"}}
+	  }}}
+	}`, srv.URL)
+	_, ierr := invokeWith(t, spec, "#/paths/~1form/post", map[string]any{"name": "a b", "extra": "y"})
+	if ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	if gotCT != "application/x-www-form-urlencoded" {
+		t.Errorf("Content-Type = %q", gotCT)
+	}
+	if string(gotBody) != "extra=y&name=a%20b" {
+		t.Errorf("body = %q, want the passthrough field serialized like declared form fields", gotBody)
+	}
+}
+
 // A supplied input missing a declared path parameter always refuses before
 // dispatch (§9.1); other missing required members are the server's business.
 func TestInvoke_SuppliedInputMissingPathParamRefuses(t *testing.T) {
