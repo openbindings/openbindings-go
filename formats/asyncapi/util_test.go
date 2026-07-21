@@ -117,9 +117,10 @@ func TestResolveTarget_NoServers(t *testing.T) {
 }
 
 // TestResolveTarget_PinnedShapes pins §9.2's configuration value shapes for
-// the server point: {"key": "<server-name>"} selects a member of the
-// effective server set, xor {"url": "<connection-url>"} overrides with a
-// complete URL whose scheme picks the protocol.
+// the server point: {"key": "<server-name>", "variables": {...}?} selects a
+// member of the effective server set, xor {"url": "<connection-url>"}
+// overrides with a complete URL whose scheme picks the protocol. The
+// variables carriage itself is TestResolveTarget_ServerVariablesCarriage.
 func TestResolveTarget_PinnedShapes(t *testing.T) {
 	doc := &document{
 		Servers: map[string]server{
@@ -158,13 +159,115 @@ func TestResolveTarget_PinnedShapes(t *testing.T) {
 	}
 }
 
+// TestResolveTarget_ServerVariablesCarriage pins §9.2's `variables` member
+// of the server pin's key form (ratified 2026-07-21): supplied values for
+// the selected server's own declared variables, substitution
+// supplied-else-default-else-refusal, a supplied value outside the declared
+// enum refused (upstream SHOULD, hardened to a refusal — the
+// specification's own pin), an undeclared supplied name refused, never
+// ignored. AsyncAPI declares a Server Variable's default OPTIONAL, so an
+// undefaulted variable is satisfiable only by consumer supply.
+func TestResolveTarget_ServerVariablesCarriage(t *testing.T) {
+	doc := &document{
+		Servers: map[string]server{
+			"tiered": {
+				Host:     "{env}.example.com",
+				Protocol: "wss",
+				PathName: "/{version}",
+				Variables: map[string]serverVariable{
+					"env":     {Default: "prod", Enum: []string{"prod", "staging"}},
+					"version": {Default: "v1"},
+				},
+			},
+			"bare": {
+				Host:     "{tenant}.example.com",
+				Protocol: "ws",
+				Variables: map[string]serverVariable{
+					"tenant": {}, // no default: satisfiable only by supply
+				},
+			},
+		},
+	}
+	cfg := func(server any) map[string]any {
+		return map[string]any{"configuration": map[string]any{"server": server}}
+	}
+
+	// A supplied value wins over the declared default.
+	target, err := resolveTarget(doc, nil, cfg(map[string]any{
+		"key": "tiered", "variables": map[string]any{"env": "staging"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.ServerURL != "wss://staging.example.com/v1" {
+		t.Errorf("supplied-over-default: url = %q, want wss://staging.example.com/v1", target.ServerURL)
+	}
+
+	// An unsupplied variable falls to its declared default; an empty
+	// variables object is the same as none.
+	target, err = resolveTarget(doc, nil, cfg(map[string]any{
+		"key": "tiered", "variables": map[string]any{},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.ServerURL != "wss://prod.example.com/v1" {
+		t.Errorf("default fallback: url = %q, want wss://prod.example.com/v1", target.ServerURL)
+	}
+
+	// An undefaulted variable is satisfiable by supply — the carriage the
+	// assembly rule presupposes.
+	target, err = resolveTarget(doc, nil, cfg(map[string]any{
+		"key": "bare", "variables": map[string]any{"tenant": "acme"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.ServerURL != "ws://acme.example.com" {
+		t.Errorf("undefaulted-by-supply: url = %q, want ws://acme.example.com", target.ServerURL)
+	}
+
+	// Undefaulted and unsupplied: a pre-dispatch refusal whose remedy is
+	// supplying the variable.
+	_, err = resolveTarget(doc, nil, cfg(map[string]any{"key": "bare"}))
+	if err == nil {
+		t.Fatal("an undefaulted, unsupplied variable must refuse")
+	}
+	if want := `server "bare": variable "tenant" has no supplied value and no declared default (supply one at the server configuration point's "variables" member)`; err.Error() != want {
+		t.Errorf("undefaulted refusal = %q\n                 want %q", err.Error(), want)
+	}
+
+	// A supplied value outside the declared enum is refused loudly.
+	_, err = resolveTarget(doc, nil, cfg(map[string]any{
+		"key": "tiered", "variables": map[string]any{"env": "qa"},
+	}))
+	if err == nil {
+		t.Fatal("a supplied value outside the declared enum must refuse")
+	}
+	if want := `server "tiered": variable "env" value "qa" is not in the declared enum [prod staging]`; err.Error() != want {
+		t.Errorf("enum refusal = %q, want %q", err.Error(), want)
+	}
+
+	// A supplied name the selected server does not declare is refused,
+	// never ignored — even when every template expression would resolve.
+	_, err = resolveTarget(doc, nil, cfg(map[string]any{
+		"key": "tiered", "variables": map[string]any{"region": "eu"},
+	}))
+	if err == nil {
+		t.Fatal("an undeclared supplied name must refuse")
+	}
+	if want := `configuration.server.variables["region"] names no declared variable of server "tiered"`; err.Error() != want {
+		t.Errorf("undeclared-name refusal = %q, want %q", err.Error(), want)
+	}
+}
+
 // TestResolveTarget_ShapeTeachingErrors pins the refusal text for every
 // non-pinned `configuration.server` form, byte-identical to the TS SDK's
 // (target.test.ts carries the same table): the §9.2 pin exists "so two
 // implementations carry it identically", and silently tolerating extra
 // spellings would defeat it.
 func TestResolveTarget_ShapeTeachingErrors(t *testing.T) {
-	const tail = `the pinned shapes (openbindings.asyncapi@1 §9.2) are {"key": "<server-name>"} (select a member of the effective server set) xor {"url": "<connection-url>"} (override with a complete connection URL); the two forms are mutually exclusive`
+	const tail = `the pinned shapes (openbindings.asyncapi@1 §9.2) are {"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?} (select a member of the effective server set, "variables" optionally supplying its declared server variables) xor {"url": "<connection-url>"} (override with a complete connection URL); the two forms are mutually exclusive and "variables" composes only with "key"`
 	doc := &document{
 		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https"},
@@ -183,14 +286,16 @@ func TestResolveTarget_ShapeTeachingErrors(t *testing.T) {
 			"configuration.server must be an object: " + tail},
 		{"retired name member", map[string]any{"name": "prod"},
 			`configuration.server member "name" is not pinned: ` + tail},
-		{"retired variables member", map[string]any{"key": "prod", "variables": map[string]any{"env": "staging"}},
-			`configuration.server member "variables" is not pinned: ` + tail},
-		{"two retired members", map[string]any{"name": "prod", "variables": map[string]any{"env": "staging"}},
-			`configuration.server members "name", "variables" are not pinned: ` + tail},
+		{"two unpinned members", map[string]any{"mode": "fast", "name": "prod"},
+			`configuration.server members "mode", "name" are not pinned: ` + tail},
 		{"both pinned members", map[string]any{"key": "prod", "url": "wss://api.example.com/v2"},
 			`configuration.server carries both "key" and "url": ` + tail},
 		{"neither pinned member", map[string]any{},
 			`configuration.server carries neither "key" nor "url": ` + tail},
+		{"variables without key", map[string]any{"variables": map[string]any{"env": "staging"}},
+			`configuration.server carries neither "key" nor "url": ` + tail},
+		{"variables with url", map[string]any{"url": "wss://api.example.com/v2", "variables": map[string]any{"env": "staging"}},
+			`configuration.server carries "variables" with "url": ` + tail},
 		{"key not a string", map[string]any{"key": 3},
 			`configuration.server.key must be a non-empty string: ` + tail},
 		{"key empty", map[string]any{"key": ""},
@@ -199,8 +304,16 @@ func TestResolveTarget_ShapeTeachingErrors(t *testing.T) {
 			`configuration.server.url must be a non-empty string: ` + tail},
 		{"url empty", map[string]any{"url": ""},
 			`configuration.server.url must be a non-empty string: ` + tail},
+		{"variables not an object", map[string]any{"key": "prod", "variables": "staging"},
+			`configuration.server.variables must be an object of string values: ` + tail},
+		{"variables null", map[string]any{"key": "prod", "variables": nil},
+			`configuration.server.variables must be an object of string values: ` + tail},
+		{"variables entry not a string", map[string]any{"key": "prod", "variables": map[string]any{"env": 3}},
+			`configuration.server.variables["env"] must be a string value: ` + tail},
 		{"key names no member", map[string]any{"key": "nope"},
 			`configuration.server.key "nope" names no member of the effective server set`},
+		{"variables name not declared", map[string]any{"key": "prod", "variables": map[string]any{"env": "staging"}},
+			`configuration.server.variables["env"] names no declared variable of server "prod"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

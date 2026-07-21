@@ -227,10 +227,10 @@ operations:
     channel: {$ref: "#/channels/c"}
 `
 
-// TestResolveEndpoint_ServerVariables: substitution from declared defaults;
-// the refusals for an undefaulted variable and for the retired `variables`
-// member (§9.2 pins no carriage for consumer-supplied server-variable
-// values — full control is the {"url": ...} override) (ASYNC-P-04).
+// TestResolveEndpoint_ServerVariables: supplied-else-default substitution
+// (the key form's `variables` member, §9.2); the refusals for an
+// undefaulted, unsupplied variable, a supplied out-of-enum value, and a
+// supplied name the selected server does not declare (ASYNC-P-04).
 func TestResolveEndpoint_ServerVariables(t *testing.T) {
 	d := mustParse(t, variableDoc)
 
@@ -250,18 +250,59 @@ func TestResolveEndpoint_ServerVariables(t *testing.T) {
 		t.Errorf("URL = %q", ep.URL)
 	}
 
-	// The retired `variables` member is refused with the teaching error.
-	if _, err := d.ResolveEndpoint("#/operations/op",
+	// A supplied value at the key form's `variables` member wins over the
+	// declared default.
+	ep, err = d.ResolveEndpoint("#/operations/op",
 		configuration(map[string]any{"server": map[string]any{
 			"key":       "tiered",
 			"variables": map[string]any{"env": "staging"},
-		}})); err == nil {
-		t.Error("the retired variables member must be refused")
-	} else if !strings.Contains(err.Error(), `member "variables" is not pinned`) {
-		t.Errorf("the refusal must teach the pin, got %v", err)
+		}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ep.URL != "wss://staging.example.com/c" {
+		t.Errorf("URL = %q", ep.URL)
 	}
 
-	// Full control over server variables is the url-override form.
+	// An undefaulted variable is satisfiable only by supply — AsyncAPI
+	// declares Server Variable defaults OPTIONAL.
+	ep, err = d.ResolveEndpoint("#/operations/op",
+		configuration(map[string]any{"server": map[string]any{
+			"key":       "bare",
+			"variables": map[string]any{"region": "eu"},
+		}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ep.URL != "ws://eu.example.com/c" {
+		t.Errorf("URL = %q", ep.URL)
+	}
+
+	// A supplied value outside the declared enum is refused (upstream
+	// SHOULD, hardened to a refusal — the specification's own pin).
+	if _, err := d.ResolveEndpoint("#/operations/op",
+		configuration(map[string]any{"server": map[string]any{
+			"key":       "tiered",
+			"variables": map[string]any{"env": "qa"},
+		}})); err == nil {
+		t.Error("a supplied out-of-enum value must be refused")
+	} else if !strings.Contains(err.Error(), "is not in the declared enum") {
+		t.Errorf("the refusal must name the enum constraint, got %v", err)
+	}
+
+	// A supplied name the selected server does not declare is refused,
+	// never ignored.
+	if _, err := d.ResolveEndpoint("#/operations/op",
+		configuration(map[string]any{"server": map[string]any{
+			"key":       "tiered",
+			"variables": map[string]any{"nope": "x"},
+		}})); err == nil {
+		t.Error("an undeclared supplied name must be refused")
+	} else if !strings.Contains(err.Error(), `names no declared variable of server "tiered"`) {
+		t.Errorf("the refusal must name the undeclared variable, got %v", err)
+	}
+
+	// The url-override form still bypasses variables entirely.
 	ep, err = d.ResolveEndpoint("#/operations/op",
 		configuration(map[string]any{"server": map[string]any{"url": "wss://staging.example.com"}}))
 	if err != nil {
