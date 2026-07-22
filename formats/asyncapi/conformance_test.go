@@ -105,21 +105,22 @@ func TestAddressParameterExpansion(t *testing.T) {
 		t.Errorf("path = %q, want /rooms/ops/audit", gotPath)
 	}
 
-	// Unresolved after defaults: pre-dispatch refusal, braces never dialed.
+	// Unresolved after defaults: braces never dialed. R1a: a resolvable-
+	// missing address parameter is a config.value CONTEXT_REQUIRED, not a
+	// terminal ERR_SOURCE_CONFIG_ERROR.
 	before := requests.Load()
 	err := publish(nil)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for an unresolved address parameter, got %v", err)
-	}
+	assertConfigValue(t, err, "address", "roomId")
 	if got := requests.Load(); got != before {
 		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got-before)
 	}
 }
 
-// TestAddressParameterEnumViolationRefused verifies a supplied parameter
-// value outside the declared enum is refused loudly (the Parameter Object's
-// own constraint, incorporated).
-func TestAddressParameterEnumViolationRefused(t *testing.T) {
+// TestAddressParameterEnumNotGated verifies a supplied parameter value
+// outside the declared enum is NOT refused (§9.2, R1): the enum is the
+// author's expectation, not a boundary, so the value is substituted and the
+// invocation dispatches.
+func TestAddressParameterEnumNotGated(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(202)
 	}))
@@ -144,9 +145,8 @@ func TestAddressParameterEnumViolationRefused(t *testing.T) {
 	if err := call.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for an out-of-enum parameter value, got %v", err)
+	if _, err := drainOutputs(t, call); err != nil {
+		t.Fatalf("an out-of-enum address parameter value must not be refused: %v", err)
 	}
 }
 
@@ -226,23 +226,20 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 		t.Errorf("path = %q, want /v2/events (supplied-substituted pathname + address)", gotPath)
 	}
 
-	// A supplied value outside the variable's declared enum is a
-	// pre-dispatch refusal (upstream SHOULD, hardened to a refusal — the
-	// specification's own pin).
-	beforeEnum := requests.Load()
+	// A supplied value outside the variable's declared enum is NOT refused
+	// (§9.2, R1): the enum is the author's expectation, not a boundary. The
+	// value substitutes and the invocation dispatches.
 	if err := publish(map[string]any{"configuration": map[string]any{
 		"server": map[string]any{"key": "test", "variables": map[string]any{"version": "v9"}},
-	}}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for a supplied out-of-enum value, got %v", err)
-	} else if !strings.Contains(err.Error(), "is not in the declared enum") {
-		t.Fatalf("the refusal must name the enum constraint, got %v", err)
+	}}); err != nil {
+		t.Fatalf("an out-of-enum supplied value must not be refused: %v", err)
 	}
-	if got := requests.Load(); got != beforeEnum {
-		t.Errorf("the enum refusal is pre-dispatch: %d requests dispatched", got-beforeEnum)
+	if gotPath != "/v9/events" {
+		t.Errorf("path = %q, want /v9/events (out-of-enum value substituted)", gotPath)
 	}
 
-	// A declared default outside the variable's own declared enum is refused
-	// (the declaration's own constraint, incorporated).
+	// A declared default outside the variable's own declared enum is likewise
+	// not refused — enum gates neither supplied values nor defaults.
 	docBadDefault := *doc
 	docBadDefault.Servers = map[string]server{
 		"test": {Host: hostOf(srv), Protocol: "http", PathName: "/{version}",
@@ -260,8 +257,8 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	if err := callBad.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := drainOutputs(t, callBad); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for an out-of-enum declared default, got %v", err)
+	if _, err := drainOutputs(t, callBad); err != nil {
+		t.Fatalf("an out-of-enum declared default must not be refused: %v", err)
 	}
 
 	// No default and no supplied value: pre-dispatch refusal.
@@ -282,9 +279,10 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for an unsubstitutable server variable, got %v", err)
-	}
+	// R1a: an unsubstitutable server variable is a resolvable-missing config
+	// value, surfaced as a config.value CONTEXT_REQUIRED (retryable), not a
+	// terminal ERR_SOURCE_CONFIG_ERROR.
+	assertConfigValue(t, err, "server", "version")
 	if got := requests.Load(); got != before {
 		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got-before)
 	}
@@ -509,9 +507,10 @@ func TestOnlyUnboundProtocolServersIsRefused(t *testing.T) {
 		Ref:    "#/operations/post",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR with only unbound protocols declared, got %v", err)
-	}
+	// R1a: no server with a supported protocol is resolvable by supplying a
+	// connection URL at the server point — a config.value CONTEXT_REQUIRED,
+	// not a terminal ERR_SOURCE_CONFIG_ERROR.
+	assertConfigValue(t, err, "server", "url")
 }
 
 // TestFullURLOverride verifies the full-URL override lane: the URL's scheme

@@ -161,10 +161,13 @@ func configIndex(raw any) (int, bool) {
 }
 
 // substituteServerVariables substitutes each declared server variable with
-// the supplied value (validated against the variable's enum, per the OAS)
-// or its declared default. A variable with neither a supplied value nor a
-// declared default, and a supplied variable the entry does not declare, are
-// loud errors.
+// the supplied value or its declared default. A variable with neither a
+// supplied value nor a declared default, and a supplied variable the entry
+// does not declare, are loud errors. A declared enum does NOT gate: it is the
+// author's expectation, not a boundary (openbindings.openapi@1 §9.3) — the
+// same configuration point admits a complete base-URL override that bypasses
+// the declaration entirely, so refusing a narrower substitution would be
+// incoherent. A caller MAY surface the enum as choice metadata.
 func substituteServerVariables(srv *openapi3.Server, supplied map[string]string) (string, error) {
 	u := srv.URL
 	names := make([]string, 0, len(srv.Variables))
@@ -182,18 +185,11 @@ func substituteServerVariables(srv *openapi3.Server, supplied map[string]string)
 			val = v.Default
 		}
 		if val == "" && v.Default == "" {
-			return "", fmt.Errorf("server %q: variable %q has no supplied value and no declared default", srv.URL, name)
-		}
-		if len(v.Enum) > 0 {
-			found := false
-			for _, e := range v.Enum {
-				if e == val {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return "", fmt.Errorf("server %q: variable %q value %q is not in the declared enum %v", srv.URL, name, val, v.Enum)
+			return "", &configRequired{
+				point:       "server",
+				key:         name,
+				description: fmt.Sprintf("server %q: variable %q has no supplied value and no declared default", srv.URL, name),
+				choices:     v.Enum,
 			}
 		}
 		u = strings.ReplaceAll(u, "{"+name+"}", val)
@@ -226,5 +222,27 @@ func absolutizeServerURL(serverURL, sourceLocation string) (string, error) {
 			return strings.TrimRight(base.ResolveReference(u).String(), "/"), nil
 		}
 	}
-	return "", fmt.Errorf("server URL %q cannot resolve to an absolute URL: the source has no absolute-URI location to serve as the artifact's base URI", serverURL)
+	return "", &configRequired{
+		point:       "server",
+		key:         "url",
+		description: fmt.Sprintf("server URL %q cannot resolve to an absolute URL: the source has no absolute-URI location to serve as the artifact's base URI; supply a base URL at the server configuration point", serverURL),
+	}
 }
+
+// configRequired is the typed signal a resolution helper returns when a named
+// configuration point cannot resolve because a value is absent (no default,
+// no supplied value) — a resolvable-missing value, not a malformed one. The
+// invoke path turns it into a config.value CONTEXT_REQUIRED challenge
+// (retryable after resolution, R1a) rather than a terminal
+// ERR_SOURCE_CONFIG_ERROR. It implements error so it rides the existing
+// (…, error) returns unchanged. config values are non-secret, so no
+// credential-grade target keying is needed.
+type configRequired struct {
+	point       string
+	key         string
+	description string
+	choices     []string
+	durable     *bool
+}
+
+func (c *configRequired) Error() string { return c.description }

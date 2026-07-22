@@ -240,11 +240,12 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 
 // resolveRef resolves a parsed ref against the (pinned or live, exhausted)
 // listing BEFORE dispatch (§7, MCP-P-02): a remainder matching nothing makes
-// the binding unresolvable, and a remainder matching more than one entry is
-// ambiguous and likewise unresolvable — loudly, never first-match. A
-// resources remainder matches first against declared resource URIs, then
-// against template strings (a template is addressed by its template string,
-// byte-exact — never by a URI the template happens to match).
+// the binding unresolvable, and a remainder matching more than one entry
+// WITHIN its entity's collection is ambiguous and likewise unresolvable —
+// loudly, never first-match. resources matches only declared resource URIs;
+// resourceTemplates matches only declared template strings (§7, R5): the two
+// are separate namespaces, so a resource URI and a byte-identical template
+// string never collide — each is reached by its own entity token.
 func resolveRef(l *listing, entityType, remainder string) (targetKind, *openbindings.InvocationError) {
 	where := "server listing"
 	if l.pinned {
@@ -290,19 +291,26 @@ func resolveRef(l *listing, entityType, remainder string) (targetKind, *openbind
 			return ambiguous("prompt", n)
 		}
 		return notFound("prompt")
-	default: // resources
+	case "resources":
 		switch n := count(l.resources); {
 		case n == 1:
 			return targetStaticResource, nil
 		case n > 1:
 			return ambiguous("resource", n)
 		}
+		return notFound("resource")
+	case "resourceTemplates":
 		switch n := count(l.templates); {
 		case n == 1:
 			return targetTemplateResource, nil
 		case n > 1:
 			return ambiguous("resource template", n)
 		}
-		return notFound("resource or resource template")
+		return notFound("resource template")
+	default:
+		return 0, &openbindings.InvocationError{
+			Code:    openbindings.ErrCodeRefNotFound,
+			Message: fmt.Sprintf("MCP ref %q names an unknown entity %q (expected tools, resources, resourceTemplates, or prompts)", ref, entityType),
+		}
 	}
 }

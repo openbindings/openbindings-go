@@ -430,6 +430,29 @@ func (e *OperationInvoker) run(
 			merged[k] = v
 		}
 		for k, v := range resolved {
+			// The binding-invoker contract retries with the *augmented*
+			// context, not a replaced one. Top-level credential fields are
+			// leaf values, so an overwrite is correct — but `configuration`
+			// is a map keyed by configuration point, and a resolved
+			// config.value (R1a) names one point; overwriting the whole map
+			// would clobber sibling points the caller already supplied. Merge
+			// it point-wise so a resolved `server` value does not drop an
+			// existing `decode` override.
+			if k == "configuration" {
+				rc, rok := v.(map[string]any)
+				ec, eok := merged[k].(map[string]any)
+				if rok && eok {
+					points := make(map[string]any, len(ec)+len(rc))
+					for pk, pv := range ec {
+						points[pk] = pv
+					}
+					for pk, pv := range rc {
+						points[pk] = pv
+					}
+					merged[k] = points
+					continue
+				}
+			}
 			merged[k] = v
 		}
 		contextData = merged

@@ -84,9 +84,9 @@ type Endpoint struct {
 // is refused with a teaching error, and `variables` composes only with
 // `key`. Server variables substitute supplied-else-default — unsupplied and
 // undefaulted is a refusal (AsyncAPI declares Server Variable defaults
-// OPTIONAL, so an undefaulted variable is satisfiable only by supply), an
-// undeclared supplied name is refused, never ignored, and a supplied value
-// outside the variable's declared enum is refused.
+// OPTIONAL, so an undefaulted variable is satisfiable only by supply), and an
+// undeclared supplied name is refused, never ignored. A declared enum does
+// not gate the value (§9.2): author's expectation, not a boundary.
 //
 // The address point: the channel's declared `address` with every `{name}`
 // expression expanded from consumer-supplied parameter values

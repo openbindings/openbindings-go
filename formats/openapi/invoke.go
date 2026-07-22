@@ -19,6 +19,26 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
+// configOrSourceError maps a server-resolution error to the right terminal: a
+// resolvable-missing configuration value (a configRequired signal) becomes a
+// config.value CONTEXT_REQUIRED challenge — retryable after resolution (R1a) —
+// while any other error stays a terminal ERR_SOURCE_CONFIG_ERROR for source
+// misconfiguration no runtime can fix. resolveServer already consulted the
+// supplied context and found the value absent, so the challenge fires
+// unconditionally; the operation-invoker's bounded resolve-and-retry loop is
+// the backstop. config values are non-secret, so the challenge carries an
+// empty target (a best-effort key suffices and no server URL has resolved).
+func configOrSourceError(err error) *openbindings.InvocationError {
+	var cr *configRequired
+	if errors.As(err, &cr) {
+		req := openbindings.NewConfigValueRequirement(cr.point, cr.key, cr.description, cr.choices, cr.durable)
+		return openbindings.NewContextRequiredError(cr.description, &openbindings.ContextRequiredDetails{
+			Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{req}}},
+		})
+	}
+	return &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()}
+}
+
 // classifyHTTPError maps a transport-level error from http.Client.Do to a
 // standard SDK error code. Cancellation and deadlines from the caller's context
 // are surfaced as cancelled/timeout, network errors as connect_failed, and
@@ -113,7 +133,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 
 	baseURL, err := resolveServer(doc, pathItem, op, args.Context, args.Source.Location)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		inv.FireError(configOrSourceError(err))
 		return
 	}
 

@@ -278,16 +278,19 @@ func TestResolveEndpoint_ServerVariables(t *testing.T) {
 		t.Errorf("URL = %q", ep.URL)
 	}
 
-	// A supplied value outside the declared enum is refused (upstream
-	// SHOULD, hardened to a refusal — the specification's own pin).
-	if _, err := d.ResolveEndpoint("#/operations/op",
+	// A supplied value outside the declared enum is NOT refused (§9.2, R1):
+	// the enum is the author's expectation, not a boundary, and the same
+	// point admits a full-URL override that bypasses the declaration.
+	ep, err = d.ResolveEndpoint("#/operations/op",
 		configuration(map[string]any{"server": map[string]any{
 			"key":       "tiered",
 			"variables": map[string]any{"env": "qa"},
-		}})); err == nil {
-		t.Error("a supplied out-of-enum value must be refused")
-	} else if !strings.Contains(err.Error(), "is not in the declared enum") {
-		t.Errorf("the refusal must name the enum constraint, got %v", err)
+		}}))
+	if err != nil {
+		t.Fatalf("an out-of-enum value must not be refused: %v", err)
+	}
+	if ep.URL != "wss://qa.example.com/c" {
+		t.Errorf("out-of-enum substitution URL = %q", ep.URL)
 	}
 
 	// A supplied name the selected server does not declare is refused,

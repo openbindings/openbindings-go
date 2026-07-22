@@ -100,6 +100,37 @@ func (r *ContextRequirement) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// NewConfigValueRequirement builds a config.value ContextRequirement — the
+// binding-invoker family for a non-secret configuration value a binding needs
+// but the artifact does not supply (a server variable with no default, a
+// channel address a service generates at runtime). point names the
+// binding-specification configuration point the value belongs to ("server",
+// "address", …); key names the specific value within it (a server-variable
+// name, or "address" for a whole channel address); choices carries the
+// artifact's declared allowed values when it enumerates them (advisory picker
+// metadata, never a gate — the point does not refuse an off-list value).
+// durable defaults to true; pass a *bool of false for a value known to be
+// per-invocation (a runtime-generated address). The resolved value is carried
+// in the "configuration" context field under point; its shape there is the
+// invoker's own, so this requirement names what is needed, not the resolved
+// structure.
+func NewConfigValueRequirement(point, key, description string, choices []string, durable *bool) ContextRequirement {
+	extra := map[string]any{"point": point, "key": key}
+	if len(choices) > 0 {
+		c := make([]any, len(choices))
+		for i, v := range choices {
+			c[i] = v
+		}
+		extra["choices"] = c
+	}
+	return ContextRequirement{
+		Type:        "config.value",
+		Description: description,
+		Durable:     durable,
+		Extra:       extra,
+	}
+}
+
 // ContextAlternative is a conjunctive requirement set: ALL requirements must
 // be satisfied.
 type ContextAlternative struct {

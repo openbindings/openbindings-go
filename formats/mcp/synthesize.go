@@ -133,7 +133,7 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Ref:       refPrefixResources + tmpl.URITemplate,
+			Ref:       refPrefixResourceTemplates + tmpl.URITemplate,
 		}
 	}
 
