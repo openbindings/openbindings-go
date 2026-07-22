@@ -380,18 +380,23 @@ func (eng *engine) run(ctx context.Context) {
 	}
 
 	// sendPerEventError routes a per-event failure ({error, event}) to the
-	// node's onError target, or drops it. The error event inherits the
-	// failing event's lineage and root.
+	// node's onError target. Without an explicit route, the complete error
+	// event terminates the graph; omission never silently discards failure.
 	sendPerEventError := func(nodeKey string, errVal any, ev *event, lineage map[string]int) {
 		node := eng.graph.Nodes[nodeKey]
-		if node.OnError == "" {
-			return
-		}
-		if ev.errorDepth >= maxErrorDepth {
+		errorEvent := map[string]any{"error": errVal, "event": ev.data}
+		if node.OnError == "" || ev.errorDepth >= maxErrorDepth {
+			eng.exitFlag.Store(true)
+			eng.handle.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeOperationGraphExit,
+				Message: fmt.Sprintf("unhandled per-event failure at node %q", nodeKey),
+				Details: errorEvent,
+			})
+			cancel()
 			return
 		}
 		sendToNode(node.OnError, &event{
-			data:       map[string]any{"error": errVal, "event": ev.data},
+			data:       errorEvent,
 			source:     nodeKey,
 			root:       ev.root,
 			lineage:    copyLineage(lineage),
@@ -420,7 +425,7 @@ func (eng *engine) run(ctx context.Context) {
 		_ = eng.handle.CloseInput()
 	}
 
-	// startConduit lazily drives an operation node's held invocation and
+	// startConduit opens an operation node's held invocation and
 	// spawns its watcher (input closed from below) and output pump. The
 	// output pump owns the node's downstream completion and its terminal
 	// error handling: routed per onError when set, fatal to the graph when
@@ -523,6 +528,15 @@ func (eng *engine) run(ctx context.Context) {
 				sendDownstream(key, &event{data: v, source: key, root: root, lineage: lineage})
 			}
 		}()
+	}
+
+	// An operation node denotes one unconditional held session. Open every
+	// conduit with the graph, before waiting for caller input, so startup
+	// output/failure preserve the causal availability of direct invocation.
+	for key, node := range eng.graph.Nodes {
+		if node.Type == "operation" {
+			startConduit(key, node)
+		}
 	}
 
 	// handleCompletion processes a completion marker arriving at a node.
@@ -923,7 +937,7 @@ func (eng *engine) evalOrFail(
 	sendPerEventError func(string, any, *event, map[string]int),
 ) (any, bool) {
 	if eng.transform == nil {
-		sendPerEventError(key, "no transform evaluator available", ev, ev.lineage)
+		sendPerEventError(key, ExpressionEvaluationFailed, ev, ev.lineage)
 		return nil, true
 	}
 	var result any
@@ -941,7 +955,7 @@ func (eng *engine) evalOrFail(
 		if errors.Is(err, openbindings.ErrTransformUndefined) {
 			sendPerEventError(key, TransformUndefined, ev, ev.lineage)
 		} else {
-			sendPerEventError(key, err.Error(), ev, ev.lineage)
+			sendPerEventError(key, ExpressionEvaluationFailed, ev, ev.lineage)
 		}
 		return nil, true
 	}

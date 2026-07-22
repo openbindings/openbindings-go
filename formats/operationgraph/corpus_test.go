@@ -20,11 +20,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/recolabs/gnata"
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/recolabs/gnata"
 )
 
 // ---------------------------------------------------------------------------
@@ -62,12 +63,13 @@ type execFile struct {
 }
 
 type execFixture struct {
-	ID         string             `json:"id"`
-	Name       string             `json:"name"`
-	Operations map[string]*mockOp `json:"operations"`
-	Graph      json.RawMessage    `json:"graph"`
-	Writes     []any              `json:"writes"`
-	Expected   struct {
+	ID                       string             `json:"id"`
+	Name                     string             `json:"name"`
+	Operations               map[string]*mockOp `json:"operations"`
+	Graph                    json.RawMessage    `json:"graph"`
+	Writes                   []any              `json:"writes"`
+	AwaitOutputsBeforeWrites int                `json:"awaitOutputsBeforeWrites"`
+	Expected                 struct {
 		Output   []any  `json:"output"`
 		Ordering string `json:"ordering"`
 		// ArrayOrdering: "set" compares ARRAY-VALUED output events as
@@ -78,10 +80,12 @@ type execFixture struct {
 		ArrayOrdering string `json:"arrayOrdering"`
 		Error         bool   `json:"error"`
 		ErrorDetail   any    `json:"errorDetail"`
+		RefusedWrites *int   `json:"refusedWrites"`
 	} `json:"expected"`
 }
 
 type mockOp struct {
+	OnOpen      *mockResponse  `json:"onOpen"`
 	ClosesAfter *int           `json:"closesAfter"`
 	Responses   []mockResponse `json:"responses"`
 }
@@ -135,11 +139,30 @@ func (m *mockBindingInvoker) InvokeBinding(ctx context.Context, args *openbindin
 		})
 	}
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	// The controlled no-input mock closes from below as part of invocation
+	// opening, before the caller can race a write (OG-EX-42).
+	if op.ClosesAfter != nil && *op.ClosesAfter == 0 {
+		_ = inv.CloseInput()
+	}
 	go m.serve(ctx, inv, op, opKey)
 	return inv
 }
 
 func (m *mockBindingInvoker) serve(ctx context.Context, handle openbindings.BindingHandle[any, any], op *mockOp, opKey string) {
+	if op.OnOpen != nil {
+		if op.OnOpen.Emit != nil {
+			for _, v := range *op.OnOpen.Emit {
+				if err := handle.EmitOutput(v); err != nil {
+					return
+				}
+			}
+		}
+		if op.OnOpen.Fail != nil {
+			handle.FireError(&openbindings.InvocationError{Code: *op.OnOpen.Fail, Message: *op.OnOpen.Fail})
+			return
+		}
+	}
+
 	writes := []any{}
 	limit := -1
 	if op.ClosesAfter != nil {
@@ -387,6 +410,13 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 		Interface: iface,
 	})
 
+	outputsReady := make(chan struct{})
+	var outputsReadyOnce sync.Once
+	if fx.AwaitOutputsBeforeWrites == 0 {
+		outputsReadyOnce.Do(func() { close(outputsReady) })
+	}
+	writerDone := make(chan int, 1)
+
 	// Writer: the fixture's caller. Writes are paced: after each write the
 	// caller yields until either the graph back-closes the input side (then
 	// remaining writes are refused at the boundary, per the spec) or a short
@@ -394,15 +424,41 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 	// refusal, not a failure.
 	go func() {
 		defer func() { _ = call.Close() }()
+		refused := 0
+		defer func() { writerDone <- refused }()
+		select {
+		case <-outputsReady:
+		case <-ctx.Done():
+			return
+		}
+		// The corpus schedule begins writes after graph startup. Give the
+		// asynchronous SDK adapter time to open held conduits and propagate an
+		// immediate input-side close before the first caller write.
+		select {
+		case <-call.InputClosed():
+			refused += len(fx.Writes)
+			return
+		case <-time.After(time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
 		for i, w := range fx.Writes {
 			if i > 0 {
 				select {
 				case <-call.InputClosed():
+					refused += len(fx.Writes) - i
 					return
 				case <-time.After(50 * time.Millisecond):
 				}
 			}
+			select {
+			case <-call.InputClosed():
+				refused += len(fx.Writes) - i
+				return
+			default:
+			}
 			if err := call.Write(ctx, w); err != nil {
+				refused += len(fx.Writes) - i
 				return // input closed from below (back-closure) or terminal
 			}
 		}
@@ -425,6 +481,14 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 			break
 		}
 		outputs = append(outputs, v)
+		if fx.AwaitOutputsBeforeWrites > 0 && len(outputs) >= fx.AwaitOutputsBeforeWrites {
+			outputsReadyOnce.Do(func() { close(outputsReady) })
+		}
+	}
+	outputsReadyOnce.Do(func() { close(outputsReady) })
+	refusedWrites := <-writerDone
+	if fx.Expected.RefusedWrites != nil && refusedWrites != *fx.Expected.RefusedWrites {
+		t.Fatalf("refused writes = %d, want %d", refusedWrites, *fx.Expected.RefusedWrites)
 	}
 
 	// Terminal expectations.
@@ -440,7 +504,8 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 				t.Fatalf("terminal error code = %q, want %q (err: %v)", terminal.Code, detail, terminal)
 			}
 		default:
-			// An exit node with error:true: the event is the error detail.
+			// A graph-defined terminal (exit or unhandled per-event failure)
+			// carries the event as structured details.
 			if terminal.Code != openbindings.ErrCodeOperationGraphExit {
 				t.Fatalf("terminal error code = %q, want %q (err: %v)", terminal.Code, openbindings.ErrCodeOperationGraphExit, terminal)
 			}

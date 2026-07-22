@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -31,9 +30,8 @@ func FormatIssue(i GraphValidationIssue) string {
 }
 
 // ValidateGraph enforces the format spec's validation rules OG-V-01 through
-// OG-V-17 on one graph definition, plus the per-type field whitelists the
-// format's JSON Schema expresses structurally (which is how OG-V-17 and the
-// each/operation field split are caught without a separate schema pass).
+// OG-V-19 on one graph definition, plus required-field and field-type checks.
+// Graph-controlled objects are closed except for x- extensions (OG-V-19).
 // It returns structured issues (empty = valid).
 //
 // operationKeys is the set of operation keys the containing OBI declares;
@@ -50,6 +48,17 @@ func ValidateGraph(g *Graph, operationKeys map[string]bool) []GraphValidationIss
 	var issues []GraphValidationIssue
 	addIssue := func(rule, message string, nodeKeys ...string) {
 		issues = append(issues, GraphValidationIssue{Rule: rule, Message: message, NodeKeys: nodeKeys})
+	}
+
+	// OG-V-19: the graph and edge objects are closed except for x-
+	// extensions. Node-level checks follow after type discrimination below.
+	for _, field := range g.unknownFields {
+		addIssue("OG-V-19", fmt.Sprintf("graph has unknown field %q", field))
+	}
+	for i, edge := range g.Edges {
+		for _, field := range edge.unknownFields {
+			addIssue("OG-V-19", fmt.Sprintf("edge %d has unknown field %q", i, field))
+		}
 	}
 
 	// OG-V-01: version field present and SemVer 2.0.0.
@@ -182,14 +191,8 @@ func ValidateGraph(g *Graph, operationKeys map[string]bool) []GraphValidationIss
 			continue
 		}
 
-		// Field placement. The only field-placement failure is the explicit
-		// prohibition OG-V-17 (onError on a boundary node), enforced here as a
-		// rule (R10 — the format's schema no longer closes objects, so this
-		// cannot ride the schema). Any OTHER field the node type does not
-		// define is tolerated, not a failure: per R3 (§20) an unknown or
-		// misplaced field is ignored the way core OBI-T-02 treats one — a
-		// defined field on the wrong node type (maxIterations on operation)
-		// included. A diagnostic MAY be surfaced; it is never a refusal.
+		// Field placement. Boundary onError has its older, more specific
+		// OG-V-17 identity; every other unknown or misplaced field is OG-V-19.
 		for _, f := range presentFields(node) {
 			if fields.allowed[f] {
 				continue
@@ -197,7 +200,12 @@ func ValidateGraph(g *Graph, operationKeys map[string]bool) []GraphValidationIss
 			if f == "onError" && (node.Type == "input" || node.Type == "output") {
 				addIssue("OG-V-17", fmt.Sprintf("node %q (%s node) must not declare onError", key, node.Type), key)
 			}
-			// else: tolerated per R3, no issue.
+		}
+		for _, f := range node.unknownFields {
+			if f == "onError" && (node.Type == "input" || node.Type == "output") {
+				continue // reported above as OG-V-17
+			}
+			addIssue("OG-V-19", fmt.Sprintf("node %q (%s node) has unknown field %q", key, node.Type, f), key)
 		}
 		for _, f := range fields.required {
 			if !hasField(node, f) {
@@ -292,14 +300,8 @@ func existingKeys(g *Graph, keys ...string) []string {
 // carries).
 var semverRe = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
 
-// The format version this implementation supports. OG-T-02 (mirroring the
-// core spec's OBI-T-04): refuse a higher major version or one below the
-// supported minimum (pre-1.0, both bounds apply to minors), and refuse
-// prereleases absent declared support.
-const (
-	supportedMajor = 0
-	supportedMinor = 2
-)
+// The exact graph-unit edition this binding-specification revision supports.
+const supportedVersion = "0.2.0"
 
 // Keyword-shape tables for the OG-V-18 walk: recursion follows JSON Schema
 // 2020-12 keyword shapes so that property NAMES under `properties`/`$defs`/
@@ -370,16 +372,8 @@ func checkVersion(version string) error {
 	if m == nil {
 		return fmt.Errorf("version %q is not a SemVer 2.0.0 string", version)
 	}
-	major, _ := strconv.Atoi(m[1])
-	minor, _ := strconv.Atoi(m[2])
-	if major > supportedMajor || (supportedMajor == 0 && major == 0 && minor > supportedMinor) {
-		return fmt.Errorf("OG-T-02: graph declares openbindings.operation-graph %s; this implementation supports up to %d.%d.x", version, supportedMajor, supportedMinor)
-	}
-	if major < supportedMajor || (supportedMajor == 0 && major == 0 && minor < supportedMinor) {
-		return fmt.Errorf("OG-T-02: graph declares openbindings.operation-graph %s; this implementation supports no lower than %d.%d.x", version, supportedMajor, supportedMinor)
-	}
-	if m[4] != "" {
-		return fmt.Errorf("OG-T-02: graph declares prerelease openbindings.operation-graph %s; this implementation declares no prerelease support", version)
+	if version != supportedVersion {
+		return fmt.Errorf("OG-T-02: graph declares openbindings.operation-graph %s; this implementation supports exactly %s", version, supportedVersion)
 	}
 	return nil
 }

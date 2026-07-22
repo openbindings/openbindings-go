@@ -368,7 +368,7 @@ func summarizeValidationError(ve *jsonschema.ValidationError) string {
 func ValidateAgainstSchema(value any, schema JSONSchema, schemas map[string]JSONSchema) error {
 	compiled, err := compileExampleSchema(schema, buildSchemaDefs(schemas))
 	if err != nil {
-		return fmt.Errorf("openbindings: schema compilation failed: %w", err)
+		return &SchemaGraphUnavailableError{Cause: err}
 	}
 	if verr := compiled.Validate(value); verr != nil {
 		// The library's Error() leads with the compiler's internal resource
@@ -377,6 +377,31 @@ func ValidateAgainstSchema(value any, schema JSONSchema, schemas map[string]JSON
 		return &schemaValidationError{lines: splitSchemaError(verr), cause: verr}
 	}
 	return nil
+}
+
+// SchemaGraphUnavailableError reports that a value verdict could not be
+// reached because the governing operation schema's complete statically
+// reachable graph was not available, well-formed, and evaluable. It is
+// distinct from an instance mismatch, as required by OBI-T-16.
+//
+// Callers can use errors.As rather than parsing diagnostic text. Cause remains
+// available through errors.Unwrap for validator-specific diagnostics.
+type SchemaGraphUnavailableError struct {
+	Cause error
+}
+
+func (e *SchemaGraphUnavailableError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "openbindings: schema compilation failed"
+	}
+	return fmt.Sprintf("openbindings: schema compilation failed: %v", e.Cause)
+}
+
+func (e *SchemaGraphUnavailableError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 // schemaValidationError renders a validation failure as its per-leaf lines
