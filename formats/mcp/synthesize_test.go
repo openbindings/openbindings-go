@@ -298,6 +298,31 @@ func TestConvertToInterface_SortedOutput(t *testing.T) {
 	}
 }
 
+// Cross-SDK pin, mirroring the TS SDK's collision-assignment fixture: both
+// names sanitize to "a_b", and byte-wise name order (" " 0x20 < "_" 0x5F)
+// decides which tool is processed first and wins the bare key. The TS SDK
+// matches via codePointCompare (UTF-8 byte order is code point order); its
+// former localeCompare made this assignment depend on the host locale.
+func TestConvertToInterface_CollisionAssignmentFollowsByteOrder(t *testing.T) {
+	disc := &discovery{
+		Tools: []*gomcp.Tool{
+			{Name: "a_b", Description: "underscore tool"},
+			{Name: "a b", Description: "space tool"},
+		},
+	}
+
+	iface, err := convertToInterface(disc, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := iface.Operations["a_b"].Description; got != "space tool" {
+		t.Errorf(`Operations["a_b"].Description = %q, want "space tool"`, got)
+	}
+	if got := iface.Operations["tool_a_b"].Description; got != "underscore tool" {
+		t.Errorf(`Operations["tool_a_b"].Description = %q, want "underscore tool"`, got)
+	}
+}
+
 func TestConvertToInterface_ToolFallsBackToTitle(t *testing.T) {
 	disc := &discovery{
 		Tools: []*gomcp.Tool{

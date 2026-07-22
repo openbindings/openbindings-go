@@ -22,6 +22,11 @@ func TestSanitizeKey(t *testing.T) {
 		// '.' and '-' survive sanitization but cannot lead either.
 		{".hidden", "_.hidden"},
 		{"-flag", "_-flag"},
+		// Cross-SDK pin: an astral-plane character replaces as ONE
+		// underscore (regexp operates on runes). The TS SDK matches via a
+		// Unicode-mode character class — without the u flag it would emit
+		// one underscore per UTF-16 surrogate half ("t-__-a").
+		{"t-😀-a", "t-_-a"},
 	}
 	for _, tc := range cases {
 		if got := SanitizeKey(tc.in); got != tc.want {
