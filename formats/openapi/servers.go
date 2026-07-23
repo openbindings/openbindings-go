@@ -24,8 +24,8 @@ import (
 //     else the path item's, else the document's, else the implied
 //     `url: "/"`.
 //
-//   - The default selects the effective list's first entry with each server
-//     variable substituted by its declared default.
+//   - A sole effective entry selects itself with declared variable defaults;
+//     multiple artifact alternatives require configuration to select one.
 //
 //   - Consumer configuration (context.configuration.server) may instead
 //     select another entry, supply variable values, or supply a complete
@@ -64,6 +64,9 @@ func resolveServer(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Op
 		if base, ok := meta["baseURL"].(string); ok && base != "" {
 			return absolutizeServerURL(base, sourceLocation)
 		}
+	}
+	if len(servers) != 1 {
+		return "", fmt.Errorf("the effective server list has %d alternatives; configuration.server must select one (openbindings.openapi@1 OAPI-P-05)", len(servers))
 	}
 
 	substituted, err := substituteServerVariables(servers[0], nil)
@@ -163,11 +166,10 @@ func configIndex(raw any) (int, bool) {
 // substituteServerVariables substitutes each declared server variable with
 // the supplied value or its declared default. A variable with neither a
 // supplied value nor a declared default, and a supplied variable the entry
-// does not declare, are loud errors. A declared enum does NOT gate: it is the
-// author's expectation, not a boundary (openbindings.openapi@1 §9.3) — the
-// same configuration point admits a complete base-URL override that bypasses
-// the declaration entirely, so refusing a narrower substitution would be
-// incoherent. A caller MAY surface the enum as choice metadata.
+// does not declare, are loud errors. A declared enum constrains substitution
+// values exactly as the artifact declares; the separate complete-base-URL
+// override is an explicit configuration choice, not permission to weaken the
+// selected Server Object.
 func substituteServerVariables(srv *openapi3.Server, supplied map[string]string) (string, error) {
 	u := srv.URL
 	names := make([]string, 0, len(srv.Variables))
@@ -190,6 +192,18 @@ func substituteServerVariables(srv *openapi3.Server, supplied map[string]string)
 				key:         name,
 				description: fmt.Sprintf("server %q: variable %q has no supplied value and no declared default", srv.URL, name),
 				choices:     v.Enum,
+			}
+		}
+		if len(v.Enum) > 0 {
+			allowed := false
+			for _, candidate := range v.Enum {
+				if candidate == val {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return "", fmt.Errorf("server %q variable %q value %q is outside its declared enum", srv.URL, name, val)
 			}
 		}
 		u = strings.ReplaceAll(u, "{"+name+"}", val)

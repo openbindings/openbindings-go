@@ -12,7 +12,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"net/http"
 	"sort"
@@ -53,6 +52,8 @@ type Invoker struct {
 	// through to the default: not solicited.
 	solicitProgress *bool
 }
+
+var _ openbindings.BindingInvoker = (*Invoker)(nil)
 
 // InvokerOption configures an Invoker.
 type InvokerOption func(*Invoker)
@@ -123,7 +124,7 @@ func (e *Invoker) Close() error {
 	return nil
 }
 
-// Formats returns the source formats supported by the MCP invoker.
+// BindingSpecs returns the binding-spec identifiers supported by the MCP invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Model Context Protocol"}}
 }
@@ -160,6 +161,9 @@ type Synthesizer struct {
 	httpClient    *http.Client
 }
 
+var _ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+var _ openbindings.SourceInspector = (*Synthesizer)(nil)
+
 // SynthesizerOption configures a Synthesizer.
 type SynthesizerOption func(*Synthesizer)
 
@@ -192,7 +196,7 @@ func NewSynthesizer(opts ...SynthesizerOption) *Synthesizer {
 	return c
 }
 
-// Formats returns the source formats supported by the MCP synthesizer.
+// BindingSpecs returns the binding-spec identifiers supported by the MCP synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Model Context Protocol"}}
 }
@@ -205,12 +209,24 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // loudly before any I/O. Without content, discovery connects live.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
-		return nil, openbindings.ErrNoSources
+		skeleton, err := openbindings.SynthesisSkeleton(in)
+		return &skeleton, err
 	}
 	if len(in.Sources) > 1 {
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
+	if src.BindingSpec != BindingSpec {
+		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	}
+	if src.OutputLocation != "" {
+		if err := validateEndpoint(src.OutputLocation); err != nil {
+			return nil, fmt.Errorf("outputLocation: %w", err)
+		}
+	}
+	if src.Embed && src.Content == nil {
+		return nil, fmt.Errorf("MCP live-discovery embedding is not supported: preserving the complete pagination-exhausted listing is required; provide pinned listing content explicitly")
+	}
 
 	var disc *discovery
 	if src.Content != nil {
@@ -235,32 +251,23 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, fmt.Errorf("MCP convert: %w", err)
 	}
 
-	if in.Name != "" {
-		iface.Name = in.Name
+	if src.Content != nil {
+		entry := iface.Sources[DefaultSourceName]
+		entry.Content = src.Content
+		iface.Sources[DefaultSourceName] = entry
 	}
-	if in.Version != "" {
-		iface.Version = in.Version
-	}
-	if in.Description != "" {
-		iface.Description = in.Description
+	if err := openbindings.FinalizeSynthesis(iface, in, DefaultSourceName, BindingSpec); err != nil {
+		return nil, err
 	}
 
 	return iface, nil
 }
 
-// buildHTTPHeaders constructs HTTP headers from invocation context
-// credentials for the MCP Streamable HTTP transport.
+// buildHTTPHeaders carries only explicitly named HTTP headers and cookies.
+// Generic credentials are challenged before this point because MCP does not
+// declare their HTTP destination.
 func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 	headers := map[string]string{}
-
-	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
-		headers["Authorization"] = "Bearer " + token
-	} else if key := openbindings.ContextAPIKey(bindCtx); key != "" {
-		headers["Authorization"] = "ApiKey " + key
-	} else if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
-		encoded := base64.StdEncoding.EncodeToString([]byte(u + ":" + p))
-		headers["Authorization"] = "Basic " + encoded
-	}
 
 	for k, v := range openbindings.ContextHeaders(bindCtx) {
 		headers[k] = v

@@ -368,9 +368,10 @@ cmd "configuration" {
 	if result.cmd.Name != "set" {
 		t.Errorf("cmd name = %q, want set", result.cmd.Name)
 	}
-	// The canonical path should use the primary name, not the alias.
-	if result.path[0] != "configuration" {
-		t.Errorf("path[0] = %q, want configuration", result.path[0])
+	// The ref spelling is also the argv spelling; an artifact-declared alias
+	// is preserved rather than normalized to the primary command name.
+	if result.path[0] != "config" {
+		t.Errorf("path[0] = %q, want supplied alias config", result.path[0])
 	}
 
 	// "cfg set" should also work.
@@ -380,6 +381,9 @@ cmd "configuration" {
 	}
 	if result2.cmd.Name != "set" {
 		t.Errorf("cmd name = %q, want set", result2.cmd.Name)
+	}
+	if result2.path[0] != "cfg" {
+		t.Errorf("path[0] = %q, want supplied alias cfg", result2.path[0])
 	}
 }
 

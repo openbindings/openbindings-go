@@ -1,11 +1,48 @@
 package asyncapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
+
+func TestSynthesizeInterface_PreservesObjectFormContent(t *testing.T) {
+	content := json.RawMessage(`{"asyncapi":"3.0.0","info":{"title":"T","version":"1"},"operations":{}}`)
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := iface.Sources[DefaultSourceName].Content; !bytes.Equal(got, content) {
+		t.Fatalf("object-form content changed: got %s want %s", got, content)
+	}
+}
+
+func TestSynthesizeInterface_FilePathEmitsInvocableFileURI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.json")
+	content := `{"asyncapi":"3.0.0","info":{"title":"T","version":"1"},"operations":{}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: path, Embed: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := iface.Sources[DefaultSourceName].Location, "file://"+path; got != want {
+		t.Fatalf("emitted location = %q, want %q", got, want)
+	}
+	if got, err := openbindings.ContentToBytes(iface.Sources[DefaultSourceName].Content); err != nil || string(got) != content {
+		t.Fatalf("embed directive did not preserve the artifact: %s (%v)", got, err)
+	}
+}
 
 // helper wraps synthesizeInterfaceWithDoc for simpler test calls
 func testSynthesizeInterface(t *testing.T, doc *document, location string) openbindings.Interface {
@@ -43,9 +80,9 @@ func TestSynthesizeInterface_CreatesOperationsAlphabetically(t *testing.T) {
 		AsyncAPI: "3.0.0",
 		Operations: map[string]asyncOperation{
 			"zeta":  {Action: "send", Channel: channelRef{Ref: "#/channels/ch"}},
-			"alpha": {Action: "receive", Channel: channelRef{Ref: "#/channels/ch"}},
+			"alpha": {Action: "receive", Channel: channelRef{Ref: "#/channels/ch"}, Bindings: &operationBindings{HTTP: &httpOperationBinding{Method: "POST"}}},
 		},
-		Channels: map[string]channel{"ch": {Address: "/ch"}},
+		Channels: map[string]channel{"ch": {Address: "/ch", Messages: map[string]message{"event": {Payload: map[string]any{"type": "object"}}}}},
 	}
 
 	iface := testSynthesizeInterface(t, doc, "")
@@ -66,7 +103,7 @@ func TestSynthesizeInterface_CreatesBindingsWithRefs(t *testing.T) {
 		Operations: map[string]asyncOperation{
 			"sendMsg": {Action: "send", Channel: channelRef{Ref: "#/channels/messages"}},
 		},
-		Channels: map[string]channel{"messages": {Address: "/messages"}},
+		Channels: map[string]channel{"messages": {Address: "/messages", Messages: map[string]message{"event": {Payload: map[string]any{"type": "object"}}}}},
 	}
 
 	iface := testSynthesizeInterface(t, doc, "")
@@ -80,6 +117,38 @@ func TestSynthesizeInterface_CreatesBindingsWithRefs(t *testing.T) {
 	}
 	if binding.Operation != "sendMsg" {
 		t.Errorf("operation = %q, want %q", binding.Operation, "sendMsg")
+	}
+}
+
+func TestSynthesizeInterface_UsesInvocationEligibilityAndPreservesMessageAlternatives(t *testing.T) {
+	doc := &document{
+		AsyncAPI: "3.0.0",
+		Channels: map[string]channel{
+			"good": {Address: "/good", Messages: map[string]message{
+				"a": {Payload: map[string]any{"type": "string"}},
+				"b": {Payload: map[string]any{"type": "number"}},
+			}},
+			"headers": {Address: "/headers", Messages: map[string]message{
+				"event": {Payload: map[string]any{"type": "object"}, Headers: map[string]any{}},
+			}},
+		},
+		Operations: map[string]asyncOperation{
+			"good":        {Action: "send", Channel: channelRef{Ref: "#/channels/good"}},
+			"headers":     {Action: "send", Channel: channelRef{Ref: "#/channels/headers"}},
+			"missing":     {Action: "send", Channel: channelRef{Ref: "#/channels/missing"}},
+			"replyNoHTTP": {Action: "receive", Channel: channelRef{Ref: "#/channels/good"}, Reply: &operationReply{}},
+		},
+	}
+	iface := testSynthesizeInterface(t, doc, "")
+	if len(iface.Operations) != 1 {
+		t.Fatalf("operations = %v, want only the bindable operation", iface.Operations)
+	}
+	output, ok := iface.Operations["good"].Output.(map[string]any)
+	if !ok {
+		t.Fatalf("good output = %v, want schema union", iface.Operations["good"].Output)
+	}
+	if choices, ok := output["anyOf"].([]any); !ok || len(choices) != 2 {
+		t.Fatalf("good output anyOf = %v, want both artifact message schemas", output["anyOf"])
 	}
 }
 
@@ -119,7 +188,7 @@ func TestSynthesizeInterface_BindingSpec(t *testing.T) {
 func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	content := `{"asyncapi":"3.0.0","info":{"title":"T","version":"1.0.0"},"operations":{}}`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: "asyncapi@3.0", Content: openbindings.TextContent(content)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)

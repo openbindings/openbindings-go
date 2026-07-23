@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -148,25 +147,149 @@ func runServerStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 	}
 }
 
-// applyGRPCContext attaches binding-context credentials and caller-supplied
-// header entries as outgoing gRPC metadata per §9.5 (GRPC-P-07): a bearer
-// token rides `authorization: Bearer <token>`; any other entry naming a
-// valid metadata key rides that key. A key that violates the gRPC metadata
+// runClientStream opens the artifact-declared client stream before reading
+// its values, sends each canonical ProtoJSON request message, then closes the
+// request side and emits the method's one response. A later invalid value is
+// terminal and the invocation-owned context cancels the already-open RPC.
+func runClientStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, noInput bool) {
+	stream, err := stub.InvokeRpcClientStream(rpcCtx, methodDesc)
+	if err != nil {
+		inv.FireError(grpcError(err, openbindings.ErrCodeExecutionFailed))
+		return
+	}
+	if noInput {
+		_ = inv.CloseInput()
+	} else {
+		for {
+			raw, rerr := inv.ReadInput(rpcCtx)
+			if rerr == io.EOF {
+				break
+			}
+			if rerr != nil {
+				return
+			}
+			msg, buildErr := buildRequest(methodDesc, raw)
+			if buildErr != nil {
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: buildErr.Error()})
+				return
+			}
+			if sendErr := stream.SendMsg(msg); sendErr != nil {
+				inv.FireError(grpcError(sendErr, openbindings.ErrCodeStreamError))
+				return
+			}
+		}
+	}
+	resp, recvErr := stream.CloseAndReceive()
+	if md, herr := stream.Header(); herr == nil {
+		_ = inv.SetHeader(toOBMetadata(md))
+	}
+	if md := toOBMetadata(stream.Trailer()); md != nil {
+		inv.SetTrailer(md)
+	}
+	if recvErr != nil {
+		if rpcCtx.Err() == nil {
+			inv.FireError(grpcError(recvErr, openbindings.ErrCodeStreamError))
+		}
+		return
+	}
+	emitUnaryResponse(inv, resp)
+}
+
+// runBidiStream sends and receives concurrently so a server response can be
+// emitted while the caller's input side remains open. Either direction's
+// failure terminates the invocation and cancels the other through rpcCtx;
+// values emitted before a later status or local validation failure stand.
+func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, noInput bool) {
+	stream, err := stub.InvokeRpcBidiStream(rpcCtx, methodDesc)
+	if err != nil {
+		inv.FireError(grpcError(err, openbindings.ErrCodeExecutionFailed))
+		return
+	}
+
+	go func() {
+		if noInput {
+			_ = inv.CloseInput()
+			if closeErr := stream.CloseSend(); closeErr != nil && rpcCtx.Err() == nil {
+				inv.FireError(grpcError(closeErr, openbindings.ErrCodeStreamError))
+			}
+			return
+		}
+		for {
+			raw, readErr := inv.ReadInput(rpcCtx)
+			if readErr == io.EOF {
+				if closeErr := stream.CloseSend(); closeErr != nil && rpcCtx.Err() == nil {
+					inv.FireError(grpcError(closeErr, openbindings.ErrCodeStreamError))
+				}
+				return
+			}
+			if readErr != nil {
+				return
+			}
+			msg, buildErr := buildRequest(methodDesc, raw)
+			if buildErr != nil {
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: buildErr.Error()})
+				return
+			}
+			if sendErr := stream.SendMsg(msg); sendErr != nil {
+				if rpcCtx.Err() == nil {
+					inv.FireError(grpcError(sendErr, openbindings.ErrCodeStreamError))
+				}
+				return
+			}
+		}
+	}()
+
+	if md, herr := stream.Header(); herr == nil {
+		_ = inv.SetHeader(toOBMetadata(md))
+	}
+	for {
+		resp, recvErr := stream.RecvMsg()
+		if recvErr != nil {
+			if md := toOBMetadata(stream.Trailer()); md != nil {
+				inv.SetTrailer(md)
+			}
+			if recvErr == io.EOF {
+				inv.CloseOutput()
+				return
+			}
+			if rpcCtx.Err() == nil {
+				inv.FireError(grpcError(recvErr, openbindings.ErrCodeStreamError))
+			}
+			return
+		}
+		output, jsonErr := responseToJSON(resp)
+		if jsonErr != nil {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: jsonErr.Error()})
+			return
+		}
+		if emitErr := inv.EmitOutput(output); emitErr != nil {
+			return
+		}
+	}
+}
+
+func emitUnaryResponse(inv openbindings.BindingHandle[any, any], resp proto.Message) {
+	output, err := responseToJSON(resp)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
+		return
+	}
+	if err := inv.EmitOutput(output); err != nil {
+		return
+	}
+	inv.CloseOutput()
+}
+
+// applyGRPCContext attaches caller-supplied, explicitly named header entries
+// as outgoing gRPC metadata per §9.5 (GRPC-P-07). Generic bearer, basic,
+// and API-key credentials have no artifact-declared carriage and are
+// challenged by the invocation path rather than mapped here. A key that violates the gRPC metadata
 // name grammar (lowercase letters, digits, `-`, `_`, `.`) or uses the
 // protocol-reserved `grpc-` prefix is UNPLACEABLE — surfaced to the
 // consumer as a loud pre-dispatch refusal, never normalized or case-folded
 // into place, never silently skipped.
 func applyGRPCContext(ctx context.Context, bindCtx map[string]any) (context.Context, error) {
 	md := metadata.MD{}
-
-	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
-		md.Set("authorization", "Bearer "+token)
-	} else if key := openbindings.ContextAPIKey(bindCtx); key != "" {
-		md.Set("authorization", "ApiKey "+key)
-	} else if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
-		encoded := base64.StdEncoding.EncodeToString([]byte(u + ":" + p))
-		md.Set("authorization", "Basic "+encoded)
-	}
 
 	for k, v := range openbindings.ContextHeaders(bindCtx) {
 		if err := checkMetadataKey(k); err != nil {

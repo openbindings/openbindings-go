@@ -432,27 +432,18 @@ func TestConformance_P02_UndecodableResponseIsLoudFailure(t *testing.T) {
 	}
 }
 
-// Unknown members in a RESPONSE are tolerated and dropped, matching the
-// incorporated schema layer's wire behavior (openbindings.grpc@1's binary
-// decode preserves-and-ignores unknown response fields; §9.2's loud
-// unknown-field posture is the INPUT rule). The pin stays authoritative
-// for interpretation (§6).
-func TestConformance_P02_UnknownResponseMemberTolerated(t *testing.T) {
+// Connect's JSON codec uses canonical ProtoJSON in both directions. Its
+// default parser refuses unknown response members; binary protobuf's unknown
+// field skipping does not authorize a different JSON posture.
+func TestConformance_P02_UnknownResponseMemberRefused(t *testing.T) {
 	ctx := testContext(t)
 	srv := fakeConnectServer(t, http.StatusOK, `{"id":"a","name":"b","driftedField":{"x":1}}`)
 
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "a"})
-	v, err := openbindings.Single[any](ctx, inv.Outputs())
-	if err != nil {
-		t.Fatalf("a drifted-but-compatible response must decode (§6 staleness): %v", err)
-	}
-	data := v.(map[string]any)
-	if data["id"] != "a" || data["name"] != "b" {
-		t.Errorf("known fields must decode, got %v", data)
-	}
-	if _, present := data["driftedField"]; present {
-		t.Errorf("unknown response members are outside the pin and must not pass through, got %v", data)
+	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
+	if !strings.Contains(ierr.Message, "driftedField") && !strings.Contains(ierr.Message, "unknown") {
+		t.Errorf("unknown response refusal should identify the mismatch, got %q", ierr.Message)
 	}
 }
 
@@ -673,14 +664,12 @@ func TestConformance_P03_DescriptorlessVerbatimValues(t *testing.T) {
 		t.Errorf("output = %#v, want the verbatim parsed array", v)
 	}
 
-	// An ABSENT input value sends {}, the empty message's canonical form.
+	// An ABSENT input cannot acquire a request shape in descriptorless mode.
 	respBody = `{"ok":true}`
 	inv = invokeWith(t, ctx, NewInvoker(), args())
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
-		t.Fatalf("absent input: %v", err)
-	}
-	if gotBody != `{}` {
-		t.Errorf("absent input body = %q, want {} (CONN-P-03)", gotBody)
+	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeValidationFailed)
+	if !strings.Contains(ierr.Message, "one present JSON input value") {
+		t.Errorf("absent-input refusal = %q", ierr.Message)
 	}
 
 	// An explicit JSON null is a VALUE, not absence, and rides as `null`.
@@ -692,15 +681,12 @@ func TestConformance_P03_DescriptorlessVerbatimValues(t *testing.T) {
 		t.Errorf("null input body = %q, want null (CONN-P-03: any JSON value, verbatim)", gotBody)
 	}
 
-	// An empty response body yields null.
+	// An empty response body carries no JSON value and is a protocol error.
 	respBody = ``
 	inv = invokeWith(t, ctx, NewInvoker(), args(), map[string]any{"q": 1})
 	outputs, terr := collectOutputs(t, ctx, inv)
-	if terr != nil {
-		t.Fatalf("empty body must be a success yielding null (CONN-P-03): %v", terr)
-	}
-	if len(outputs) != 1 || outputs[0] != nil {
-		t.Errorf("outputs = %#v, want exactly one null value", outputs)
+	if len(outputs) != 0 || terr == nil || terr.Code != openbindings.ErrCodeResponseError {
+		t.Fatalf("empty body must fail without invented output (CONN-P-03): outputs=%v error=%v", outputs, terr)
 	}
 }
 
@@ -753,7 +739,7 @@ service ChatService { rpc Chat(stream ChatMsg) returns (stream ChatMsg); }
 	ctx := testContext(t)
 	srv := unreachableServer(t)
 
-	inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, bidiProto, "testpkg.ChatService/Chat"))
+	inv := NewInvoker().WithFullDuplexTransport(false).InvokeBinding(ctx, unaryArgs(srv.URL, bidiProto, "testpkg.ChatService/Chat"))
 	outputs, terr := collectOutputs(t, ctx, inv)
 	if len(outputs) != 0 || terr == nil {
 		t.Fatal("bidi must refuse pre-dispatch (CONN-P-04)")
@@ -1035,7 +1021,7 @@ func TestConformance_P07_BareAPIKeyFieldSurfacedLoudly(t *testing.T) {
 	args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
 	args.Context = map[string]any{"apiKey": "k-secret"}
 	inv := NewInvoker().InvokeBinding(ctx, args)
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
+	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeContextRequired)
 	if hit {
 		t.Error("server was contacted; an inexpressible apiKey must be surfaced BEFORE dispatch (§9.6)")
 	}
@@ -1064,7 +1050,7 @@ func TestConformance_P07_BearerDoesNotSilentlyDropAPIKeyField(t *testing.T) {
 	args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
 	args.Context = map[string]any{"bearerToken": "tok-1", "apiKey": "k-secret"}
 	inv := NewInvoker().InvokeBinding(ctx, args)
-	_ = mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
+	_ = mustTerminalError(t, ctx, inv, openbindings.ErrCodeContextRequired)
 	if hit {
 		t.Error("server was contacted; a bearer must not let a bare apiKey be silently dropped — the apiKey is surfaced pre-dispatch (§9.6)")
 	}

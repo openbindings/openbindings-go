@@ -3,8 +3,6 @@ package asyncapi
 import (
 	"context"
 	"fmt"
-	"sort"
-
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -23,11 +21,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 
 	var targets []openbindings.BindableTarget
 
-	opIDs := make([]string, 0, len(doc.Operations))
-	for opID := range doc.Operations {
-		opIDs = append(opIDs, opID)
-	}
-	sort.Strings(opIDs)
+	opIDs := bindableOperationIDs(doc)
 
 	// Suggest the same operation key SynthesizeInterface assigns (synthesize.go: same
 	// sorted iteration and SanitizeKey + UniqueKey de-duplication), so an

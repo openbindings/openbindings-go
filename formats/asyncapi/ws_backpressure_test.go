@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/coder/websocket"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // WS slow-consumer backpressure (spec/binding-specs/asyncapi/openbindings.asyncapi.md, "WS slow-consumer

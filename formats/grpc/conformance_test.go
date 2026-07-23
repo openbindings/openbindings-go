@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -35,17 +36,18 @@ import (
 
 func TestConformance_D02_DialAddressGrammar(t *testing.T) {
 	valid := []struct {
-		address string
-		wantTLS bool
+		address      string
+		wantTLS      bool
+		wantExplicit bool
 	}{
-		{"api.example.com:50051", false},
-		{"api.example.com:443", true},          // TLS iff port 443
-		{"api.example.com:8443", false},        // 8443 dials plaintext unless overridden
-		{"grpc://api.example.com:443", false},  // explicit plaintext beats the 443 rule
-		{"grpcs://api.example.com:8443", true}, // explicit TLS off port 443
-		{"10.0.0.7:50051", false},              // IPv4 literal
-		{"[::1]:50051", false},                 // bracketed IPv6 literal
-		{"grpcs://[2001:db8::1]:50051", true},  // scheme + IPv6
+		{"api.example.com:50051", false, false},
+		{"api.example.com:443", false, false}, // ports never imply transport
+		{"api.example.com:8443", false, false},
+		{"grpc://api.example.com:443", false, true},
+		{"grpcs://api.example.com:8443", true, true},
+		{"10.0.0.7:50051", false, false},
+		{"[::1]:50051", false, false},
+		{"grpcs://[2001:db8::1]:50051", true, true},
 	}
 	for _, tc := range valid {
 		addr, err := parseDialAddress(tc.address)
@@ -55,6 +57,9 @@ func TestConformance_D02_DialAddressGrammar(t *testing.T) {
 		}
 		if addr.tls != tc.wantTLS {
 			t.Errorf("parseDialAddress(%q).tls = %v, want %v", tc.address, addr.tls, tc.wantTLS)
+		}
+		if addr.explicit != tc.wantExplicit {
+			t.Errorf("parseDialAddress(%q).explicit = %v, want %v", tc.address, addr.explicit, tc.wantExplicit)
 		}
 		if strings.Contains(addr.hostPort, "://") {
 			t.Errorf("parseDialAddress(%q) must strip the scheme before dialing, got %q", tc.address, addr.hostPort)
@@ -186,7 +191,8 @@ func TestConformance_D01_DescriptorSetJSON_InvokesEndToEnd(t *testing.T) {
 			Location:    bufconnLocation,
 			Content:     mustContent(descriptorSetJSON(t, durationFDP(), testItemsFDP())),
 		},
-		Ref: "testpkg.ItemService/GetItem",
+		Ref:     "testpkg.ItemService/GetItem",
+		Context: map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "fds"}); err != nil {
 		t.Fatal(err)
@@ -299,7 +305,7 @@ message PingMsg { string msg = 1; }
 		inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
 			// The location is a valid form but unreachable: the refusal must
 			// fire from offline resolution, never a dial.
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "203.0.113.9:50051", Content: openbindings.TextContent(proto)},
+			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
 			Ref:    ref,
 		})
 		_, terr := drainInvocation(t, inv)
@@ -447,12 +453,12 @@ func TestConformance_TargetPointReplacesLocation(t *testing.T) {
 
 	ctx := testCtx(t)
 	inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		// The location would elect TLS (:443) and fail against the
-		// plaintext server; the configured target elects plaintext. Success
+		// The location explicitly elects TLS and would fail against the
+		// plaintext server; the configured target explicitly elects plaintext. Success
 		// proves the replacement.
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "203.0.113.9:443"},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://203.0.113.9:443"},
 		Ref:     "testpkg.ItemService/GetItem",
-		Context: map[string]any{"configuration": map[string]any{"target": "127.0.0.1:50051"}},
+		Context: map[string]any{"configuration": map[string]any{"target": "grpc://127.0.0.1:50051"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "t"}); err != nil {
 		t.Fatal(err)
@@ -680,7 +686,7 @@ service S { rpc Do(Req) returns (Resp); }
 	defer invoker.Close()
 
 	inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "203.0.113.9:50051", Content: openbindings.TextContent(proto)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
 		Ref:    "p2.S/Do",
 	})
 	_, terr := drainInvocation(t, inv)
@@ -720,7 +726,8 @@ func TestConformance_SchemaRange_InertCarriageNotRefused(t *testing.T) {
 			Location:    bufconnLocation,
 			Content:     mustContent(descriptorSetJSON(t, durationFDP(), testItemsFDP(), dirty)),
 		},
-		Ref: "testpkg.ItemService/GetItem",
+		Ref:     "testpkg.ItemService/GetItem",
+		Context: map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "inert"}); err != nil {
 		t.Fatal(err)
@@ -734,23 +741,31 @@ func TestConformance_SchemaRange_InertCarriageNotRefused(t *testing.T) {
 // GRPC-P-04 — interaction-kind coverage (§8)
 // ---------------------------------------------------------------------------
 
-// Bidirectional methods are refused BEFORE dispatch as this
-// implementation's declared limitation (client-streaming is pinned by
-// TestIntegration_ClientStreamingUnsupported).
-func TestConformance_P04_BidiRefusedPreDispatchAsDeclaredLimitation(t *testing.T) {
+// Bidirectional methods preserve the artifact's two independent stream
+// directions: a response can arrive before caller input closes.
+func TestConformance_P04_BidiFlowsWhileInputOpen(t *testing.T) {
 	dialer, _ := setupTestServer(t)
 	invoker := newTestInvoker(t, dialer)
 	defer invoker.Close()
 
-	inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("testpkg.ItemService/Chat", nil))
-	_, terr := drainInvocation(t, inv)
-	if terr == nil {
-		t.Fatal("bidi must refuse pre-dispatch")
+	ctx := testCtx(t)
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/Chat", nil))
+	if err := inv.Write(ctx, map[string]any{"id": "one"}); err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{"bidirectional", "limitation", "GRPC-P-04"} {
-		if !strings.Contains(terr.Message, want) {
-			t.Errorf("refusal must mention %q, got: %s", want, terr.Message)
-		}
+	stream := inv.Outputs()
+	value, err := stream.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.(map[string]any)["name"] != "chat-one" {
+		t.Fatalf("response = %v", value)
+	}
+	if err := inv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Read(ctx); err != io.EOF {
+		t.Fatalf("terminal = %v, want clean EOF", err)
 	}
 }
 

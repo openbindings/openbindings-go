@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -43,7 +44,8 @@ const maxRedirects = 10
 
 // Invoker handles binding invocation for Connect sources.
 type Invoker struct {
-	client *http.Client
+	client     *http.Client
+	fullDuplex bool
 }
 
 // NewInvoker creates a new Connect binding invoker with a default HTTP
@@ -72,7 +74,16 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 			},
 		}
 	}
-	return &Invoker{client: client}
+	return &Invoker{client: client, fullDuplex: true}
+}
+
+// WithFullDuplexTransport declares whether this invoker's selected HTTP
+// transport can concurrently stream a request and response. It is useful for
+// runtimes restricted to HTTP/1.1; such runtimes refuse client-streaming and
+// bidirectional methods before dispatch rather than changing their shape.
+func (e *Invoker) WithFullDuplexTransport(enabled bool) *Invoker {
+	e.fullDuplex = enabled
+	return e
 }
 
 // BindingSpecs returns the binding specifications supported by the
@@ -183,7 +194,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			inv.FireError(ie)
 			return
 		}
-		if ie := preflightMethod(m); ie != nil {
+		if ie := preflightMethod(m, e.fullDuplex); ie != nil {
 			inv.FireError(ie)
 			return
 		}
@@ -196,10 +207,24 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// no-input-consumed retry stays safe — never silently skipped.
 	headers, hdrErr := buildHTTPHeaders(args.Context)
 	if hdrErr != nil {
+		if _, ok := hdrErr.(*unplacedCredentialError); ok {
+			inv.FireError(openbindings.NewContextRequiredError(hdrErr.Error(), &openbindings.ContextRequiredDetails{
+				Target: target,
+				Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{{
+					Type: "auth.apiKey", Description: "supply the credential through an explicitly named Connect metadata field",
+				}}}},
+			}))
+			return
+		}
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceConfigError,
 			Message: hdrErr.Error(),
 		})
+		return
+	}
+
+	if mi != nil && mi.method.IsStreamingClient() {
+		e.runClientStreaming(bctx, inv, connectURL(target, svcName, methodName), headers, mi, args.DeliveryUnitLimit())
 		return
 	}
 
@@ -215,6 +240,13 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	if mi != nil {
 		body, ierr = buildSchemaModeBody(mi, input)
 	} else {
+		if !gotInput {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeValidationFailed,
+				Message: "descriptorless Connect mode requires one present JSON input value; no request shape is available to invent an empty object",
+			})
+			return
+		}
 		body, ierr = buildDescriptorlessBody(input, gotInput)
 	}
 	if ierr != nil {
@@ -269,21 +301,21 @@ func readRequestValue(ctx context.Context, inv openbindings.BindingHandle[any, a
 // bidirectional methods are refused before dispatch as this
 // implementation's declared limitation — a coverage declaration, never a
 // reinterpretation of the shape.
-func preflightMethod(methodDesc protoreflect.MethodDescriptor) *openbindings.InvocationError {
+func preflightMethod(methodDesc protoreflect.MethodDescriptor, fullDuplex bool) *openbindings.InvocationError {
 	if err := validateBoundClosure(methodDesc); err != nil {
 		return &openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceLoadFailed,
 			Message: err.Error(),
 		}
 	}
-	if methodDesc.IsStreamingClient() {
+	if methodDesc.IsStreamingClient() && !fullDuplex {
 		kind := "client-streaming"
 		if methodDesc.IsStreamingServer() {
 			kind = "bidirectional-streaming"
 		}
 		return &openbindings.InvocationError{
 			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: fmt.Sprintf("Connect method %s/%s is %s; this invoker covers unary and server-streaming methods (implementation-declared limitation, openbindings.connect@1 §8 / CONN-P-04)", methodDesc.Parent().FullName(), methodDesc.Name(), kind),
+			Message: fmt.Sprintf("Connect method %s/%s is %s, but the selected transport cannot provide HTTP/2 full duplex; this is the implementation's declared transport limitation (openbindings.connect@1 §8 / CONN-P-04)", methodDesc.Parent().FullName(), methodDesc.Name(), kind),
 		}
 	}
 	return nil
@@ -291,6 +323,9 @@ func preflightMethod(methodDesc protoreflect.MethodDescriptor) *openbindings.Inv
 
 // Synthesizer handles interface synthesis from protobuf definitions for the Connect format.
 type Synthesizer struct{}
+
+var _ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+var _ openbindings.SourceInspector = (*Synthesizer)(nil)
 
 // NewSynthesizer creates a new Connect interface synthesizer.
 func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
@@ -305,14 +340,27 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // OpenBindings interface with Connect bindings.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
-		return nil, openbindings.ErrNoSources
+		skeleton, err := openbindings.SynthesisSkeleton(in)
+		return &skeleton, err
 	}
 	if len(in.Sources) > 1 {
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.Location == "" && src.Content == nil {
-		return nil, fmt.Errorf("Connect source requires a location or content")
+	if src.BindingSpec != BindingSpec {
+		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	}
+	if src.OutputLocation != "" {
+		u, err := url.Parse(src.OutputLocation)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return nil, fmt.Errorf("outputLocation must be an absolute HTTP(S) Connect service URL")
+		}
+	}
+	if src.Location == "" {
+		return nil, fmt.Errorf("Connect source requires an HTTP(S) base URL")
+	}
+	if src.Content == nil {
+		return nil, fmt.Errorf("descriptorless Connect sources expose no discoverable operation set; synthesis requires embedded protobuf content")
 	}
 
 	disc, err := discoverFromProto(ctx, src.Location, src.Content)
@@ -324,14 +372,11 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	if err != nil {
 		return nil, fmt.Errorf("Connect convert: %w", err)
 	}
-	if in.Name != "" {
-		iface.Name = in.Name
-	}
-	if in.Version != "" {
-		iface.Version = in.Version
-	}
-	if in.Description != "" {
-		iface.Description = in.Description
+	entry := iface.Sources[DefaultSourceName]
+	entry.Content = src.Content
+	iface.Sources[DefaultSourceName] = entry
+	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
+		return nil, err
 	}
 	return &iface, nil
 }

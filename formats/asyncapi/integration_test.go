@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/coder/websocket"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 const testSecret = "test-token-123"

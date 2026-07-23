@@ -24,6 +24,7 @@ func mustParse(t *testing.T, kdl string) *Spec {
 func TestConvertToInterface_CopiesMetadata(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
+bin "mycli"
 version "1.2.3"
 about "A test CLI"
 cmd "greet" help="Say hello"
@@ -45,6 +46,7 @@ cmd "greet" help="Say hello"
 func TestConvertToInterface_CreatesOperations(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
+bin "mycli"
 cmd "greet" help="Say hello"
 cmd "farewell" help="Say goodbye"
 `)
@@ -65,6 +67,7 @@ cmd "farewell" help="Say goodbye"
 func TestConvertToInterface_BindingRefs(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
+bin "mycli"
 cmd "greet" help="Say hello"
 `)
 	if err != nil {
@@ -86,6 +89,7 @@ cmd "greet" help="Say hello"
 func TestConvertToInterface_SubcommandRefs(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
+bin "mycli"
 cmd "config" {
     cmd "set" help="Set a value"
 }
@@ -107,6 +111,7 @@ cmd "config" {
 func TestConvertToInterface_FlagSchema(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
+bin "mycli"
 cmd "greet" help="Say hello" {
     flag "--name <value>" help="Who to greet" required=#true
     flag "--verbose" help="Enable verbose output"
@@ -154,6 +159,7 @@ cmd "greet" help="Say hello" {
 func TestConvertToInterface_ArgSchema(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
+bin "mycli"
 cmd "greet" help="Say hello" {
     arg "<name>" help="Who to greet"
 }
@@ -180,6 +186,31 @@ cmd "greet" help="Say hello" {
 	}
 }
 
+func TestConvertToInterface_ContextSatisfiableAndDynamicFieldsStayOpen(t *testing.T) {
+	iface, err := synthesizeFromArtifactText(`
+bin "tool"
+flag "--token <token>" required=#true env="TOKEN"
+flag "--environment" {
+  arg "<environment>" {
+    choices "dev" env="DEPLOY_ENVS"
+  }
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := iface.Operations["tool"].Input.(map[string]any)
+	required, _ := schema["required"].([]string)
+	if containsString(required, "token") {
+		t.Fatalf("environment-backed required field must not overstate the caller contract: %v", required)
+	}
+	properties := schema["properties"].(map[string]any)
+	environment := properties["environment"].(map[string]any)
+	if _, closed := environment["enum"]; closed {
+		t.Fatalf("dynamic choices must not be published as a closed literal enum: %v", environment)
+	}
+}
+
 func TestConvertToInterface_SourceEntry(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`name "mycli"`)
 	if err != nil {
@@ -199,9 +230,21 @@ func TestConvertToInterface_SourceEntry(t *testing.T) {
 	}
 }
 
+func TestConvertToInterface_DoesNotInventTargetIdentityFromName(t *testing.T) {
+	iface, err := synthesizeFromArtifactText(`name "mycli"
+cmd "run" help="Run it"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(iface.Operations) != 0 || len(iface.Bindings) != 0 {
+		t.Fatalf("descriptor without bin must synthesize no operations or bindings: %+v", iface)
+	}
+}
+
 func TestConvertToInterface_SkipsSubcommandRequired(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
+bin "mycli"
 cmd "config" subcommand_required=#true {
     cmd "get" help="Get a value"
     cmd "set" help="Set a value"
@@ -224,6 +267,7 @@ cmd "config" subcommand_required=#true {
 func TestConvertToInterface_TopLevelGlobalFlags(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
+bin "mycli"
 flag "-v --verbose" global=#true help="Enable verbose output"
 cmd "deploy" help="Deploy the app"
 cmd "status" help="Show status"
@@ -339,6 +383,7 @@ cmd "init" help="Initialize"
 // emissionTestKDL is a minimal artifact carrying name+version so the
 // synthesized document exercises Interface.Validate end to end.
 const emissionTestKDL = `name "mycli"
+bin "mycli"
 version "1.0.0"
 about "A test CLI"
 cmd "greet" help="Say hello"
@@ -572,6 +617,7 @@ func TestEmittableAsLocation_Rules(t *testing.T) {
 func TestSynthesizeInterface_CLIAliasesAreNotSatisfactionAliases(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
+bin "mycli"
 version "1.0.0"
 cmd "context" {
   cmd "list" help="List contexts" {

@@ -43,10 +43,6 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(o
 	for _, svc := range disc.services {
 		methods := serviceMethodsSorted(svc)
 		for _, method := range methods {
-			if method.IsStreamingClient() {
-				continue
-			}
-
 			fqn := string(svc.FullName()) + "/" + string(method.Name())
 			opKey := openbindings.SanitizeKey(string(method.Name()))
 			opKey = openbindings.ResolveKeyCollision(opKey, string(svc.Name()), usedKeys)

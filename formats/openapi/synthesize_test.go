@@ -3,11 +3,34 @@ package openapi
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	openbindings "github.com/openbindings/openbindings-go"
 )
+
+func TestSynthesizeInterface_FilePathEmitsInvocableFileURI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.json")
+	content := `{"openapi":"3.0.3","info":{"title":"T","version":"1"},"paths":{}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: path, Embed: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := iface.Sources[DefaultSourceName].Location, "file://"+path; got != want {
+		t.Fatalf("emitted location = %q, want %q", got, want)
+	}
+	if got, err := openbindings.ContentToBytes(iface.Sources[DefaultSourceName].Content); err != nil || string(got) != content {
+		t.Fatalf("embed directive did not preserve the artifact: %s (%v)", got, err)
+	}
+}
 
 func minimalDoc() *openapi3.T {
 	doc := &openapi3.T{
@@ -35,9 +58,18 @@ func minimalDoc() *openapi3.T {
 	return doc
 }
 
+func mustConvertDocToInterface(t *testing.T, doc *openapi3.T, location string) openbindings.Interface {
+	t.Helper()
+	iface, err := convertDocToInterface(doc, location, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return iface
+}
+
 func TestConvertDocToInterface_CopiesMetadata(t *testing.T) {
 	doc := minimalDoc()
-	iface := convertDocToInterface(doc, "https://example.com/openapi.json", nil)
+	iface := mustConvertDocToInterface(t, doc, "https://example.com/openapi.json")
 
 	if iface.Name != "Test API" {
 		t.Errorf("Name = %q, want %q", iface.Name, "Test API")
@@ -52,7 +84,7 @@ func TestConvertDocToInterface_CopiesMetadata(t *testing.T) {
 
 func TestConvertDocToInterface_CreatesOperations(t *testing.T) {
 	doc := minimalDoc()
-	iface := convertDocToInterface(doc, "", nil)
+	iface := mustConvertDocToInterface(t, doc, "")
 
 	if len(iface.Operations) != 2 {
 		t.Fatalf("len(Operations) = %d, want 2", len(iface.Operations))
@@ -67,7 +99,7 @@ func TestConvertDocToInterface_CreatesOperations(t *testing.T) {
 
 func TestConvertDocToInterface_CreatesBindingsWithRefs(t *testing.T) {
 	doc := minimalDoc()
-	iface := convertDocToInterface(doc, "", nil)
+	iface := mustConvertDocToInterface(t, doc, "")
 
 	if len(iface.Bindings) != 2 {
 		t.Fatalf("len(Bindings) = %d, want 2", len(iface.Bindings))
@@ -91,7 +123,7 @@ func TestConvertDocToInterface_CreatesBindingsWithRefs(t *testing.T) {
 
 func TestConvertDocToInterface_CreatesSourceEntry(t *testing.T) {
 	doc := minimalDoc()
-	iface := convertDocToInterface(doc, "https://example.com/openapi.json", nil)
+	iface := mustConvertDocToInterface(t, doc, "https://example.com/openapi.json")
 
 	src, ok := iface.Sources[DefaultSourceName]
 	if !ok {
@@ -110,7 +142,7 @@ func TestConvertDocToInterface_NoPaths(t *testing.T) {
 		OpenAPI: "3.0.3",
 		Info:    &openapi3.Info{Title: "Empty", Version: "1.0.0"},
 	}
-	iface := convertDocToInterface(doc, "", nil)
+	iface := mustConvertDocToInterface(t, doc, "")
 
 	if len(iface.Operations) != 0 {
 		t.Errorf("len(Operations) = %d, want 0", len(iface.Operations))
@@ -133,7 +165,7 @@ func TestConvertDocToInterface_DerivesKeyFromOperationId(t *testing.T) {
 			}),
 		),
 	}
-	iface := convertDocToInterface(doc, "", nil)
+	iface := mustConvertDocToInterface(t, doc, "")
 
 	if _, ok := iface.Operations["findPets"]; !ok {
 		t.Errorf("expected operation key 'findPets', got keys: %v", keys(iface.Operations))
@@ -153,7 +185,7 @@ func TestConvertDocToInterface_DerivesKeyFromPathWhenNoOperationId(t *testing.T)
 			}),
 		),
 	}
-	iface := convertDocToInterface(doc, "", nil)
+	iface := mustConvertDocToInterface(t, doc, "")
 
 	// Should derive key from path + method
 	if _, ok := iface.Operations["pets.get"]; !ok {
@@ -193,7 +225,7 @@ paths:
 	if err != nil {
 		t.Fatalf("loadDocument: %v", err)
 	}
-	iface := convertDocToInterface(doc, "", nil)
+	iface := mustConvertDocToInterface(t, doc, "")
 
 	op, ok := iface.Operations["abilityList"]
 	if !ok {
@@ -247,7 +279,7 @@ paths:
 	if err != nil {
 		t.Fatalf("loadDocument: %v", err)
 	}
-	iface := convertDocToInterface(doc, "", nil)
+	iface := mustConvertDocToInterface(t, doc, "")
 
 	op := iface.Operations["x"]
 	props := op.Output.(map[string]any)["properties"].(map[string]any)
@@ -285,7 +317,7 @@ paths:
 	if err != nil {
 		t.Fatalf("loadDocument: %v", err)
 	}
-	iface := convertDocToInterface(doc, "", nil)
+	iface := mustConvertDocToInterface(t, doc, "")
 
 	op := iface.Operations["q"]
 	props := op.Input.(map[string]any)["properties"].(map[string]any)
@@ -312,7 +344,7 @@ paths:
 func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	content := `{"openapi":"3.0.3","info":{"title":"T","version":"1.0.0"},"paths":{"/x":{"get":{"operationId":"getX","responses":{"200":{"description":"ok"}}}}}}`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: "openapi@3.0", Content: openbindings.TextContent(content)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
@@ -346,10 +378,11 @@ func TestSynthesizeInterface_RefusesMultipleSources(t *testing.T) {
 	}
 }
 
-// TestSynthesize_ParamBodyCollisionWarns pins the field-collision rule's
-// synthesis half: the merge is deterministic (body schema wins) and never
-// silent — a SynthesizerWarning names the field and the delivery rule.
-func TestSynthesize_ParamBodyCollisionWarns(t *testing.T) {
+// A required request body whose only candidate collides with an independent
+// parameter cannot round-trip through revision 1's flattened boundary. The
+// synthesizer refuses the whole result: its direct OBI return type has no
+// durable channel in which to disclose an omitted callable target.
+func TestSynthesize_ParamBodyCollisionRefusesPartialInterface(t *testing.T) {
 	spec := `{
 	  "openapi": "3.0.0",
 	  "info": {"title": "t", "version": "1"},
@@ -370,29 +403,25 @@ func TestSynthesize_ParamBodyCollisionWarns(t *testing.T) {
 	}`
 	var warnings []openbindings.SynthesizerWarning
 	synth := NewSynthesizer()
-	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources:   []openbindings.SynthesizeSource{{Content: openbindings.TextContent(spec)}},
+	_, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources:   []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 		OnWarning: func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), `"updateUser"`) || !strings.Contains(err.Error(), "statically unbindable partial interface") {
+		t.Fatalf("want creation-time soundness refusal for updateUser, got %v", err)
 	}
-	if len(warnings) != 1 || warnings[0].Code != "openapi.param_body_collision" {
-		t.Fatalf("want one param_body_collision warning, got %v", warnings)
-	}
-	props, _ := iface.Operations["updateUser"].Input.(map[string]any)["properties"].(map[string]any)
-	if _, ok := props["id"]; !ok {
-		t.Fatalf("flattened input must carry one id field, got %v", props)
+	if len(warnings) != 0 {
+		t.Fatalf("a fatal target omission must not be downgraded to warnings, got %v", warnings)
 	}
 }
 
 // TestSynthesize_MediaSchemaMismatchWarns pins the synthesis half of §9.2's
 // degenerate media/schema combination rule (OAPI-P-04): when the produced
-// contract's only declared request media cannot carry it — multipart or
-// urlencoded selected while the body schema does not flatten, text/plain
-// selected while it does — synthesis emits openapi.media_schema_mismatch,
-// so authors hear it at synthesis time rather than at first dispatch. A
-// co-declared JSON media type is selected instead and silences the warning.
+// optional request body cannot carry its declaration — multipart or urlencoded
+// selected while the body schema does not flatten, text/plain selected while
+// it does — synthesis can still emit a usable no-body operation and reports
+// the lossy projection. A co-declared JSON media type is selected instead and
+// silences the warning. Required degenerate bodies fail synthesis instead.
 func TestSynthesize_MediaSchemaMismatchWarns(t *testing.T) {
 	spec := `{
 	  "openapi": "3.1.0",
@@ -401,14 +430,14 @@ func TestSynthesize_MediaSchemaMismatchWarns(t *testing.T) {
 	    "/scalar-multipart": {
 	      "post": {
 	        "operationId": "scalarMultipart",
-	        "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {"type": "string"}}}},
+	        "requestBody": {"required": false, "content": {"multipart/form-data": {"schema": {"type": "string"}}}},
 	        "responses": {"200": {"description": "ok"}}
 	      }
 	    },
 	    "/object-text": {
 	      "post": {
 	        "operationId": "objectText",
-	        "requestBody": {"required": true, "content": {"text/plain": {"schema": {"type": "object", "properties": {"a": {"type": "string"}}}}}},
+	        "requestBody": {"required": false, "content": {"text/plain": {"schema": {"type": "object", "properties": {"a": {"type": "string"}}}}}},
 	        "responses": {"200": {"description": "ok"}}
 	      }
 	    },
@@ -427,7 +456,7 @@ func TestSynthesize_MediaSchemaMismatchWarns(t *testing.T) {
 	var warnings []openbindings.SynthesizerWarning
 	synth := NewSynthesizer()
 	_, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources:   []openbindings.SynthesizeSource{{Content: openbindings.TextContent(spec)}},
+		Sources:   []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 		OnWarning: func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
 	if err != nil {
@@ -442,13 +471,61 @@ func TestSynthesize_MediaSchemaMismatchWarns(t *testing.T) {
 	if len(byPath) != 2 {
 		t.Fatalf("want exactly two media_schema_mismatch warnings (the co-declared-JSON operation is fine), got %v", warnings)
 	}
-	wantMultipart := `request media selection (OAPI-P-04) lands on multipart/form-data, but the declared body schema does not flatten (no properties and no explicit object type): openbindings.openapi@1 defines no request carriage for this combination; a conformant invoker refuses this operation before dispatch`
+	wantMultipart := `request media candidate multipart/form-data has a non-object body schema and is inadmissible; optional body omitted from the synthesized contract`
 	if w := byPath["operations.scalarMultipart.input"]; w.Message != wantMultipart {
 		t.Errorf("multipart warning = %q, want %q", w.Message, wantMultipart)
 	}
-	wantText := `request media selection (OAPI-P-04) lands on text/plain, but the declared body schema flattens (an object contract): openbindings.openapi@1 defines no request carriage for this combination; a conformant invoker refuses this operation before dispatch`
+	wantText := `request media candidate text/plain has an object body schema and is inadmissible; optional body omitted from the synthesized contract`
 	if w := byPath["operations.objectText.input"]; w.Message != wantText {
 		t.Errorf("text warning = %q, want %q", w.Message, wantText)
+	}
+}
+
+func TestSynthesize_PreservesCandidateSpecificInputSurfaces(t *testing.T) {
+	spec := `{
+	  "openapi": "3.1.0",
+	  "info": {"title": "t", "version": "1"},
+	  "paths": {"/send": {"post": {
+	    "operationId": "send",
+	    "requestBody": {"required": true, "content": {
+	      "multipart/form-data": {"schema": {"type": "object", "properties": {"metadata": {"type": "string"}}}},
+	      "text/plain": {"schema": {"type": "string"}}
+	    }},
+	    "responses": {"200": {"description": "ok"}}
+	  }}}
+	}`
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := iface.Operations["send"].Input.(map[string]any)
+	rawVariants, ok := input["anyOf"].([]any)
+	variants := make([]map[string]any, 0, len(rawVariants))
+	for _, raw := range rawVariants {
+		if variant, valid := raw.(map[string]any); valid {
+			variants = append(variants, variant)
+		}
+	}
+	if !ok || len(variants) != 2 {
+		t.Fatalf("candidate surfaces = %T %v, want two anyOf branches", input["anyOf"], input["anyOf"])
+	}
+	seenMetadata, seenBody := false, false
+	for _, variant := range variants {
+		if variant["additionalProperties"] != false {
+			t.Errorf("non-JSON candidate must be closed: %v", variant)
+		}
+		properties, _ := variant["properties"].(map[string]any)
+		if _, ok := properties["metadata"]; ok {
+			seenMetadata = true
+		}
+		if _, ok := properties["body"]; ok {
+			seenBody = true
+		}
+	}
+	if !seenMetadata || !seenBody {
+		t.Fatalf("candidate surfaces lost: %v", variants)
 	}
 }
 
@@ -484,7 +561,7 @@ func TestSynthesize_TypelessBodyWrapsSynthetic(t *testing.T) {
 	}`
 	synth := NewSynthesizer()
 	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{Content: openbindings.TextContent(spec)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)

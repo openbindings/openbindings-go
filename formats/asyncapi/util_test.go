@@ -937,10 +937,10 @@ func TestGoverningMessages_ChannelFallback(t *testing.T) {
 	}
 }
 
-// TestResolveInputCodec pins §9.1 (ASYNC-P-03): JSON family → JSON; no
-// declaration → JSON (the specification's default); text family → the raw
-// text lane; ambiguity → the text lane; any other declared family is an @1
-// exclusion refused before dispatch.
+// TestResolveInputCodec pins §9.1 (ASYNC-P-03): exactly one selected message
+// governs; JSON family → JSON; no declaration requires an explicit lane;
+// every other declared type uses the raw-string lane. Arbitrary bytes remain
+// unrepresentable because that lane accepts strings, not byte conventions.
 func TestResolveInputCodec(t *testing.T) {
 	mk := func(cts ...string) (*document, []message) {
 		doc := &document{AsyncAPI: "3.0.0"}
@@ -958,9 +958,23 @@ func TestResolveInputCodec(t *testing.T) {
 	}
 
 	doc, msgs = mk()
-	codec, err = resolveInputCodec(doc, msgs)
+	if _, err = resolveInputCodec(doc, msgs); err == nil || !strings.Contains(err.Error(), "exactly one selected message") {
+		t.Errorf("no selected message must refuse, got %v", err)
+	}
+
+	doc, msgs = mk("")
+	if _, err = resolveInputCodec(doc, msgs); err == nil || !strings.Contains(err.Error(), "configuration.encode") {
+		t.Errorf("an absent declaration must require configuration.encode, got %v", err)
+	}
+	jsonContext := map[string]any{"configuration": map[string]any{"encode": "json"}}
+	codec, err = resolveInputCodec(doc, msgs, jsonContext)
 	if err != nil || !codec.JSON || codec.ContentType != "application/json" {
-		t.Errorf("no declaration: codec = %+v, err = %v (JSON is the spec default)", codec, err)
+		t.Errorf("configured JSON lane: codec = %+v, err = %v", codec, err)
+	}
+	textContext := map[string]any{"configuration": map[string]any{"encode": "text"}}
+	codec, err = resolveInputCodec(doc, msgs, textContext)
+	if err != nil || codec.JSON || codec.ContentType != "text/plain; charset=utf-8" {
+		t.Errorf("configured text lane: codec = %+v, err = %v", codec, err)
 	}
 
 	doc, msgs = mk("text/plain")
@@ -976,18 +990,20 @@ func TestResolveInputCodec(t *testing.T) {
 	}
 
 	doc, msgs = mk("application/json", "text/plain")
-	codec, err = resolveInputCodec(doc, msgs)
-	if err != nil || codec.JSON || codec.ContentType != "" {
-		t.Errorf("ambiguous set: codec = %+v, err = %v (text lane, no one declared type)", codec, err)
+	if _, err = resolveInputCodec(doc, msgs); err == nil || !strings.Contains(err.Error(), "exactly one selected message") {
+		t.Errorf("an unselected message set must refuse, got %v", err)
 	}
 
 	doc, msgs = mk("avro/binary")
-	if _, err = resolveInputCodec(doc, msgs); err == nil {
-		t.Error("an excluded declared family (avro) must refuse before dispatch")
+	codec, err = resolveInputCodec(doc, msgs)
+	if err != nil || codec.JSON || codec.ContentType != "avro/binary" {
+		t.Errorf("declared non-JSON lane: codec = %+v, err = %v", codec, err)
 	}
-	doc, msgs = mk("application/octet-stream")
-	if _, err = resolveInputCodec(doc, msgs); err == nil {
-		t.Error("an excluded declared family (binary) must refuse before dispatch")
+	if b, verr := encodeInput(codec, "wire bytes represented as a string"); verr != nil || string(b) != "wire bytes represented as a string" {
+		t.Errorf("declared non-JSON lane must carry strings raw, got %q err %v", b, verr)
+	}
+	if _, verr := encodeInput(codec, map[string]any{"unsupported": "arbitrary bytes"}); verr == nil {
+		t.Error("declared non-JSON lane must refuse non-string values")
 	}
 }
 

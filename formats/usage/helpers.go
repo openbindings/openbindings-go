@@ -91,10 +91,149 @@ func (f Flag) PrimaryName() string {
 	if len(parsed.Long) > 0 {
 		return parsed.Long[0]
 	}
+	for _, alias := range f.Aliases {
+		for _, spelling := range alias.Names {
+			if strings.HasPrefix(spelling, "--") {
+				return cleanFlagSpelling(spelling)
+			}
+		}
+	}
 	if len(parsed.Short) > 0 {
 		return parsed.Short[0]
 	}
+	for _, alias := range f.Aliases {
+		for _, spelling := range alias.Names {
+			if strings.HasPrefix(spelling, "-") {
+				return cleanFlagSpelling(spelling)
+			}
+		}
+	}
 	return f.Usage
+}
+
+func cleanFlagSpelling(spelling string) string {
+	return strings.TrimLeft(strings.TrimSuffix(spelling, "..."), "-")
+}
+
+// inputNames returns every artifact-declared spelling by which a flag can be
+// referenced, with the canonical identity first. It is shared by conditional
+// requirements, override checks, and argv assembly so those lanes cannot
+// disagree about alias identity.
+func (f Flag) inputNames() []string {
+	seen := map[string]bool{}
+	var names []string
+	add := func(name string) {
+		name = cleanFlagSpelling(name)
+		if name != "" && !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	add(f.PrimaryName())
+	parsed := f.ParseUsage()
+	for _, name := range parsed.Short {
+		add(name)
+	}
+	for _, name := range parsed.Long {
+		add(name)
+	}
+	for _, alias := range f.Aliases {
+		for _, name := range alias.Names {
+			add(name)
+		}
+	}
+	return names
+}
+
+func (f Flag) valueArg() *Arg {
+	if len(f.Args) == 0 {
+		return nil
+	}
+	return &f.Args[0]
+}
+
+func (f Flag) effectiveEnv() string {
+	if f.Env != "" {
+		return f.Env
+	}
+	if arg := f.valueArg(); arg != nil {
+		return arg.Env
+	}
+	return ""
+}
+
+func (f Flag) effectiveDefault() any {
+	if f.Default != nil {
+		return f.Default
+	}
+	if arg := f.valueArg(); arg != nil {
+		return arg.Default
+	}
+	return nil
+}
+
+func (f Flag) effectiveChoices() []string {
+	seen := map[string]bool{}
+	var choices []string
+	for _, values := range [][]string{f.Choices} {
+		for _, value := range values {
+			if !seen[value] {
+				seen[value] = true
+				choices = append(choices, value)
+			}
+		}
+	}
+	if arg := f.valueArg(); arg != nil {
+		for _, value := range arg.Choices {
+			if !seen[value] {
+				seen[value] = true
+				choices = append(choices, value)
+			}
+		}
+	}
+	return choices
+}
+
+func choicesEnvironment(node Node) string {
+	for _, child := range node.Children {
+		if child.Name == "choices" {
+			if env := stringProp(child, "env"); env != "" {
+				return env
+			}
+		}
+	}
+	return ""
+}
+
+func (f Flag) choicesEnvironment() string {
+	if env := choicesEnvironment(f.Node); env != "" {
+		return env
+	}
+	if arg := f.valueArg(); arg != nil {
+		return choicesEnvironment(arg.Node)
+	}
+	return ""
+}
+
+func (a Arg) choicesEnvironment() string { return choicesEnvironment(a.Node) }
+
+func (f Flag) valueVariadic() bool {
+	arg := f.valueArg()
+	return arg != nil && arg.IsVariadic()
+}
+
+func (f Flag) effectiveVarMin() *int {
+	if arg := f.valueArg(); arg != nil && arg.VarMin != nil {
+		return arg.VarMin
+	}
+	return f.VarMin
+}
+
+func (f Flag) effectiveVarMax() *int {
+	if arg := f.valueArg(); arg != nil && arg.VarMax != nil {
+		return arg.VarMax
+	}
+	return f.VarMax
 }
 
 // FullPath returns the full command path from root to this command.

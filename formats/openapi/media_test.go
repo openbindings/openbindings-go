@@ -21,9 +21,10 @@ func opWithRequestBody(content openapi3.Content, required bool) *openapi3.Operat
 
 func emptyMedia() *openapi3.MediaType { return &openapi3.MediaType{} }
 
-// OAPI-P-04: selection order — exact application/json, then the
-// lexicographically least +json type, then multipart/form-data, then
-// urlencoded, then text/plain. Ranges never participate.
+// OAPI-P-04 gives artifact alternatives no preference. planRequestBody's
+// declaration-identity sort is only the reference SDK's deterministic
+// convenience for callers that request one candidate; invocation preserves
+// and tests the full candidate set.
 func TestPlanRequestBody_SelectionOrder(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -52,12 +53,12 @@ func TestPlanRequestBody_SelectionOrder(t *testing.T) {
 			"application/vnd.a+json", familyJSON,
 		},
 		{
-			"multipart over urlencoded",
+			"lexical fallback does not invent family preference",
 			openapi3.Content{
 				"application/x-www-form-urlencoded": emptyMedia(),
 				"multipart/form-data":               emptyMedia(),
 			},
-			"multipart/form-data", familyMultipart,
+			"application/x-www-form-urlencoded", familyURLEncoded,
 		},
 		{
 			"urlencoded over text/plain",
@@ -73,9 +74,9 @@ func TestPlanRequestBody_SelectionOrder(t *testing.T) {
 			"text/plain", familyText,
 		},
 		{
-			"parameters ignored in matching",
+			"parameters remain part of candidate identity and content type",
 			openapi3.Content{"application/JSON; charset=utf-8": emptyMedia()},
-			"application/json", familyJSON,
+			"application/json; charset=utf-8", familyJSON,
 		},
 	}
 	for _, tc := range cases {
@@ -420,9 +421,9 @@ func TestBuildURLEncodedBody(t *testing.T) {
 }
 
 // The Accept header advertises the declared concrete media types of the
-// SUCCESS responses (2xx literals + the 2XX range; default never
-// participates; ranges are not concrete); absent any declaration,
-// application/json (§9.2, §8).
+// SUCCESS responses (2xx literals + 2XX, plus default only when it can
+// actually govern an otherwise-unmatched 2xx); ranges are not concrete and
+// absent declarations do not invent application/json (§9.2, §8).
 func TestAcceptHeader(t *testing.T) {
 	op := &openapi3.Operation{Responses: openapi3.NewResponses()}
 	op.Responses.Set("200", &openapi3.ResponseRef{Value: &openapi3.Response{
@@ -441,7 +442,7 @@ func TestAcceptHeader(t *testing.T) {
 	got := successMediaTypes(op)
 	want := []string{"application/json", "text/csv", "text/event-stream"}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("successMediaTypes = %v, want %v (404 and default never participate; ranges excluded)", got, want)
+		t.Errorf("successMediaTypes = %v, want %v (404 excluded; 2XX shadows default; media ranges excluded)", got, want)
 	}
 	if !isStreamingCapable(op) {
 		t.Error("operation declaring text/event-stream on a success response is streaming-capable")
@@ -449,19 +450,20 @@ func TestAcceptHeader(t *testing.T) {
 
 	empty := &openapi3.Operation{Responses: openapi3.NewResponses()}
 	empty.Responses.Set("204", &openapi3.ResponseRef{Value: &openapi3.Response{}})
-	if got := acceptHeader(empty); got != "application/json" {
-		t.Errorf("acceptHeader with no declared media = %q, want application/json", got)
+	if got := acceptHeader(empty); got != "" {
+		t.Errorf("acceptHeader with no declared media = %q, want omission", got)
 	}
 	if isStreamingCapable(empty) {
 		t.Error("operation with no declared media is not streaming-capable")
 	}
 
-	// default-only text/event-stream does NOT confer streaming capability.
+	// A default-only response can govern a successful status and therefore
+	// does confer streaming capability.
 	defOnly := &openapi3.Operation{Responses: openapi3.NewResponses()}
 	defOnly.Responses.Set("default", &openapi3.ResponseRef{Value: &openapi3.Response{
 		Content: openapi3.Content{"text/event-stream": emptyMedia()},
 	}})
-	if isStreamingCapable(defOnly) {
-		t.Error("the default entry never participates in shape determination (§8)")
+	if !isStreamingCapable(defOnly) {
+		t.Error("a default entry that can govern a 2xx participates in shape determination (§8)")
 	}
 }

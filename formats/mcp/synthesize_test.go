@@ -2,12 +2,31 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	openbindings "github.com/openbindings/openbindings-go"
 )
+
+func failingCountingClient(requests *atomic.Int64) *http.Client {
+	return &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return nil, errors.New("network trap")
+	})}
+}
+
+func TestSynthesizeInterface_RefusesLossyLiveDiscoveryEmbed(t *testing.T) {
+	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: "https://mcp.example.test", Embed: true}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "complete pagination-exhausted listing") {
+		t.Fatalf("expected pre-discovery embed refusal, got %v", err)
+	}
+}
 
 func TestConvertToInterface_CopiesServerInfo(t *testing.T) {
 	disc := &discovery{
@@ -145,7 +164,7 @@ func TestConvertToInterface_ResourceTemplateOperations(t *testing.T) {
 	}
 	op := iface.Operations["user_profile"]
 	// Updated for openbindings.mcp@1 §8/§9.1: a template operation's input
-	// is the object of its RFC 6570 variables (string-typed, none required)
+	// is the object of its RFC 6570 variables (string/list/map, none required)
 	// — this test previously pinned a const-uriTemplate input schema, whose
 	// only member the conformant invoker refuses as an undeclared variable.
 	if op.Input == nil {
@@ -159,8 +178,8 @@ func TestConvertToInterface_ResourceTemplateOperations(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected userId variable property, got %v", props)
 	}
-	if varSchema["type"] != "string" {
-		t.Errorf("userId type = %v, want string (template variables are string-typed)", varSchema["type"])
+	if choices, ok := varSchema["anyOf"].([]any); !ok || len(choices) != 3 {
+		t.Errorf("userId anyOf = %v, want the RFC 6570 string/list/map domain", varSchema["anyOf"])
 	}
 	if _, hasTemplate := props["uriTemplate"]; hasTemplate {
 		t.Error("uriTemplate must not appear as an input property")
@@ -202,7 +221,7 @@ func TestConvertToInterface_PromptOperations(t *testing.T) {
 	if _, ok := props["style"]; !ok {
 		t.Error("expected style property")
 	}
-	req, ok := op.Input.(map[string]any)["required"].([]string)
+	req, ok := op.Input.(map[string]any)["required"].([]any)
 	if !ok {
 		t.Fatal("expected required array")
 	}
@@ -241,7 +260,7 @@ func TestConvertToInterface_PromptHasOutputSchema(t *testing.T) {
 	if _, ok := props["messages"]; !ok {
 		t.Error("expected messages property in output schema")
 	}
-	req, ok := op.Output.(map[string]any)["required"].([]string)
+	req, ok := op.Output.(map[string]any)["required"].([]any)
 	if !ok {
 		t.Fatal("expected required array in output schema")
 	}
@@ -339,6 +358,22 @@ func TestConvertToInterface_ToolFallsBackToTitle(t *testing.T) {
 	}
 }
 
+func TestConvertToInterface_ExcludesStaticallyUnbindableEntities(t *testing.T) {
+	disc := &discovery{
+		Tools:             []*gomcp.Tool{{Name: "task"}, {Name: "duplicate"}, {Name: "duplicate"}, {Name: "ok"}},
+		RequiredTaskTools: map[string]bool{"task": true},
+		Resources:         []*gomcp.Resource{{Name: "a", URI: "app://same"}, {Name: "b", URI: "app://same"}},
+		ResourceTemplates: []*gomcp.ResourceTemplate{{Name: "bad", URITemplate: "{"}, {Name: "good", URITemplate: "file:///{path}"}},
+	}
+	iface, err := convertToInterface(disc, "https://mcp.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(iface.Operations) != 2 || iface.Operations["ok"].Description != "" || iface.Operations["good"].Description != "" {
+		t.Fatalf("operations = %v, want only ok and good", iface.Operations)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Pinned-listing synthesis (MCP-D-01, §6 content primacy)
 // ---------------------------------------------------------------------------
@@ -347,7 +382,7 @@ func TestConvertToInterface_ToolFallsBackToTitle(t *testing.T) {
 // OFFLINE — the server is never dialed (the dead-end counter proves it) —
 // and the emitted OBI matches what the same live listing would produce.
 func TestSynthesizeInterface_PinnedListingIsOffline(t *testing.T) {
-	ts, requests := deadEndServer(t)
+	var requests atomic.Int64
 
 	pin := map[string]any{
 		"tools": []any{map[string]any{
@@ -370,11 +405,11 @@ func TestSynthesizeInterface_PinnedListingIsOffline(t *testing.T) {
 		}},
 	}
 
-	synth := NewSynthesizer()
+	synth := NewSynthesizer(WithSynthesizerHTTPClient(failingCountingClient(&requests)))
 	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
 			BindingSpec: BindingSpec,
-			Location:    ts.URL,
+			Location:    "https://mcp.example.test",
 			Content:     mustContent(pin),
 		}},
 	})
@@ -409,11 +444,13 @@ func TestSynthesizeInterface_PinnedListingIsOffline(t *testing.T) {
 	if !ok {
 		t.Fatalf("greet input schema not derived from pinned prompt arguments: %v", iface.Operations["greet"].Input)
 	}
-	if req, _ := greetIn["required"].([]string); len(req) != 1 || req[0] != "name" {
+	if req, _ := greetIn["required"].([]any); len(req) != 1 || req[0] != "name" {
 		t.Errorf("greet required = %v, want [name]", greetIn["required"])
 	}
-	if src := iface.Sources[DefaultSourceName]; src.Location != ts.URL {
-		t.Errorf("source location = %q, want %q", src.Location, ts.URL)
+	if src := iface.Sources[DefaultSourceName]; src.Location != "https://mcp.example.test" {
+		t.Errorf("source location = %q, want %q", src.Location, "https://mcp.example.test")
+	} else if src.Content == nil {
+		t.Error("the emitted source must retain the authoritative pinned listing")
 	}
 
 	if n := requests.Load(); n != 0 {
@@ -425,9 +462,9 @@ func TestSynthesizeInterface_PinnedListingIsOffline(t *testing.T) {
 // (stray members included) and the 2025-11-25 entity shapes both gate the
 // synthesis lane exactly as they gate invocation.
 func TestSynthesizeInterface_InvalidPinRefusedLoudly(t *testing.T) {
-	ts, requests := deadEndServer(t)
+	var requests atomic.Int64
 
-	synth := NewSynthesizer()
+	synth := NewSynthesizer(WithSynthesizerHTTPClient(failingCountingClient(&requests)))
 	cases := []struct {
 		name string
 		pin  any
@@ -445,7 +482,7 @@ func TestSynthesizeInterface_InvalidPinRefusedLoudly(t *testing.T) {
 			_, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 				Sources: []openbindings.SynthesizeSource{{
 					BindingSpec: BindingSpec,
-					Location:    ts.URL,
+					Location:    "https://mcp.example.test",
 					Content:     mustContent(tc.pin),
 				}},
 			})
@@ -480,13 +517,13 @@ func TestSynthesizeInterface_PinWithoutLocationRefused(t *testing.T) {
 
 // Without content there is no pin: synthesis still dials the live server.
 func TestSynthesizeInterface_AbsentContentDialsLive(t *testing.T) {
-	ts, requests := deadEndServer(t)
+	var requests atomic.Int64
 
-	synth := NewSynthesizer()
+	synth := NewSynthesizer(WithSynthesizerHTTPClient(failingCountingClient(&requests)))
 	_, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
 			BindingSpec: BindingSpec,
-			Location:    ts.URL,
+			Location:    "https://mcp.example.test",
 		}},
 	})
 	if err == nil {

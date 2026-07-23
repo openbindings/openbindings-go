@@ -413,7 +413,7 @@ func TestInvokeBinding_ClientStreamingRefused(t *testing.T) {
 	ctx := testContext(t)
 	srv := unreachableServer(t)
 
-	inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, clientStreamingProto, "testpkg.UploadService/Upload"))
+	inv := NewInvoker().WithFullDuplexTransport(false).InvokeBinding(ctx, unaryArgs(srv.URL, clientStreamingProto, "testpkg.UploadService/Upload"))
 
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
 	for _, want := range []string{"UploadService/Upload", "client-streaming"} {

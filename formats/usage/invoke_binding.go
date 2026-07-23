@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -29,6 +31,19 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// abandoned output stream, or upstream ctx cancellation kills it.
 	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
 	defer stop()
+
+	if usageGenericCredentialPresent(args.Context) {
+		inv.FireError(openbindings.NewContextRequiredError(
+			"generic credential has no artifact-declared environment-variable destination",
+			&openbindings.ContextRequiredDetails{
+				Target: args.Source.Location,
+				Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{{
+					Type: "auth.apiKey", Description: "supply an explicitly named process-environment mapping",
+				}}}},
+			},
+		))
+		return
+	}
 
 	// No-input convention: an operation-layer call for an operation that
 	// declares no input (InputSchema == nil) closes input on entry and runs
@@ -95,11 +110,16 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	meta := spec.Meta()
 	binName := meta.Bin
 	if binName == "" {
-		binName = meta.Name
-	}
-	if binName == "" {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "usage artifact does not define a binary name (bin or name)"})
 		return
+	}
+	if target, present := openbindings.ContextConfiguration(args.Context)["target"]; present {
+		text, ok := target.(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "configuration.target must be a non-empty executable path string"})
+			return
+		}
+		binName = text
 	}
 
 	// Complete the site: Target is GUARANTEED on this lane (the kdl's
@@ -110,12 +130,24 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// configuration: routing is a wire question the usage artifact cannot
 	// answer; the assumption is argv, the consumer's FieldRouter overrides
 	// per field). Enforcement replaces the wrapper's load-time validation.
-	routed, rierr := routeFields(site, args.Hooks, cmd, inherited, input)
+	configured, cierr := applyUsageConfiguration(cmd, inherited, input, args.Context, e.Encoders)
+	if cierr != nil {
+		inv.FireError(cierr)
+		return
+	}
+	routed, rierr := routeFields(site, args.Hooks, cmd, inherited, configured.fields)
 	if rierr != nil {
 		inv.FireError(rierr)
 		return
 	}
 	defer routed.cleanup()
+	if configured.stdin != nil {
+		if routed.stdin != nil {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: "more than one field routes to the single stdin channel"})
+			return
+		}
+		routed.stdin = configured.stdin
+	}
 
 	var argvInput any
 	if input != nil {
@@ -127,7 +159,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	res, runErr := runCLI(bctx, binName, cmdArgs, args.Context, routed.stdin, args.DeliveryUnitLimit())
+	res, runErr := e.executeProcess(bctx, binName, cmdArgs, args.Context, configured.environment, routed.stdin, args.DeliveryUnitLimit())
 	// Materialized files only need to outlive the process; the deferred call
 	// (idempotent) covers the error paths above.
 	routed.cleanup()
@@ -218,6 +250,9 @@ func builtinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (boo
 // recoverable. Machine lanes are a consumer decode hook (or a future
 // artifact-native declaration).
 func builtinDecodeText(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+	if !utf8.Valid(raw.Body) {
+		return nil, fmt.Errorf("process output decode failed: stdout is not valid UTF-8")
+	}
 	return strings.TrimRight(string(raw.Body), "\r\n"), nil
 }
 
@@ -320,7 +355,11 @@ func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvoc
 		})
 		return
 	}
-	output := strings.TrimRight(res.stdout, "\r\n") // the text assumption
+	output, decodeErr := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte(res.stdout)})
+	if decodeErr != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRuntime, Message: decodeErr.Error()})
+		return
+	}
 	// Direct-binary dispatch consults no hooks (stated in run); a nil
 	// carrier stamps the assumptions, which is what actually decided.
 	emitWithDiagnostics(inv, output, res, nil, nil)
@@ -336,6 +375,438 @@ func metadataBinary(ctx map[string]any) string {
 		return b
 	}
 	return ""
+}
+
+func usageGenericCredentialPresent(ctx map[string]any) bool {
+	if openbindings.ContextAPIKey(ctx) != "" {
+		return true
+	}
+	if values, ok := ctx["apiKeys"].(map[string]any); ok {
+		for _, value := range values {
+			if text, ok := value.(string); ok && text != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type usageConfiguredInput struct {
+	fields      any
+	stdin       []byte
+	environment map[string]string
+}
+
+// applyUsageConfiguration closes only invocation-time choices the artifact
+// leaves open. It never invents field destinations or token encodings.
+func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx map[string]any, encoders map[string]TokenEncoder) (*usageConfiguredInput, *openbindings.InvocationError) {
+	out := &usageConfiguredInput{fields: input, environment: map[string]string{}}
+	inputMap := map[string]any{}
+	if input != nil {
+		var ok bool
+		inputMap, ok = openbindings.ToStringAnyMap(input)
+		if !ok {
+			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: "usage input must be a JSON object"}
+		}
+	}
+	fields := make(map[string]any, len(inputMap))
+	suppliedFields := make(map[string]any, len(inputMap))
+	for name, value := range inputMap {
+		fields[name] = value
+		suppliedFields[name] = value
+	}
+	if input != nil {
+		out.fields = fields
+	}
+
+	configuration := openbindings.ContextConfiguration(bindCtx)
+	encodeConfig := map[string]any{}
+	if raw, present := configuration["encode"]; present {
+		var ok bool
+		encodeConfig, ok = raw.(map[string]any)
+		if !ok {
+			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "configuration.encode must be an object of field-to-encoder names"}
+		}
+	}
+	if rawRoutes, present := configuration["route"]; present {
+		routes, ok := rawRoutes.(map[string]any)
+		if !ok {
+			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "configuration.route must be an object"}
+		}
+		stdinField := ""
+		for field, raw := range routes {
+			entry, ok := raw.(map[string]any)
+			if !ok {
+				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configuration.route[%q] must be an object", field)}
+			}
+			kind, _ := entry["kind"].(string)
+			value, supplied := fields[field]
+			slot, slotKind := findSlot(cmd, inherited, field)
+			if slotKind == slotNone {
+				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configuration.route names undeclared field %q", field)}
+			}
+			if !supplied || value == nil {
+				continue
+			}
+			switch kind {
+			case "argv", "":
+			case "environment":
+				envName := ""
+				switch definition := slot.(type) {
+				case Flag:
+					envName = definition.effectiveEnv()
+					if definition.Count || definition.Var || definition.valueVariadic() {
+						return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("field %q cannot preserve its occurrence structure in one environment value", field)}
+					}
+				case Arg:
+					envName = definition.Env
+					if definition.IsVariadic() {
+						return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("field %q cannot preserve its occurrence structure in one environment value", field)}
+					}
+				}
+				if envName == "" {
+					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("field %q has no artifact-declared environment variable", field)}
+				}
+				text, ok := value.(string)
+				if !ok {
+					if flag, isFlag := slot.(Flag); isFlag && !flag.Count && flag.ParseUsage().ArgName == "" && len(flag.Args) == 0 {
+						if boolean, isBool := value.(bool); isBool {
+							text = strconv.FormatBool(boolean)
+							ok = true
+						}
+					}
+				}
+				if !ok {
+					var ierr *openbindings.InvocationError
+					text, ierr = configuredUsageEncoding(field, value, encodeConfig, encoders)
+					if ierr != nil {
+						return nil, ierr
+					}
+				}
+				if configured, present := openbindings.ContextEnvironment(bindCtx)[envName]; present && configured != text {
+					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("environment route for field %q conflicts with configured %s", field, envName)}
+				}
+				out.environment[envName] = text
+				delete(fields, field)
+			case "stdin":
+				if stdinField != "" {
+					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("fields %q and %q both route to stdin", stdinField, field)}
+				}
+				stdinField = field
+				out.stdin, _ = routeBytes(value)
+				operand, _ := entry["operand"].(string)
+				if operand == "dash" {
+					fields[field] = "-"
+				} else {
+					delete(fields, field)
+				}
+			default:
+				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configuration.route[%q].kind %q is unsupported", field, kind)}
+			}
+		}
+	}
+
+	effectiveEnvironment := map[string]string{}
+	for name, value := range openbindings.ContextEnvironment(bindCtx) {
+		effectiveEnvironment[name] = value
+	}
+	for name, value := range out.environment {
+		effectiveEnvironment[name] = value
+	}
+	if err := validateUsageOverrides(cmd, inherited, suppliedFields); err != nil {
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+	}
+	if err := validateUsageRequirements(cmd, inherited, suppliedFields, effectiveEnvironment); err != nil {
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+	}
+	if err := validateUsageChoices(cmd, inherited, suppliedFields, effectiveEnvironment); err != nil {
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+	}
+
+	for field, value := range fields {
+		slot, kind := findSlot(cmd, inherited, field)
+		if !needsScalarTokenEncoding(slot, kind, value) {
+			continue
+		}
+		token, ierr := configuredUsageEncoding(field, value, encodeConfig, encoders)
+		if ierr != nil {
+			return nil, ierr
+		}
+		fields[field] = token
+	}
+	return out, nil
+}
+
+func configuredUsageEncoding(field string, value any, encodeConfig map[string]any, encoders map[string]TokenEncoder) (string, *openbindings.InvocationError) {
+	encoderName, configured := encodeConfig[field].(string)
+	if !configured || encoderName == "" {
+		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("field %q has a non-string scalar value but the artifact declares no token encoding and configuration.encode selects none", field)}
+	}
+	encoder := encoders[encoderName]
+	if encoder == nil {
+		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configuration.encode[%q] selects unavailable encoder %q", field, encoderName)}
+	}
+	token, err := encoder(value)
+	if err != nil {
+		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("encode field %q: %v", field, err)}
+	}
+	return token, nil
+}
+
+func needsScalarTokenEncoding(slot any, kind slotKind, value any) bool {
+	if value == nil {
+		return false
+	}
+	if _, ok := value.(string); ok {
+		return false
+	}
+	switch kind {
+	case slotBoolFlag:
+		return false // boolean and count shapes are artifact-declared
+	case slotValueFlag:
+		if flag, ok := slot.(Flag); ok && (flag.Var || flag.valueVariadic()) {
+			return false
+		}
+		return true
+	case slotArg:
+		if arg, ok := slot.(Arg); ok && arg.IsVariadic() {
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func validateUsageOverrides(cmd *Command, inherited []Flag, fields map[string]any) error {
+	flags := cmd.AllFlags(inherited)
+	for _, flag := range flags {
+		if flag.Overrides == "" {
+			continue
+		}
+		name := flag.PrimaryName()
+		if _, left := suppliedFlagValue(flag, fields); !left {
+			continue
+		}
+		for _, reference := range splitUsageReferences(flag.Overrides) {
+			other, ok := resolveUsageFlag(flags, reference)
+			if !ok {
+				return fmt.Errorf("flag %q overrides declaration names unknown flag %q", name, reference)
+			}
+			if _, right := suppliedFlagValue(other, fields); right {
+				return fmt.Errorf("flags %q and %q are both supplied but the artifact declares an overrides relation and JSON object order cannot choose a winner", name, other.PrimaryName())
+			}
+		}
+	}
+	return nil
+}
+
+func splitUsageReferences(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+}
+
+func resolveUsageFlag(flags []Flag, reference string) (Flag, bool) {
+	normalized := cleanFlagSpelling(reference)
+	for _, flag := range flags {
+		for _, name := range flag.inputNames() {
+			if name == normalized {
+				return flag, true
+			}
+		}
+	}
+	return Flag{}, false
+}
+
+func suppliedFlagValue(flag Flag, fields map[string]any) (any, bool) {
+	for _, name := range flag.inputNames() {
+		if value, present := fields[name]; present {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func usageFlagSatisfied(flag Flag, fields map[string]any, environment map[string]string) bool {
+	if _, supplied := suppliedFlagValue(flag, fields); supplied {
+		return true
+	}
+	if env := flag.effectiveEnv(); env != "" {
+		if _, present := environment[env]; present {
+			return true
+		}
+	}
+	return flag.effectiveDefault() != nil
+}
+
+func usageArgSatisfied(arg Arg, fields map[string]any, environment map[string]string) bool {
+	if _, supplied := fields[arg.CleanName()]; supplied {
+		return true
+	}
+	if arg.Env != "" {
+		if _, present := environment[arg.Env]; present {
+			return true
+		}
+	}
+	return arg.Default != nil
+}
+
+func validateUsageRequirements(cmd *Command, inherited []Flag, fields map[string]any, environment map[string]string) error {
+	flags := cmd.AllFlags(inherited)
+	for _, flag := range flags {
+		present := usageFlagSatisfied(flag, fields, environment)
+		if flag.Required && !present {
+			return fmt.Errorf("required field %s has no caller, environment, or default value", flag.PrimaryName())
+		}
+		if present {
+			continue
+		}
+		if references := splitUsageReferences(flag.RequiredIf); len(references) > 0 {
+			var triggering []string
+			for _, reference := range references {
+				target, ok := resolveUsageFlag(flags, reference)
+				if !ok {
+					return fmt.Errorf("field %s requirement names unknown flag %q", flag.PrimaryName(), reference)
+				}
+				if usageFlagSatisfied(target, fields, environment) {
+					triggering = append(triggering, target.PrimaryName())
+				}
+			}
+			if len(triggering) > 0 {
+				return fmt.Errorf("field %s is required because %s is present", flag.PrimaryName(), strings.Join(triggering, ", "))
+			}
+		}
+		if references := splitUsageReferences(flag.RequiredUnless); len(references) > 0 {
+			var alternatives []string
+			anyPresent := false
+			for _, reference := range references {
+				target, ok := resolveUsageFlag(flags, reference)
+				if !ok {
+					return fmt.Errorf("field %s requirement names unknown flag %q", flag.PrimaryName(), reference)
+				}
+				alternatives = append(alternatives, target.PrimaryName())
+				anyPresent = anyPresent || usageFlagSatisfied(target, fields, environment)
+			}
+			if !anyPresent {
+				return fmt.Errorf("field %s is required unless one of %s is present", flag.PrimaryName(), strings.Join(alternatives, ", "))
+			}
+		}
+	}
+	for _, arg := range cmd.Args {
+		if arg.IsRequired() && !usageArgSatisfied(arg, fields, environment) {
+			return fmt.Errorf("required field %s has no caller, environment, or default value", arg.CleanName())
+		}
+	}
+	return nil
+}
+
+func dynamicUsageChoices(literal []string, envName string, environment map[string]string) ([]string, bool) {
+	if len(literal) == 0 && envName == "" {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	choices := make([]string, 0, len(literal))
+	for _, choice := range literal {
+		if !seen[choice] {
+			seen[choice] = true
+			choices = append(choices, choice)
+		}
+	}
+	if raw, present := environment[envName]; envName != "" && present {
+		for _, choice := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || unicode.IsSpace(r) }) {
+			if choice != "" && !seen[choice] {
+				seen[choice] = true
+				choices = append(choices, choice)
+			}
+		}
+	}
+	return choices, true
+}
+
+func validateUsageChoiceValue(field string, value any, choices []string) error {
+	values := []any{value}
+	switch list := value.(type) {
+	case []any:
+		values = list
+	case []string:
+		values = make([]any, len(list))
+		for i := range list {
+			values[i] = list[i]
+		}
+	}
+	for _, candidate := range values {
+		text, ok := candidate.(string)
+		if !ok || !containsString(choices, text) {
+			encoded, _ := json.Marshal(candidate)
+			return fmt.Errorf("field %s value %s is outside its artifact-declared choices", field, encoded)
+		}
+	}
+	return nil
+}
+
+func validateUsageChoices(cmd *Command, inherited []Flag, fields map[string]any, environment map[string]string) error {
+	for _, flag := range cmd.AllFlags(inherited) {
+		choices, constrained := dynamicUsageChoices(flag.effectiveChoices(), flag.choicesEnvironment(), environment)
+		if !constrained {
+			continue
+		}
+		value, present := suppliedFlagValue(flag, fields)
+		if !present {
+			if env := flag.effectiveEnv(); env != "" {
+				value, present = environment[env]
+			}
+		}
+		if !present && flag.effectiveDefault() != nil {
+			value, present = flag.effectiveDefault(), true
+		}
+		if present {
+			if err := validateUsageChoiceValue(flag.PrimaryName(), value, choices); err != nil {
+				return err
+			}
+		}
+	}
+	for _, arg := range cmd.Args {
+		choices, constrained := dynamicUsageChoices(arg.Choices, arg.choicesEnvironment(), environment)
+		if !constrained {
+			continue
+		}
+		value, present := fields[arg.CleanName()]
+		if !present && arg.Env != "" {
+			value, present = environment[arg.Env]
+		}
+		if !present && arg.Default != nil {
+			value, present = arg.Default, true
+		}
+		if present {
+			if err := validateUsageChoiceValue(arg.CleanName(), value, choices); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (e *Invoker) executeProcess(ctx context.Context, binary string, args []string, bindCtx map[string]any, configuredEnvironment map[string]string, stdin []byte, maxStdout int64) (*cliResult, error) {
+	environment := map[string]string{}
+	for name, value := range openbindings.ContextEnvironment(bindCtx) {
+		environment[name] = value
+	}
+	for name, value := range configuredEnvironment {
+		environment[name] = value
+	}
+	if e.Execute == nil {
+		copyContext := make(map[string]any, len(bindCtx)+1)
+		for key, value := range bindCtx {
+			copyContext[key] = value
+		}
+		copyContext["environment"] = environment
+		return runCLI(ctx, binary, args, copyContext, stdin, maxStdout)
+	}
+	argv := append([]string{binary}, args...)
+	result, err := e.Execute(ctx, ProcessRequest{Argv: argv, Environment: environment, Stdin: stdin, MaxStdout: maxStdout})
+	if err != nil {
+		return nil, err
+	}
+	return &cliResult{stdout: result.Stdout, stderr: result.Stderr, exitCode: result.ExitCode}, nil
 }
 
 func buildDirectArgsFromRef(ref string, input any) ([]string, error) {
@@ -413,7 +884,10 @@ func findCommand(spec *Spec, ref string) (*findCommandResult, error) {
 			if !commandMatchesName(cmd, target) {
 				continue
 			}
-			path = append(path, cmd.Name)
+			// A command alias is equal in standing to its canonical spelling at
+			// the process boundary: emit exactly the ref segment the caller
+			// selected, rather than rewriting it to the canonical name.
+			path = append(path, target)
 			if i == len(targetPath)-1 {
 				cmdCopy := cmd
 				return &findCommandResult{
@@ -467,21 +941,6 @@ func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input
 		return nil, fmt.Errorf("input must be an object with field names matching the command's flags and args")
 	}
 
-	flagDefs := make(map[string]Flag)
-	for _, f := range cmd.AllFlags(inheritedGlobals) {
-		name := f.PrimaryName()
-		if name != "" {
-			flagDefs[name] = f
-		}
-		parsed := f.ParseUsage()
-		for _, short := range parsed.Short {
-			flagDefs[short] = f
-		}
-		for _, long := range parsed.Long {
-			flagDefs[long] = f
-		}
-	}
-
 	type argDef struct {
 		name      string
 		cleanName string
@@ -498,20 +957,24 @@ func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input
 
 	processed := make(map[string]bool)
 
-	sortedKeys := make([]string, 0, len(inputMap))
-	for key := range inputMap {
-		sortedKeys = append(sortedKeys, key)
-	}
-	sort.Strings(sortedKeys)
-	for _, key := range sortedKeys {
-		value := inputMap[key]
-		if flagDef, isFlag := flagDefs[key]; isFlag {
+	// Flags emit in artifact declaration order. Input-object member order is
+	// semantically absent, so it can never control argv ordering.
+	for _, flagDef := range cmd.AllFlags(inheritedGlobals) {
+		for _, key := range flagDef.inputNames() {
+			if key == "" || processed[key] {
+				continue
+			}
+			value, supplied := inputMap[key]
+			if !supplied {
+				continue
+			}
 			flagArgs, err := formatFlagWithDef(key, value, flagDef)
 			if err != nil {
 				return nil, fmt.Errorf("flag %q: %w", key, err)
 			}
 			args = append(args, flagArgs...)
 			processed[key] = true
+			break
 		}
 	}
 
@@ -597,8 +1060,25 @@ func formatFlagWithDef(name string, value any, flagDef Flag) ([]string, error) {
 		return []string{flagName, v}, nil
 	case []any:
 		var args []string
+		if flagDef.valueVariadic() {
+			args = append(args, flagName)
+			for _, item := range v {
+				args = append(args, argvToken(item))
+			}
+		} else {
+			for _, item := range v {
+				args = append(args, flagName, argvToken(item))
+			}
+		}
+		return args, nil
+	case []string:
+		args := []string{flagName}
+		if flagDef.valueVariadic() {
+			return append(args, v...), nil
+		}
+		args = args[:0]
 		for _, item := range v {
-			args = append(args, flagName, argvToken(item))
+			args = append(args, flagName, item)
 		}
 		return args, nil
 	case nil:

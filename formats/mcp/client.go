@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -15,6 +16,7 @@ import (
 // discovery holds the results of an MCP server's capability negotiation.
 type discovery struct {
 	Tools             []*gomcp.Tool
+	RequiredTaskTools map[string]bool
 	Resources         []*gomcp.Resource
 	ResourceTemplates []*gomcp.ResourceTemplate
 	Prompts           []*gomcp.Prompt
@@ -29,13 +31,41 @@ func clientInfo(version string) *gomcp.Implementation {
 }
 
 func discover(ctx context.Context, clientVersion string, baseClient *http.Client, url string) (*discovery, error) {
-	session, err := connect(ctx, clientVersion, baseClient, url, nil)
+	requiredTaskTools := map[string]bool{}
+	observe := func(method string, data []byte) {
+		if method != "tools/list" {
+			return
+		}
+		var envelope struct {
+			Result struct {
+				Tools []map[string]any `json:"tools"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(data, &envelope) != nil {
+			return
+		}
+		for _, tool := range envelope.Result.Tools {
+			name, _ := tool["name"].(string)
+			execution, _ := tool["execution"].(map[string]any)
+			if name != "" && execution["taskSupport"] == "required" {
+				requiredTaskTools[name] = true
+			}
+		}
+	}
+	session, err := connect(ctx, clientVersion, baseClient, url, nil, observe)
 	if err != nil {
 		return nil, fmt.Errorf("connect to MCP server: %w", err)
 	}
 	defer func() { _ = session.Close() }()
+	if init := session.InitializeResult(); init == nil || init.ProtocolVersion != "2025-11-25" {
+		negotiated := ""
+		if init != nil {
+			negotiated = init.ProtocolVersion
+		}
+		return nil, fmt.Errorf("MCP negotiated protocol revision %q; openbindings.mcp@1 accepts only 2025-11-25", negotiated)
+	}
 
-	result := &discovery{}
+	result := &discovery{RequiredTaskTools: requiredTaskTools}
 
 	initResult := session.InitializeResult()
 	if initResult != nil {
@@ -114,13 +144,13 @@ func getPromptPooled(ctx context.Context, pool *sessionPool, clientVersion strin
 	return result, nil
 }
 
-func connect(ctx context.Context, clientVersion string, baseClient *http.Client, url string, headers map[string]string) (*gomcp.ClientSession, error) {
+func connect(ctx context.Context, clientVersion string, baseClient *http.Client, url string, headers map[string]string, resultObservers ...func(string, []byte)) (*gomcp.ClientSession, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("MCP source location must be an HTTP or HTTPS URL, got %q", url)
 	}
 
 	transport := &gomcp.StreamableClientTransport{Endpoint: url}
-	transport.HTTPClient = httpClientWithHeaders(baseClient, headers, nil)
+	transport.HTTPClient = httpClientWithHeaders(baseClient, headers, nil, resultObservers...)
 
 	client := gomcp.NewClient(clientInfo(clientVersion), nil)
 	session, err := client.Connect(ctx, transport, nil)
@@ -140,18 +170,21 @@ func connect(ctx context.Context, clientVersion string, baseClient *http.Client,
 // non-nil, receives each JSON-RPC payload carried on a text/event-stream
 // response body (see sseObserver); the invoker's session pool wires it to the
 // session's raw progress-notification capture, and discovery passes nil.
-func httpClientWithHeaders(base *http.Client, headers map[string]string, observeSSE func(data []byte)) *http.Client {
-	hc := &http.Client{}
+func httpClientWithHeaders(base *http.Client, headers map[string]string, observeSSE func(data []byte), resultObservers ...func(string, []byte)) *http.Client {
+	hc := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	roundTripBase := http.DefaultTransport
 	if base != nil {
 		hc.Timeout = base.Timeout
-		hc.CheckRedirect = base.CheckRedirect
 		hc.Jar = base.Jar
 		if base.Transport != nil {
 			roundTripBase = base.Transport
 		}
 	}
-	hc.Transport = &headerTransport{base: roundTripBase, headers: headers, observeSSE: observeSSE}
+	var observeResult func(string, []byte)
+	if len(resultObservers) > 0 {
+		observeResult = resultObservers[0]
+	}
+	hc.Transport = &headerTransport{base: roundTripBase, headers: headers, observeSSE: observeSSE, observeResult: observeResult}
 	return hc
 }
 
@@ -162,9 +195,10 @@ func httpClientWithHeaders(base *http.Client, headers map[string]string, observe
 // response bodies are teed through an sseObserver so raw server→client
 // JSON-RPC payloads can be observed byte-exactly.
 type headerTransport struct {
-	base       http.RoundTripper
-	headers    map[string]string
-	observeSSE func(data []byte)
+	base          http.RoundTripper
+	headers       map[string]string
+	observeSSE    func(data []byte)
+	observeResult func(method string, data []byte)
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -174,14 +208,21 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			clone.Header.Set(k, v)
 		}
 	}
-	if omit, _ := req.Context().Value(omitEmptyArgumentsKey{}).(bool); omit &&
-		req.Method == http.MethodPost && clone.Body != nil {
+	requestMethod := ""
+	if req.Method == http.MethodPost && clone.Body != nil {
 		body, rerr := io.ReadAll(clone.Body)
 		_ = clone.Body.Close()
 		if rerr != nil {
 			return nil, rerr
 		}
-		body = stripInjectedEmptyArguments(body)
+		var requestEnvelope struct {
+			Method string `json:"method"`
+		}
+		_ = json.Unmarshal(body, &requestEnvelope)
+		requestMethod = requestEnvelope.Method
+		if omit, _ := req.Context().Value(omitEmptyArgumentsKey{}).(bool); omit {
+			body = stripInjectedEmptyArguments(body)
+		}
 		clone.Body = io.NopCloser(bytes.NewReader(body))
 		clone.ContentLength = int64(len(body))
 		clone.GetBody = func() (io.ReadCloser, error) {
@@ -194,10 +235,61 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			hc.record(resp)
 		}
 	}
-	if err == nil && t.observeSSE != nil && isEventStream(resp.Header.Get("Content-Type")) {
-		resp.Body = &sseObserver{body: resp.Body, observe: t.observeSSE}
+	if err == nil && resp.Body != nil && isEventStream(resp.Header.Get("Content-Type")) {
+		resp.Body = &sseObserver{body: resp.Body, observe: func(data []byte) {
+			if t.observeSSE != nil {
+				t.observeSSE(data)
+			}
+			observeRawResult(req.Context(), requestMethod, data, t.observeResult)
+		}}
+	} else if err == nil && resp.Body != nil && req.Method == http.MethodPost {
+		body, rerr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if rerr != nil {
+			return nil, rerr
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		observeRawResult(req.Context(), requestMethod, body, t.observeResult)
 	}
 	return resp, err
+}
+
+type rawResultCaptureKey struct{}
+
+type rawResultCapture struct {
+	mu    sync.Mutex
+	value any
+}
+
+func (c *rawResultCapture) record(data []byte) {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(data, &envelope) != nil || envelope["result"] == nil {
+		return
+	}
+	var value any
+	dec := json.NewDecoder(bytes.NewReader(envelope["result"]))
+	dec.UseNumber()
+	if dec.Decode(&value) != nil {
+		return
+	}
+	c.mu.Lock()
+	c.value = value
+	c.mu.Unlock()
+}
+
+func (c *rawResultCapture) result() any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.value
+}
+
+func observeRawResult(ctx context.Context, method string, data []byte, observer func(string, []byte)) {
+	if observer != nil {
+		observer(method, data)
+	}
+	if capture, _ := ctx.Value(rawResultCaptureKey{}).(*rawResultCapture); capture != nil {
+		capture.record(data)
+	}
 }
 
 // omitEmptyArgumentsKey marks a per-call context (same propagation mechanics

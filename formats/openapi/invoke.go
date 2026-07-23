@@ -125,12 +125,6 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		})
 		return
 	}
-	plan, err := planRequestBody(op)
-	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
-		return
-	}
-
 	baseURL, err := resolveServer(doc, pathItem, op, args.Context, args.Source.Location)
 	if err != nil {
 		inv.FireError(configOrSourceError(err))
@@ -188,7 +182,51 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 
 	// ----- Routing (§9.1) and body construction (§9.2): still pre-dispatch. -----
 
-	routed, err := routeInput(params, inputMap, pathTemplate, plan)
+	var plans []*bodyPlan
+	if requestWillEmitBody(params, inputMap, op) {
+		plans, err = planRequestBodies(op)
+		if err != nil {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+			return
+		}
+	}
+
+	var routed *routedInput
+	var bodyReader io.Reader
+	var contentType string
+	if len(plans) == 0 {
+		routed, err = routeInput(params, inputMap, pathTemplate, &bodyPlan{})
+	} else {
+		var reasons []string
+		for _, candidate := range configuredRequestPlans(plans, args.Context) {
+			if candidateCollides(params, candidate) {
+				reasons = append(reasons, fmt.Sprintf("request media candidate %s collides with an independently declared parameter", candidate.mediaType))
+				continue
+			}
+			candidateRouted, routeErr := routeInput(params, inputMap, pathTemplate, candidate)
+			if routeErr != nil {
+				if errors.Is(routeErr, errMissingPathParam) {
+					err = routeErr
+					break
+				}
+				reasons = append(reasons, fmt.Sprintf("%s: %v", candidate.mediaType, routeErr))
+				continue
+			}
+			candidateBody, candidateContentType, buildErr := buildRequestBody(doc, candidate, candidateRouted)
+			if buildErr != nil {
+				reasons = append(reasons, fmt.Sprintf("%s: %v", candidate.mediaType, buildErr))
+				continue
+			}
+			routed, bodyReader, contentType = candidateRouted, candidateBody, candidateContentType
+			break
+		}
+		if routed == nil && err == nil {
+			if len(reasons) == 0 {
+				reasons = append(reasons, "configured requestMedia selects no declared supported candidate")
+			}
+			err = fmt.Errorf("no request media candidate can carry this invocation: %s", strings.Join(reasons, "; "))
+		}
+	}
 	if err != nil {
 		code := openbindings.ErrCodeValidationFailed
 		if errors.Is(err, errMissingPathParam) {
@@ -198,16 +236,10 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 
-	bodyReader, contentType, err := buildRequestBody(doc, plan, routed)
-	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
-		return
-	}
-
 	// ----- Channel assembly (§9.6, OAPI-P-10). -----
 
 	placements := credentialPlacements(doc, op, args.Context)
-	if err := checkCredentialCollisions(placements, routed.populated); err != nil {
+	if err := checkCredentialCollisions(placements, params, routed.populated); err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
 		return
 	}
@@ -250,11 +282,11 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	// The Accept header advertises the declared concrete media types of the
-	// operation's success responses; absent any declaration, application/json
-	// (§9.2). For streaming-capable operations the declared text/event-stream
-	// is in the set naturally.
-	req.Header.Set("Accept", acceptHeader(op))
+	// The Accept header advertises only artifact-declared concrete success
+	// media. An empty membership set omits the header.
+	if accept := acceptHeader(op); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
 
 	for _, h := range routed.headers {
 		req.Header.Set(h[0], h[1])
@@ -287,6 +319,8 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	_ = inv.SetHeader(headerMetadata(resp.Header))
 
 	site := siteFor(args, baseURL)
+	responseDecl := governingResponse(op, resp.StatusCode)
+	actualContentType := resp.Header.Get("Content-Type")
 
 	// Interaction-shape dispatch (§8, OAPI-P-06): the shape is bounded by
 	// declaration and selected by framing. An operation is streaming-capable
@@ -296,18 +330,10 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	// text/event-stream response on an operation that is NOT
 	// streaming-capable contradicts the declaration: a protocol error, never
 	// a silent reclassification.
-	if isSSEContentType(resp.Header.Get("Content-Type")) {
-		if !isStreamingCapable(op) {
-			_ = resp.Body.Close()
-			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeProtocol,
-				Message: "response arrived as text/event-stream, but no declared success response of this operation declares that media type (OAPI-P-06: an undeclared event-stream response is a protocol error)",
-			})
-			return
-		}
-		// Classification for the stream path runs once, here, at dispatch,
-		// on the initial response's status and headers (the body is the
-		// stream; it is never read for classification).
+	if isSSEContentType(actualContentType) {
+		// Classification is independent of declaration lookup. A non-success
+		// final status remains the native HTTP failure even when its body uses
+		// event-stream framing.
 		status := resp.StatusCode
 		ok, cerr := args.Hooks.Classify(site, openbindings.RawResult{
 			Status: &status,
@@ -323,6 +349,20 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 			inv.FireError(openbindings.HTTPError(resp.StatusCode, resp.Status))
 			return
 		}
+		matched, mediaErr := governingResponseMedia(responseDecl, actualContentType)
+		if mediaErr != nil || matched.base != "text/event-stream" {
+			_ = resp.Body.Close()
+			message := "response arrived as text/event-stream, but the governing response does not declare that media type"
+			if mediaErr != nil {
+				message += ": " + mediaErr.Error()
+			}
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeProtocol,
+				Message: message,
+			})
+			return
+		}
+		inv.SetTrailer(openbindings.Metadata{"x-ob-governing-media": {matched.canonical}})
 		streamSSE(bctx, resp, args, site, inv)
 		return
 	}
@@ -380,8 +420,21 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		inv.FireError(ierr)
 		return
 	}
+	// An empty successful response carries absence, not an invented JSON
+	// null. It completes without consulting response media or decode.
+	if len(respBody) == 0 {
+		inv.SetTrailer(decodeClassifyTrailer(args.Hooks, "not-consulted/empty"))
+		inv.CloseOutput()
+		return
+	}
 
-	output, derr := args.Hooks.DecodeOutput(site, raw, decodeByContentType(resp.Header.Get("Content-Type")))
+	matched, mediaErr := governingResponseMedia(responseDecl, actualContentType)
+	if mediaErr != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeProtocol, Message: mediaErr.Error()})
+		return
+	}
+
+	output, derr := args.Hooks.DecodeOutput(site, raw, decodeByContentType(actualContentType))
 	if derr != nil {
 		inv.FireError(openbindings.AsInvocationError(derr))
 		return
@@ -391,7 +444,9 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	// header/content-type when the builtin (the Content-Type lane) decided,
 	// hook when overridden; classify is always assumption/2xx unless a hook
 	// widened it.
-	inv.SetTrailer(decodeClassifyTrailer(args.Hooks, "header/content-type"))
+	trailer := decodeClassifyTrailer(args.Hooks, "header/content-type")
+	trailer["x-ob-governing-media"] = []string{matched.canonical}
+	inv.SetTrailer(trailer)
 	if err := inv.EmitOutput(output); err != nil {
 		return
 	}
@@ -784,6 +839,27 @@ func requiredInputMissing(params openapi3.Parameters, op *openapi3.Operation) st
 	return ""
 }
 
+func requestWillEmitBody(params openapi3.Parameters, input map[string]any, op *openapi3.Operation) bool {
+	if !hasRequestBody(op) {
+		return false
+	}
+	if op.RequestBody.Value.Required {
+		return true
+	}
+	parameterNames := map[string]bool{}
+	for _, parameter := range params {
+		if parameter != nil && parameter.Value != nil {
+			parameterNames[parameter.Value.Name] = true
+		}
+	}
+	for name := range input {
+		if !parameterNames[name] {
+			return true
+		}
+	}
+	return false
+}
+
 // encodePathValue percent-encodes one path parameter value with exactly
 // JavaScript's encodeURIComponent byte set (every byte except ALPHA / DIGIT /
 // "-" "_" "." "!" "~" "*" "'" "(" ")" is %XX-escaped, UTF-8 bytewise), so the
@@ -907,15 +983,36 @@ func credentialPlacements(doc *openapi3.T, op *openapi3.Operation, bindCtx map[s
 // between a credential and a caller-populated declared parameter on the same
 // channel is refused before dispatch — loud, never a silent overwrite in
 // either direction. Header names compare case-insensitively.
-func checkCredentialCollisions(placements []credentialPlacement, populated map[string]map[string]bool) error {
+func checkCredentialCollisions(placements []credentialPlacement, params openapi3.Parameters, populated map[string]map[string]bool) error {
+	declared := map[string]map[string]bool{"header": {}, "query": {}, "cookie": {}, "path": {}}
+	for _, ref := range params {
+		if ref == nil || ref.Value == nil {
+			continue
+		}
+		name := ref.Value.Name
+		if ref.Value.In == openapi3.ParameterInHeader {
+			name = http.CanonicalHeaderKey(name)
+		}
+		declared[ref.Value.In][name] = true
+	}
+	ownedHeaders := map[string]bool{"Host": true, "Content-Length": true, "Content-Type": true, "Accept": true}
+	seen := map[string]bool{}
 	for _, pl := range placements {
 		name := pl.name
 		if pl.channel == "header" {
 			name = http.CanonicalHeaderKey(name)
+			if ownedHeaders[name] {
+				return fmt.Errorf("credential %q collides with processor-owned request field %s (OAPI-P-10)", pl.name, name)
+			}
 		}
-		if populated[pl.channel][name] {
-			return fmt.Errorf("credential %q collides with a caller-populated %s parameter of the same name (OAPI-P-10: refused before dispatch, never a silent overwrite in either direction)", pl.name, pl.channel)
+		if declared[pl.channel][name] || populated[pl.channel][name] {
+			return fmt.Errorf("credential %q collides with an effective %s parameter of the same name (OAPI-P-10: refused before dispatch, never a silent overwrite in either direction)", pl.name, pl.channel)
 		}
+		key := pl.channel + "\x00" + name
+		if seen[key] {
+			return fmt.Errorf("two credentials collide at %s %q (OAPI-P-10)", pl.channel, pl.name)
+		}
+		seen[key] = true
 	}
 	return nil
 }

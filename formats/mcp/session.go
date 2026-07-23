@@ -54,6 +54,9 @@ type progressRegistration struct {
 type mcpSession struct {
 	session *gomcp.ClientSession
 
+	artifactMu        sync.Mutex
+	requiredTaskTools map[string]bool
+
 	// progressHandlers maps progress tokens to per-call registrations.
 	// The session-level progress handler demuxes incoming notifications to
 	// the registration for the matching token. Access is protected by
@@ -178,11 +181,12 @@ func (p *sessionPool) createSession(ctx context.Context, clientVersion string, u
 	}
 
 	s := &mcpSession{
-		progressHandlers: make(map[string]*progressRegistration),
-		rawProgress:      make(map[string][]map[string]any),
-		url:              url,
-		key:              key,
-		pool:             p,
+		progressHandlers:  make(map[string]*progressRegistration),
+		rawProgress:       make(map[string][]map[string]any),
+		requiredTaskTools: make(map[string]bool),
+		url:               url,
+		key:               key,
+		pool:              p,
 	}
 
 	// The headerTransport is always installed (even with no auth headers) so
@@ -191,7 +195,7 @@ func (p *sessionPool) createSession(ctx context.Context, clientVersion string, u
 	// client so proxy, mTLS, and custom-CA configuration is honored; the SSE
 	// observer feeds the session's raw progress-notification capture.
 	transport := &gomcp.StreamableClientTransport{Endpoint: url}
-	transport.HTTPClient = httpClientWithHeaders(p.baseClient, headers, s.observeSSEData)
+	transport.HTTPClient = httpClientWithHeaders(p.baseClient, headers, s.observeSSEData, s.observeResult)
 
 	opts := &gomcp.ClientOptions{
 		ProgressNotificationHandler: s.demuxProgress,
@@ -203,6 +207,37 @@ func (p *sessionPool) createSession(ctx context.Context, clientVersion string, u
 	}
 	s.session = session
 	return s, nil
+}
+
+// observeResult retains only artifact facts that the upstream typed SDK does
+// not yet expose. The binding still treats the MCP wire object as authority.
+func (s *mcpSession) observeResult(method string, data []byte) {
+	if method != "tools/list" {
+		return
+	}
+	var envelope struct {
+		Result struct {
+			Tools []map[string]any `json:"tools"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(data, &envelope) != nil {
+		return
+	}
+	s.artifactMu.Lock()
+	defer s.artifactMu.Unlock()
+	for _, tool := range envelope.Result.Tools {
+		name, _ := tool["name"].(string)
+		execution, _ := tool["execution"].(map[string]any)
+		if name != "" && execution["taskSupport"] == "required" {
+			s.requiredTaskTools[name] = true
+		}
+	}
+}
+
+func (s *mcpSession) toolRequiresTask(name string) bool {
+	s.artifactMu.Lock()
+	defer s.artifactMu.Unlock()
+	return s.requiredTaskTools[name]
 }
 
 // demuxProgress routes a progress notification to the handler registered for

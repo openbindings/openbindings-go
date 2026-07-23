@@ -140,8 +140,54 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
 		return
 	}
+	e.runStreamingBody(ctx, inv, reqURL, &body, headers, mi, maxUnit)
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, &body)
+// runClientStreaming preserves the schema-declared client-streaming or
+// bidirectional shape. Request messages are encoded as they arrive and the
+// HTTP exchange begins immediately; response envelopes are consumed
+// concurrently, so bidirectional outputs may arrive while input remains open.
+func (e *Invoker) runClientStreaming(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, headers map[string]string, mi *methodInfo, maxUnit int64) {
+	reader, writer := io.Pipe()
+	go func() {
+		defer func() { _ = writer.Close() }()
+		for {
+			value, err := inv.ReadInput(ctx)
+			if err == io.EOF {
+				if werr := writeConnectEnvelope(writer, connectFlagEndStream, []byte("{}")); werr != nil && ctx.Err() == nil {
+					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
+				}
+				return
+			}
+			if err != nil {
+				_ = writer.CloseWithError(err)
+				return
+			}
+			payload, ierr := buildSchemaModeBody(mi, value)
+			if ierr != nil {
+				inv.FireError(ierr)
+				_ = writer.CloseWithError(ierr)
+				return
+			}
+			if err := writeConnectEnvelope(writer, 0, payload); err != nil {
+				if ctx.Err() == nil {
+					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()})
+				}
+				return
+			}
+		}
+	}()
+
+	e.runStreamingBody(ctx, inv, reqURL, reader, headers, mi, maxUnit)
+	_ = reader.Close()
+}
+
+// runStreamingBody performs one Connect streaming exchange over an already
+// prepared request body. body may be a live pipe for client/bidirectional
+// streaming or a finite buffer for server streaming.
+func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, body io.Reader, headers map[string]string, mi *methodInfo, maxUnit int64) {
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, body)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
 		return
@@ -228,6 +274,9 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 			return
 		}
 		if flags&connectFlagEndStream != 0 {
+			// The peer has ended the RPC. Stop accepting client-streaming input;
+			// outputs already emitted remain authoritative.
+			_ = inv.CloseInput()
 			// End-stream envelope: trailing metadata, then clean close or
 			// terminal error. An empty payload carries nothing and is read
 			// as the empty object.

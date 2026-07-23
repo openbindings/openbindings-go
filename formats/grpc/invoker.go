@@ -6,9 +6,8 @@
 //     UNIMPLEMENTED), embedded .proto source text, or an embedded
 //     FileDescriptorSet in canonical JSON
 //   - Converting protobuf service descriptors to OpenBindings interfaces
-//   - Invoking unary and server-streaming RPCs (client-streaming and
-//     bidirectional methods are refused pre-dispatch as this
-//     implementation's declared limitation, per GRPC-P-04)
+//   - Invoking unary, client-streaming, server-streaming, and bidirectional
+//     RPCs with the interaction shape declared by protobuf
 package grpc
 
 import (
@@ -107,7 +106,7 @@ func (e *Invoker) Close() error {
 	return errors.Join(errs...)
 }
 
-// Formats returns the source formats supported by the gRPC invoker.
+// BindingSpecs returns the binding-spec identifiers supported by the gRPC invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "gRPC via server reflection or .proto files"}}
 }
@@ -195,6 +194,14 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	// Credentials ride outgoing gRPC metadata (§9.5, GRPC-P-07); an
 	// unplaceable key is surfaced here, pre-dispatch.
+	_, _, hasBasic := openbindings.ContextBasicAuth(args.Context)
+	if openbindings.ContextAPIKey(args.Context) != "" || openbindings.ContextBearerToken(args.Context) != "" || hasBasic {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeContextRequired,
+			Message: "gRPC declares no metadata key for a generic credential; supply an explicitly named metadata entry",
+		})
+		return
+	}
 	rpcCtx, mdErr := applyGRPCContext(bctx, args.Context)
 	if mdErr != nil {
 		inv.FireError(&openbindings.InvocationError{
@@ -263,41 +270,37 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		}
 	}
 
-	noInput := args.Binding != nil && args.InputSchema == nil
-	reqMsg, ok := readRequest(bctx, inv, methodDesc, noInput)
-	if !ok {
-		return
-	}
-
 	stub := grpcdynamic.NewStub(conn)
-	if methodDesc.IsStreamingServer() {
+	noInput := args.Binding != nil && args.InputSchema == nil
+	switch {
+	case methodDesc.IsStreamingClient() && methodDesc.IsStreamingServer():
+		runBidiStream(rpcCtx, inv, stub, methodDesc, noInput)
+	case methodDesc.IsStreamingClient():
+		runClientStream(rpcCtx, inv, stub, methodDesc, noInput)
+	case methodDesc.IsStreamingServer():
+		reqMsg, ok := readRequest(bctx, inv, methodDesc, noInput)
+		if !ok {
+			return
+		}
 		runServerStream(rpcCtx, inv, stub, methodDesc, reqMsg)
-	} else {
+	default:
+		reqMsg, ok := readRequest(bctx, inv, methodDesc, noInput)
+		if !ok {
+			return
+		}
 		runUnary(rpcCtx, inv, stub, methodDesc, reqMsg)
 	}
 }
 
 // preflightMethod applies the pre-dispatch gates that follow method
 // resolution: §3's accepted schema range over the bound method's
-// transitive closure (GRPC-P-03), then interaction-kind coverage
-// (GRPC-P-04). Client-streaming and bidirectional methods are refused
-// before dispatch as this implementation's declared limitation — a
-// coverage declaration, never a reinterpretation of the shape.
+// transitive closure (GRPC-P-03). All four protobuf interaction kinds are
+// covered; the artifact's method declaration remains authoritative.
 func preflightMethod(methodDesc protoreflect.MethodDescriptor) *openbindings.InvocationError {
 	if err := validateBoundClosure(methodDesc); err != nil {
 		return &openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceLoadFailed,
 			Message: err.Error(),
-		}
-	}
-	if methodDesc.IsStreamingClient() {
-		kind := "client-streaming"
-		if methodDesc.IsStreamingServer() {
-			kind = "bidirectional-streaming"
-		}
-		return &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: fmt.Sprintf("gRPC method %q is %s; this invoker covers unary and server-streaming methods (implementation-declared limitation, openbindings.grpc@1 §8 / GRPC-P-04)", methodDesc.FullName(), kind),
 		}
 	}
 	return nil
@@ -333,30 +336,41 @@ func NewSynthesizer(opts ...SynthesizerOption) *Synthesizer {
 	return c
 }
 
-// Formats returns the source formats supported by the gRPC synthesizer.
+// BindingSpecs returns the binding-spec identifiers supported by the gRPC synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "gRPC via server reflection or .proto files"}}
 }
 
 // SynthesizeInterface discovers gRPC services and converts to an OpenBindings interface.
-// Supports two discovery modes:
-//   - Live server reflection (default): connects to the address and introspects via gRPC reflection
-//   - Proto file: parses a .proto file when the location ends in .proto or inline content is provided
+// Supports the binding specification's two discovery modes: embedded
+// protobuf content, or live server reflection when content is absent.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
-		return nil, openbindings.ErrNoSources
+		skeleton, err := openbindings.SynthesisSkeleton(in)
+		return &skeleton, err
 	}
 	if len(in.Sources) > 1 {
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
+	if src.BindingSpec != BindingSpec {
+		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	}
+	if src.OutputLocation != "" {
+		if _, err := parseDialAddress(src.OutputLocation); err != nil {
+			return nil, fmt.Errorf("outputLocation: %w", err)
+		}
+	}
+	if src.Embed && src.Content == nil {
+		return nil, fmt.Errorf("gRPC reflection embedding is not supported: preserving the complete reflected descriptor closure is required; provide embedded protobuf content explicitly")
+	}
 
 	var disc *discovery
 	var err error
 	var sourceLocation string
 
-	if src.Content != nil || isProtoFile(src.Location) {
-		// Parse from .proto file or inline content.
+	if src.Content != nil {
+		// Embedded content is authoritative and displaces reflection.
 		disc, err = discoverFromProto(ctx, src.Location, src.Content)
 		if err != nil {
 			return nil, fmt.Errorf("gRPC proto parse: %w", err)
@@ -379,14 +393,13 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	if err != nil {
 		return nil, fmt.Errorf("gRPC convert: %w", err)
 	}
-	if in.Name != "" {
-		iface.Name = in.Name
+	if src.Content != nil {
+		entry := iface.Sources[DefaultSourceName]
+		entry.Content = src.Content
+		iface.Sources[DefaultSourceName] = entry
 	}
-	if in.Version != "" {
-		iface.Version = in.Version
-	}
-	if in.Description != "" {
-		iface.Description = in.Description
+	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
+		return nil, err
 	}
 	return &iface, nil
 }

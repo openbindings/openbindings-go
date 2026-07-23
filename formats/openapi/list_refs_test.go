@@ -145,7 +145,7 @@ func TestInspectSource_DescriptionFromSummary(t *testing.T) {
 
 func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	doc := minimalDoc()
-	iface := convertDocToInterface(doc, "", nil)
+	iface := mustConvertDocToInterface(t, doc, "")
 
 	// Collect binding refs from SynthesizeInterface.
 	createRefs := map[string]bool{}
@@ -213,7 +213,7 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iface := convertDocToInterface(doc, "", nil)
+	iface := mustConvertDocToInterface(t, doc, "")
 
 	// Map each ref to the operation key SynthesizeInterface assigned it.
 	createKeyByRef := map[string]string{}

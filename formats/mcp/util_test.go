@@ -1,9 +1,6 @@
 package mcp
 
-import (
-	"encoding/base64"
-	"testing"
-)
+import "testing"
 
 func TestParseRef_Tool(t *testing.T) {
 	entityType, name, err := parseRef("tools/get_weather")
@@ -65,32 +62,17 @@ func TestParseRef_EmptyName(t *testing.T) {
 	}
 }
 
-func TestBuildHTTPHeaders_BearerToken(t *testing.T) {
-	h := buildHTTPHeaders(map[string]any{"bearerToken": "tok_123"})
-	if h["Authorization"] != "Bearer tok_123" {
-		t.Errorf("Authorization = %q, want Bearer tok_123", h["Authorization"])
-	}
-}
-
-func TestBuildHTTPHeaders_APIKey(t *testing.T) {
-	h := buildHTTPHeaders(map[string]any{"apiKey": "key_abc"})
-	if h["Authorization"] != "ApiKey key_abc" {
-		t.Errorf("Authorization = %q, want ApiKey key_abc", h["Authorization"])
-	}
-}
-
-func TestBuildHTTPHeaders_BasicAuth(t *testing.T) {
-	h := buildHTTPHeaders(map[string]any{"basic": map[string]any{"username": "user", "password": "pass"}})
-	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("user:pass"))
-	if h["Authorization"] != want {
-		t.Errorf("Authorization = %q, want %q", h["Authorization"], want)
-	}
-}
-
-func TestBuildHTTPHeaders_BearerTakesPriority(t *testing.T) {
-	h := buildHTTPHeaders(map[string]any{"bearerToken": "tok", "apiKey": "key"})
-	if h["Authorization"] != "Bearer tok" {
-		t.Errorf("Authorization = %q, want Bearer tok", h["Authorization"])
+func TestBuildHTTPHeaders_GenericCredentialsDoNotInventCarriage(t *testing.T) {
+	for name, context := range map[string]map[string]any{
+		"bearer": {"bearerToken": "tok_123"},
+		"apiKey": {"apiKey": "key_abc"},
+		"basic":  {"basic": map[string]any{"username": "user", "password": "pass"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := buildHTTPHeaders(context); got != nil {
+				t.Fatalf("generic credential must not be assigned an invented HTTP header: %v", got)
+			}
+		})
 	}
 }
 
@@ -103,10 +85,13 @@ func TestBuildHTTPHeaders_NoCredentials(t *testing.T) {
 
 func TestBuildHTTPHeaders_ContextHeaders(t *testing.T) {
 	bindCtx := map[string]any{
-		"headers": map[string]any{"X-Custom": "value"},
+		"headers": map[string]any{"X-Custom": "value", "Authorization": "Bearer explicit"},
 	}
 	h := buildHTTPHeaders(bindCtx)
 	if h["X-Custom"] != "value" {
 		t.Errorf("X-Custom = %q, want value", h["X-Custom"])
+	}
+	if h["Authorization"] != "Bearer explicit" {
+		t.Errorf("Authorization = %q, want explicitly supplied header", h["Authorization"])
 	}
 }

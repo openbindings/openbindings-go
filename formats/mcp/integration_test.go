@@ -336,7 +336,7 @@ func TestIntegration_ExecuteTool(t *testing.T) {
 	defer invoker.Close()
 
 	call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/echo",
-		map[string]any{"bearerToken": "tok_secret"}))
+		map[string]any{"headers": map[string]any{"Authorization": "Bearer tok_secret"}}))
 	if err := call.Write(bg(), map[string]any{"message": "hello world"}); err != nil {
 		t.Fatal(err)
 	}
@@ -345,8 +345,8 @@ func TestIntegration_ExecuteTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v != "echo: hello world" {
-		t.Errorf("output = %v, want 'echo: hello world'", v)
+	if got := toolResultText(t, v); got != "echo: hello world" {
+		t.Errorf("tool result text = %q, want 'echo: hello world'", got)
 	}
 
 	// Verify credentials flowed through.
@@ -377,20 +377,11 @@ func TestIntegration_ExecuteResource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Updated for openbindings.mcp@1 §9.3 (MCP-P-05): a resource result is
-	// ALWAYS the array of decoded contents items — this test previously
-	// pinned the non-conformant single-item unwrap. The lone declared-JSON
-	// item parses into a map inside a one-element array.
-	items, ok := v.([]any)
-	if !ok || len(items) != 1 {
-		t.Fatalf("expected the array of decoded contents items, got %T: %v", v, v)
-	}
-	resp, ok := items[0].(map[string]any)
-	if !ok {
-		t.Fatalf("expected decoded JSON map item, got %T: %v", items[0], items[0])
-	}
-	if resp["ok"] != true {
-		t.Errorf("ok = %v, want true", resp["ok"])
+	// Revision 1 preserves the complete protocol result and declared resource
+	// item; it does not reinterpret text merely because mimeType says JSON.
+	item := resourceResultItem(t, v)
+	if item["uri"] != "app://status" || item["mimeType"] != "application/json" || item["text"] != `{"ok":true}` {
+		t.Fatalf("resource item was not preserved: %v", item)
 	}
 }
 
@@ -547,7 +538,7 @@ func TestIntegration_AuthRequired(t *testing.T) {
 
 	// With credentials the same call succeeds.
 	call = invoker.InvokeBinding(bg(), invocationArgs(gated.URL, "resources/app://status",
-		map[string]any{"bearerToken": "tok"}))
+		map[string]any{"headers": map[string]any{"Authorization": "Bearer tok"}}))
 	if _, err := openbindings.Single(shortCtx(t), call.Outputs()); err != nil {
 		t.Fatalf("authorized call failed: %v", err)
 	}
@@ -804,7 +795,7 @@ func TestIntegration_SessionPooling_DifferentHeaders(t *testing.T) {
 
 	for _, token := range []string{"token_A", "token_B"} {
 		call := invoker.InvokeBinding(bg(), invocationArgs(ts.URL, "tools/echo",
-			map[string]any{"bearerToken": token}))
+			map[string]any{"headers": map[string]any{"Authorization": "Bearer " + token}}))
 		if err := call.Write(bg(), map[string]any{"message": token}); err != nil {
 			t.Fatal(err)
 		}

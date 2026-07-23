@@ -8,6 +8,9 @@ OpenBindings is an open standard: one interface, limitless bindings. An OBI (Ope
 
 **Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through OBI-D-12, OBI-D-16, and OBI-T-04 (OBI-D-13/D-14/D-15 take per-format knowledge and are left unverified, per the spec §14.2's partial-verification posture). OBI-D-02 (document validates against `openbindings.schema.json`) and OBI-D-11 (examples validate against their operation's input/output schemas) are enforced via [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema). The schema is embedded at build time (synced via `scripts/sync-schema.sh`). To exercise the core conformance corpus, check out the spec repo alongside this one (at `../spec`, or `./spec` inside the repo) and run `go test ./...` from the root module.
 
+The cross-SDK equivalence policy and corresponding public names are recorded
+in [`IMPLEMENTATION_PARITY.md`](IMPLEMENTATION_PARITY.md).
+
 ## Layout
 
 This is a multi-module Go monorepo. Each subdirectory below is its own module:
@@ -58,13 +61,13 @@ go install github.com/openbindings/ob/cmd/ob@latest
 
 - **Core types** for the OpenBindings interface document: operations, bindings, sources, transforms, schemas
 - **Lossless JSON** round-tripping that preserves unknown fields and `x-*` extensions for forward compatibility
-- **Validation** with shape-level checks, strict mode for unknown fields, and format token validation
+- **Validation** with shape-level checks, strict mode for unknown fields, and exact binding-specification identifier validation
 - **Schema compatibility** checking under the OpenBindings Schema Compatibility Profile v0.1 (covariant outputs, contravariant inputs) with diagnostic reasons
 - **`FetchInterface`** for resolving OBIs from URLs: well-known discovery, then synthesis from raw OpenAPI / AsyncAPI / etc. via supplied synthesizers
-- **`OperationInvoker`** that dispatches operations to per-format binding invokers and applies transforms
+- **`OperationInvoker`** that dispatches operations to binding-spec implementations and applies transforms
 - **Context contracts** for per-origin invocation context (credentials and non-secret configuration), resolved at call time with least-privilege scoping
 
-The SDK is the foundation layer. It defines the contracts that binding invokers (OpenAPI, AsyncAPI, gRPC, etc.) implement but does not contain any format-specific logic itself.
+The SDK is the foundation layer. It defines the contracts that binding invokers (OpenAPI, AsyncAPI, gRPC, etc.) implement but does not contain any binding-spec-specific logic itself.
 
 ## Quick start
 
@@ -190,25 +193,27 @@ resolved by the operation invoker's `ContextResolver` when one is configured.
 
 ## Binding invokers
 
-The SDK routes operations to binding invokers by format token. Invokers declare what formats they handle (including semver ranges like `openapi@^3.0.0`) and the SDK matches OBI source formats against those declarations:
+The SDK routes operations to binding invokers by exact, opaque `bindingSpec`
+identifier. Invokers declare the identifiers they implement, and the SDK uses
+exact equality—never semver range matching:
 
 ```go
 opInv := openbindings.NewOperationInvoker(
-    openapi.NewInvoker(),   // handles openapi@^3.0.0
-    asyncapi.NewInvoker(),  // handles asyncapi@^3.0.0
-    grpc.NewInvoker(),      // handles grpc (versionless)
+    openapi.NewInvoker(),   // openbindings.openapi@1
+    asyncapi.NewInvoker(),  // openbindings.asyncapi@1
+    grpc.NewInvoker(),      // openbindings.grpc@1
 )
 ```
 
-| Module | Format token(s) | Synthesizes OBIs? |
+| Module | Binding specification | Synthesizes OBIs? |
 |--------|-----------------|-------------------|
-| `formats/openapi` | `openapi@^3.0.0` | yes |
-| `formats/asyncapi` | `asyncapi@^3.0.0` | yes |
+| `formats/openapi` | `openbindings.openapi@1` | yes |
+| `formats/asyncapi` | `openbindings.asyncapi@1` | yes |
 | `formats/graphql` | `graphql` | yes |
-| `formats/grpc` | `grpc` | yes |
-| `formats/connect` | `connect` | yes |
-| `formats/mcp` | `mcp@2025-11-25` | yes |
-| `formats/usage` | `usage@^2.0.0`, `usage@^3.0.0` | yes |
+| `formats/grpc` | `openbindings.grpc@1` | yes |
+| `formats/connect` | `openbindings.connect@1` | yes |
+| `formats/mcp` | `openbindings.mcp@1` | yes |
+| `formats/usage` | `openbindings.usage@1` | yes |
 | `formats/operationgraph` | `openbindings.operation-graph@0.2.0` | no (graphs are authored, then composed at invoke time) |
 | `formats/workersrpc` | `workers-rpc@^1.0.0` | no (Go-side stub; dispatch requires the Workers runtime) |
 

@@ -24,17 +24,17 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	if err != nil {
 		return nil, fmt.Errorf("parse usage content: %w", err)
 	}
+	if err := validateAcceptedUsageArtifact(spec); err != nil {
+		return nil, err
+	}
 	meta := spec.Meta()
+	if meta.Bin == "" {
+		return &openbindings.SourceInspection{Exhaustive: true}, nil
+	}
 
 	var targets []openbindings.BindableTarget
 	if rc := rootCommand(spec); rc != nil {
-		rootName := meta.Bin
-		if rootName == "" {
-			rootName = meta.Name
-		}
-		if rootName != "" {
-			targets = append(targets, bindableTarget("", rootName, meta.About))
-		}
+		targets = append(targets, bindableTarget("", meta.Bin, meta.About))
 	}
 	walkWithGlobals(spec, func(path []string, cmd Command, _ []Flag) {
 		if len(path) == 0 || cmd.SubcommandRequired {

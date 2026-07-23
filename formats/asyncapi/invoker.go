@@ -2,7 +2,7 @@
 // synthesizer for the OpenBindings Go SDK: HTTP (request + SSE) and
 // WebSocket channels behind the SDK's cardinality-agnostic Invocation
 // handle. The public surface is the format contract (Invoker, Synthesizer,
-// their constructors, and the format token) plus the endpoint-resolution
+// their constructors, and the binding-spec identifier) plus the endpoint-resolution
 // seam (ParseDocument, Document.ResolveEndpoint — §9.2's server and address
 // configuration points for consumers that dial with their own transport);
 // the rest of the document model is internal.
@@ -25,12 +25,7 @@ const maxRedirects = 10
 
 func newDefaultHTTPClient() *http.Client {
 	return &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxRedirects {
-				return fmt.Errorf("stopped after %d redirects", maxRedirects)
-			}
-			return nil
-		},
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 
@@ -108,7 +103,7 @@ func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, conte
 	return doc, nil
 }
 
-// Formats returns the source formats supported by the AsyncAPI invoker.
+// BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "AsyncAPI 3.x event-driven APIs"}}
 }
@@ -204,7 +199,7 @@ func NewSynthesizer() *Synthesizer {
 	}
 }
 
-// Formats returns the source formats supported by the AsyncAPI synthesizer.
+// BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "AsyncAPI 3.x event-driven APIs"}}
 }
@@ -212,39 +207,59 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // SynthesizeInterface converts an AsyncAPI document to an OpenBindings interface.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
-		return nil, openbindings.ErrNoSources
+		skeleton, err := openbindings.SynthesisSkeleton(in)
+		return &skeleton, err
 	}
 	if len(in.Sources) > 1 {
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	// Authoring convenience: a bare filesystem path loads as its file://
-	// spelling (the strict loader refuses bare paths, ASYNC-D-02); the
-	// original spelling still rides emission below.
+	if src.BindingSpec != BindingSpec {
+		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	}
+	if src.OutputLocation != "" {
+		if err := validateDocumentAddress(src.OutputLocation); err != nil {
+			return nil, fmt.Errorf("outputLocation: %w", err)
+		}
+	}
+	// Authoring convenience: a bare filesystem path loads and is emitted as
+	// its absolute file:// spelling. Emitting the original relative spelling
+	// would create a source this binding implementation is guaranteed to
+	// refuse under ASYNC-D-02.
 	loadLocation, err := absolutizeArtifactLocation(src.Location)
 	if err != nil {
 		return nil, err
 	}
-	doc, err := loadDocument(ctx, c.httpClient, loadLocation, src.Content)
+	artifactContent := src.Content
+	if src.Embed && artifactContent == nil {
+		data, embedErr := sourceToBytes(ctx, c.httpClient, loadLocation, nil)
+		if embedErr != nil {
+			return nil, fmt.Errorf("embed AsyncAPI source: %w", embedErr)
+		}
+		artifactContent = openbindings.TextContent(string(data))
+	}
+	doc, err := loadDocument(ctx, c.httpClient, loadLocation, artifactContent)
 	if err != nil {
 		return nil, err
 	}
-	iface, err := synthesizeInterfaceWithDoc(ctx, in, doc)
+	normalizedInput := *in
+	normalizedInput.Sources = append([]openbindings.SynthesizeSource(nil), in.Sources...)
+	normalizedInput.Sources[0].Location = loadLocation
+	iface, err := synthesizeInterfaceWithDoc(ctx, &normalizedInput, doc)
 	if err != nil {
 		return nil, err
 	}
 	// Content-fed synthesis: the emitted source must stay invocable. A
 	// source needs location or content; with no location, dropping the
 	// provided content would emit neither.
-	if src.Location == "" && src.Content != nil {
+	if artifactContent != nil {
 		if entry, ok := iface.Sources[DefaultSourceName]; ok {
-			data, cerr := openbindings.ContentToBytes(src.Content)
-			if cerr != nil {
-				return nil, fmt.Errorf("embed source content: %w", cerr)
-			}
-			entry.Content = openbindings.TextContent(string(data))
+			entry.Content = append(json.RawMessage(nil), artifactContent...)
 			iface.Sources[DefaultSourceName] = entry
 		}
+	}
+	if err := openbindings.FinalizeSynthesis(iface, in, DefaultSourceName, BindingSpec); err != nil {
+		return nil, err
 	}
 	return iface, nil
 }

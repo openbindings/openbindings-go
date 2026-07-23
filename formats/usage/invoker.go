@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -40,7 +41,41 @@ type Invoker struct {
 	// configuration for that command. nil means DENY ALL (the normative
 	// default); a consumer wires its authorization policy here.
 	AuthorizeExec func(argv []string) bool
+
+	// Execute is an optional process-runtime seam. Nil uses os/exec. The
+	// request preserves the observable process boundary while allowing
+	// embedders and conformance runners to provide a sandboxed executor.
+	Execute ProcessExecutor
+
+	// Encoders supplies named per-field scalar token encoders selected by the
+	// configuration.encode point. Each occurrence must produce exactly one
+	// argv token.
+	Encoders map[string]TokenEncoder
 }
+
+// ProcessRequest is one completely assembled process dispatch.
+type ProcessRequest struct {
+	Argv        []string
+	Environment map[string]string
+	Stdin       []byte
+	MaxStdout   int64
+}
+
+// ProcessResult is one completed process exchange.
+type ProcessResult struct {
+	// Stdout and Stderr preserve the process byte sequence in Go strings.
+	// The builtin output lane validates Stdout as UTF-8; configured decoders
+	// receive the original bytes through RawResult.
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+// ProcessExecutor executes one assembled process request.
+type ProcessExecutor func(context.Context, ProcessRequest) (ProcessResult, error)
+
+// TokenEncoder converts one scalar value occurrence to exactly one argv token.
+type TokenEncoder func(any) (string, error)
 
 // NewInvoker creates a new usage binding invoker. Exec addresses are
 // denied by default (USAGE-P-02); set AuthorizeExec to authorize.
@@ -71,14 +106,8 @@ func (e *Invoker) cachedLoadSpec(ctx context.Context, location string, content j
 	if err != nil {
 		return nil, fmt.Errorf("parse usage artifact: %w", err)
 	}
-	if min := spec.Meta().MinUsageVersion; min != "" {
-		ok, verr := IsSupportedVersion(min)
-		if verr != nil {
-			return nil, fmt.Errorf("artifact min_usage_version %q: %w", min, verr)
-		}
-		if !ok {
-			return nil, fmt.Errorf("artifact declares min_usage_version %q, outside the accepted range %s-%s", min, MinSupportedVersion, MaxTestedVersion)
-		}
+	if err := validateAcceptedUsageArtifact(spec); err != nil {
+		return nil, err
 	}
 
 	if location != "" {
@@ -103,7 +132,7 @@ func artifactText(ctx context.Context, location string, content json.RawMessage,
 		if err := json.Unmarshal(content, &text); err != nil {
 			return "", fmt.Errorf("usage source content must be the artifact text (a JSON string), got %s", openbindings.ContentKind(content))
 		}
-		return text, nil
+		return validArtifactText(text, "embedded usage artifact")
 	}
 	if location == "" {
 		return "", fmt.Errorf("source must have location or content")
@@ -121,7 +150,11 @@ func artifactText(ctx context.Context, location string, content json.RawMessage,
 		if authorizeExec == nil || !authorizeExec(argv) {
 			return "", fmt.Errorf("exec address %q is not authorized (USAGE-P-02: dereferencing an exec address executes a document-supplied command; the default is refusal — authorize this command in your configuration)", location)
 		}
-		return resolveCommandArtifact(ctx, argv)
+		text, err := resolveCommandArtifact(ctx, argv)
+		if err != nil {
+			return "", err
+		}
+		return validArtifactText(text, "generated usage artifact")
 	}
 	u, _ := url.Parse(location) // validated above: absolute, non-opaque
 	switch u.Scheme {
@@ -130,12 +163,23 @@ func artifactText(ctx context.Context, location string, content json.RawMessage,
 		if rerr != nil {
 			return "", fmt.Errorf("read usage artifact: %w", rerr)
 		}
-		return string(data), nil
+		return validArtifactText(string(data), "usage artifact file")
 	case "http", "https":
-		return fetchArtifact(ctx, location)
+		text, err := fetchArtifact(ctx, location)
+		if err != nil {
+			return "", err
+		}
+		return validArtifactText(text, "fetched usage artifact")
 	default:
 		return "", fmt.Errorf("usage location scheme %q is not dereferenced by this processor (supported: file, http, https, exec addresses)", u.Scheme)
 	}
+}
+
+func validArtifactText(text, source string) (string, error) {
+	if !utf8.ValidString(text) {
+		return "", fmt.Errorf("%s is not valid UTF-8 (USAGE-D-01)", source)
+	}
+	return text, nil
 }
 
 // validateLocation checks USAGE-D-02's two address forms offline, without
@@ -179,6 +223,48 @@ func fetchArtifact(ctx context.Context, location string) (string, error) {
 	return string(data), nil
 }
 
+// validateInvocationArtifact refuses upstream lanes whose semantics require
+// private filesystem, shell, discovery, or configuration policy. The
+// descriptor remains faithfully parseable for inspection, but this binding
+// does not silently ignore these nodes on invocation.
+func validateInvocationArtifact(spec *Spec) error {
+	var walk func([]Node) error
+	walk = func(nodes []Node) error {
+		for _, node := range nodes {
+			switch node.Name {
+			case "include":
+				return fmt.Errorf("usage include nodes are excluded from openbindings.usage@1 invocation")
+			case "mount":
+				return fmt.Errorf("usage dynamic mounts are excluded from openbindings.usage@1 invocation")
+			case "config", "config_file", "config_alias":
+				return fmt.Errorf("usage config-file discovery is excluded from openbindings.usage@1 invocation")
+			case "arg":
+				if value, ok := node.Props["parse"]; ok && value.String() != "" {
+					return fmt.Errorf("usage argument parse commands are excluded from openbindings.usage@1 invocation")
+				}
+			}
+			if err := walk(node.Children); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(spec.Nodes)
+}
+
+func validateAcceptedUsageArtifact(spec *Spec) error {
+	if min := spec.Meta().MinUsageVersion; min != "" {
+		ok, err := IsSupportedVersion(min)
+		if err != nil {
+			return fmt.Errorf("artifact min_usage_version %q: %w", min, err)
+		}
+		if !ok {
+			return fmt.Errorf("artifact declares min_usage_version %q, outside the accepted range %s-%s", min, MinSupportedVersion, MaxTestedVersion)
+		}
+	}
+	return validateInvocationArtifact(spec)
+}
+
 // ParseExecAddress parses an exec address per USAGE-D-02's grammar: the
 // exec: prefix followed by one command token and zero or more argument
 // tokens separated by SINGLE spaces. Tokens carry no quoting mechanism —
@@ -198,7 +284,7 @@ func ParseExecAddress(location string) ([]string, error) {
 	return argv, nil
 }
 
-// Formats returns the source formats supported by the usage invoker.
+// BindingSpecs returns the binding-spec identifiers supported by the usage invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return usageBindingSpecInfos()
 }
@@ -226,12 +312,15 @@ type Synthesizer struct {
 	AuthorizeExec func(argv []string) bool
 }
 
+var _ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+var _ openbindings.SourceInspector = (*Synthesizer)(nil)
+
 // NewSynthesizer creates a new usage interface synthesizer.
 func NewSynthesizer() *Synthesizer {
 	return &Synthesizer{}
 }
 
-// Formats returns the source formats supported by the usage synthesizer:
+// BindingSpecs returns the binding-spec identifiers supported by the usage synthesizer:
 // bare jdx usage-spec artifacts.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return usageBindingSpecInfos()
@@ -245,12 +334,21 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // keys the diagnostics and self-clears when a real schema is elected).
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
-		return nil, openbindings.ErrNoSources
+		skeleton, err := openbindings.SynthesisSkeleton(in)
+		return &skeleton, err
 	}
 	if len(in.Sources) > 1 {
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
+	if src.BindingSpec != BindingSpec {
+		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	}
+	if src.OutputLocation != "" {
+		if err := validateLocation(src.OutputLocation); err != nil {
+			return nil, fmt.Errorf("outputLocation: %w", err)
+		}
+	}
 
 	location, err := absolutizeArtifactLocation(src.Location, src.Content)
 	if err != nil {
@@ -269,13 +367,26 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	// artifacts): a file path — even absolutized — is a relative reference
 	// and never rides the emitted location, so the artifact embeds as
 	// pristine content and the machine-coupled path stays out of the
-	// document. Only an exec: locator that is a well-formed URI (no
-	// arguments/spaces) is emitted verbatim. Either way the synthesized
-	// document validates and is invocable as written: content is
-	// authoritative at the invoke lane, and an emitted exec: locator is
-	// resolved live.
+	// document. A valid exec: address is binding-spec-defined absolute
+	// address carriage (USAGE-D-02), including a space-separated argv vector,
+	// and is emitted verbatim. Either way the synthesized document validates
+	// and is invocable as written: content is authoritative at the invoke
+	// lane, and an emitted exec: address is resolved live.
 	sourceEntry := openbindings.Source{BindingSpec: src.BindingSpec}
-	if emittableAsLocation(location) {
+	if src.Content != nil {
+		// Content primacy is part of the emitted document too: retaining the
+		// supplied artifact prevents a co-present provenance location from
+		// silently becoming authoritative after synthesis.
+		sourceEntry.Content = src.Content
+		if emittableAsLocation(location) {
+			sourceEntry.Location = location
+		}
+	} else if src.Embed {
+		sourceEntry.Content = openbindings.TextContent(text)
+		if emittableAsLocation(location) {
+			sourceEntry.Location = location
+		}
+	} else if emittableAsLocation(location) {
 		sourceEntry.Location = location
 	} else {
 		sourceEntry.Content = openbindings.TextContent(text)
@@ -286,14 +397,8 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, err
 	}
 
-	if in.Name != "" {
-		iface.Name = in.Name
-	}
-	if in.Version != "" {
-		iface.Version = in.Version
-	}
-	if in.Description != "" {
-		iface.Description = in.Description
+	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
+		return nil, err
 	}
 
 	return &iface, nil

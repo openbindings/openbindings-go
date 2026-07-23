@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net/textproto"
@@ -15,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // This file implements §9.2 of openbindings.openapi@1 (OAPI-P-04): request
@@ -68,6 +70,41 @@ type bodyPlan struct {
 	props     map[string]bool // declared top-level body property names (object mode)
 }
 
+type parsedMediaType struct {
+	base      string
+	params    map[string]string
+	canonical string
+	identity  string
+}
+
+func parseMediaType(raw string) (parsedMediaType, error) {
+	base, params, err := mime.ParseMediaType(raw)
+	if err != nil {
+		return parsedMediaType{}, fmt.Errorf("invalid media type %q: %w", raw, err)
+	}
+	base = strings.ToLower(strings.TrimSpace(base))
+	if base == "" || isMediaRange(base) {
+		return parsedMediaType{}, fmt.Errorf("media type %q is not concrete", raw)
+	}
+	keys := make([]string, 0, len(params))
+	for key := range params {
+		keys = append(keys, strings.ToLower(key))
+	}
+	sort.Strings(keys)
+	normalizedParams := make(map[string]string, len(params))
+	identity := base
+	for _, key := range keys {
+		value := params[key]
+		normalizedParams[key] = value
+		identity += "\x00" + key + "=" + value
+	}
+	canonical := mime.FormatMediaType(base, normalizedParams)
+	if canonical == "" {
+		return parsedMediaType{}, fmt.Errorf("invalid media type %q", raw)
+	}
+	return parsedMediaType{base: base, params: normalizedParams, canonical: canonical, identity: identity}, nil
+}
+
 // degenerateMediaError is §9.2's degenerate media/schema combination
 // refusal (OAPI-P-04): the selected request media type has no OAS-defined
 // wire form for the declared body schema. A distinct type so synthesis
@@ -77,119 +114,109 @@ type degenerateMediaError struct{ msg string }
 
 func (e *degenerateMediaError) Error() string { return e.msg }
 
-// planRequestBody selects the request media type from the operation's
-// DECLARED requestBody.content per OAPI-P-04's preference order: exact
-// application/json, then the lexicographically least +json type, then
-// multipart/form-data, then application/x-www-form-urlencoded, then
-// text/plain (whose string-value condition is checked after routing, when
-// the body value exists). Two refusals are loud and pre-dispatch: an
-// operation declaring only media types outside these families (its request
-// carriage is undefined in revision 1), and a degenerate media/schema
-// combination the OAS defines no wire form for (§9.2).
+// planRequestBody returns the reference SDK's first declaration-sorted
+// candidate. Runtime invocation uses planRequestBodies and applies
+// candidate-specific admissibility after reading the caller value.
 func planRequestBody(op *openapi3.Operation) (*bodyPlan, error) {
-	if !hasRequestBody(op) {
+	plans, err := planRequestBodies(op)
+	if err != nil {
+		return nil, err
+	}
+	if len(plans) == 0 {
 		return &bodyPlan{}, nil
+	}
+	return plans[0], nil
+}
+
+// planRequestBodies preserves the artifact's concrete supported candidate
+// set. Sorting is a nonnormative reference-SDK policy only; the binding
+// specification gives the declarations no preference order.
+func planRequestBodies(op *openapi3.Operation) ([]*bodyPlan, error) {
+	if !hasRequestBody(op) {
+		return nil, nil
 	}
 	rb := op.RequestBody.Value
 	if len(rb.Content) == 0 {
-		// A requestBody with no content declares no carriage; treat as no
-		// declared body (degenerate artifact — the OAS requires content).
-		return &bodyPlan{}, nil
+		return nil, nil
 	}
 
 	type candidate struct {
-		key        string
-		normalized string
+		key    string
+		parsed parsedMediaType
+		family string
 	}
-	var exactJSON, multipartFD, urlEncoded, textPlain *candidate
-	var plusJSON []candidate
+	var candidates []candidate
 	var declared []string
+	identities := map[string]string{}
 	for key := range rb.Content {
-		n := normalizeMediaType(key)
-		declared = append(declared, n)
-		if isMediaRange(n) {
-			continue // ranges never participate in selection
+		parsed, err := parseMediaType(key)
+		if err != nil {
+			declared = append(declared, key)
+			continue
 		}
-		c := candidate{key: key, normalized: n}
+		declared = append(declared, parsed.canonical)
+		if previous, exists := identities[parsed.identity]; exists {
+			return nil, fmt.Errorf("request content declarations %q and %q denote the same parsed media type (OAPI-P-04 normalized collision)", previous, key)
+		}
+		identities[parsed.identity] = key
+		family := ""
 		switch {
-		case n == "application/json":
-			exactJSON = &c
-		case strings.HasSuffix(n, "+json"):
-			plusJSON = append(plusJSON, c)
-		case n == "multipart/form-data":
-			multipartFD = &c
-		case n == "application/x-www-form-urlencoded":
-			urlEncoded = &c
-		case n == "text/plain":
-			textPlain = &c
+		case isJSONMediaType(parsed.base):
+			family = familyJSON
+		case parsed.base == "multipart/form-data":
+			family = familyMultipart
+		case parsed.base == "application/x-www-form-urlencoded":
+			family = familyURLEncoded
+		case parsed.base == "text/plain":
+			family = familyText
+		}
+		if family != "" {
+			candidates = append(candidates, candidate{key: key, parsed: parsed, family: family})
 		}
 	}
-
-	var chosen *candidate
-	var family string
-	switch {
-	case exactJSON != nil:
-		chosen, family = exactJSON, familyJSON
-	case len(plusJSON) > 0:
-		sort.Slice(plusJSON, func(i, j int) bool { return plusJSON[i].normalized < plusJSON[j].normalized })
-		chosen, family = &plusJSON[0], familyJSON
-	case multipartFD != nil:
-		chosen, family = multipartFD, familyMultipart
-	case urlEncoded != nil:
-		chosen, family = urlEncoded, familyURLEncoded
-	case textPlain != nil:
-		chosen, family = textPlain, familyText
-	default:
+	if len(candidates) == 0 {
 		sort.Strings(declared)
 		return nil, fmt.Errorf("request body declares only media types outside the families openbindings.openapi@1 defines a request carriage for (declared: %s)", strings.Join(declared, ", "))
 	}
-
-	plan := &bodyPlan{
-		declared:  true,
-		required:  rb.Required,
-		mediaKey:  chosen.key,
-		mediaType: chosen.normalized,
-		media:     rb.Content[chosen.key],
-		family:    family,
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].parsed.identity < candidates[j].parsed.identity })
+	plans := make([]*bodyPlan, 0, len(candidates))
+	var rejected []string
+	for _, candidate := range candidates {
+		plan, err := buildBodyPlan(rb, candidate.key, candidate.parsed, candidate.family)
+		if err != nil {
+			rejected = append(rejected, err.Error())
+			continue
+		}
+		plans = append(plans, plan)
 	}
+	if len(plans) == 0 {
+		return nil, &degenerateMediaError{msg: strings.Join(rejected, "; ")}
+	}
+	return plans, nil
+}
 
-	// Flatten mode and the degenerate-combination refusal (§9.2). The
-	// flatten determination is §9.1's, SHARED with synthesis
-	// (bodySchemaFlattens, synthesize.go): a declared schema flattens iff
-	// it declares `properties` or an explicit object type — a TYPELESS
-	// schema does not — so the wire always agrees with the published
-	// contract. The two declaration facts here mirror isObjectTypedSchema's
-	// raw-map reading in kin-openapi's typed form: Types.Is("object") is
-	// true for the 3.0 string form and the single-element 3.1 type array
-	// only.
-	//
-	// A combination the OAS defines no wire form for refuses pre-dispatch
-	// rather than inventing one (OAPI-P-04): multipart and form-urlencoded
-	// serialize exclusively over object properties, so a non-flattening
-	// schema gives them nothing to implement; the text lane is a
-	// single-string wire, so a flattening schema's object contract cannot
-	// ride it. Reachable only when no JSON-family media is declared — JSON
-	// is preferred and carries any shape.
+func buildBodyPlan(rb *openapi3.RequestBody, key string, parsed parsedMediaType, family string) (*bodyPlan, error) {
+	plan := &bodyPlan{declared: true, required: rb.Required, mediaKey: key, mediaType: parsed.canonical, media: rb.Content[key], family: family}
 	schema := mediaSchema(plan.media)
-	flattens := true // no declared schema: an open object body
-	if schema != nil {
-		flattens = bodySchemaFlattens(schema.Properties != nil, schema.Type.Is("object"))
+	flattens, props, err := resolvedBodyShape(schema, map[*openapi3.Schema]bool{})
+	if err != nil {
+		return nil, err
 	}
 	switch family {
 	case familyJSON:
-		plan.synthetic = !flattens
+		plan.synthetic = schema != nil && !flattens
 	case familyMultipart, familyURLEncoded:
 		if schema != nil && !flattens {
-			return nil, &degenerateMediaError{msg: fmt.Sprintf("request media selection (OAPI-P-04) lands on %s, but the declared body schema does not flatten (no properties and no explicit object type): openbindings.openapi@1 defines no request carriage for this combination", plan.mediaType)}
+			return nil, fmt.Errorf("request media candidate %s has a non-object body schema and is inadmissible", plan.mediaType)
 		}
 	case familyText:
 		if schema != nil && flattens {
-			return nil, &degenerateMediaError{msg: "request media selection (OAPI-P-04) lands on text/plain, but the declared body schema flattens (an object contract): openbindings.openapi@1 defines no request carriage for this combination"}
+			return nil, fmt.Errorf("request media candidate text/plain has an object body schema and is inadmissible")
 		}
 		plan.synthetic = true
 	}
 	if !plan.synthetic {
-		plan.props = mediaSchemaProps(plan.media)
+		plan.props = props
 	}
 	return plan, nil
 }
@@ -201,18 +228,79 @@ func mediaSchema(media *openapi3.MediaType) *openapi3.Schema {
 	return media.Schema.Value
 }
 
-// mediaSchemaProps returns the selected media schema's declared top-level
-// property names — the body half of the flattened model's collision rule.
-func mediaSchemaProps(media *openapi3.MediaType) map[string]bool {
-	schema := mediaSchema(media)
-	if schema == nil || len(schema.Properties) == 0 {
-		return nil
+func resolvedBodyShape(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) (bool, map[string]bool, error) {
+	if schema == nil {
+		return true, nil, nil // an absent schema is an open object declaration
 	}
-	props := make(map[string]bool, len(schema.Properties))
+	if seen[schema] {
+		return false, nil, nil
+	}
+	seen[schema] = true
+	defer delete(seen, schema)
+	if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 || schema.Not != nil {
+		return false, nil, fmt.Errorf("conditional/combinatorial request schema has no single declaration-defined flattened surface in openbindings.openapi@1 revision 1")
+	}
+	props := map[string]bool{}
+	object := schema.Type.Is("object") || schema.Properties != nil
 	for name := range schema.Properties {
 		props[name] = true
 	}
-	return props
+	for _, member := range schema.AllOf {
+		if member == nil || member.Value == nil {
+			continue
+		}
+		memberObject, memberProps, err := resolvedBodyShape(member.Value, seen)
+		if err != nil {
+			return false, nil, err
+		}
+		object = object || memberObject
+		for name := range memberProps {
+			props[name] = true
+		}
+	}
+	if len(props) == 0 {
+		props = nil
+	}
+	return object, props, nil
+}
+
+func candidateCollides(params openapi3.Parameters, plan *bodyPlan) bool {
+	if plan == nil || !plan.declared {
+		return false
+	}
+	for _, ref := range params {
+		if ref == nil || ref.Value == nil {
+			continue
+		}
+		name := ref.Value.Name
+		if (plan.synthetic && name == syntheticBodyProperty) || (!plan.synthetic && plan.props[name]) {
+			return true
+		}
+	}
+	return false
+}
+
+func configuredRequestPlans(plans []*bodyPlan, bindCtx map[string]any) []*bodyPlan {
+	cfg := openbindings.ContextConfiguration(bindCtx)
+	raw, configured := cfg["requestMedia"]
+	if !configured || raw == nil {
+		return plans
+	}
+	wanted, ok := raw.(string)
+	if !ok {
+		return nil
+	}
+	parsedWanted, err := parseMediaType(wanted)
+	if err != nil {
+		return nil
+	}
+	for _, plan := range plans {
+		parsed, err := parseMediaType(plan.mediaKey)
+		if err == nil && parsed.identity == parsedWanted.identity {
+			return []*bodyPlan{plan}
+		}
+	}
+	return nil
 }
 
 // buildRequestBody produces the wire body for the selected media type. A nil
@@ -597,25 +685,107 @@ func isSuccessResponseKey(key string) bool {
 	return len(key) == 3 && key[0] == '2' && key[1] >= '0' && key[1] <= '9' && key[2] >= '0' && key[2] <= '9'
 }
 
-// successMediaTypes returns the declared CONCRETE media types of the
-// operation's success responses, normalized, deduplicated, and sorted
-// (membership is normative, ordering is not). Media ranges are excluded:
-// they are not concrete.
+// governingResponse applies the OAS exact → class-range → default lookup for
+// one actual status. The default entry may therefore govern a successful 2xx
+// status when neither a literal nor 2XX entry exists.
+func governingResponse(op *openapi3.Operation, status int) *openapi3.Response {
+	if op == nil || op.Responses == nil {
+		return nil
+	}
+	responses := op.Responses.Map()
+	for _, key := range []string{fmt.Sprintf("%d", status), fmt.Sprintf("%dXX", status/100), "default"} {
+		if ref := responses[key]; ref != nil && ref.Value != nil {
+			return ref.Value
+		}
+	}
+	return nil
+}
+
+// governingResponseMedia selects the one concrete declaration in the
+// governing Response Object whose type/subtype and declared parameters are
+// a subset of the actual Content-Type. Greatest parameter specificity wins;
+// a tie is ambiguous and loud.
+func governingResponseMedia(response *openapi3.Response, actual string) (parsedMediaType, error) {
+	if response == nil || len(response.Content) == 0 {
+		return parsedMediaType{}, fmt.Errorf("the governing response declares no concrete media")
+	}
+	parsedActual, err := parseMediaType(actual)
+	if err != nil {
+		return parsedMediaType{}, fmt.Errorf("response Content-Type: %w", err)
+	}
+	identities := map[string]string{}
+	bestSpecificity := -1
+	var matches []parsedMediaType
+	for key := range response.Content {
+		declared, err := parseMediaType(key)
+		if err != nil {
+			continue
+		}
+		if previous, exists := identities[declared.identity]; exists {
+			return parsedMediaType{}, fmt.Errorf("response content declarations %q and %q denote the same parsed media type", previous, key)
+		}
+		identities[declared.identity] = key
+		if declared.base != parsedActual.base {
+			continue
+		}
+		matchesParams := true
+		for name, value := range declared.params {
+			if parsedActual.params[name] != value {
+				matchesParams = false
+				break
+			}
+		}
+		if !matchesParams {
+			continue
+		}
+		specificity := len(declared.params)
+		if specificity > bestSpecificity {
+			bestSpecificity, matches = specificity, []parsedMediaType{declared}
+		} else if specificity == bestSpecificity {
+			matches = append(matches, declared)
+		}
+	}
+	if len(matches) == 0 {
+		return parsedMediaType{}, fmt.Errorf("response Content-Type %q matches no concrete media in the governing response", actual)
+	}
+	if len(matches) != 1 {
+		return parsedMediaType{}, fmt.Errorf("response Content-Type %q ambiguously matches %d equally specific declarations", actual, len(matches))
+	}
+	return matches[0], nil
+}
+
+// successMediaTypes returns the declared concrete media types that may govern
+// a successful response: literal 2xx, 2XX, and default declarations. Members
+// retain declaration parameters; ordering is an implementation convention.
 func successMediaTypes(op *openapi3.Operation) []string {
 	if op == nil || op.Responses == nil {
 		return nil
 	}
 	seen := map[string]bool{}
-	for key, ref := range op.Responses.Map() {
-		if !isSuccessResponseKey(key) || ref == nil || ref.Value == nil {
+	identities := map[string]bool{}
+	responses := op.Responses.Map()
+	_, hasRange := responses["2XX"]
+	exactSuccesses := 0
+	for key := range responses {
+		if len(key) == 3 && key[0] == '2' && key[1] >= '0' && key[1] <= '9' && key[2] >= '0' && key[2] <= '9' {
+			exactSuccesses++
+		}
+	}
+	for key, ref := range responses {
+		defaultCanGovernSuccess := key == "default" && !hasRange && exactSuccesses < 100
+		if !(isSuccessResponseKey(key) || defaultCanGovernSuccess) || ref == nil || ref.Value == nil {
 			continue
 		}
 		for mt := range ref.Value.Content {
-			n := normalizeMediaType(mt)
-			if n == "" || isMediaRange(n) {
+			parsed, err := parseMediaType(mt)
+			if err != nil {
 				continue
 			}
-			seen[n] = true
+			if identities[parsed.identity] {
+				continue
+			}
+			identities[parsed.identity] = true
+			seen[parsed.canonical] = true
 		}
 	}
 	if len(seen) == 0 {
@@ -630,13 +800,9 @@ func successMediaTypes(op *openapi3.Operation) []string {
 }
 
 // acceptHeader advertises the declared concrete media types of the
-// operation's success responses; absent any declaration, application/json
-// (§9.2).
+// operation's success responses. Empty membership means header omission.
 func acceptHeader(op *openapi3.Operation) string {
 	types := successMediaTypes(op)
-	if len(types) == 0 {
-		return "application/json"
-	}
 	return strings.Join(types, ", ")
 }
 

@@ -3,8 +3,11 @@ package asyncapi
 import (
 	"encoding/json"
 	"fmt"
+	"mime"
 	"sort"
 	"strings"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // This file resolves the governing content-type declarations of
@@ -12,10 +15,10 @@ import (
 // (ASYNC-P-05, decode). Effective content type resolves PER MESSAGE first —
 // the message's own `contentType`, else the document's
 // `defaultContentType`, the AsyncAPI rule — and the governing set's
-// distinct effective types decide the lane: exactly one selects it; none,
-// or more than one (an ambiguous declaration), falls to the text lane
-// rather than guessing. Everything here is decided by declarations, never
-// payload bytes.
+// distinct effective types decide the lane. Input requires exactly one
+// selected message; output requires one coherent effective type. An absent
+// type requires the corresponding configuration point. Everything here is
+// decided by declarations, never payload bytes.
 
 // governingMessages returns the operation's own governing message set — the
 // declarations governing a subscription's outputs and a publish's input
@@ -38,6 +41,61 @@ func governingMessages(doc *document, op *asyncOperation, ch *channel) []message
 		return nil
 	}
 	return channelMessages(ch)
+}
+
+// selectedInputMessages resolves the publish-side message point to exactly
+// one artifact declaration. Selection is declarative; payload bytes never
+// participate.
+func selectedInputMessages(doc *document, op *asyncOperation, ch *channel, bindCtx map[string]any) ([]message, error) {
+	type candidate struct {
+		name    string
+		message message
+	}
+	var candidates []candidate
+	if op != nil && len(op.Messages) > 0 {
+		for _, ref := range op.Messages {
+			if m := resolveMessageRef(doc, ref); m != nil {
+				name := m.Name
+				if name == "" {
+					name = extractRefName(ref.Ref)
+				}
+				candidates = append(candidates, candidate{name, *m})
+			}
+		}
+	} else if ch != nil {
+		names := make([]string, 0, len(ch.Messages))
+		for name := range ch.Messages {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			candidates = append(candidates, candidate{name, ch.Messages[name]})
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("publish operation has no resolved message declaration")
+	}
+	selected := candidates[0]
+	if len(candidates) > 1 {
+		choice, _ := openbindings.ContextConfiguration(bindCtx)["message"].(string)
+		if choice == "" {
+			return nil, fmt.Errorf("publish operation declares several messages; configuration.message must select one artifact-declared member")
+		}
+		matches := 0
+		for _, candidate := range candidates {
+			if candidate.name == choice {
+				selected = candidate
+				matches++
+			}
+		}
+		if matches != 1 {
+			return nil, fmt.Errorf("configuration.message %q does not select exactly one operation message", choice)
+		}
+	}
+	if selected.message.Headers != nil {
+		return nil, fmt.Errorf("selected message declares headers, which openbindings.asyncapi@1 revision 1 cannot carry")
+	}
+	return []message{selected.message}, nil
 }
 
 // replyGoverningMessages returns the REPLY-side governing message set — the
@@ -133,18 +191,19 @@ type inputCodec struct {
 }
 
 // resolveInputCodec resolves the input encoding from the governing
-// request-side declaration (§9.1, ASYNC-P-03): a JSON-family type — or no
-// declaration at all, this specification's default — serializes the value
-// as JSON; a text-family type sends a string value raw; any other declared
-// family (binary, avro, protobuf, …) is EXCLUDED from revision 1 and
-// refused before dispatch. A governing set with more than one distinct
-// effective type is ambiguous and falls to the text lane, mirroring §9.3's
-// decode rule. Forwarded frames on the duplex subscription cell use the
-// same rule.
-func resolveInputCodec(doc *document, msgs []message) (inputCodec, error) {
+// request-side declaration (§9.1, ASYNC-P-03): a JSON-family type serializes
+// the value as JSON; every other declared type carries a string value as
+// character bytes. With no declaration, configuration.encode must choose
+// the JSON or text lane. More or fewer than one selected message is refused;
+// payload bytes never select among artifact alternatives. Forwarded frames
+// on the duplex subscription cell use the same rule.
+func resolveInputCodec(doc *document, msgs []message, contexts ...map[string]any) (inputCodec, error) {
+	if len(msgs) != 1 {
+		return inputCodec{}, fmt.Errorf("publish input must be governed by exactly one selected message")
+	}
 	types := distinctEffectiveTypes(doc, msgs)
 	if len(types) > 1 {
-		return inputCodec{JSON: false, ContentType: ""}, nil // ambiguous → the text lane
+		return inputCodec{}, fmt.Errorf("selected message has ambiguous effective content type")
 	}
 	t := ""
 	if len(types) == 1 {
@@ -152,15 +211,204 @@ func resolveInputCodec(doc *document, msgs []message) (inputCodec, error) {
 	}
 	switch {
 	case t == "":
-		// No declaration at all: JSON, the specification's default.
-		return inputCodec{JSON: true, ContentType: "application/json"}, nil
+		var ctx map[string]any
+		if len(contexts) > 0 {
+			ctx = contexts[0]
+		}
+		lane, err := requiredCodecLane(ctx, "encode")
+		if err != nil {
+			return inputCodec{}, err
+		}
+		return lane, nil
 	case isJSONContentType(t):
 		return inputCodec{JSON: true, ContentType: t}, nil
-	case isTextContentType(t):
-		return inputCodec{JSON: false, ContentType: t}, nil
 	default:
-		return inputCodec{}, fmt.Errorf("declared content type %q is neither a JSON- nor a text-family type: excluded from openbindings.asyncapi@1 revision 1 and refused before dispatch", t)
+		return inputCodec{JSON: false, ContentType: t}, nil
 	}
+}
+
+func requiredCodecLane(bindCtx map[string]any, point string) (inputCodec, error) {
+	value, _ := openbindings.ContextConfiguration(bindCtx)[point].(string)
+	switch value {
+	case "json":
+		return inputCodec{JSON: true, ContentType: "application/json"}, nil
+	case "text":
+		return inputCodec{JSON: false, ContentType: "text/plain; charset=utf-8"}, nil
+	default:
+		return inputCodec{}, fmt.Errorf("configuration.%s must select json or text because the artifact declares no effective content type", point)
+	}
+}
+
+func resolveSubscriptionContentType(doc *document, msgs []message, bindCtx map[string]any) (string, error) {
+	if len(msgs) == 0 {
+		return "", fmt.Errorf("operation has no resolved output message declaration")
+	}
+	identities := map[string]string{}
+	for _, m := range msgs {
+		if err := validateMessageBindingVersion(m); err != nil {
+			return "", err
+		}
+		if m.Headers != nil {
+			return "", fmt.Errorf("output message declares headers, which revision 1 cannot carry")
+		}
+		ct := m.ContentType
+		if ct == "" {
+			ct = doc.DefaultContentType
+		}
+		identity := ""
+		if ct != "" {
+			var err error
+			identity, _, err = canonicalMedia(ct)
+			if err != nil {
+				return "", err
+			}
+		}
+		identities[identity] = ct
+	}
+	if len(identities) > 1 {
+		return "", fmt.Errorf("output messages declare conflicting effective content types")
+	}
+	for identity, ct := range identities {
+		if identity != "" {
+			return ct, nil
+		}
+		lane, err := requiredCodecLane(bindCtx, "decode")
+		if err != nil {
+			return "", err
+		}
+		return lane.ContentType, nil
+	}
+	return "", fmt.Errorf("operation has no output message declaration")
+}
+
+func resolveReplyContentType(doc *document, op *asyncOperation, status int, actual string, bindCtx map[string]any) (string, error) {
+	all := replyGoverningMessages(doc, op)
+	if len(all) == 0 {
+		return "", fmt.Errorf("non-empty HTTP response has no artifact-declared reply message")
+	}
+	var exact, fallback []message
+	for _, m := range all {
+		if m.Bindings != nil && m.Bindings.HTTP != nil && m.Bindings.HTTP.StatusCode != 0 {
+			if m.Bindings.HTTP.StatusCode == status {
+				exact = append(exact, m)
+			}
+		} else {
+			fallback = append(fallback, m)
+		}
+	}
+	candidates := fallback
+	if len(exact) > 0 {
+		candidates = exact
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("non-empty HTTP %d response has no governing reply message", status)
+	}
+	for _, m := range candidates {
+		if err := validateMessageBindingVersion(m); err != nil {
+			return "", err
+		}
+		if m.Headers != nil {
+			return "", fmt.Errorf("selected reply message declares headers, which revision 1 cannot carry")
+		}
+	}
+	type match struct {
+		value, identity string
+		specificity     int
+	}
+	var declared []match
+	for _, m := range candidates {
+		ct := m.ContentType
+		if ct == "" {
+			ct = doc.DefaultContentType
+		}
+		if ct == "" {
+			continue
+		}
+		identity, params, err := canonicalMedia(ct)
+		if err != nil {
+			return "", err
+		}
+		declared = append(declared, match{ct, identity, len(params)})
+	}
+	if len(declared) == 0 {
+		lane, err := requiredCodecLane(bindCtx, "decode")
+		return lane.ContentType, err
+	}
+	if strings.TrimSpace(actual) == "" {
+		return "", fmt.Errorf("reply candidates declare content types but the HTTP response has no Content-Type")
+	}
+	_, actualParams, err := canonicalMedia(actual)
+	if err != nil {
+		return "", err
+	}
+	actualType, _, _ := mime.ParseMediaType(actual)
+	var matches []match
+	for _, d := range declared {
+		dType, dParams, _ := mime.ParseMediaType(d.value)
+		if !strings.EqualFold(dType, actualType) {
+			continue
+		}
+		ok := true
+		for k, v := range dParams {
+			if actualParams[k] != v {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			matches = append(matches, d)
+		}
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("HTTP response Content-Type %q matches no reply declaration", actual)
+	}
+	best := -1
+	for _, m := range matches {
+		if m.specificity > best {
+			best = m.specificity
+		}
+	}
+	var winners []match
+	for _, m := range matches {
+		if m.specificity == best {
+			winners = append(winners, m)
+		}
+	}
+	if len(winners) != 1 {
+		return "", fmt.Errorf("HTTP response matches several distinct reply media declarations at equal specificity")
+	}
+	return winners[0].value, nil
+}
+
+func validateMessageBindingVersion(m message) error {
+	if m.Bindings != nil && m.Bindings.HTTP != nil {
+		v := m.Bindings.HTTP.BindingVersion
+		if v != "" && v != "0.3.0" {
+			return fmt.Errorf("HTTP message binding version %q is outside revision 1's incorporated 0.3.0 envelope", v)
+		}
+	}
+	return nil
+}
+
+func canonicalMedia(value string) (string, map[string]string, error) {
+	t, params, err := mime.ParseMediaType(value)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid media type %q: %v", value, err)
+	}
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(strings.ToLower(t))
+	for _, k := range keys {
+		b.WriteString(";")
+		b.WriteString(strings.ToLower(k))
+		b.WriteString("=")
+		b.WriteString(params[k])
+	}
+	return b.String(), params, nil
 }
 
 // encodeInput renders one caller value as message-payload bytes under the
@@ -190,9 +438,9 @@ func normalizeMediaType(contentType string) string {
 }
 
 // isTextContentType reports a text-family type: the `text/*` primary type.
-// Application-tree types that happen to be textual (application/xml, …) are
-// NOT the text family — on the input side they are excluded families
-// (§9.1); on the decode side everything non-JSON is the text lane anyway.
+// The input and output correspondence uses the broader non-JSON string lane;
+// this predicate is retained only for callers that specifically need MIME's
+// text family.
 func isTextContentType(contentType string) bool {
 	return strings.HasPrefix(normalizeMediaType(contentType), "text/")
 }

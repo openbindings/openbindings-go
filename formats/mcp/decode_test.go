@@ -13,88 +13,59 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// setupDecodeServer registers the tool/resource shapes the decode-lane
-// ruling pins: JSON-as-text without structuredContent, structuredContent
-// with its compatibility text shadow, and resources with declared MIME
-// types (json valid, json malformed, plain text that looks like JSON).
+// setupDecodeServer deliberately returns result objects with several legal
+// shapes. Revision 1 carries each complete MCP result object; it does not
+// project structuredContent, unwrap content, or reinterpret resource text.
 func setupDecodeServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	server := gomcp.NewServer(&gomcp.Implementation{Name: "decode-test", Version: "1.0.0"}, nil)
-
 	type emptyInput struct{}
-	gomcp.AddTool(server, &gomcp.Tool{
-		Name: "jsonAsText", Description: "returns JSON serialized into a text block, no structuredContent",
-	}, func(ctx context.Context, req *gomcp.CallToolRequest, args emptyInput) (*gomcp.CallToolResult, any, error) {
-		return &gomcp.CallToolResult{
-			Content: []gomcp.Content{&gomcp.TextContent{Text: `{"temperature": 22.5}`}},
-		}, nil, nil
-	})
-	gomcp.AddTool(server, &gomcp.Tool{
-		Name: "multiText", Description: "returns two text content blocks (any-other-shape passthrough, MCP-P-05)",
-	}, func(ctx context.Context, req *gomcp.CallToolRequest, args emptyInput) (*gomcp.CallToolResult, any, error) {
-		return &gomcp.CallToolResult{
-			Content: []gomcp.Content{
-				&gomcp.TextContent{Text: "note:"},
-				&gomcp.TextContent{Text: `{"a":1}`},
-			},
-		}, nil, nil
-	})
-	gomcp.AddTool(server, &gomcp.Tool{
-		Name: "structured", Description: "returns structuredContent plus its compatibility text shadow",
-	}, func(ctx context.Context, req *gomcp.CallToolRequest, args emptyInput) (*gomcp.CallToolResult, any, error) {
-		return &gomcp.CallToolResult{
-			Content:           []gomcp.Content{&gomcp.TextContent{Text: `{"temperature": 22.5}`}},
-			StructuredContent: map[string]any{"temperature": 22.5},
-		}, nil, nil
+	addTool := func(name string, result *gomcp.CallToolResult) {
+		gomcp.AddTool(server, &gomcp.Tool{Name: name}, func(context.Context, *gomcp.CallToolRequest, emptyInput) (*gomcp.CallToolResult, any, error) {
+			return result, nil, nil
+		})
+	}
+	addTool("jsonAsText", &gomcp.CallToolResult{Content: []gomcp.Content{&gomcp.TextContent{Text: `{"temperature": 22.5}`}}})
+	addTool("multiText", &gomcp.CallToolResult{Content: []gomcp.Content{
+		&gomcp.TextContent{Text: "note:"},
+		&gomcp.TextContent{Text: `{"a":1}`},
+	}})
+	addTool("structured", &gomcp.CallToolResult{
+		Content:           []gomcp.Content{&gomcp.TextContent{Text: `{"temperature": 22.5}`}},
+		StructuredContent: map[string]any{"temperature": 22.5},
 	})
 
 	addResource := func(name, uri, mime, text string) {
-		server.AddResource(&gomcp.Resource{Name: name, URI: uri}, func(ctx context.Context, req *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
-			return &gomcp.ReadResourceResult{
-				Contents: []*gomcp.ResourceContents{{URI: uri, MIMEType: mime, Text: text}},
-			}, nil
+		server.AddResource(&gomcp.Resource{Name: name, URI: uri}, func(context.Context, *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
+			return &gomcp.ReadResourceResult{Contents: []*gomcp.ResourceContents{{URI: uri, MIMEType: mime, Text: text}}}, nil
 		})
 	}
 	addResource("goodJSON", "app://good", "application/json", `{"ok":true}`)
 	addResource("badJSON", "app://bad", "application/json", `{not json`)
 	addResource("plainText", "app://plain", "text/plain", `{"looks":"like json"}`)
-
-	// Multi-item, blob, and empty resources exercise §9.3's always-array
-	// resource rule (MCP-P-05): the output value is uniformly the array of
-	// decoded contents items, whatever the count, and blob items decode
-	// structurally before any mimeType consideration.
-	server.AddResource(&gomcp.Resource{Name: "multi", URI: "app://multi"}, func(ctx context.Context, req *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
-		return &gomcp.ReadResourceResult{
-			Contents: []*gomcp.ResourceContents{
-				{URI: "app://multi", MIMEType: "application/json", Text: `{"n":1}`},
-				{URI: "app://multi", MIMEType: "text/plain", Text: "second"},
-			},
-		}, nil
+	server.AddResource(&gomcp.Resource{Name: "multi", URI: "app://multi"}, func(context.Context, *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
+		return &gomcp.ReadResourceResult{Contents: []*gomcp.ResourceContents{
+			{URI: "app://multi", MIMEType: "application/json", Text: `{"n":1}`},
+			{URI: "app://multi", MIMEType: "text/plain", Text: "second"},
+		}}, nil
 	})
-	server.AddResource(&gomcp.Resource{Name: "blob", URI: "app://blob"}, func(ctx context.Context, req *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
-		return &gomcp.ReadResourceResult{
-			Contents: []*gomcp.ResourceContents{
-				// Declared-JSON mimeType on a BLOB item: the blob member is
-				// structural and wins, whatever mimeType declares.
-				{URI: "app://blob", MIMEType: "application/json", Blob: []byte("hello world")},
-			},
-		}, nil
+	server.AddResource(&gomcp.Resource{Name: "blob", URI: "app://blob"}, func(context.Context, *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
+		return &gomcp.ReadResourceResult{Contents: []*gomcp.ResourceContents{{
+			URI: "app://blob", MIMEType: "application/json", Blob: []byte("hello world"),
+		}}}, nil
 	})
-	server.AddResource(&gomcp.Resource{Name: "empty", URI: "app://empty"}, func(ctx context.Context, req *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
+	server.AddResource(&gomcp.Resource{Name: "empty", URI: "app://empty"}, func(context.Context, *gomcp.ReadResourceRequest) (*gomcp.ReadResourceResult, error) {
 		return &gomcp.ReadResourceResult{Contents: []*gomcp.ResourceContents{}}, nil
 	})
 
-	handler := gomcp.NewStreamableHTTPHandler(func(r *http.Request) *gomcp.Server { return server }, nil)
-	ts := httptest.NewServer(handler)
+	ts := httptest.NewServer(gomcp.NewStreamableHTTPHandler(func(*http.Request) *gomcp.Server { return server }, nil))
 	t.Cleanup(ts.Close)
 	return ts
 }
 
-func invokeAndRead(t *testing.T, inv *Invoker, url, ref string, hooks *openbindings.InvokeHooks) (any, error) {
+func invokeAndRead(t *testing.T, inv *Invoker, url, ref string, _ ...*openbindings.InvokeHooks) (any, error) {
 	t.Helper()
-	args := invocationArgs(url, ref, nil)
-	args.Hooks = hooks
-	call := inv.InvokeBinding(bg(), args)
+	call := inv.InvokeBinding(bg(), invocationArgs(url, ref, nil))
 	if strings.HasPrefix(ref, "tools/") {
 		if err := call.Write(bg(), map[string]any{}); err != nil {
 			return nil, err
@@ -103,207 +74,112 @@ func invokeAndRead(t *testing.T, inv *Invoker, url, ref string, hooks *openbindi
 	return openbindings.Single(shortCtx(t), call.Outputs())
 }
 
-// The ruling's core pin: JSON-in-text is, per MCP 2025-11-25, the
-// backwards-compatibility SHADOW of structuredContent — a client never
-// sniffs it. Text content is a string.
-func TestDecode_JSONAsTextIsAString(t *testing.T) {
-	ts := setupDecodeServer(t)
-	inv := NewInvoker()
-	defer inv.Close()
-
-	v, err := invokeAndRead(t, inv, ts.URL, "tools/jsonAsText", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s, ok := v.(string); !ok || s != `{"temperature": 22.5}` {
-		t.Fatalf("text content must be the string verbatim, got %T: %v", v, v)
-	}
-}
-
-// TestDecode_MultiTextBlockIsContentArray pins MCP-P-05 / §9.3: a single text
-// block decodes to that text verbatim, but ANY OTHER content shape — two text
-// blocks included — passes through as the content array, verbatim in MCP's
-// block shapes, never a "\n"-joined string with an invented separator. The
-// input mirrors the TS SDK's cross-checked test (blocks "note:" and
-// `{"a":1}`), which yields the same array shape.
-func TestDecode_MultiTextBlockIsContentArray(t *testing.T) {
-	ts := setupDecodeServer(t)
-	inv := NewInvoker()
-	defer inv.Close()
-
-	v, err := invokeAndRead(t, inv, ts.URL, "tools/multiText", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	arr, ok := v.([]any)
-	if !ok {
-		t.Fatalf("two text blocks must decode to the content array, got %T: %v", v, v)
-	}
-	if len(arr) != 2 {
-		t.Fatalf("expected 2 content items, got %d: %v", len(arr), arr)
-	}
-	first, _ := arr[0].(map[string]any)
-	second, _ := arr[1].(map[string]any)
-	if first["type"] != "text" || first["text"] != "note:" {
-		t.Errorf("item 0 = %v, want {type:text, text:note:}", arr[0])
-	}
-	if second["type"] != "text" || second["text"] != `{"a":1}` {
-		t.Errorf("item 1 = %v, want {type:text, text:{\"a\":1}}", arr[1])
-	}
-}
-
-// structuredContent is the declared lane and wins over its text shadow.
-func TestDecode_StructuredContentPreferred(t *testing.T) {
-	ts := setupDecodeServer(t)
-	inv := NewInvoker()
-	defer inv.Close()
-
-	v, err := invokeAndRead(t, inv, ts.URL, "tools/structured", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, ok := v.(map[string]any)
-	if !ok || m["temperature"] != 22.5 {
-		t.Fatalf("structuredContent must win, got %T: %v", v, v)
-	}
-}
-
-// singleItem asserts the always-array resource rule (openbindings.mcp@1
-// §9.3, MCP-P-05) and returns the lone decoded item. The resource decode
-// tests previously pinned the non-conformant single-item unwrap.
-func singleItem(t *testing.T, v any) any {
+func resultObject(t *testing.T, value any) map[string]any {
 	t.Helper()
-	items, ok := v.([]any)
-	if !ok || len(items) != 1 {
-		t.Fatalf("resource output must be the array of decoded contents items, got %T: %v", v, v)
+	result, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("MCP output must be the complete result object, got %T: %v", value, value)
 	}
-	return items[0]
+	return result
 }
 
-// Resources decode by their DECLARED mimeType: json parses...
-func TestDecode_ResourceDeclaredJSONParses(t *testing.T) {
+func arrayMember(t *testing.T, result map[string]any, name string) []any {
+	t.Helper()
+	items, ok := result[name].([]any)
+	if !ok {
+		t.Fatalf("result.%s must be an array, got %T: %v", name, result[name], result[name])
+	}
+	return items
+}
+
+func TestDecode_ToolResultPreservesTextContent(t *testing.T) {
 	ts := setupDecodeServer(t)
 	inv := NewInvoker()
 	defer inv.Close()
-
-	v, err := invokeAndRead(t, inv, ts.URL, "resources/app://good", nil)
+	v, err := invokeAndRead(t, inv, ts.URL, "tools/jsonAsText")
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, ok := singleItem(t, v).(map[string]any)
-	if !ok || m["ok"] != true {
-		t.Fatalf("declared application/json must parse, got %T: %v", v, v)
+	items := arrayMember(t, resultObject(t, v), "content")
+	block := items[0].(map[string]any)
+	if block["type"] != "text" || block["text"] != `{"temperature": 22.5}` {
+		t.Fatalf("content block was not preserved: %v", block)
 	}
 }
 
-// ...malformed declared-JSON is a LOUD error (never a silent string)...
-func TestDecode_ResourceDeclaredJSONMalformedIsLoud(t *testing.T) {
+func TestDecode_ToolResultPreservesMultipleBlocks(t *testing.T) {
 	ts := setupDecodeServer(t)
 	inv := NewInvoker()
 	defer inv.Close()
-
-	_, err := invokeAndRead(t, inv, ts.URL, "resources/app://bad", nil)
-	if err == nil || !strings.Contains(err.Error(), "not valid JSON") {
-		t.Fatalf("declared-JSON parse failure must be loud, got %v", err)
-	}
-}
-
-// ...and JSON-shaped text under a non-JSON declaration stays a string
-// (the anti-sniff pin: the payload's shape never picks the lane).
-func TestDecode_ResourcePlainTextNeverSniffed(t *testing.T) {
-	ts := setupDecodeServer(t)
-	inv := NewInvoker()
-	defer inv.Close()
-
-	v, err := invokeAndRead(t, inv, ts.URL, "resources/app://plain", nil)
+	v, err := invokeAndRead(t, inv, ts.URL, "tools/multiText")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s, ok := singleItem(t, v).(string); !ok || s != `{"looks":"like json"}` {
-		t.Fatalf("text/plain must stay a string regardless of shape, got %T: %v", v, v)
+	items := arrayMember(t, resultObject(t, v), "content")
+	if len(items) != 2 || items[0].(map[string]any)["text"] != "note:" || items[1].(map[string]any)["text"] != `{"a":1}` {
+		t.Fatalf("content array was not preserved: %v", items)
 	}
 }
 
-// The output value is ALWAYS the array of decoded contents items, in order
-// (§9.3, MCP-P-05): a two-item result decodes item-by-item.
-func TestDecode_ResourceMultipleItemsInOrder(t *testing.T) {
+func TestDecode_ToolResultPreservesStructuredAndCompatibilityContent(t *testing.T) {
 	ts := setupDecodeServer(t)
 	inv := NewInvoker()
 	defer inv.Close()
-
-	v, err := invokeAndRead(t, inv, ts.URL, "resources/app://multi", nil)
+	v, err := invokeAndRead(t, inv, ts.URL, "tools/structured")
 	if err != nil {
 		t.Fatal(err)
 	}
-	items, ok := v.([]any)
-	if !ok || len(items) != 2 {
-		t.Fatalf("expected 2 decoded items, got %T: %v", v, v)
-	}
-	first, ok := items[0].(map[string]any)
-	if !ok || first["n"] != 1.0 {
-		t.Errorf("item 0 must be the parsed JSON, got %T: %v", items[0], items[0])
-	}
-	if items[1] != "second" {
-		t.Errorf("item 1 must be the text string, got %v", items[1])
+	result := resultObject(t, v)
+	structured, ok := result["structuredContent"].(map[string]any)
+	if !ok || structured["temperature"] != json.Number("22.5") || len(arrayMember(t, result, "content")) != 1 {
+		t.Fatalf("complete tool result was not preserved: %v", result)
 	}
 }
 
-// A blob item decodes STRUCTURALLY first (§9.3): the blob member is the
-// item's Base64 string as MCP carries it, whatever mimeType it declares —
-// even application/json.
-func TestDecode_ResourceBlobIsBase64String(t *testing.T) {
+func TestDecode_ResourceResultPreservesDeclaredText(t *testing.T) {
 	ts := setupDecodeServer(t)
 	inv := NewInvoker()
 	defer inv.Close()
-
-	v, err := invokeAndRead(t, inv, ts.URL, "resources/app://blob", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := base64.StdEncoding.EncodeToString([]byte("hello world"))
-	if s, ok := singleItem(t, v).(string); !ok || s != want {
-		t.Fatalf("blob item must pass as its Base64 string, got %T: %v", v, v)
+	for _, tc := range []struct{ ref, text string }{
+		{"resources/app://good", `{"ok":true}`},
+		{"resources/app://bad", `{not json`},
+		{"resources/app://plain", `{"looks":"like json"}`},
+	} {
+		v, err := invokeAndRead(t, inv, ts.URL, tc.ref)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.ref, err)
+		}
+		item := arrayMember(t, resultObject(t, v), "contents")[0].(map[string]any)
+		if item["text"] != tc.text {
+			t.Errorf("%s text = %v, want %q", tc.ref, item["text"], tc.text)
+		}
 	}
 }
 
-// contents: [] yields [] — the shape never depends on the item count (§9.3).
-func TestDecode_ResourceEmptyContentsIsEmptyArray(t *testing.T) {
+func TestDecode_ResourceResultPreservesOrderBlobAndEmpty(t *testing.T) {
 	ts := setupDecodeServer(t)
 	inv := NewInvoker()
 	defer inv.Close()
-
-	v, err := invokeAndRead(t, inv, ts.URL, "resources/app://empty", nil)
+	multi, err := invokeAndRead(t, inv, ts.URL, "resources/app://multi")
 	if err != nil {
 		t.Fatal(err)
 	}
-	items, ok := v.([]any)
-	if !ok || len(items) != 0 {
-		t.Fatalf("empty contents must yield an empty array, got %T: %v", v, v)
+	items := arrayMember(t, resultObject(t, multi), "contents")
+	if len(items) != 2 || items[0].(map[string]any)["text"] != `{"n":1}` || items[1].(map[string]any)["text"] != "second" {
+		t.Fatalf("resource order or items changed: %v", items)
 	}
-}
-
-// A consumer stuck with a JSON-as-text server opts in through the decode
-// seam — per-invocation hook, the completeness spectrum working as designed.
-func TestDecode_HookOptInParsesText(t *testing.T) {
-	ts := setupDecodeServer(t)
-	inv := NewInvoker()
-	defer inv.Close()
-
-	hooks := openbindings.NewOperationInvoker().SnapshotHooks(
-		func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
-			var parsed any
-			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
-				return nil, err
-			}
-			return parsed, nil
-		}, nil, nil)
-
-	v, err := invokeAndRead(t, inv, ts.URL, "tools/jsonAsText", hooks)
+	blob, err := invokeAndRead(t, inv, ts.URL, "resources/app://blob")
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, ok := v.(map[string]any)
-	if !ok || m["temperature"] != 22.5 {
-		t.Fatalf("decode hook must be able to opt into JSON, got %T: %v", v, v)
+	if got := arrayMember(t, resultObject(t, blob), "contents")[0].(map[string]any)["blob"]; got != base64.StdEncoding.EncodeToString([]byte("hello world")) {
+		t.Fatalf("blob = %v", got)
+	}
+	empty, err := invokeAndRead(t, inv, ts.URL, "resources/app://empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := arrayMember(t, resultObject(t, empty), "contents"); len(got) != 0 {
+		t.Fatalf("empty contents changed: %v", got)
 	}
 }

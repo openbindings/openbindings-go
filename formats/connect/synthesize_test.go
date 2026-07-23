@@ -77,7 +77,7 @@ service TestService {
 	}
 }
 
-func TestConvertToInterface_SkipsClientStreaming(t *testing.T) {
+func TestConvertToInterface_IncludesClientStreaming(t *testing.T) {
 	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
@@ -99,11 +99,14 @@ service TestService {
 		t.Fatal(err)
 	}
 
-	if len(iface.Operations) != 1 {
-		t.Fatalf("expected 1 operation (client streaming skipped), got %d", len(iface.Operations))
+	if len(iface.Operations) != 2 {
+		t.Fatalf("expected both binding-spec-supported operations, got %d", len(iface.Operations))
 	}
 	if _, ok := iface.Operations["GetItem"]; !ok {
 		t.Error("expected operation 'GetItem'")
+	}
+	if _, ok := iface.Operations["StreamUpload"]; !ok {
+		t.Error("expected operation 'StreamUpload'")
 	}
 }
 
@@ -533,7 +536,7 @@ service TestService {
 	var warnings []openbindings.SynthesizerWarning
 	c := NewSynthesizer()
 	_, err := c.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: "https://connect.example.test", Content: openbindings.TextContent(proto)}},
 		OnWarning: func(w openbindings.SynthesizerWarning) {
 			warnings = append(warnings, w)
 		},

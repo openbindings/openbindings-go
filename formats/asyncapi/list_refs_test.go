@@ -12,8 +12,8 @@ func TestInspectSource_BasicRefs(t *testing.T) {
   "asyncapi": "3.0.0",
   "info": {"title": "Test API", "version": "1.0.0"},
   "channels": {
-    "messages": {"address": "/messages"},
-    "events": {"address": "/events"}
+    "messages": {"address": "/messages", "messages": {"event": {"payload": {"type": "object"}}}},
+    "events": {"address": "/events", "messages": {"event": {"payload": {"type": "object"}}}}
   },
   "operations": {
     "sendMessage": {
@@ -24,7 +24,8 @@ func TestInspectSource_BasicRefs(t *testing.T) {
     "receiveEvent": {
       "action": "receive",
       "description": "Receive an event",
-      "channel": {"$ref": "#/channels/events"}
+      "channel": {"$ref": "#/channels/events"},
+      "bindings": {"http": {"method": "POST"}}
     }
   }
 }`
@@ -50,7 +51,7 @@ func TestInspectSource_RefFormat(t *testing.T) {
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
   "channels": {
-    "ch": {"address": "/ch"}
+    "ch": {"address": "/ch", "messages": {"event": {"payload": {"type": "object"}}}}
   },
   "operations": {
     "alpha": {
@@ -59,7 +60,8 @@ func TestInspectSource_RefFormat(t *testing.T) {
     },
     "beta": {
       "action": "receive",
-      "channel": {"$ref": "#/channels/ch"}
+      "channel": {"$ref": "#/channels/ch"},
+      "bindings": {"http": {"method": "POST"}}
     }
   }
 }`
@@ -91,10 +93,10 @@ func TestInspectSource_RefFormat(t *testing.T) {
 func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	doc := &document{
 		AsyncAPI: "3.0.0",
-		Channels: map[string]channel{"ch": {Address: "/ch"}},
+		Channels: map[string]channel{"ch": {Address: "/ch", Messages: map[string]message{"event": {Payload: map[string]any{"type": "object"}}}}},
 		Operations: map[string]asyncOperation{
 			"sendMsg":    {Action: "send", Channel: channelRef{Ref: "#/channels/ch"}},
-			"receiveMsg": {Action: "receive", Channel: channelRef{Ref: "#/channels/ch"}},
+			"receiveMsg": {Action: "receive", Channel: channelRef{Ref: "#/channels/ch"}, Bindings: &operationBindings{HTTP: &httpOperationBinding{Method: "POST"}}},
 		},
 	}
 
@@ -107,10 +109,10 @@ func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
-  "channels": {"ch": {"address": "/ch"}},
+  "channels": {"ch": {"address": "/ch", "messages": {"event": {"payload": {"type": "object"}}}}},
   "operations": {
     "sendMsg": {"action": "send", "channel": {"$ref": "#/channels/ch"}},
-    "receiveMsg": {"action": "receive", "channel": {"$ref": "#/channels/ch"}}
+    "receiveMsg": {"action": "receive", "channel": {"$ref": "#/channels/ch"}, "bindings": {"http": {"method": "POST"}}}
   }
 }`
 
@@ -136,7 +138,7 @@ func TestInspectSource_Description(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
-  "channels": {"ch": {"address": "/ch"}},
+  "channels": {"ch": {"address": "/ch", "messages": {"event": {"payload": {"type": "object"}}}}},
   "operations": {
     "withDesc": {
       "action": "send",
@@ -147,7 +149,8 @@ func TestInspectSource_Description(t *testing.T) {
     "summaryOnly": {
       "action": "receive",
       "summary": "Only summary",
-      "channel": {"$ref": "#/channels/ch"}
+      "channel": {"$ref": "#/channels/ch"},
+      "bindings": {"http": {"method": "POST"}}
     }
   }
 }`
@@ -199,10 +202,10 @@ func TestInspectSource_AlphabeticallySorted(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
-  "channels": {"ch": {"address": "/ch"}},
+  "channels": {"ch": {"address": "/ch", "messages": {"event": {"payload": {"type": "object"}}}}},
   "operations": {
     "zeta": {"action": "send", "channel": {"$ref": "#/channels/ch"}},
-    "alpha": {"action": "receive", "channel": {"$ref": "#/channels/ch"}},
+    "alpha": {"action": "receive", "channel": {"$ref": "#/channels/ch"}, "bindings": {"http": {"method": "POST"}}},
     "mike": {"action": "send", "channel": {"$ref": "#/channels/ch"}}
   }
 }`

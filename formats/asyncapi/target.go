@@ -424,6 +424,16 @@ func addressConfiguration(bindCtx map[string]any) (addressConfig, error) {
 	if cfg == nil {
 		return out, nil
 	}
+	if rawParams, ok := cfg["parameters"].(map[string]any); ok {
+		out.Parameters = make(map[string]string, len(rawParams))
+		for name, value := range rawParams {
+			text, ok := value.(string)
+			if !ok {
+				return out, fmt.Errorf("configuration.parameters[%q] must be a string", name)
+			}
+			out.Parameters[name] = text
+		}
+	}
 	raw, ok := cfg["address"]
 	if !ok || raw == nil {
 		return out, nil
@@ -437,6 +447,9 @@ func addressConfiguration(bindCtx map[string]any) (addressConfig, error) {
 			out.Address = addr
 		}
 		if rawParams, ok := v["parameters"].(map[string]any); ok {
+			if len(out.Parameters) > 0 {
+				return out, fmt.Errorf("address parameters may not be supplied through both configuration.parameters and configuration.address.parameters")
+			}
 			out.Parameters = make(map[string]string, len(rawParams))
 			for name, val := range rawParams {
 				s, ok := val.(string)
@@ -459,7 +472,7 @@ func addressConfiguration(bindCtx map[string]any) (addressConfig, error) {
 // or any expression left unresolved after defaults, is a pre-dispatch
 // refusal, never a guess — this specification does not assume the channel
 // key is an address, and never dials literal braces.
-func resolveAddress(ch *channel, channelName string, cfg addressConfig) (string, error) {
+func resolveAddress(ch *channel, channelName string, cfg addressConfig, payloads ...any) (string, error) {
 	if cfg.Address != "" {
 		if strings.ContainsAny(cfg.Address, "{}") {
 			return "", fmt.Errorf("configuration.address %q is not concrete: literal braces never reach the wire", cfg.Address)
@@ -477,7 +490,11 @@ func resolveAddress(ch *channel, channelName string, cfg addressConfig) (string,
 			durable:     &no,
 		}
 	}
-	return expandAddress(ch, channelName, cfg.Parameters)
+	var payload any
+	if len(payloads) > 0 {
+		payload = payloads[0]
+	}
+	return expandAddress(ch, channelName, cfg.Parameters, payload)
 }
 
 // expandAddress expands every `{name}` expression in the channel's declared
@@ -485,12 +502,34 @@ func resolveAddress(ch *channel, channelName string, cfg addressConfig) (string,
 // parameter's `default`; anything left unresolved is a pre-dispatch
 // refusal. A declared enum does not gate the value (§9.2): it is the author's
 // expectation, not a boundary, consistent with the server-variable point.
-func expandAddress(ch *channel, channelName string, supplied map[string]string) (string, error) {
+func expandAddress(ch *channel, channelName string, supplied map[string]string, payloads ...any) (string, error) {
+	var payload any
+	if len(payloads) > 0 {
+		payload = payloads[0]
+	}
+	for name := range supplied {
+		declared, ok := ch.Parameters[name]
+		if !ok {
+			return "", fmt.Errorf("configuration parameter %q is not declared by channel %q", name, channelName)
+		}
+		if declared.Location != "" {
+			return "", fmt.Errorf("configuration cannot override address parameter %q because the artifact declares location %q", name, declared.Location)
+		}
+	}
 	out := ch.Address
 	for _, name := range templateExpressions(ch.Address) {
+		declared := ch.Parameters[name]
 		val, ok := supplied[name]
+		if declared.Location != "" {
+			var err error
+			val, err = evaluatePayloadLocation(declared.Location, payload, name)
+			if err != nil {
+				return "", err
+			}
+			ok = true
+		}
 		if !ok {
-			if p, declared := ch.Parameters[name]; declared && p.Default != "" {
+			if p, exists := ch.Parameters[name]; exists && p.Default != "" {
 				val = p.Default
 			} else {
 				var choices []string
@@ -505,12 +544,55 @@ func expandAddress(ch *channel, channelName string, supplied map[string]string) 
 				}
 			}
 		}
-		out = strings.ReplaceAll(out, "{"+name+"}", val)
+		if len(declared.Enum) > 0 {
+			allowed := false
+			for _, candidate := range declared.Enum {
+				if candidate == val {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return "", fmt.Errorf("address parameter %q value %q is outside the artifact-declared enum", name, val)
+			}
+		}
+		out = strings.ReplaceAll(out, "{"+name+"}", url.PathEscape(val))
 	}
 	if strings.ContainsAny(out, "{}") {
 		return "", fmt.Errorf("channel %q: address %q still carries an unexpanded expression after parameter expansion", channelName, out)
 	}
 	return out, nil
+}
+
+func evaluatePayloadLocation(location string, payload any, name string) (string, error) {
+	const prefix = "$message.payload#"
+	if !strings.HasPrefix(location, prefix) {
+		return "", fmt.Errorf("address parameter %q uses unsupported runtime expression %q", name, location)
+	}
+	current := payload
+	pointer := strings.TrimPrefix(location, prefix)
+	if pointer != "" {
+		if !strings.HasPrefix(pointer, "/") {
+			return "", fmt.Errorf("runtime expression %q has an invalid JSON Pointer", location)
+		}
+		for _, raw := range strings.Split(strings.TrimPrefix(pointer, "/"), "/") {
+			segment := strings.ReplaceAll(strings.ReplaceAll(raw, "~1", "/"), "~0", "~")
+			object, ok := openbindings.ToStringAnyMap(current)
+			if !ok {
+				return "", fmt.Errorf("runtime expression %q did not resolve against the outgoing payload", location)
+			}
+			var present bool
+			current, present = object[segment]
+			if !present {
+				return "", fmt.Errorf("runtime expression %q did not resolve against the outgoing payload", location)
+			}
+		}
+	}
+	value, ok := current.(string)
+	if !ok {
+		return "", fmt.Errorf("runtime expression %q must resolve to a string", location)
+	}
+	return value, nil
 }
 
 // templateExpressions returns the `{name}` expression names of a template,
@@ -543,4 +625,3 @@ func templateExpressions(template string) []string {
 func joinURL(base, path string) string {
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
 }
-

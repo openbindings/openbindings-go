@@ -369,12 +369,20 @@ const writeDeadline = 30 * time.Second
 // closes a truly wedged socket (dead for every listener anyway) — but only a
 // real stall, never a voluntary sibling cancel.
 func (pw *pooledWS) send(ctx context.Context, data []byte) error {
+	return pw.sendType(ctx, data, "text")
+}
+
+func (pw *pooledWS) sendType(ctx context.Context, data []byte, messageType string) error {
 	pw.writeMu.Lock()
 	defer pw.writeMu.Unlock()
 	_ = ctx // the per-invocation ctx never bounds the shared-socket write
 	writeCtx, cancel := context.WithTimeout(context.Background(), writeDeadline)
 	defer cancel()
-	return pw.conn.Write(writeCtx, websocket.MessageText, data)
+	typ := websocket.MessageText
+	if messageType == "binary" {
+		typ = websocket.MessageBinary
+	}
+	return pw.conn.Write(writeCtx, typ, data)
 }
 
 // closeConn closes the underlying socket, marking the close as

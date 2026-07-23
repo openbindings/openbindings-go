@@ -118,6 +118,9 @@ func commandRef(path []string) string { return strings.Join(path, " ") }
 // buildInterfaceFromSpec synthesizes an interface from a bare artifact:
 // one operation per bindable command, bound by command-path ref.
 func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbindings.Interface, error) {
+	if err := validateAcceptedUsageArtifact(spec); err != nil {
+		return openbindings.Interface{}, err
+	}
 	meta := spec.Meta()
 
 	iface := openbindings.Interface{
@@ -130,6 +133,9 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 			DefaultSourceName: sourceEntry,
 		},
 		Bindings: map[string]openbindings.BindingEntry{},
+	}
+	if meta.Bin == "" {
+		return iface, nil
 	}
 
 	addOp := func(name, ref, help string, path []string, cmd *Command, inherited []Flag) error {
@@ -166,14 +172,8 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 	}
 
 	if rc := rootCommand(spec); rc != nil {
-		rootName := meta.Bin
-		if rootName == "" {
-			rootName = meta.Name
-		}
-		if rootName != "" {
-			if err := addOp(rootName, "", meta.About, []string{rootName}, rc, nil); err != nil {
-				return openbindings.Interface{}, err
-			}
+		if err := addOp(meta.Bin, "", meta.About, []string{meta.Bin}, rc, nil); err != nil {
+			return openbindings.Interface{}, err
 		}
 	}
 	var walkErr error
@@ -251,6 +251,9 @@ func rootCommand(spec *Spec) *Command {
 }
 
 func generateInputSchema(cmd Command, inheritedGlobals []Flag) (map[string]any, error) {
+	if err := validateUsageRelations(&cmd, inheritedGlobals); err != nil {
+		return nil, err
+	}
 	properties := make(map[string]any)
 	seen := make(map[string]string)
 	var required []string
@@ -267,13 +270,16 @@ func generateInputSchema(cmd Command, inheritedGlobals []Flag) (map[string]any, 
 				cmd.Name, name, existing, name)
 		}
 		seen[name] = fmt.Sprintf("flag --%s", name)
+		if flag.Var && flag.valueVariadic() {
+			return nil, fmt.Errorf("flag %q is both repeatable and variadic; revision 1 refuses the ambiguous multiplicity", name)
+		}
 
 		prop := generateFlagSchema(flag)
 		if prop != nil {
 			properties[name] = prop
 		}
 
-		if flag.Required && flag.Default == nil {
+		if flag.Required && flag.effectiveDefault() == nil && flag.effectiveEnv() == "" {
 			required = append(required, name)
 		}
 	}
@@ -295,7 +301,7 @@ func generateInputSchema(cmd Command, inheritedGlobals []Flag) (map[string]any, 
 			properties[name] = prop
 		}
 
-		if arg.IsRequired() && arg.Default == nil {
+		if arg.IsRequired() && arg.Default == nil && arg.Env == "" {
 			required = append(required, name)
 		}
 	}
@@ -316,6 +322,23 @@ func generateInputSchema(cmd Command, inheritedGlobals []Flag) (map[string]any, 
 	return schema, nil
 }
 
+func validateUsageRelations(cmd *Command, inherited []Flag) error {
+	flags := cmd.AllFlags(inherited)
+	for _, flag := range flags {
+		for _, declaration := range []struct {
+			name  string
+			value string
+		}{{"required_if", flag.RequiredIf}, {"required_unless", flag.RequiredUnless}, {"overrides", flag.Overrides}} {
+			for _, reference := range splitUsageReferences(declaration.value) {
+				if _, ok := resolveUsageFlag(flags, reference); !ok {
+					return fmt.Errorf("flag %q %s names unknown flag %q", flag.PrimaryName(), declaration.name, reference)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func generateFlagSchema(flag Flag) map[string]any {
 	prop := make(map[string]any)
 
@@ -323,11 +346,12 @@ func generateFlagSchema(flag Flag) map[string]any {
 
 	if flag.Count {
 		prop["type"] = schemaTypeInteger
+		prop["minimum"] = 0
 		if flag.Help != "" {
 			prop["description"] = flag.Help
 		}
-		if flag.Default != nil {
-			prop["default"] = flag.Default
+		if value := flag.effectiveDefault(); value != nil {
+			prop["default"] = value
 		}
 		return prop
 	}
@@ -339,37 +363,38 @@ func generateFlagSchema(flag Flag) map[string]any {
 		if flag.Help != "" {
 			prop["description"] = flag.Help
 		}
-		if flag.Default != nil {
-			prop["default"] = flag.Default
+		if value := flag.effectiveDefault(); value != nil {
+			prop["default"] = value
 		}
 		return prop
 	}
 
-	if flag.Var {
+	choices := flag.effectiveChoices()
+	if flag.Var || flag.valueVariadic() {
 		itemSchema := map[string]any{"type": schemaTypeString}
-		if len(flag.Choices) > 0 {
-			itemSchema["enum"] = flag.Choices
+		if len(choices) > 0 && flag.choicesEnvironment() == "" {
+			itemSchema["enum"] = choices
 		}
 		prop["type"] = schemaTypeArray
 		prop["items"] = itemSchema
-		if flag.VarMin != nil {
-			prop["minItems"] = *flag.VarMin
+		if min := flag.effectiveVarMin(); min != nil {
+			prop["minItems"] = *min
 		}
-		if flag.VarMax != nil {
-			prop["maxItems"] = *flag.VarMax
+		if max := flag.effectiveVarMax(); max != nil {
+			prop["maxItems"] = *max
 		}
 	} else {
 		prop["type"] = schemaTypeString
-		if len(flag.Choices) > 0 {
-			prop["enum"] = flag.Choices
+		if len(choices) > 0 && flag.choicesEnvironment() == "" {
+			prop["enum"] = choices
 		}
 	}
 
 	if flag.Help != "" {
 		prop["description"] = flag.Help
 	}
-	if flag.Default != nil {
-		prop["default"] = flag.Default
+	if value := flag.effectiveDefault(); value != nil {
+		prop["default"] = value
 	}
 
 	return prop
@@ -380,7 +405,7 @@ func generateArgSchema(arg Arg) map[string]any {
 
 	if arg.IsVariadic() {
 		itemSchema := map[string]any{"type": schemaTypeString}
-		if len(arg.Choices) > 0 {
+		if len(arg.Choices) > 0 && arg.choicesEnvironment() == "" {
 			itemSchema["enum"] = arg.Choices
 		}
 		prop["type"] = schemaTypeArray
@@ -395,7 +420,7 @@ func generateArgSchema(arg Arg) map[string]any {
 		}
 	} else {
 		prop["type"] = schemaTypeString
-		if len(arg.Choices) > 0 {
+		if len(arg.Choices) > 0 && arg.choicesEnvironment() == "" {
 			prop["enum"] = arg.Choices
 		}
 	}

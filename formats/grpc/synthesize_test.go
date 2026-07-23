@@ -1,6 +1,8 @@
 package grpc
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -10,6 +12,15 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
+
+func TestSynthesizeInterface_RefusesLossyReflectionEmbed(t *testing.T) {
+	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: "grpc://127.0.0.1:50051", Embed: true}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "complete reflected descriptor closure") {
+		t.Fatalf("expected pre-discovery embed refusal, got %v", err)
+	}
+}
 
 // buildTestDiscovery creates a Discovery with the given services for testing.
 // Files are registered into a shared protoregistry so later files can resolve
@@ -172,7 +183,7 @@ func TestConvertToInterface_CreatesSourceEntry(t *testing.T) {
 	}
 }
 
-func TestConvertToInterface_SkipsClientStreaming(t *testing.T) {
+func TestConvertToInterface_IncludesClientStreaming(t *testing.T) {
 	disc := buildTestDiscovery(t, simpleServiceFile("testpkg", "TestService",
 		unaryMethod("GetItem"),
 		clientStreamMethod("StreamUpload"),
@@ -182,11 +193,14 @@ func TestConvertToInterface_SkipsClientStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(iface.Operations) != 1 {
-		t.Fatalf("expected 1 operation (client streaming skipped), got %d", len(iface.Operations))
+	if len(iface.Operations) != 2 {
+		t.Fatalf("expected 2 operations, got %d", len(iface.Operations))
 	}
 	if _, ok := iface.Operations["GetItem"]; !ok {
 		t.Error("expected operation 'GetItem'")
+	}
+	if _, ok := iface.Operations["StreamUpload"]; !ok {
+		t.Error("expected operation 'StreamUpload'")
 	}
 }
 

@@ -36,17 +36,17 @@ type discovery struct {
 
 // dialAddress is a parsed dial address per openbindings.grpc@1 §4
 // (GRPC-D-02): the scheme-stripped host:port handed to the resolver, plus
-// the address-form transport determination (the transport configuration
-// point's default, GRPC-P-02).
+// any explicit address-form transport determination (GRPC-P-02).
 type dialAddress struct {
 	hostPort string
 	tls      bool
+	explicit bool
 }
 
 // parseDialAddress validates a dial address against §4's three
 // port-explicit forms (GRPC-D-02):
 //
-//	host:port          TLS iff the port is 443, plaintext otherwise
+//	host:port          no transport determination
 //	grpc://host:port   plaintext
 //	grpcs://host:port  TLS
 //
@@ -93,7 +93,8 @@ func parseDialAddress(address string) (dialAddress, error) {
 
 	return dialAddress{
 		hostPort: rest,
-		tls:      schemeTLS || (!schemePlain && port == "443"),
+		tls:      schemeTLS,
+		explicit: schemeTLS || schemePlain,
 	}, nil
 }
 
@@ -121,6 +122,9 @@ func resolveTransport(cfg map[string]any, invokerCreds credentials.TransportCred
 	}
 	if invokerCreds != nil {
 		return invokerCreds, "invoker", nil
+	}
+	if !addr.explicit {
+		return nil, "", fmt.Errorf("bare gRPC target %q does not declare transport security; configuration.transport must elect plaintext or TLS before dialing (GRPC-P-02)", addr.hostPort)
 	}
 	if addr.tls {
 		return defaultTransport(addr), "tls", nil

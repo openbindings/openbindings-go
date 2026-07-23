@@ -2,7 +2,13 @@
 
 Binding invoker, interface synthesizer, and usage-spec parser for bare [jdx usage](https://usage.jdx.dev/) CLI descriptors, for the [OpenBindings](https://openbindings.com) Go SDK.
 
-The artifact IS the source: an OBI binding points `{source: usage@2.x/3.x, ref: "<space-separated command path>"}` at a pristine usage-spec KDL document, with no wrapper and no OB-authored companion document. Where the descriptor cannot answer a wire question (usage describes a CLI's human surface — flags, args, help — not stdout decoding, exit-code meaning, or a field's stdin routing), the gap is made up in **consumer configuration**: documented content-independent assumptions, overridable through the SDK's generic hook seam. *Specification + configuration = complete invocation.* See the shared [formats/README completeness-spectrum note](https://github.com/openbindings/spec/blob/main/formats/README.md) for the recommended defaults, the consultation matrix, and the decline chain.
+The artifact is the source: an OBI source governed by the exact identifier
+`openbindings.usage@1` carries or addresses a pristine usage v3.5.6 KDL
+descriptor. The binding's `ref` is the descriptor's own space-separated
+command-path grammar. Questions the descriptor cannot answer—stdout decoding,
+exit classification, or alternate field carriage—remain explicit named
+configuration points. The artifact stays pristine and the OBI stays abstract:
+specification plus consumer configuration makes a complete invocation.
 
 ## Install
 
@@ -25,7 +31,9 @@ import (
 invoker := openbindings.NewOperationInvoker(usage.NewInvoker())
 ```
 
-The invoker and synthesizer claim `usage@^2.0.0` and `usage@^3.0.0` (usage version numbers track the jdx tool, which is what an artifact's `min_usage_version` pins; the KDL vocabulary is unchanged across the 2.x → 3.x line).
+The invoker and synthesizer claim `openbindings.usage@1` exactly. That binding
+specification pins the incorporated usage interpreter to v3.5.6; an artifact's
+`min_usage_version` is a load-time gate, not part of the binding identifier.
 
 ### Invoke a binding
 
@@ -33,8 +41,8 @@ The invoker and synthesizer claim `usage@^2.0.0` and `usage@^3.0.0` (usage versi
 invoker := usage.NewInvoker()
 call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        Format:   "usage@2.13.1",
-        Location: "/abs/path/mycli.usage.kdl", // or exec:mycli, or inline Content
+        BindingSpec: usage.BindingSpec,
+        Location:    "file:///abs/path/mycli.usage.kdl", // or authorized exec:mycli, or inline Content
     },
     Ref: "config set", // the format's own grammar: a command path; empty = root
 })
@@ -49,7 +57,7 @@ The built-in defaults are content-independent — decided by the artifact and th
 
 | Wire question | Built-in assumption | Override |
 | --- | --- | --- |
-| Where does an input field ride? | its argv slot (strings verbatim, other values compact JSON) | `FieldRouter` returning `usage.RouteStdinDash` (bytes to stdin, `-` in the slot), `usage.RouteStdin` (slotless pure channel), or `usage.RouteFile` (temp-file path in the slot) |
+| Where does an input field ride? | its artifact-declared argv slot; strings verbatim, non-strings have no invented encoding | `FieldRouter` returning `usage.RouteStdinDash` (bytes to stdin, `-` in the slot), `usage.RouteStdin` (slotless pure channel), `usage.RouteFile` (temp-file path), or the field's declared environment variable |
 | How does stdout decode? | text, trailing newlines stripped (command-substitution semantics) | `OutputDecoder` (e.g. strict JSON for a machine lane) |
 | Which exits are success? | exit 0 | `ResultClassifier` (the diff(1) class: `{0, 1}`) |
 
@@ -88,14 +96,12 @@ The descriptor declares commands, flags, args, choices, and help — a CLI's *su
 synthesizer := usage.NewSynthesizer()
 iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
     Sources: []openbindings.SynthesizeSource{{
-        Format:   "usage@2.13.1",
-        Location: "mycli.usage.kdl",
+        BindingSpec: usage.BindingSpec,
+        Content:     openbindings.TextContent(descriptor),
     }},
 })
-// iface EMBEDS the pristine artifact as its source (a local file path is
-// not a conformant OBI-D-05 location, so it never rides the emitted
-// document; a spaceless exec: locator, being a well-formed URI, is emitted
-// verbatim instead), one operation per bindable command (dot-joined keys,
+// iface retains the pristine artifact as its source, one operation per
+// bindable command (dot-joined keys,
 // e.g. config.set), bindings ref'ing
 // command paths, and FLOOR-TRUE output schemas: {"type":"string"} with an
 // in-schema x-ob floor-stamp (the text assumption always yields a string,
@@ -129,7 +135,7 @@ Converts a usage-spec KDL document into an OBI by:
 - Walking all commands depth-first, skipping `subcommand_required` nodes
 - Generating JSON Schema input from flags (boolean, string, integer, array) and positional args
 - Using dot-separated paths as operation keys and space-separated paths as refs (e.g. `config.set` / `config set`)
-- Carrying the pristine artifact verbatim as the source: embedded `content` for inline and file-path intake (a local path is a relative reference under OBI-D-05, so it never rides the emitted `location`), the locator itself for a URI-valid (spaceless) `exec:` locator; a spaced `exec:` locator also embeds (its conformant reference form is a recorded open point in the conventions doc)
+- Carrying the pristine artifact verbatim as the source: embedded `content` for inline and file-path intake (a local path is a relative reference under OBI-D-05, so it never rides the emitted `location`), and the binding-spec-defined `exec:` address verbatim for live descriptor generation. `exec:` is an absolute address under USAGE-D-02 even when its space-separated argv vector contains spaces; it is not forced into URI syntax.
 
 ## Parser SDK
 

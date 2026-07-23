@@ -38,8 +38,11 @@ func TestVersionGate_ToolMajors(t *testing.T) {
 
 func TestSynthesizer_NoSources(t *testing.T) {
 	c := NewSynthesizer()
-	_, err := c.SynthesizeInterface(nil, &openbindings.SynthesizeInput{})
-	if err != openbindings.ErrNoSources {
-		t.Errorf("err = %v, want ErrNoSources", err)
+	iface, err := c.SynthesizeInterface(nil, &openbindings.SynthesizeInput{Name: "scaffold"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if iface.OpenBindings != openbindings.MaxTestedVersion || iface.Name != "scaffold" || len(iface.Operations) != 0 || len(iface.Sources) != 0 || len(iface.Bindings) != 0 {
+		t.Fatalf("unexpected source-less scaffold: %+v", iface)
 	}
 }

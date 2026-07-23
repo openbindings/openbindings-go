@@ -2,7 +2,11 @@
 
 Connect (Buf) binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
 
-This package enables OpenBindings to invoke operations against Connect services and synthesize OBI documents from protobuf definitions. It uses the Connect wire protocol (HTTP POST with JSON) and shares the same protobuf service definitions and ref convention as the gRPC invoker.
+This package implements the published, exact binding-specification identifier
+`openbindings.connect@1`. It uses the Connect JSON protocol and incorporates
+the protobuf schema carriage, ref grammar, and canonical ProtoJSON
+correspondence defined by `openbindings.grpc@1` where the Connect binding
+specification says to do so.
 
 See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 
@@ -34,11 +38,11 @@ invoker := connectbinding.NewInvoker()
 
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        Format:   "connect",
-        Location: "https://api.example.com",
+        BindingSpec: connectbinding.BindingSpec,
+        Location:    "https://api.example.com",
     },
     Ref:     "mypackage.MyService/GetItem",
-    Context: map[string]any{"bearerToken": "tok_123"},
+    Context: map[string]any{"headers": map[string]string{"authorization": "Bearer tok_123"}},
 })
 
 // The request message flows through the handle, not the args.
@@ -71,25 +75,27 @@ for {
 }
 ```
 
-### Synthesize an interface from a .proto file
+### Synthesize an interface from embedded protobuf content
 
 ```go
 synth := connectbinding.NewSynthesizer()
 iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
     Sources: []openbindings.SynthesizeSource{{
-        Format:   "connect",
-        Location: "./service.proto",
+        BindingSpec: connectbinding.BindingSpec,
+        Location:    "https://api.example.com",
+        Content:     openbindings.TextContent(protoSource),
     }},
 })
 ```
 
 ## Conventions
 
-These are non-normative conventions specific to the `connect` binding format.
+These are non-normative implementation notes. The binding specification is
+normative for artifact, target, and operation-boundary behavior.
 
-### Format token
+### Binding specification identifier
 
-`connect` (versionless). Handles Connect (Buf) services via HTTP.
+`openbindings.connect@1` (exact and opaque).
 
 ### Ref format
 
@@ -107,19 +113,18 @@ Both Connect and gRPC use protobuf service definitions, so the ref convention is
 
 ### Credential application
 
-Credentials are applied as HTTP headers:
-
-- `bearerToken`: `Authorization: Bearer <token>`
-- `apiKey`: `Authorization: ApiKey <key>`
-- `basic`: `Authorization: Basic <encoded>`
-
-Context `headers` and `cookies` are also forwarded.
+The schema and protocol declare no application authentication convention, so
+the package invents none. Explicitly named context `headers` and `cookies`
+ride under Connect/HTTP metadata rules. A generic bearer, basic, or API-key
+credential without a named carriage raises `CONTEXT_REQUIRED` before
+dispatch; it is never silently mapped to `Authorization`.
 
 ### Connect protocol details
 
-The invoker sends requests as HTTP POST with:
-- `Content-Type: application/json`
-- `Connect-Protocol-Version: 1`
+The invoker sends unary requests as plain `application/json` and streaming
+requests as enveloped `application/connect+json`. The Connect protocol permits
+`Connect-Protocol-Version: 1` to be sent or omitted; either artifact-permitted
+choice is valid.
 
 Responses are parsed as JSON. Connect error responses (with `code` and `message` fields) are mapped to standard error codes, mirroring the gRPC family per the binding-invoker contract: `unauthenticated` → `ERR_AUTH_REQUIRED`, `permission_denied` → `ERR_PERMISSION_DENIED`, `unavailable`/`resource_exhausted` → `ERR_UNAVAILABLE` (the server answered but refused as retryable — not a transport failure), `deadline_exceeded` → `ERR_TIMEOUT`, `canceled` → `ERR_CANCELLED`, anything else → `ERR_EXECUTION_FAILED`.
 
@@ -127,20 +132,28 @@ Leading metadata (HTTP response headers) is available via the handle's `Header`;
 
 ### Streaming behavior
 
-The Connect invoker supports two cardinalities, both taking exactly one request message through the handle's `Write` channel:
-
-- **Unary RPCs** — single request, single response. The invocation yields one output.
-- **Server-streaming RPCs** — single request, stream of responses. Each server-streamed message is emitted as a separate output; the output stream closes when the server's end-stream envelope is received or the caller cancels.
+With embedded schema content, the invoker preserves all four protobuf-declared
+cardinalities: unary, server-streaming, client-streaming, and bidirectional.
+Bidirectional output may arrive while input remains open. A selected HTTP
+transport that cannot provide full duplex refuses client-streaming and
+bidirectional methods before dispatch as an implementation limitation; it does
+not reinterpret them. Without content, descriptorless mode is unary by
+definition and requires exactly one caller value.
 
 Server-streaming uses the Connect envelope-framed wire format with `Content-Type: application/connect+json` per the [Connect protocol specification](https://connectrpc.com/docs/protocol#streaming-rpcs). Server-streaming dispatch requires inline proto `content` on the source so the invoker can detect that the method is streaming; without proto content the invoker falls back to unary invocation.
 
-The interface synthesizer skips **client-streaming** methods during synthesis (out of the module's cardinality scope: one request message in, one or more outputs out). Server-streaming methods are included.
-
-Compression is not currently supported. Bidirectional streaming is out of scope.
+The interface synthesizer and `SourceInspector` include all four declared
+method kinds. Whether a particular invocation host can dispatch a
+request-streaming method is a runtime transport capability; it does not shrink
+the artifact-derived interface.
 
 ### Relationship to gRPC
 
-Connect and gRPC are separate wire protocols that share protobuf service definitions. The same `.proto` file can produce both `format: "grpc"` and `format: "connect"` bindings. A service that speaks both protocols would have two sources and two sets of bindings in its OBI.
+Connect and gRPC are separate wire protocols that share protobuf service
+definitions. The same schema can govern sources with
+`bindingSpec: "openbindings.grpc@1"` and
+`bindingSpec: "openbindings.connect@1"`; a service speaking both has distinct
+sources and bindings for the two access paths.
 
 ### Consumer hooks
 

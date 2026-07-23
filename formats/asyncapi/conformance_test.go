@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/coder/websocket"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // Conformance tests for the openbindings.asyncapi@1 remainder: the server
@@ -983,11 +983,11 @@ func TestInputTextLane(t *testing.T) {
 	}
 }
 
-// TestInputExcludedFamilyRefusedPreDispatch verifies §9.1's exclusion: a
-// declared non-JSON non-text family (avro, protobuf, binary, …) is refused
-// BEFORE dispatch — on the HTTP cell before any request, on the WS cell
-// before any upgrade.
-func TestInputExcludedFamilyRefusedPreDispatch(t *testing.T) {
+// TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch verifies §9.1's
+// value boundary: a non-JSON declared type carries strings, but an arbitrary
+// structured value cannot be invented into bytes and is refused before
+// dispatch.
+func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -1008,8 +1008,8 @@ func TestInputExcludedFamilyRefusedPreDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for an excluded declared family, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeValidationFailed {
+		t.Fatalf("expected ERR_VALIDATION_FAILED for a non-string value on the declared string lane, got %v", err)
 	}
 	if got := requests.Load(); got != 0 {
 		t.Errorf("the exclusion refusal is pre-dispatch: %d requests sent", got)

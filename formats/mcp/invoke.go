@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,6 +56,23 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			Message: err.Error(),
 		})
 		return
+	}
+	_, _, hasBasic := openbindings.ContextBasicAuth(args.Context)
+	if openbindings.ContextAPIKey(args.Context) != "" || openbindings.ContextBearerToken(args.Context) != "" || hasBasic {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeContextRequired,
+			Message: "MCP does not declare a carrier for a generic credential; provide a named HTTP header credential",
+		})
+		return
+	}
+	for name := range openbindings.ContextHeaders(args.Context) {
+		if strings.EqualFold(name, "MCP-Session-Id") || strings.EqualFold(name, "MCP-Protocol-Version") {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeValidationFailed,
+				Message: fmt.Sprintf("credential header %q collides with an MCP processor-owned session field", name),
+			})
+			return
+		}
 	}
 
 	// A pinned listing (source content) validates up front: an invalid pin
@@ -168,6 +186,17 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 	defer session.release()
+	if init := session.session.InitializeResult(); init == nil || init.ProtocolVersion != "2025-11-25" {
+		negotiated := ""
+		if init != nil {
+			negotiated = init.ProtocolVersion
+		}
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceLoadFailed,
+			Message: fmt.Sprintf("MCP negotiated protocol revision %q; openbindings.mcp@1 accepts only 2025-11-25", negotiated),
+		})
+		return
+	}
 
 	// --- Live resolution (no pin): the capability-gated, pagination-
 	// exhausted listing for the ref's entity family, then the same byte-exact
@@ -224,16 +253,18 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	// --- Dispatch. ---
 	site := siteFor(args, location)
+	rawResult := &rawResultCapture{}
+	operationCtx := context.WithValue(callCtx, rawResultCaptureKey{}, rawResult)
 	var derr *openbindings.InvocationError
 	var suspect bool
 	switch kind {
 	case targetTool:
 		solicit := resolveSolicit(args.Context, e.solicitProgress)
-		derr, suspect = runTool(callCtx, session, name, toolArgs, solicit, inv, hc, setHeader, site, args.Hooks)
+		derr, suspect = runTool(operationCtx, session, name, toolArgs, solicit, inv, hc, setHeader, site, args.Hooks, rawResult)
 	case targetPrompt:
-		derr, suspect = runPrompt(callCtx, session, name, promptArgs, inv, hc, setHeader)
+		derr, suspect = runPrompt(operationCtx, session, name, promptArgs, inv, hc, setHeader, rawResult)
 	default: // static resource, or a template expanded to targetURI
-		derr, suspect = runResource(callCtx, session, targetURI, inv, hc, setHeader, site, args.Hooks)
+		derr, suspect = runResource(operationCtx, session, targetURI, inv, hc, setHeader, site, args.Hooks, rawResult)
 	}
 	if derr != nil {
 		// A transport- or HTTP-level failure may have poisoned the pooled
@@ -322,6 +353,7 @@ func runTool(
 	setHeader func(),
 	site openbindings.InvokeSite,
 	hooks *openbindings.InvokeHooks,
+	rawResult *rawResultCapture,
 ) (*openbindings.InvocationError, bool) {
 	params := &gomcp.CallToolParams{Name: toolName}
 	if toolArgs != nil {
@@ -342,7 +374,7 @@ func runTool(
 		if callErr != nil {
 			return mapMCPError(callErr, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(callErr)
 		}
-		return emitToolResult(result, toolName, inv, setHeader, site, hooks)
+		return emitToolResult(result, toolName, inv, setHeader, site, hooks, rawResult)
 	}
 
 	// Each solicited call gets a fresh progress token so the server can
@@ -412,7 +444,7 @@ func runTool(
 	if callErr != nil {
 		return mapMCPError(callErr, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(callErr)
 	}
-	return emitToolResult(result, toolName, inv, setHeader, site, hooks)
+	return emitToolResult(result, toolName, inv, setHeader, site, hooks, rawResult)
 }
 
 // emitToolResult classifies and emits a completed tools/call result: an
@@ -425,6 +457,7 @@ func emitToolResult(
 	setHeader func(),
 	site openbindings.InvokeSite,
 	hooks *openbindings.InvokeHooks,
+	rawResult *rawResultCapture,
 ) (*openbindings.InvocationError, bool) {
 	if result.IsError {
 		// Application-level tool failure (CallToolResult.isError). The
@@ -439,15 +472,8 @@ func emitToolResult(
 	}
 
 	setHeader()
-	value, decodeStamp, derr := toolResultValue(result, site, hooks)
-	if derr != nil {
-		return derr, false
-	}
-	// Success provenance stamps (conventions record): decode provenance
-	// names the lane that produced the value; classification is
-	// protocol-native (CallToolResult.isError), stamped as such.
+	value := completeMCPResult(rawResult, result)
 	inv.SetTrailer(openbindings.Metadata{
-		"x-ob-decode":   {decodeStamp},
 		"x-ob-classify": {"protocol/isError"},
 	})
 	if err := inv.EmitOutput(value); err != nil {
@@ -467,6 +493,7 @@ func runResource(
 	setHeader func(),
 	site openbindings.InvokeSite,
 	hooks *openbindings.InvokeHooks,
+	rawResult *rawResultCapture,
 ) (*openbindings.InvocationError, bool) {
 	result, err := session.session.ReadResource(ctx, &gomcp.ReadResourceParams{URI: uri})
 	if err != nil {
@@ -474,11 +501,7 @@ func runResource(
 	}
 
 	setHeader()
-	value, decodeStamp, derr := resourceValue(result, site, hooks)
-	if derr != nil {
-		return derr, false
-	}
-	inv.SetTrailer(openbindings.Metadata{"x-ob-decode": {decodeStamp}})
+	value := completeMCPResult(rawResult, result)
 	if err := inv.EmitOutput(value); err != nil {
 		return nil, false
 	}
@@ -495,6 +518,7 @@ func runPrompt(
 	inv *openbindings.InvocationImpl[any, any],
 	hc *headerCapture,
 	setHeader func(),
+	rawResult *rawResultCapture,
 ) (*openbindings.InvocationError, bool) {
 	result, err := session.session.GetPrompt(ctx, &gomcp.GetPromptParams{
 		Name:      promptName,
@@ -505,7 +529,7 @@ func runPrompt(
 	}
 
 	setHeader()
-	if err := inv.EmitOutput(promptValue(result)); err != nil {
+	if err := inv.EmitOutput(completeMCPResult(rawResult, result)); err != nil {
 		return nil, false
 	}
 	inv.CloseOutput()
@@ -569,14 +593,53 @@ func expandTemplateInput(
 					Message: fmt.Sprintf("MCP resource-template input names variable %q, which template %q does not declare", k, template),
 				}, false
 			}
-			s, ok := v.(string)
-			if !ok {
+			switch value := v.(type) {
+			case string:
+				values[k] = uritemplate.String(value)
+			case []string:
+				values[k] = uritemplate.List(value...)
+			case []any:
+				items := make([]string, len(value))
+				for i, item := range value {
+					text, ok := item.(string)
+					if !ok {
+						return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("MCP resource-template list variable %q contains non-string item at index %d", k, i)}, false
+					}
+					items[i] = text
+				}
+				values[k] = uritemplate.List(items...)
+			case map[string]string:
+				keys := make([]string, 0, len(value))
+				for name := range value {
+					keys = append(keys, name)
+				}
+				sort.Strings(keys)
+				pairs := make([]string, 0, len(keys)*2)
+				for _, name := range keys {
+					pairs = append(pairs, name, value[name])
+				}
+				values[k] = uritemplate.KV(pairs...)
+			case map[string]any:
+				keys := make([]string, 0, len(value))
+				for name := range value {
+					keys = append(keys, name)
+				}
+				sort.Strings(keys)
+				pairs := make([]string, 0, len(keys)*2)
+				for _, name := range keys {
+					text, ok := value[name].(string)
+					if !ok {
+						return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("MCP resource-template associative variable %q has non-string value at key %q", k, name)}, false
+					}
+					pairs = append(pairs, name, text)
+				}
+				values[k] = uritemplate.KV(pairs...)
+			default:
 				return "", &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeValidationFailed,
-					Message: fmt.Sprintf("MCP resource-template variable %q must be a string, got %T (template variables are never coerced)", k, v),
+					Message: fmt.Sprintf("MCP resource-template variable %q must be an RFC 6570 string, string list, or string map; got %T", k, v),
 				}, false
 			}
-			values[k] = uritemplate.String(s)
 		}
 	}
 
@@ -773,6 +836,29 @@ func (hc *headerCapture) lastStatus() (int, string) {
 // ---------------------------------------------------------------------------
 // Result conversion
 // ---------------------------------------------------------------------------
+
+// completeMCPResult returns the complete protocol result object. The raw
+// transport capture wins because a typed third-party SDK can erase explicit
+// false values or extension members while decoding. The typed value is only a
+// fallback for transports that do not expose response bytes.
+func completeMCPResult(capture *rawResultCapture, typed any) any {
+	if capture != nil {
+		if value := capture.result(); value != nil {
+			return value
+		}
+	}
+	data, err := json.Marshal(typed)
+	if err != nil {
+		return typed
+	}
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.UseNumber()
+	var value any
+	if dec.Decode(&value) != nil {
+		return typed
+	}
+	return value
+}
 
 // siteFor builds the hook-consultation site for an MCP binding.
 func siteFor(args *openbindings.BindingInvocationArgs, target string) openbindings.InvokeSite {

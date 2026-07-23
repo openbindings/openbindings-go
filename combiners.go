@@ -116,7 +116,8 @@ func (c *combinedSynthesizer) BindingSpecs() []BindingSpecInfo {
 
 func (c *combinedSynthesizer) SynthesizeInterface(ctx context.Context, in *SynthesizeInput) (*Interface, error) {
 	if len(in.Sources) == 0 {
-		return nil, ErrNoSources
+		skeleton, err := SynthesisSkeleton(in)
+		return &skeleton, err
 	}
 	cr := c.bySpec[in.Sources[0].BindingSpec]
 	if cr == nil {

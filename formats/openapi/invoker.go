@@ -11,7 +11,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 
@@ -25,11 +28,6 @@ const BindingSpec = "openbindings.openapi@1"
 // DefaultSourceName is the default source key used when registering an OpenAPI source in an OBI.
 const DefaultSourceName = "openapi"
 
-// maxRedirects bounds the redirect chain a single HTTP request may follow.
-// Prevents redirect loops without imposing any total request timeout
-// (which is the caller's responsibility via context).
-const maxRedirects = 10
-
 // newDefaultHTTPClient constructs an HTTP client with the invoker's default
 // redirect policy and no overall timeout (the caller controls cancellation
 // via context). Each Invoker gets its own client so multiple Invokers can
@@ -37,11 +35,11 @@ const maxRedirects = 10
 // reaching into package-level globals.
 func newDefaultHTTPClient() *http.Client {
 	return &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxRedirects {
-				return fmt.Errorf("stopped after %d redirects", maxRedirects)
-			}
-			return nil
+		// Redirects may rewrite an artifact-declared method or discard its
+		// encoded body. Revision 1 defines no semantics-preserving follow
+		// profile, so the conforming default observes the redirect response.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
 	}
 }
@@ -114,7 +112,7 @@ func (e *Invoker) cachedLoadDocument(location string, content json.RawMessage) (
 	return doc, nil
 }
 
-// Formats returns the binding format tokens this invoker supports.
+// BindingSpecs returns the binding-spec identifiers this invoker supports.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"}}
 }
@@ -224,7 +222,7 @@ func NewSynthesizer() *Synthesizer {
 	return &Synthesizer{}
 }
 
-// Formats returns the format tokens this synthesizer supports.
+// BindingSpecs returns the binding-spec identifiers this synthesizer supports.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"}}
 }
@@ -232,20 +230,38 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
-		return nil, openbindings.ErrNoSources
+		skeleton, err := openbindings.SynthesisSkeleton(in)
+		return &skeleton, err
 	}
 	if len(in.Sources) > 1 {
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	// Authoring convenience: a bare filesystem path loads as its file://
-	// spelling (the strict loader refuses bare paths, OAPI-D-02); the
-	// original spelling still rides emission below.
+	if src.BindingSpec != BindingSpec {
+		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	}
+	if src.OutputLocation != "" {
+		if err := validateDocumentAddress(src.OutputLocation); err != nil {
+			return nil, fmt.Errorf("outputLocation: %w", err)
+		}
+	}
+	// Authoring convenience: a bare filesystem path loads and is emitted as
+	// its absolute file:// spelling. Emitting the original relative spelling
+	// would create a source this binding implementation is guaranteed to
+	// refuse under OAPI-D-02.
 	loadLocation, err := absolutizeArtifactLocation(src.Location)
 	if err != nil {
 		return nil, err
 	}
-	doc, err := loadDocument(loadLocation, src.Content)
+	artifactContent := src.Content
+	if src.Embed && artifactContent == nil {
+		data, embedErr := readAuthoringArtifact(ctx, loadLocation)
+		if embedErr != nil {
+			return nil, fmt.Errorf("embed OpenAPI source: %w", embedErr)
+		}
+		artifactContent = openbindings.TextContent(string(data))
+	}
+	doc, err := loadDocument(loadLocation, artifactContent)
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
@@ -254,30 +270,50 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 			in.OnWarning(w)
 		}
 	}
-	iface := convertDocToInterface(doc, src.Location, warn)
-	// Content-fed synthesis: the emitted source must stay invocable. A
-	// source needs location or content; with no location, dropping the
-	// provided content would emit neither.
-	if src.Location == "" && src.Content != nil {
+	iface, err := convertDocToInterface(doc, loadLocation, warn)
+	if err != nil {
+		return nil, err
+	}
+	// Content is authoritative and remains byte-for-byte in the synthesized
+	// source. A co-present location is its base/provenance, not permission to
+	// replace the embedded artifact with a later fetch.
+	if artifactContent != nil {
 		if entry, ok := iface.Sources[DefaultSourceName]; ok {
-			data, cerr := openbindings.ContentToBytes(src.Content)
-			if cerr != nil {
-				return nil, fmt.Errorf("embed source content: %w", cerr)
-			}
-			entry.Content = openbindings.TextContent(string(data))
+			entry.Content = append(json.RawMessage(nil), artifactContent...)
 			iface.Sources[DefaultSourceName] = entry
 		}
 	}
-	if in.Name != "" {
-		iface.Name = in.Name
-	}
-	if in.Version != "" {
-		iface.Version = in.Version
-	}
-	if in.Description != "" {
-		iface.Description = in.Description
+	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
+		return nil, err
 	}
 	return &iface, nil
+}
+
+func readAuthoringArtifact(ctx context.Context, location string) ([]byte, error) {
+	u, err := url.Parse(location)
+	if err != nil {
+		return nil, err
+	}
+	switch u.Scheme {
+	case "file":
+		return os.ReadFile(u.Path)
+	case "http", "https":
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+		return io.ReadAll(resp.Body)
+	default:
+		return nil, fmt.Errorf("location scheme %q cannot be embedded", u.Scheme)
+	}
 }
 
 // BuiltinHooks exposes the openapi builtins to the consultation seam's

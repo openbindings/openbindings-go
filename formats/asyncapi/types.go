@@ -62,9 +62,10 @@ type channelBindings struct {
 // (ASYNC-P-02: values supplied like address parameters, any unsatisfied
 // required declaration a pre-dispatch refusal).
 type wsChannelBinding struct {
-	Method  string         `json:"method,omitempty" yaml:"method,omitempty"`
-	Query   map[string]any `json:"query,omitempty" yaml:"query,omitempty"`
-	Headers map[string]any `json:"headers,omitempty" yaml:"headers,omitempty"`
+	Method         string         `json:"method,omitempty" yaml:"method,omitempty"`
+	Query          map[string]any `json:"query,omitempty" yaml:"query,omitempty"`
+	Headers        map[string]any `json:"headers,omitempty" yaml:"headers,omitempty"`
+	BindingVersion string         `json:"bindingVersion,omitempty" yaml:"bindingVersion,omitempty"`
 }
 
 type asyncOperation struct {
@@ -102,7 +103,9 @@ type operationBindings struct {
 // selects the request method (§8 — authoritative where it speaks; where
 // silent, POST for a publish, GET for an SSE subscription).
 type httpOperationBinding struct {
-	Method string `json:"method,omitempty" yaml:"method,omitempty"`
+	Method         string         `json:"method,omitempty" yaml:"method,omitempty"`
+	Query          map[string]any `json:"query,omitempty" yaml:"query,omitempty"`
+	BindingVersion string         `json:"bindingVersion,omitempty" yaml:"bindingVersion,omitempty"`
 }
 
 type operationReply struct {
@@ -111,13 +114,24 @@ type operationReply struct {
 }
 
 type message struct {
-	Name        string         `json:"name,omitempty" yaml:"name,omitempty"`
-	Title       string         `json:"title,omitempty" yaml:"title,omitempty"`
-	Summary     string         `json:"summary,omitempty" yaml:"summary,omitempty"`
-	Description string         `json:"description,omitempty" yaml:"description,omitempty"`
-	ContentType string         `json:"contentType,omitempty" yaml:"contentType,omitempty"`
-	Payload     map[string]any `json:"payload,omitempty" yaml:"payload,omitempty"`
-	Ref         string         `json:"$ref,omitempty" yaml:"$ref,omitempty"`
+	Name        string           `json:"name,omitempty" yaml:"name,omitempty"`
+	Title       string           `json:"title,omitempty" yaml:"title,omitempty"`
+	Summary     string           `json:"summary,omitempty" yaml:"summary,omitempty"`
+	Description string           `json:"description,omitempty" yaml:"description,omitempty"`
+	ContentType string           `json:"contentType,omitempty" yaml:"contentType,omitempty"`
+	Payload     map[string]any   `json:"payload,omitempty" yaml:"payload,omitempty"`
+	Headers     map[string]any   `json:"headers,omitempty" yaml:"headers,omitempty"`
+	Bindings    *messageBindings `json:"bindings,omitempty" yaml:"bindings,omitempty"`
+	Ref         string           `json:"$ref,omitempty" yaml:"$ref,omitempty"`
+}
+
+type messageBindings struct {
+	HTTP *httpMessageBinding `json:"http,omitempty" yaml:"http,omitempty"`
+}
+
+type httpMessageBinding struct {
+	StatusCode     int    `json:"statusCode,omitempty" yaml:"statusCode,omitempty"`
+	BindingVersion string `json:"bindingVersion,omitempty" yaml:"bindingVersion,omitempty"`
 }
 
 type channelRef struct {
@@ -133,9 +147,11 @@ type serverRef struct {
 }
 
 type parameter struct {
-	Description string   `json:"description,omitempty" yaml:"description,omitempty"`
-	Default     string   `json:"default,omitempty" yaml:"default,omitempty"`
-	Enum        []string `json:"enum,omitempty" yaml:"enum,omitempty"`
+	Description string         `json:"description,omitempty" yaml:"description,omitempty"`
+	Default     string         `json:"default,omitempty" yaml:"default,omitempty"`
+	Enum        []string       `json:"enum,omitempty" yaml:"enum,omitempty"`
+	Location    string         `json:"location,omitempty" yaml:"location,omitempty"`
+	Schema      map[string]any `json:"schema,omitempty" yaml:"schema,omitempty"`
 }
 
 type tag struct {

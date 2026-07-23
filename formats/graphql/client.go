@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/coder/websocket"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // introspectionSchema holds a parsed GraphQL introspection result.

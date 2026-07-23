@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,7 +31,8 @@ import (
 
 // bufconnLocation is the conformant dial address (GRPC-D-02: explicit
 // port, plaintext determination) the bufconn tests use; the pre-stored
-// connection is keyed to it, so no real dial happens.
+// connection is keyed to it, so no real dial happens. Tests elect
+// plaintext through configuration because the bare address itself does not.
 const bufconnLocation = "bufconn:50051"
 
 // testServer records the metadata it received and can demand authentication.
@@ -199,6 +201,27 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 		},
 		Streams: []grpc.StreamDesc{
 			{
+				StreamName:    "UploadItems",
+				ClientStreams: true,
+				Handler: func(srv any, stream grpc.ServerStream) error {
+					ts.capture(stream.Context())
+					count := 0
+					for {
+						req := dynamicpb.NewMessage(reqDesc)
+						if err := stream.RecvMsg(req); err != nil {
+							if err != io.EOF {
+								return err
+							}
+							break
+						}
+						count++
+					}
+					resp := dynamicpb.NewMessage(respDesc)
+					resp.Set(respDesc.Fields().ByName("name"), protoreflect.ValueOfString(fmt.Sprintf("uploaded-%d", count)))
+					return stream.SendMsg(resp)
+				},
+			},
+			{
 				StreamName:    "ListItems",
 				ServerStreams: true,
 				Handler: func(srv any, stream grpc.ServerStream) error {
@@ -252,14 +275,29 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 				},
 			},
 			{
-				// Chat is bidirectional; the invoker refuses it pre-dispatch
-				// (GRPC-P-04 declared limitation), so this handler is never
-				// reached.
+				// Chat echoes each request immediately, proving the response
+				// direction can flow while caller input remains open.
 				StreamName:    "Chat",
 				ClientStreams: true,
 				ServerStreams: true,
 				Handler: func(srv any, stream grpc.ServerStream) error {
-					return status.Error(codes.Unimplemented, "unreached")
+					ts.capture(stream.Context())
+					for {
+						req := dynamicpb.NewMessage(reqDesc)
+						if err := stream.RecvMsg(req); err != nil {
+							if err == io.EOF {
+								return nil
+							}
+							return err
+						}
+						id := req.Get(reqDesc.Fields().ByName("id")).String()
+						resp := dynamicpb.NewMessage(respDesc)
+						resp.Set(respDesc.Fields().ByName("id"), protoreflect.ValueOfString(id))
+						resp.Set(respDesc.Fields().ByName("name"), protoreflect.ValueOfString("chat-"+id))
+						if err := stream.SendMsg(resp); err != nil {
+							return err
+						}
+					}
 				},
 			},
 		},
@@ -293,14 +331,13 @@ func dialTestServer(t *testing.T, dialer func(context.Context, string) (net.Conn
 }
 
 // newTestInvoker returns an invoker whose bufconnLocation address is wired
-// to the test server's in-memory listener. The cache key mirrors what run()
-// computes for that location: plaintext is the §4 address-form
-// determination for a non-443 port.
+// to the test server's in-memory listener. The cache key mirrors the
+// explicit configuration.transport plaintext election used by bufconnArgs.
 func newTestInvoker(t *testing.T, dialer func(context.Context, string) (net.Conn, error)) *Invoker {
 	t.Helper()
 	conn := dialTestServer(t, dialer)
 	invoker := NewInvoker()
-	invoker.conns.Store(connKey(bufconnLocation, "plaintext"), conn)
+	invoker.conns.Store(connKey(bufconnLocation, "cfg:plaintext"), conn)
 	return invoker
 }
 
@@ -335,10 +372,26 @@ func drainInvocation(t *testing.T, inv openbindings.Invocation[any, any]) ([]any
 }
 
 func bufconnArgs(ref string, bindCtx map[string]any) *openbindings.BindingInvocationArgs {
+	if bindCtx == nil {
+		bindCtx = map[string]any{}
+	}
+	copied := make(map[string]any, len(bindCtx)+1)
+	for key, value := range bindCtx {
+		copied[key] = value
+	}
+	configuration, _ := copied["configuration"].(map[string]any)
+	configurationCopy := make(map[string]any, len(configuration)+1)
+	for key, value := range configuration {
+		configurationCopy[key] = value
+	}
+	if _, exists := configurationCopy["transport"]; !exists {
+		configurationCopy["transport"] = "plaintext"
+	}
+	copied["configuration"] = configurationCopy
 	return &openbindings.BindingInvocationArgs{
 		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: bufconnLocation},
 		Ref:     ref,
-		Context: bindCtx,
+		Context: copied,
 	}
 }
 
@@ -382,12 +435,12 @@ func TestIntegration_SynthesizeInterface_FromReflection(t *testing.T) {
 	if iface.Name != "ItemService" {
 		t.Errorf("name = %q, want %q", iface.Name, "ItemService")
 	}
-	// UploadItems (client-streaming) and Chat (bidi) must be skipped by the
-	// synthesizer; the five unary/server-streaming methods remain.
-	if len(iface.Operations) != 5 {
-		t.Fatalf("expected 5 operations, got %d", len(iface.Operations))
+	// Every protobuf interaction kind remains bindable; synthesis does not
+	// erase client-streaming or bidirectional declarations.
+	if len(iface.Operations) != 7 {
+		t.Fatalf("expected 7 operations, got %d", len(iface.Operations))
 	}
-	for _, op := range []string{"GetItem", "EchoDuration", "ListItems", "WatchItems", "FailItems"} {
+	for _, op := range []string{"GetItem", "EchoDuration", "ListItems", "WatchItems", "FailItems", "UploadItems", "Chat"} {
 		if _, ok := iface.Operations[op]; !ok {
 			t.Errorf("expected operation %s", op)
 		}
@@ -438,7 +491,7 @@ service ItemService {
 		t.Error("expected operation ListItems")
 	}
 
-	// Source entry references the gRPC format token and the supplied location.
+	// Source entry references the gRPC binding spec and the supplied location.
 	src, ok := iface.Sources[DefaultSourceName]
 	if !ok {
 		t.Fatalf("expected source %q", DefaultSourceName)
@@ -464,13 +517,16 @@ service ItemService {
 	}
 }
 
-// TestIntegration_SynthesizeInterface_PublicAPI_NoSources verifies the public API
-// rejects empty source lists.
+// TestIntegration_SynthesizeInterface_PublicAPI_NoSources verifies the
+// interface-synthesizer contract's deterministic source-less scaffold.
 func TestIntegration_SynthesizeInterface_PublicAPI_NoSources(t *testing.T) {
 	synthesizer := NewSynthesizer()
-	_, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{})
-	if err == nil {
-		t.Fatal("expected error for empty sources")
+	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Name: "scaffold"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if iface.OpenBindings != openbindings.MaxTestedVersion || iface.Name != "scaffold" || len(iface.Operations) != 0 || len(iface.Sources) != 0 || len(iface.Bindings) != 0 {
+		t.Fatalf("unexpected source-less scaffold: %+v", iface)
 	}
 }
 
@@ -481,7 +537,7 @@ func TestIntegration_InvokeUnary(t *testing.T) {
 
 	ctx := testCtx(t)
 	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/GetItem",
-		map[string]any{"bearerToken": "tok_secret"}))
+		map[string]any{"headers": map[string]any{"authorization": "Bearer tok_secret"}}))
 	if err := inv.Write(ctx, map[string]any{"id": "42"}); err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +598,7 @@ func TestIntegration_InvokeServerStreaming(t *testing.T) {
 	// ListItemsRequest has no fields: the binding closes input on entry and
 	// dispatches the empty request without a Write.
 	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/ListItems",
-		map[string]any{"bearerToken": "stream_tok"}))
+		map[string]any{"headers": map[string]any{"authorization": "Bearer stream_tok"}}))
 
 	vals, terr := drainInvocation(t, inv)
 	if terr != nil {
@@ -810,17 +866,28 @@ func TestIntegration_RefNotFound_Method(t *testing.T) {
 	}
 }
 
-func TestIntegration_ClientStreamingUnsupported(t *testing.T) {
+func TestIntegration_ClientStreaming(t *testing.T) {
 	dialer, _ := setupTestServer(t)
 	invoker := newTestInvoker(t, dialer)
 	defer invoker.Close()
 
-	// The error fires pre-dispatch, before any input is required.
-	inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("testpkg.ItemService/UploadItems", nil))
-
-	_, terr := drainInvocation(t, inv)
-	if terr == nil || terr.Code != openbindings.ErrCodeExecutionFailed {
-		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", terr)
+	ctx := testCtx(t)
+	inv := invoker.InvokeBinding(ctx, bufconnArgs("testpkg.ItemService/UploadItems", nil))
+	if err := inv.Write(ctx, map[string]any{"id": "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := inv.Write(ctx, map[string]any{"id": "2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := inv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	value, err := openbindings.Single(ctx, inv.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.(map[string]any)["name"] != "uploaded-2" {
+		t.Fatalf("response = %v", value)
 	}
 }
 
@@ -880,10 +947,8 @@ func TestIntegration_NoInputConvention(t *testing.T) {
 // options through the PRODUCTION dial path (no pre-stored connection):
 // WithDialOptions carries the bufconn context dialer (which ignores the
 // resolved address and connects in-memory), and
-// WithTransportCredentials(insecure) must OVERRIDE the §4 address-form
-// determination — the address ends in :443, which the address-form rule
-// would wrap in TLS and fail against the plaintext test server
-// (GRPC-P-02: an override is an override).
+// WithTransportCredentials(insecure) supplies the otherwise-missing
+// transport determination for a bare address (GRPC-P-02).
 func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 	dialer, ts := setupTestServer(t)
 	_ = ts
@@ -910,10 +975,8 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 		t.Fatal("no output")
 	}
 
-	// Negative control: WITHOUT caller credentials, the :443 port makes
-	// the address-form rule elect TLS against the plaintext server and the
-	// call fails — proving the option genuinely overrode the determination
-	// above.
+	// Negative control: without caller credentials, a bare target has no
+	// transport determination at any port and refuses before dialing.
 	autoTLS := NewInvoker(WithDialOptions(grpc.WithContextDialer(dialer)))
 	t.Cleanup(func() { _ = autoTLS.Close() })
 	ctl, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -923,7 +986,7 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 	_ = inv2.Write(ctl, map[string]any{"id": "i1"})
-	if _, err := openbindings.Single(ctl, inv2.Outputs()); err == nil {
-		t.Fatal("TLS determination against the plaintext server should fail; the negative control is vacuous")
+	if _, err := openbindings.Single(ctl, inv2.Outputs()); err == nil || !strings.Contains(err.Error(), "configuration.transport") {
+		t.Fatalf("bare target must require an explicit transport election, got %v", err)
 	}
 }

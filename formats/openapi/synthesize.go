@@ -14,7 +14,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindings.SynthesizerWarning)) openbindings.Interface {
+func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindings.SynthesizerWarning)) (openbindings.Interface, error) {
 	// The schema-dialect translation keys off the artifact's own declared
 	// version (3.0 vs 3.1); the identifier stays exact and version-free.
 	formatVersion := majorMinor(doc.OpenAPI)
@@ -42,7 +42,7 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 	}
 
 	if doc.Paths == nil {
-		return iface
+		return iface, nil
 	}
 
 	// Build a registry of `$ref → resolved schema` from
@@ -66,7 +66,6 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 			continue
 		}
 
-		pathParams := pathItem.Parameters
 		for _, method := range httpMethods {
 			op := pathItem.GetOperation(strings.ToUpper(method))
 			if op == nil {
@@ -75,6 +74,43 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 
 			opKey := deriveOperationKey(op, path, method, usedKeys)
 			usedKeys[opKey] = true
+
+			params := effectiveParameters(pathItem, op)
+			if field := unflattenableParam(params); field != "" {
+				return iface, unrealizableOperation(opKey, fmt.Sprintf("parameter %q has no unique revision-1 flattened identity", field))
+			}
+
+			var requestPlans []*bodyPlan
+			if op.RequestBody != nil && op.RequestBody.Value != nil {
+				plans, planErr := planRequestBodies(op)
+				if planErr == nil {
+					for _, plan := range plans {
+						if !candidateCollides(params, plan) {
+							requestPlans = append(requestPlans, plan)
+						}
+					}
+				}
+				requiredBody := op.RequestBody.Value.Required
+				if requiredBody && (planErr != nil || len(requestPlans) == 0) {
+					reason := "no artifact-declared request media candidate can realize its required flattened input"
+					if planErr != nil {
+						reason = planErr.Error()
+					}
+					return iface, unrealizableOperation(opKey, reason)
+				}
+				if len(requestPlans) == 0 && warn != nil {
+					code := "openapi.unresolvable_request_body"
+					var dme *degenerateMediaError
+					if errors.As(planErr, &dme) {
+						code = "openapi.media_schema_mismatch"
+					}
+					reason := "no artifact-declared request media candidate can realize its flattened input"
+					if planErr != nil {
+						reason = planErr.Error()
+					}
+					warn(openbindings.SynthesizerWarning{Code: code, Message: reason + "; optional body omitted from the synthesized contract", Path: fmt.Sprintf("operations.%s.input", opKey)})
+				}
+			}
 
 			obiOp := openbindings.Operation{
 				Description: operationDescription(op),
@@ -85,7 +121,7 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 				obiOp.Tags = op.Tags
 			}
 
-			inputSchema := buildInputSchema(op, pathParams, refRegistry, opKey, warn)
+			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, refRegistry)
 			if inputSchema != nil {
 				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry)
 				obiOp.Input = translateSchemaDialect(inlined, formatVersion)
@@ -109,7 +145,11 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 		}
 	}
 
-	return iface
+	return iface, nil
+}
+
+func unrealizableOperation(operationKey, reason string) error {
+	return fmt.Errorf("cannot synthesize OpenAPI operation %q: %s; synthesis would return a statically unbindable partial interface", operationKey, reason)
 }
 
 // httpMethods defines the iteration order for path item methods.
@@ -148,9 +188,8 @@ func loadDocument(location string, content json.RawMessage) (*openapi3.T, error)
 // convenience at the SYNTHESIS entries only, the usage family's posture
 // (one loader for every lane, no bare-path lane). The invoke/binding lanes
 // never absolutize: a document's own bare-path location is a relative
-// reference in form and is refused (OAPI-D-02). Emission is untouched —
-// what a synthesized document may carry as its location is the
-// embed-default ruling's territory, not this helper's.
+// reference in form and is refused (OAPI-D-02). Synthesis emits this
+// normalized address so the returned source remains invocable.
 func absolutizeArtifactLocation(location string) (string, error) {
 	if location == "" || strings.Contains(location, "://") {
 		return location, nil
@@ -301,22 +340,56 @@ func buildJSONPointerRef(path, method string) string {
 	return "#/paths/" + escaped + "/" + strings.ToLower(method)
 }
 
-func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, refRegistry map[string]any, opKey string, warn func(openbindings.SynthesizerWarning)) map[string]any {
+func buildInputSchemaForPlans(op *openapi3.Operation, allParams openapi3.Parameters, requestPlans []*bodyPlan, refRegistry map[string]any) map[string]any {
+	if op.RequestBody == nil || op.RequestBody.Value == nil {
+		return buildInputSchema(op, allParams, nil, refRegistry)
+	}
+	var variants []map[string]any
+	if !op.RequestBody.Value.Required {
+		if parameterOnly := buildInputSchema(op, allParams, nil, refRegistry); parameterOnly != nil {
+			variants = append(variants, parameterOnly)
+		}
+	}
+	for _, plan := range requestPlans {
+		if schema := buildInputSchema(op, allParams, plan, refRegistry); schema != nil {
+			variants = append(variants, schema)
+		}
+	}
+	seen := map[string]bool{}
+	unique := make([]map[string]any, 0, len(variants))
+	for _, schema := range variants {
+		encoded, _ := json.Marshal(schema)
+		key := string(encoded)
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, schema)
+		}
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	if len(unique) == 1 {
+		return unique[0]
+	}
+	anyOf := make([]any, len(unique))
+	for i, schema := range unique {
+		anyOf[i] = schema
+	}
+	return map[string]any{"anyOf": anyOf}
+}
+
+func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, requestPlan *bodyPlan, refRegistry map[string]any) map[string]any {
 	properties := map[string]any{}
 	var required []string
-	hasOpenBody := false
-
-	allParams := mergeParameters(pathParams, op.Parameters)
+	// Only JSON-family object candidates can carry undeclared fields. The
+	// parameter-only, multipart/form, and scalar-body surfaces stay closed.
+	hasOpenBody := requestPlan != nil && requestPlan.family == familyJSON && !requestPlan.synthetic
 
 	for _, paramRef := range allParams {
 		if paramRef == nil || paramRef.Value == nil {
 			continue
 		}
 		param := paramRef.Value
-
-		if param.In == "cookie" {
-			continue
-		}
 
 		prop := paramToSchema(param)
 		if prop != nil {
@@ -328,27 +401,12 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 		}
 	}
 
-	if op.RequestBody != nil && op.RequestBody.Value != nil {
+	if op.RequestBody != nil && op.RequestBody.Value != nil && requestPlan != nil {
 		rb := op.RequestBody.Value
-		// §9.2's degenerate media/schema combination (OAPI-P-04), surfaced
-		// at synthesis time: when the operation's declared request media
-		// cannot carry the contract this schema publishes, a conformant
-		// invoker refuses the operation before dispatch — warn here so
-		// authors hear it when the contract is produced, not at first
-		// dispatch. The selection is not re-derived: planRequestBody
-		// (media.go) is the one deciding site, and its typed refusal is the
-		// warning's trigger.
-		if warn != nil {
-			var dme *degenerateMediaError
-			if _, err := planRequestBody(op); errors.As(err, &dme) {
-				warn(openbindings.SynthesizerWarning{
-					Code:    "openapi.media_schema_mismatch",
-					Message: dme.msg + "; a conformant invoker refuses this operation before dispatch",
-					Path:    fmt.Sprintf("operations.%s.input", opKey),
-				})
-			}
+		var bodySchema map[string]any
+		if requestPlan.media != nil && requestPlan.media.Schema != nil {
+			bodySchema = schemaRefToMap(requestPlan.media.Schema)
 		}
-		bodySchema := requestBodyToSchema(rb)
 		if bodySchema != nil {
 			// Resolve a $ref body BEFORE the flatten decision: bodies
 			// declared by reference are the production norm, and wrapping
@@ -373,18 +431,7 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 				}
 			case hasProps:
 				for k, v := range bodyProps {
-					// Field-collision rule: a name declared as a parameter
-					// AND a body property flattens to ONE input field (the
-					// body's schema wins deterministically); at invocation
-					// the one value is delivered to every declared wire
-					// location. Warn so the merge is never silent.
-					if _, collides := properties[k]; collides && warn != nil {
-						warn(openbindings.SynthesizerWarning{
-							Code:    "openapi.param_body_collision",
-							Message: fmt.Sprintf("field %q is declared as a parameter and a body property; the flattened input carries one field (body schema shown) whose value is delivered to both wire locations at invocation", k),
-							Path:    fmt.Sprintf("operations.%s.input.properties.%s", opKey, k),
-						})
-					}
+					// Colliding candidates were removed before this plan was chosen.
 					properties[k] = v
 				}
 				required = append(required, stringSlice(bodySchema["required"])...)
@@ -396,7 +443,7 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 				// the synthetic `body` wrap is reserved for NON-object
 				// body schemas, and wrapping here would describe a field
 				// the conformant invoker refuses as unmatched.
-				hasOpenBody = true
+				// hasOpenBody was determined by the selected candidate's family.
 			}
 		}
 	}
@@ -405,6 +452,9 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 		if hasOpenBody {
 			return map[string]any{"type": "object"}
 		}
+		if requestPlan != nil && op.RequestBody != nil && op.RequestBody.Value != nil && op.RequestBody.Value.Required {
+			return map[string]any{"type": "object", "additionalProperties": false}
+		}
 		return nil
 	}
 
@@ -412,9 +462,16 @@ func buildInputSchema(op *openapi3.Operation, pathParams openapi3.Parameters, re
 		"type":       "object",
 		"properties": properties,
 	}
+	if !hasOpenBody {
+		schema["additionalProperties"] = false
+	}
 	if len(required) > 0 {
 		sort.Strings(required)
-		schema["required"] = required
+		requiredValues := make([]any, len(required))
+		for i, name := range required {
+			requiredValues[i] = name
+		}
+		schema["required"] = requiredValues
 	}
 	return schema
 }
@@ -457,6 +514,20 @@ func paramToSchema(param *openapi3.Parameter) map[string]any {
 		}
 		return schema
 	}
+	if len(param.Content) > 0 {
+		keys := make([]string, 0, len(param.Content))
+		for key := range param.Content {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if media := param.Content[keys[0]]; media != nil && media.Schema != nil {
+			schema := schemaRefToMap(media.Schema)
+			if param.Description != "" {
+				schema["description"] = param.Description
+			}
+			return schema
+		}
+	}
 
 	prop := map[string]any{"type": "string"}
 	if param.Description != "" {
@@ -465,69 +536,77 @@ func paramToSchema(param *openapi3.Parameter) map[string]any {
 	return prop
 }
 
-func requestBodyToSchema(rb *openapi3.RequestBody) map[string]any {
-	if rb.Content == nil {
-		return nil
-	}
-
-	mt := preferJSONMediaType(rb.Content)
-	if mt == nil || mt.Schema == nil {
-		return nil
-	}
-
-	return schemaRefToMap(mt.Schema)
-}
-
 func buildOutputSchema(op *openapi3.Operation) map[string]any {
 	if op.Responses == nil {
 		return nil
 	}
 
-	for _, code := range []string{"200", "201", "202"} {
-		resp := op.Responses.Value(code)
-		if resp == nil || resp.Value == nil {
-			continue
+	responses := op.Responses.Map()
+	keys := make([]string, 0, len(responses))
+	hasRange := false
+	exactSuccesses := 0
+	for key := range responses {
+		keys = append(keys, key)
+		if key == "2XX" {
+			hasRange = true
 		}
-		return responseToSchema(resp.Value)
-	}
-
-	return nil
-}
-
-func responseToSchema(resp *openapi3.Response) map[string]any {
-	if resp.Content == nil {
-		return nil
-	}
-
-	mt := preferJSONMediaType(resp.Content)
-	if mt == nil || mt.Schema == nil {
-		return nil
-	}
-
-	return schemaRefToMap(mt.Schema)
-}
-
-func preferJSONMediaType(content openapi3.Content) *openapi3.MediaType {
-	if mt := content.Get("application/json"); mt != nil {
-		return mt
-	}
-
-	keys := make([]string, 0, len(content))
-	for k := range content {
-		keys = append(keys, k)
+		if len(key) == 3 && key[0] == '2' && key[1] >= '0' && key[1] <= '9' && key[2] >= '0' && key[2] <= '9' {
+			exactSuccesses++
+		}
 	}
 	sort.Strings(keys)
-
-	for _, k := range keys {
-		if strings.Contains(k, "json") {
-			return content[k]
+	var schemas []map[string]any
+	seen := map[string]bool{}
+	for _, key := range keys {
+		isExact := len(key) == 3 && key[0] == '2' && key[1] >= '0' && key[1] <= '9' && key[2] >= '0' && key[2] <= '9'
+		if !isExact && key != "2XX" && !(key == "default" && !hasRange && exactSuccesses < 100) {
+			continue
+		}
+		ref := responses[key]
+		if ref == nil || ref.Value == nil || len(ref.Value.Content) == 0 {
+			continue // this outcome emits no value
+		}
+		mediaKeys := make([]string, 0, len(ref.Value.Content))
+		for mediaKey := range ref.Value.Content {
+			mediaKeys = append(mediaKeys, mediaKey)
+		}
+		sort.Strings(mediaKeys)
+		for _, mediaKey := range mediaKeys {
+			parsed, err := parseMediaType(mediaKey)
+			if err != nil {
+				continue
+			}
+			var schema map[string]any
+			if isJSONMediaType(parsed.base) {
+				media := ref.Value.Content[mediaKey]
+				if media == nil || media.Schema == nil {
+					return nil // an unconstrained JSON success can emit any JSON value
+				}
+				schema = schemaRefToMap(media.Schema)
+			} else {
+				// The revision-1 builtin non-JSON lane emits text, including
+				// one text value per SSE event.
+				schema = map[string]any{"type": "string"}
+			}
+			encoded, _ := json.Marshal(schema)
+			identity := string(encoded)
+			if !seen[identity] {
+				seen[identity] = true
+				schemas = append(schemas, schema)
+			}
 		}
 	}
-
-	if len(keys) > 0 {
-		return content[keys[0]]
+	if len(schemas) == 0 {
+		return nil
 	}
-	return nil
+	if len(schemas) == 1 {
+		return schemas[0]
+	}
+	anyOf := make([]any, len(schemas))
+	for i, schema := range schemas {
+		anyOf[i] = schema
+	}
+	return map[string]any{"anyOf": anyOf}
 }
 
 // stringSlice extracts a string list from a schema field that may be

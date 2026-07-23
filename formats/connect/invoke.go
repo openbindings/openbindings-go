@@ -196,7 +196,7 @@ func buildDescriptorlessBody(input any, gotInput bool) ([]byte, *openbindings.In
 // drifted-but-compatible server keeps answering.
 func decodeSchemaModeOutput(mi *methodInfo, payload []byte) (any, *openbindings.InvocationError) {
 	msg := dynamicpb.NewMessage(mi.method.Output())
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(payload, msg); err != nil {
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(payload, msg); err != nil {
 		return nil, &openbindings.InvocationError{
 			Code:    openbindings.ErrCodeResponseError,
 			Message: fmt.Sprintf("response is not the canonical JSON form of %s: %v (openbindings.connect@1 CONN-P-02)", mi.method.Output().FullName(), err),
@@ -403,17 +403,20 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 		output = out
 	} else {
 		// Descriptorless mode (CONN-P-03): the output value is the response
-		// body parsed as JSON, verbatim; an empty response body yields
-		// null; a body that fails to parse as JSON is a loud protocol-error
+		// body parsed as JSON, verbatim; an empty response cannot represent a
+		// JSON value and is a protocol error rather than an invented null; a
+		// body that fails to parse as JSON is a loud protocol-error
 		// failure outcome, never a string.
-		if len(respBody) > 0 {
-			if err := json.Unmarshal(respBody, &output); err != nil {
-				inv.FireError(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeResponseError,
-					Message: fmt.Sprintf("connect unary 200 response body does not parse as JSON: %v (openbindings.connect@1 §9.3)", err),
-				})
-				return
-			}
+		if len(respBody) == 0 {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: "successful descriptorless Connect response is empty and carries no JSON value"})
+			return
+		}
+		if err := json.Unmarshal(respBody, &output); err != nil {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeResponseError,
+				Message: fmt.Sprintf("connect unary 200 response body does not parse as JSON: %v (openbindings.connect@1 §9.3)", err),
+			})
+			return
 		}
 	}
 
@@ -446,22 +449,42 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 func buildHTTPHeaders(bindCtx map[string]any) (map[string]string, error) {
 	headers := map[string]string{}
 
-	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
+	token := openbindings.ContextBearerToken(bindCtx)
+	user, password, hasBasic := openbindings.ContextBasicAuth(bindCtx)
+	if token != "" && hasBasic {
+		return nil, fmt.Errorf("bearer and basic credentials both target Authorization")
+	}
+	if token != "" {
 		headers["Authorization"] = "Bearer " + token
-	} else if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
-		encoded := base64.StdEncoding.EncodeToString([]byte(u + ":" + p))
+	} else if hasBasic {
+		encoded := base64.StdEncoding.EncodeToString([]byte(user + ":" + password))
 		headers["Authorization"] = "Basic " + encoded
 	}
 
 	if apiKeyPresent(bindCtx) {
-		return nil, fmt.Errorf(
-			"an API key is present in context but openbindings.connect@1 defines no standard header for one (unlike the gRPC family's fixed authorization metadata key, §9.6): name the header the key rides via context.headers — an inexpressible credential is surfaced, never placed on Authorization and never silently skipped (openbindings.connect@1 §9.6 / CONN-P-07)")
+		return nil, &unplacedCredentialError{message: "an API key is present in context but openbindings.connect@1 defines no standard header for one (unlike the gRPC family's fixed authorization metadata key, §9.6): name the header the key rides via context.headers — an inexpressible credential is surfaced, never placed on Authorization and never silently skipped (openbindings.connect@1 §9.6 / CONN-P-07)"}
 	}
 
+	reserved := map[string]bool{"host": true, "content-length": true, "content-type": true}
+	seen := map[string]string{}
 	for k, v := range openbindings.ContextHeaders(bindCtx) {
+		lower := strings.ToLower(k)
+		if strings.HasPrefix(lower, "connect-") || reserved[lower] {
+			return nil, fmt.Errorf("metadata field %q is protocol-reserved or processor-owned", k)
+		}
+		if prior, ok := seen[lower]; ok {
+			return nil, fmt.Errorf("metadata fields %q and %q have the same case-insensitive destination", prior, k)
+		}
+		if lower == "authorization" && headers["Authorization"] != "" {
+			return nil, fmt.Errorf("configured Authorization header collides with structured authorization credential")
+		}
+		seen[lower] = k
 		headers[k] = v
 	}
 	if cookies := openbindings.ContextCookies(bindCtx); len(cookies) > 0 {
+		if _, ok := seen["cookie"]; ok {
+			return nil, fmt.Errorf("configured Cookie header collides with structured cookie credentials")
+		}
 		pairs := make([]string, 0, len(cookies))
 		for k, v := range cookies {
 			pairs = append(pairs, k+"="+v)
@@ -472,6 +495,10 @@ func buildHTTPHeaders(bindCtx map[string]any) (map[string]string, error) {
 
 	return headers, nil
 }
+
+type unplacedCredentialError struct{ message string }
+
+func (e *unplacedCredentialError) Error() string { return e.message }
 
 // apiKeyPresent reports whether the binding context carries a well-known API
 // key credential — the flat `apiKey` field or any non-empty scheme-scoped

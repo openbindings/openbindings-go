@@ -732,27 +732,30 @@ func TestRouteInput_UnknownFieldsRefusedWithoutBody(t *testing.T) {
 	}
 }
 
-// TestRouteInput_CollisionDeliversToBothLocations pins the field-collision
-// rule: a field declared as a parameter AND a body property carries ONE
-// value delivered to every declared wire location.
-func TestRouteInput_CollisionDeliversToBothLocations(t *testing.T) {
+// Candidate screening, not routeInput, refuses a body/parameter collision;
+// routing never duplicates one caller value into both independent locations.
+func TestRouteInput_CollisionIsScreenedWithoutDuplication(t *testing.T) {
 	params := openapi3.Parameters{
 		{Value: &openapi3.Parameter{Name: "id", In: "path", Required: true}},
 	}
 	input := map[string]any{"id": "u1", "name": "Ada"}
-	routed, err := routeInput(params, input, "/users/{id}", &bodyPlan{
+	plan := &bodyPlan{
 		declared: true,
 		family:   familyJSON,
 		props:    map[string]bool{"id": true, "name": true},
-	})
+	}
+	if !candidateCollides(params, plan) {
+		t.Fatal("the media candidate must be inadmissible before routing")
+	}
+	routed, err := routeInput(params, input, "/users/{id}", plan)
 	if err != nil {
 		t.Fatalf("routeInput: %v", err)
 	}
 	if routed.resolvedPath != "/users/u1" {
 		t.Fatalf("path = %q, want /users/u1", routed.resolvedPath)
 	}
-	if routed.bodyFields["id"] != "u1" {
-		t.Fatalf("body must keep the colliding field, got %v", routed.bodyFields)
+	if _, duplicated := routed.bodyFields["id"]; duplicated {
+		t.Fatalf("routing must never duplicate a parameter into the body, got %v", routed.bodyFields)
 	}
 	if routed.bodyFields["name"] != "Ada" {
 		t.Fatalf("body missing name: %v", routed.bodyFields)
@@ -787,8 +790,8 @@ func TestPlanRequestBody_MediaTypeParameters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planRequestBody: %v", err)
 	}
-	if plan.family != familyJSON || plan.mediaType != "application/json" {
-		t.Fatalf("selection must see through media-type parameters, got %+v", plan)
+	if plan.family != familyJSON || plan.mediaType != "application/json; charset=utf-8" {
+		t.Fatalf("selection must preserve media-type parameters, got %+v", plan)
 	}
 	if !plan.props["id"] || !plan.props["name"] {
 		t.Fatalf("body property names must survive parameterized content keys, got %v", plan.props)

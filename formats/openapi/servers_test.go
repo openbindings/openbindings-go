@@ -31,8 +31,8 @@ func TestEffectiveServers_Precedence(t *testing.T) {
 	if got, _ := resolveServer(doc, pathItem, &openapi3.Operation{}, nil, ""); got != "https://path.example.com" {
 		t.Errorf("path-item servers next, got %q", got)
 	}
-	if got, _ := resolveServer(doc, nil, &openapi3.Operation{}, nil, ""); got != "https://doc-a.example.com" {
-		t.Errorf("document servers next (first entry), got %q", got)
+	if got, err := resolveServer(doc, nil, &openapi3.Operation{}, nil, ""); err == nil || got != "" {
+		t.Errorf("multiple document servers require selection, got (%q, %v)", got, err)
 	}
 	// Implied "/" resolves against the artifact's base URI (the location).
 	if got, _ := resolveServer(&openapi3.T{}, nil, nil, nil, "https://host.example.com/openapi.json"); got != "https://host.example.com" {
@@ -103,11 +103,10 @@ func TestResolveServer_ConfigurationPoint(t *testing.T) {
 	if got, _ := resolveServer(doc, nil, nil, ctxWith(map[string]any{"variables": map[string]any{"env": "staging"}}), ""); got != "https://staging.example.com" {
 		t.Errorf("variables = %q", got)
 	}
-	// An out-of-enum value is NOT refused (§9.3, R1): the enum is the
-	// author's expectation, not a boundary; a full base-URL override bypasses
-	// the declaration anyway.
-	if got, err := resolveServer(doc, nil, nil, ctxWith(map[string]any{"variables": map[string]any{"env": "prod"}}), ""); err != nil || got != "https://prod.example.com" {
-		t.Errorf("out-of-enum value must substitute, got %q err %v", got, err)
+	// Variable substitutions honor the artifact's enum. A complete base URL
+	// remains the distinct target-override lane tested above.
+	if got, err := resolveServer(doc, nil, nil, ctxWith(map[string]any{"variables": map[string]any{"env": "prod"}}), ""); err == nil || got != "" {
+		t.Errorf("out-of-enum value must refuse, got %q err %v", got, err)
 	}
 	if _, err := resolveServer(doc, nil, nil, ctxWith(map[string]any{"variables": map[string]any{"nope": "x"}}), ""); err == nil {
 		t.Error("an undeclared variable name must refuse loudly")

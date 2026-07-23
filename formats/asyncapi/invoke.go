@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -132,6 +133,14 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		h.FireError(configOrSourceError(err, ""))
 		return
 	}
+	if err := validateCell(doc, ch, &asyncOp, target.Protocol, args.Context); err != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		return
+	}
+	if err := validateCredentialDestinations(doc, &asyncOp, target.SecurityServer, target.Protocol, args.Context); err != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+		return
+	}
 
 	// Context negotiation: challenge BEFORE any connection is opened.
 	if details := requiredContext(doc, &asyncOp, target.SecurityServer, target.ServerURL, args.Context); details != nil {
@@ -148,7 +157,27 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
 		return
 	}
-	address, err := resolveAddress(ch, channelName, addrCfg)
+	var prepared *preparedInput
+	if asyncOp.Action == "receive" {
+		if args.Binding != nil && args.InputSchema == nil {
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeMissingInput, Message: "publish invocation requires an input message"})
+			return
+		}
+		value, readErr := h.ReadInput(ctx)
+		if readErr == io.EOF {
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeMissingInput, Message: "publish invocation requires an input message"})
+			return
+		}
+		if readErr != nil {
+			return
+		}
+		prepared = &preparedInput{Value: value}
+	}
+	var outgoing any
+	if prepared != nil {
+		outgoing = prepared.Value
+	}
+	address, err := resolveAddress(ch, channelName, addrCfg, outgoing)
 	if err != nil {
 		h.FireError(configOrSourceError(err, target.ServerURL))
 		return
@@ -173,20 +202,25 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		// it speaks (§8): declared query and header values, supplied like
 		// address parameters, with unsatisfied required declarations a
 		// pre-dispatch refusal.
-		up, uerr := resolveWSUpgrade(ch, channelName, addrCfg.Parameters, openbindings.ContextHeaders(args.Context))
+		fields, ferr := protocolFieldValues(args.Context)
+		if ferr != nil {
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: ferr.Error()})
+			return
+		}
+		up, uerr := resolveWSUpgrade(ch, channelName, fields.WebSocketQuery, fields.WebSocketHeaders)
 		if uerr != nil {
 			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: uerr.Error()})
 			return
 		}
 		dialAddress := mergeQuery(address, up.Query)
 		if asyncOp.Action == "receive" {
-			runWSPublish(ctx, pool, target, dialAddress, up.Headers, doc, ch, &asyncOp, args, h)
+			runWSPublish(ctx, pool, target, dialAddress, up.Headers, doc, ch, &asyncOp, args, h, prepared)
 		} else {
 			runWSSubscribe(ctx, pool, target, dialAddress, up.Headers, doc, ch, &asyncOp, args, h)
 		}
 	case "http", "https":
 		if asyncOp.Action == "receive" {
-			runUnaryPublish(ctx, client, target, address, doc, ch, &asyncOp, args, h)
+			runUnaryPublish(ctx, client, target, address, doc, ch, &asyncOp, args, h, prepared)
 		} else {
 			runSSESubscribe(ctx, client, target, address, doc, ch, &asyncOp, args, h)
 		}
@@ -197,6 +231,129 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 			Message: fmt.Sprintf("protocol %q is not bound by openbindings.asyncapi@1 (supported: http, https, ws, wss)", target.Protocol),
 		})
 	}
+}
+
+type preparedInput struct{ Value any }
+
+func validateCell(doc *document, ch *channel, op *asyncOperation, protocol string, bindCtx map[string]any) error {
+	var httpBinding *httpOperationBinding
+	if op.Bindings != nil {
+		httpBinding = op.Bindings.HTTP
+	}
+	if httpBinding != nil && httpBinding.BindingVersion != "" && httpBinding.BindingVersion != "0.3.0" {
+		return fmt.Errorf("HTTP binding version %q is outside revision 1's incorporated 0.3.0 envelope", httpBinding.BindingVersion)
+	}
+	var wsBinding *wsChannelBinding
+	if ch != nil && ch.Bindings != nil {
+		wsBinding = ch.Bindings.WS
+	}
+	if wsBinding != nil && wsBinding.BindingVersion != "" && wsBinding.BindingVersion != "0.1.0" {
+		return fmt.Errorf("WebSockets binding version %q is outside revision 1's incorporated 0.1.0 envelope", wsBinding.BindingVersion)
+	}
+	if protocol == "http" || protocol == "https" {
+		if op.Action == "send" {
+			return fmt.Errorf("standalone HTTP send operations are excluded from revision 1")
+		}
+		if httpBinding == nil || strings.TrimSpace(httpBinding.Method) == "" {
+			return fmt.Errorf("HTTP receive operation has no artifact-declared HTTP method; POST is not inferred")
+		}
+		selected, err := selectedInputMessages(doc, op, ch, bindCtx)
+		if err != nil {
+			return err
+		}
+		if err := validateMessageBindingVersion(selected[0]); err != nil {
+			return err
+		}
+		if _, err = resolveInputCodec(doc, selected, bindCtx); err != nil {
+			return err
+		}
+		fields, err := protocolFieldValues(bindCtx)
+		if err != nil {
+			return err
+		}
+		_, err = resolveHTTPQuery(op, fields.HTTPQuery)
+		return err
+	}
+	if op.Action == "receive" {
+		if op.Reply != nil {
+			return fmt.Errorf("reply-bearing WebSocket receive operations are excluded from revision 1")
+		}
+		selected, err := selectedInputMessages(doc, op, ch, bindCtx)
+		if err != nil {
+			return err
+		}
+		if err := validateMessageBindingVersion(selected[0]); err != nil {
+			return err
+		}
+		if _, err = resolveInputCodec(doc, selected, bindCtx); err != nil {
+			return err
+		}
+		messageType, _ := openbindings.ContextConfiguration(bindCtx)["websocketMessageType"].(string)
+		if messageType != "text" && messageType != "binary" {
+			return fmt.Errorf("configuration.websocketMessageType must select text or binary for a WebSocket publish")
+		}
+		return nil
+	}
+	if ch != nil {
+		for _, parameter := range ch.Parameters {
+			if parameter.Location != "" {
+				return fmt.Errorf("WebSocket subscription address uses a runtime expression that requires an outgoing payload")
+			}
+		}
+	}
+	_, err := resolveSubscriptionContentType(doc, governingMessages(doc, op, ch), bindCtx)
+	return err
+}
+
+func validateCredentialDestinations(doc *document, op *asyncOperation, server *server, protocol string, bindCtx map[string]any) error {
+	fields, err := protocolFieldValues(bindCtx)
+	if err != nil {
+		return err
+	}
+	reserved := map[string]bool{}
+	if protocol == "http" || protocol == "https" {
+		for _, n := range []string{"host", "content-length", "content-type"} {
+			reserved[n] = true
+		}
+	} else {
+		for _, n := range []string{"host", "connection", "upgrade", "sec-websocket-key", "sec-websocket-version", "sec-websocket-protocol"} {
+			reserved[n] = true
+		}
+	}
+	for name := range openbindings.ContextHeaders(bindCtx) {
+		if reserved[strings.ToLower(name)] {
+			return fmt.Errorf("configured header %q collides with a processor-owned transport field", name)
+		}
+	}
+	for _, named := range resolveSecuritySchemes(doc, server, op) {
+		s := named.Scheme
+		if s.Type != "apiKey" && s.Type != "httpApiKey" {
+			continue
+		}
+		if openbindings.ContextAPIKeyFor(bindCtx, named.Name) == "" {
+			continue
+		}
+		switch s.In {
+		case "header":
+			lower := strings.ToLower(s.Name)
+			if reserved[lower] {
+				return fmt.Errorf("credential header destination %q collides with a processor-owned transport field", s.Name)
+			}
+			for name := range fields.WebSocketHeaders {
+				if strings.EqualFold(name, s.Name) {
+					return fmt.Errorf("credential header destination %q collides with a WebSocket protocol field", s.Name)
+				}
+			}
+		case "query":
+			if _, ok := fields.WebSocketQuery[s.Name]; ok {
+				return fmt.Errorf("credential query destination %q collides with a WebSocket protocol field", s.Name)
+			}
+			if _, ok := fields.HTTPQuery[s.Name]; ok {
+				return fmt.Errorf("credential query destination %q collides with an HTTP protocol field", s.Name)
+			}
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -512,7 +669,7 @@ func securityRequirementName(req securityRequirement) string {
 // Publish over HTTP (`receive` action): unary POST
 // ---------------------------------------------------------------------------
 
-func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTarget, address string, doc *document, ch *channel, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTarget, address string, doc *document, ch *channel, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle, prepared *preparedInput) {
 	// Unary: the one input IS the message payload (ASYNC-P-03). A publish
 	// invocation requires an input value — this family defines no empty
 	// message, so absence is a pre-dispatch refusal, never an empty-object
@@ -529,13 +686,24 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 
 	// Input encoding follows the governing request-side declaration
 	// (ASYNC-P-03); an excluded declared family refuses BEFORE dispatch.
-	codec, cerr := resolveInputCodec(doc, governingMessages(doc, asyncOp, ch))
+	selected, cerr := selectedInputMessages(doc, asyncOp, ch, args.Context)
+	if cerr != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: cerr.Error()})
+		return
+	}
+	codec, cerr := resolveInputCodec(doc, selected, args.Context)
 	if cerr != nil {
 		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: cerr.Error()})
 		return
 	}
 
-	first, rerr := h.ReadInput(ctx)
+	var first any
+	var rerr error
+	if prepared != nil {
+		first = prepared.Value
+	} else {
+		first, rerr = h.ReadInput(ctx)
+	}
 	if rerr == io.EOF {
 		h.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeMissingInput,
@@ -556,7 +724,27 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 
 	// The request method is the http operation binding's `method` where
 	// declared, else POST (§8, ASYNC-P-02).
-	req, err := http.NewRequestWithContext(ctx, requestMethod(asyncOp, http.MethodPost), joinURL(target.ServerURL, address), bytes.NewReader(body))
+	requestURL := joinURL(target.ServerURL, address)
+	fields, ferr := protocolFieldValues(args.Context)
+	if ferr != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: ferr.Error()})
+		return
+	}
+	query, qerr := resolveHTTPQuery(asyncOp, fields.HTTPQuery)
+	if qerr != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: qerr.Error()})
+		return
+	}
+	if len(query) > 0 {
+		parsed, _ := url.Parse(requestURL)
+		values := parsed.Query()
+		for name, value := range query {
+			values.Set(name, value)
+		}
+		parsed.RawQuery = values.Encode()
+		requestURL = parsed.String()
+	}
+	req, err := http.NewRequestWithContext(ctx, requestMethod(asyncOp, ""), requestURL, bytes.NewReader(body))
 	if err != nil {
 		h.FireError(openbindings.AsInvocationError(err))
 		return
@@ -567,10 +755,6 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	// Direction-correct Accept: the reply-side governing declaration, when
 	// it names exactly one type (ASYNC-P-05); nothing is advertised when
 	// the declaration names none.
-	replyDecode := decodeContentType(doc, replyGoverningMessages(doc, asyncOp))
-	if replyDecode != "" {
-		req.Header.Set("Accept", replyDecode)
-	}
 	applyHTTPContext(req, doc, target.SecurityServer, asyncOp, args.Context)
 
 	resp, err := client.Do(req)
@@ -619,6 +803,15 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 		// An empty body (202/204 acknowledgments included) yields no output
 		// value: an acknowledgment is not a message and emits no value (§8).
 		h.CloseOutput()
+		return
+	}
+	if asyncOp.Reply == nil {
+		h.CloseOutput()
+		return
+	}
+	replyDecode, rderr := resolveReplyContentType(doc, asyncOp, resp.StatusCode, resp.Header.Get("Content-Type"), args.Context)
+	if rderr != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeProtocol, Message: rderr.Error()})
 		return
 	}
 
@@ -911,17 +1104,16 @@ func decodeWSFrame(args *openbindings.BindingInvocationArgs, site openbindings.I
 }
 
 // ---------------------------------------------------------------------------
-// Subscribe over WebSocket (`send` action): bidi-capable, on a pooled socket
+// Subscribe over WebSocket (`send` action): server-streaming, on a pooled socket
 // ---------------------------------------------------------------------------
 
 func runWSSubscribe(ctx context.Context, pool *wsPool, target resolvedTarget, address string, extraHeaders map[string]string, doc *document, ch *channel, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
-	// Outputs decode by the operation's own message declarations
-	// (direction-correct decode, ASYNC-P-05); forwarded input frames use the
-	// same governing declaration (§9.1). An excluded declared family refuses
-	// only when an input frame actually arrives — a duplex subscription's
-	// inputs are optional, and the exclusion belongs to the input lane.
-	decodeCT := decodeContentType(doc, governingMessages(doc, asyncOp, ch))
-	codec, codecErr := resolveInputCodec(doc, governingMessages(doc, asyncOp, ch))
+	_ = h.CloseInput()
+	decodeCT, decodeErr := resolveSubscriptionContentType(doc, governingMessages(doc, asyncOp, ch), args.Context)
+	if decodeErr != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: decodeErr.Error()})
+		return
+	}
 
 	// The subscription is registered inside acquire (before the reader
 	// starts on a fresh dial) so no early server push can be lost.
@@ -937,38 +1129,6 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, target resolvedTarget, ad
 	}
 	defer pw.release()
 	defer unsubscribe()
-
-	// NO in-band auth: no credential ever rides a message body or a first
-	// frame under this specification (§9.5, ASYNC-P-07) — credentials ride
-	// the upgrade request. In-band auth conventions (a first-frame bearer
-	// message) are consumer configuration riding this duplex cell as an
-	// ordinary input frame, never a built-in.
-
-	// Inputs -> socket: the duplex lane — caller-supplied input values
-	// forward as frames, and the caller closing input does NOT end the
-	// subscription (outputs keep flowing). The pump exits on input EOF, on
-	// invocation terminal, or when ctx (bound to the invocation's lifetime)
-	// ends.
-	go func() {
-		for {
-			msg, rerr := h.ReadInput(ctx)
-			if rerr != nil {
-				return
-			}
-			if codecErr != nil {
-				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: codecErr.Error()})
-				return
-			}
-			frame, merr := encodeInput(codec, msg)
-			if merr != nil {
-				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: merr.Error()})
-				return
-			}
-			if pw.send(ctx, frame) != nil {
-				return
-			}
-		}
-	}()
 
 	// Socket -> outputs. Owns the terminal transition: clean socket close ->
 	// CloseOutput; socket error or backpressure overflow -> ERR_STREAM_ERROR.
@@ -1130,7 +1290,7 @@ func (s *wsSubscription) next(ctx context.Context) (res wsSubResult, ok bool) {
 // Publish over WebSocket (`receive` action): client-streaming, pooled socket
 // ---------------------------------------------------------------------------
 
-func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, address string, extraHeaders map[string]string, doc *document, ch *channel, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle) {
+func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, address string, extraHeaders map[string]string, doc *document, ch *channel, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle, prepared *preparedInput) {
 	// A publish invocation requires input — the input IS the message
 	// (ASYNC-P-03); this family defines no empty message. An operation-layer
 	// call for an operation declaring no input is refused before dispatch
@@ -1146,7 +1306,12 @@ func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, addr
 	// Input encoding follows the governing request-side declaration
 	// (ASYNC-P-03); an excluded declared family refuses BEFORE dispatch —
 	// before any socket is dialed.
-	codec, cerr := resolveInputCodec(doc, governingMessages(doc, asyncOp, ch))
+	selected, cerr := selectedInputMessages(doc, asyncOp, ch, args.Context)
+	if cerr != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: cerr.Error()})
+		return
+	}
+	codec, cerr := resolveInputCodec(doc, selected, args.Context)
 	if cerr != nil {
 		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: cerr.Error()})
 		return
@@ -1170,7 +1335,14 @@ func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, addr
 	// the streaming face of the same refusal: nothing was published.
 	sent := 0
 	for {
-		msg, rerr := h.ReadInput(ctx)
+		var msg any
+		var rerr error
+		if prepared != nil {
+			msg = prepared.Value
+			prepared = nil
+		} else {
+			msg, rerr = h.ReadInput(ctx)
+		}
 		if rerr == io.EOF {
 			if sent == 0 {
 				h.FireError(&openbindings.InvocationError{
@@ -1190,7 +1362,12 @@ func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, addr
 			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: merr.Error()})
 			return
 		}
-		if werr := pw.send(ctx, frame); werr != nil {
+		messageType, _ := openbindings.ContextConfiguration(args.Context)["websocketMessageType"].(string)
+		if messageType == "text" && !utf8.Valid(frame) {
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: "WebSocket text message payload is not valid UTF-8"})
+			return
+		}
+		if werr := pw.sendType(ctx, frame, messageType); werr != nil {
 			// Broken socket: evict it so the next caller dials a fresh one.
 			pool.evict(pw)
 			if ctx.Err() != nil {

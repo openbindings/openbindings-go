@@ -46,3 +46,66 @@ func TestCappedBuffer_StopsAtLimit(t *testing.T) {
 		t.Fatalf("buffer grew past limit: len %d", b.Len())
 	}
 }
+
+func TestBuiltinDecodeText_RefusesInvalidUTF8(t *testing.T) {
+	_, err := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte{0xff}})
+	if err == nil || !strings.Contains(err.Error(), "not valid UTF-8") {
+		t.Fatalf("invalid UTF-8 must fail loudly, got %v", err)
+	}
+	got, err := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte("ok\r\n\n")})
+	if err != nil || got != "ok" {
+		t.Fatalf("valid text decode = %q, %v; want ok", got, err)
+	}
+}
+
+func rootCommandFromText(t *testing.T, text string) *Command {
+	t.Helper()
+	spec, err := ParseKDL([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := rootCommand(spec)
+	if cmd == nil {
+		t.Fatal("fixture has no callable root command")
+	}
+	return cmd
+}
+
+func TestApplyUsageConfiguration_ConditionalRequirementsUseCanonicalIdentity(t *testing.T) {
+	cmd := rootCommandFromText(t, `
+bin "tool"
+flag "--file <file>" required_if="--dir"
+flag "--dir <dir>"
+flag "--identity <id>" required_unless="--anonymous"
+flag "-a" {
+  alias "--anonymous"
+}
+`)
+	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"dir": "tmp", "anonymous": true}, nil, nil); ierr == nil || !strings.Contains(ierr.Message, "file is required because dir is present") {
+		t.Fatalf("required_if refusal = %v", ierr)
+	}
+	if _, ierr := applyUsageConfiguration(cmd, nil, nil, nil, nil); ierr == nil || !strings.Contains(ierr.Message, "identity is required unless") {
+		t.Fatalf("required_unless refusal = %v", ierr)
+	}
+}
+
+func TestApplyUsageConfiguration_DynamicChoicesUnionLiteralAndEnvironment(t *testing.T) {
+	cmd := rootCommandFromText(t, `
+bin "tool"
+flag "--environment" {
+  arg "<environment>" {
+    choices "dev" env="DEPLOY_ENVS"
+  }
+}
+`)
+	context := map[string]any{"environment": map[string]any{"DEPLOY_ENVS": "staging, prod"}}
+	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "prod"}, context, nil); ierr != nil {
+		t.Fatalf("dynamic choice must be accepted: %v", ierr)
+	}
+	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "qa"}, context, nil); ierr == nil || !strings.Contains(ierr.Message, "outside its artifact-declared choices") {
+		t.Fatalf("out-of-set choice must refuse: %v", ierr)
+	}
+	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "dev"}, nil, nil); ierr != nil {
+		t.Fatalf("literal choice remains valid without the dynamic environment: %v", ierr)
+	}
+}

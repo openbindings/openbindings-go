@@ -56,6 +56,41 @@ func (l *wireLog) params(method string) []map[string]any {
 
 func (l *wireLog) count(method string) int { return len(l.params(method)) }
 
+func toolResultText(t *testing.T, value any) string {
+	t.Helper()
+	result, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("tool output must preserve the complete result object, got %T: %v", value, value)
+	}
+	content, ok := result["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("tool result content = %T %v", result["content"], result["content"])
+	}
+	item, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool content item = %T %v", content[0], content[0])
+	}
+	text, _ := item["text"].(string)
+	return text
+}
+
+func resourceResultItem(t *testing.T, value any) map[string]any {
+	t.Helper()
+	result, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("resource output must preserve the complete result object, got %T: %v", value, value)
+	}
+	contents, ok := result["contents"].([]any)
+	if !ok || len(contents) != 1 {
+		t.Fatalf("resource result contents = %T %v", result["contents"], result["contents"])
+	}
+	item, ok := contents[0].(map[string]any)
+	if !ok {
+		t.Fatalf("resource content item = %T %v", contents[0], contents[0])
+	}
+	return item
+}
+
 // setupConformanceServer builds an MCP server carrying one entity of each
 // family plus a progress-capable tool, wrapped so every JSON-RPC request
 // body is logged. pageSize > 0 overrides the server's list page size.
@@ -236,8 +271,8 @@ func TestPin_DisplacesListRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v != "ok" {
-		t.Errorf("output = %v, want ok", v)
+	if got := toolResultText(t, v); got != "ok" {
+		t.Errorf("tool result text = %q, want ok", got)
 	}
 	if n := log.count("tools/list"); n != 0 {
 		t.Errorf("a pinned listing must displace list requests; server saw %d tools/list calls", n)
@@ -320,9 +355,9 @@ func TestPin_StaticResourceRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	items, ok := v.([]any)
-	if !ok || len(items) != 1 || items[0] != "s" {
-		t.Fatalf("output = %T %v, want [s]", v, v)
+	item := resourceResultItem(t, v)
+	if item["text"] != "s" || item["uri"] != "app://static" {
+		t.Fatalf("resource item = %v, want declared URI and text", item)
 	}
 	if n := log.count("resources/list"); n != 0 {
 		t.Errorf("pin must displace resources/list; server saw %d", n)
@@ -349,9 +384,9 @@ func TestPin_TemplateExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	items, ok := v.([]any)
-	if !ok || len(items) != 1 || items[0] != "file:///logs/2026-07-15" {
-		t.Fatalf("output = %T %v, want the expanded URI echoed back", v, v)
+	item := resourceResultItem(t, v)
+	if item["text"] != "file:///logs/2026-07-15" || item["uri"] != "file:///logs/2026-07-15" {
+		t.Fatalf("resource item = %v, want the expanded URI echoed back", item)
 	}
 	if n := log.count("resources/templates/list"); n != 0 {
 		t.Errorf("pin must displace resources/templates/list; server saw %d", n)
@@ -384,8 +419,8 @@ func TestResolution_PaginationExhausted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v != "ok" {
-		t.Errorf("output = %v, want ok", v)
+	if got := toolResultText(t, v); got != "ok" {
+		t.Errorf("tool result text = %q, want ok", got)
 	}
 	if n := log.count("tools/list"); n < 3 {
 		t.Errorf("expected the listing to be followed to exhaustion (>= 3 pages), saw %d tools/list calls", n)
@@ -445,15 +480,18 @@ func TestSolicit_ConsultationOrder(t *testing.T) {
 				if len(vals) != 1 {
 					t.Fatalf("unsolicited stream must be exactly the result, got %d outputs: %v", len(vals), vals)
 				}
-				if vals[0] != "done" {
-					t.Errorf("result = %v, want done", vals[0])
+				if got := toolResultText(t, vals[0]); got != "done" {
+					t.Errorf("tool result text = %q, want done", got)
 				}
 			} else {
 				// Solicited: the result is last; anything before it is a
 				// progress value {progress, total?, message?}. go-mcp
 				// dispatches notifications asynchronously, so the exact
 				// count is not asserted.
-				if len(vals) < 1 || vals[len(vals)-1] != "done" {
+				if len(vals) < 1 {
+					t.Fatalf("the result must terminate the stream, got %v", vals)
+				}
+				if got := toolResultText(t, vals[len(vals)-1]); got != "done" {
 					t.Fatalf("the result must terminate the stream, got %v", vals)
 				}
 				for i, ev := range vals[:len(vals)-1] {
@@ -714,9 +752,9 @@ func TestTemplate_LiveExpansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	items, ok := v.([]any)
-	if !ok || len(items) != 1 || items[0] != "file:///logs/2026-07-15" {
-		t.Fatalf("output = %T %v, want the expanded URI echoed back", v, v)
+	item := resourceResultItem(t, v)
+	if item["text"] != "file:///logs/2026-07-15" || item["uri"] != "file:///logs/2026-07-15" {
+		t.Fatalf("resource item = %v, want the expanded URI echoed back", item)
 	}
 	// The template was resolved against the live, exhausted template listing.
 	if n := log.count("resources/templates/list"); n < 1 {
@@ -742,9 +780,9 @@ func TestTemplate_AbsentInputExpandsUndefined(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	items, ok := v.([]any)
-	if !ok || len(items) != 1 || items[0] != "file:///logs/" {
-		t.Fatalf("output = %T %v, want file:///logs/ (undefined-value expansion)", v, v)
+	item := resourceResultItem(t, v)
+	if item["text"] != "file:///logs/" || item["uri"] != "file:///logs/" {
+		t.Fatalf("resource item = %v, want file:///logs/ (undefined-value expansion)", item)
 	}
 	reads := log.params("resources/read")
 	if len(reads) != 1 || reads[0]["uri"] != "file:///logs/" {

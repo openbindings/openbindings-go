@@ -42,6 +42,7 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 
 	usedKeys := map[string]string{}
 
+	disc = bindableDiscovery(disc)
 	sort.Slice(disc.Tools, func(i, j int) bool { return disc.Tools[i].Name < disc.Tools[j].Name })
 	sort.Slice(disc.Resources, func(i, j int) bool { return disc.Resources[i].Name < disc.Resources[j].Name })
 	sort.Slice(disc.ResourceTemplates, func(i, j int) bool { return disc.ResourceTemplates[i].Name < disc.ResourceTemplates[j].Name })
@@ -178,7 +179,7 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 // templateInputSchema derives a resource template's input schema from its
 // RFC 6570 variables — the operation's input value per openbindings.mcp@1
 // §8/§9.1: one string property per declared variable (template variables are
-// string-typed, never coerced), none required (an unsupplied variable
+// string/list/associative value domain), none required (an unsupplied variable
 // follows RFC 6570's undefined-value expansion), and no undeclared members
 // (the invoker refuses them, hence additionalProperties: false). A template
 // that does not parse yields no input schema; the invoker refuses it loudly
@@ -190,7 +191,11 @@ func templateInputSchema(template string) map[string]any {
 	}
 	properties := map[string]any{}
 	for _, name := range tmpl.Varnames() {
-		properties[name] = map[string]any{"type": "string"}
+		properties[name] = map[string]any{"anyOf": []any{
+			map[string]any{"type": "string"},
+			map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+		}}
 	}
 	return map[string]any{
 		"type":                 "object",
@@ -198,6 +203,66 @@ func templateInputSchema(template string) map[string]any {
 		"properties":           properties,
 		"additionalProperties": false,
 	}
+}
+
+// bindableDiscovery applies the same resolution boundary invocation uses:
+// ambiguous identities, required-task tools, and malformed RFC 6570
+// templates are not binding targets in revision 1. Filtering them is not a
+// partial interface; the binding specification itself declares them
+// unresolvable. Both synthesis and inspection call this helper.
+func bindableDiscovery(disc *discovery) *discovery {
+	if disc == nil {
+		return &discovery{}
+	}
+	toolCounts := map[string]int{}
+	resourceCounts := map[string]int{}
+	templateCounts := map[string]int{}
+	promptCounts := map[string]int{}
+	for _, v := range disc.Tools {
+		if v != nil {
+			toolCounts[v.Name]++
+		}
+	}
+	for _, v := range disc.Resources {
+		if v != nil {
+			resourceCounts[v.URI]++
+		}
+	}
+	for _, v := range disc.ResourceTemplates {
+		if v != nil {
+			templateCounts[v.URITemplate]++
+		}
+	}
+	for _, v := range disc.Prompts {
+		if v != nil {
+			promptCounts[v.Name]++
+		}
+	}
+	out := &discovery{ServerInfo: disc.ServerInfo, RequiredTaskTools: disc.RequiredTaskTools}
+	for _, v := range disc.Tools {
+		if v != nil && toolCounts[v.Name] == 1 && !disc.RequiredTaskTools[v.Name] {
+			out.Tools = append(out.Tools, v)
+		}
+	}
+	for _, v := range disc.Resources {
+		if v != nil && resourceCounts[v.URI] == 1 {
+			out.Resources = append(out.Resources, v)
+		}
+	}
+	for _, v := range disc.ResourceTemplates {
+		if v == nil || templateCounts[v.URITemplate] != 1 {
+			continue
+		}
+		if _, err := uritemplate.New(v.URITemplate); err == nil {
+			out.ResourceTemplates = append(out.ResourceTemplates, v)
+		}
+	}
+	for _, v := range disc.Prompts {
+		if v != nil && promptCounts[v.Name] == 1 {
+			out.Prompts = append(out.Prompts, v)
+		}
+	}
+	return out
 }
 
 // promptOutputSchema returns a JSON Schema describing the standard MCP
@@ -219,11 +284,11 @@ func promptOutputSchema() map[string]any {
 						"role":    map[string]any{"type": "string"},
 						"content": map[string]any{},
 					},
-					"required": []string{"role", "content"},
+					"required": []any{"role", "content"},
 				},
 			},
 		},
-		"required": []string{"messages"},
+		"required": []any{"messages"},
 	}
 }
 
@@ -254,7 +319,11 @@ func promptArgsToSchema(args []*gomcp.PromptArgument) map[string]any {
 	}
 	if len(required) > 0 {
 		sort.Strings(required)
-		schema["required"] = required
+		values := make([]any, len(required))
+		for i, name := range required {
+			values[i] = name
+		}
+		schema["required"] = values
 	}
 	return schema
 }

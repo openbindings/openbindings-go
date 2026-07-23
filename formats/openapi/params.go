@@ -51,6 +51,7 @@ func effectiveParameters(pathItem *openapi3.PathItem, op *openapi3.Operation) op
 // loudly at binding resolution (OAPI-P-03). Empty string means flattenable.
 func unflattenableParam(params openapi3.Parameters) string {
 	locs := map[string]string{}
+	headerNames := map[string]string{}
 	for _, pref := range params {
 		if pref == nil || pref.Value == nil {
 			continue
@@ -60,6 +61,13 @@ func unflattenableParam(params openapi3.Parameters) string {
 			return p.Name
 		}
 		locs[p.Name] = p.In
+		if p.In == openapi3.ParameterInHeader {
+			folded := strings.ToLower(p.Name)
+			if previous, ok := headerNames[folded]; ok && previous != p.Name {
+				return p.Name
+			}
+			headerNames[folded] = p.Name
+		}
 	}
 	return ""
 }
@@ -91,11 +99,9 @@ type routedInput struct {
 //
 //   - declared parameters ride their location, serialized per the OAS
 //     style/explode/allowReserved rules (OAPI-P-02);
-//   - a field that is both a parameter and a declared body property is one
-//     name, one value, delivered to BOTH wire locations (the merge is
-//     surfaced at synthesis time as the openapi.param_body_collision
-//     warning — invocation performs the dual delivery, never a silent drop
-//     of either carriage);
+//   - parameter/body-property collisions are rejected before this function:
+//     independently declared upstream values are never collapsed or
+//     duplicated;
 //   - a field matching no declared parameter or body property passes through
 //     into the body when a request body is declared, and is refused loudly
 //     before dispatch when none is declared;
@@ -132,16 +138,6 @@ func routeInput(params openapi3.Parameters, input map[string]any, pathTemplate s
 			return nil, err
 		}
 
-		// One name, one value, delivered to every declared wire location:
-		// the parameter location AND the body when the name is also a
-		// declared body property (or the synthetic `body` property).
-		if plan != nil && plan.declared {
-			if plan.synthetic && p.Name == syntheticBodyProperty {
-				r.bodyValue, r.bodySet = value, true
-			} else if !plan.synthetic && plan.props[p.Name] {
-				r.bodyFields[p.Name] = value
-			}
-		}
 	}
 
 	if len(missingPath) > 0 {

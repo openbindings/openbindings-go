@@ -10,6 +10,7 @@ import (
 func TestInspectSource_BasicRefs(t *testing.T) {
 	content := `
 name "mycli"
+bin "mycli"
 cmd "greet" help="Say hello"
 cmd "farewell" help="Say goodbye"
 `
@@ -33,6 +34,7 @@ cmd "farewell" help="Say goodbye"
 func TestInspectSource_SpaceSeparatedPaths(t *testing.T) {
 	content := `
 name "mycli"
+bin "mycli"
 cmd "config" {
     cmd "set" help="Set a value"
     cmd "get" help="Get a value"
@@ -106,6 +108,7 @@ arg "<pattern>" help="Search pattern"
 func TestInspectSource_AlphabeticallySorted(t *testing.T) {
 	content := `
 name "mycli"
+bin "mycli"
 cmd "zulu" help="Z"
 cmd "alpha" help="A"
 cmd "mike" help="M"
@@ -136,6 +139,7 @@ cmd "mike" help="M"
 func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	content := `
 name "mycli"
+bin "mycli"
 cmd "greet" help="Say hello"
 cmd "farewell" help="Say goodbye"
 `
@@ -171,6 +175,7 @@ cmd "farewell" help="Say goodbye"
 func TestInspectSource_SkipsSubcommandRequired(t *testing.T) {
 	content := `
 name "mycli"
+bin "mycli"
 cmd "config" subcommand_required=#true {
     cmd "get" help="Get a value"
     cmd "set" help="Set a value"
@@ -220,6 +225,21 @@ func TestInspectSource_EmptySpec(t *testing.T) {
 
 	if len(result.Targets) != 0 {
 		t.Errorf("expected 0 refs, got %d", len(result.Targets))
+	}
+}
+
+func TestInspectSource_DoesNotInventTargetIdentityFromName(t *testing.T) {
+	content := `name "mycli"
+cmd "run" help="Run it"`
+
+	result, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{
+		Content: openbindings.TextContent(content),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Targets) != 0 || !result.Exhaustive {
+		t.Fatalf("descriptor without bin must have an exhaustive empty target set, got %+v", result)
 	}
 }
 

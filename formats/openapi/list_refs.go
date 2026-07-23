@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -23,42 +22,19 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
 
+	// Inspection and synthesis share the same realizability filter: an OAS
+	// operation whose revision-1 flattened boundary cannot be represented is
+	// not advertised as bindable merely because it appears under paths.
+	iface, err := convertDocToInterface(doc, source.Location, nil)
+	if err != nil {
+		return nil, err
+	}
 	var targets []openbindings.BindableTarget
-
-	if doc.Paths == nil {
-		return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+	for _, binding := range iface.Bindings {
+		op := iface.Operations[binding.Operation]
+		targets = append(targets, openbindings.BindableTarget{Ref: binding.Ref, OperationKey: binding.Operation, Operation: &op})
 	}
-
-	pathKeys := make([]string, 0, doc.Paths.Len())
-	for path := range doc.Paths.Map() {
-		pathKeys = append(pathKeys, path)
-	}
-	sort.Strings(pathKeys)
-
-	usedKeys := make(map[string]bool)
-	for _, path := range pathKeys {
-		pathItem := doc.Paths.Find(path)
-		if pathItem == nil {
-			continue
-		}
-		for _, method := range httpMethods {
-			op := pathItem.GetOperation(strings.ToUpper(method))
-			if op == nil {
-				continue
-			}
-
-			// Suggest the same operation key SynthesizeInterface would assign for
-			// this target. The iteration order and usedKeys de-duplication here
-			// match create's, so inspection previews exactly what synthesis names.
-			opKey := deriveOperationKey(op, path, method, usedKeys)
-			usedKeys[opKey] = true
-
-			ref := buildJSONPointerRef(path, method)
-			desc := operationDescription(op)
-
-			targets = append(targets, bindableTarget(ref, opKey, desc))
-		}
-	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Ref < targets[j].Ref })
 
 	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }

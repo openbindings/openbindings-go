@@ -27,7 +27,9 @@ import (
 opInv := openbindings.NewOperationInvoker(grpcbinding.NewInvoker())
 ```
 
-The invoker declares the binding specification `openbindings.grpc@1` -- it handles gRPC servers via reflection and `.proto` files.
+The invoker declares `openbindings.grpc@1`. Embedded protobuf content pins the
+schema; without content, the schema is discovered from the addressed server
+through gRPC reflection.
 
 ### Invoke a binding
 
@@ -40,10 +42,10 @@ defer invoker.Close()
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
         BindingSpec: grpcbinding.BindingSpec, // "openbindings.grpc@1"
-        Location:    "api.example.com:443",
+        Location:    "grpcs://api.example.com:443",
     },
     Ref:     "mypackage.MyService/GetItem",
-    Context: map[string]any{"bearerToken": "tok_123"},
+    Context: map[string]any{"headers": map[string]string{"authorization": "Bearer tok_123"}},
 })
 
 // Input flows through the handle, not the args.
@@ -63,7 +65,7 @@ For server-streaming methods, read the output stream to `io.EOF` instead:
 
 ```go
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-    Source: openbindings.InvocationSource{BindingSpec: grpcbinding.BindingSpec, Location: "api.example.com:443"},
+    Source: openbindings.InvocationSource{BindingSpec: grpcbinding.BindingSpec, Location: "grpcs://api.example.com:443"},
     Ref:    "mypackage.MyService/WatchItems",
 })
 _ = inv.Write(ctx, map[string]any{"topic": "orders"})
@@ -90,7 +92,7 @@ synth := grpcbinding.NewSynthesizer()
 iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
     Sources: []openbindings.SynthesizeSource{{
         BindingSpec: grpcbinding.BindingSpec, // "openbindings.grpc@1"
-        Location:    "api.example.com:443",
+        Location:    "grpcs://api.example.com:443",
     }},
 })
 // iface is a fully-formed OBInterface with operations, bindings, and sources
@@ -102,7 +104,8 @@ This package implements the published [`openbindings.grpc@1`](https://github.com
 
 ### Binding specification identifier
 
-`openbindings.grpc@1` (exact, opaque). Handles gRPC servers via reflection and `.proto` files.
+`openbindings.grpc@1` (exact, opaque). Handles gRPC servers via embedded
+protobuf schemas or live reflection.
 
 ### Ref format
 
@@ -115,7 +118,7 @@ The service name is the protobuf fully qualified name. The method name is the un
 
 ### Source expectations
 
-- **`location`**: The gRPC server dial address in one of the specification's three port-explicit forms (`openbindings.grpc@1` §4, GRPC-D-02): `host:port` (TLS iff the port is 443, plaintext otherwise), `grpc://host:port` (plaintext), or `grpcs://host:port` (TLS). No port is defaulted, and no other scheme spelling is accepted. At the synthesis entrypoints a location ending in `.proto` is parsed directly instead of using server reflection.
+- **`location`**: The gRPC server dial address in one of the specification's three port-explicit forms (`openbindings.grpc@1` §4, GRPC-D-02): bare `host:port`, `grpc://host:port` (plaintext), or `grpcs://host:port` (TLS). A bare target makes no transport claim and requires consumer election before dispatch; port numbers never imply TLS. No port is defaulted, and no location is interpreted as a schema-file path.
 - **`content`**: The embedded schema — single-file `.proto` source text (string; imports limited to `google/protobuf/*`) or a `google.protobuf.FileDescriptorSet` in canonical JSON (object). When provided, method descriptors are built from it directly, never from reflection.
 
 ### Transport configuration
@@ -123,13 +126,16 @@ The service name is the protobuf fully qualified name. The method name is the un
 The invoker and synthesizer take functional options speaking grpc-go's own vocabulary (the invoker is openly grpc-go; inventing an abstraction over it would serve nobody):
 
 ```go
-grpc.NewInvoker()                                          // zero-config: TLS auto-detected (:443, https://, grpcs://)
+grpc.NewInvoker()                                          // schemes elect transport; bare host:port requires explicit election
 grpc.NewInvoker(grpcfmt.WithTransportCredentials(creds))   // mTLS / custom CA / forced plaintext — replaces auto-detection
 grpc.NewInvoker(grpcfmt.WithDialOptions(opts...))          // interceptors, keepalive, user-agent, ... (appended after defaults)
 grpc.NewSynthesizer(grpcfmt.WithSynthesizerTransportCredentials(creds)) // reflection discovery dials live, so it needs the same setup
 ```
 
-A caller who states the transport identity owns it: `WithTransportCredentials` disables the automatic TLS detection entirely. These are process-level defaults applied to every connection the invoker dials; a per-target credential lane (an `auth.mtls` context family) is designed follow-up work.
+A caller who states the transport identity owns it:
+`WithTransportCredentials` replaces the address form's determination entirely.
+These are process-level defaults applied to every connection the invoker
+dials.
 
 ### Dial address resolution (invocation)
 
@@ -149,13 +155,12 @@ This is the publishing form for servers with reflection disabled: the document i
 
 ### Credential application
 
-Credentials are applied as gRPC metadata (equivalent to HTTP/2 headers):
-
-- `bearerToken`: `authorization: Bearer <token>`
-- `apiKey`: `authorization: ApiKey <key>`
-- `basic`: `authorization: Basic <encoded>`
-
-The context's `headers` map is forwarded as additional metadata.
+Protobuf and gRPC declare no per-method application-authentication convention,
+so this binding invents none. Explicitly named context `headers` ride as gRPC
+metadata under the protocol grammar. A generic bearer, basic, or API-key
+credential without a named metadata carriage raises `CONTEXT_REQUIRED` before
+reflection or method dispatch; it is never silently mapped to
+`authorization`.
 
 ### Connect (Buf) compatibility
 
@@ -167,7 +172,7 @@ The resulting OBI will have `bindingSpec: "openbindings.grpc@1"`, reflecting the
 
 Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.grpc@1` §10); these are this package's conventions:
 
-- **Discovery**: services come from gRPC server reflection or `.proto` file parsing. Infrastructure services (`grpc.reflection.*`, `grpc.health.*`) are excluded. Client-streaming and bidirectional RPCs are skipped (a coverage limitation of this synthesizer, not a family rule — the binding specification defines all four method kinds).
+- **Discovery**: services come from embedded protobuf content or gRPC server reflection. Infrastructure services (`grpc.reflection.*`, `grpc.health.*`) are excluded. All four declared method kinds are synthesized.
 - **Determinism**: services iterate by fully-qualified name, methods by name; the same schema yields an identical OBI.
 - **Operation keys** are the method's unqualified name, sanitized to the OBI key grammar; a cross-service collision is disambiguated with the service's name. Binding refs are the full `package.Service/Method` form.
 - **Schema translation** mirrors protobuf's canonical JSON mapping. Field names use their `json_name` (camelCase) spellings; enums emit `{"type": "string", "enum": [...declared value names]}`; maps emit `additionalProperties`; repeated fields emit arrays; recursive message cycles degrade to a bare `{"type": "object"}`.
@@ -230,7 +235,7 @@ Converts a live gRPC server into an OBI by:
 
 - Discovering services via gRPC reflection or `.proto` file parsing
 - Filtering out infrastructure services (`grpc.reflection.*`, `grpc.health.*`)
-- Skipping client-streaming RPCs
+- Including unary, server-streaming, client-streaming, and bidirectional RPCs exactly as declared
 - Converting protobuf message types to JSON Schema (input and output)
 - Generating `package.Service/Method` refs for each binding
 - Sorting services and methods alphabetically for deterministic output

@@ -37,6 +37,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	}
 
 	var targets []openbindings.BindableTarget
+	disc = bindableDiscovery(disc)
 
 	// Suggest the same operation keys SynthesizeInterface assigns (synthesize.go: a
 	// SanitizeKey'd name with collision resolution against the entity kind,

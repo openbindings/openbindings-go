@@ -208,7 +208,7 @@ func TestRouting_StdinOnSlottedFieldRefused(t *testing.T) {
 	// The slotless pure channel requires a field mapping to NO slot; `tag`
 	// maps to --tag, so it is refused with the stdin-dash teaching hint.
 	d := routerDriver(map[string]string{"tag": RouteStdin}, false)
-	ierr := refusalCode(t, d, "slurp", nil, map[string]any{"tag": "x"})
+	ierr := refusalCode(t, d, "slurp", nil, map[string]any{"tag": "x", "doc": "input"})
 	if ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "stdin-dash") {
 		t.Fatalf("want ERR_VALIDATION_FAILED hinting stdin-dash, got %s: %s", ierr.Code, ierr.Message)
 	}

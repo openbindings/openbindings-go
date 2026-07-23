@@ -17,11 +17,12 @@ import (
 // what dispatch uses — but multiplicity matters: MCP names are only
 // SHOULD-unique, so ambiguity detection needs every occurrence.
 type listing struct {
-	tools     []string // Tool.name
-	resources []string // Resource.uri
-	templates []string // ResourceTemplate.uriTemplate
-	prompts   []string // Prompt.name
-	pinned    bool
+	tools             []string // Tool.name
+	requiredTaskTools map[string]bool
+	resources         []string // Resource.uri
+	templates         []string // ResourceTemplate.uriTemplate
+	prompts           []string // Prompt.name
+	pinned            bool
 }
 
 // targetKind is the outcome of resolving a ref against the listing: which
@@ -73,10 +74,21 @@ func parsePinnedListing(content json.RawMessage) (*listing, error) {
 		}
 	}
 
-	l := &listing{pinned: true}
+	l := &listing{pinned: true, requiredTaskTools: map[string]bool{}}
 	var perr error
 	if l.tools, perr = pinEntityIdentities(members["tools"], "tools", "name"); perr != nil {
 		return nil, perr
+	}
+	if raw := members["tools"]; raw != nil {
+		var entries []map[string]any
+		_ = json.Unmarshal(raw, &entries)
+		for _, entry := range entries {
+			name, _ := entry["name"].(string)
+			execution, _ := entry["execution"].(map[string]any)
+			if execution["taskSupport"] == "required" {
+				l.requiredTaskTools[name] = true
+			}
+		}
 	}
 	if l.resources, perr = pinEntityIdentities(members["resources"], "resources", "uri"); perr != nil {
 		return nil, perr
@@ -126,7 +138,8 @@ func pinEntityIdentities(raw json.RawMessage, member, idKey string) ([]string, e
 // pin carries no serverInfo, so ServerInfo stays nil — the interface's
 // name/version, when wanted, come from SynthesizeInput.
 func pinnedDiscovery(content json.RawMessage) (*discovery, error) {
-	if _, err := parsePinnedListing(content); err != nil {
+	listing, err := parsePinnedListing(content)
+	if err != nil {
 		return nil, err
 	}
 	var pin struct {
@@ -140,6 +153,7 @@ func pinnedDiscovery(content json.RawMessage) (*discovery, error) {
 	}
 	return &discovery{
 		Tools:             pin.Tools,
+		RequiredTaskTools: listing.requiredTaskTools,
 		Resources:         pin.Resources,
 		ResourceTemplates: pin.ResourceTemplates,
 		Prompts:           pin.Prompts,
@@ -172,7 +186,7 @@ func paginationOverflow() error {
 }
 
 func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listing, error) {
-	l := &listing{}
+	l := &listing{requiredTaskTools: map[string]bool{}}
 	init := s.session.InitializeResult()
 	if init == nil {
 		return l, nil
@@ -198,6 +212,9 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 				return nil, berr
 			}
 			l.tools = append(l.tools, tool.Name)
+			if s.toolRequiresTask(tool.Name) {
+				l.requiredTaskTools[tool.Name] = true
+			}
 		}
 	case "prompts":
 		if init.Capabilities.Prompts == nil {
@@ -278,6 +295,12 @@ func resolveRef(l *listing, entityType, remainder string) (targetKind, *openbind
 	case "tools":
 		switch n := count(l.tools); {
 		case n == 1:
+			if l.requiredTaskTools[remainder] {
+				return 0, &openbindings.InvocationError{
+					Code:    openbindings.ErrCodeInvalidRef,
+					Message: fmt.Sprintf("MCP tool %q requires task augmentation, which openbindings.mcp@1 intentionally does not implement (MCP-P-08)", remainder),
+				}
+			}
 			return targetTool, nil
 		case n > 1:
 			return ambiguous("tool", n)

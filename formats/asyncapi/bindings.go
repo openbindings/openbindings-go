@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // This file honors declared protocol `bindings` objects, which are
@@ -34,6 +36,57 @@ func requestMethod(op *asyncOperation, cellDefault string) string {
 type wsUpgrade struct {
 	Query   url.Values
 	Headers map[string]string
+}
+
+type protocolFields struct {
+	HTTPQuery        map[string]string
+	WebSocketQuery   map[string]string
+	WebSocketHeaders map[string]string
+}
+
+func protocolFieldValues(ctx map[string]any) (protocolFields, error) {
+	var out protocolFields
+	raw, present := openbindings.ContextConfiguration(ctx)["protocolFields"]
+	if !present {
+		return out, nil
+	}
+	record, ok := raw.(map[string]any)
+	if !ok {
+		return out, fmt.Errorf("configuration.protocolFields must be an object")
+	}
+	for name, value := range record {
+		var target *map[string]string
+		switch name {
+		case "httpQuery":
+			target = &out.HTTPQuery
+		case "webSocketQuery":
+			target = &out.WebSocketQuery
+		case "webSocketHeaders":
+			target = &out.WebSocketHeaders
+		default:
+			return out, fmt.Errorf("configuration.protocolFields names unsupported map %q", name)
+		}
+		m, ok := value.(map[string]any)
+		if !ok {
+			return out, fmt.Errorf("configuration.protocolFields.%s must be an object of strings", name)
+		}
+		*target = map[string]string{}
+		for k, v := range m {
+			s, ok := v.(string)
+			if !ok {
+				return out, fmt.Errorf("configuration.protocolFields.%s[%q] must be a string", name, k)
+			}
+			(*target)[k] = s
+		}
+	}
+	return out, nil
+}
+
+func resolveHTTPQuery(op *asyncOperation, supplied map[string]string) (map[string]string, error) {
+	if op == nil || op.Bindings == nil || op.Bindings.HTTP == nil {
+		return nil, nil
+	}
+	return schemaPropertyValues(op.Bindings.HTTP.Query, supplied, nil, "HTTP operation binding query field")
 }
 
 // resolveWSUpgrade resolves the websockets channel binding against the
@@ -115,14 +168,19 @@ func schemaPropertyValues(schema map[string]any, supplied map[string]string, sat
 		if hasCaseInsensitive(satisfiedElsewhere, name) {
 			continue // already riding the request via the generic carriage
 		}
-		if prop, ok := props[name].(map[string]any); ok {
-			if def, ok := stringifyScalar(prop["default"]); ok {
-				out[name] = def
-				continue
-			}
-		}
 		if required[name] {
 			return nil, fmt.Errorf("%s %q is required but has no supplied value and no declared default", what, name)
+		}
+	}
+	for name := range supplied {
+		prop, declared := props[name]
+		if !declared {
+			return nil, fmt.Errorf("%s %q is not declared by the binding schema", what, name)
+		}
+		if schema, ok := prop.(map[string]any); ok {
+			if typ, exists := schema["type"]; exists && typ != "string" {
+				return nil, fmt.Errorf("%s %q cannot admit a string value", what, name)
+			}
 		}
 	}
 	if len(out) == 0 {

@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -58,11 +57,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 
 	usedKeys := map[string]bool{}
 
-	opIDs := make([]string, 0, len(doc.Operations))
-	for opID := range doc.Operations {
-		opIDs = append(opIDs, opID)
-	}
-	sort.Strings(opIDs)
+	opIDs := bindableOperationIDs(doc)
 
 	for _, opID := range opIDs {
 		asyncOp := doc.Operations[opID]
@@ -86,7 +81,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 		case "send":
 			// The application sends; invoking subscribes — the operation's
 			// messages are the invoker's OUTPUT.
-			payload := resolveOperationPayload(doc, asyncOp)
+			payload := operationPayloadSchema(doc, &asyncOp, false)
 			if payload != nil {
 				obiOp.Output = payload
 			}
@@ -94,12 +89,12 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 			// The application receives; invoking publishes — the operation's
 			// messages are the invoker's INPUT, and a declared reply is what
 			// the publish's response decodes to.
-			inputPayload := resolveOperationPayload(doc, asyncOp)
+			inputPayload := operationPayloadSchema(doc, &asyncOp, true)
 			if inputPayload != nil {
 				obiOp.Input = inputPayload
 			}
 			if asyncOp.Reply != nil {
-				outputPayload := resolveReplyPayload(doc, asyncOp.Reply)
+				outputPayload := replyPayloadSchema(doc, asyncOp.Reply)
 				if outputPayload != nil {
 					obiOp.Output = outputPayload
 				}
@@ -151,10 +146,10 @@ func parseDocument(data []byte) (*document, error) {
 	}
 
 	// ASYNC-P-01: the artifact's own `asyncapi` field discriminates the
-	// accepted line — 3.0.x ONLY. A later 3.x line is adopted by compatible
+	// accepted revision — exactly 3.0.0. A later patch is adopted by compatible
 	// revision of the binding specification, never sight-unseen.
-	if !strings.HasPrefix(doc.AsyncAPI, "3.0.") {
-		return nil, fmt.Errorf("unsupported AsyncAPI version %q: openbindings.asyncapi@1 accepts the 3.0.x line only (ASYNC-P-01)", doc.AsyncAPI)
+	if doc.AsyncAPI != "3.0.0" {
+		return nil, fmt.Errorf("unsupported AsyncAPI version %q: openbindings.asyncapi@1 accepts exactly 3.0.0 (ASYNC-P-01)", doc.AsyncAPI)
 	}
 
 	resolveRefs(&doc)
@@ -167,9 +162,8 @@ func parseDocument(data []byte) (*document, error) {
 // convenience at the SYNTHESIS entries only, the usage family's posture
 // (one loader for every lane, no bare-path lane). The invoke/binding lanes
 // never absolutize: a document's own bare-path location is a relative
-// reference in form and is refused (ASYNC-D-02). Emission is untouched —
-// what a synthesized document may carry as its location is the
-// embed-default ruling's territory, not this helper's.
+// reference in form and is refused (ASYNC-D-02). Synthesis emits this
+// normalized address so the returned source remains invocable.
 func absolutizeArtifactLocation(location string) (string, error) {
 	if location == "" || strings.Contains(location, "://") {
 		return location, nil
@@ -252,47 +246,6 @@ func operationDescription(op asyncOperation) string {
 		return op.Description
 	}
 	return op.Summary
-}
-
-func resolveOperationPayload(doc *document, op asyncOperation) map[string]any {
-	if len(op.Messages) > 0 {
-		msg := resolveMessageRef(doc, op.Messages[0])
-		if msg != nil && msg.Payload != nil {
-			return msg.Payload
-		}
-	}
-
-	channelName := extractRefName(op.Channel.Ref)
-	if channelName == "" {
-		return nil
-	}
-	channel, ok := doc.Channels[channelName]
-	if !ok {
-		return nil
-	}
-
-	for _, msg := range channel.Messages {
-		if msg.Payload != nil {
-			return msg.Payload
-		}
-	}
-
-	return nil
-}
-
-func resolveReplyPayload(doc *document, reply *operationReply) map[string]any {
-	if reply == nil {
-		return nil
-	}
-
-	if len(reply.Messages) > 0 {
-		msg := resolveMessageRef(doc, reply.Messages[0])
-		if msg != nil && msg.Payload != nil {
-			return msg.Payload
-		}
-	}
-
-	return nil
 }
 
 func resolveMessageRef(doc *document, ref messageRef) *message {

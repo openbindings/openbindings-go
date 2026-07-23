@@ -487,7 +487,7 @@ func widgetSpec(baseURL string) string {
 					"parameters": []map[string]any{
 						{"name": "id", "in": "path", "required": true, "schema": map[string]any{"type": "integer"}},
 					},
-					"responses": map[string]any{"200": map[string]any{"description": "OK"}},
+					"responses": map[string]any{"200": map[string]any{"description": "OK", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{}}}}},
 				},
 			},
 			"/widgets": map[string]any{
@@ -499,7 +499,7 @@ func widgetSpec(baseURL string) string {
 							"application/json": map[string]any{"schema": map[string]any{"type": "object"}},
 						},
 					},
-					"responses": map[string]any{"201": map[string]any{"description": "Created"}},
+					"responses": map[string]any{"201": map[string]any{"description": "Created", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{}}}}},
 				},
 			},
 			"/session": map[string]any{
@@ -508,7 +508,7 @@ func widgetSpec(baseURL string) string {
 					"parameters": []map[string]any{
 						{"name": "session_id", "in": "cookie", "schema": map[string]any{"type": "string"}},
 					},
-					"responses": map[string]any{"200": map[string]any{"description": "OK"}},
+					"responses": map[string]any{"200": map[string]any{"description": "OK", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{}}}}},
 				},
 			},
 		},
@@ -624,7 +624,7 @@ func TestIntegration_OAuth2CredentialsApplied(t *testing.T) {
 
 	binv := NewInvoker()
 	call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(specBytes))},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(withDeclaredJSONResponses(t, string(specBytes)))},
 		Ref:     "#/paths/~1me/get",
 		Context: map[string]any{"accessToken": "at-123"},
 	})
@@ -674,7 +674,7 @@ func TestIntegration_TwoANDedAPIKeysDistinguishedByName(t *testing.T) {
 	specBytes, _ := json.Marshal(spec)
 
 	binv := NewInvoker()
-	source := openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(specBytes))}
+	source := openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(withDeclaredJSONResponses(t, string(specBytes)))}
 
 	// Preflight: the AND'd alternative challenges, each requirement carrying
 	// its own securitySchemes key as Name (R2.a ruling).
@@ -759,6 +759,15 @@ func sseSpec(serverURL string) string {
 							"description": "Stream of events",
 							"content": map[string]any{
 								"text/event-stream": map[string]any{
+									"schema": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"id":  map[string]any{"type": "string"},
+											"msg": map[string]any{"type": "string"},
+										},
+									},
+								},
+								"application/json": map[string]any{
 									"schema": map[string]any{
 										"type": "object",
 										"properties": map[string]any{
@@ -1141,7 +1150,7 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 	  "paths": {"/pets": {"post": {
 	    "operationId": "createPet",
 	    "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Pet"}}}},
-	    "responses": {"201": {"description": "created"}}
+	    "responses": {"201": {"description": "created", "content": {"application/json": {"schema": {}}}}}
 	  }}},
 	  "components": {"schemas": {"Pet": {
 	    "type": "object",
@@ -1160,7 +1169,7 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: "openapi@3.0", Content: openbindings.TextContent(strings.ReplaceAll(spec, "PLACEHOLDER", srv.URL))}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(strings.ReplaceAll(spec, "PLACEHOLDER", srv.URL))}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
@@ -1187,7 +1196,7 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 
 	// The contract's shape goes onto the wire verbatim.
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: "openapi@3.0", Content: openbindings.TextContent(strings.ReplaceAll(spec, `"paths"`, `"servers": [{"url": "`+srv.URL+`"}], "paths"`))},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(strings.ReplaceAll(spec, `"paths"`, `"servers": [{"url": "`+srv.URL+`"}], "paths"`))},
 		Ref:     "#/paths/~1pets/post",
 		Context: nil,
 	})
@@ -1234,7 +1243,7 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 	          {"$ref": "#/components/parameters/IdParam"},
 	          {"$ref": "#/components/parameters/VerboseParam"}
 	        ],
-	        "responses": {"200": {"description": "ok"}}
+	        "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {}}}}}
 	      }
 	    }
 	  },
@@ -1301,17 +1310,14 @@ func TestPrepareBinding_UsesCachePrimedFromContent(t *testing.T) {
 	}
 }
 
-// TestIntegration_CollisionDeliversToBothWireLocations proves the
-// field-collision rule end to end: PUT /users/{id} with id also required
-// in the body sends ONE caller value to BOTH wire locations.
-func TestIntegration_CollisionDeliversToBothWireLocations(t *testing.T) {
-	var gotPath string
-	var gotBody map[string]any
+// A parameter/body collision makes that request-media candidate
+// inadmissible. One caller value is never duplicated into independent wire
+// declarations.
+func TestIntegration_CollisionRefusesBeforeDispatch(t *testing.T) {
+	var requests atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		requests.Add(1)
+		http.Error(w, "must not dispatch", http.StatusTeapot)
 	}))
 	defer ts.Close()
 
@@ -1337,19 +1343,16 @@ func TestIntegration_CollisionDeliversToBothWireLocations(t *testing.T) {
 
 	inv := NewInvoker()
 	call := inv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: "openapi@3.0.0", Content: openbindings.TextContent(spec)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1users~1{id}/put",
 	})
 	if err := call.Write(context.Background(), map[string]any{"id": "u1", "name": "Ada"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openbindings.Single(context.Background(), call.Outputs()); err != nil {
-		t.Fatal(err)
+	if _, err := openbindings.Single(context.Background(), call.Outputs()); err == nil {
+		t.Fatal("collision must refuse")
 	}
-	if gotPath != "/users/u1" {
-		t.Fatalf("path = %q, want /users/u1", gotPath)
-	}
-	if gotBody["id"] != "u1" || gotBody["name"] != "Ada" {
-		t.Fatalf("body must carry the colliding field too, got %v", gotBody)
+	if requests.Load() != 0 {
+		t.Fatalf("collision refusal must precede dispatch, got %d requests", requests.Load())
 	}
 }

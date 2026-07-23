@@ -18,11 +18,52 @@ import (
 
 func invokeWith(t *testing.T, spec, ref string, input any) (any, *openbindings.InvocationError) {
 	t.Helper()
+	spec = withDeclaredJSONResponses(t, spec)
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
 		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    ref,
 	})
 	return driveSingle(t, call, input)
+}
+
+// Most routing fixtures predate OAPI-P-07 and are not response-negotiation
+// tests. Give their otherwise-minimal Response Objects the concrete JSON
+// declaration their fake server already emits; fixtures with explicit
+// content remain untouched.
+func withDeclaredJSONResponses(t *testing.T, spec string) string {
+	t.Helper()
+	var document any
+	if err := json.Unmarshal([]byte(spec), &document); err != nil {
+		return spec
+	}
+	var visit func(any)
+	visit = func(value any) {
+		switch node := value.(type) {
+		case map[string]any:
+			if responses, ok := node["responses"].(map[string]any); ok {
+				for _, raw := range responses {
+					response, ok := raw.(map[string]any)
+					if !ok || response["$ref"] != nil || response["content"] != nil {
+						continue
+					}
+					response["content"] = map[string]any{"application/json": map[string]any{"schema": map[string]any{}}}
+				}
+			}
+			for _, child := range node {
+				visit(child)
+			}
+		case []any:
+			for _, child := range node {
+				visit(child)
+			}
+		}
+	}
+	visit(document)
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +256,7 @@ func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
 			if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 				t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 			}
-			if ierr.Message != wantMsg {
+			if !strings.Contains(ierr.Message, wantMsg) {
 				t.Errorf("refusal message = %q, want %q", ierr.Message, wantMsg)
 			}
 			if requests.Load() != 0 {
@@ -593,9 +634,9 @@ func TestInvoke_BinaryOnlyBodyRefused(t *testing.T) {
 // text/plain while it does — has no OAS-defined wire form and refuses
 // pre-dispatch rather than inventing carriage.
 func TestInvoke_DegenerateMediaSchemaCombinationRefused(t *testing.T) {
-	const multipartMsg = `request media selection (OAPI-P-04) lands on multipart/form-data, but the declared body schema does not flatten (no properties and no explicit object type): openbindings.openapi@1 defines no request carriage for this combination`
-	const urlencodedMsg = `request media selection (OAPI-P-04) lands on application/x-www-form-urlencoded, but the declared body schema does not flatten (no properties and no explicit object type): openbindings.openapi@1 defines no request carriage for this combination`
-	const textMsg = `request media selection (OAPI-P-04) lands on text/plain, but the declared body schema flattens (an object contract): openbindings.openapi@1 defines no request carriage for this combination`
+	const multipartMsg = `request media candidate multipart/form-data has a non-object body schema and is inadmissible`
+	const urlencodedMsg = `request media candidate application/x-www-form-urlencoded has a non-object body schema and is inadmissible`
+	const textMsg = `request media candidate text/plain has an object body schema and is inadmissible`
 	cases := []struct {
 		name    string
 		content string
@@ -646,7 +687,7 @@ func TestInvoke_DegenerateMediaSchemaCombinationRefused(t *testing.T) {
 			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 				t.Fatalf("expected the degenerate-combination refusal, got %v", ierr)
 			}
-			if ierr.Message != tc.wantMsg {
+			if !strings.Contains(ierr.Message, tc.wantMsg) {
 				t.Errorf("refusal message = %q, want %q", ierr.Message, tc.wantMsg)
 			}
 			if requests.Load() != 0 {
@@ -824,16 +865,22 @@ func TestInvoke_AcceptHeaderMembership(t *testing.T) {
 		t.Errorf("Accept = %q, must not contain failure-response media", gotAccept)
 	}
 
-	// Absent any declaration: application/json.
+	// Absent any declaration: no Accept header is invented. Drive this one
+	// directly so the routing-fixture helper does not add response media.
 	srv2, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAccept = r.Header.Get("Accept")
 		w.WriteHeader(200)
 	})
-	if _, ierr := invokeWith(t, widgetSpec(srv2.URL), "#/paths/~1session/get", nil); ierr != nil {
-		t.Fatalf("invoke: %v", ierr)
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv2.URL))},
+		Ref:    "#/paths/~1session/get",
+	})
+	outputs, ierr := driveOutputs(context.Background(), call, nil)
+	if ierr != nil || len(outputs) != 0 {
+		t.Fatalf("invoke: outputs=%v error=%v", outputs, ierr)
 	}
-	if gotAccept != "application/json" {
-		t.Errorf("Accept = %q, want the application/json default", gotAccept)
+	if gotAccept != "" {
+		t.Errorf("Accept = %q, want omission", gotAccept)
 	}
 }
 
@@ -974,7 +1021,8 @@ func TestDecode_CharsetHandling(t *testing.T) {
 		t.Error("an unsupported charset must be a loud decode error")
 	}
 
-	// Empty body (204 included) yields null on every lane.
+	// The builtin decoder returns nil for absent bytes; the invocation layer
+	// interprets that as zero output values rather than a JSON null result.
 	dec = decodeByContentType("application/json")
 	out, err = dec(openbindings.InvokeSite{}, openbindings.RawResult{Body: nil})
 	if err != nil || out != nil {

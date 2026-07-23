@@ -176,17 +176,101 @@ type SynthesizeInput struct {
 	Version             string             `json:"version,omitempty"`
 	Description         string             `json:"description,omitempty"`
 
-	// OnWarning, when set, is invoked by synthesizers that encounter non-fatal
-	// limitations during interface construction (e.g., a source-side feature
-	// the schema profile cannot fully express). The synthesizer still produces
-	// a valid Interface; the warning surfaces what was lost or approximated.
-	// nil is acceptable and means warnings are dropped silently.
+	// OnWarning, when set, is invoked for a non-fatal, usable but lossy schema
+	// projection. It must never stand in for omitting a callable target or for
+	// returning an operation that is statically guaranteed to refuse; those
+	// conditions fail synthesis. nil is acceptable because warning-free use of
+	// the returned Interface remains sound.
 	OnWarning func(SynthesizerWarning) `json:"-"`
 }
 
-// SynthesizerWarning describes a non-fatal limitation encountered while building
-// an Interface. Warnings do not block synthesis; the returned Interface is
-// still valid and usable. Consumers may surface warnings in tooling output
+// SynthesisSkeleton returns the deterministic source-less result required by
+// the interface-synthesizer contract. Family synthesizers use the same helper
+// as the combined dispatcher so a source-less call has no family-dependent
+// behavior.
+func SynthesisSkeleton(in *SynthesizeInput) (Interface, error) {
+	version := MaxTestedVersion
+	var name, contractVersion, description string
+	if in != nil {
+		if in.OpenBindingsVersion != "" {
+			version = in.OpenBindingsVersion
+		}
+		name = in.Name
+		contractVersion = in.Version
+		description = in.Description
+	}
+	iface := Interface{
+		OpenBindings: version,
+		Name:         name,
+		Version:      contractVersion,
+		Description:  description,
+		Operations:   map[string]Operation{},
+	}
+	if err := iface.Validate(); err != nil {
+		return Interface{}, fmt.Errorf("source-less synthesis target is invalid: %w", err)
+	}
+	return iface, nil
+}
+
+// FinalizeSynthesis applies the format-neutral authoring directives shared by
+// all single-source synthesizers and validates the emitted OBI. Artifact
+// acquisition and the embed directive remain family work because only the
+// governing binding specification knows what bytes constitute the source.
+func FinalizeSynthesis(iface *Interface, in *SynthesizeInput, defaultSourceName, bindingSpec string) error {
+	if iface == nil || in == nil || len(in.Sources) != 1 {
+		return fmt.Errorf("finalize synthesis requires one source and one interface")
+	}
+	src := in.Sources[0]
+	if src.BindingSpec != bindingSpec {
+		return fmt.Errorf("synthesizer supports exact binding specification %q, got %q", bindingSpec, src.BindingSpec)
+	}
+	if in.OpenBindingsVersion != "" {
+		iface.OpenBindings = in.OpenBindingsVersion
+	}
+	if in.Name != "" {
+		iface.Name = in.Name
+	}
+	if in.Version != "" {
+		iface.Version = in.Version
+	}
+	if in.Description != "" {
+		iface.Description = in.Description
+	}
+
+	entry, ok := iface.Sources[defaultSourceName]
+	if !ok {
+		return fmt.Errorf("synthesizer emitted no source %q", defaultSourceName)
+	}
+	entry.BindingSpec = bindingSpec
+	if src.OutputLocation != "" {
+		entry.Location = src.OutputLocation
+	}
+	if src.Description != "" {
+		entry.Description = src.Description
+	}
+	outputName := defaultSourceName
+	if src.Name != "" {
+		outputName = src.Name
+	}
+	delete(iface.Sources, defaultSourceName)
+	iface.Sources[outputName] = entry
+	if outputName != defaultSourceName {
+		for key, binding := range iface.Bindings {
+			if binding.Source == defaultSourceName {
+				binding.Source = outputName
+				iface.Bindings[key] = binding
+			}
+		}
+	}
+	if err := iface.Validate(); err != nil {
+		return fmt.Errorf("synthesized interface is invalid: %w", err)
+	}
+	return nil
+}
+
+// SynthesizerWarning describes a non-fatal, usable but lossy projection made
+// while building an Interface. Warnings do not block synthesis; every returned
+// operation remains bindable. Consumers may surface warnings in tooling output
 // (CLI, registry publish checks, CI) to inform users about lossy conversions.
 type SynthesizerWarning struct {
 	// Code is a stable machine-readable identifier for programmatic handling.

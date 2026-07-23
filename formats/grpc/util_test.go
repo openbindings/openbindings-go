@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -216,64 +215,26 @@ func mustApplyGRPCContext(t *testing.T, ctx context.Context, bindCtx map[string]
 	return result
 }
 
-func TestApplyGRPCContext_BearerToken(t *testing.T) {
-	ctx := context.Background()
-	bindCtx := map[string]any{"bearerToken": "tok_123"}
-	result := mustApplyGRPCContext(t, ctx, bindCtx)
-
-	md, ok := metadata.FromOutgoingContext(result)
-	if !ok {
-		t.Fatal("expected outgoing metadata")
-	}
-	auth := md.Get("authorization")
-	if len(auth) != 1 || auth[0] != "Bearer tok_123" {
-		t.Errorf("authorization = %v, want [Bearer tok_123]", auth)
+func TestApplyGRPCContext_GenericBearerDoesNotInventMetadata(t *testing.T) {
+	result := mustApplyGRPCContext(t, context.Background(), map[string]any{"bearerToken": "tok_123"})
+	if _, ok := metadata.FromOutgoingContext(result); ok {
+		t.Fatal("generic bearer credential must not be assigned an invented gRPC metadata field")
 	}
 }
 
 func TestApplyGRPCContext_APIKey(t *testing.T) {
-	ctx := context.Background()
-	bindCtx := map[string]any{"apiKey": "key_abc"}
-	result := mustApplyGRPCContext(t, ctx, bindCtx)
-
-	md, ok := metadata.FromOutgoingContext(result)
-	if !ok {
-		t.Fatal("expected outgoing metadata")
-	}
-	auth := md.Get("authorization")
-	if len(auth) != 1 || auth[0] != "ApiKey key_abc" {
-		t.Errorf("authorization = %v, want [ApiKey key_abc]", auth)
+	result := mustApplyGRPCContext(t, context.Background(), map[string]any{"apiKey": "key_abc"})
+	if _, ok := metadata.FromOutgoingContext(result); ok {
+		t.Fatal("generic API credential must not be assigned an invented gRPC metadata field")
 	}
 }
 
 func TestApplyGRPCContext_BasicAuth(t *testing.T) {
-	ctx := context.Background()
-	bindCtx := map[string]any{"basic": map[string]any{"username": "user", "password": "pass"}}
-	result := mustApplyGRPCContext(t, ctx, bindCtx)
-
-	md, ok := metadata.FromOutgoingContext(result)
-	if !ok {
-		t.Fatal("expected outgoing metadata")
-	}
-	auth := md.Get("authorization")
-	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("user:pass"))
-	if len(auth) != 1 || auth[0] != want {
-		t.Errorf("authorization = %v, want [%s]", auth, want)
-	}
-}
-
-func TestApplyGRPCContext_BearerTakesPriority(t *testing.T) {
-	ctx := context.Background()
-	bindCtx := map[string]any{
-		"bearerToken": "tok_123",
-		"apiKey":      "key_abc",
-	}
-	result := mustApplyGRPCContext(t, ctx, bindCtx)
-
-	md, _ := metadata.FromOutgoingContext(result)
-	auth := md.Get("authorization")
-	if len(auth) != 1 || auth[0] != "Bearer tok_123" {
-		t.Errorf("authorization = %v, want [Bearer tok_123]", auth)
+	result := mustApplyGRPCContext(t, context.Background(), map[string]any{
+		"basic": map[string]any{"username": "user", "password": "pass"},
+	})
+	if _, ok := metadata.FromOutgoingContext(result); ok {
+		t.Fatal("generic basic credential must not be assigned an invented gRPC metadata field")
 	}
 }
 
@@ -290,7 +251,7 @@ func TestApplyGRPCContext_NoCredentials(t *testing.T) {
 func TestApplyGRPCContext_ContextHeaders(t *testing.T) {
 	ctx := context.Background()
 	bindCtx := map[string]any{
-		"headers": map[string]any{"x-custom": "value"},
+		"headers": map[string]any{"x-custom": "value", "authorization": "Bearer explicit"},
 	}
 	result := mustApplyGRPCContext(t, ctx, bindCtx)
 
@@ -301,6 +262,9 @@ func TestApplyGRPCContext_ContextHeaders(t *testing.T) {
 	got := md.Get("x-custom")
 	if len(got) != 1 || got[0] != "value" {
 		t.Errorf("x-custom = %v, want [value]", got)
+	}
+	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer explicit" {
+		t.Errorf("authorization = %v, want explicitly supplied metadata", got)
 	}
 }
 

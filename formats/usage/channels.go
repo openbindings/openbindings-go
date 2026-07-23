@@ -288,12 +288,9 @@ const (
 // whether it can receive a value token.
 func findSlot(cmd *Command, inherited []Flag, field string) (any, slotKind) {
 	for _, f := range cmd.AllFlags(inherited) {
-		names := []string{f.PrimaryName()}
-		parsed := f.ParseUsage()
-		names = append(names, parsed.Short...)
-		names = append(names, parsed.Long...)
-		for _, n := range names {
+		for _, n := range f.inputNames() {
 			if n == field && n != "" {
+				parsed := f.ParseUsage()
 				takesValue := parsed.ArgName != "" || len(f.Args) > 0
 				if f.Count || !takesValue {
 					return f, slotBoolFlag
@@ -313,7 +310,7 @@ func findSlot(cmd *Command, inherited []Flag, field string) (any, slotKind) {
 func slotChoices(slot any) []string {
 	switch s := slot.(type) {
 	case Flag:
-		return s.Choices
+		return s.effectiveChoices()
 	case Arg:
 		return s.Choices
 	}

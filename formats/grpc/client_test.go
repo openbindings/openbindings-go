@@ -74,7 +74,7 @@ message PingMsg { string msg = 1; }
 	h2 := inv.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
 		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
 		Ref:     "tiny.Tiny/Ping",
-		Context: map[string]any{"configuration": map[string]any{"target": "127.0.0.1:1"}},
+		Context: map[string]any{"configuration": map[string]any{"target": "grpc://127.0.0.1:1"}},
 	})
 	_ = h2.Write(ctx, map[string]any{"msg": "hi"})
 	_, err2 := openbindings.Single(ctx, h2.Outputs())

@@ -121,7 +121,7 @@ service TestService {
 	}
 }
 
-func TestInspectSource_FiltersClientStreaming(t *testing.T) {
+func TestInspectSource_IncludesClientStreaming(t *testing.T) {
 	protoContent := `
 syntax = "proto3";
 package testpkg;
@@ -143,11 +143,14 @@ service TestService {
 		t.Fatal(err)
 	}
 
-	if len(result.Targets) != 1 {
-		t.Fatalf("expected 1 ref (client streaming filtered), got %d", len(result.Targets))
+	if len(result.Targets) != 2 {
+		t.Fatalf("expected both binding-spec-supported refs, got %d", len(result.Targets))
 	}
 	if result.Targets[0].Ref != "testpkg.TestService/GetItem" {
 		t.Errorf("ref = %q, want testpkg.TestService/GetItem", result.Targets[0].Ref)
+	}
+	if result.Targets[1].Ref != "testpkg.TestService/StreamUpload" {
+		t.Errorf("ref = %q, want testpkg.TestService/StreamUpload", result.Targets[1].Ref)
 	}
 }
 

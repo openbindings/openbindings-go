@@ -29,7 +29,7 @@ type Document struct {
 // ParseDocument parses AsyncAPI document bytes — JSON or YAML, discriminated
 // by the leading non-whitespace byte, never by content sniffing beyond that —
 // into a Document handle. The artifact's own `asyncapi` field discriminates
-// the accepted line: 3.0.x only, anything else (AsyncAPI 2.x included) is
+// the accepted revision: exactly 3.0.0, anything else (AsyncAPI 2.x included) is
 // refused loudly (ASYNC-P-01). Internal Reference Objects are resolved per
 // the artifact's own reference rules — an operations-map entry that is a
 // Reference Object resolves through it before the operation-object test
