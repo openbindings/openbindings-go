@@ -127,12 +127,16 @@ operations:
     action: send
     channel: {$ref: "#/channels/c"}
 `)
-	ep, err := d.ResolveEndpoint("#/operations/op", nil)
+	if _, err := d.ResolveEndpoint("#/operations/op", nil); err == nil {
+		t.Fatal("several bindable servers must require selection, never declaration-order defaulting")
+	}
+	ep, err := d.ResolveEndpoint("#/operations/op",
+		configuration(map[string]any{"server": map[string]any{"key": "b-web"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ep.URL != "wss://ws.example/c" || ep.Protocol != "wss" {
-		t.Errorf("got %+v, want the first bound-protocol candidate in key order (b-web)", ep)
+		t.Errorf("got %+v, want explicitly selected b-web", ep)
 	}
 }
 
@@ -278,19 +282,15 @@ func TestResolveEndpoint_ServerVariables(t *testing.T) {
 		t.Errorf("URL = %q", ep.URL)
 	}
 
-	// A supplied value outside the declared enum is NOT refused (§9.2, R1):
-	// the enum is the author's expectation, not a boundary, and the same
-	// point admits a full-URL override that bypasses the declaration.
-	ep, err = d.ResolveEndpoint("#/operations/op",
+	// A supplied value outside the declared enum is refused. A full-URL
+	// override remains distinct and is tested below.
+	_, err = d.ResolveEndpoint("#/operations/op",
 		configuration(map[string]any{"server": map[string]any{
 			"key":       "tiered",
 			"variables": map[string]any{"env": "qa"},
 		}}))
-	if err != nil {
-		t.Fatalf("an out-of-enum value must not be refused: %v", err)
-	}
-	if ep.URL != "wss://qa.example.com/c" {
-		t.Errorf("out-of-enum substitution URL = %q", ep.URL)
+	if err == nil {
+		t.Fatal("an out-of-enum value must be refused")
 	}
 
 	// A supplied name the selected server does not declare is refused,
@@ -305,9 +305,10 @@ func TestResolveEndpoint_ServerVariables(t *testing.T) {
 		t.Errorf("the refusal must name the undeclared variable, got %v", err)
 	}
 
-	// The url-override form still bypasses variables entirely.
+	// A URL replacement bypasses unresolved URL-template variables but still
+	// names the selected artifact server whose declarations govern.
 	ep, err = d.ResolveEndpoint("#/operations/op",
-		configuration(map[string]any{"server": map[string]any{"url": "wss://staging.example.com"}}))
+		configuration(map[string]any{"server": map[string]any{"key": "tiered", "url": "wss://staging.example.com"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,10 +317,8 @@ func TestResolveEndpoint_ServerVariables(t *testing.T) {
 	}
 }
 
-// TestResolveEndpoint_ServerConfiguration: the §9.2 pinned
-// configuration.server value shapes — {"key": ...} member selection xor
-// {"url": ...} full connection-URL override, out-of-revision schemes
-// refused, every other spelling refused with the teaching error.
+// TestResolveEndpoint_ServerConfiguration exercises member selection and a
+// same-scheme URL replacement of that selected member.
 func TestResolveEndpoint_ServerConfiguration(t *testing.T) {
 	d := mustParse(t, `asyncapi: "3.0.0"
 info: {title: t, version: "1"}
@@ -352,31 +351,28 @@ operations:
 		t.Errorf("the refusal must teach the pin, got %v", err)
 	}
 
-	// The two pinned forms are mutually exclusive.
-	if _, err := d.ResolveEndpoint("#/operations/op",
+	// Selection and replacement compose.
+	ep, err = d.ResolveEndpoint("#/operations/op",
 		configuration(map[string]any{"server": map[string]any{
 			"key": "b",
 			"url": "wss://override.example",
-		}})); err == nil {
-		t.Error("key and url together must be refused")
-	} else if !strings.Contains(err.Error(), `carries both "key" and "url"`) {
-		t.Errorf("the refusal must name the mutual exclusion, got %v", err)
-	}
-
-	// Full connection-URL override: the URL's scheme decides the protocol,
-	// and the address still concatenates onto it.
-	ep, err = d.ResolveEndpoint("#/operations/op",
-		configuration(map[string]any{"server": map[string]any{"url": "wss://override.example/v2"}}))
+		}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ep.URL != "wss://override.example/v2/c" || ep.Protocol != "wss" {
-		t.Errorf("url override: got %+v", ep)
+	if ep.URL != "wss://override.example/c" || ep.Protocol != "wss" {
+		t.Errorf("selected URL replacement: got %+v", ep)
+	}
+
+	// URL alone cannot choose between several artifact servers.
+	if _, err := d.ResolveEndpoint("#/operations/op",
+		configuration(map[string]any{"server": map[string]any{"url": "wss://override.example/v2"}})); err == nil {
+		t.Error("URL replacement without member selection must refuse when several remain")
 	}
 
 	// An out-of-revision scheme on the override is refused pre-dispatch.
 	if _, err := d.ResolveEndpoint("#/operations/op",
-		configuration(map[string]any{"server": map[string]any{"url": "mqtt://mq.example"}})); err == nil {
+		configuration(map[string]any{"server": map[string]any{"key": "b", "url": "mqtt://mq.example"}})); err == nil {
 		t.Error("an out-of-revision override scheme must be refused")
 	}
 

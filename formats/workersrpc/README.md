@@ -2,6 +2,12 @@
 
 Go-side stub registration for the `workers-rpc@^1.0.0` OpenBindings binding format.
 
+> **Legacy experimental adapter.** This package recognizes the historical
+> `workers-rpc@^1.0.0` token. It is not an implementation of the unpromoted
+> `openbindings.workers-rpc@1` candidate, is not one of the six published 0.2
+> binding specifications, and does not participate in the release's portable
+> synthesis-coverage guarantee.
+
 **This package cannot dispatch Workers RPC calls.** Cloudflare Workers RPC is a JavaScript runtime feature: a sibling Worker exposes a `WorkerEntrypoint` class via a service binding declared in `wrangler.toml`, and the calling Worker invokes methods on it through `env[bindingName][methodName](args)`. The Cloudflare runtime handles structured-clone serialization across the binding boundary. There is no HTTP, no JSON, no URL, and no way for a Go program to participate.
 
 For the actual runtime invoker, use [`@openbindings/workers-rpc`](https://github.com/openbindings/openbindings-ts/tree/main/packages/workers-rpc) from inside your Cloudflare Worker.

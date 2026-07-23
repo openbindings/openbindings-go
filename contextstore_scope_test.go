@@ -6,8 +6,8 @@ import (
 )
 
 // ScopeContext enforces least privilege: a CONTEXT_REQUIRED challenge is a
-// scope, not a hint. Non-secret config always passes; only the satisfied
-// alternative's credential family is admitted; other credentials are withheld.
+// scope, not a hint. Only fields named by the satisfied alternative pass;
+// arbitrary stored context is not assumed public or relevant.
 
 func TestScopeContext_WithholdsUnrelatedCredentials(t *testing.T) {
 	stored := map[string]any{
@@ -22,12 +22,9 @@ func TestScopeContext_WithholdsUnrelatedCredentials(t *testing.T) {
 		},
 	}
 	got := ScopeContext(stored, details)
-	want := map[string]any{
-		"bearerToken": "tok",
-		"headers":     map[string]any{"Accept": "application/json"},
-	}
+	want := map[string]any{"bearerToken": "tok"}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("scoped = %v, want %v (apiKey withheld, headers kept)", got, want)
+		t.Errorf("scoped = %v, want %v (unrelated apiKey and headers withheld)", got, want)
 	}
 }
 
@@ -53,8 +50,8 @@ func TestScopeContext_AdmitsWholeOAuth2Family(t *testing.T) {
 	if _, ok := got["apiKey"]; ok {
 		t.Errorf("unrelated apiKey must be withheld, got %v", got)
 	}
-	if _, ok := got["headers"]; !ok {
-		t.Errorf("non-secret headers must pass through, got %v", got)
+	if _, ok := got["headers"]; ok {
+		t.Errorf("unrequested headers must be withheld, got %v", got)
 	}
 }
 
@@ -95,10 +92,7 @@ func TestScopeContext_AdmitsOnlyTheNamedAPIKey(t *testing.T) {
 		},
 	}
 	got := ScopeContext(stored, details)
-	want := map[string]any{
-		"apiKeys": map[string]any{"serviceA": "key-a"},
-		"headers": map[string]any{"Accept": "application/json"},
-	}
+	want := map[string]any{"apiKeys": map[string]any{"serviceA": "key-a"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("scoped = %v, want %v (serviceB withheld)", got, want)
 	}
@@ -155,8 +149,8 @@ func TestScopeContext_NamedAPIKeyFallsBackToPlainApiKey(t *testing.T) {
 // unmapped family (e.g. "auth.http.digest") is never satisfiable
 // (requirementSatisfied always declines it), so ScopeContext falls through
 // the whole loop admitting nothing — real stored credentials (bearerToken,
-// apiKey) stay withheld exactly as when no alternative is satisfied at all;
-// only non-secret configuration passes through.
+// apiKey) and unrelated fields stay withheld exactly as when no alternative
+// is satisfied at all.
 func TestScopeContext_UnmappedAlternativeAdmitsNoCredentials(t *testing.T) {
 	stored := map[string]any{
 		"bearerToken": "should-be-withheld",
@@ -169,8 +163,32 @@ func TestScopeContext_UnmappedAlternativeAdmitsNoCredentials(t *testing.T) {
 		},
 	}
 	got := ScopeContext(stored, details)
-	want := map[string]any{"headers": map[string]any{"X": "1"}}
+	want := map[string]any{}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("scoped = %v, want %v (no alternative is satisfiable, so no credential is admitted)", got, want)
+	}
+}
+
+func TestScopeContext_AdmitsOnlyNamedConfigurationPoint(t *testing.T) {
+	stored := map[string]any{
+		"configuration": map[string]any{
+			"server": map[string]any{"url": "https://api.example.com"},
+			"decode": "text",
+		},
+		"headers": map[string]any{"Authorization": "sensitive"},
+	}
+	details := &ContextRequiredDetails{
+		Target: "https://api.example.com",
+		Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{
+			Type:  "config.value",
+			Extra: map[string]any{"point": "server", "key": "url"},
+		}}}},
+	}
+	got := ScopeContext(stored, details)
+	want := map[string]any{"configuration": map[string]any{
+		"server": map[string]any{"url": "https://api.example.com"},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("scoped = %v, want %v", got, want)
 	}
 }

@@ -26,8 +26,9 @@ import (
 // misconfiguration no runtime can fix. resolveServer already consulted the
 // supplied context and found the value absent, so the challenge fires
 // unconditionally; the operation-invoker's bounded resolve-and-retry loop is
-// the backstop. config values are non-secret, so the challenge carries an
-// empty target (a best-effort key suffices and no server URL has resolved).
+// the backstop. No server target has resolved, so the challenge target is
+// empty. A resolver may satisfy it interactively or from caller-owned policy;
+// a generic store-backed resolver must not infer a reusable target from it.
 func configOrSourceError(err error) *openbindings.InvocationError {
 	var cr *configRequired
 	if errors.As(err, &cr) {

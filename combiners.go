@@ -102,6 +102,7 @@ func (c *combinedInvoker) findInvoker(bindingSpec string) BindingInvoker {
 // ---------------------------------------------------------------------------
 
 var _ SourceInspector = (*combinedSynthesizer)(nil)
+var _ CoverageSynthesizer = (*combinedSynthesizer)(nil)
 
 type combinedSynthesizer struct {
 	bySpec map[string]InterfaceSynthesizer // exact identifier -> synthesizer
@@ -124,6 +125,28 @@ func (c *combinedSynthesizer) SynthesizeInterface(ctx context.Context, in *Synth
 		return nil, fmt.Errorf("%w: %s", ErrNoSynthesizer, in.Sources[0].BindingSpec)
 	}
 	return cr.SynthesizeInterface(ctx, in)
+}
+
+// SynthesizeInterfaceWithCoverage routes to the selected synthesizer's
+// durable coverage surface. It never fabricates exhaustive evidence from a
+// strict synthesis result.
+func (c *combinedSynthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *SynthesizeInput) (*SynthesizeResult, error) {
+	if len(in.Sources) == 0 {
+		skeleton, err := SynthesisSkeleton(in)
+		if err != nil {
+			return nil, err
+		}
+		return NewSynthesisResult(&skeleton, nil, true)
+	}
+	cr := c.bySpec[in.Sources[0].BindingSpec]
+	if cr == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNoSynthesizer, in.Sources[0].BindingSpec)
+	}
+	coverage, ok := cr.(CoverageSynthesizer)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrSynthesisCoverageUnsupported, in.Sources[0].BindingSpec)
+	}
+	return coverage.SynthesizeInterfaceWithCoverage(ctx, in)
 }
 
 // InspectSource implements SourceInspector by routing to the underlying

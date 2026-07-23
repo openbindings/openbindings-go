@@ -28,8 +28,9 @@ import (
 // fires unconditionally; the operation-invoker's bounded resolve-and-retry
 // loop is the backstop against a resolver that keeps supplying an insufficient
 // value. serverURL is the resolved target when known (empty when server
-// resolution itself failed), used as the challenge target for storage keying;
-// config values are non-secret, so a best-effort target suffices.
+// resolution itself failed), used as the challenge's best available scope.
+// A resolver decides whether that scope is sufficient for stored-value
+// release; configuration is not assumed public.
 func configOrSourceError(err error, serverURL string) *openbindings.InvocationError {
 	var cr *configRequired
 	if errors.As(err, &cr) {
@@ -58,13 +59,13 @@ func configOrSourceError(err error, serverURL string) *openbindings.InvocationEr
 // One entrypoint (runBinding) drives every cell against the binding-facing
 // BindingHandle:
 //
-//	receive + http/https  unary publish: one input -> request body (POST),
-//	                      response -> at most one output
+//	receive + http/https  unary publish: one input -> request body using the
+//	                      artifact-declared method, response -> at most one output
 //	receive + ws/wss      client-streaming publish: every input -> one
 //	                      socket frame; the caller closing input ends it
-//	send + http/https     SSE subscription: server events -> outputs
-//	send + ws/wss         streaming subscription (bidi-capable): socket
-//	                      frames -> outputs, caller inputs forward as frames
+//	send + http/https     excluded in revision 1
+//	send + ws/wss         server-streaming subscription: socket frames ->
+//	                      outputs, no caller input values
 //
 // All pre-dispatch failures (bad ref, no resolvable server, missing
 // context, an unresolved address or server variable, an unsatisfied
@@ -267,6 +268,9 @@ func validateCell(doc *document, ch *channel, op *asyncOperation, protocol strin
 		if _, err = resolveInputCodec(doc, selected, bindCtx); err != nil {
 			return err
 		}
+		if !replyMessagesBindable(doc, op) {
+			return fmt.Errorf("an HTTP reply message uses carriage outside revision 1")
+		}
 		fields, err := protocolFieldValues(bindCtx)
 		if err != nil {
 			return err
@@ -467,10 +471,9 @@ func unmappedRequirementType(s securityScheme) string {
 // discoverable to a runtime with a resolver for it. Side-effect-free;
 // shared by runBinding and PrepareBinding.
 //
-// secSrv is the server whose declared security applies (§9.5): the server
-// the connection actually goes to — or, under a full-URL override, the
-// server the default selection would have targeted (resolveTarget's
-// SecurityServer). nil means the artifact declares no such server.
+// secSrv is the selected artifact server whose declared security applies
+// (§9.5), including when its target is replaced by a complete URL
+// (resolveTarget's SecurityServer). nil means no artifact server was selected.
 func requiredContext(doc *document, asyncOp *asyncOperation, secSrv *server, serverURL string, ctx map[string]any) *openbindings.ContextRequiredDetails {
 	serverReqs := resolveRequirementList(doc, serverSecurityRequirements(secSrv), serverURL)
 	opReqs := resolveRequirementList(doc, operationSecurityRequirements(asyncOp), serverURL)
@@ -580,9 +583,8 @@ func absolutizeURL(ref, baseURL string) string {
 
 // serverSecurityRequirements returns the security list of the server whose
 // declared security applies (§9.5, ASYNC-P-07) — resolveTarget's
-// SecurityServer, so the requirements always describe the server the
-// connection targets (or, under a full-URL override, the server the default
-// selection would have targeted).
+// SecurityServer, so the requirements always describe the selected artifact
+// server, including when configuration replaces only its connection target.
 func serverSecurityRequirements(secSrv *server) []securityRequirement {
 	if secSrv != nil {
 		return secSrv.Security
@@ -666,7 +668,7 @@ func securityRequirementName(req securityRequirement) string {
 }
 
 // ---------------------------------------------------------------------------
-// Publish over HTTP (`receive` action): unary POST
+// Publish over HTTP (`receive` action): unary, artifact-declared method
 // ---------------------------------------------------------------------------
 
 func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTarget, address string, doc *document, ch *channel, asyncOp *asyncOperation, args *openbindings.BindingInvocationArgs, h handle, prepared *preparedInput) {
@@ -722,8 +724,8 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 		return
 	}
 
-	// The request method is the http operation binding's `method` where
-	// declared, else POST (§8, ASYNC-P-02).
+	// The request method is the required http operation binding's `method`
+	// (§8, ASYNC-P-02); validateCell already refused its absence.
 	requestURL := joinURL(target.ServerURL, address)
 	fields, ferr := protocolFieldValues(args.Context)
 	if ferr != nil {
@@ -1426,10 +1428,7 @@ func httpStatusError(resp *http.Response) *openbindings.InvocationError {
 // the server whose declared security applies (§9.5).
 func applyHTTPContext(req *http.Request, doc *document, secSrv *server, asyncOp *asyncOperation, bindCtx map[string]any) {
 	if len(bindCtx) > 0 {
-		applied, queryParams := applyCredentialsViaSecuritySchemes(req, doc, secSrv, asyncOp, bindCtx)
-		if !applied {
-			applyCredentialsFallback(req, bindCtx)
-		}
+		_, queryParams := applyCredentialsViaSecuritySchemes(req, doc, secSrv, asyncOp, bindCtx)
 		if len(queryParams) > 0 {
 			q := req.URL.Query()
 			for k, vs := range queryParams {
@@ -1566,18 +1565,6 @@ func applyCredentialsViaSecuritySchemes(req *http.Request, doc *document, secSrv
 	return applied, queryParams
 }
 
-// applyCredentialsFallback applies credentials using sensible defaults when
-// no securitySchemes are defined in the spec.
-func applyCredentialsFallback(req *http.Request, bindCtx map[string]any) {
-	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	} else if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
-		req.SetBasicAuth(u, p)
-	} else if key := openbindings.ContextAPIKey(bindCtx); key != "" {
-		req.Header.Set("Authorization", "ApiKey "+key)
-	}
-}
-
 // builtinDecodeFor is the asyncapi builtin decoder: strict JSON when the
 // DECLARED message contentType is application/json or a +json suffix
 // (a declared-JSON payload that fails to parse is a lying producer — a
@@ -1601,6 +1588,12 @@ func builtinDecodeFor(contentType string) openbindings.OutputDecoder {
 				}
 			}
 			return parsed, nil
+		}
+		if !utf8.Valid(raw.Body) {
+			return nil, &openbindings.InvocationError{
+				Code:    openbindings.ErrCodeResponseError,
+				Message: fmt.Sprintf("message declares %q but the payload is not valid UTF-8", contentType),
+			}
 		}
 		return string(raw.Body), nil
 	}

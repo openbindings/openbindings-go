@@ -69,7 +69,7 @@ func TestSignatureInvokeUntyped(t *testing.T) {
 
 // WithBindingKey bypasses selection and routes to the named binding.
 // getUser.bad emits a shape that fails the operation's OBI-T-08 output schema,
-// so routing there surfaces a validation error the preferred binding
+// so routing there surfaces a validation error the test application's main binding
 // (getUser.main, which produces name "Ada") would not.
 func TestSignatureInvokeBindingKeyOverride(t *testing.T) {
 	op := newOpInvoker(&mockBindingInvoker{}, nil)

@@ -345,6 +345,18 @@ func newOpInvoker(mock BindingInvoker, resolver ContextResolver) *OperationInvok
 	op := NewOperationInvoker(mock)
 	op.TransformEvaluator = exprEvaluator{}
 	op.ContextResolver = resolver
+	// Most operation-layer tests exercise validation, transforms, streaming,
+	// or context rather than binding resolution. Give that test application an
+	// explicit policy for its deliberately multi-bound fixtures; dedicated
+	// tests below exercise the contract's policy-neutral default.
+	op.BindingSelector = func(iface *Interface, opKey string) (string, *BindingEntry, error) {
+		key := opKey + ".main"
+		if b, ok := iface.Bindings[key]; ok && b.Operation == opKey {
+			entry := b
+			return key, &entry, nil
+		}
+		return DefaultBindingSelector(iface, opKey)
+	}
 	return op
 }
 
@@ -1004,9 +1016,8 @@ func TestSelectBinding_FormatSkippedNamesTheGap(t *testing.T) {
 	}
 }
 
-// selectionTestInterface builds a three-binding operation for exercising the
-// operation-invoker contract's default selection policy and its
-// context.configuration.selection override.
+// selectionTestInterface builds a three-binding operation for exercising
+// ambiguity refusal and context.configuration.selection.
 func selectionTestInterface() *Interface {
 	return &Interface{
 		OpenBindings: "0.2.0",
@@ -1023,29 +1034,20 @@ func selectionTestInterface() *Interface {
 	}
 }
 
-// The ruled default policy: a candidate with no declared preference ranks
-// below EVERY candidate with one — a declared negative beats undeclared —
-// and remaining ties break by lexicographic binding key.
-func TestSelectBinding_UndeclaredRanksBelowAllDeclared(t *testing.T) {
-	key, _, err := selectBinding(selectionTestInterface(), "op", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key != "op.declared" {
-		t.Fatalf("declared preference -5 must beat undeclared, got %q", key)
+func TestSelectBinding_RefusesAmbiguityWithoutInventedPolicy(t *testing.T) {
+	iface := selectionTestInterface()
+	if _, _, err := selectBinding(iface, "op", nil); !errors.Is(err, ErrBindingSelectionRequired) {
+		t.Fatalf("multiple candidates must require selection, got %v", err)
 	}
 
-	// With no declared preferences at all, lexicographic key decides.
-	iface := selectionTestInterface()
+	// Preference, deprecation, and lexicographic order remain metadata, not
+	// implicit authority to choose.
 	entry := iface.Bindings["op.declared"]
-	entry.Preference = nil
+	entry.Deprecated = true
+	entry.Preference = pf(1000)
 	iface.Bindings["op.declared"] = entry
-	key, _, err = selectBinding(iface, "op", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key != "op.declared" {
-		t.Fatalf("lexicographic tiebreak, got %q", key)
+	if _, _, err := selectBinding(iface, "op", nil); !errors.Is(err, ErrBindingSelectionRequired) {
+		t.Fatalf("metadata must not resolve ambiguity, got %v", err)
 	}
 }
 
@@ -1074,35 +1076,14 @@ func TestSelectBinding_NoSourcePreferenceInheritance(t *testing.T) {
 	if _, isModel := iface.Sources["b"].Unknown["preference"]; !isModel {
 		t.Fatal("retired source preference should land in Unknown")
 	}
-	key, _, err := selectBinding(&iface, "op", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key != "op.declared" {
-		t.Fatalf("source preference must not be inherited, got %q", key)
-	}
-}
-
-// Non-deprecated candidates rank before deprecated ones regardless of
-// declared preference.
-func TestSelectBinding_DeprecationTierBeforePreference(t *testing.T) {
-	iface := selectionTestInterface()
-	entry := iface.Bindings["op.declared"]
-	entry.Deprecated = true
-	iface.Bindings["op.declared"] = entry
-	key, _, err := selectBinding(iface, "op", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key != "op.undeclared" {
-		t.Fatalf("non-deprecated must outrank deprecated even undeclared-vs-declared, got %q", key)
+	if _, _, err := selectBinding(&iface, "op", nil); !errors.Is(err, ErrBindingSelectionRequired) {
+		t.Fatalf("source preference must not select a binding, got %v", err)
 	}
 }
 
 // The context.configuration.selection override: an ordered list of binding
 // keys, the first invocable entry winning; entries that are undefined or
-// target another operation are skipped; when none is invocable the default
-// policy applies.
+// target another operation are skipped.
 func TestSelectionOverride_FirstInvocableWins(t *testing.T) {
 	iface := selectionTestInterface()
 
@@ -1119,27 +1100,23 @@ func TestSelectionOverride_FirstInvocableWins(t *testing.T) {
 		t.Fatalf("no listed key is invocable under other@1.0, got %q", key)
 	}
 
-	// No override listed: not ok, default policy applies.
+	// No override listed: not ok, so sole-candidate/ambiguity resolution applies.
 	if _, _, ok = selectionOverride(iface, "op", nil, nil); ok {
 		t.Fatal("empty override must not select")
 	}
 }
 
-// End-to-end: WithContext carrying configuration.selection displaces the
-// default policy on Invoke, and an explicit binding key bypasses both.
+// End-to-end: no choice refuses ambiguity, configuration.selection supplies
+// an ordered choice, and an explicit binding key bypasses both.
 func TestInvoke_SelectionOverrideViaConfiguration(t *testing.T) {
 	mock := &mockBindingInvoker{}
 	op := newOpInvoker(mock, nil)
 	iface := opTestInterface()
 	iface.Bindings["ping.alt"] = BindingEntry{Operation: "ping", Source: "mock", Ref: "ping", Preference: pf(-1)}
 
-	// Default policy: ping.alt declares a preference, ping.main does not —
-	// the declared one wins.
-	if _, err := drainOutputs(t, Invoke(bg(), op, iface, NewOperationSignature[any, any]("ping"))); err != nil {
-		t.Fatal(err)
-	}
-	if got := mock.lastBindingKey(); got != "ping.alt" {
-		t.Fatalf("declared preference must win by default, got %q", got)
+	op.BindingSelector = nil
+	if _, err := drainOutputs(t, Invoke(bg(), op, iface, NewOperationSignature[any, any]("ping"))); codeOf(t, err) != ErrCodeBindingSelectionRequired {
+		t.Fatalf("ambiguous invocation must require selection, got %v", err)
 	}
 
 	// The consumer override displaces the policy.
@@ -1149,7 +1126,7 @@ func TestInvoke_SelectionOverrideViaConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := mock.lastBindingKey(); got != "ping.main" {
-		t.Fatalf("configuration.selection must displace the default, got %q", got)
+		t.Fatalf("configuration.selection must choose the first effective candidate, got %q", got)
 	}
 
 	// An explicit binding key bypasses selection (and the override) entirely.

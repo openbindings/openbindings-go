@@ -164,7 +164,7 @@ var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "p
 // §6). Embedded content with no location has no base and must be
 // self-contained: a relative external $ref then fails with a readable error
 // (absolute http(s) $refs still resolve — they need no base). The artifact's
-// own `openapi` field discriminates the accepted lines (OAPI-P-01).
+// own `openapi` field discriminates the accepted editions (OAPI-P-01).
 //
 // String content parses as YAML 1.2 (JSON being a valid subset); duplicate
 // mapping keys are refused loudly by the YAML layer itself, satisfying the
@@ -287,20 +287,20 @@ func selfContainedReadFunc() openapi3.ReadFromURIFunc {
 	}
 }
 
-// checkAcceptedOpenAPIVersion discriminates the accepted lines per
-// OAPI-P-01: the artifact's own `openapi` field must declare 3.0.* or
-// 3.1.*; any other value — a Swagger 2.0 `swagger` field included — is
-// refused loudly at load.
+// checkAcceptedOpenAPIVersion discriminates the exact accepted editions per
+// OAPI-P-01. Patch-looking values outside the frozen set are not inferred
+// compatible.
 func checkAcceptedOpenAPIVersion(doc *openapi3.T) error {
 	v := doc.OpenAPI
 	if v == "" {
-		return fmt.Errorf("document declares no `openapi` field: openbindings.openapi@1 accepts OpenAPI 3.0.x and 3.1.x documents only (OAPI-P-01; Swagger 2.0 is not accepted)")
+		return fmt.Errorf("document declares no `openapi` field: openbindings.openapi@1 requires one of its exact accepted OpenAPI editions (OAPI-P-01; Swagger 2.0 is not accepted)")
 	}
-	mm := majorMinor(v)
-	if mm == "3.0" || mm == "3.1" {
+	switch v {
+	case "3.0.0", "3.0.1", "3.0.2", "3.0.3", "3.0.4",
+		"3.1.0", "3.1.1", "3.1.2":
 		return nil
 	}
-	return fmt.Errorf("unsupported OpenAPI version %q: openbindings.openapi@1 accepts the 3.0.x and 3.1.x lines only (OAPI-P-01)", v)
+	return fmt.Errorf("unsupported OpenAPI version %q: openbindings.openapi@1 accepts exactly 3.0.0–3.0.4 and 3.1.0–3.1.2 (OAPI-P-01)", v)
 }
 
 func deriveOperationKey(op *openapi3.Operation, path, method string, used map[string]bool) string {

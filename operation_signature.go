@@ -43,7 +43,7 @@ func NewOperationSignature[I, O any](key string) OperationSignature[I, O] {
 // InvokeOption configures a single Invoke call. Options are rarely needed:
 // invocation context is normally resolved by the invoker's ContextResolver via
 // the reactive CONTEXT_REQUIRED path, and the binding is normally selected by
-// the operation-invoker contract's default policy. The variadic-functional-option shape matches the rest of the SDK
+// the operation-invoker contract's sole-candidate rule. The variadic-functional-option shape matches the rest of the SDK
 // (FetchOption, ValidateOption), so the common call passes no options at all.
 type InvokeOption func(*invokeConfig)
 

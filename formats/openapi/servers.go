@@ -249,8 +249,9 @@ func absolutizeServerURL(serverURL, sourceLocation string) (string, error) {
 // invoke path turns it into a config.value CONTEXT_REQUIRED challenge
 // (retryable after resolution, R1a) rather than a terminal
 // ERR_SOURCE_CONFIG_ERROR. It implements error so it rides the existing
-// (…, error) returns unchanged. config values are non-secret, so no
-// credential-grade target keying is needed.
+// (…, error) returns unchanged. Configuration may be sensitive according to
+// its meaning; consumers decide whether the challenge target is sufficient
+// for any stored-value release.
 type configRequired struct {
 	point       string
 	key         string

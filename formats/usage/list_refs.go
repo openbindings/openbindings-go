@@ -33,14 +33,31 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	}
 
 	var targets []openbindings.BindableTarget
-	if rc := rootCommand(spec); rc != nil {
-		targets = append(targets, bindableTarget("", meta.Bin, meta.About))
+	usedOperationKeys := map[string]bool{}
+	rootKey := openbindings.UniqueKey(openbindings.SanitizeKey(meta.Bin), usedOperationKeys)
+	usedOperationKeys[rootKey] = true
+	rc := rootCommand(spec)
+	if rc == nil {
+		rc = &Command{}
 	}
-	walkWithGlobals(spec, func(path []string, cmd Command, _ []Flag) {
-		if len(path) == 0 || cmd.SubcommandRequired {
+	if _, err := generateInputSchema(*rc, nil); err == nil {
+		targets = append(targets, bindableTarget("", rootKey, meta.About))
+	}
+	walkWithGlobals(spec, func(path []string, cmd Command, inherited []Flag) {
+		if len(path) == 0 {
 			return
 		}
-		targets = append(targets, bindableTarget(commandRef(path), operationName(path), cmd.Help))
+		opKey := openbindings.UniqueKey(openbindings.SanitizeKey(operationName(path)), usedOperationKeys)
+		usedOperationKeys[opKey] = true
+		if cmd.SubcommandRequired {
+			return
+		}
+		if _, err := generateInputSchema(cmd, inherited); err != nil {
+			return
+		}
+		for _, ref := range uniquelyResolvableCommandRefs(spec, path) {
+			targets = append(targets, bindableTarget(ref, opKey, cmd.Help))
+		}
 	})
 
 	sort.Slice(targets, func(i, j int) bool { return targets[i].Ref < targets[j].Ref })

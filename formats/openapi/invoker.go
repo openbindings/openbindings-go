@@ -214,6 +214,7 @@ type Synthesizer struct{}
 
 var (
 	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+	_ openbindings.CoverageSynthesizer  = (*Synthesizer)(nil)
 	_ openbindings.SourceInspector      = (*Synthesizer)(nil)
 )
 
@@ -229,20 +230,37 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+	iface, _, err := c.synthesizeObserved(ctx, in)
+	return iface, err
+}
+
+// SynthesizeInterfaceWithCoverage converts an OpenAPI document and durably
+// accounts for every path operation, request-media alternative, callback, and
+// webhook observed by the same load.
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+	iface, doc, err := c.synthesizeObserved(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	entries := openAPISynthesisCoverage(doc, iface)
+	return openbindings.NewSynthesisResult(iface, entries, true)
+}
+
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, *openapi3.T, error) {
 	if len(in.Sources) == 0 {
 		skeleton, err := openbindings.SynthesisSkeleton(in)
-		return &skeleton, err
+		return &skeleton, nil, err
 	}
 	if len(in.Sources) > 1 {
-		return nil, openbindings.ErrMultipleSources
+		return nil, nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
 	if src.BindingSpec != BindingSpec {
-		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+		return nil, nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {
-			return nil, fmt.Errorf("outputLocation: %w", err)
+			return nil, nil, fmt.Errorf("outputLocation: %w", err)
 		}
 	}
 	// Authoring convenience: a bare filesystem path loads and is emitted as
@@ -251,19 +269,19 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	// refuse under OAPI-D-02.
 	loadLocation, err := absolutizeArtifactLocation(src.Location)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	artifactContent := src.Content
 	if src.Embed && artifactContent == nil {
 		data, embedErr := readAuthoringArtifact(ctx, loadLocation)
 		if embedErr != nil {
-			return nil, fmt.Errorf("embed OpenAPI source: %w", embedErr)
+			return nil, nil, fmt.Errorf("embed OpenAPI source: %w", embedErr)
 		}
 		artifactContent = openbindings.TextContent(string(data))
 	}
 	doc, err := loadDocument(loadLocation, artifactContent)
 	if err != nil {
-		return nil, fmt.Errorf("load OpenAPI document: %w", err)
+		return nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
 	warn := func(w openbindings.SynthesizerWarning) {
 		if in.OnWarning != nil {
@@ -272,7 +290,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	}
 	iface, err := convertDocToInterface(doc, loadLocation, warn)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Content is authoritative and remains byte-for-byte in the synthesized
 	// source. A co-present location is its base/provenance, not permission to
@@ -284,9 +302,9 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		}
 	}
 	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &iface, nil
+	return &iface, doc, nil
 }
 
 func readAuthoringArtifact(ctx context.Context, location string) ([]byte, error) {

@@ -2,9 +2,8 @@ package openbindings
 
 // Conformance corpus adapter: runs this SDK's binding selection against the
 // interfaces repository's operation-invoker selection corpus unmodified
-// (conformance/selection — the contract's default policy, the
-// context.configuration.selection consumer override, and the explicit
-// `binding` bypass).
+// (conformance/selection — explicit caller choice, sole-candidate inference,
+// and ambiguity refusal).
 //
 // The corpus is located via OB_INTERFACES_CORPUS or the local-dev sibling
 // path (openbindings/interfaces next to openbindings/openbindings-go); the
@@ -14,7 +13,7 @@ package openbindings
 // fixture's `supported` set is presented by a stub BindingInvoker (the
 // candidate set is formed from the invoker's registered binding
 // specifications) and Invoke runs the shared resolution (OBI-T-12 name
-// resolution, override, pinning, default policy). Selection is decided
+// resolution, ordered choice, pinning, and ambiguity refusal). Selection is decided
 // before the binding layer runs, so the selected key is observed via the
 // invocation-site carriage the invoke path stamps on the binding-layer args
 // (args.Site.BindingKey) — public contract surface, no test seam added.
@@ -22,9 +21,9 @@ package openbindings
 import (
 	"context"
 	"encoding/json"
-	"sync"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -168,10 +167,12 @@ func runSelectionFixture(t *testing.T, tc *selectionCase) {
 		if err == nil {
 			t.Fatalf("expected selection error (%s), selected %q", tc.Expected.Kind, stub.selectedBindingKey())
 		}
-		// Both error kinds — unknown explicit binding key and no invocable
-		// candidate — are contract-named ERR_BINDING_NOT_FOUND.
-		if code := codeOf(t, err); code != ErrCodeBindingNotFound {
-			t.Fatalf("error code = %q, want %q (err: %v)", code, ErrCodeBindingNotFound, err)
+		wantCode := ErrCodeBindingNotFound
+		if tc.Expected.Kind == "ambiguous" {
+			wantCode = ErrCodeBindingSelectionRequired
+		}
+		if code := codeOf(t, err); code != wantCode {
+			t.Fatalf("error code = %q, want %q (err: %v)", code, wantCode, err)
 		}
 		return
 	}

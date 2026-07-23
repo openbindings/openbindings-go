@@ -64,6 +64,22 @@ func codeOf(t *testing.T, err error) string {
 	return ie.Code
 }
 
+func wsTextContext(bindCtx map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range bindCtx {
+		out[key] = value
+	}
+	configuration := map[string]any{}
+	if current, ok := out["configuration"].(map[string]any); ok {
+		for key, value := range current {
+			configuration[key] = value
+		}
+	}
+	configuration["websocketMessageType"] = "text"
+	out["configuration"] = configuration
+	return out
+}
+
 // drainOutputs reads the invocation's outputs to EOF or terminal error.
 func drainOutputs(t *testing.T, call openbindings.Invocation[any, any]) ([]any, error) {
 	t.Helper()
@@ -115,10 +131,20 @@ func makeAsyncAPISpec(baseURL string) *document {
 				Channel:  channelRef{Ref: "#/channels/messages"},
 				Messages: []messageRef{{Ref: "#/components/messages/json"}},
 				Reply:    &operationReply{Messages: []messageRef{{Ref: "#/components/messages/json"}}},
+				Bindings: &operationBindings{HTTP: &httpOperationBinding{Method: "POST"}},
 				Security: []securityRequirement{{Ref: "#/components/securitySchemes/bearer"}},
 			},
-			"sendOpenMessage": {Action: "receive", Channel: channelRef{Ref: "#/channels/messages"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
-			"sendAck":         {Action: "receive", Channel: channelRef{Ref: "#/channels/ack"}, Messages: []messageRef{{Ref: "#/components/messages/json"}}},
+			"sendOpenMessage": {
+				Action: "receive", Channel: channelRef{Ref: "#/channels/messages"},
+				Messages: []messageRef{{Ref: "#/components/messages/json"}},
+				Reply:    &operationReply{Messages: []messageRef{{Ref: "#/components/messages/json"}}},
+				Bindings: &operationBindings{HTTP: &httpOperationBinding{Method: "POST"}},
+			},
+			"sendAck": {
+				Action: "receive", Channel: channelRef{Ref: "#/channels/ack"},
+				Messages: []messageRef{{Ref: "#/components/messages/json"}},
+				Bindings: &operationBindings{HTTP: &httpOperationBinding{Method: "POST"}},
+			},
 			"receiveEvents": {
 				Action:   "send",
 				Channel:  channelRef{Ref: "#/channels/events"},
@@ -236,7 +262,7 @@ func TestContextRequiredBeforeAnyIO(t *testing.T) {
 	}
 }
 
-func TestContextRequiredOnReceive(t *testing.T) {
+func TestExcludedHTTPSubscriptionPrecedesCredentialNegotiation(t *testing.T) {
 	srv, requests := newHTTPFixture(t)
 	binv := NewInvoker()
 	defer binv.Close()
@@ -247,8 +273,8 @@ func TestContextRequiredOnReceive(t *testing.T) {
 		Ref:    "#/operations/receiveEvents",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeContextRequired {
-		t.Fatalf("expected CONTEXT_REQUIRED, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("expected standalone HTTP send exclusion, got %v", err)
 	}
 	if got := requests.Load(); got != before {
 		t.Errorf("challenge must precede any I/O: %d requests dispatched", got-before)
@@ -348,9 +374,13 @@ func TestChannelWithoutAddressIsRefusedPreDispatch(t *testing.T) {
 		"asyncapi": "3.0.0",
 		"info": {"title": "t", "version": "1.0.0"},
 		"servers": {"test": {"host": %q, "protocol": "http"}},
-		"channels": {"notify": {}},
+		"channels": {"notify": {"messages": {"json": {"name": "json", "contentType": "application/json"}}}},
 		"operations": {
-			"notifyOp": {"action": "receive", "channel": {"$ref": "#/channels/notify"}}
+			"notifyOp": {
+				"action": "receive",
+				"channel": {"$ref": "#/channels/notify"},
+				"bindings": {"http": {"method": "POST"}}
+			}
 		}
 	}`, strings.TrimPrefix(srv.URL, "http://"))
 
@@ -525,6 +555,7 @@ func TestNoInputOperationRefused_WSPublish(t *testing.T) {
 		Source:  wsSource(srv, nil),
 		Ref:     "#/operations/publish",
 		Binding: &openbindings.BindingEntry{Operation: "publish", Source: DefaultSourceName, Ref: "#/operations/publish"},
+		Context: wsTextContext(nil),
 	})
 	_, err := drainOutputs(t, call)
 	if codeOf(t, err) != openbindings.ErrCodeMissingInput {
@@ -547,8 +578,9 @@ func TestWSPublishZeroMessagesRefused(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: wsSource(srv, nil),
-		Ref:    "#/operations/publish",
+		Source:  wsSource(srv, nil),
+		Ref:     "#/operations/publish",
+		Context: wsTextContext(nil),
 	})
 	if err := call.Close(); err != nil {
 		t.Fatal(err)
@@ -580,36 +612,9 @@ func TestSendAckYieldsZeroOutputs(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SSE receive
-// ---------------------------------------------------------------------------
-
-func TestSSEReceiveStreamsBareOutputs(t *testing.T) {
-	srv, _ := newHTTPFixture(t)
-	binv := NewInvoker()
-	defer binv.Close()
-
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:  httpSource(srv),
-		Ref:     "#/operations/receiveEvents",
-		Context: map[string]any{"bearerToken": testSecret},
-	})
-	vals, err := drainOutputs(t, call)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(vals) != 2 {
-		t.Fatalf("expected 2 events, got %d: %v", len(vals), vals)
-	}
-	for i, want := range []float64{1, 2} {
-		if got := vals[i].(map[string]any)["seq"]; got != want {
-			t.Errorf("event %d: seq = %v, want %v", i, got, want)
-		}
-	}
-}
-
-// sseEventDoc builds a minimal doc with one receive op (no security) whose
-// channel address points at the given path.
+// sseEventDoc builds a minimal standalone HTTP `send` operation. Revision 1
+// uses it to prove that an event-looking endpoint is still excluded rather
+// than being inferred as an SSE subscription.
 func sseEventDoc(baseURL, path string) *document {
 	return &document{
 		AsyncAPI: "3.0.0",
@@ -622,44 +627,12 @@ func sseEventDoc(baseURL, path string) *document {
 	}
 }
 
-// TestSSEReceiveCapIsPerEvent verifies the size cap applies per event, not
-// cumulatively: a long-lived subscription streaming more than the cap in
-// total keeps flowing.
-func TestSSEReceiveCapIsPerEvent(t *testing.T) {
-	const eventSize = 2 * 1024 * 1024 // 2 MB per event, 6 events = 12 MB total
-	payload := strings.Repeat("x", eventSize)
+func TestHTTPSubscriptionDoesNotInferSSE(t *testing.T) {
+	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
-		flusher := w.(http.Flusher)
-		for i := 0; i < 6; i++ {
-			fmt.Fprintf(w, "data: %s\n\n", payload)
-			flusher.Flush()
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	binv := NewInvoker()
-	defer binv.Close()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
-		Ref:    "#/operations/receiveCaps",
-	})
-	vals, err := drainOutputs(t, call)
-	if err != nil {
-		t.Fatalf("a >10MB cumulative stream of small events must not error: %v", err)
-	}
-	if len(vals) != 6 {
-		t.Fatalf("expected 6 events, got %d", len(vals))
-	}
-}
-
-// TestSSEReceiveSingleOversizedEventErrors verifies a single event larger
-// than the cap terminates with ERR_RESPONSE_ERROR.
-func TestSSEReceiveSingleOversizedEventErrors(t *testing.T) {
-	payload := strings.Repeat("x", maxResponseBytes+16)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprintf(w, "data: %s\n\n", payload)
+		fmt.Fprint(w, "data: excluded\n\n")
 	}))
 	t.Cleanup(srv.Close)
 
@@ -670,33 +643,11 @@ func TestSSEReceiveSingleOversizedEventErrors(t *testing.T) {
 		Ref:    "#/operations/receiveCaps",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeResponseError {
-		t.Fatalf("expected ERR_RESPONSE_ERROR for an oversized event, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("expected standalone HTTP send exclusion, got %v", err)
 	}
-}
-
-func TestStopCancelsLiveSubscription(t *testing.T) {
-	srv, _ := newHTTPFixture(t)
-	binv := NewInvoker()
-	defer binv.Close()
-
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: httpSource(srv),
-		Ref:    "#/operations/receiveStream",
-	})
-	out := call.Outputs()
-	first, err := out.Read(shortCtx(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.(map[string]any)["tick"] != float64(1) {
-		t.Fatalf("got %v", first)
-	}
-
-	out.Stop()
-	_, err = out.Read(shortCtx(t))
-	if codeOf(t, err) != openbindings.ErrCodeCancelled {
-		t.Fatalf("expected ERR_CANCELLED, got %v", err)
+	if requests.Load() != 0 {
+		t.Fatalf("excluded HTTP send dispatched %d requests", requests.Load())
 	}
 }
 
@@ -979,26 +930,14 @@ func wsSource(srv *httptest.Server, scheme *securityScheme) openbindings.Invocat
 // ---------------------------------------------------------------------------
 
 // TestWebSocketBearerRidesUpgradeRequest verifies §9.5 (ASYNC-P-07): for
-// WebSocket connections a declared bearer credential rides the UPGRADE
-// REQUEST's Authorization header — and NO credential ever rides a message
-// body or a first frame. The server echoes every frame back, so the first
-// output proves no auth frame preceded the caller's own control frame.
-// (Flipped from the pre-conformance first-frame bearer convention this test
-// used to pin; in-band auth is consumer configuration riding the duplex
-// cell as an ordinary input frame, never a built-in.)
+// WebSocket connections a declared bearer credential rides the upgrade
+// request. A server-streaming subscription has no input lane, so credentials
+// cannot be volunteered as an in-band message.
 func TestWebSocketBearerRidesUpgradeRequest(t *testing.T) {
 	authCh := make(chan string, 1)
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
 		authCh <- r.Header.Get("Authorization")
-		for {
-			msg, err := readWSJSON(ctx, conn)
-			if err != nil {
-				return
-			}
-			if err := writeWSJSON(ctx, conn, msg); err != nil {
-				return
-			}
-		}
+		_ = writeWSJSON(ctx, conn, map[string]any{"hello": true})
 	})
 
 	binv := NewInvoker()
@@ -1010,19 +949,13 @@ func TestWebSocketBearerRidesUpgradeRequest(t *testing.T) {
 		Context: map[string]any{"bearerToken": "test-bearer-xyz"},
 	})
 	out := call.Outputs()
-	if err := call.Write(bg(), map[string]any{"hello": true}); err != nil {
-		t.Fatal(err)
-	}
 	first, err := out.Read(shortCtx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, _ := first.(map[string]any)
-	if _, leaked := got["bearerToken"]; leaked {
-		t.Fatal("bearer token rode a message frame: no credential ever rides in-band (ASYNC-P-07)")
-	}
 	if got["hello"] != true {
-		t.Fatalf("first echoed frame = %v, want the caller's own control frame (no auth frame precedes it)", got)
+		t.Fatalf("first server event = %v, want hello", got)
 	}
 	select {
 	case auth := <-authCh:
@@ -1035,22 +968,13 @@ func TestWebSocketBearerRidesUpgradeRequest(t *testing.T) {
 	out.Stop()
 }
 
-// TestWebSocketNoInBandAuthWithoutDeclaredScheme verifies the token is
-// never volunteered into the message stream when no bearer-family scheme is
-// declared either (ASYNC-P-07: no credential rides in-band, and none is
-// invented). The server echoes every frame back, so the first output proves
-// which frame arrived first.
+// TestWebSocketNoInventedAuthWithoutDeclaredScheme verifies an undeclared
+// bearer token is not volunteered onto the upgrade request.
 func TestWebSocketNoInBandAuthWithoutDeclaredScheme(t *testing.T) {
+	authCh := make(chan string, 1)
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		for {
-			msg, err := readWSJSON(ctx, conn)
-			if err != nil {
-				return
-			}
-			if err := writeWSJSON(ctx, conn, msg); err != nil {
-				return
-			}
-		}
+		authCh <- r.Header.Get("Authorization")
+		_ = writeWSJSON(ctx, conn, map[string]any{"hello": true})
 	})
 
 	binv := NewInvoker()
@@ -1063,81 +987,23 @@ func TestWebSocketNoInBandAuthWithoutDeclaredScheme(t *testing.T) {
 		Context: map[string]any{"bearerToken": "secret-tok"},
 	})
 	out := call.Outputs()
-	if err := call.Write(bg(), map[string]any{"hello": true}); err != nil {
-		t.Fatal(err)
-	}
 	first, err := out.Read(shortCtx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, _ := first.(map[string]any)
-	if _, leaked := got["bearerToken"]; leaked {
-		t.Fatal("bearer token volunteered without a declared bearer scheme")
-	}
 	if got["hello"] != true {
-		t.Fatalf("first echoed frame = %v, want the hello control frame", got)
+		t.Fatalf("first server event = %v, want hello", got)
+	}
+	select {
+	case auth := <-authCh:
+		if auth != "" {
+			t.Fatalf("undeclared bearer token reached upgrade Authorization: %q", auth)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server never saw the upgrade")
 	}
 	out.Stop()
-}
-
-// TestWebSocketNoAuthFrameOnPooledConnections verifies no auth frame is
-// ever sent — on a fresh dial or a pooled reuse (§9.5: no credential rides
-// a first frame; the upgrade request authenticates the connection) — and
-// that same-credential subscriptions still share one upgrade.
-func TestWebSocketNoAuthFrameOnPooledConnections(t *testing.T) {
-	var upgrades atomic.Int32
-	frames := make(chan map[string]any, 16)
-	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		upgrades.Add(1)
-		for {
-			msg, err := readWSJSON(ctx, conn)
-			if err != nil {
-				return
-			}
-			frames <- msg
-		}
-	})
-
-	binv := NewInvoker()
-	defer binv.Close()
-	source := wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"})
-	bindCtx := map[string]any{"bearerToken": "tok"}
-
-	sub1 := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: source, Ref: "#/operations/subscribe", Context: bindCtx,
-	})
-	if err := sub1.Write(bg(), map[string]any{"n": 1}); err != nil {
-		t.Fatal(err)
-	}
-	got := collectFrames(t, frames, 1)
-	if _, hasToken := got[0]["bearerToken"]; hasToken {
-		t.Fatal("auth frame sent on a fresh socket: no credential ever rides a first frame")
-	}
-	if n, _ := got[0]["n"].(float64); n != 1 {
-		t.Fatalf("first frame = %v, want the caller's n=1 control frame", got[0])
-	}
-	sub1.Outputs().Stop()
-
-	// Second subscription reuses the pooled socket (same credential
-	// identity): its first frame is likewise its own control frame.
-	sub2 := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: source, Ref: "#/operations/subscribe", Context: bindCtx,
-	})
-	if err := sub2.Write(bg(), map[string]any{"n": 2}); err != nil {
-		t.Fatal(err)
-	}
-	next := collectFrames(t, frames, 1)
-	if _, hasToken := next[0]["bearerToken"]; hasToken {
-		t.Fatal("auth frame sent on a reused connection")
-	}
-	if n, _ := next[0]["n"].(float64); n != 2 {
-		t.Fatalf("frame = %v, want the n=2 control frame", next[0])
-	}
-	sub2.Outputs().Stop()
-
-	if c := upgrades.Load(); c != 1 {
-		t.Errorf("expected both subscriptions to share 1 upgrade, got %d", c)
-	}
 }
 
 // TestWebSocketQueryParamApiKey is the regression test for query-param
@@ -1336,23 +1202,12 @@ func TestWebSocketServerErrorFrame(t *testing.T) {
 	}
 }
 
-// TestWebSocketBidiControlFrames verifies the receive binding is
-// bidi-capable: caller inputs are forwarded as socket frames, and closing
-// input does NOT end the subscription.
-func TestWebSocketBidiControlFrames(t *testing.T) {
-	inputClosed := make(chan struct{})
+// TestWebSocketSubscriptionHasNoInput verifies the documented server-stream
+// boundary: once established, a `send` operation accepts no caller values.
+func TestWebSocketSubscriptionHasNoInput(t *testing.T) {
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
-		control, err := readWSJSON(ctx, conn) // no bearer context: first frame is the control frame
-		if err != nil {
-			return
-		}
-		_ = writeWSJSON(ctx, conn, map[string]any{"ack": control["subscribe"]})
-		select {
-		case <-inputClosed:
-		case <-ctx.Done():
-			return
-		}
-		_ = writeWSJSON(ctx, conn, map[string]any{"final": true})
+		_ = writeWSJSON(ctx, conn, map[string]any{"ready": true})
+		<-ctx.Done()
 	})
 
 	binv := NewInvoker()
@@ -1363,34 +1218,18 @@ func TestWebSocketBidiControlFrames(t *testing.T) {
 		Ref:    "#/operations/subscribe",
 	})
 
-	if err := call.Write(bg(), map[string]any{"subscribe": "orders"}); err != nil {
-		t.Fatal(err)
-	}
 	out := call.Outputs()
-	ack, err := out.Read(shortCtx(t))
+	ready, err := out.Read(shortCtx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ack.(map[string]any)["ack"] != "orders" {
-		t.Fatalf("got %v", ack)
+	if ready.(map[string]any)["ready"] != true {
+		t.Fatalf("got %v", ready)
 	}
-
-	// Close the input side; the subscription must keep flowing.
-	if err := call.Close(); err != nil {
-		t.Fatal(err)
+	if err := call.Write(bg(), map[string]any{"not": "admitted"}); err == nil {
+		t.Fatal("server-streaming subscription accepted an input value")
 	}
-	close(inputClosed)
-
-	final, err := out.Read(shortCtx(t))
-	if err != nil {
-		t.Fatalf("closing input must not end the subscription: %v", err)
-	}
-	if final.(map[string]any)["final"] != true {
-		t.Fatalf("got %v", final)
-	}
-	if _, err := out.Read(shortCtx(t)); err != io.EOF {
-		t.Fatalf("expected clean EOF after server close, got %v", err)
-	}
+	out.Stop()
 }
 
 // TestNewInvokerWithClient verifies that an Invoker created with a custom

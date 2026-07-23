@@ -283,6 +283,7 @@ func TestResolveRefs_EndToEnd_SynthesizeInterface(t *testing.T) {
 	doc := &document{
 		AsyncAPI: "3.0.0",
 		Info:     info{Title: "Ref Test", Version: "2.0.0"},
+		Servers:  testWSServers(),
 		Channels: map[string]channel{
 			"events": {
 				Address: "/events",

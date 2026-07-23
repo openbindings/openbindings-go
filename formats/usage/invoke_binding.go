@@ -849,9 +849,12 @@ func buildDirectArgsFromRef(ref string, input any) ([]string, error) {
 
 type findCommandResult struct {
 	path           []string
+	canonicalPath  []string
 	cmd            *Command
 	inheritedFlags []Flag
 }
+
+var errAmbiguousCommandSpelling = errors.New("ambiguous usage command spelling")
 
 func findCommand(spec *Spec, ref string) (*findCommandResult, error) {
 	if ref == "" {
@@ -869,6 +872,7 @@ func findCommand(spec *Spec, ref string) (*findCommandResult, error) {
 	}
 	commands := spec.Commands()
 	var path []string
+	var canonicalPath []string
 
 	// Seed with top-level global flags so they're inherited by all commands.
 	var inheritedGlobals []Flag
@@ -879,35 +883,40 @@ func findCommand(spec *Spec, ref string) (*findCommandResult, error) {
 	}
 
 	for i, target := range targetPath {
-		matched := false
+		var matches []Command
 		for _, cmd := range commands {
-			if !commandMatchesName(cmd, target) {
-				continue
+			if commandMatchesName(cmd, target) {
+				matches = append(matches, cmd)
 			}
-			// A command alias is equal in standing to its canonical spelling at
-			// the process boundary: emit exactly the ref segment the caller
-			// selected, rather than rewriting it to the canonical name.
-			path = append(path, target)
-			if i == len(targetPath)-1 {
-				cmdCopy := cmd
-				return &findCommandResult{
-					path:           path,
-					cmd:            &cmdCopy,
-					inheritedFlags: inheritedGlobals,
-				}, nil
-			}
-			for _, f := range cmd.Flags {
-				if f.Global {
-					inheritedGlobals = append(inheritedGlobals, f)
-				}
-			}
-			commands = cmd.Commands
-			matched = true
-			break
 		}
-		if !matched {
+		if len(matches) == 0 {
 			return nil, fmt.Errorf("command %q not found in usage spec", ref)
 		}
+		if len(matches) > 1 {
+			return nil, fmt.Errorf("%w: segment %q in ref %q matches %d sibling commands (USAGE-D-03)",
+				errAmbiguousCommandSpelling, target, ref, len(matches))
+		}
+		cmd := matches[0]
+		// A command alias is equal in standing to its canonical spelling at
+		// the process boundary: emit exactly the ref segment the caller
+		// selected, rather than rewriting it to the canonical name.
+		path = append(path, target)
+		canonicalPath = append(canonicalPath, cmd.Name)
+		if i == len(targetPath)-1 {
+			cmdCopy := cmd
+			return &findCommandResult{
+				path:           path,
+				canonicalPath:  canonicalPath,
+				cmd:            &cmdCopy,
+				inheritedFlags: inheritedGlobals,
+			}, nil
+		}
+		for _, f := range cmd.Flags {
+			if f.Global {
+				inheritedGlobals = append(inheritedGlobals, f)
+			}
+		}
+		commands = cmd.Commands
 	}
 
 	return nil, fmt.Errorf("command %q not found in usage spec", ref)

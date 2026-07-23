@@ -13,12 +13,13 @@ import (
 // README table changes.
 var readmeCategories = map[string]Category{
 	// Normative codes.
-	"CONTEXT_REQUIRED":      CategoryContext,
-	"ERR_PROTOCOL":          CategoryProtocol,
-	"ERR_TRANSPORT_CLOSED":  CategoryTransient,
-	"ERR_CANCELLED":         CategoryCancelled,
-	"ERR_VALIDATION_FAILED": CategoryValidation,
-	"ERR_BINDING_NOT_FOUND": CategoryPermanent,
+	"CONTEXT_REQUIRED":               CategoryContext,
+	"ERR_PROTOCOL":                   CategoryProtocol,
+	"ERR_TRANSPORT_CLOSED":           CategoryTransient,
+	"ERR_CANCELLED":                  CategoryCancelled,
+	"ERR_VALIDATION_FAILED":          CategoryValidation,
+	"ERR_BINDING_NOT_FOUND":          CategoryPermanent,
+	"ERR_BINDING_SELECTION_REQUIRED": CategoryPermanent,
 	// Convention codes.
 	"ERR_AUTH_REQUIRED":              CategoryAuth,
 	"ERR_PERMISSION_DENIED":          CategoryAuth,
@@ -78,7 +79,7 @@ func TestEveryEmittedCodeIsClassified(t *testing.T) {
 		ErrCodeInputClosed, ErrCodeInvocationClosed, ErrCodeTooManyInputs,
 		ErrCodeMissingInput, ErrCodeProtocol, ErrCodeTransportClosed,
 		ErrCodeContextRequired, ErrCodeTypeMismatch, ErrCodeOperationNotFound,
-		ErrCodeBindingNotFound, ErrCodeUnknownSource, ErrCodeAuthRequired,
+		ErrCodeBindingNotFound, ErrCodeBindingSelectionRequired, ErrCodeUnknownSource, ErrCodeAuthRequired,
 		ErrCodePermissionDenied, ErrCodeInvalidRef, ErrCodeRefNotFound,
 		ErrCodeSourceLoadFailed, ErrCodeSourceConfigError, ErrCodeConnectFailed,
 		ErrCodeExecutionFailed, ErrCodeResponseError, ErrCodeStreamError,

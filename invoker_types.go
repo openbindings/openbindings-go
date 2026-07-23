@@ -12,8 +12,9 @@ import (
 // Context store
 // ---------------------------------------------------------------------------
 
-// ContextStore is a document store for binding invocation context.
-// Keys are invoker-determined strings (typically a normalized API origin).
+// ContextStore is an optional SDK storage seam for binding invocation context.
+// Keys are caller-chosen strings; StoreContextResolver uses its own normalized
+// target convention, while other consumers may choose a different policy.
 // Values are opaque context records — credentials, headers, cookies,
 // environment, metadata — using well-known field names for cross-invoker
 // interoperability.
@@ -31,11 +32,11 @@ import (
 //	store.Set(ctx, openbindings.NormalizeContextKey(target),
 //	    map[string]any{"bearerToken": token})
 //
-// The SDK stores and retrieves context but never inspects its contents.
-// Setting a nil value removes the entry (the published contract pins
-// set-null ≡ delete, so Get's nil uniformly means "no entry").
-// The published openbindings.document-store interface standardizes this
-// same get/set/delete capability where a store sits across a wire.
+// StoreContextResolver inspects standard requirement fields only to satisfy
+// and scope a challenge. Other consumers may treat values as wholly opaque.
+// Delete removes an entry; Set is for a non-nil object. The published
+// openbindings.document-store interface is the language-neutral wire analogue
+// when this optional seam crosses a process boundary.
 type ContextStore interface {
 	Get(ctx context.Context, key string) (map[string]any, error)
 	Set(ctx context.Context, key string, value map[string]any) error
@@ -287,6 +288,108 @@ type SynthesizerWarning struct {
 	Details map[string]any `json:"details,omitempty"`
 }
 
+// SynthesisCoverageScope identifies the granularity of a synthesis coverage
+// entry.
+type SynthesisCoverageScope string
+
+const (
+	// SynthesisCoverageTarget is an addressable source interaction.
+	SynthesisCoverageTarget SynthesisCoverageScope = "target"
+	// SynthesisCoverageAlternative is an independently selectable alternative
+	// whose omission would remove a source-permitted invocation path.
+	SynthesisCoverageAlternative SynthesisCoverageScope = "alternative"
+	// SynthesisCoverageProjection is a source contract projection into an OBI
+	// schema or operation framing.
+	SynthesisCoverageProjection SynthesisCoverageScope = "projection"
+)
+
+// SynthesisCoverageStatus is the durable disposition of one observed source
+// interaction unit.
+type SynthesisCoverageStatus string
+
+const (
+	// SynthesisRepresented means the emitted OBI carries an operation and
+	// binding path for the unit.
+	SynthesisRepresented SynthesisCoverageStatus = "represented"
+	// SynthesisExcluded means the governing binding-specification revision
+	// explicitly excludes the upstream-valid unit.
+	SynthesisExcluded SynthesisCoverageStatus = "excluded"
+	// SynthesisInvalid means the source unit is malformed or internally
+	// contradictory under its upstream authority.
+	SynthesisInvalid SynthesisCoverageStatus = "invalid"
+	// SynthesisLossy means invocation remains usable but the emitted OBI
+	// framing cannot express part of the source contract exactly.
+	SynthesisLossy SynthesisCoverageStatus = "lossy"
+	// SynthesisImplementationUnsupported means the binding revision admits the
+	// unit but this synthesizer cannot represent it. Reference SDK releases
+	// must carry no such entries.
+	SynthesisImplementationUnsupported SynthesisCoverageStatus = "implementation-unsupported"
+)
+
+// SynthesisCoverageEntry records the disposition of one source interaction
+// unit observed during the same call that produced the synthesized Interface.
+type SynthesisCoverageEntry struct {
+	// SourceIndex is the zero-based index of the input source containing the
+	// interaction unit.
+	SourceIndex int `json:"sourceIndex"`
+	// SourceKey is the corresponding source key in the emitted OBI. It is
+	// required for represented and lossy entries.
+	SourceKey string `json:"sourceKey,omitempty"`
+	// SourceRef is a stable source-local identifier. It need not be a conformant
+	// binding ref for an excluded or invalid unit.
+	SourceRef string `json:"sourceRef"`
+	// Scope distinguishes addressable targets from independently selectable
+	// alternatives of a target.
+	Scope SynthesisCoverageScope `json:"scope"`
+	// Status is the unit's durable disposition.
+	Status SynthesisCoverageStatus `json:"status"`
+	// OperationKey, BindingKey, and BindingRef are required for represented
+	// and lossy entries.
+	// BindingRef is serialized even when empty because some binding
+	// specifications identify a valid target by an omitted ref.
+	OperationKey string `json:"operationKey,omitempty"`
+	BindingKey   string `json:"bindingKey,omitempty"`
+	BindingRef   string `json:"bindingRef"`
+	// ReasonCode and Message are required for every non-represented entry.
+	// ReasonCode is stable and family-namespaced; Message is diagnostic prose.
+	ReasonCode string `json:"reasonCode,omitempty"`
+	Rule       string `json:"rule,omitempty"`
+	Message    string `json:"message,omitempty"`
+	// Requirements names runtime prerequisites without treating them as
+	// synthesis omissions.
+	Requirements []string `json:"requirements,omitempty"`
+	// Details carries family-specific structured evidence.
+	Details map[string]any `json:"details,omitempty"`
+}
+
+// SynthesisCoverage is durable coverage evidence for one synthesis call.
+type SynthesisCoverage struct {
+	Entries []SynthesisCoverageEntry `json:"entries"`
+	// Exhaustive is true when every interaction unit in every accepted source,
+	// under the governing binding revision's inventory, has one disposition.
+	Exhaustive bool `json:"exhaustive"`
+	// FullyRepresented is true when Exhaustive is true and every upstream-valid
+	// unit is represented. NewSynthesisResult derives it from Entries.
+	FullyRepresented bool `json:"fullyRepresented"`
+	// Limitation explains what may be missing when Exhaustive is false.
+	Limitation *SynthesisCoverageLimitation `json:"limitation,omitempty"`
+}
+
+// SynthesisCoverageLimitation explains why a synthesis inventory is not
+// exhaustive.
+type SynthesisCoverageLimitation struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
+// SynthesizeResult carries a creation-time-sound Interface and the coverage
+// evidence derived from the same synthesis observation.
+type SynthesizeResult struct {
+	Interface *Interface        `json:"interface"`
+	Coverage  SynthesisCoverage `json:"coverage"`
+}
+
 // BindingSpecInfo describes a binding specification supported by an
 // invoker, by exact identifier.
 type BindingSpecInfo struct {
@@ -301,6 +404,16 @@ type SourceInspection struct {
 	// Exhaustive is true when this is the complete list of targets for the
 	// source. When false, additional targets may exist that were not enumerated.
 	Exhaustive bool `json:"exhaustive"`
+	// Limitation explains a non-exhaustive result. It is required when
+	// Exhaustive is false.
+	Limitation *InspectionLimitation `json:"limitation,omitempty"`
+}
+
+// InspectionLimitation explains why a source inspection is not exhaustive.
+type InspectionLimitation struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
 }
 
 // BindableTarget describes a target within a source that can be framed as an
@@ -439,20 +552,22 @@ func contextRequirementSummary(d *ContextRequiredDetails) string {
 }
 
 // RedactContext returns a shallow copy of ctx with well-known credential
-// fields replaced by "[REDACTED]". Safe for logging and error messages.
-// Returns nil for nil input.
+// fields replaced by "[REDACTED]". Returns nil for nil input. Other fields
+// may also contain secrets according to their binding specification or
+// application meaning, so the result is not automatically safe to log without
+// an application-specific second pass.
 //
-// The context-confidentiality invariant: no context value the credential
-// taxonomy classifies as secret survives, in cleartext, to any diagnostic
-// surface. The set of secret fields is single-sourced on credentialFieldNames
-// — the one registry ScopeContext already consumes — so redaction and scoping
-// can never disagree about what is secret. The credential-field list itself is
-// owned by the binding-invoker interface's context table (its confidentiality
-// clause); this SDK implements that contract. Flat credential fields redact to
-// "[REDACTED]"; nested credential fields keep their non-secret structure
-// (basic keeps its username, apiKeys keeps its scheme names) and redact only
-// the secret values. (Store KEYS are the one surface this cannot reach — see
-// NormalizeContextKey, which strips userinfo so no secret rides into a key.)
+// The context-confidentiality invariant: no context value the standard
+// credential taxonomy classifies as secret survives, in cleartext, to any
+// diagnostic surface. credentialFieldNames is the closed redaction registry;
+// ScopeContext separately admits only the family selected by a challenge.
+// Tests guard both registries as the standard taxonomy evolves. The taxonomy
+// itself comes from the binding-invoker interface's context table and
+// confidentiality clause. Flat credential fields redact to "[REDACTED]";
+// nested credential fields retain their identifiers (basic keeps its username,
+// apiKeys keeps its scheme names) and redact the known secret values. (Store
+// KEYS are the one surface this cannot reach — see NormalizeContextKey, which
+// strips userinfo so no secret rides into a key.)
 func RedactContext(ctx map[string]any) map[string]any {
 	if ctx == nil {
 		return nil
@@ -460,8 +575,9 @@ func RedactContext(ctx map[string]any) map[string]any {
 	redacted := make(map[string]any, len(ctx))
 	for k, v := range ctx {
 		if !isCredentialField(k) {
-			// Non-secret configuration (headers, cookies, environment,
-			// metadata, ...) passes through unchanged.
+			// Unknown fields pass through because this generic helper cannot
+			// infer their structure. Callers must additionally redact fields
+			// their binding or application classifies as sensitive.
 			redacted[k] = v
 			continue
 		}

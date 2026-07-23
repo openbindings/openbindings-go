@@ -69,24 +69,18 @@ type Endpoint struct {
 // ref is ASYNC-D-03's JSON Pointer `#/operations/<operation-key>` — the only
 // conformant spelling (RFC 6901-escaped; a bare operation key is refused).
 //
-// The server point: the default is the first candidate of the operation's
-// effective server set whose protocol revision 1 binds — the channel's
-// declared `servers` subset when present and non-empty (in the artifact's
-// own array order), else the document's `servers` map in lexicographic key
-// order, this specification's determinism rule. Consumer configuration
-// (bindingContext's `configuration.server`) carries one of §9.2's two
-// pinned, mutually exclusive value shapes: {"key": "<server-name>",
-// "variables": {"<variable-name>": "<string-value>"}?} selects a member of
-// the effective set, the optional `variables` member supplying values for
-// the selected server's own declared variables; xor
-// {"url": "<connection-url>"} overrides with a complete URL whose scheme
-// decides the protocol, out-of-revision schemes refused; any other spelling
-// is refused with a teaching error, and `variables` composes only with
-// `key`. Server variables substitute supplied-else-default — unsupplied and
-// undefaulted is a refusal (AsyncAPI declares Server Variable defaults
-// OPTIONAL, so an undefaulted variable is satisfiable only by supply), and an
-// undeclared supplied name is refused, never ignored. A declared enum does
-// not gate the value (§9.2): author's expectation, not a boundary.
+// The server point selects the sole bindable candidate of the operation's
+// effective server set — the channel's declared `servers` subset when
+// present and non-empty, else the document's `servers` map. When several
+// bindable candidates remain, consumer configuration MUST select one by
+// `key`; ordering never invents identity. This SDK carries the point as one
+// composable object: {"key": "<server-name>"?, "variables":
+// {"<variable-name>": "<string-value>"}?, "url":
+// "<connection-url>"?}. `variables` completes the selected member, and
+// `url` replaces only that member's target with the same scheme as its
+// declared protocol. Server variables substitute supplied-else-default;
+// unsupplied and undefaulted is a refusal, as are undeclared names and
+// out-of-enum values.
 //
 // The address point: the channel's declared `address` with every `{name}`
 // expression expanded from consumer-supplied parameter values

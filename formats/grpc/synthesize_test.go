@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"github.com/openbindings/openbindings-go/schemaprofile"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -68,6 +67,35 @@ func servicesFromFiles(t *testing.T, files ...*descriptorpb.FileDescriptorProto)
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func protoSchemaVariant(t *testing.T, value any, schemaType string) map[string]any {
+	t.Helper()
+	schema, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("schema is %T, want object: %v", value, value)
+	}
+	if schema["type"] == schemaType {
+		return schema
+	}
+	if variants, ok := schema["anyOf"].([]any); ok {
+		for _, variant := range variants {
+			if candidate, ok := variant.(map[string]any); ok {
+				if candidate["type"] == schemaType {
+					return candidate
+				}
+				if nested, ok := candidate["anyOf"].([]any); ok {
+					for _, member := range nested {
+						if result, ok := member.(map[string]any); ok && result["type"] == schemaType {
+							return result
+						}
+					}
+				}
+			}
+		}
+	}
+	t.Fatalf("schema has no %q variant: %v", schemaType, schema)
+	return nil
+}
 
 func simpleServiceFile(pkg, svcName string, methods ...*descriptorpb.MethodDescriptorProto) *descriptorpb.FileDescriptorProto {
 	return &descriptorpb.FileDescriptorProto{
@@ -262,10 +290,7 @@ func TestConvertToInterface_InputOutputSchemas(t *testing.T) {
 	if !ok {
 		t.Fatal("expected input properties")
 	}
-	idSchema, ok := props["id"].(map[string]any)
-	if !ok {
-		t.Fatal("expected id property")
-	}
+	idSchema := protoSchemaVariant(t, props["id"], "string")
 	if idSchema["type"] != "string" {
 		t.Errorf("id type = %v, want string", idSchema["type"])
 	}
@@ -420,11 +445,9 @@ func TestWellKnownSchema_Int32Wrappers(t *testing.T) {
 func TestWellKnownSchema_Int64Wrappers(t *testing.T) {
 	for _, fqn := range []string{"google.protobuf.Int64Value", "google.protobuf.UInt64Value"} {
 		got := wellKnownSchema(fqn)
-		if got["type"] != "integer" {
-			t.Errorf("%s: type = %v, want integer", fqn, got["type"])
-		}
-		if got["format"] != "int64" {
-			t.Errorf("%s: format = %v, want int64", fqn, got["format"])
+		integer := protoSchemaVariant(t, got, "integer")
+		if integer["format"] != "int64" {
+			t.Errorf("%s: format = %v, want int64", fqn, integer["format"])
 		}
 	}
 }
@@ -432,9 +455,7 @@ func TestWellKnownSchema_Int64Wrappers(t *testing.T) {
 func TestWellKnownSchema_FloatWrappers(t *testing.T) {
 	for _, fqn := range []string{"google.protobuf.FloatValue", "google.protobuf.DoubleValue"} {
 		got := wellKnownSchema(fqn)
-		if got["type"] != "number" {
-			t.Errorf("%s: type = %v, want number", fqn, got["type"])
-		}
+		protoSchemaVariant(t, got, "number")
 	}
 }
 
@@ -534,10 +555,7 @@ func TestConvertToInterface_WellKnownTimestampField(t *testing.T) {
 	if !ok {
 		t.Fatal("expected input properties")
 	}
-	createdAt, ok := props["createdAt"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected createdAt property, got %v", props)
-	}
+	createdAt := protoSchemaVariant(t, props["createdAt"], "string")
 	if createdAt["type"] != "string" {
 		t.Errorf("createdAt.type = %v, want string (canonical Timestamp form, not seconds/nanos object)", createdAt["type"])
 	}
@@ -551,7 +569,7 @@ func TestConvertToInterface_WellKnownTimestampField(t *testing.T) {
 
 // ---------- oneof ----------
 
-func TestConvertToInterface_OneofSingleGroup(t *testing.T) {
+func TestConvertToInterface_OneofSingleGroupProjectsOptionalMembers(t *testing.T) {
 	file := &descriptorpb.FileDescriptorProto{
 		Name:    ptr("testpkg.proto"),
 		Package: ptr("testpkg"),
@@ -590,41 +608,17 @@ func TestConvertToInterface_OneofSingleGroup(t *testing.T) {
 	}
 
 	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
-	variants, ok := input["oneOf"].([]any)
+	if _, ok := input["oneOf"]; ok {
+		t.Fatal("ProtoJSON oneof is at-most-one and may be unset; an exactly-one schema is invalid")
+	}
+	props, ok := input["properties"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected oneOf on input schema, got %v", input)
+		t.Fatal("expected oneof members as optional properties")
 	}
-	if len(variants) != 2 {
-		t.Fatalf("expected 2 oneOf variants, got %d", len(variants))
-	}
-
-	if props, ok := input["properties"].(map[string]any); ok {
-		if _, present := props["itemId"]; present {
-			t.Error("oneof member itemId should not appear in top-level properties")
+	for _, name := range []string{"itemId", "item_id", "itemIndex", "item_index"} {
+		if _, present := props[name]; !present {
+			t.Errorf("missing accepted ProtoJSON spelling %q", name)
 		}
-		if _, present := props["itemIndex"]; present {
-			t.Error("oneof member itemIndex should not appear in top-level properties")
-		}
-	}
-
-	seen := map[string]bool{}
-	for _, v := range variants {
-		vm, ok := v.(map[string]any)
-		if !ok {
-			t.Fatalf("variant not a map: %v", v)
-		}
-		if vm["type"] != "object" {
-			t.Errorf("variant type = %v, want object", vm["type"])
-		}
-		req, ok := vm["required"].([]any)
-		if !ok || len(req) != 1 {
-			t.Fatalf("variant required = %v, want single-element array", vm["required"])
-		}
-		name, _ := req[0].(string)
-		seen[name] = true
-	}
-	if !seen["itemId"] || !seen["itemIndex"] {
-		t.Errorf("expected variants for itemId and itemIndex, got %v", seen)
 	}
 }
 
@@ -677,12 +671,11 @@ func TestConvertToInterface_OneofWithRegularFields(t *testing.T) {
 	if _, ok := props["tenant"]; !ok {
 		t.Error("expected non-oneof field `tenant` in properties")
 	}
-	if _, ok := props["itemId"]; ok {
-		t.Error("oneof member itemId should not be in top-level properties")
+	if _, ok := props["itemId"]; !ok {
+		t.Error("oneof member itemId should be an optional top-level property")
 	}
-
-	if _, ok := input["oneOf"].([]any); !ok {
-		t.Error("expected oneOf on input")
+	if _, ok := input["oneOf"]; ok {
+		t.Error("oneof must not be projected as exactly-one")
 	}
 }
 
@@ -748,25 +741,11 @@ func TestConvertToInterface_OneofMultipleGroupsFallsBackToProperties(t *testing.
 		}
 	}
 
-	if len(warnings) != 1 {
-		t.Fatalf("expected 1 warning, got %d: %+v", len(warnings), warnings)
+	if len(warnings) != 0 {
+		t.Fatalf("exact null-aware oneof constraints should need no warning, got %+v", warnings)
 	}
-	got := warnings[0]
-	if got.Code != "grpc.multi_group_oneof" {
-		t.Errorf("warning code = %q, want grpc.multi_group_oneof", got.Code)
-	}
-	if got.Path != "operations.GetItem.input" {
-		t.Errorf("warning path = %q, want operations.GetItem.input", got.Path)
-	}
-	if got.Details["message"] != "testpkg.Request" {
-		t.Errorf("warning details.message = %v, want testpkg.Request", got.Details["message"])
-	}
-	groups, ok := got.Details["groups"].([]string)
-	if !ok {
-		t.Fatalf("warning details.groups not []string: %T", got.Details["groups"])
-	}
-	if len(groups) != 2 {
-		t.Errorf("warning groups = %v, want 2 entries", groups)
+	if constraints, _ := input["allOf"].([]any); len(constraints) == 0 {
+		t.Error("multi-group oneof schema does not enforce at-most-one constraints")
 	}
 }
 
@@ -865,10 +844,8 @@ func TestConvertToInterface_OneofShapeAcceptedByProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n := &schemaprofile.Normalizer{}
-	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
-	if _, err := n.Normalize(input); err != nil {
-		t.Fatalf("oneof schema rejected by v0.1 profile: %v", err)
+	if err := iface.Validate(); err != nil {
+		t.Fatalf("oneof schema rejected by the OpenBindings schema boundary: %v", err)
 	}
 }
 
@@ -938,33 +915,65 @@ func TestConvertToInterface_ByteAndInt64ShapesAcceptedByProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n := &schemaprofile.Normalizer{}
 	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
-	if _, err := n.Normalize(input); err != nil {
-		t.Fatalf("bytes/int64 schema rejected by v0.1 profile: %v", err)
-	}
-
 	props, _ := input["properties"].(map[string]any)
-	count, _ := props["count"].(map[string]any)
+	count := protoSchemaVariant(t, props["count"], "integer")
 	if count["type"] != "integer" || count["format"] != "int64" {
 		t.Errorf("count = %v, want integer+int64", count)
 	}
-	payload, _ := props["payload"].(map[string]any)
+	payload := protoSchemaVariant(t, props["payload"], "string")
 	if payload["type"] != "string" {
 		t.Errorf("payload.type = %v, want string", payload["type"])
 	}
 	if _, hasEnc := payload["contentEncoding"]; hasEnc {
 		t.Error("payload should not carry contentEncoding (v0.1 profile rejects it)")
 	}
-	wrappedCount, _ := props["wrappedCount"].(map[string]any)
+	wrappedCount := protoSchemaVariant(t, props["wrappedCount"], "integer")
 	if wrappedCount["type"] != "integer" || wrappedCount["format"] != "int64" {
 		t.Errorf("wrappedCount = %v, want integer+int64", wrappedCount)
 	}
-	wrappedPayload, _ := props["wrappedPayload"].(map[string]any)
+	wrappedPayload := protoSchemaVariant(t, props["wrappedPayload"], "string")
 	if wrappedPayload["type"] != "string" {
 		t.Errorf("wrappedPayload.type = %v, want string", wrappedPayload["type"])
 	}
 	if _, hasEnc := wrappedPayload["contentEncoding"]; hasEnc {
 		t.Error("wrappedPayload should not carry contentEncoding")
+	}
+}
+
+func TestSynthesizeInterfaceWithCoverage_AccountsForSchemaRangeExclusion(t *testing.T) {
+	proto := `
+syntax = "proto2";
+package testpkg;
+message Good { optional string value = 1; }
+message Bad { required string value = 1; }
+service TestService {
+  rpc Accepted(Good) returns (Good);
+  rpc Excluded(Bad) returns (Good);
+}`
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Location:    "grpc://127.0.0.1:50051",
+			Content:     openbindings.TextContent(proto),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(result.Interface.Bindings); got != 1 {
+		t.Fatalf("bindings = %d, want 1", got)
+	}
+	if result.Coverage.FullyRepresented {
+		t.Fatal("coverage with a binding-spec exclusion must not be fully represented")
+	}
+	if got := len(result.Coverage.Entries); got != 2 {
+		t.Fatalf("coverage entries = %d, want 2: %+v", got, result.Coverage.Entries)
+	}
+	if entry := result.Coverage.Entries[0]; entry.SourceRef != "testpkg.TestService/Accepted" || entry.Status != openbindings.SynthesisRepresented {
+		t.Fatalf("accepted entry = %+v", entry)
+	}
+	if entry := result.Coverage.Entries[1]; entry.SourceRef != "testpkg.TestService/Excluded" || entry.Status != openbindings.SynthesisExcluded || entry.ReasonCode != "grpc.schema_range" || entry.Rule != "GRPC-P-03" {
+		t.Fatalf("excluded entry = %+v", entry)
 	}
 }

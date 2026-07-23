@@ -80,6 +80,10 @@ const (
 	// handles the selected source format.
 	ErrCodeBindingNotFound = "ERR_BINDING_NOT_FOUND"
 
+	// ErrCodeBindingSelectionRequired indicates that several invocable
+	// bindings remain and the caller must choose one explicitly.
+	ErrCodeBindingSelectionRequired = "ERR_BINDING_SELECTION_REQUIRED"
+
 	// ErrCodeUnknownSource indicates a binding references a source not
 	// present in the interface.
 	ErrCodeUnknownSource = "ERR_UNKNOWN_SOURCE"

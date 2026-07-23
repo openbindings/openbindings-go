@@ -32,6 +32,10 @@ var (
 	// ErrBindingNotFound is returned when no binding is available for the requested operation.
 	ErrBindingNotFound = errors.New("openbindings: no binding for operation")
 
+	// ErrBindingSelectionRequired is returned when an operation has several
+	// invocable bindings and the caller supplied no effective choice.
+	ErrBindingSelectionRequired = errors.New("openbindings: binding selection required")
+
 	// ErrNilInterface is returned when a nil interface is passed to an operation that requires one.
 	ErrNilInterface = errors.New("openbindings: nil interface")
 
@@ -67,4 +71,7 @@ var (
 
 	// ErrSourceInspectionUnsupported is returned when a source inspector cannot inspect a format.
 	ErrSourceInspectionUnsupported = errors.New("openbindings: source inspection unsupported for format")
+	// ErrSynthesisCoverageUnsupported is returned when a selected synthesizer
+	// does not implement the optional durable coverage capability.
+	ErrSynthesisCoverageUnsupported = errors.New("openbindings: synthesis coverage unsupported for format")
 )

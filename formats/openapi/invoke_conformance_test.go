@@ -116,31 +116,27 @@ func TestInvoke_RefResolvesPathItemRef(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// OAPI-P-01 / §3 / §6 — accepted lines, duplicate keys, self-containment
+// OAPI-P-01 / §3 / §6 — accepted editions, duplicate keys, self-containment
 // ---------------------------------------------------------------------------
 
 func TestLoadDocument_VersionDiscrimination(t *testing.T) {
-	cases := []struct {
-		name    string
-		content string
-		wantErr string
-	}{
-		{"swagger 2.0", `{"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {}}`, "OAPI-P-01"},
-		{"3.2 line", `{"openapi": "3.2.0", "info": {"title": "t", "version": "1"}, "paths": {}}`, "OAPI-P-01"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := loadDocument("", openbindings.TextContent(tc.content))
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("loadDocument = %v, want loud OAPI-P-01 refusal", err)
-			}
-		})
-	}
-	// Accepted lines load.
-	for _, v := range []string{"3.0.3", "3.1.0"} {
+	for _, v := range []string{"3.0.0", "3.0.1", "3.0.2", "3.0.3", "3.0.4", "3.1.0", "3.1.1", "3.1.2"} {
 		doc, err := loadDocument("", openbindings.TextContent(fmt.Sprintf(`{"openapi": %q, "info": {"title": "t", "version": "1"}, "paths": {}}`, v)))
 		if err != nil || doc == nil {
 			t.Errorf("version %s must load, got %v", v, err)
+		}
+	}
+
+	rejected := []string{
+		`{"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {}}`,
+		`{"openapi": "3.0.5", "info": {"title": "t", "version": "1"}, "paths": {}}`,
+		`{"openapi": "3.1.3", "info": {"title": "t", "version": "1"}, "paths": {}}`,
+		`{"openapi": "3.2.0", "info": {"title": "t", "version": "1"}, "paths": {}}`,
+	}
+	for _, content := range rejected {
+		_, err := loadDocument("", openbindings.TextContent(content))
+		if err == nil || !strings.Contains(err.Error(), "OAPI-P-01") {
+			t.Errorf("loadDocument(%s) = %v, want loud OAPI-P-01 refusal", content, err)
 		}
 	}
 }
@@ -579,6 +575,7 @@ func TestInvoke_PlusJSONSelected(t *testing.T) {
 		gotCT = r.Header.Get("Content-Type")
 		gotBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{}`))
 	})
 	spec := fmt.Sprintf(`{
@@ -590,7 +587,7 @@ func TestInvoke_PlusJSONSelected(t *testing.T) {
 	      "application/vnd.b+json": {"schema": {"type": "object"}},
 	      "application/vnd.a+json": {"schema": {"type": "object"}}
 	    }},
-	    "responses": {"201": {"description": "ok"}}
+	    "responses": {"201": {"description": "ok", "content": {"application/json": {"schema": {}}}}}
 	  }}}
 	}`, srv.URL)
 	_, ierr := invokeWith(t, spec, "#/paths/~1things/post", map[string]any{"k": "v"})
@@ -871,8 +868,16 @@ func TestInvoke_AcceptHeaderMembership(t *testing.T) {
 		gotAccept = r.Header.Get("Accept")
 		w.WriteHeader(200)
 	})
+	noMediaSpec := fmt.Sprintf(`{
+	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/session": {"get": {
+	    "operationId": "getSession",
+	    "responses": {"200": {"description": "ok"}}
+	  }}}
+	}`, srv2.URL)
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv2.URL))},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(noMediaSpec)},
 		Ref:    "#/paths/~1session/get",
 	})
 	outputs, ierr := driveOutputs(context.Background(), call, nil)
@@ -1053,7 +1058,7 @@ func TestInvoke_CookieChannelAssembly(t *testing.T) {
 	      {"name": "zeta", "in": "cookie", "schema": {"type": "string"}},
 	      {"name": "alpha", "in": "cookie", "schema": {"type": "string"}}
 	    ],
-	    "responses": {"200": {"description": "ok"}}
+	    "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {}}}}}
 	  }}},
 	  "components": {"securitySchemes": {
 	    "cookieKey": {"type": "apiKey", "in": "cookie", "name": "auth_token"}
@@ -1142,7 +1147,9 @@ func TestInvoke_ServerConfigurationPoint(t *testing.T) {
 	spec := `{
 	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
 	  "servers": [{"url": "https://unreachable.invalid"}],
-	  "paths": {"/ping": {"get": {"operationId": "ping", "responses": {"200": {"description": "ok"}}}}}
+	  "paths": {"/ping": {"get": {"operationId": "ping", "responses": {"200": {
+	    "description": "ok", "content": {"application/json": {"schema": {}}}
+	  }}}}}
 	}`
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
 		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},

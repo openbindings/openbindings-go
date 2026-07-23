@@ -1183,7 +1183,7 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 	if _, hasName := props["name"]; !hasName {
 		t.Fatalf("contract must describe the flat caller shape, got properties %v", props)
 	}
-	req, _ := op.Input.(map[string]any)["required"].([]string)
+	req, _ := op.Input.(map[string]any)["required"].([]any)
 	found := false
 	for _, r := range req {
 		if r == "name" {

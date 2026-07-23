@@ -7,10 +7,8 @@ import (
 )
 
 // sharedTypeServiceFile declares a message (Pair) that reuses one user-defined
-// message type (Point) in two sibling fields (a, b). This is ordinary DAG
-// reuse, not a cycle: the schema walker must emit the full Point schema in
-// BOTH positions. A permanent `visited` set truncates the second occurrence to
-// a bare {"type":"object"}.
+// message type (Point) in two sibling fields (a, b). Both fields must point to
+// the same complete definition.
 func sharedTypeServiceFile() *descriptorpb.FileDescriptorProto {
 	return &descriptorpb.FileDescriptorProto{
 		Name:    ptr("shared.proto"),
@@ -41,9 +39,8 @@ func sharedTypeServiceFile() *descriptorpb.FileDescriptorProto {
 	}
 }
 
-// cyclicServiceFile declares a self-referential message (Node.next: Node). A
-// true cycle must terminate as a bare placeholder object; this behavior is
-// correct and must be preserved by the delete-on-unwind fix.
+// cyclicServiceFile declares a self-referential message (Node.next: Node). Its
+// schema must terminate structurally while preserving the recursive contract.
 func cyclicServiceFile() *descriptorpb.FileDescriptorProto {
 	return &descriptorpb.FileDescriptorProto{
 		Name:    ptr("cyclic.proto"),
@@ -69,8 +66,8 @@ func cyclicServiceFile() *descriptorpb.FileDescriptorProto {
 }
 
 // TestConvertToInterface_SharedTypeNotTruncated pins the F1/C8f fix: a message
-// type reused in sibling (non-cyclic) positions must carry the full schema in
-// every position, not collapse to a bare {"type":"object"} after the first.
+// type reused in sibling (non-cyclic) positions must point to one complete
+// shared definition, not collapse to a bare {"type":"object"}.
 func TestConvertToInterface_SharedTypeNotTruncated(t *testing.T) {
 	disc := buildTestDiscovery(t, sharedTypeServiceFile())
 	iface, err := convertToInterface(disc, "localhost:50051", nil)
@@ -87,26 +84,25 @@ func TestConvertToInterface_SharedTypeNotTruncated(t *testing.T) {
 		t.Fatalf("expected Pair properties, got %v", out)
 	}
 
+	defs, _ := out["$defs"].(map[string]any)
+	point, _ := defs["testpkg.Point"].(map[string]any)
+	pointProps, _ := point["properties"].(map[string]any)
+	if _, ok := pointProps["label"]; !ok {
+		t.Fatalf("shared Point definition is missing label: %v", point)
+	}
+	wantRef := out["$id"].(string) + "#/$defs/testpkg.Point"
 	for _, fieldName := range []string{"a", "b"} {
-		field, ok := props[fieldName].(map[string]any)
-		if !ok {
-			t.Fatalf("expected %s property, got %v", fieldName, props)
-		}
-		fieldProps, ok := field["properties"].(map[string]any)
-		if !ok {
-			t.Errorf("field %q truncated to a property-less object (shared-type reuse mistaken for a cycle): %v", fieldName, field)
-			continue
-		}
-		if _, ok := fieldProps["label"]; !ok {
-			t.Errorf("field %q is missing Point.label; got %v", fieldName, fieldProps)
+		field, _ := props[fieldName].(map[string]any)
+		if field["$ref"] != wantRef {
+			t.Errorf("field %q ref = %v, want %q", fieldName, field["$ref"], wantRef)
 		}
 	}
 }
 
-// TestConvertToInterface_CyclePlaceholderPreserved asserts a true cycle still
-// terminates as a bare placeholder object (never recurses forever, never
-// carries nested properties). This must hold both before and after the fix.
-func TestConvertToInterface_CyclePlaceholderPreserved(t *testing.T) {
+// TestConvertToInterface_CyclePreservedByReference asserts a true cycle
+// terminates while preserving the recursive contract through a local schema
+// resource rather than broadening it to an unconstrained object.
+func TestConvertToInterface_CyclePreservedByReference(t *testing.T) {
 	disc := buildTestDiscovery(t, cyclicServiceFile())
 	iface, err := convertToInterface(disc, "localhost:50051", nil)
 	if err != nil {
@@ -121,14 +117,9 @@ func TestConvertToInterface_CyclePlaceholderPreserved(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected Node properties, got %v", out)
 	}
-	next, ok := props["next"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected next property, got %v", props)
-	}
-	if _, hasProps := next["properties"]; hasProps {
-		t.Errorf("cyclic self-reference should be a bare placeholder, got %v", next)
-	}
-	if next["type"] != "object" {
-		t.Errorf("cycle placeholder type = %v, want object", next["type"])
+	next, _ := props["next"].(map[string]any)
+	wantRef := out["$id"].(string) + "#/$defs/testpkg.Node"
+	if next["$ref"] != wantRef {
+		t.Errorf("recursive next ref = %v, want %q", next["$ref"], wantRef)
 	}
 }

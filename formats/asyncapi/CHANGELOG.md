@@ -4,16 +4,16 @@
 
 ### Changed
 
-- **BREAKING: `configuration.server` accepts exactly the §9.2-pinned value
-  shapes** — `{"key": "<server-name>", "variables": {"<variable-name>":
-  "<string-value>"}?}` selecting a member of the effective server set, the
-  optional `variables` member supplying values for the selected server's own
-  declared variables, xor `{"url": "<connection-url>"}` overriding with a
-  complete connection URL; the two mutually exclusive, `variables` composing
-  only with `key`. The previously tolerated spellings — a bare string
+- **BREAKING: `configuration.server` accepts exactly the SDK's composable
+  carriage for the §9.2 server point** — `{"key": "<server-name>"?,
+  "variables": {"<variable-name>": "<string-value>"}?, "url":
+  "<connection-url>"?}`. The sole bindable effective-set member selects
+  itself; several members require `key`. `variables` completes the selected
+  member and `url` may replace only that member's target using the same scheme
+  as its declared protocol. The previously tolerated spellings — a bare string
   (member name or URL) and `{"name": ...}` — are refused loudly with a
-  teaching error naming the two pinned forms (byte-identical to the TS
-  SDK's; the pin exists so two implementations carry the value identically,
+  teaching error naming the pinned shape (byte-identical to the TS SDK's;
+  the pin exists so two implementations carry the value identically,
   and silent tolerance of extra spellings defeats it). Server variables
   substitute supplied-else-default-else-refusal: an undeclared supplied name
   is refused, never ignored, and a supplied value outside the variable's

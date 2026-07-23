@@ -146,8 +146,8 @@ func parseDocument(data []byte) (*document, error) {
 	}
 
 	// ASYNC-P-01: the artifact's own `asyncapi` field discriminates the
-	// accepted revision — exactly 3.0.0. A later patch is adopted by compatible
-	// revision of the binding specification, never sight-unseen.
+	// accepted revision — exactly 3.0.0. A later edition requires a new
+	// binding-specification identifier, never range inference.
 	if doc.AsyncAPI != "3.0.0" {
 		return nil, fmt.Errorf("unsupported AsyncAPI version %q: openbindings.asyncapi@1 accepts exactly 3.0.0 (ASYNC-P-01)", doc.AsyncAPI)
 	}

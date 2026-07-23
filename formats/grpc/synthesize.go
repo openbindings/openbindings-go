@@ -3,6 +3,7 @@ package grpc
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -38,6 +39,14 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(o
 	for _, svc := range disc.services {
 		methods := serviceMethodsSorted(svc)
 		for _, method := range methods {
+			// The binding specification defines its accepted schema range per
+			// bound method. A method outside that range is not bindable under
+			// openbindings.grpc@1 and is accounted for by the coverage surface;
+			// it must never become an OBI binding that invocation will
+			// deterministically refuse.
+			if err := validateBoundClosure(method); err != nil {
+				continue
+			}
 			fqn := string(svc.FullName()) + "/" + string(method.Name())
 			opKey := openbindings.SanitizeKey(string(method.Name()))
 			opKey = openbindings.ResolveKeyCollision(opKey, string(svc.Name()), usedKeys)
@@ -48,10 +57,10 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(o
 			}
 
 			if inputType := method.Input(); inputType != nil {
-				op.Input = newSchemaWalker(onWarning, "operations."+opKey+".input").message(inputType)
+				op.Input = newSchemaWalker(schemaInput, onWarning, "operations."+opKey+".input").root(inputType)
 			}
 			if outputType := method.Output(); outputType != nil {
-				op.Output = newSchemaWalker(onWarning, "operations."+opKey+".output").message(outputType)
+				op.Output = newSchemaWalker(schemaOutput, onWarning, "operations."+opKey+".output").root(outputType)
 			}
 
 			iface.Operations[opKey] = op
@@ -129,15 +138,28 @@ func trimComment(s string) string {
 // schemaWalker walks a proto message tree and produces JSON Schema. It holds
 // traversal state (cycle detection, warning callback, OBI path) so individual
 // walk methods stay focused on structural translation.
+type schemaDirection uint8
+
+const (
+	schemaInput schemaDirection = iota
+	schemaOutput
+)
+
 type schemaWalker struct {
-	visited   map[string]bool
+	direction schemaDirection
+	defs      map[string]any
+	building  map[string]bool
+	baseID    string
 	onWarning func(openbindings.SynthesizerWarning)
 	path      string
 }
 
-func newSchemaWalker(onWarning func(openbindings.SynthesizerWarning), path string) *schemaWalker {
+func newSchemaWalker(direction schemaDirection, onWarning func(openbindings.SynthesizerWarning), path string) *schemaWalker {
 	return &schemaWalker{
-		visited:   make(map[string]bool),
+		direction: direction,
+		defs:      make(map[string]any),
+		building:  make(map[string]bool),
+		baseID:    "urn:openbindings:generated:grpc:" + path,
 		onWarning: onWarning,
 		path:      path,
 	}
@@ -155,30 +177,40 @@ func (w *schemaWalker) warn(code, message string, details map[string]any) {
 	})
 }
 
-func (w *schemaWalker) message(msg protoreflect.MessageDescriptor) map[string]any {
-	fqn := string(msg.FullName())
-	if w.visited[fqn] {
-		return map[string]any{"type": "object"}
-	}
-
-	// Well-known proto types have canonical JSON representations per the
-	// proto3 JSON mapping spec. Emit those directly instead of descending
-	// into the message's fields — traversing Timestamp's `seconds`/`nanos`
-	// produces a contract the invoker's protojson layer cannot accept.
-	if wk := wellKnownSchema(fqn); wk != nil {
+func (w *schemaWalker) root(msg protoreflect.MessageDescriptor) map[string]any {
+	if wk := wellKnownSchema(string(msg.FullName()), w.direction); wk != nil {
 		return wk
 	}
+	_ = w.messageReference(msg)
+	definition, _ := w.defs[string(msg.FullName())].(map[string]any)
+	root := make(map[string]any, len(definition)+2)
+	for key, value := range definition {
+		root[key] = value
+	}
+	root["$id"] = w.baseID
+	root["$defs"] = w.defs
+	return root
+}
 
-	w.visited[fqn] = true
-	// Delete on unwind so `visited` tracks only the types on the current
-	// recursion stack (a genuine cycle), never every type seen anywhere in
-	// the walk. Left permanently set, it would truncate a message reused in
-	// sibling (non-cyclic) positions to a bare {"type":"object"}. This is the
-	// same delete-on-unwind discipline formats/openapi's inlineRefs uses.
-	defer delete(w.visited, fqn)
+func (w *schemaWalker) messageReference(msg protoreflect.MessageDescriptor) map[string]any {
+	fqn := string(msg.FullName())
+	if wk := wellKnownSchema(fqn, w.direction); wk != nil {
+		return wk
+	}
+	if _, exists := w.defs[fqn]; !exists && !w.building[fqn] {
+		w.building[fqn] = true
+		// Install the completed definition after the walk. Recursive edges
+		// already point at this stable $defs address.
+		w.defs[fqn] = w.messageDefinition(msg)
+		delete(w.building, fqn)
+	}
+	return map[string]any{"$ref": w.baseID + "#/$defs/" + escapeJSONPointerToken(fqn)}
+}
 
+func (w *schemaWalker) messageDefinition(msg protoreflect.MessageDescriptor) map[string]any {
 	schema := map[string]any{
-		"type": "object",
+		"type":                 "object",
+		"additionalProperties": false,
 	}
 
 	fieldsDesc := msg.Fields()
@@ -206,74 +238,92 @@ func (w *schemaWalker) message(msg protoreflect.MessageDescriptor) map[string]an
 		oneofGroups[name] = append(oneofGroups[name], field)
 	}
 
-	// Single oneof group: emit top-level `oneOf` preserving exactly-one-of
-	// semantics. Multiple oneof groups: the v0.1 schema profile rejects
-	// `oneOf` inside `allOf` (schemaprofile/allof.go), and a Cartesian
-	// expansion would incorrectly force one member per group. Fall back to
-	// putting multi-group oneof fields in `properties` as independent
-	// optional fields and surface a warning so callers know the emitted
-	// OBI cannot enforce exclusivity. Multi-group messages will be
-	// properly expressible when a future profile revision allows `oneOf`
-	// inside `allOf`.
-	useOneOf := len(oneofGroups) == 1
-
-	if len(oneofGroups) > 1 {
-		groupNames := make([]string, 0, len(oneofOrder))
-		groupNames = append(groupNames, oneofOrder...)
-		w.warn(
-			"grpc.multi_group_oneof",
-			fmt.Sprintf("message %s contains %d oneof groups; the v0.1 schema profile cannot express multi-group exclusivity, so members are emitted as independent optional properties", string(msg.Name()), len(oneofGroups)),
-			map[string]any{
-				"message": string(msg.FullName()),
-				"groups":  groupNames,
-			},
-		)
-	}
-
 	properties := map[string]any{}
+	var constraints []any
 	for _, field := range regularFields {
-		properties[field.JSONName()] = w.field(field)
+		constraints = append(constraints, w.addProtoFieldProperties(properties, field, w.field(field))...)
 	}
-	if !useOneOf {
-		for _, name := range oneofOrder {
-			for _, field := range oneofGroups[name] {
-				properties[field.JSONName()] = w.field(field)
-			}
+	for _, name := range oneofOrder {
+		for _, field := range oneofGroups[name] {
+			constraints = append(constraints, w.addProtoFieldProperties(properties, field, w.field(field))...)
 		}
+		constraints = append(constraints, oneofConstraints(oneofGroups[name], w.direction)...)
 	}
 	if len(properties) > 0 {
 		schema["properties"] = properties
 	}
-
-	if useOneOf {
-		group := oneofGroups[oneofOrder[0]]
-		variants := make([]any, 0, len(group))
-		for _, field := range group {
-			jsonName := field.JSONName()
-			variants = append(variants, map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					jsonName: w.field(field),
-				},
-				"required": []any{jsonName},
-			})
-		}
-		schema["oneOf"] = variants
+	if len(constraints) > 0 {
+		schema["allOf"] = constraints
 	}
 
 	return schema
+}
+
+func (w *schemaWalker) addProtoFieldProperties(properties map[string]any, field protoreflect.FieldDescriptor, schema map[string]any) []any {
+	projected := schema
+	if w.direction == schemaInput {
+		projected = map[string]any{"anyOf": []any{schema, map[string]any{"type": "null"}}}
+	}
+	properties[field.JSONName()] = projected
+	if protoName := string(field.Name()); protoName != field.JSONName() {
+		if w.direction == schemaInput {
+			properties[protoName] = projected
+			// ProtoJSON accepts either spelling but rejects a duplicate field,
+			// including the two aliases of one descriptor.
+			return []any{map[string]any{"not": map[string]any{"required": []any{field.JSONName(), protoName}}}}
+		}
+	}
+	return nil
+}
+
+func oneofConstraints(fields []protoreflect.FieldDescriptor, direction schemaDirection) []any {
+	var constraints []any
+	for left := 0; left < len(fields); left++ {
+		for right := left + 1; right < len(fields); right++ {
+			for _, leftName := range protoFieldSpellings(fields[left], direction) {
+				for _, rightName := range protoFieldSpellings(fields[right], direction) {
+					constraints = append(constraints, map[string]any{
+						"not": map[string]any{
+							"required": []any{leftName, rightName},
+							"properties": map[string]any{
+								leftName:  map[string]any{"not": map[string]any{"type": "null"}},
+								rightName: map[string]any{"not": map[string]any{"type": "null"}},
+							},
+						},
+					})
+				}
+			}
+		}
+	}
+	return constraints
+}
+
+func protoFieldSpellings(field protoreflect.FieldDescriptor, direction schemaDirection) []string {
+	names := []string{field.JSONName()}
+	if protoName := string(field.Name()); direction == schemaInput && protoName != field.JSONName() {
+		names = append(names, protoName)
+	}
+	return names
+}
+
+func escapeJSONPointerToken(value string) string {
+	value = strings.ReplaceAll(value, "~", "~0")
+	return strings.ReplaceAll(value, "/", "~1")
 }
 
 // wellKnownSchema returns the canonical JSON Schema for a google.protobuf.*
 // well-known message type, matching proto3's JSON mapping. Returns nil for
 // any other fully qualified name.
 //
-// Schemas describe semantic types, not wire encoding. 64-bit integers emit
-// as {"type":"integer","format":"int64"}; the wire's choice of carrying them
-// as JSON numbers, JSON strings, or protobuf varints is an invoker concern.
-// Downstream codegen can read format:int64 to pick precision-preserving
-// language types (TypeScript string, Go int64, Rust i64).
-func wellKnownSchema(fqn string) map[string]any {
+// Schemas describe the directional ProtoJSON boundary. Inputs admit an exact
+// interoperable JSON-integer range plus the mapping's string carriage; outputs
+// use the canonical string printer form. Downstream codegen can read
+// format:int64 to pick a precision-preserving language type.
+func wellKnownSchema(fqn string, directions ...schemaDirection) map[string]any {
+	direction := schemaInput
+	if len(directions) > 0 {
+		direction = directions[0]
+	}
 	switch fqn {
 	case "google.protobuf.Timestamp":
 		return map[string]any{"type": "string", "format": "date-time"}
@@ -294,19 +344,22 @@ func wellKnownSchema(fqn string) map[string]any {
 	case "google.protobuf.ListValue":
 		return map[string]any{"type": "array"}
 	case "google.protobuf.Empty":
-		return map[string]any{"type": "object"}
+		return map[string]any{"type": "object", "additionalProperties": false}
 	case "google.protobuf.BoolValue":
 		return map[string]any{"type": "boolean"}
 	case "google.protobuf.StringValue":
 		return map[string]any{"type": "string"}
 	case "google.protobuf.BytesValue":
-		return map[string]any{"type": "string"}
+		return protoBytesSchema()
 	case "google.protobuf.Int32Value", "google.protobuf.UInt32Value":
-		return map[string]any{"type": "integer"}
+		if fqn == "google.protobuf.UInt32Value" {
+			return map[string]any{"type": "integer", "minimum": 0, "maximum": uint64(4294967295)}
+		}
+		return map[string]any{"type": "integer", "minimum": int64(-2147483648), "maximum": int64(2147483647)}
 	case "google.protobuf.Int64Value", "google.protobuf.UInt64Value":
-		return map[string]any{"type": "integer", "format": "int64"}
+		return integer64Schema(fqn == "google.protobuf.UInt64Value", direction)
 	case "google.protobuf.FloatValue", "google.protobuf.DoubleValue":
-		return map[string]any{"type": "number"}
+		return protoFloatSchema()
 	case "google.protobuf.Any":
 		return map[string]any{
 			"type": "object",
@@ -323,10 +376,14 @@ func wellKnownSchema(fqn string) map[string]any {
 func (w *schemaWalker) field(field protoreflect.FieldDescriptor) map[string]any {
 	if field.IsMap() {
 		valField := field.MapValue()
-		return map[string]any{
+		schema := map[string]any{
 			"type":                 "object",
 			"additionalProperties": w.scalarOrMessage(valField),
 		}
+		if propertyNames := protoMapKeySchema(field.MapKey()); propertyNames != nil {
+			schema["propertyNames"] = propertyNames
+		}
+		return schema
 	}
 
 	s := w.scalarOrMessage(field)
@@ -348,44 +405,127 @@ func (w *schemaWalker) scalarOrMessage(field protoreflect.FieldDescriptor) map[s
 
 	case protoreflect.Int32Kind,
 		protoreflect.Sint32Kind,
-		protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind,
+		protoreflect.Sfixed32Kind:
+		return map[string]any{"type": "integer", "minimum": int64(-2147483648), "maximum": int64(2147483647)}
+
+	case protoreflect.Uint32Kind,
 		protoreflect.Fixed32Kind:
-		return map[string]any{"type": "integer"}
+		return map[string]any{"type": "integer", "minimum": 0, "maximum": uint64(4294967295)}
 
 	case protoreflect.Int64Kind,
 		protoreflect.Sint64Kind,
-		protoreflect.Sfixed64Kind,
-		protoreflect.Uint64Kind,
+		protoreflect.Sfixed64Kind:
+		return integer64Schema(false, w.direction)
+
+	case protoreflect.Uint64Kind,
 		protoreflect.Fixed64Kind:
-		return map[string]any{"type": "integer", "format": "int64"}
+		return integer64Schema(true, w.direction)
 
 	case protoreflect.FloatKind, protoreflect.DoubleKind:
-		return map[string]any{"type": "number"}
+		return protoFloatSchema()
 
-	case protoreflect.StringKind, protoreflect.BytesKind:
+	case protoreflect.StringKind:
 		return map[string]any{"type": "string"}
+	case protoreflect.BytesKind:
+		return protoBytesSchema()
 
 	case protoreflect.EnumKind:
 		enumDesc := field.Enum()
 		if enumDesc != nil {
+			if enumDesc.FullName() == "google.protobuf.NullValue" {
+				return map[string]any{"type": "null"}
+			}
 			values := enumDesc.Values()
 			out := make([]any, 0, values.Len())
 			for i := 0; i < values.Len(); i++ {
 				out = append(out, string(values.Get(i).Name()))
 			}
-			return map[string]any{"type": "string", "enum": out}
+			if w.direction == schemaOutput {
+				return map[string]any{"type": "string", "enum": out}
+			}
+			return map[string]any{"anyOf": []any{
+				map[string]any{"type": "string", "enum": out},
+				map[string]any{"type": "integer", "minimum": int64(-2147483648), "maximum": int64(2147483647)},
+			}}
 		}
 		return map[string]any{"type": "string"}
 
 	case protoreflect.MessageKind, protoreflect.GroupKind:
 		msgDesc := field.Message()
 		if msgDesc != nil {
-			return w.message(msgDesc)
+			return w.messageReference(msgDesc)
 		}
 		return map[string]any{"type": "object"}
 
 	default:
 		return map[string]any{"type": "string"}
 	}
+}
+
+func integer64Schema(unsigned bool, direction schemaDirection) map[string]any {
+	if direction == schemaOutput {
+		pattern := `^-?(?:0|[1-9][0-9]*)$`
+		if unsigned {
+			pattern = `^(?:0|[1-9][0-9]*)$`
+		}
+		return map[string]any{"type": "string", "format": "int64", "pattern": pattern}
+	}
+	integer := map[string]any{
+		"type":   "integer",
+		"format": "int64",
+		// Restrict the numeric spelling to the exact interoperable JSON
+		// range. Every 64-bit value remains available through the string
+		// branch below.
+		"maximum": int64(9007199254740991),
+	}
+	if unsigned {
+		integer["minimum"] = 0
+	} else {
+		integer["minimum"] = int64(-9007199254740991)
+	}
+	return map[string]any{"anyOf": []any{
+		integer,
+		// ProtoJSON accepts quoted integer forms (including exponent
+		// notation) and performs the exact range/integrality check. JSON
+		// Schema cannot express that arithmetic without rejecting valid
+		// spellings, so the string branch stays deliberately open.
+		map[string]any{
+			"type":    "string",
+			"format":  "int64",
+			"pattern": `^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`,
+		},
+	}}
+}
+
+func protoMapKeySchema(field protoreflect.FieldDescriptor) map[string]any {
+	if field == nil {
+		return nil
+	}
+	switch field.Kind() {
+	case protoreflect.BoolKind:
+		return map[string]any{"enum": []any{"true", "false"}}
+	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
+		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
+		return map[string]any{"pattern": `^-?(?:0|[1-9][0-9]*)$`}
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind,
+		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return map[string]any{"pattern": `^(?:0|[1-9][0-9]*)$`}
+	default:
+		return nil
+	}
+}
+
+func protoBytesSchema() map[string]any {
+	return map[string]any{
+		"type": "string",
+		// ProtoJSON accepts padded or unpadded standard and URL-safe base64.
+		"pattern": `^(?:[A-Za-z0-9+/_-]{4})*(?:[A-Za-z0-9+/_-]{2}(?:==)?|[A-Za-z0-9+/_-]{3}=?)?$`,
+	}
+}
+
+func protoFloatSchema() map[string]any {
+	return map[string]any{"anyOf": []any{
+		map[string]any{"type": "number"},
+		map[string]any{"type": "string", "enum": []any{"NaN", "Infinity", "-Infinity"}},
+	}}
 }

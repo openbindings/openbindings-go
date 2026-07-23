@@ -64,8 +64,9 @@ go install github.com/openbindings/ob/cmd/ob@latest
 - **Validation** with shape-level checks, strict mode for unknown fields, and exact binding-specification identifier validation
 - **Schema compatibility** checking under the OpenBindings Schema Compatibility Profile v0.1 (covariant outputs, contravariant inputs) with diagnostic reasons
 - **`FetchInterface`** for resolving OBIs from URLs: well-known discovery, then synthesis from raw OpenAPI / AsyncAPI / etc. via supplied synthesizers
+- **Exhaustiveness-qualified synthesis accounting** through `CoverageSynthesizer`, pairing a creation-time-sound OBI with durable dispositions and an explicit claim about whether the upstream interaction inventory is complete
 - **`OperationInvoker`** that dispatches operations to binding-spec implementations and applies transforms
-- **Context contracts** for per-origin invocation context (credentials and non-secret configuration), resolved at call time with least-privilege scoping
+- **Context contracts** for caller-supplied or resolved invocation context, with requirement-scoped provisioning and no assumption that non-credential fields are public
 
 The SDK is the foundation layer. It defines the contracts that binding invokers (OpenAPI, AsyncAPI, gRPC, etc.) implement but does not contain any binding-spec-specific logic itself.
 
@@ -214,28 +215,39 @@ opInv := openbindings.NewOperationInvoker(
 | `formats/connect` | `openbindings.connect@1` | yes |
 | `formats/mcp` | `openbindings.mcp@1` | yes |
 | `formats/usage` | `openbindings.usage@1` | yes |
-| `formats/operationgraph` | `openbindings.operation-graph@0.2.0` | no (graphs are authored, then composed at invoke time) |
+| `formats/operationgraph` | `openbindings.operation-graph@1` | no (graphs are authored, then composed at invoke time) |
 | `formats/workersrpc` | `workers-rpc@^1.0.0` | no (Go-side stub; dispatch requires the Workers runtime) |
 
-Invokers implement `BindingInvoker`. Interface synthesizers (which synthesize OBIs from raw specs) implement `InterfaceSynthesizer`. Source inspectors (which enumerate refs in a source) implement `SourceInspector`. A single type may implement any combination.
+Only OpenAPI, AsyncAPI, MCP, gRPC, Connect, and usage are published revision-1
+binding specifications and participate in the 0.2 cross-SDK coverage
+guarantee. `graphql` and `workers-rpc@^1.0.0` are retained legacy experimental
+tokens; their candidate specification documents have not been promoted and
+these packages must not be presented as implementations of
+`openbindings.graphql@1` or `openbindings.workers-rpc@1`.
+
+Invokers implement `BindingInvoker`. Interface synthesizers implement
+`InterfaceSynthesizer`; synthesizers that can return durable, explicitly
+exhaustiveness-qualified source accounting implement `CoverageSynthesizer`.
+Source inspectors implement `SourceInspector`.
+A single type may implement any combination.
 
 Most HTTP-speaking invokers (openapi, asyncapi, graphql, connect) accept an injected `*http.Client` via `NewInvokerWithClient` (it also rides WebSocket upgrade handshakes); mcp takes one through the `WithHTTPClient` option; grpc, which is not `*http.Client`-based, injects transport via `WithDialOptions`/`WithTransportCredentials`. Invokers that pool resources — grpc connections, asyncapi WebSockets, mcp sessions — implement `io.Closer`.
 
 ## Context and authentication
 
 Context is never part of an OBI document. Credentials and other runtime
-configuration are supplied per call or resolved at invocation time, keyed by
-normalized origin. The context key is `host[:port]` and is scheme-agnostic, so
-`http://`, `https://`, and `ws://` for the same origin share context:
+configuration are supplied per call or resolved at invocation time. The
+contract does not prescribe storage or keying. For applications that choose
+origin-scoped reuse, the SDK provides a scheme-agnostic normalization helper:
 
 ```go
 key := openbindings.NormalizeContextKey("https://api.example.com/v1/users")
 // key = "api.example.com"
 ```
 
-The SDK defines the `ContextStore` contract (`Get`/`Set`/`Delete` keyed by
-origin; values are opaque maps the SDK never inspects) and leaves storage to
-the caller: a file, a keychain, or an in-memory map in tests.
+The SDK defines an optional `ContextStore` seam (`Get`/`Set`/`Delete` over a
+caller-chosen key) and leaves storage to the caller: a file, a keychain, or an
+in-memory map in tests. It is not required by binding invocation.
 
 Credential values use well-known field names, keyed by the requirement
 family the challenge declares:
@@ -257,11 +269,13 @@ _ = store.Set(ctx, openbindings.NormalizeContextKey("https://api.example.com"),
 A binding that needs context it wasn't given raises a `CONTEXT_REQUIRED`
 challenge before any side effect; the operation invoker resolves challenges
 through its configured `ContextResolver` and re-drives the binding.
-`openbindings.StoreContextResolver(store)` is the store-backed resolver, the
-composition of the published binding-invoker and context-store interfaces. It
-treats a challenge as a scope, not a hint: via `ScopeContext` it returns only
-the credential fields the satisfied requirement-alternative needs, plus
-non-secret configuration, never other stored credentials.
+`openbindings.StoreContextResolver(store)` is an optional store-backed
+realization of the published binding-invoker challenge. It treats a challenge
+as a scope, not a hint: via `ScopeContext` it returns only
+the fields the satisfied requirement-alternative names. It does not forward
+unrelated headers, cookies, environment values, metadata, configuration, or
+credentials from the stored record; any of those can be sensitive. Context the
+caller explicitly supplied for the invocation is preserved separately.
 
 ```go
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker()).

@@ -240,17 +240,17 @@ func bindableDiscovery(disc *discovery) *discovery {
 	}
 	out := &discovery{ServerInfo: disc.ServerInfo, RequiredTaskTools: disc.RequiredTaskTools}
 	for _, v := range disc.Tools {
-		if v != nil && toolCounts[v.Name] == 1 && !disc.RequiredTaskTools[v.Name] {
+		if v != nil && v.Name != "" && toolCounts[v.Name] == 1 && !disc.RequiredTaskTools[v.Name] {
 			out.Tools = append(out.Tools, v)
 		}
 	}
 	for _, v := range disc.Resources {
-		if v != nil && resourceCounts[v.URI] == 1 {
+		if v != nil && v.URI != "" && resourceCounts[v.URI] == 1 {
 			out.Resources = append(out.Resources, v)
 		}
 	}
 	for _, v := range disc.ResourceTemplates {
-		if v == nil || templateCounts[v.URITemplate] != 1 {
+		if v == nil || v.URITemplate == "" || templateCounts[v.URITemplate] != 1 {
 			continue
 		}
 		if _, err := uritemplate.New(v.URITemplate); err == nil {
@@ -258,7 +258,7 @@ func bindableDiscovery(disc *discovery) *discovery {
 		}
 	}
 	for _, v := range disc.Prompts {
-		if v != nil && promptCounts[v.Name] == 1 {
+		if v != nil && v.Name != "" && promptCounts[v.Name] == 1 {
 			out.Prompts = append(out.Prompts, v)
 		}
 	}

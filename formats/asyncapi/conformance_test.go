@@ -26,6 +26,21 @@ func hostOf(srv *httptest.Server) string {
 	return strings.TrimPrefix(strings.TrimPrefix(srv.URL, "http://"), "https://")
 }
 
+func testJSONChannel(address string) channel {
+	return channel{
+		Address:  address,
+		Messages: map[string]message{"json": {Name: "json", ContentType: "application/json"}},
+	}
+}
+
+func testHTTPPublish(channelName, method string) asyncOperation {
+	return asyncOperation{
+		Action:   "receive",
+		Channel:  channelRef{Ref: "#/channels/" + channelName},
+		Bindings: &operationBindings{HTTP: &httpOperationBinding{Method: method}},
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Address parameters (ASYNC-P-04)
 // ---------------------------------------------------------------------------
@@ -39,7 +54,8 @@ func paramDoc(srv *httptest.Server) *document {
 		Servers:  map[string]server{"test": {Host: hostOf(srv), Protocol: "http"}},
 		Channels: map[string]channel{
 			"rooms": {
-				Address: "/rooms/{roomId}/{lane}",
+				Address:  "/rooms/{roomId}/{lane}",
+				Messages: map[string]message{"json": {Name: "json", ContentType: "application/json"}},
 				Parameters: map[string]parameter{
 					"roomId": {},
 					"lane":   {Default: "main"},
@@ -47,7 +63,10 @@ func paramDoc(srv *httptest.Server) *document {
 			},
 		},
 		Operations: map[string]asyncOperation{
-			"post": {Action: "receive", Channel: channelRef{Ref: "#/channels/rooms"}},
+			"post": {
+				Action: "receive", Channel: channelRef{Ref: "#/channels/rooms"},
+				Bindings: &operationBindings{HTTP: &httpOperationBinding{Method: "POST"}},
+			},
 		},
 	}
 }
@@ -116,12 +135,12 @@ func TestAddressParameterExpansion(t *testing.T) {
 	}
 }
 
-// TestAddressParameterEnumNotGated verifies a supplied parameter value
-// outside the declared enum is NOT refused (§9.2, R1): the enum is the
-// author's expectation, not a boundary, so the value is substituted and the
-// invocation dispatches.
-func TestAddressParameterEnumNotGated(t *testing.T) {
+// TestAddressParameterEnumIsAuthoritative verifies that a supplied parameter
+// value outside the artifact-declared enum is refused before dispatch.
+func TestAddressParameterEnumIsAuthoritative(t *testing.T) {
+	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		w.WriteHeader(202)
 	}))
 	t.Cleanup(srv.Close)
@@ -145,8 +164,11 @@ func TestAddressParameterEnumNotGated(t *testing.T) {
 	if err := call.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := drainOutputs(t, call); err != nil {
-		t.Fatalf("an out-of-enum address parameter value must not be refused: %v", err)
+	if _, err := drainOutputs(t, call); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("an out-of-enum address parameter value must be refused: %v", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("out-of-enum refusal must precede dispatch; got %d requests", requests.Load())
 	}
 }
 
@@ -183,9 +205,9 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 				},
 			},
 		},
-		Channels: map[string]channel{"events": {Address: "/events"}},
+		Channels: map[string]channel{"events": testJSONChannel("/events")},
 		Operations: map[string]asyncOperation{
-			"post": {Action: "receive", Channel: channelRef{Ref: "#/channels/events"}},
+			"post": testHTTPPublish("events", "POST"),
 		},
 	}
 
@@ -226,20 +248,19 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 		t.Errorf("path = %q, want /v2/events (supplied-substituted pathname + address)", gotPath)
 	}
 
-	// A supplied value outside the variable's declared enum is NOT refused
-	// (§9.2, R1): the enum is the author's expectation, not a boundary. The
-	// value substitutes and the invocation dispatches.
+	// A supplied value outside the variable's declared enum is refused.
+	beforeEnum := requests.Load()
 	if err := publish(map[string]any{"configuration": map[string]any{
 		"server": map[string]any{"key": "test", "variables": map[string]any{"version": "v9"}},
-	}}); err != nil {
-		t.Fatalf("an out-of-enum supplied value must not be refused: %v", err)
+	}}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("an out-of-enum supplied value must be refused: %v", err)
 	}
-	if gotPath != "/v9/events" {
-		t.Errorf("path = %q, want /v9/events (out-of-enum value substituted)", gotPath)
+	if requests.Load() != beforeEnum {
+		t.Fatal("out-of-enum supplied value dispatched")
 	}
 
-	// A declared default outside the variable's own declared enum is likewise
-	// not refused — enum gates neither supplied values nor defaults.
+	// A declared default outside the variable's own declared enum is an
+	// artifact inconsistency and is likewise refused.
 	docBadDefault := *doc
 	docBadDefault.Servers = map[string]server{
 		"test": {Host: hostOf(srv), Protocol: "http", PathName: "/{version}",
@@ -257,8 +278,8 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	if err := callBad.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := drainOutputs(t, callBad); err != nil {
-		t.Fatalf("an out-of-enum declared default must not be refused: %v", err)
+	if _, err := drainOutputs(t, callBad); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("an out-of-enum declared default must be refused: %v", err)
 	}
 
 	// No default and no supplied value: pre-dispatch refusal.
@@ -314,9 +335,9 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 
 // TestChannelServersSubsetInArrayOrder verifies the effective server set
 // (ASYNC-P-04): a non-empty channel `servers` array selects that subset in
-// the ARTIFACT'S OWN ARRAY ORDER (the default connects to its first
-// bound-protocol member), while an absent/empty channel `servers` means ALL
-// document servers in lexicographic key order, unbound protocols skipped.
+// artifact order, while absent/empty means all document servers in key
+// order. Neither ordering invents identity when several bindable members
+// remain.
 func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 	var hitsA, hitsB atomic.Int32
 	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -342,10 +363,14 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 				"zHTTP":  {Host: hostOf(srvB), Protocol: "http"},
 			},
 			Channels: map[string]channel{
-				"c": {Address: "/c", Servers: channelServers},
+				"c": func() channel {
+					ch := testJSONChannel("/c")
+					ch.Servers = channelServers
+					return ch
+				}(),
 			},
 			Operations: map[string]asyncOperation{
-				"post": {Action: "receive", Channel: channelRef{Ref: "#/channels/c"}},
+				"post": testHTTPPublish("c", "POST"),
 			},
 		}
 	}
@@ -368,33 +393,30 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 		return err
 	}
 
-	// Non-empty channel servers subset: array order wins — zHTTP is listed
-	// FIRST, so it is the default even though bHTTP sorts before it.
-	if err := publish(mkDoc([]serverRef{{Ref: "#/servers/zHTTP"}, {Ref: "#/servers/bHTTP"}}), nil); err != nil {
-		t.Fatal(err)
+	subset := mkDoc([]serverRef{{Ref: "#/servers/zHTTP"}, {Ref: "#/servers/bHTTP"}})
+	if err := publish(subset, nil); codeOf(t, err) != openbindings.ErrCodeContextRequired {
+		t.Fatalf("several subset members must require selection, got %v", err)
 	}
-	if hitsB.Load() != 1 || hitsA.Load() != 0 {
-		t.Fatalf("subset array order must win: hits A=%d B=%d, want A=0 B=1", hitsA.Load(), hitsB.Load())
-	}
-
-	// Absent channel servers = ALL doc servers in lexicographic key order:
-	// aKafka (unbound) is skipped, bHTTP selected.
-	if err := publish(mkDoc(nil), nil); err != nil {
-		t.Fatal(err)
-	}
-	if hitsA.Load() != 1 {
-		t.Fatalf("doc-order default must select the first bound server: hits A=%d B=%d", hitsA.Load(), hitsB.Load())
-	}
-
-	// Consumer configuration selects another member of the effective set by
-	// its servers-map key ({"key": ...}, the §9.2 pinned selection form).
-	if err := publish(mkDoc(nil), map[string]any{"configuration": map[string]any{
+	if err := publish(subset, map[string]any{"configuration": map[string]any{
 		"server": map[string]any{"key": "zHTTP"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if hitsB.Load() != 2 {
-		t.Fatalf("configuration.server.key must select the named member: hits A=%d B=%d", hitsA.Load(), hitsB.Load())
+	if hitsB.Load() != 1 || hitsA.Load() != 0 {
+		t.Fatalf("explicit subset selection: hits A=%d B=%d, want A=0 B=1", hitsA.Load(), hitsB.Load())
+	}
+
+	all := mkDoc(nil)
+	if err := publish(all, nil); codeOf(t, err) != openbindings.ErrCodeContextRequired {
+		t.Fatalf("several document members must require selection, got %v", err)
+	}
+	if err := publish(all, map[string]any{"configuration": map[string]any{
+		"server": map[string]any{"key": "bHTTP"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if hitsA.Load() != 1 {
+		t.Fatalf("configuration.server.key must select bHTTP: hits A=%d B=%d", hitsA.Load(), hitsB.Load())
 	}
 
 	// A key outside the effective set is a refusal.
@@ -405,12 +427,8 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 	}
 }
 
-// TestServerConfigurationPinnedShapesOnly verifies §9.2's configuration
-// value shapes end to end: the server point accepts {"key": ...,
-// "variables": {...}?} xor {"url": ...} and NOTHING else — the retired
-// name/bare-string spellings, a key+url combination, and variables riding
-// the url form are pre-dispatch refusals carrying the teaching error, so
-// no bytes ever leave under a non-pinned form.
+// TestServerConfigurationPinnedShapesOnly verifies this SDK's composable
+// server-point carriage end to end.
 func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -425,8 +443,8 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 		Servers: map[string]server{
 			"test": {Host: hostOf(srv), Protocol: "http"},
 		},
-		Channels:   map[string]channel{"c": {Address: "/c"}},
-		Operations: map[string]asyncOperation{"post": {Action: "receive", Channel: channelRef{Ref: "#/channels/c"}}},
+		Channels:   map[string]channel{"c": testJSONChannel("/c")},
+		Operations: map[string]asyncOperation{"post": testHTTPPublish("c", "POST")},
 	}
 
 	binv := NewInvoker()
@@ -454,9 +472,7 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 	}{
 		{"bare string", "test", "must be an object"},
 		{"retired name member", map[string]any{"name": "test"}, `member "name" is not pinned`},
-		{"both pinned members", map[string]any{"key": "test", "url": srv.URL}, `carries both "key" and "url"`},
-		{"neither pinned member", map[string]any{}, `carries neither "key" nor "url"`},
-		{"variables with url", map[string]any{"url": srv.URL, "variables": map[string]any{"env": "staging"}}, `carries "variables" with "url"`},
+		{"empty object", map[string]any{}, `carries none of "key", "variables", or "url"`},
 	}
 	for _, tc := range refused {
 		before := requests.Load()
@@ -467,23 +483,26 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 		if !strings.Contains(err.Error(), tc.teach) {
 			t.Errorf("%s: refusal must teach the pin (%q), got %v", tc.name, tc.teach, err)
 		}
-		if !strings.Contains(err.Error(), `{"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?}`) || !strings.Contains(err.Error(), `{"url": "<connection-url>"}`) {
-			t.Errorf("%s: refusal must name both pinned forms, got %v", tc.name, err)
+		if !strings.Contains(err.Error(), `{"key": "<server-name>"?`) || !strings.Contains(err.Error(), `"url": "<connection-url>"?`) {
+			t.Errorf("%s: refusal must name the composable shape, got %v", tc.name, err)
 		}
 		if got := requests.Load(); got != before {
 			t.Errorf("%s: the refusal is pre-dispatch, %d requests dispatched", tc.name, got-before)
 		}
 	}
 
-	// The two pinned forms dispatch.
+	// Selection, sole-member URL replacement, and their composition dispatch.
 	if err := publish(map[string]any{"key": "test"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := publish(map[string]any{"url": srv.URL}); err != nil {
 		t.Fatal(err)
 	}
-	if got := requests.Load(); got != 2 {
-		t.Errorf("expected exactly the two pinned-form dispatches, got %d", got)
+	if err := publish(map[string]any{"key": "test", "url": srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Errorf("expected exactly three valid composable-form dispatches, got %d", got)
 	}
 }
 
@@ -497,8 +516,8 @@ func TestOnlyUnboundProtocolServersIsRefused(t *testing.T) {
 		Servers: map[string]server{
 			"broker": {Host: "broker.example.com:9092", Protocol: "kafka"},
 		},
-		Channels:   map[string]channel{"c": {Address: "/c"}},
-		Operations: map[string]asyncOperation{"post": {Action: "receive", Channel: channelRef{Ref: "#/channels/c"}}},
+		Channels:   map[string]channel{"c": testJSONChannel("/c")},
+		Operations: map[string]asyncOperation{"post": testHTTPPublish("c", "POST")},
 	}
 	binv := NewInvoker()
 	defer binv.Close()
@@ -507,16 +526,18 @@ func TestOnlyUnboundProtocolServersIsRefused(t *testing.T) {
 		Ref:    "#/operations/post",
 	})
 	_, err := drainOutputs(t, call)
-	// R1a: no server with a supported protocol is resolvable by supplying a
-	// connection URL at the server point — a config.value CONTEXT_REQUIRED,
-	// not a terminal ERR_SOURCE_CONFIG_ERROR.
-	assertConfigValue(t, err, "server", "url")
+	// No bindable server means there is no artifact member to select or
+	// configure. A replacement URL may refine a selected member, but it
+	// cannot invent one, so refusal is terminal and precedes dispatch.
+	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("expected terminal refusal when no bindable server exists, got %v", err)
+	}
 }
 
-// TestFullURLOverride verifies the full-URL override lane: the URL's scheme
-// decides the protocol, an out-of-revision scheme is refused pre-dispatch,
-// and the declared security of the server the default selection would have
-// targeted STILL applies (§9.5).
+// TestFullURLOverride verifies the full-URL replacement lane: it refines the
+// selected artifact server without changing its protocol, an incompatible
+// scheme is refused pre-dispatch, and the selected server's declared security
+// STILL applies (§9.5).
 func TestFullURLOverride(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -529,11 +550,11 @@ func TestFullURLOverride(t *testing.T) {
 		AsyncAPI: "3.0.0",
 		Info:     info{Title: "t", Version: "1"},
 		Servers: map[string]server{
-			"prod": {Host: "unreachable.example.com", Protocol: "https",
+			"prod": {Host: "unreachable.example.com", Protocol: "http",
 				Security: []securityRequirement{{Ref: "#/components/securitySchemes/bearer"}}},
 		},
-		Channels:   map[string]channel{"c": {Address: "/c"}},
-		Operations: map[string]asyncOperation{"post": {Action: "receive", Channel: channelRef{Ref: "#/channels/c"}}},
+		Channels:   map[string]channel{"c": testJSONChannel("/c")},
+		Operations: map[string]asyncOperation{"post": testHTTPPublish("c", "POST")},
 		Components: &components{SecuritySchemes: map[string]securityScheme{
 			"bearer": {Type: "http", Scheme: "bearer"},
 		}},
@@ -557,21 +578,21 @@ func TestFullURLOverride(t *testing.T) {
 		return err
 	}
 
-	// Out-of-revision scheme: refused pre-dispatch.
+	// A scheme incompatible with the selected server: refused pre-dispatch.
 	if err := publish(map[string]any{"configuration": map[string]any{
 		"server": map[string]any{"url": "ftp://files.example.com"},
 	}}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("expected refusal of an out-of-revision scheme, got %v", err)
 	}
 
-	// The default-selected server's declared security still applies under a
-	// full-URL override: the challenge fires before any I/O.
+	// The sole selected server's declared security still applies under a
+	// full-URL replacement: the challenge fires before any I/O.
 	before := requests.Load()
 	err := publish(map[string]any{"configuration": map[string]any{
 		"server": map[string]any{"url": srv.URL},
 	}})
 	if codeOf(t, err) != openbindings.ErrCodeContextRequired {
-		t.Fatalf("expected CONTEXT_REQUIRED under a full-URL override, got %v", err)
+		t.Fatalf("expected CONTEXT_REQUIRED under a full-URL replacement, got %v", err)
 	}
 	if got := requests.Load(); got != before {
 		t.Errorf("the challenge precedes any I/O: %d requests dispatched", got-before)
@@ -593,9 +614,9 @@ func TestFullURLOverride(t *testing.T) {
 // Protocol bindings (ASYNC-P-02)
 // ---------------------------------------------------------------------------
 
-// TestHTTPBindingMethodOverride verifies the http operation binding's
-// `method` is authoritative where it speaks: a publish uses it in place of
-// POST, an SSE subscription in place of GET.
+// TestHTTPBindingMethodOverride verifies that a supported HTTP publish uses
+// the artifact-declared method and that a standalone HTTP send operation
+// remains excluded even when it declares one.
 func TestHTTPBindingMethodOverride(t *testing.T) {
 	var publishMethod, sseMethod atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -616,8 +637,8 @@ func TestHTTPBindingMethodOverride(t *testing.T) {
 		Info:     info{Title: "t", Version: "1"},
 		Servers:  map[string]server{"test": {Host: hostOf(srv), Protocol: "http"}},
 		Channels: map[string]channel{
-			"in":  {Address: "/in"},
-			"out": {Address: "/out"},
+			"in":  testJSONChannel("/in"),
+			"out": testJSONChannel("/out"),
 		},
 		Operations: map[string]asyncOperation{
 			"post": {Action: "receive", Channel: channelRef{Ref: "#/channels/in"},
@@ -651,21 +672,17 @@ func TestHTTPBindingMethodOverride(t *testing.T) {
 		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/sub",
 	})
-	vals, err := drainOutputs(t, sub)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := drainOutputs(t, sub); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("standalone HTTP send must be refused, got %v", err)
 	}
-	if len(vals) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(vals))
-	}
-	if got := sseMethod.Load(); got != "POST" {
-		t.Errorf("SSE establishment method = %v, want the binding-declared POST", got)
+	if got := sseMethod.Load(); got != nil {
+		t.Errorf("excluded HTTP send dispatched with method %v", got)
 	}
 }
 
-// wsBindingDoc declares a ws channel binding with a required query
-// property, a defaulted query property, a defaulted header, and a required
-// header.
+// wsBindingDoc declares WebSocket upgrade query and header schemas. JSON
+// Schema `default` values remain annotations and are not invented as wire
+// values; concrete values come from configuration.protocolFields.
 func wsBindingDoc(srv *httptest.Server) *document {
 	return &document{
 		AsyncAPI: "3.0.0",
@@ -673,7 +690,8 @@ func wsBindingDoc(srv *httptest.Server) *document {
 		Servers:  map[string]server{"test": {Host: hostOf(srv), Protocol: "ws"}},
 		Channels: map[string]channel{
 			"stream": {
-				Address: "/ws",
+				Address:  "/ws",
+				Messages: map[string]message{"json": {Name: "json", ContentType: "application/json"}},
 				Bindings: &channelBindings{WS: &wsChannelBinding{
 					Method: "GET",
 					Query: map[string]any{
@@ -732,7 +750,7 @@ func TestWSBindingQueryAndHeadersGovernUpgrade(t *testing.T) {
 		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
 			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsBindingDoc(srv))},
 			Ref:     "#/operations/publish",
-			Context: bindCtx,
+			Context: wsTextContext(bindCtx),
 		})
 		if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
 			return err
@@ -744,12 +762,14 @@ func TestWSBindingQueryAndHeadersGovernUpgrade(t *testing.T) {
 		return err
 	}
 
-	// Required query via the parameter bag; required header via the generic
-	// header carriage; defaults fill the rest.
+	// Query and header values ride the named protocolFields point. Values
+	// whose schemas carry `default` annotations are supplied explicitly too.
 	if err := publish(map[string]any{
-		"headers": map[string]any{"X-Trace": "trace-1"},
 		"configuration": map[string]any{
-			"address": map[string]any{"parameters": map[string]any{"token": "qtok"}},
+			"protocolFields": map[string]any{
+				"webSocketQuery":   map[string]any{"token": "qtok", "lane": "live"},
+				"webSocketHeaders": map[string]any{"X-Trace": "trace-1", "X-Client": "ob"},
+			},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -775,14 +795,16 @@ func TestWSBindingQueryAndHeadersGovernUpgrade(t *testing.T) {
 	// Unsatisfied required declarations: pre-dispatch refusals, no upgrade.
 	before := upgrades.Load()
 	if err := publish(map[string]any{
-		"headers": map[string]any{"X-Trace": "trace-2"},
+		"configuration": map[string]any{"protocolFields": map[string]any{
+			"webSocketHeaders": map[string]any{"X-Trace": "trace-2"},
+		}},
 	}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("expected refusal for the missing required query property, got %v", err)
 	}
 	if err := publish(map[string]any{
-		"configuration": map[string]any{
-			"address": map[string]any{"parameters": map[string]any{"token": "qtok"}},
-		},
+		"configuration": map[string]any{"protocolFields": map[string]any{
+			"webSocketQuery": map[string]any{"token": "qtok"},
+		}},
 	}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("expected refusal for the missing required header, got %v", err)
 	}
@@ -809,8 +831,9 @@ func TestWSBindingNonGETMethodRefused(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-		Ref:    "#/operations/publish",
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		Ref:     "#/operations/publish",
+		Context: wsTextContext(nil),
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
 		t.Fatal(err)
@@ -827,18 +850,15 @@ func TestWSBindingNonGETMethodRefused(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SSE establishment and WHATWG event framing (§8)
-// ---------------------------------------------------------------------------
-
-// TestSSEEstablishmentRequiresEventStreamContentType verifies §8's
-// establishment pin (ASYNC-P-06): a 2xx response NOT bearing the
-// text/event-stream content type is a protocol-error failure, never a
-// silently-consumed stream.
-func TestSSEEstablishmentRequiresEventStreamContentType(t *testing.T) {
+// TestStandaloneHTTPSendIsExcluded verifies the revision-1 cell boundary:
+// an AsyncAPI `send` over HTTP is not silently interpreted as SSE, even when
+// the endpoint would have returned an event stream.
+func TestStandaloneHTTPSendIsExcluded(t *testing.T) {
+	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"not": "a stream"})
+		requests.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: should-not-dispatch\n\n")
 	}))
 	t.Cleanup(srv.Close)
 
@@ -849,56 +869,11 @@ func TestSSEEstablishmentRequiresEventStreamContentType(t *testing.T) {
 		Ref:    "#/operations/receiveCaps",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeProtocol {
-		t.Fatalf("expected ERR_PROTOCOL for a non-event-stream 2xx, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("expected revision-1 exclusion for standalone HTTP send, got %v", err)
 	}
-}
-
-// TestSSEWHATWGFraming verifies the incorporated WHATWG event framing:
-// multi-line data joins with U+000A; comment-only and empty-data events
-// emit nothing; `event`/`id`/`retry` never enter the output value; exactly
-// one leading space is stripped from a field value; an incomplete final
-// event (no dispatching blank line before EOF) is discarded.
-func TestSSEWHATWGFraming(t *testing.T) {
-	body := strings.Join([]string{
-		": stream comment", // comment-only event
-		"",
-		"event: greeting",
-		"id: 41",
-		"data: hello",
-		"data:  indented", // ONE leading space stripped: " indented"
-		"",
-		"data:", // empty-data event: emits nothing
-		"",
-		"retry: 5000", // framing only; never acted on (no reconnect in @1)
-		"data: second",
-		"",
-		"data: never dispatched (EOF before blank line)",
-	}, "\n")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, body)
-	}))
-	t.Cleanup(srv.Close)
-
-	binv := NewInvoker()
-	defer binv.Close()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
-		Ref:    "#/operations/receiveCaps",
-	})
-	vals, err := drainOutputs(t, call)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []any{"hello\n indented", "second"}
-	if len(vals) != len(want) {
-		t.Fatalf("expected %d events %v, got %d: %v", len(want), want, len(vals), vals)
-	}
-	for i := range want {
-		if vals[i] != want[i] {
-			t.Errorf("event %d = %q, want %q", i, vals[i], want[i])
-		}
+	if requests.Load() != 0 {
+		t.Fatalf("excluded cell performed %d requests", requests.Load())
 	}
 }
 
@@ -923,7 +898,8 @@ func laneDoc(srv *httptest.Server, proto, contentType string) *document {
 		Operations: map[string]asyncOperation{
 			"post": {Action: "receive", Channel: channelRef{Ref: "#/channels/c"},
 				Messages: []messageRef{{Ref: "#/channels/c/messages/m"}},
-				Reply:    &operationReply{Messages: []messageRef{{Ref: "#/channels/c/messages/m"}}}},
+				Reply:    &operationReply{Messages: []messageRef{{Ref: "#/channels/c/messages/m"}}},
+				Bindings: &operationBindings{HTTP: &httpOperationBinding{Method: "POST"}}},
 			"sub": {Action: "send", Channel: channelRef{Ref: "#/channels/c"},
 				Messages: []messageRef{{Ref: "#/channels/c/messages/m"}}},
 		},
@@ -984,9 +960,8 @@ func TestInputTextLane(t *testing.T) {
 }
 
 // TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch verifies §9.1's
-// value boundary: a non-JSON declared type carries strings, but an arbitrary
-// structured value cannot be invented into bytes and is refused before
-// dispatch.
+// value boundary: binary/codec-specific media have no revision-1 bytes
+// carriage and are refused before dispatch, regardless of the caller value.
 func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1008,8 +983,8 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeValidationFailed {
-		t.Fatalf("expected ERR_VALIDATION_FAILED for a non-string value on the declared string lane, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for a media family outside revision 1, got %v", err)
 	}
 	if got := requests.Load(); got != 0 {
 		t.Errorf("the exclusion refusal is pre-dispatch: %d requests sent", got)
@@ -1045,19 +1020,13 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 }
 
 // TestDecodeTextLaneAndReplyDirection verifies §9.3 end to end: a publish
-// output decodes by the REPLY-side declaration — text/plain keeps the body
-// a raw string even when it happens to look like JSON — and a governing set
-// with two distinct effective types falls to the text lane rather than
-// guessing.
+// output decodes by the reply-side declaration, and the response media type
+// must agree with that artifact declaration.
 func TestDecodeTextLaneAndReplyDirection(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/c":
-			w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/c" {
+			w.Header().Set("Content-Type", "text/plain")
 			fmt.Fprint(w, `{"looks":"like json"}`)
-		case "/mixed":
-			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"seq\":1}\n\n")
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -1086,37 +1055,6 @@ func TestDecodeTextLaneAndReplyDirection(t *testing.T) {
 	}
 	if vals[0] != `{"looks":"like json"}` {
 		t.Errorf("output = %v (%T), want the raw string (declared text/plain, never sniffed)", vals[0], vals[0])
-	}
-
-	// Two distinct effective types govern the subscription: ambiguous →
-	// text lane, events stay strings.
-	mixed := &document{
-		AsyncAPI: "3.0.0",
-		Info:     info{Title: "t", Version: "1"},
-		Servers:  map[string]server{"test": {Host: hostOf(srv), Protocol: "http"}},
-		Channels: map[string]channel{
-			"mixed": {Address: "/mixed", Messages: map[string]message{
-				"j": {Name: "j", ContentType: "application/json"},
-				"t": {Name: "t", ContentType: "text/plain"},
-			}},
-		},
-		Operations: map[string]asyncOperation{
-			"sub": {Action: "send", Channel: channelRef{Ref: "#/channels/mixed"}},
-		},
-	}
-	sub := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(mixed)},
-		Ref:    "#/operations/sub",
-	})
-	events, err := drainOutputs(t, sub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0] != `{"seq":1}` {
-		t.Errorf("ambiguous declaration must decode on the text lane, got %v (%T)", events[0], events[0])
 	}
 }
 

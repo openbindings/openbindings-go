@@ -1,0 +1,252 @@
+package openapi
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/getkin/kin-openapi/openapi3"
+	openbindings "github.com/openbindings/openbindings-go"
+)
+
+// openAPISynthesisCoverage inventories the interaction units that matter to
+// OpenAPI synthesis fidelity in revision 1:
+//   - every client-invoked paths operation;
+//   - every independently selectable request media declaration;
+//   - callbacks and 3.1 webhooks, which are upstream interactions but are
+//     explicitly outside this revision's caller-to-service direction.
+//
+// Incorporated parameter serialization, response selection, server
+// resolution, and security requirements are behavior of a represented target,
+// not independently addressable units.
+func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface) []openbindings.SynthesisCoverageEntry {
+	if doc == nil || iface == nil {
+		return []openbindings.SynthesisCoverageEntry{}
+	}
+
+	type bindingIdentity struct {
+		operationKey string
+		ref          string
+	}
+	byRef := make(map[string]bindingIdentity, len(iface.Bindings))
+	for _, binding := range iface.Bindings {
+		byRef[binding.Ref] = bindingIdentity{operationKey: binding.Operation, ref: binding.Ref}
+	}
+
+	var entries []openbindings.SynthesisCoverageEntry
+	if doc.Paths != nil {
+		pathKeys := make([]string, 0, doc.Paths.Len())
+		for path := range doc.Paths.Map() {
+			pathKeys = append(pathKeys, path)
+		}
+		sort.Strings(pathKeys)
+		for _, path := range pathKeys {
+			pathItem := doc.Paths.Find(path)
+			if pathItem == nil {
+				continue
+			}
+			for _, method := range httpMethods {
+				op := pathItem.GetOperation(strings.ToUpper(method))
+				if op == nil {
+					continue
+				}
+				ref := buildJSONPointerRef(path, method)
+				identity, ok := byRef[ref]
+				if !ok {
+					// convertDocToInterface refuses before returning when a path
+					// operation admitted by the binding revision is not
+					// represented, so this is an implementation invariant.
+					entries = append(entries, openbindings.SynthesisCoverageEntry{
+						SourceIndex: 0,
+						SourceRef:   ref,
+						Scope:       openbindings.SynthesisCoverageTarget,
+						Status:      openbindings.SynthesisImplementationUnsupported,
+						ReasonCode:  "openapi.missing_emitted_binding",
+						Message:     "the synthesizer returned without emitting this admitted paths operation",
+					})
+					continue
+				}
+				entries = append(entries, openbindings.SynthesisCoverageEntry{
+					SourceIndex:  0,
+					SourceRef:    ref,
+					Scope:        openbindings.SynthesisCoverageTarget,
+					Status:       openbindings.SynthesisRepresented,
+					OperationKey: identity.operationKey,
+					BindingRef:   identity.ref,
+				})
+				entries = append(entries, openAPIRequestMediaCoverage(op, pathItem, identity)...)
+				entries = append(entries, openAPICallbackCoverage(op, ref)...)
+			}
+		}
+	}
+	entries = append(entries, openAPIWebhookCoverage(doc)...)
+	return entries
+}
+
+func openAPIRequestMediaCoverage(op *openapi3.Operation, pathItem *openapi3.PathItem, identity struct {
+	operationKey string
+	ref          string
+}) []openbindings.SynthesisCoverageEntry {
+	if op.RequestBody == nil || op.RequestBody.Value == nil || len(op.RequestBody.Value.Content) == 0 {
+		return nil
+	}
+	params := effectiveParameters(pathItem, op)
+	plans, planErr := planRequestBodies(op)
+	planned := make(map[string]bool, len(plans))
+	represented := make(map[string]bool, len(plans))
+	for _, plan := range plans {
+		planned[plan.mediaKey] = true
+		if !candidateCollides(params, plan) {
+			represented[plan.mediaKey] = true
+		}
+	}
+	mediaKeys := make([]string, 0, len(op.RequestBody.Value.Content))
+	for mediaKey := range op.RequestBody.Value.Content {
+		mediaKeys = append(mediaKeys, mediaKey)
+	}
+	sort.Strings(mediaKeys)
+	entries := make([]openbindings.SynthesisCoverageEntry, 0, len(mediaKeys))
+	for _, mediaKey := range mediaKeys {
+		sourceRef := identity.ref + "/requestBody/content/" + escapeJSONPointerToken(mediaKey)
+		if represented[mediaKey] {
+			entries = append(entries, openbindings.SynthesisCoverageEntry{
+				SourceIndex:  0,
+				SourceRef:    sourceRef,
+				Scope:        openbindings.SynthesisCoverageAlternative,
+				Status:       openbindings.SynthesisRepresented,
+				OperationKey: identity.operationKey,
+				BindingRef:   identity.ref,
+			})
+			continue
+		}
+		reasonCode := "openapi.request_media_excluded"
+		message := "request media alternative has no faithful revision-1 carriage"
+		rule := "OAPI-P-04"
+		if planned[mediaKey] {
+			reasonCode = "openapi.flattening_collision"
+			message = "request media alternative collides with an independently declared parameter in revision 1's flattened boundary"
+			rule = "OAPI-P-03"
+		} else if planErr != nil {
+			message = planErr.Error()
+		}
+		entries = append(entries, openbindings.SynthesisCoverageEntry{
+			SourceIndex: 0,
+			SourceRef:   sourceRef,
+			Scope:       openbindings.SynthesisCoverageAlternative,
+			Status:      openbindings.SynthesisExcluded,
+			ReasonCode:  reasonCode,
+			Rule:        rule,
+			Message:     message,
+			Details: map[string]any{
+				"mediaType": mediaKey,
+			},
+		})
+	}
+	return entries
+}
+
+func openAPICallbackCoverage(op *openapi3.Operation, parentRef string) []openbindings.SynthesisCoverageEntry {
+	if len(op.Callbacks) == 0 {
+		return nil
+	}
+	callbackNames := make([]string, 0, len(op.Callbacks))
+	for name := range op.Callbacks {
+		callbackNames = append(callbackNames, name)
+	}
+	sort.Strings(callbackNames)
+	var entries []openbindings.SynthesisCoverageEntry
+	for _, name := range callbackNames {
+		callbackRef := op.Callbacks[name]
+		if callbackRef == nil || callbackRef.Value == nil {
+			continue
+		}
+		expressions := make([]string, 0, callbackRef.Value.Len())
+		for expression := range callbackRef.Value.Map() {
+			expressions = append(expressions, expression)
+		}
+		sort.Strings(expressions)
+		for _, expression := range expressions {
+			pathItem := callbackRef.Value.Value(expression)
+			if pathItem == nil {
+				continue
+			}
+			for _, method := range httpMethods {
+				if pathItem.GetOperation(strings.ToUpper(method)) == nil {
+					continue
+				}
+				entries = append(entries, excludedReverseOpenAPIInteraction(
+					parentRef+"/callbacks/"+escapeJSONPointerToken(name)+"/"+escapeJSONPointerToken(expression)+"/"+method,
+				))
+			}
+		}
+	}
+	return entries
+}
+
+func openAPIWebhookCoverage(doc *openapi3.T) []openbindings.SynthesisCoverageEntry {
+	raw, ok := doc.Extensions["webhooks"]
+	if !ok {
+		return nil
+	}
+	webhooks, ok := raw.(map[string]any)
+	if !ok {
+		return []openbindings.SynthesisCoverageEntry{{
+			SourceIndex: 0,
+			SourceRef:   "#/webhooks",
+			Scope:       openbindings.SynthesisCoverageTarget,
+			Status:      openbindings.SynthesisInvalid,
+			ReasonCode:  "openapi.invalid_webhooks",
+			Message:     "the OpenAPI 3.1 webhooks member is not an object",
+		}}
+	}
+	names := make([]string, 0, len(webhooks))
+	for name := range webhooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var entries []openbindings.SynthesisCoverageEntry
+	for _, name := range names {
+		pathItem, ok := webhooks[name].(map[string]any)
+		if !ok {
+			entries = append(entries, openbindings.SynthesisCoverageEntry{
+				SourceIndex: 0,
+				SourceRef:   "#/webhooks/" + escapeJSONPointerToken(name),
+				Scope:       openbindings.SynthesisCoverageTarget,
+				Status:      openbindings.SynthesisInvalid,
+				ReasonCode:  "openapi.invalid_webhook",
+				Message:     "webhook path item is not an object",
+			})
+			continue
+		}
+		for _, method := range httpMethods {
+			if _, exists := pathItem[method]; !exists {
+				continue
+			}
+			entries = append(entries, excludedReverseOpenAPIInteraction(
+				"#/webhooks/"+escapeJSONPointerToken(name)+"/"+method,
+			))
+		}
+	}
+	return entries
+}
+
+func excludedReverseOpenAPIInteraction(sourceRef string) openbindings.SynthesisCoverageEntry {
+	return openbindings.SynthesisCoverageEntry{
+		SourceIndex: 0,
+		SourceRef:   sourceRef,
+		Scope:       openbindings.SynthesisCoverageTarget,
+		Status:      openbindings.SynthesisExcluded,
+		ReasonCode:  "openapi.reverse_direction",
+		Rule:        "OAPI-D-03",
+		Message:     "callbacks and webhooks describe service-to-consumer requests outside openbindings.openapi@1",
+	}
+}
+
+func escapeJSONPointerToken(value string) string {
+	value = strings.ReplaceAll(value, "~", "~0")
+	return strings.ReplaceAll(value, "/", "~1")
+}
+
+func formatCoverageRef(parts ...string) string {
+	return fmt.Sprintf("#/%s", strings.Join(parts, "/"))
+}

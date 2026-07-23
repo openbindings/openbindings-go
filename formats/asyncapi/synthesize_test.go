@@ -56,6 +56,10 @@ func testSynthesizeInterface(t *testing.T, doc *document, location string) openb
 	return *iface
 }
 
+func testWSServers() map[string]server {
+	return map[string]server{"ws": {Host: "events.example", Protocol: "wss"}}
+}
+
 func TestSynthesizeInterface_CopiesMetadata(t *testing.T) {
 	doc := &document{
 		AsyncAPI:   "3.0.0",
@@ -78,6 +82,7 @@ func TestSynthesizeInterface_CopiesMetadata(t *testing.T) {
 func TestSynthesizeInterface_CreatesOperationsAlphabetically(t *testing.T) {
 	doc := &document{
 		AsyncAPI: "3.0.0",
+		Servers:  testWSServers(),
 		Operations: map[string]asyncOperation{
 			"zeta":  {Action: "send", Channel: channelRef{Ref: "#/channels/ch"}},
 			"alpha": {Action: "receive", Channel: channelRef{Ref: "#/channels/ch"}, Bindings: &operationBindings{HTTP: &httpOperationBinding{Method: "POST"}}},
@@ -100,6 +105,7 @@ func TestSynthesizeInterface_CreatesOperationsAlphabetically(t *testing.T) {
 func TestSynthesizeInterface_CreatesBindingsWithRefs(t *testing.T) {
 	doc := &document{
 		AsyncAPI: "3.0.0",
+		Servers:  testWSServers(),
 		Operations: map[string]asyncOperation{
 			"sendMsg": {Action: "send", Channel: channelRef{Ref: "#/channels/messages"}},
 		},
@@ -123,6 +129,7 @@ func TestSynthesizeInterface_CreatesBindingsWithRefs(t *testing.T) {
 func TestSynthesizeInterface_UsesInvocationEligibilityAndPreservesMessageAlternatives(t *testing.T) {
 	doc := &document{
 		AsyncAPI: "3.0.0",
+		Servers:  testWSServers(),
 		Channels: map[string]channel{
 			"good": {Address: "/good", Messages: map[string]message{
 				"a": {Payload: map[string]any{"type": "string"}},
@@ -149,6 +156,69 @@ func TestSynthesizeInterface_UsesInvocationEligibilityAndPreservesMessageAlterna
 	}
 	if choices, ok := output["anyOf"].([]any); !ok || len(choices) != 2 {
 		t.Fatalf("good output anyOf = %v, want both artifact message schemas", output["anyOf"])
+	}
+}
+
+func TestSynthesizeInterfaceWithCoverage_AccountsForMessagesAndProtocolCells(t *testing.T) {
+	content := json.RawMessage(`{
+	  "asyncapi": "3.0.0",
+	  "info": {"title": "Events", "version": "1"},
+	  "servers": {
+	    "http": {"host": "api.example", "protocol": "https"},
+	    "ws": {"host": "api.example", "protocol": "wss"},
+	    "broker": {"host": "api.example", "protocol": "mqtt"}
+	  },
+	  "channels": {
+	    "events": {
+	      "address": "/events",
+	      "messages": {
+	        "good": {"payload": {"type": "object"}},
+	        "headers": {"headers": {"type": "object"}, "payload": {"type": "object"}}
+	      }
+	    },
+	    "replies": {
+	      "messages": {"reply": {"payload": {"type": "string"}}}
+	    }
+	  },
+	  "operations": {
+	    "publish": {
+	      "action": "receive",
+	      "channel": {"$ref": "#/channels/events"},
+	      "bindings": {"http": {"method": "POST"}},
+	      "reply": {"channel": {"$ref": "#/channels/replies"}}
+	    }
+	  }
+	}`)
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Coverage.FullyRepresented {
+		t.Fatal("mixed message and server alternatives must disclose exclusions")
+	}
+	statusByCode := map[string]openbindings.SynthesisCoverageStatus{}
+	for _, entry := range result.Coverage.Entries {
+		statusByCode[entry.ReasonCode] = entry.Status
+	}
+	for _, code := range []string{
+		"asyncapi.message_headers",
+		"asyncapi.websocket_reply",
+		"asyncapi.protocol_outside_revision",
+	} {
+		if statusByCode[code] != openbindings.SynthesisExcluded {
+			t.Errorf("%s status = %q, want excluded; entries=%#v", code, statusByCode[code], result.Coverage.Entries)
+		}
+	}
+	foundTarget := false
+	for _, entry := range result.Coverage.Entries {
+		if entry.SourceRef == "#/operations/publish" && entry.Status == openbindings.SynthesisRepresented {
+			foundTarget = true
+		}
+	}
+	if !foundTarget {
+		t.Error("bindable publish target was not represented")
 	}
 }
 

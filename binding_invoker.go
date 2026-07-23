@@ -42,6 +42,15 @@ type InterfaceSynthesizer interface {
 	SynthesizeInterface(ctx context.Context, in *SynthesizeInput) (*Interface, error)
 }
 
+// CoverageSynthesizer extends InterfaceSynthesizer with durable accounting of
+// every source interaction unit observed by the same synthesis call. It is a
+// separate capability so existing third-party synthesizers remain source
+// compatible while reference families adopt the 0.2 coverage contract.
+type CoverageSynthesizer interface {
+	InterfaceSynthesizer
+	SynthesizeInterfaceWithCoverage(ctx context.Context, in *SynthesizeInput) (*SynthesizeResult, error)
+}
+
 // SourceInspector inspects sources and returns bindable targets that
 // tooling can frame as OpenBindings operations.
 type SourceInspector interface {

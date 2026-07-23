@@ -6,6 +6,7 @@ import (
 	"mime"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -166,10 +167,8 @@ func distinctEffectiveTypes(doc *document, msgs []message) []string {
 }
 
 // decodeContentType collapses a governing set to the declaration the decode
-// point consults (§9.3, ASYNC-P-05): exactly one distinct effective type
-// selects the lane (strict JSON for application/json and +json, text
-// otherwise); none, or more than one distinct type, is the text lane ("" —
-// builtinDecodeFor's non-JSON lane), never a guess.
+// point consults (§9.3, ASYNC-P-05). Runtime callers additionally validate
+// that the result belongs to the supported JSON or UTF-8 text carriage.
 func decodeContentType(doc *document, msgs []message) string {
 	types := distinctEffectiveTypes(doc, msgs)
 	if len(types) == 1 {
@@ -192,11 +191,12 @@ type inputCodec struct {
 
 // resolveInputCodec resolves the input encoding from the governing
 // request-side declaration (§9.1, ASYNC-P-03): a JSON-family type serializes
-// the value as JSON; every other declared type carries a string value as
-// character bytes. With no declaration, configuration.encode must choose
-// the JSON or text lane. More or fewer than one selected message is refused;
-// payload bytes never select among artifact alternatives. Forwarded frames
-// on the duplex subscription cell use the same rule.
+// the value as JSON; a supported text-family type carries a UTF-8 string.
+// Binary/codec-specific media and explicit non-UTF-8 charsets are refused:
+// revision 1 has no bytes value or common transcode surface. With no
+// declaration, configuration.encode must choose the JSON or text lane. More
+// or fewer than one selected message is refused; payload bytes never select
+// among artifact alternatives.
 func resolveInputCodec(doc *document, msgs []message, contexts ...map[string]any) (inputCodec, error) {
 	if len(msgs) != 1 {
 		return inputCodec{}, fmt.Errorf("publish input must be governed by exactly one selected message")
@@ -221,10 +221,49 @@ func resolveInputCodec(doc *document, msgs []message, contexts ...map[string]any
 		}
 		return lane, nil
 	case isJSONContentType(t):
-		return inputCodec{JSON: true, ContentType: t}, nil
+		effective := messageEffectiveContentType(doc, msgs[0])
+		if err := supportedMessageContentType(effective); err != nil {
+			return inputCodec{}, err
+		}
+		return inputCodec{JSON: true, ContentType: effective}, nil
+	case isTextContentType(t):
+		effective := messageEffectiveContentType(doc, msgs[0])
+		if err := supportedMessageContentType(effective); err != nil {
+			return inputCodec{}, err
+		}
+		return inputCodec{JSON: false, ContentType: effective}, nil
 	default:
-		return inputCodec{JSON: false, ContentType: t}, nil
+		return inputCodec{}, fmt.Errorf("effective content type %q has no revision-1 value carriage", messageEffectiveContentType(doc, msgs[0]))
 	}
+}
+
+func messageEffectiveContentType(doc *document, m message) string {
+	if m.ContentType != "" {
+		return m.ContentType
+	}
+	return doc.DefaultContentType
+}
+
+// supportedMessageContentType enforces the revision-1 value boundary:
+// JSON-family and UTF-8 text-family media are representable; absence is
+// completed by encode/decode configuration; binary codecs and a non-UTF-8
+// charset are not assigned an invented bytes convention.
+func supportedMessageContentType(contentType string) error {
+	if strings.TrimSpace(contentType) == "" {
+		return nil
+	}
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return fmt.Errorf("invalid media type %q: %v", contentType, err)
+	}
+	mediaType = strings.ToLower(mediaType)
+	if mediaType != "application/json" && !strings.HasSuffix(mediaType, "+json") && !strings.HasPrefix(mediaType, "text/") {
+		return fmt.Errorf("effective content type %q has no revision-1 value carriage", contentType)
+	}
+	if charset := strings.ToLower(strings.TrimSpace(params["charset"])); charset != "" && charset != "utf-8" && charset != "utf8" {
+		return fmt.Errorf("effective content type %q declares unsupported non-UTF-8 charset %q", contentType, params["charset"])
+	}
+	return nil
 }
 
 func requiredCodecLane(bindCtx map[string]any, point string) (inputCodec, error) {
@@ -254,6 +293,9 @@ func resolveSubscriptionContentType(doc *document, msgs []message, bindCtx map[s
 		ct := m.ContentType
 		if ct == "" {
 			ct = doc.DefaultContentType
+		}
+		if err := supportedMessageContentType(ct); err != nil {
+			return "", err
 		}
 		identity := ""
 		if ct != "" {
@@ -309,6 +351,9 @@ func resolveReplyContentType(doc *document, op *asyncOperation, status int, actu
 		}
 		if m.Headers != nil {
 			return "", fmt.Errorf("selected reply message declares headers, which revision 1 cannot carry")
+		}
+		if err := supportedMessageContentType(messageEffectiveContentType(doc, m)); err != nil {
+			return "", err
 		}
 	}
 	type match struct {
@@ -421,6 +466,9 @@ func encodeInput(codec inputCodec, v any) ([]byte, error) {
 	s, ok := v.(string)
 	if !ok {
 		return nil, fmt.Errorf("the governing declaration selects the text lane: the input value must be a string, got %T", v)
+	}
+	if !utf8.ValidString(s) {
+		return nil, fmt.Errorf("the text-lane input is not valid UTF-8")
 	}
 	return []byte(s), nil
 }

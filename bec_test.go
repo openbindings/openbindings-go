@@ -58,15 +58,18 @@ func TestContextSatisfies(t *testing.T) {
 		details := &ContextRequiredDetails{
 			Target: "k",
 			Alternatives: []ContextAlternative{
-				{Requirements: []ContextRequirement{{Type: "auth.basic"}, {Type: "config.value"}}},
+				{Requirements: []ContextRequirement{
+					{Type: "auth.basic"},
+					{Type: "config.value", Extra: map[string]any{"point": "server", "key": "url"}},
+				}},
 			},
 		}
 		if ContextSatisfies(map[string]any{"basic": map[string]any{"username": "u"}}, details) {
 			t.Fatal("partial conjunction must not satisfy")
 		}
 		ctx := map[string]any{
-			"basic":        map[string]any{"username": "u", "password": "p"},
-			"config.value": "x",
+			"basic":         map[string]any{"username": "u", "password": "p"},
+			"configuration": map[string]any{"server": map[string]any{"url": "https://api.example.com"}},
 		}
 		if !ContextSatisfies(ctx, details) {
 			t.Fatal("full conjunction should satisfy")
@@ -255,13 +258,13 @@ func TestRedactContext(t *testing.T) {
 		t.Fatalf("password not redacted: %v", red)
 	}
 	if red["basic"].(map[string]any)["username"] != "u" || red["plain"] != "visible" {
-		t.Fatalf("non-secrets must survive: %v", red)
+		t.Fatalf("unclassified values and structural identifiers must survive this generic helper: %v", red)
 	}
 }
 
 // TestRedactContext_CoversEveryCredentialField is the drift guard whose
 // absence let the TS apiKeys leak ship: for EVERY field the credential
-// registry (credentialFieldNames — the one source ScopeContext consumes)
+// redaction registry (credentialFieldNames)
 // classifies as secret, place a distinctive sentinel in that field's proper
 // shape, redact, serialize, and assert the sentinel appears NOWHERE. Adding a
 // credential family to the registry without teaching RedactContext its shape
@@ -292,11 +295,11 @@ func TestRedactContext_CoversEveryCredentialField(t *testing.T) {
 			t.Errorf("RedactContext leaked a %q secret: sentinel survived in %s", field, out)
 		}
 		if !strings.Contains(string(out), "keepme") {
-			t.Errorf("RedactContext dropped non-secret config for %q: %s", field, out)
+			t.Errorf("RedactContext dropped an unclassified pass-through value for %q: %s", field, out)
 		}
 	}
-	// Non-secret structure of nested credential fields survives (scheme names,
-	// basic username), only the values are scrubbed.
+	// Structural identifiers of nested credential fields survive (scheme
+	// names, basic username); known secret values are scrubbed.
 	red := RedactContext(map[string]any{
 		"apiKeys": map[string]any{"stripe": "sk"},
 		"basic":   map[string]any{"username": "alice", "password": "pw"},

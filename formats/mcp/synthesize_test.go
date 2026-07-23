@@ -458,6 +458,49 @@ func TestSynthesizeInterface_PinnedListingIsOffline(t *testing.T) {
 	}
 }
 
+func TestSynthesizeInterfaceWithCoverage_DisclosesPinnedListingExclusions(t *testing.T) {
+	pin := map[string]any{
+		"tools": []any{
+			map[string]any{"name": "ok"},
+			map[string]any{"name": "duplicate"},
+			map[string]any{"name": "duplicate"},
+			map[string]any{"name": ""},
+		},
+		"resourceTemplates": []any{
+			map[string]any{"name": "bad", "uriTemplate": "{"},
+		},
+	}
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Location:    "https://mcp.example.test",
+			Content:     mustContent(pin),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Coverage.FullyRepresented {
+		t.Fatal("ambiguous and invalid listing entries must make coverage incomplete")
+	}
+	foundRepresented := false
+	foundAmbiguous := false
+	foundInvalid := false
+	for _, entry := range result.Coverage.Entries {
+		switch {
+		case entry.SourceRef == "tools/ok" && entry.Status == openbindings.SynthesisRepresented:
+			foundRepresented = true
+		case entry.ReasonCode == "mcp.ambiguous_identity" && entry.Status == openbindings.SynthesisExcluded:
+			foundAmbiguous = true
+		case entry.Status == openbindings.SynthesisInvalid:
+			foundInvalid = true
+		}
+	}
+	if !foundRepresented || !foundAmbiguous || !foundInvalid {
+		t.Fatalf("coverage did not preserve listing dispositions: %#v", result.Coverage.Entries)
+	}
+}
+
 // An invalid pin is refused loudly before any I/O: the pin grammar
 // (stray members included) and the 2025-11-25 entity shapes both gate the
 // synthesis lane exactly as they gate invocation.

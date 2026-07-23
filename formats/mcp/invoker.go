@@ -162,6 +162,7 @@ type Synthesizer struct {
 }
 
 var _ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+var _ openbindings.CoverageSynthesizer = (*Synthesizer)(nil)
 var _ openbindings.SourceInspector = (*Synthesizer)(nil)
 
 // SynthesizerOption configures a Synthesizer.
@@ -208,9 +209,37 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // location (content does not waive it), and an invalid pin is refused
 // loudly before any I/O. Without content, discovery connects live.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+	observation, err := c.synthesizeObserved(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return observation.iface, nil
+}
+
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+	observation, err := c.synthesizeObserved(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return openbindings.NewSynthesisResult(
+		observation.iface,
+		synthesisCoverage(observation.disc, observation.iface),
+		true,
+	)
+}
+
+type synthesisObservation struct {
+	iface *openbindings.Interface
+	disc  *discovery
+}
+
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*synthesisObservation, error) {
 	if len(in.Sources) == 0 {
 		skeleton, err := openbindings.SynthesisSkeleton(in)
-		return &skeleton, err
+		if err != nil {
+			return nil, err
+		}
+		return &synthesisObservation{iface: &skeleton}, nil
 	}
 	if len(in.Sources) > 1 {
 		return nil, openbindings.ErrMultipleSources
@@ -260,7 +289,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, err
 	}
 
-	return iface, nil
+	return &synthesisObservation{iface: iface, disc: disc}, nil
 }
 
 // buildHTTPHeaders carries only explicitly named HTTP headers and cookies.

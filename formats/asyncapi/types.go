@@ -100,8 +100,8 @@ type operationBindings struct {
 }
 
 // httpOperationBinding is the AsyncAPI HTTP operation binding: its `method`
-// selects the request method (§8 — authoritative where it speaks; where
-// silent, POST for a publish, GET for an SSE subscription).
+// selects the request method for the supported unary publish cell. Revision 1
+// does not infer a method and excludes standalone HTTP subscriptions.
 type httpOperationBinding struct {
 	Method         string         `json:"method,omitempty" yaml:"method,omitempty"`
 	Query          map[string]any `json:"query,omitempty" yaml:"query,omitempty"`

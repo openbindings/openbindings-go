@@ -10,6 +10,35 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
+func protoSchemaVariant(t *testing.T, value any, schemaType string) map[string]any {
+	t.Helper()
+	schema, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("schema is %T, want object: %v", value, value)
+	}
+	if schema["type"] == schemaType {
+		return schema
+	}
+	if variants, ok := schema["anyOf"].([]any); ok {
+		for _, variant := range variants {
+			if candidate, ok := variant.(map[string]any); ok {
+				if candidate["type"] == schemaType {
+					return candidate
+				}
+				if nested, ok := candidate["anyOf"].([]any); ok {
+					for _, member := range nested {
+						if result, ok := member.(map[string]any); ok && result["type"] == schemaType {
+							return result
+						}
+					}
+				}
+			}
+		}
+	}
+	t.Fatalf("schema has no %q variant: %v", schemaType, schema)
+	return nil
+}
+
 func TestConvertToInterface_CreatesOperations(t *testing.T) {
 	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
@@ -257,7 +286,7 @@ func TestWellKnownSchema_Struct(t *testing.T) {
 
 func TestWellKnownSchema_Int64Wrappers(t *testing.T) {
 	for _, fqn := range []string{"google.protobuf.Int64Value", "google.protobuf.UInt64Value"} {
-		got := wellKnownSchema(fqn)
+		got := protoSchemaVariant(t, wellKnownSchema(fqn), "integer")
 		if got["type"] != "integer" {
 			t.Errorf("%s: type = %v, want integer", fqn, got["type"])
 		}
@@ -335,10 +364,7 @@ func TestConvertToInterface_WellKnownTimestampField(t *testing.T) {
 	if !ok {
 		t.Fatal("expected input properties")
 	}
-	createdAt, ok := props["createdAt"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected createdAt property, got %v", props)
-	}
+	createdAt := protoSchemaVariant(t, props["createdAt"], "string")
 	if createdAt["type"] != "string" {
 		t.Errorf("createdAt.type = %v, want string (canonical Timestamp form, not seconds/nanos object)", createdAt["type"])
 	}
@@ -377,10 +403,7 @@ service TestService {
 	if !ok {
 		t.Fatal("expected input properties")
 	}
-	count, ok := props["count"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected count property, got %v", props)
-	}
+	count := protoSchemaVariant(t, props["count"], "integer")
 	if count["type"] != "integer" {
 		t.Errorf("count.type = %v, want integer", count["type"])
 	}
@@ -389,7 +412,7 @@ service TestService {
 	}
 }
 
-func TestConvertToInterface_OneofSingleGroup(t *testing.T) {
+func TestConvertToInterface_OneofSingleGroupProjectsOptionalMembers(t *testing.T) {
 	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
@@ -416,37 +439,17 @@ service TestService {
 	}
 
 	input, _ := iface.Operations["GetItem"].Input.(map[string]any)
-	variants, ok := input["oneOf"].([]any)
+	if _, ok := input["oneOf"]; ok {
+		t.Fatal("ProtoJSON oneof is at-most-one and may be unset; an exactly-one schema is invalid")
+	}
+	props, ok := input["properties"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected oneOf on input schema, got %v", input)
+		t.Fatal("expected oneof members as optional properties")
 	}
-	if len(variants) != 2 {
-		t.Fatalf("expected 2 oneOf variants, got %d", len(variants))
-	}
-	if props, ok := input["properties"].(map[string]any); ok {
-		if _, present := props["itemId"]; present {
-			t.Error("oneof member itemId should not appear in top-level properties")
+	for _, name := range []string{"itemId", "item_id", "itemIndex", "item_index"} {
+		if _, present := props[name]; !present {
+			t.Errorf("missing accepted ProtoJSON spelling %q", name)
 		}
-	}
-
-	seen := map[string]bool{}
-	for _, v := range variants {
-		vm, ok := v.(map[string]any)
-		if !ok {
-			t.Fatalf("variant not a map: %v", v)
-		}
-		if vm["type"] != "object" {
-			t.Errorf("variant type = %v, want object", vm["type"])
-		}
-		req, ok := vm["required"].([]any)
-		if !ok || len(req) != 1 {
-			t.Fatalf("variant required = %v, want single-element array", vm["required"])
-		}
-		name, _ := req[0].(string)
-		seen[name] = true
-	}
-	if !seen["itemId"] || !seen["itemIndex"] {
-		t.Errorf("expected variants for itemId and itemIndex, got %v", seen)
 	}
 }
 
@@ -501,18 +504,17 @@ service TestService {
 		}
 	}
 
-	if len(warnings) != 1 {
-		t.Fatalf("expected 1 warning, got %d: %+v", len(warnings), warnings)
+	if len(warnings) != 0 {
+		t.Fatalf("exact null-aware oneof constraints should need no warning, got %+v", warnings)
 	}
-	if warnings[0].Code != "connect.multi_group_oneof" {
-		t.Errorf("warning code = %q, want connect.multi_group_oneof", warnings[0].Code)
+	if constraints, _ := input["allOf"].([]any); len(constraints) == 0 {
+		t.Error("multi-group oneof schema does not enforce at-most-one constraints")
 	}
 }
 
-// SynthesizeInterface must wire SynthesizeInput.OnWarning through to the
-// schema walker, matching grpc — previously connect's public entry point
-// dropped it on the floor regardless of what the caller set.
-func TestSynthesizeInterface_OnWarningWired(t *testing.T) {
+// Exact oneof projection should not turn a sound synthesized operation into a
+// lossy warning on the public synthesis surface.
+func TestSynthesizeInterface_ExactOneofNeedsNoWarning(t *testing.T) {
 	proto := `
 syntax = "proto3";
 package testpkg;
@@ -527,6 +529,7 @@ message Request {
     bytes binary_payload = 4;
   }
 }
+
 message Response { string value = 1; }
 
 service TestService {
@@ -544,7 +547,44 @@ service TestService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(warnings) != 1 || warnings[0].Code != "connect.multi_group_oneof" {
-		t.Fatalf("expected 1 connect.multi_group_oneof warning, got %+v", warnings)
+	if len(warnings) != 0 {
+		t.Fatalf("exact oneof projection emitted warnings: %+v", warnings)
+	}
+}
+
+func TestSynthesizeInterfaceWithCoverage_AccountsForSchemaRangeExclusion(t *testing.T) {
+	proto := `
+syntax = "proto2";
+package testpkg;
+message Good { optional string value = 1; }
+message Bad { required string value = 1; }
+service TestService {
+  rpc Accepted(Good) returns (Good);
+  rpc Excluded(Bad) returns (Good);
+}`
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Location:    "https://connect.example.test",
+			Content:     openbindings.TextContent(proto),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(result.Interface.Bindings); got != 1 {
+		t.Fatalf("bindings = %d, want 1", got)
+	}
+	if result.Coverage.FullyRepresented {
+		t.Fatal("coverage with a binding-spec exclusion must not be fully represented")
+	}
+	if got := len(result.Coverage.Entries); got != 2 {
+		t.Fatalf("coverage entries = %d, want 2: %+v", got, result.Coverage.Entries)
+	}
+	if entry := result.Coverage.Entries[0]; entry.SourceRef != "testpkg.TestService/Accepted" || entry.Status != openbindings.SynthesisRepresented {
+		t.Fatalf("accepted entry = %+v", entry)
+	}
+	if entry := result.Coverage.Entries[1]; entry.SourceRef != "testpkg.TestService/Excluded" || entry.Status != openbindings.SynthesisExcluded || entry.ReasonCode != "connect.schema_range" || entry.Rule != "CONN-P-02" {
+		t.Fatalf("excluded entry = %+v", entry)
 	}
 }

@@ -22,8 +22,10 @@ var requirementFields = map[string]string{
 // requirementFamilyFields maps a requirement family to every context field that
 // belongs to it. requirementFields names only the field whose presence gates
 // satisfaction; this names the whole family, so scoping can admit (for example)
-// an oauth2 refresh token alongside its access token. Any field not listed in a
-// family is treated as non-secret configuration.
+// an oauth2 refresh token alongside its access token. Fields outside the
+// selected requirement family are not admitted: this helper cannot infer
+// whether an arbitrary header, cookie, environment value, metadata entry, or
+// configuration point is sensitive.
 //
 // "auth.apiKey" names only "apiKey" here (the unnamed, single-key
 // convenience): a NAMED auth.apiKey requirement is satisfied and scoped
@@ -37,10 +39,10 @@ var requirementFamilyFields = map[string][]string{
 	"auth.oauth2": {"accessToken", "refreshToken", "clientSecret"},
 }
 
-// credentialFieldNames are the BindingContext fields ScopeContext treats as
-// secret credential material (admitted only for the alternative selected),
-// as opposed to non-secret configuration (headers, cookies, environment,
-// metadata, ...) which always passes through. Listed independently of
+// credentialFieldNames are the BindingContext fields RedactContext always
+// treats as secret credential material. Other fields may also be sensitive
+// according to their binding specification or application meaning; this list
+// is not a claim that unlisted fields are safe. Listed independently of
 // requirementFamilyFields because 'apiKeys' is a credential field but is
 // never admitted wholesale by that map's generic per-family copy — it is
 // scoped per name by admitRequirement.
@@ -54,9 +56,8 @@ var credentialFieldNames = map[string]bool{
 	"clientSecret": true,
 }
 
-// isCredentialField reports whether a context key names secret credential
-// material, as opposed to non-secret configuration (headers, cookies,
-// environment, metadata, ...).
+// isCredentialField reports whether a context key names one of the standard
+// credential fields. It does not classify unrecognized fields as non-secret.
 func isCredentialField(key string) bool {
 	return credentialFieldNames[key]
 }
@@ -78,13 +79,18 @@ func isCredentialField(key string) bool {
 // for it, and this layer must not invent a satisfaction convention for the
 // reserved "auth." namespace.
 //
-// A non-"auth." type (e.g. "config.value", "approval.user") is a different,
-// pre-existing convention: those families fall back to a context field named
-// after the type itself, because a resolver for them conventionally stores
-// its result there. That fallback is untouched by this ruling.
+// config.value is satisfied by the named point in context.configuration.
+// Other non-"auth." extension families fall back to a context field named
+// after their type; the extension family owns that convention.
 func requirementSatisfied(ctx map[string]any, req ContextRequirement) bool {
 	if req.Type == "auth.apiKey" && req.Name != "" {
 		return ContextAPIKeyFor(ctx, req.Name) != ""
+	}
+	if req.Type == "config.value" {
+		point, _ := req.Extra["point"].(string)
+		configuration, _ := ctx["configuration"].(map[string]any)
+		v, present := configuration[point]
+		return point != "" && present && v != nil && v != ""
 	}
 	field, mapped := requirementFields[req.Type]
 	if !mapped {
@@ -121,28 +127,21 @@ func ContextSatisfies(ctx map[string]any, details *ContextRequiredDetails) bool 
 // ScopeContext returns the least-privilege subset of a stored context for a
 // challenge (the published binding-invoker contract). A CONTEXT_REQUIRED
 // challenge is a scope,
-// not a hint: the invoker receives only what it declared it needs. Every
-// non-secret configuration field passes through unchanged; among the secret
-// credential fields, only those belonging to the requirement families of the
-// first alternative that stored satisfies are admitted, and all other stored
-// credentials are withheld. With a nil challenge there is nothing to scope, so
+// not a hint: the invoker receives only what the first satisfied alternative
+// declares. Standard credential requirements admit their corresponding
+// credential family; config.value admits only its named configuration point;
+// an extension requirement admits its type-named field. No other stored field
+// passes by default because this generic helper cannot determine its
+// sensitivity or relevance. With a nil challenge there is nothing to scope, so
 // the full context is returned (copied). Returns nil for nil input.
 func ScopeContext(stored map[string]any, details *ContextRequiredDetails) map[string]any {
 	if stored == nil {
 		return nil
 	}
 	out := make(map[string]any, len(stored))
-	// Non-secret configuration always passes through.
-	for k, v := range stored {
-		if !isCredentialField(k) {
-			out[k] = v
-		}
-	}
 	if details == nil {
 		for k, v := range stored {
-			if isCredentialField(k) {
-				out[k] = v
-			}
+			out[k] = v
 		}
 		return out
 	}
@@ -199,6 +198,24 @@ func admitRequirement(out, stored map[string]any, req ContextRequirement) {
 		}
 		return
 	}
+	if req.Type == "config.value" {
+		point, _ := req.Extra["point"].(string)
+		configuration, _ := stored["configuration"].(map[string]any)
+		if point == "" {
+			return
+		}
+		value, present := configuration[point]
+		if !present {
+			return
+		}
+		scoped, _ := out["configuration"].(map[string]any)
+		if scoped == nil {
+			scoped = map[string]any{}
+			out["configuration"] = scoped
+		}
+		scoped[point] = value
+		return
+	}
 	fields, ok := requirementFamilyFields[req.Type]
 	if !ok {
 		fields = []string{req.Type}
@@ -219,8 +236,8 @@ func admitRequirement(out, stored map[string]any, req ContextRequirement) {
 // context (ScopeContext) when it satisfies one of the challenge's alternatives,
 // and declines otherwise — at which point the challenge surfaces to the caller
 // unchanged. A CONTEXT_REQUIRED challenge is a scope, not a hint: the resolver
-// returns only the credentials the satisfied alternative needs plus non-secret
-// config, never other stored credentials.
+// returns only the context fields the satisfied alternative names. It does
+// not classify or forward arbitrary stored fields.
 //
 // A stored entry that does NOT satisfy the challenge (wrong field name,
 // empty value) is a decline like any other: the challenge surfaces, and its
@@ -236,7 +253,14 @@ func StoreContextResolver(store ContextStore) ContextResolver {
 		if details == nil {
 			return nil, nil
 		}
-		stored, err := store.Get(ctx, NormalizeEndpoint(details.Target))
+		key := NormalizeEndpoint(details.Target)
+		if key == "" {
+			// An empty or unkeyable target cannot safely select reusable
+			// stored context. Interactive or application-specific resolvers
+			// may still satisfy the challenge.
+			return nil, nil
+		}
+		stored, err := store.Get(ctx, key)
 		if err != nil || stored == nil {
 			return nil, err
 		}

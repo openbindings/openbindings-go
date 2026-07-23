@@ -137,8 +137,18 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 	if meta.Bin == "" {
 		return iface, nil
 	}
+	usedOperationKeys := map[string]bool{}
 
-	addOp := func(name, ref, help string, path []string, cmd *Command, inherited []Flag) error {
+	addOp := func(name, help string, path []string, cmd *Command, inherited []Flag) error {
+		refs := uniquelyResolvableCommandRefs(spec, path)
+		if len(path) == 0 {
+			refs = []string{""}
+		}
+		if len(refs) == 0 {
+			return nil
+		}
+		opKey := openbindings.UniqueKey(openbindings.SanitizeKey(name), usedOperationKeys)
+		usedOperationKeys[opKey] = true
 		op := openbindings.Operation{Description: help}
 		if len(path) > 1 {
 			op.Tags = make([]string, len(path)-1)
@@ -162,35 +172,96 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 		}
 		op.Output = floorOutputSchema()
 
-		iface.Operations[name] = op
-		iface.Bindings[name+"."+DefaultSourceName] = openbindings.BindingEntry{
-			Operation: name,
-			Source:    DefaultSourceName,
-			Ref:       ref,
+		iface.Operations[opKey] = op
+		for index, ref := range refs {
+			bindingKey := opKey + "." + DefaultSourceName
+			if index > 0 {
+				bindingKey = fmt.Sprintf("%s.%s.alias%d", opKey, DefaultSourceName, index)
+			}
+			iface.Bindings[bindingKey] = openbindings.BindingEntry{
+				Operation: opKey,
+				Source:    DefaultSourceName,
+				Ref:       ref,
+			}
 		}
 		return nil
 	}
 
-	if rc := rootCommand(spec); rc != nil {
-		if err := addOp(meta.Bin, "", meta.About, []string{meta.Bin}, rc, nil); err != nil {
-			return openbindings.Interface{}, err
-		}
+	rc := rootCommand(spec)
+	if rc == nil {
+		rc = &Command{}
 	}
-	var walkErr error
+	// The descriptor's binary is itself a callable root command even when it
+	// declares no top-level fields. An omitted ref selects it under USAGE-D-03.
+	// A command-local unresolvable surface is omitted here and receives an
+	// explicit exclusion on the coverage surface.
+	_ = addOp(meta.Bin, meta.About, nil, rc, nil)
 	walkWithGlobals(spec, func(path []string, cmd Command, inherited []Flag) {
-		if walkErr != nil || len(path) == 0 || cmd.SubcommandRequired {
+		if len(path) == 0 || cmd.SubcommandRequired {
 			return
 		}
 		c := cmd
-		if err := addOp(operationName(path), commandRef(path), cmd.Help, path, &c, inherited); err != nil {
-			walkErr = err
-		}
+		_ = addOp(operationName(path), cmd.Help, path, &c, inherited)
 	})
-	if walkErr != nil {
-		return openbindings.Interface{}, walkErr
-	}
 
 	return iface, nil
+}
+
+// commandRefAlternatives returns the Cartesian product of every declared
+// command spelling along a canonical command path. Aliases remain binding
+// alternatives (their exact spelling rides argv); they are never copied into
+// Operation.Aliases, whose meaning is cross-interface satisfaction.
+func commandRefAlternatives(spec *Spec, path []string) []string {
+	if len(path) == 0 {
+		return []string{""}
+	}
+	prefixes := [][]string{{}}
+	commands := spec.Commands()
+	for _, segment := range path {
+		var matched *Command
+		for index := range commands {
+			if commands[index].Name == segment {
+				matched = &commands[index]
+				break
+			}
+		}
+		if matched == nil {
+			return nil
+		}
+		spellings := []string{matched.Name}
+		for _, alias := range matched.Aliases {
+			spellings = append(spellings, alias.Names...)
+		}
+		var next [][]string
+		for _, prefix := range prefixes {
+			for _, spelling := range spellings {
+				candidate := append(append([]string(nil), prefix...), spelling)
+				next = append(next, candidate)
+			}
+		}
+		prefixes = next
+		commands = matched.Commands
+	}
+	refs := make([]string, 0, len(prefixes))
+	for _, path := range prefixes {
+		refs = append(refs, commandRef(path))
+	}
+	return refs
+}
+
+// uniquelyResolvableCommandRefs keeps only artifact spellings that resolve to
+// exactly one command at every segment and arrive at the requested canonical
+// command path. A descriptor may declare colliding sibling aliases; declaration
+// order is not target identity, so synthesis refuses those spellings.
+func uniquelyResolvableCommandRefs(spec *Spec, path []string) []string {
+	var refs []string
+	for _, ref := range commandRefAlternatives(spec, path) {
+		resolved, err := findCommand(spec, ref)
+		if err == nil && strings.Join(resolved.canonicalPath, "\x00") == strings.Join(path, "\x00") {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
 }
 
 func walkWithGlobals(spec *Spec, fn func(path []string, cmd Command, inheritedGlobals []Flag)) {
@@ -226,20 +297,13 @@ func walkCommandWithGlobals(path []string, cmd Command, inheritedGlobals []Flag,
 	}
 }
 
-// rootCommand returns a synthetic Command representing the root invocation if the spec
-// has top-level args or non-global flags. Returns nil if there is no callable root level.
+// rootCommand returns the root invocation's declared field surface. Global
+// top-level flags apply to the root as well as descendants.
 func rootCommand(spec *Spec) *Command {
 	topFlags := spec.Flags()
 	topArgs := spec.Args()
 
-	var rootFlags []Flag
-	for _, f := range topFlags {
-		if !f.Global {
-			rootFlags = append(rootFlags, f)
-		}
-	}
-
-	if len(rootFlags) == 0 && len(topArgs) == 0 {
+	if len(topFlags) == 0 && len(topArgs) == 0 {
 		return nil
 	}
 
@@ -316,7 +380,7 @@ func generateInputSchema(cmd Command, inheritedGlobals []Flag) (map[string]any, 
 	}
 
 	if len(required) > 0 {
-		schema["required"] = required
+		schema["required"] = stringValues(required)
 	}
 
 	return schema, nil
@@ -373,7 +437,7 @@ func generateFlagSchema(flag Flag) map[string]any {
 	if flag.Var || flag.valueVariadic() {
 		itemSchema := map[string]any{"type": schemaTypeString}
 		if len(choices) > 0 && flag.choicesEnvironment() == "" {
-			itemSchema["enum"] = choices
+			itemSchema["enum"] = stringValues(choices)
 		}
 		prop["type"] = schemaTypeArray
 		prop["items"] = itemSchema
@@ -386,7 +450,7 @@ func generateFlagSchema(flag Flag) map[string]any {
 	} else {
 		prop["type"] = schemaTypeString
 		if len(choices) > 0 && flag.choicesEnvironment() == "" {
-			prop["enum"] = choices
+			prop["enum"] = stringValues(choices)
 		}
 	}
 
@@ -406,7 +470,7 @@ func generateArgSchema(arg Arg) map[string]any {
 	if arg.IsVariadic() {
 		itemSchema := map[string]any{"type": schemaTypeString}
 		if len(arg.Choices) > 0 && arg.choicesEnvironment() == "" {
-			itemSchema["enum"] = arg.Choices
+			itemSchema["enum"] = stringValues(arg.Choices)
 		}
 		prop["type"] = schemaTypeArray
 		prop["items"] = itemSchema
@@ -421,7 +485,7 @@ func generateArgSchema(arg Arg) map[string]any {
 	} else {
 		prop["type"] = schemaTypeString
 		if len(arg.Choices) > 0 && arg.choicesEnvironment() == "" {
-			prop["enum"] = arg.Choices
+			prop["enum"] = stringValues(arg.Choices)
 		}
 	}
 
@@ -433,4 +497,12 @@ func generateArgSchema(arg Arg) map[string]any {
 	}
 
 	return prop
+}
+
+func stringValues(values []string) []any {
+	result := make([]any, len(values))
+	for index, value := range values {
+		result[index] = value
+	}
+	return result
 }

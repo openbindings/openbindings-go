@@ -21,7 +21,7 @@ func sendOnce(t *testing.T, binv *Invoker, source openbindings.InvocationSource,
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
 		Source:  source,
 		Ref:     "#/operations/publish",
-		Context: bindCtx,
+		Context: wsTextContext(bindCtx),
 	})
 	if err := call.Write(bg(), msg); err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestWSPool_ConcurrentSendsShareOneConnection(t *testing.T) {
 			call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
 				Source:  source,
 				Ref:     "#/operations/publish",
-				Context: map[string]any{"bearerToken": "tok"},
+				Context: wsTextContext(map[string]any{"bearerToken": "tok"}),
 			})
 			if err := call.Write(bg(), map[string]any{"seq": seq}); err != nil {
 				errs <- err
@@ -175,7 +175,7 @@ func TestWSPool_ClientStreamingFrames(t *testing.T) {
 	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
 		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/publish",
-		Context: map[string]any{"bearerToken": "tok"},
+		Context: wsTextContext(map[string]any{"bearerToken": "tok"}),
 	})
 	for i := 1; i <= 3; i++ {
 		if err := call.Write(bg(), map[string]any{"chunk": i}); err != nil {

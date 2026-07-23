@@ -27,7 +27,7 @@ import (
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 ```
 
-The invoker declares the binding specification `openbindings.openapi@1` — it handles OpenAPI 3.0.x and 3.1.x documents.
+The invoker declares the binding specification `openbindings.openapi@1` — it handles exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents.
 
 ### Invoke a binding
 
@@ -77,7 +77,7 @@ This package implements the published [`openbindings.openapi@1`](https://github.
 
 ### Binding specification identifier
 
-`openbindings.openapi@1` (exact, opaque). Accepts OpenAPI 3.0.x and 3.1.x documents, discriminated by the artifact's own `openapi` field.
+`openbindings.openapi@1` (exact, opaque). Accepts exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own `openapi` field.
 
 ### Ref format
 
@@ -163,7 +163,7 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
 
 ### Invocation flow
 
-1. Loads and caches the OpenAPI document (JSON or YAML, local or remote), discriminating the accepted 3.0.x/3.1.x lines
+1. Loads and caches the OpenAPI document (JSON or YAML, local or remote), discriminating the exact accepted 3.0.0–3.0.4 and 3.1.0–3.1.2 editions
 2. Parses the ref as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)
 3. Resolves the server (effective list + variables + the `server` configuration point)
 4. Routes input fields per the flattened model — parameters serialize per the OAS style/explode rules; unmatched fields pass into a declared request body and refuse loudly otherwise — and selects the request media type per the specification's preference order

@@ -325,6 +325,7 @@ func preflightMethod(methodDesc protoreflect.MethodDescriptor, fullDuplex bool) 
 type Synthesizer struct{}
 
 var _ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+var _ openbindings.CoverageSynthesizer = (*Synthesizer)(nil)
 var _ openbindings.SourceInspector = (*Synthesizer)(nil)
 
 // NewSynthesizer creates a new Connect interface synthesizer.
@@ -339,9 +340,41 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // SynthesizeInterface parses a .proto file or inline content and converts to an
 // OpenBindings interface with Connect bindings.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+	observation, err := c.synthesizeObserved(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return observation.iface, nil
+}
+
+// SynthesizeInterfaceWithCoverage returns the schema-mode OBI and a durable
+// disposition for every protobuf method and lossy projection observed by the
+// same schema load.
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+	observation, err := c.synthesizeObserved(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return openbindings.NewSynthesisResult(
+		observation.iface,
+		synthesisCoverage(observation.disc, observation.iface, observation.warnings),
+		true,
+	)
+}
+
+type synthesisObservation struct {
+	iface    *openbindings.Interface
+	disc     *discovery
+	warnings []openbindings.SynthesizerWarning
+}
+
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*synthesisObservation, error) {
 	if len(in.Sources) == 0 {
 		skeleton, err := openbindings.SynthesisSkeleton(in)
-		return &skeleton, err
+		if err != nil {
+			return nil, err
+		}
+		return &synthesisObservation{iface: &skeleton}, nil
 	}
 	if len(in.Sources) > 1 {
 		return nil, openbindings.ErrMultipleSources
@@ -368,7 +401,14 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, fmt.Errorf("Connect proto parse: %w", err)
 	}
 
-	iface, err := convertToInterface(disc, src.Location, in.OnWarning)
+	var warnings []openbindings.SynthesizerWarning
+	observeWarning := func(warning openbindings.SynthesizerWarning) {
+		warnings = append(warnings, warning)
+		if in.OnWarning != nil {
+			in.OnWarning(warning)
+		}
+	}
+	iface, err := convertToInterface(disc, src.Location, observeWarning)
 	if err != nil {
 		return nil, fmt.Errorf("Connect convert: %w", err)
 	}
@@ -378,5 +418,5 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
 		return nil, err
 	}
-	return &iface, nil
+	return &synthesisObservation{iface: &iface, disc: disc, warnings: warnings}, nil
 }

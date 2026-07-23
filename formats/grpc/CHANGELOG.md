@@ -31,8 +31,10 @@
     (`ERR_MISSING_INPUT` is no longer produced by this module).
   - **Dial address grammar (GRPC-D-02):** `location` (and the target
     configuration point) must be one of the three port-explicit forms —
-    `host:port` (TLS iff port 443), `grpc://host:port` (plaintext),
-    `grpcs://host:port` (TLS) — with bracketed IPv6 literals. The
+    `host:port` (transport unspecified), `grpc://host:port` (plaintext),
+    `grpcs://host:port` (TLS) — with bracketed IPv6 literals. A bare target
+    requires an explicit transport election and port numbers never imply
+    security. The
     pre-spec `https://` affordance is cut (one spelling per meaning), no
     port is defaulted, and path/query/fragment/userinfo components are
     refused.

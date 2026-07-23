@@ -290,8 +290,11 @@ cmd "config" subcommand_required=#true {
 		t.Errorf("version = %q, want 1.0.0", iface.Version)
 	}
 
-	if len(iface.Operations) != 3 {
-		t.Fatalf("expected 3 operations, got %d: %v", len(iface.Operations), mapKeys(iface.Operations))
+	if len(iface.Operations) != 4 {
+		t.Fatalf("expected root plus 3 operations, got %d: %v", len(iface.Operations), mapKeys(iface.Operations))
+	}
+	if _, ok := iface.Operations["mycli"]; !ok {
+		t.Error("expected root operation 'mycli'")
 	}
 	if _, ok := iface.Operations["greet"]; !ok {
 		t.Error("expected operation 'greet'")

@@ -23,8 +23,8 @@ cmd "farewell" help="Say goodbye"
 		t.Fatal(err)
 	}
 
-	if len(result.Targets) != 2 {
-		t.Fatalf("expected 2 refs, got %d", len(result.Targets))
+	if len(result.Targets) != 3 {
+		t.Fatalf("expected root plus 2 command refs, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")
@@ -122,17 +122,20 @@ cmd "mike" help="M"
 		t.Fatal(err)
 	}
 
-	if len(result.Targets) != 3 {
-		t.Fatalf("expected 3 refs, got %d", len(result.Targets))
+	if len(result.Targets) != 4 {
+		t.Fatalf("expected root plus 3 refs, got %d", len(result.Targets))
 	}
-	if result.Targets[0].Ref != "alpha" {
-		t.Errorf("first ref = %q, want alpha", result.Targets[0].Ref)
+	if result.Targets[0].Ref != "" {
+		t.Errorf("first ref = %q, want root", result.Targets[0].Ref)
 	}
-	if result.Targets[1].Ref != "mike" {
-		t.Errorf("second ref = %q, want mike", result.Targets[1].Ref)
+	if result.Targets[1].Ref != "alpha" {
+		t.Errorf("second ref = %q, want alpha", result.Targets[1].Ref)
 	}
-	if result.Targets[2].Ref != "zulu" {
-		t.Errorf("third ref = %q, want zulu", result.Targets[2].Ref)
+	if result.Targets[2].Ref != "mike" {
+		t.Errorf("third ref = %q, want mike", result.Targets[2].Ref)
+	}
+	if result.Targets[3].Ref != "zulu" {
+		t.Errorf("fourth ref = %q, want zulu", result.Targets[3].Ref)
 	}
 }
 

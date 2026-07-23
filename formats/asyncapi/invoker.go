@@ -1,11 +1,12 @@
 // Package asyncapi is the AsyncAPI 3.x binding invoker and interface
-// synthesizer for the OpenBindings Go SDK: HTTP (request + SSE) and
-// WebSocket channels behind the SDK's cardinality-agnostic Invocation
-// handle. The public surface is the format contract (Invoker, Synthesizer,
-// their constructors, and the binding-spec identifier) plus the endpoint-resolution
-// seam (ParseDocument, Document.ResolveEndpoint — §9.2's server and address
-// configuration points for consumers that dial with their own transport);
-// the rest of the document model is internal.
+// synthesizer for the OpenBindings Go SDK: unary HTTP publishes and
+// WebSocket publish/subscription cells behind the SDK's
+// cardinality-agnostic Invocation handle. The public surface is the format
+// contract (Invoker, Synthesizer, their constructors, and the binding-spec
+// identifier) plus the endpoint-resolution seam (ParseDocument,
+// Document.ResolveEndpoint — §9.2's server and address configuration points
+// for consumers that dial with their own transport); the rest of the
+// document model is internal.
 package asyncapi
 
 import (
@@ -18,7 +19,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// maxRedirects bounds redirect chains for HTTP fetches and SSE/POST invocations.
+// maxRedirects bounds redirect chains for artifact fetches and HTTP publishes.
 // Prevents redirect loops without imposing any total request timeout
 // (which is the caller's responsibility via context).
 const maxRedirects = 10
@@ -118,9 +119,9 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 // `receive` publishes):
 //   - receive + http/https: unary publish (one input -> body, response -> output)
 //   - receive + ws/wss: client-streaming publish (each input -> one frame)
-//   - send + http/https: SSE subscription (server events -> outputs)
-//   - send + ws/wss: streaming subscription, bidi-capable (frames -> outputs,
-//     caller inputs forward as frames)
+//   - send + http/https: excluded before dispatch
+//   - send + ws/wss: server-streaming subscription (frames -> outputs; input
+//     is closed at establishment)
 func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
 	go func() {
@@ -189,6 +190,7 @@ type Synthesizer struct {
 
 var (
 	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+	_ openbindings.CoverageSynthesizer  = (*Synthesizer)(nil)
 	_ openbindings.SourceInspector      = (*Synthesizer)(nil)
 )
 
@@ -206,9 +208,34 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 
 // SynthesizeInterface converts an AsyncAPI document to an OpenBindings interface.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+	observation, err := c.synthesizeObserved(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return observation.iface, nil
+}
+
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+	observation, err := c.synthesizeObserved(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return openbindings.NewSynthesisResult(
+		observation.iface,
+		synthesisCoverage(observation.doc, observation.iface),
+		true,
+	)
+}
+
+type synthesisObservation struct {
+	iface *openbindings.Interface
+	doc   *document
+}
+
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*synthesisObservation, error) {
 	if len(in.Sources) == 0 {
 		skeleton, err := openbindings.SynthesisSkeleton(in)
-		return &skeleton, err
+		return &synthesisObservation{iface: &skeleton}, err
 	}
 	if len(in.Sources) > 1 {
 		return nil, openbindings.ErrMultipleSources
@@ -261,7 +288,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	if err := openbindings.FinalizeSynthesis(iface, in, DefaultSourceName, BindingSpec); err != nil {
 		return nil, err
 	}
-	return iface, nil
+	return &synthesisObservation{iface: iface, doc: doc}, nil
 }
 
 // BuiltinHooks exposes the asyncapi builtin decoder to the seam's

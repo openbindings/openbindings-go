@@ -76,12 +76,13 @@ const (
 // invocation error for a node that blows its budget.
 var codeCategory = map[string]Category{
 	// Normative codes (named by the contract).
-	ErrCodeContextRequired:  CategoryContext,
-	ErrCodeProtocol:         CategoryProtocol,
-	ErrCodeTransportClosed:  CategoryTransient,
-	ErrCodeCancelled:        CategoryCancelled,
-	ErrCodeValidationFailed: CategoryValidation,
-	ErrCodeBindingNotFound:  CategoryPermanent,
+	ErrCodeContextRequired:          CategoryContext,
+	ErrCodeProtocol:                 CategoryProtocol,
+	ErrCodeTransportClosed:          CategoryTransient,
+	ErrCodeCancelled:                CategoryCancelled,
+	ErrCodeValidationFailed:         CategoryValidation,
+	ErrCodeBindingNotFound:          CategoryPermanent,
+	ErrCodeBindingSelectionRequired: CategoryPermanent,
 
 	// Convention codes (recommended spellings for a category member).
 	ErrCodeAuthRequired:             CategoryAuth,

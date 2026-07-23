@@ -2,10 +2,13 @@ package usage
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -53,8 +56,8 @@ cmd "farewell" help="Say goodbye"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(iface.Operations) != 2 {
-		t.Fatalf("expected 2 operations, got %d", len(iface.Operations))
+	if len(iface.Operations) != 3 {
+		t.Fatalf("expected root plus 2 operations, got %d", len(iface.Operations))
 	}
 	if _, ok := iface.Operations["greet"]; !ok {
 		t.Error("expected operation 'greet'")
@@ -144,7 +147,7 @@ cmd "greet" help="Say hello" {
 	}
 
 	// required=#true flag should appear in the schema's required array
-	req, _ := op.Input.(map[string]any)["required"].([]string)
+	req, _ := op.Input.(map[string]any)["required"].([]any)
 	foundRequired := false
 	for _, r := range req {
 		if r == "name" {
@@ -174,7 +177,7 @@ cmd "greet" help="Say hello" {
 		t.Errorf("type = %v, want string", nameSchema["type"])
 	}
 	// Required arg should be in required list
-	req, _ := op.Input.(map[string]any)["required"].([]string)
+	req, _ := op.Input.(map[string]any)["required"].([]any)
 	found := false
 	for _, r := range req {
 		if r == "name" {
@@ -324,7 +327,7 @@ arg "[file]..." help="Files to search"
 	}
 
 	// Required arg should be in required list.
-	req, _ := op.Input.(map[string]any)["required"].([]string)
+	req, _ := op.Input.(map[string]any)["required"].([]any)
 	found := false
 	for _, r := range req {
 		if r == "pattern" {
@@ -342,8 +345,9 @@ arg "[file]..." help="Files to search"
 	}
 }
 
-func TestConvertToInterface_RootNotSynthesizedWhenOnlyGlobals(t *testing.T) {
-	// If the root level only has global flags and subcommands, no root operation.
+func TestConvertToInterface_RootSynthesizedWhenOnlyGlobals(t *testing.T) {
+	// The binary remains callable at the root, and top-level globals are part
+	// of that root surface as well as descendant surfaces.
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 bin "mycli"
@@ -353,8 +357,13 @@ cmd "deploy" help="Deploy the app"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := iface.Operations["mycli"]; ok {
-		t.Error("did not expect root operation when only global flags exist")
+	root, ok := iface.Operations["mycli"]
+	if !ok {
+		t.Fatal("expected root operation when only global flags exist")
+	}
+	props := root.Input.(map[string]any)["properties"].(map[string]any)
+	if _, ok := props["verbose"]; !ok {
+		t.Error("expected root operation to expose the top-level global flag")
 	}
 	if _, ok := iface.Operations["deploy"]; !ok {
 		t.Error("expected operation 'deploy'")
@@ -640,5 +649,106 @@ cmd "source" {
 	}
 	if err := iface.Validate(); err != nil {
 		t.Errorf("synthesize output must validate: %v", err)
+	}
+}
+
+func TestSynthesizeInterface_CLIAliasesAreExactBindingAlternativesWithCoverage(t *testing.T) {
+	content := `
+bin "tool"
+flag "--profile <name>" global=#true
+cmd "database" {
+  alias "db"
+  cmd "run" {
+    alias "r"
+    flag "--force"
+  }
+}
+`
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Content:     openbindings.TextContent(content),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{
+		"": true, "database": true, "db": true,
+		"database run": true, "database r": true,
+		"db run": true, "db r": true,
+	}
+	for _, binding := range result.Interface.Bindings {
+		if !want[binding.Ref] {
+			t.Errorf("unexpected binding ref %q", binding.Ref)
+		}
+		delete(want, binding.Ref)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing binding refs: %v", want)
+	}
+	if !result.Coverage.Exhaustive || !result.Coverage.FullyRepresented {
+		t.Errorf("coverage = %#v, want exhaustive and fully represented", result.Coverage)
+	}
+	if root := result.Interface.Operations["tool"]; root.Input == nil {
+		t.Error("root operation did not inherit its declared global flag")
+	}
+}
+
+func TestSynthesizeInterface_RefusesAmbiguousSiblingSpellings(t *testing.T) {
+	content := `
+bin "tool"
+cmd "x"
+cmd "beta" {
+  alias "x"
+}
+`
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Content:     openbindings.TextContent(content),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refs []string
+	for _, binding := range result.Interface.Bindings {
+		refs = append(refs, binding.Ref)
+	}
+	sort.Strings(refs)
+	if want := []string{"", "beta"}; !reflect.DeepEqual(refs, want) {
+		t.Fatalf("emitted refs = %v, want %v", refs, want)
+	}
+	if result.Coverage.FullyRepresented {
+		t.Fatal("ambiguous source spelling must make coverage not fully represented")
+	}
+	wantEntries := map[string]struct {
+		scope  openbindings.SynthesisCoverageScope
+		status openbindings.SynthesisCoverageStatus
+		reason string
+	}{
+		"ambiguous-ref:x": {openbindings.SynthesisCoverageAlternative, openbindings.SynthesisExcluded, "usage.ambiguous_command_spelling"},
+		"command:x":       {openbindings.SynthesisCoverageTarget, openbindings.SynthesisExcluded, "usage.no_unique_command_ref"},
+	}
+	for _, entry := range result.Coverage.Entries {
+		want, ok := wantEntries[entry.SourceRef]
+		if !ok {
+			continue
+		}
+		if entry.Scope != want.scope || entry.Status != want.status || entry.ReasonCode != want.reason {
+			t.Errorf("coverage entry %q = %#v, want %#v", entry.SourceRef, entry, want)
+		}
+		delete(wantEntries, entry.SourceRef)
+	}
+	if len(wantEntries) != 0 {
+		t.Errorf("missing coverage entries: %v", wantEntries)
+	}
+	spec, err := ParseKDL([]byte(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := findCommand(spec, "x"); !errors.Is(err, errAmbiguousCommandSpelling) {
+		t.Fatalf("findCommand(x) error = %v, want ambiguous spelling", err)
 	}
 }

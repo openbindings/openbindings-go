@@ -11,6 +11,7 @@ func TestInspectSource_BasicRefs(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test API", "version": "1.0.0"},
+  "servers": {"ws": {"host": "events.example", "protocol": "wss"}},
   "channels": {
     "messages": {"address": "/messages", "messages": {"event": {"payload": {"type": "object"}}}},
     "events": {"address": "/events", "messages": {"event": {"payload": {"type": "object"}}}}
@@ -50,6 +51,7 @@ func TestInspectSource_RefFormat(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
+  "servers": {"ws": {"host": "events.example", "protocol": "wss"}},
   "channels": {
     "ch": {"address": "/ch", "messages": {"event": {"payload": {"type": "object"}}}}
   },
@@ -93,6 +95,7 @@ func TestInspectSource_RefFormat(t *testing.T) {
 func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	doc := &document{
 		AsyncAPI: "3.0.0",
+		Servers:  testWSServers(),
 		Channels: map[string]channel{"ch": {Address: "/ch", Messages: map[string]message{"event": {Payload: map[string]any{"type": "object"}}}}},
 		Operations: map[string]asyncOperation{
 			"sendMsg":    {Action: "send", Channel: channelRef{Ref: "#/channels/ch"}},
@@ -109,6 +112,7 @@ func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
+  "servers": {"ws": {"host": "events.example", "protocol": "wss"}},
   "channels": {"ch": {"address": "/ch", "messages": {"event": {"payload": {"type": "object"}}}}},
   "operations": {
     "sendMsg": {"action": "send", "channel": {"$ref": "#/channels/ch"}},
@@ -138,6 +142,7 @@ func TestInspectSource_Description(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
+  "servers": {"ws": {"host": "events.example", "protocol": "wss"}},
   "channels": {"ch": {"address": "/ch", "messages": {"event": {"payload": {"type": "object"}}}}},
   "operations": {
     "withDesc": {
@@ -202,6 +207,7 @@ func TestInspectSource_AlphabeticallySorted(t *testing.T) {
 	content := `{
   "asyncapi": "3.0.0",
   "info": {"title": "Test", "version": "1.0.0"},
+  "servers": {"ws": {"host": "events.example", "protocol": "wss"}},
   "channels": {"ch": {"address": "/ch", "messages": {"event": {"payload": {"type": "object"}}}}},
   "operations": {
     "zeta": {"action": "send", "channel": {"$ref": "#/channels/ch"}},

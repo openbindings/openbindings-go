@@ -91,21 +91,20 @@ func TestResolveTarget_MetadataOverride(t *testing.T) {
 			"prod": {Host: "api.example.com", Protocol: "https"},
 		},
 	}
-	ctx := map[string]any{"metadata": map[string]any{"baseURL": "http://localhost:8080"}}
+	ctx := map[string]any{"metadata": map[string]any{"baseURL": "https://localhost:8080"}}
 	target, err := resolveTarget(doc, nil, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Protocol != "http" {
-		t.Errorf("protocol = %q, want http", target.Protocol)
+	if target.Protocol != "https" {
+		t.Errorf("protocol = %q, want https", target.Protocol)
 	}
-	if target.ServerURL != "http://localhost:8080" {
-		t.Errorf("url = %q, want http://localhost:8080", target.ServerURL)
+	if target.ServerURL != "https://localhost:8080" {
+		t.Errorf("url = %q, want https://localhost:8080", target.ServerURL)
 	}
-	// Under a full-URL override the declared security of the server the
-	// default selection would have targeted still applies (§9.5).
+	// A URL replacement retains the selected artifact server and protocol.
 	if target.SecurityServer == nil || target.SecurityServer.Host != "api.example.com" {
-		t.Errorf("SecurityServer = %+v, want the default-selected server", target.SecurityServer)
+		t.Errorf("SecurityServer = %+v, want the sole selected server", target.SecurityServer)
 	}
 }
 
@@ -117,11 +116,9 @@ func TestResolveTarget_NoServers(t *testing.T) {
 	}
 }
 
-// TestResolveTarget_PinnedShapes pins §9.2's configuration value shapes for
-// the server point: {"key": "<server-name>", "variables": {...}?} selects a
-// member of the effective server set, xor {"url": "<connection-url>"}
-// overrides with a complete URL whose scheme picks the protocol. The
-// variables carriage itself is TestResolveTarget_ServerVariablesCarriage.
+// TestResolveTarget_PinnedShapes exercises this SDK's composable server
+// carriage: key selects the artifact member and url may replace that same
+// member's target without changing protocol or governing declarations.
 func TestResolveTarget_PinnedShapes(t *testing.T) {
 	doc := &document{
 		Servers: map[string]server{
@@ -144,19 +141,18 @@ func TestResolveTarget_PinnedShapes(t *testing.T) {
 		t.Errorf("SecurityServer = %+v, want the selected server", target.SecurityServer)
 	}
 
-	// {"url": ...}: complete connection URL, scheme decides the protocol,
-	// the default-selected server's declared security still applies (§9.5).
+	// {"key", "url"}: select the member and replace its connection URL.
 	target, err = resolveTarget(doc, nil, map[string]any{"configuration": map[string]any{
-		"server": map[string]any{"url": "ws://localhost:9090/base"},
+		"server": map[string]any{"key": "backup", "url": "wss://localhost:9090/base"},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.ServerURL != "ws://localhost:9090/base" || target.Protocol != "ws" {
+	if target.ServerURL != "wss://localhost:9090/base" || target.Protocol != "wss" {
 		t.Errorf("url override: got %+v", target)
 	}
 	if target.SecurityServer == nil || target.SecurityServer.Host != "backup.example.com" {
-		t.Errorf("SecurityServer = %+v, want the default-selected server", target.SecurityServer)
+		t.Errorf("SecurityServer = %+v, want the explicitly selected server", target.SecurityServer)
 	}
 }
 
@@ -238,16 +234,12 @@ func TestResolveTarget_ServerVariablesCarriage(t *testing.T) {
 		t.Errorf("undefaulted refusal = %q\n                 want %q", err.Error(), want)
 	}
 
-	// A supplied value outside the declared enum is NOT refused (§9.2, R1):
-	// the enum is the author's expectation, not a boundary. It substitutes.
-	target, err = resolveTarget(doc, nil, cfg(map[string]any{
+	// A supplied value outside the declared enum is refused.
+	_, err = resolveTarget(doc, nil, cfg(map[string]any{
 		"key": "tiered", "variables": map[string]any{"env": "qa"},
 	}))
-	if err != nil {
-		t.Fatalf("an out-of-enum value must not be refused: %v", err)
-	}
-	if target.ServerURL != "wss://qa.example.com/v1" {
-		t.Errorf("out-of-enum substitution: url = %q, want wss://qa.example.com/v1", target.ServerURL)
+	if err == nil {
+		t.Fatal("an out-of-enum value must be refused")
 	}
 
 	// A supplied name the selected server does not declare is refused,
@@ -263,13 +255,10 @@ func TestResolveTarget_ServerVariablesCarriage(t *testing.T) {
 	}
 }
 
-// TestResolveTarget_ShapeTeachingErrors pins the refusal text for every
-// non-pinned `configuration.server` form, byte-identical to the TS SDK's
-// (target.test.ts carries the same table): the §9.2 pin exists "so two
-// implementations carry it identically", and silently tolerating extra
-// spellings would defeat it.
+// TestResolveTarget_ShapeTeachingErrors pins the refusal text for malformed
+// values of this SDK's server-point carriage, byte-identical to the TS SDK.
 func TestResolveTarget_ShapeTeachingErrors(t *testing.T) {
-	const tail = `this implementation's accepted shapes (openbindings.asyncapi@1 §9.2 semantics) are {"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?} (select a member of the effective server set, "variables" optionally supplying its declared server variables) xor {"url": "<connection-url>"} (override with a complete connection URL); the two forms are mutually exclusive and "variables" composes only with "key"`
+	const tail = `this implementation accepts {"key": "<server-name>"?, "variables": {"<variable-name>": "<string-value>"}?, "url": "<connection-url>"?}; "key" selects an artifact member (required when several bindable members remain), "variables" completes that member, and "url" may replace only that selected member's target with the same scheme`
 	doc := &document{
 		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https"},
@@ -290,14 +279,12 @@ func TestResolveTarget_ShapeTeachingErrors(t *testing.T) {
 			`configuration.server member "name" is not pinned: ` + tail},
 		{"two unpinned members", map[string]any{"mode": "fast", "name": "prod"},
 			`configuration.server members "mode", "name" are not pinned: ` + tail},
-		{"both pinned members", map[string]any{"key": "prod", "url": "wss://api.example.com/v2"},
-			`configuration.server carries both "key" and "url": ` + tail},
-		{"neither pinned member", map[string]any{},
-			`configuration.server carries neither "key" nor "url": ` + tail},
+		{"empty object", map[string]any{},
+			`configuration.server carries none of "key", "variables", or "url": ` + tail},
 		{"variables without key", map[string]any{"variables": map[string]any{"env": "staging"}},
-			`configuration.server carries neither "key" nor "url": ` + tail},
-		{"variables with url", map[string]any{"url": "wss://api.example.com/v2", "variables": map[string]any{"env": "staging"}},
-			`configuration.server carries "variables" with "url": ` + tail},
+			`configuration.server.variables["env"] names no declared variable of server "prod"`},
+		{"variables with url", map[string]any{"url": "https://api.example.com/v2", "variables": map[string]any{"env": "staging"}},
+			`configuration.server.variables["env"] names no declared variable of server "prod"`},
 		{"key not a string", map[string]any{"key": 3},
 			`configuration.server.key must be a non-empty string: ` + tail},
 		{"key empty", map[string]any{"key": ""},
@@ -330,9 +317,8 @@ func TestResolveTarget_ShapeTeachingErrors(t *testing.T) {
 	}
 }
 
-// prodServer returns the doc's "prod" server — the server secureDoc
-// declares, i.e. the one resolveTarget's default selection targets and
-// whose security applies (§9.5).
+// prodServer returns the doc's sole "prod" server, whose security applies
+// when that artifact member is selected (§9.5).
 func prodServer(doc *document) *server {
 	s := doc.Servers["prod"]
 	return &s
@@ -569,14 +555,13 @@ func TestRequiredContext_UnresolvableRefSkipsEntry(t *testing.T) {
 }
 
 // TestRequiredContext_DerivesFromConnectionServer verifies the requirements
-// come from the SAME server the connection targets (resolveTarget's
-// SecurityServer: the effective set's first bound-protocol candidate, doc
-// servers in lexicographic key order), never from another server that
-// happens to declare security.
+// come from the explicitly selected artifact member (resolveTarget's
+// SecurityServer), never from another server that happens to declare
+// security.
 func TestRequiredContext_DerivesFromConnectionServer(t *testing.T) {
 	doc := &document{
 		Servers: map[string]server{
-			// "a" sorts first and is the connection target: no security.
+			// "a" is explicitly selected below: no security.
 			"a": {Host: "open.example.com", Protocol: "https"},
 			// "b" declares security but is NOT the server dialed.
 			"b": {Host: "secure.example.com", Protocol: "https", Security: []securityRequirement{{Ref: "#/components/securitySchemes/bearer"}}},
@@ -587,12 +572,14 @@ func TestRequiredContext_DerivesFromConnectionServer(t *testing.T) {
 		}},
 	}
 	op := doc.Operations["op"]
-	target, err := resolveTarget(doc, nil, nil)
+	target, err := resolveTarget(doc, nil, map[string]any{"configuration": map[string]any{
+		"server": map[string]any{"key": "a"},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if target.ServerURL != "https://open.example.com" {
-		t.Fatalf("default selection = %q, want the lexicographically first bound server", target.ServerURL)
+		t.Fatalf("selected server = %q, want a", target.ServerURL)
 	}
 	if got := requiredContext(doc, &op, target.SecurityServer, target.ServerURL, nil); got != nil {
 		t.Errorf("requirements must derive from the connection's server (no security), got %+v", got)
@@ -995,15 +982,13 @@ func TestResolveInputCodec(t *testing.T) {
 	}
 
 	doc, msgs = mk("avro/binary")
-	codec, err = resolveInputCodec(doc, msgs)
-	if err != nil || codec.JSON || codec.ContentType != "avro/binary" {
-		t.Errorf("declared non-JSON lane: codec = %+v, err = %v", codec, err)
+	if _, err = resolveInputCodec(doc, msgs); err == nil || !strings.Contains(err.Error(), "no revision-1 value carriage") {
+		t.Errorf("binary/codec-specific media must be refused, got %v", err)
 	}
-	if b, verr := encodeInput(codec, "wire bytes represented as a string"); verr != nil || string(b) != "wire bytes represented as a string" {
-		t.Errorf("declared non-JSON lane must carry strings raw, got %q err %v", b, verr)
-	}
-	if _, verr := encodeInput(codec, map[string]any{"unsupported": "arbitrary bytes"}); verr == nil {
-		t.Error("declared non-JSON lane must refuse non-string values")
+
+	doc, msgs = mk("text/plain; charset=iso-8859-1")
+	if _, err = resolveInputCodec(doc, msgs); err == nil || !strings.Contains(err.Error(), "non-UTF-8 charset") {
+		t.Errorf("non-UTF-8 text carriage must be refused, got %v", err)
 	}
 }
 

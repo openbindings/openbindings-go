@@ -585,3 +585,88 @@ func TestSynthesize_TypelessBodyWrapsSynthetic(t *testing.T) {
 		t.Errorf("properties-without-type body must not wrap synthetically, got %v", namedProps)
 	}
 }
+
+func TestSynthesizeInterfaceWithCoverageAccountsForAlternativesAndReverseInteractions(t *testing.T) {
+	spec := `{
+	  "openapi": "3.1.0",
+	  "info": {"title": "coverage", "version": "1"},
+	  "paths": {
+	    "/jobs": {
+	      "post": {
+	        "operationId": "createJob",
+	        "requestBody": {"required": true, "content": {
+	          "application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}},
+	          "application/x-custom": {"schema": {"type": "string"}}
+	        }},
+	        "callbacks": {
+	          "completed": {
+	            "{$request.body#/callbackUrl}": {
+	              "post": {"responses": {"200": {"description": "ok"}}}
+	            }
+	          }
+	        },
+	        "responses": {"200": {"description": "ok"}}
+	      }
+	    }
+	  },
+	  "webhooks": {
+	    "jobChanged": {
+	      "post": {"responses": {"200": {"description": "ok"}}}
+	    }
+	  }
+	}`
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Coverage.Exhaustive {
+		t.Fatal("OpenAPI coverage must be exhaustive")
+	}
+	if result.Coverage.FullyRepresented {
+		t.Fatal("unsupported request media plus reverse interactions cannot be fully represented by revision 1")
+	}
+	statusByRef := map[string]openbindings.SynthesisCoverageStatus{}
+	reasonByRef := map[string]string{}
+	for _, entry := range result.Coverage.Entries {
+		statusByRef[entry.SourceRef] = entry.Status
+		reasonByRef[entry.SourceRef] = entry.ReasonCode
+	}
+	if got := statusByRef["#/paths/~1jobs/post"]; got != openbindings.SynthesisRepresented {
+		t.Fatalf("paths operation status = %q", got)
+	}
+	if got := statusByRef["#/paths/~1jobs/post/requestBody/content/application~1json"]; got != openbindings.SynthesisRepresented {
+		t.Fatalf("JSON media status = %q", got)
+	}
+	if got := statusByRef["#/paths/~1jobs/post/requestBody/content/application~1x-custom"]; got != openbindings.SynthesisExcluded {
+		t.Fatalf("custom media status = %q", got)
+	}
+	if got := reasonByRef["#/paths/~1jobs/post/requestBody/content/application~1x-custom"]; got != "openapi.request_media_excluded" {
+		t.Fatalf("custom media reason = %q, want openapi.request_media_excluded", got)
+	}
+	if got := statusByRef["#/webhooks/jobChanged/post"]; got != openbindings.SynthesisExcluded {
+		t.Fatalf("webhook status = %q", got)
+	}
+}
+
+func TestSynthesizeInterfaceWithCoverageCanProveFullRepresentation(t *testing.T) {
+	spec := `{
+	  "openapi": "3.1.0",
+	  "info": {"title": "coverage", "version": "1"},
+	  "paths": {
+	    "/users": {
+	      "get": {"operationId": "listUsers", "responses": {"200": {"description": "ok"}}}
+	    }
+	  }
+	}`
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Coverage.FullyRepresented {
+		t.Fatalf("ordinary paths-only document should be fully represented: %+v", result.Coverage.Entries)
+	}
+}

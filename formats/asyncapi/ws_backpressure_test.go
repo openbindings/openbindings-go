@@ -76,6 +76,7 @@ func waitForSoleConnListenerCount(t *testing.T, pool *wsPool, n int) {
 // waiting for an *InvocationError that unbounded code never produces) — see
 // the FINAL REPORT for the empirical before/after run.
 func TestWSReceiveBackpressure_FrameCountOverflowFailsSubscription(t *testing.T) {
+	setWSBackpressureBoundsForTest(t, 64, 64*1024*1024)
 	floodCount := maxWSBufferedFrames + 200
 	floodDone := make(chan struct{})
 	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, r *http.Request) {
@@ -194,6 +195,7 @@ func TestWSReceiveBackpressure_ByteBudgetOverflowFailsSubscription(t *testing.T)
 // simply stops accepting frames for itself; nothing closes the pooled
 // connection or touches the sibling's listener registration.
 func TestWSReceiveBackpressure_OverflowIsolatesToOneSubscription(t *testing.T) {
+	setWSBackpressureBoundsForTest(t, 64, 64*1024*1024)
 	floodCount := maxWSBufferedFrames + 300
 	startFlood := make(chan struct{})
 	floodDone := make(chan struct{})

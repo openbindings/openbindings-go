@@ -16,12 +16,12 @@ import (
 // websockets channel binding's `method`, `query`, and `headers` govern the
 // upgrade request, with declared query and header values supplied like
 // address parameters (§9.2) and any unsatisfied required declaration a
-// pre-dispatch refusal. Where bindings are silent, the cell defaults apply
-// (POST for a unary publish, GET for an SSE subscription, a GET upgrade).
+// pre-dispatch refusal. Revision 1 requires the HTTP publish method instead
+// of inventing one; the WebSocket protocol itself fixes the upgrade method.
 
 // requestMethod returns the request method for an http-protocol cell: the
-// http operation binding's `method` where declared, else the cell's
-// default.
+// http operation binding's `method` where declared. The default parameter
+// remains only for the package's unreachable legacy SSE helper.
 func requestMethod(op *asyncOperation, cellDefault string) string {
 	if op != nil && op.Bindings != nil && op.Bindings.HTTP != nil && op.Bindings.HTTP.Method != "" {
 		return strings.ToUpper(strings.TrimSpace(op.Bindings.HTTP.Method))
@@ -89,16 +89,11 @@ func resolveHTTPQuery(op *asyncOperation, supplied map[string]string) (map[strin
 	return schemaPropertyValues(op.Bindings.HTTP.Query, supplied, nil, "HTTP operation binding query field")
 }
 
-// resolveWSUpgrade resolves the websockets channel binding against the
-// consumer-supplied values. Declared query and header property values come
-// from the address-parameter bag ("supplied like address parameters", §8) —
-// headers additionally from the context's generic header carriage, whose
-// values reach the upgrade request through applyHTTPContext — else the
-// property's declared `default`; a `required` declaration left unsatisfied
-// is a pre-dispatch refusal. A declared upgrade `method` other than GET is
-// refused loudly: RFC 6455 upgrades are GET requests and this platform
-// cannot apply another method — surfaced, never silently rerouted.
-func resolveWSUpgrade(ch *channel, channelName string, params map[string]string, ctxHeaders map[string]string) (wsUpgrade, error) {
+// resolveWSUpgrade resolves the WebSockets channel binding against the
+// protocolFields query and header maps. The two artifact channels remain
+// distinct; a query value never satisfies a header declaration or vice
+// versa. A required declaration left unsatisfied is a pre-dispatch refusal.
+func resolveWSUpgrade(ch *channel, channelName string, queryFields map[string]string, headerFields map[string]string) (wsUpgrade, error) {
 	var up wsUpgrade
 	if ch == nil || ch.Bindings == nil || ch.Bindings.WS == nil {
 		return up, nil
@@ -109,7 +104,7 @@ func resolveWSUpgrade(ch *channel, channelName string, params map[string]string,
 		return up, fmt.Errorf("channel %q: websockets binding declares upgrade method %q, which this platform cannot apply (RFC 6455 upgrades are GET) — refused rather than silently rerouted", channelName, b.Method)
 	}
 
-	queryVals, err := schemaPropertyValues(b.Query, params, nil,
+	queryVals, err := schemaPropertyValues(b.Query, queryFields, nil,
 		fmt.Sprintf("channel %q: websockets binding query parameter", channelName))
 	if err != nil {
 		return up, err
@@ -121,7 +116,7 @@ func resolveWSUpgrade(ch *channel, channelName string, params map[string]string,
 		}
 	}
 
-	headerVals, err := schemaPropertyValues(b.Headers, params, ctxHeaders,
+	headerVals, err := schemaPropertyValues(b.Headers, headerFields, nil,
 		fmt.Sprintf("channel %q: websockets binding header", channelName))
 	if err != nil {
 		return up, err

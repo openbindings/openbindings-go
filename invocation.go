@@ -47,9 +47,9 @@ type ContextRequirement struct {
 	// lookup. Empty when the artifact scheme has no addressable name (e.g.
 	// an inline AsyncAPI scheme object).
 	Name string `json:"name,omitempty"`
-	// Durable reports whether resolved context MAY be cached under the
-	// target-derived key. nil means true; non-durable context MUST be
-	// re-satisfied per call.
+	// Durable reports whether resolved context MAY be persisted and reused.
+	// nil means true; non-durable context MUST be re-satisfied per call. The
+	// contract prescribes no store or key derivation.
 	Durable     *bool          `json:"durable,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Extra       map[string]any `json:"-"`
@@ -101,16 +101,16 @@ func (r *ContextRequirement) UnmarshalJSON(b []byte) error {
 }
 
 // NewConfigValueRequirement builds a config.value ContextRequirement — the
-// binding-invoker family for a non-secret configuration value a binding needs
+// binding-invoker family for a configuration value a binding needs
 // but the artifact does not supply (a server variable with no default, a
 // channel address a service generates at runtime). point names the
 // binding-specification configuration point the value belongs to ("server",
 // "address", …); key names the specific value within it (a server-variable
 // name, or "address" for a whole channel address); choices carries the
-// artifact's declared allowed values when it enumerates them (advisory picker
-// metadata, never a gate — the point does not refuse an off-list value).
-// durable defaults to true; pass a *bool of false for a value known to be
-// per-invocation (a runtime-generated address). The resolved value is carried
+// artifact's declared choices when it enumerates them (the governing binding
+// specification decides whether that list is closed or advisory). durable
+// defaults to true, permitting but not requiring reuse; pass a *bool of false
+// for a value that must be fresh per invocation. The resolved value is carried
 // in the "configuration" context field under point; its shape there is the
 // invoker's own, so this requirement names what is needed, not the resolved
 // structure.
@@ -141,9 +141,9 @@ type ContextAlternative struct {
 // terminal error, per the openbindings.binding-invoker interface.
 // Alternatives is disjunctive: satisfying any one alternative suffices.
 type ContextRequiredDetails struct {
-	// Target is the target the binding addresses (e.g. its endpoint URL or
-	// host); the runtime/resolver derives a storage key from it — the invoker
-	// does not key or store.
+	// Target is an opaque identifier for the concrete destination or context
+	// scope. A runtime may use it when resolving or reusing context; key
+	// derivation and persistence are outside the contract.
 	Target       string               `json:"target"`
 	Alternatives []ContextAlternative `json:"alternatives"`
 }

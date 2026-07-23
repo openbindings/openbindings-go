@@ -2,7 +2,7 @@
 
 AsyncAPI 3.x binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
 
-This package enables OpenBindings to invoke operations against AsyncAPI documents and synthesize OBI documents from them. It supports HTTP/SSE for event streaming, HTTP POST for sending messages, and WebSocket for bidirectional communication. Credentials are applied via the document's security schemes.
+This package enables OpenBindings to invoke operations against AsyncAPI documents and synthesize OBI documents from them. Revision 1 supports unary HTTP publishes using the artifact-declared method, WebSocket client-streaming publishes, and WebSocket server-streaming subscriptions. Standalone HTTP `send` operations, broker protocols, and message carriage the core value boundary cannot preserve are reported as explicit exclusions. Credentials are applied only through the document's security schemes.
 
 See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 
@@ -43,7 +43,8 @@ source := openbindings.InvocationSource{
 }
 
 // Publish: `receiveOrder` has action `receive` — the described application
-// receives, so invoking it publishes. Over http/https this is a unary POST.
+// receives, so invoking it publishes. Over http/https this is a unary
+// request using the method declared by the artifact's HTTP binding.
 call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source:  source,
     Ref:     "#/operations/receiveOrder",
@@ -68,8 +69,8 @@ To subscribe, invoke a `send` operation and read the output sequence to EOF:
 
 ```go
 // Subscribe: `sendOrderUpdates` has action `send` — the described application
-// sends, so invoking it subscribes (SSE over http/https, a streaming socket
-// over ws/wss).
+// sends, so invoking it subscribes over ws/wss. Standalone HTTP send is an
+// explicit revision-1 exclusion; SSE is never inferred.
 call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source:  source,
     Ref:     "#/operations/sendOrderUpdates",
@@ -106,7 +107,7 @@ These behaviors are pinned by the binding specification (`binding-specs/asyncapi
 
 ### Binding-spec identifier
 
-`openbindings.asyncapi@1` — exact and opaque, matched by string equality; never interpreted as a version range. Accepted artifacts are the AsyncAPI **3.0.x** line only, discriminated by the document's own `asyncapi` field (ASYNC-P-01); a later 3.x line is adopted by a compatible revision of the binding specification, never sight-unseen.
+`openbindings.asyncapi@1` — exact and opaque, matched by string equality; never interpreted as a version range. Accepted artifacts declare exactly AsyncAPI **3.0.0**, discriminated by the document's own `asyncapi` field (ASYNC-P-01); accepting another edition publishes a new binding-specification identifier, never an in-place widening.
 
 ### Ref format
 
@@ -132,16 +133,16 @@ Credentials are applied based on the AsyncAPI document's `securitySchemes`:
 
 - `http` + `bearer` / `httpBearer`: `Authorization: Bearer <token>` from `bearerToken`
 - `http` + `basic` / `userPassword`: `Authorization: Basic <encoded>` from `basic`
-- `apiKey` / `httpApiKey`: Placed in header, query, or cookie as declared, from `apiKeys[<scheme name>]`, falling back to the single `apiKey`
+- `apiKey` / `httpApiKey`: Placed in header, query, or cookie as declared, from `apiKeys[<scheme name>]`
 - `oauth2`: `Authorization: Bearer <token>` from `bearerToken` or `accessToken`
 
 WebSocket credentials ride the upgrade request: headers, plus spec-declared query-param apiKeys appended to the dialed URL. No credential ever rides a message body or a first frame — in-band auth is excluded by the binding specification (§9.5, ASYNC-P-07).
 
-Falls back to bearer, then basic, then apiKey (as `Authorization: ApiKey <key>`) when no security schemes are defined.
+When the artifact declares no security scheme, this binding applies no credential. It never invents an `Authorization` convention from ambient credential fields.
 
 ### Consumer hooks
 
-Each message's bytes-to-value rule is chosen from the governing declared content type: per message, its own `contentType`, else the document's `defaultContentType`; the governing set is the operation's `messages` (else its channel's), and the reply-side declarations govern a publish's response (direction-correct decode, ASYNC-P-05). Exactly one coherent effective type selects the lane — strict JSON for `application/json` and `+json` (a declared-JSON payload that fails to parse is a loud error), text otherwise. An absent type requires `configuration.decode`; conflicting possible output types are refused rather than collapsed to a preference. This format **consults the consumer hooks seam** (`InvokeHooks`): a `DecodeOutput` hook may override the builtin rule for a message. The unary publish lane stamps decode provenance in its trailer metadata (`x-ob-decode`: `spec/content-type`, or `hook` when overridden), alongside the fixed `x-ob-classify: not-consulted` — message-oriented transports have no per-message success status the way HTTP does, so this format runs no result classifier.
+Each message's bytes-to-value rule is chosen from the governing declared content type: per message, its own `contentType`, else the document's `defaultContentType`; the governing set is the operation's `messages` (else its channel's), and the reply-side declarations govern a publish's response (direction-correct decode, ASYNC-P-05). Exactly one coherent effective type selects a supported lane — strict JSON for `application/json` and `+json` (a declared-JSON payload that fails to parse is a loud error), or UTF-8 text for `text/*`. Binary/codec-specific media and explicit non-UTF-8 charsets are refused because the core boundary has no bytes value or common transcode surface. An absent type requires `configuration.decode`; conflicting possible output types are refused rather than collapsed to a preference. This format **consults the consumer hooks seam** (`InvokeHooks`): a `DecodeOutput` hook may override the builtin rule for a message. The unary publish lane stamps decode provenance in its trailer metadata (`x-ob-decode`: `spec/content-type`, or `hook` when overridden), alongside the fixed `x-ob-classify: not-consulted` — message-oriented transports have no per-message success status the way HTTP does, so this format runs no result classifier.
 
 ### Interface synthesis
 
@@ -155,8 +156,8 @@ The transport comes from the resolved server's protocol; the cell comes from the
 
 | Protocol | Invoking `receive` (publish) | Invoking `send` (subscribe) |
 |----------|------------------------------|-----------------------------|
-| HTTP/HTTPS | POST (unary) | SSE streaming |
-| WS/WSS | WebSocket publish (client-streaming) | WebSocket subscribe (bidi-capable) |
+| HTTP/HTTPS | Unary request using the artifact-declared method | Excluded; SSE/lifecycle is not inferred |
+| WS/WSS | WebSocket publish (client-streaming) | WebSocket subscribe (server-streaming; input closed) |
 
 ## How it works
 
@@ -164,13 +165,13 @@ The transport comes from the resolved server's protocol; the cell comes from the
 
 1. Loads and caches the AsyncAPI document (JSON or YAML, local or remote)
 2. Parses the ref to extract the operation ID (`#/operations/receiveOrder` -> `receiveOrder`)
-3. Resolves the server URL and protocol from the document (consumer `configuration.server` carries one of the two §9.2-pinned value shapes — `{"key": "<server-name>", "variables": {"<variable-name>": "<string-value>"}?}` selects a member of the effective server set, the optional `variables` member supplying values for its declared server variables (substitution is supplied-else-default; an undeclared supplied name and a supplied out-of-enum value are refused), xor `{"url": "<connection-url>"}` supplies a complete connection URL; any other spelling is refused with a teaching error, and an unresolvable server, address, or `{name}` expression is a pre-dispatch refusal, never a guess)
+3. Resolves the server URL and protocol from the document. The sole bindable member of the operation's effective server set selects itself; several members require `configuration.server.key`. The SDK carries the server point as one composable object: `{"key": "<server-name>"?, "variables": {"<variable-name>": "<string-value>"}?, "url": "<connection-url>"?}`. `variables` completes the selected member using supplied-else-default substitution, while `url` may replace only that member's target and must use the same scheme as its declared protocol. An undeclared variable, out-of-enum value, incompatible replacement, unresolvable server/address/`{name}` expression, or unsupported spelling is refused before dispatch, never guessed.
 4. Challenges `CONTEXT_REQUIRED` when declared security isn't satisfied (before any connection is opened)
 5. Dispatches based on action and protocol:
-   - **receive + http/https**: unary POST publish — the one input is the message body; an empty-body response (202/204 acknowledgments included) yields zero outputs, otherwise the decoded response body is the single output
+   - **receive + http/https**: unary publish using the artifact-declared HTTP method — the one input is the message body; an empty-body response (202/204 acknowledgments included) yields zero outputs, otherwise a declared reply body is the single output
    - **receive + ws/wss**: client-streaming publish — every input is one socket frame; closing input after at least one message completes the call with zero outputs (closing with none sent is a refusal)
-   - **send + http/https**: SSE subscribe — each server event is one output; transport close completes the subscription (reconnection is excluded from revision 1)
-   - **send + ws/wss**: WebSocket subscribe (bidi-capable) — socket frames become outputs; caller inputs are forwarded as ordinary frames (closing input does not end the subscription)
+   - **send + http/https**: excluded before dispatch; an HTTP operation binding does not declare SSE framing or a counterparty subscription lifecycle
+   - **send + ws/wss**: server-streaming WebSocket subscription — the input side is closed at establishment and complete data messages become outputs
 
 ### WebSocket connection pooling
 
@@ -210,15 +211,15 @@ than re-deriving server selection outside the format package.
 
 ## Resource bounds
 
-Delivery units — the unary publish reply body, one SSE event, and one
-WebSocket message (the socket's per-message read limit) — are
+Delivery units — the unary publish reply body and one WebSocket message
+(the socket's per-message read limit) — are
 consumer-bounded: set `MaxDeliveryUnitBytes` on the `OperationInvoker` (or
 per invocation on `BindingInvocationArgs`); zero selects
 `openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). On a pooled WebSocket
 the read limit only ever rises: a later acquirer with a larger bound raises
 it, a smaller one never lowers it mid-life. Deliberately fixed: the HTTP
-error-body diagnostics capture, the SSE line-scanner guard, and the
-synthesis-lane artifact-fetch guard — none is a delivery unit.
+error-body diagnostics capture and the synthesis-lane artifact-fetch guard —
+neither is a delivery unit.
 
 ## License
 

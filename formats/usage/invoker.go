@@ -313,6 +313,7 @@ type Synthesizer struct {
 }
 
 var _ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+var _ openbindings.CoverageSynthesizer = (*Synthesizer)(nil)
 var _ openbindings.SourceInspector = (*Synthesizer)(nil)
 
 // NewSynthesizer creates a new usage interface synthesizer.
@@ -333,9 +334,37 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // always yields a string, so the derived contract never lies; the stamp
 // keys the diagnostics and self-clears when a real schema is elected).
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+	observation, err := c.synthesizeObserved(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return observation.iface, nil
+}
+
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+	observation, err := c.synthesizeObserved(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return openbindings.NewSynthesisResult(
+		observation.iface,
+		synthesisCoverage(observation.spec, observation.iface),
+		true,
+	)
+}
+
+type synthesisObservation struct {
+	iface *openbindings.Interface
+	spec  *Spec
+}
+
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*synthesisObservation, error) {
 	if len(in.Sources) == 0 {
 		skeleton, err := openbindings.SynthesisSkeleton(in)
-		return &skeleton, err
+		if err != nil {
+			return nil, err
+		}
+		return &synthesisObservation{iface: &skeleton}, nil
 	}
 	if len(in.Sources) > 1 {
 		return nil, openbindings.ErrMultipleSources
@@ -401,5 +430,5 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 		return nil, err
 	}
 
-	return &iface, nil
+	return &synthesisObservation{iface: &iface, spec: spec}, nil
 }

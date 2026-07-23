@@ -210,7 +210,7 @@ protobuf framing is unambiguous: the response message type and the gRPC status c
 
 1. Parses the ref as `package.Service/Method` (bad ref → `ERR_INVALID_REF`, before any I/O)
 2. Resolves service and method descriptors via inline content or server reflection (load failure → `ERR_SOURCE_LOAD_FAILED`; unresolved symbol → `ERR_REF_NOT_FOUND`)
-3. Resolves or reuses a cached gRPC client connection (transport per the §4 address form — `grpcs://` or port 443 means TLS — unless the transport configuration point overrides it)
+3. Resolves or reuses a cached gRPC client connection (transport per the §4 address form — `grpc://` means plaintext and `grpcs://` means TLS; a bare `host:port` requires an explicit transport election — unless the transport configuration point overrides it)
 4. Reads the single request message from the handle (`Write` one input; methods with empty request messages dispatch without one) and builds a dynamic protobuf request from it
 5. Applies credentials from the context as gRPC metadata (bearer, basic, apiKey)
 6. Invokes the RPC: unary methods emit one output then close; server-streaming methods emit per received message, with backpressure flow-controlling the stream
