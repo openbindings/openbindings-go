@@ -28,7 +28,9 @@ import (
 //   - resources/templates/list
 //   - prompts/list, prompts/get
 //
-// Not yet supported: resource subscriptions, sampling, icons, elicitation.
+// Not yet supported: resource subscriptions and server-to-client primitives
+// such as sampling and elicitation. Descriptor metadata (including icons) is
+// preserved by synthesis even though it is not itself an invocable operation.
 const BindingSpec = "openbindings.mcp@1"
 
 // Invoker handles binding invocation for MCP sources.
@@ -253,10 +255,6 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 			return nil, fmt.Errorf("outputLocation: %w", err)
 		}
 	}
-	if src.Embed && src.Content == nil {
-		return nil, fmt.Errorf("MCP live-discovery embedding is not supported: preserving the complete pagination-exhausted listing is required; provide pinned listing content explicitly")
-	}
-
 	var disc *discovery
 	if src.Content != nil {
 		if err := validateEndpoint(src.Location); err != nil {
@@ -284,6 +282,13 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		entry := iface.Sources[DefaultSourceName]
 		entry.Content = src.Content
 		iface.Sources[DefaultSourceName] = entry
+	} else if src.Embed {
+		if disc.PinnedListing == nil {
+			return nil, fmt.Errorf("MCP live discovery did not yield a complete pagination-exhausted listing to embed")
+		}
+		entry := iface.Sources[DefaultSourceName]
+		entry.Content = disc.PinnedListing
+		iface.Sources[DefaultSourceName] = entry
 	}
 	if err := openbindings.FinalizeSynthesis(iface, in, DefaultSourceName, BindingSpec); err != nil {
 		return nil, err
@@ -292,12 +297,15 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 	return &synthesisObservation{iface: iface, disc: disc}, nil
 }
 
-// buildHTTPHeaders carries only explicitly named HTTP headers and cookies.
-// Generic credentials are challenged before this point because MCP does not
-// declare their HTTP destination.
+// buildHTTPHeaders maps the bearer credential to the Authorization carrier
+// incorporated by openbindings.mcp@1 §9.5, then carries explicitly named
+// headers and cookies. Other generic credentials are challenged before here.
 func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 	headers := map[string]string{}
 
+	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
+		headers["Authorization"] = "Bearer " + token
+	}
 	for k, v := range openbindings.ContextHeaders(bindCtx) {
 		headers[k] = v
 	}

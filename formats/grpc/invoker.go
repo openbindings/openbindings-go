@@ -389,6 +389,14 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 	if src.BindingSpec != BindingSpec {
 		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
 	}
+	// Embedded proto/descriptor content is a complete discovery artifact and
+	// may be synthesized offline without an invocation target. Validate the
+	// live lane only when the caller actually supplied one.
+	if src.Location != "" {
+		if _, err := parseDialAddress(src.Location); err != nil {
+			return nil, fmt.Errorf("location: %w", err)
+		}
+	}
 	if src.OutputLocation != "" {
 		if _, err := parseDialAddress(src.OutputLocation); err != nil {
 			return nil, fmt.Errorf("outputLocation: %w", err)

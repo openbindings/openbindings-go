@@ -32,6 +32,13 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface) []
 	for _, binding := range iface.Bindings {
 		byRef[binding.Ref] = bindingIdentity{operationKey: binding.Operation, ref: binding.Ref}
 	}
+	sourceLocation := ""
+	for _, source := range iface.Sources {
+		if source.BindingSpec == BindingSpec {
+			sourceLocation = source.Location
+			break
+		}
+	}
 
 	var entries []openbindings.SynthesisCoverageEntry
 	if doc.Paths != nil {
@@ -73,6 +80,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface) []
 					Status:       openbindings.SynthesisRepresented,
 					OperationKey: identity.operationKey,
 					BindingRef:   identity.ref,
+					Requirements: openAPIServerRequirements(doc, pathItem, op, sourceLocation),
 				})
 				entries = append(entries, openAPIRequestMediaCoverage(op, pathItem, identity)...)
 				entries = append(entries, openAPICallbackCoverage(op, ref)...)
@@ -81,6 +89,18 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface) []
 	}
 	entries = append(entries, openAPIWebhookCoverage(doc)...)
 	return entries
+}
+
+func openAPIServerRequirements(
+	doc *openapi3.T,
+	pathItem *openapi3.PathItem,
+	op *openapi3.Operation,
+	sourceLocation string,
+) []string {
+	if _, err := resolveServer(doc, pathItem, op, nil, sourceLocation); err != nil {
+		return []string{"configuration.server"}
+	}
+	return nil
 }
 
 func openAPIRequestMediaCoverage(op *openapi3.Operation, pathItem *openapi3.PathItem, identity struct {

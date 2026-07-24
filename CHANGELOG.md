@@ -6,6 +6,32 @@
 
 ### Changed
 
+- **`FetchInterface` retains synthesis coverage.** A synthesized
+  `FetchedInterface` now carries the durable `SynthesisCoverage` emitted by a
+  coverage-capable synthesizer instead of discarding it at acquisition. A
+  synthesizer without that optional surface still falls back to strict
+  synthesis. Direct and well-known OBI fetches leave coverage absent.
+
+- **MCP synthesis and invocation now support a fidelity-tested native
+  round trip.** Synthesized tool outputs describe the complete
+  `CallToolResult` (with an upstream `outputSchema` correctly scoped to
+  `structuredContent`) and admit solicited progress; resource operations
+  describe complete `ReadResourceResult` values. Live embedding retains the
+  raw pagination-exhausted listing for descriptor-preserving adapters,
+  unsupported negotiated revisions are gated consistently, native
+  `isError` results retain their complete MCP payload in structured error
+  details, and `bearerToken` uses the specification's declared
+  `Authorization: Bearer` carrier.
+
+- **Portable synthesis conformance now proves refusal as well as successful
+  coverage.** The shared version-2 corpus requires loud whole-source failure
+  where faithful synthesis is impossible, and records runtime configuration
+  prerequisites on represented targets. The resulting loop fixed gRPC and
+  Connect authoring paths that could emit sources with non-conforming target
+  addresses; OpenAPI coverage now identifies unresolved server selection, and
+  gRPC coverage identifies the transport election required by bare
+  `host:port`.
+
 - **The experimental Workers RPC stub was removed.** It could neither invoke
   the runtime-local protocol from Go nor synthesize an interface, and no
   published binding specification governed its legacy token. The Go SDK now

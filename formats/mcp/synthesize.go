@@ -68,11 +68,11 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 			}
 		}
 
-		if tool.OutputSchema != nil {
-			if schemaMap, ok := tool.OutputSchema.(map[string]any); ok {
-				op.Output = schemaMap
-			}
-		}
+		// The binding emits the complete successful CallToolResult, not just
+		// structuredContent. MCP's outputSchema constrains only that member, so
+		// copying it onto the operation would reject the protocol result object
+		// at the OpenBindings boundary.
+		op.Output = toolResultOutputSchema(tool.OutputSchema)
 
 		iface.Operations[opKey] = op
 
@@ -99,6 +99,7 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 		// declares no input schema.
 		op := openbindings.Operation{
 			Description: desc,
+			Output:      resourceOutputSchema(),
 		}
 
 		iface.Operations[opKey] = op
@@ -123,6 +124,7 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 
 		op := openbindings.Operation{
 			Description: desc,
+			Output:      resourceOutputSchema(),
 		}
 		if in := templateInputSchema(tmpl.URITemplate); in != nil {
 			op.Input = in
@@ -263,6 +265,69 @@ func bindableDiscovery(disc *discovery) *discovery {
 		}
 	}
 	return out
+}
+
+// toolResultOutputSchema describes the complete successful MCP
+// CallToolResult emitted by the binding. outputSchema, when the upstream tool
+// declares one, applies specifically to structuredContent.
+func toolResultOutputSchema(structuredContent any) map[string]any {
+	resultProperties := map[string]any{
+		"_meta": map[string]any{"type": "object"},
+		"content": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "object"},
+		},
+		"isError": map[string]any{"const": false},
+	}
+	if schemaMap, ok := structuredContent.(map[string]any); ok {
+		resultProperties["structuredContent"] = schemaMap
+	}
+	return map[string]any{
+		"type": "object",
+		"anyOf": []any{
+			map[string]any{
+				"properties": map[string]any{
+					"progress": map[string]any{"type": "number"},
+					"total":    map[string]any{"type": "number"},
+					"message":  map[string]any{"type": "string"},
+				},
+				"required": []any{"progress"},
+			},
+			map[string]any{
+				"properties": resultProperties,
+				"required":   []any{"content"},
+			},
+		},
+	}
+}
+
+// resourceOutputSchema describes the complete ReadResourceResult emitted by
+// both static-resource and resource-template bindings.
+func resourceOutputSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"_meta": map[string]any{"type": "object"},
+			"contents": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"uri":      map[string]any{"type": "string"},
+						"mimeType": map[string]any{"type": "string"},
+						"text":     map[string]any{"type": "string"},
+						"blob":     map[string]any{"type": "string"},
+					},
+					"required": []any{"uri"},
+					"oneOf": []any{
+						map[string]any{"required": []any{"text"}},
+						map[string]any{"required": []any{"blob"}},
+					},
+				},
+			},
+		},
+		"required": []any{"contents"},
+	}
 }
 
 // promptOutputSchema returns a JSON Schema describing the standard MCP

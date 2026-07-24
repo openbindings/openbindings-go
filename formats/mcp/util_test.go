@@ -62,9 +62,11 @@ func TestParseRef_EmptyName(t *testing.T) {
 	}
 }
 
-func TestBuildHTTPHeaders_GenericCredentialsDoNotInventCarriage(t *testing.T) {
+func TestBuildHTTPHeaders_Carriage(t *testing.T) {
+	if got := buildHTTPHeaders(map[string]any{"bearerToken": "tok_123"})["Authorization"]; got != "Bearer tok_123" {
+		t.Fatalf("bearer token carriage = %q, want Authorization: Bearer", got)
+	}
 	for name, context := range map[string]map[string]any{
-		"bearer": {"bearerToken": "tok_123"},
 		"apiKey": {"apiKey": "key_abc"},
 		"basic":  {"basic": map[string]any{"username": "user", "password": "pass"}},
 	} {

@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -384,13 +383,12 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
-		u, err := url.Parse(src.OutputLocation)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return nil, fmt.Errorf("outputLocation must be an absolute HTTP(S) Connect service URL")
+		if err := validateBaseURL(src.OutputLocation); err != nil {
+			return nil, fmt.Errorf("outputLocation: %w", err)
 		}
 	}
-	if src.Location == "" {
-		return nil, fmt.Errorf("Connect source requires an HTTP(S) base URL")
+	if err := validateBaseURL(src.Location); err != nil {
+		return nil, fmt.Errorf("location: %w", err)
 	}
 	if src.Content == nil {
 		return nil, fmt.Errorf("descriptorless Connect sources expose no discoverable operation set; synthesis requires embedded protobuf content")

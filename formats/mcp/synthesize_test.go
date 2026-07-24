@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -19,12 +20,25 @@ func failingCountingClient(requests *atomic.Int64) *http.Client {
 	})}
 }
 
-func TestSynthesizeInterface_RefusesLossyLiveDiscoveryEmbed(t *testing.T) {
-	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: "https://mcp.example.test", Embed: true}},
-	})
-	if err == nil || !strings.Contains(err.Error(), "complete pagination-exhausted listing") {
-		t.Fatalf("expected pre-discovery embed refusal, got %v", err)
+func TestListingCapture_PreservesCompletePaginationExhaustedEntities(t *testing.T) {
+	capture := newListingCapture()
+	capture.observe("tools/list", []byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"first","inputSchema":{"type":"object"},"title":"First"}],"nextCursor":"p2"}}`))
+	capture.observe("tools/list", []byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"second","inputSchema":{"type":"object"},"execution":{"taskSupport":"optional"}}]}}`))
+	content := capture.content()
+	var pin struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(content, &pin); err != nil {
+		t.Fatal(err)
+	}
+	if len(pin.Tools) != 2 {
+		t.Fatalf("captured tools = %d, want 2", len(pin.Tools))
+	}
+	if pin.Tools[0]["title"] != "First" {
+		t.Fatalf("descriptor field lost: %v", pin.Tools[0])
+	}
+	if strings.Contains(string(content), "nextCursor") {
+		t.Fatalf("pagination carriage leaked into pinned listing: %s", content)
 	}
 }
 
@@ -120,6 +134,22 @@ func TestConvertToInterface_ToolInputOutputSchemas(t *testing.T) {
 	if op.Output.(map[string]any)["type"] != "object" {
 		t.Errorf("output type = %v, want object", op.Output.(map[string]any)["type"])
 	}
+	outputAlternatives := op.Output.(map[string]any)["anyOf"].([]any)
+	progressProps := outputAlternatives[0].(map[string]any)["properties"].(map[string]any)
+	if _, ok := progressProps["progress"]; !ok {
+		t.Fatal("tool output schema must admit solicited progress values")
+	}
+	outputProps := outputAlternatives[1].(map[string]any)["properties"].(map[string]any)
+	if _, ok := outputProps["content"]; !ok {
+		t.Fatal("complete CallToolResult schema must include content")
+	}
+	structured := outputProps["structuredContent"].(map[string]any)
+	if _, ok := structured["properties"].(map[string]any)["result"]; !ok {
+		t.Fatal("upstream outputSchema must constrain CallToolResult.structuredContent")
+	}
+	if _, leaked := outputProps["result"]; leaked {
+		t.Fatal("upstream outputSchema must not be copied onto the complete result root")
+	}
 }
 
 func TestConvertToInterface_ResourceOperations(t *testing.T) {
@@ -143,6 +173,13 @@ func TestConvertToInterface_ResourceOperations(t *testing.T) {
 	// ref, not caller input.
 	if op.Input != nil {
 		t.Fatalf("static resource operation must declare no input, got %v", op.Input)
+	}
+	if op.Output == nil {
+		t.Fatal("static resource operation must describe its complete ReadResourceResult")
+	}
+	outputProps := op.Output.(map[string]any)["properties"].(map[string]any)
+	if _, ok := outputProps["contents"]; !ok {
+		t.Fatalf("resource output schema missing contents: %v", op.Output)
 	}
 
 	binding := iface.Bindings["config."+DefaultSourceName]

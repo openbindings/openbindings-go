@@ -125,6 +125,19 @@ func TestFetchInterface_FailureCarriesResolutionTrail(t *testing.T) {
 	}
 }
 
+func TestFetchInterface_SynthesizedResultRetainsCoverage(t *testing.T) {
+	got, err := FetchInterface(context.Background(), "artifact://fake", WithSynthesizers(coverageFetchSynthesizer{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Synthesized || got.Coverage == nil {
+		t.Fatalf("synthesis evidence was discarded: %#v", got)
+	}
+	if !got.Coverage.Exhaustive || !got.Coverage.FullyRepresented || len(got.Coverage.Entries) != 1 {
+		t.Fatalf("wrong coverage: %#v", got.Coverage)
+	}
+}
+
 type failingSynthesizer struct{}
 
 func (failingSynthesizer) BindingSpecs() []BindingSpecInfo {
@@ -133,4 +146,42 @@ func (failingSynthesizer) BindingSpecs() []BindingSpecInfo {
 
 func (failingSynthesizer) SynthesizeInterface(context.Context, *SynthesizeInput) (*Interface, error) {
 	return nil, fmt.Errorf("invalid character '<' looking for beginning of value")
+}
+
+type coverageFetchSynthesizer struct{}
+
+func (coverageFetchSynthesizer) BindingSpecs() []BindingSpecInfo {
+	return []BindingSpecInfo{{BindingSpec: "fake.coverage@1"}}
+}
+
+func (coverageFetchSynthesizer) SynthesizeInterface(ctx context.Context, input *SynthesizeInput) (*Interface, error) {
+	result, err := (coverageFetchSynthesizer{}).SynthesizeInterfaceWithCoverage(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return result.Interface, nil
+}
+
+func (coverageFetchSynthesizer) SynthesizeInterfaceWithCoverage(_ context.Context, input *SynthesizeInput) (*SynthesizeResult, error) {
+	location := input.Sources[0].Location
+	iface := &Interface{
+		OpenBindings: "0.2.0",
+		Operations:   map[string]Operation{"ping": {}},
+		Sources: map[string]Source{
+			"source": {BindingSpec: "fake.coverage@1", Location: location},
+		},
+		Bindings: map[string]BindingEntry{
+			"ping.source": {Operation: "ping", Source: "source", Ref: "ping"},
+		},
+	}
+	return NewSynthesisResult(iface, []SynthesisCoverageEntry{{
+		SourceIndex:  0,
+		SourceKey:    "source",
+		SourceRef:    "ping",
+		Scope:        SynthesisCoverageTarget,
+		Status:       SynthesisRepresented,
+		OperationKey: "ping",
+		BindingKey:   "ping.source",
+		BindingRef:   "ping",
+	}}, true)
 }

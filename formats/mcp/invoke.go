@@ -58,7 +58,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 	_, _, hasBasic := openbindings.ContextBasicAuth(args.Context)
-	if openbindings.ContextAPIKey(args.Context) != "" || openbindings.ContextBearerToken(args.Context) != "" || hasBasic {
+	if openbindings.ContextAPIKey(args.Context) != "" || hasBasic {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeContextRequired,
 			Message: "MCP does not declare a carrier for a generic credential; provide a named HTTP header credential",
@@ -66,6 +66,13 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 	for name := range openbindings.ContextHeaders(args.Context) {
+		if openbindings.ContextBearerToken(args.Context) != "" && strings.EqualFold(name, "Authorization") {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeValidationFailed,
+				Message: "bearerToken and an explicit Authorization header target the same MCP credential destination",
+			})
+			return
+		}
 		if strings.EqualFold(name, "MCP-Session-Id") || strings.EqualFold(name, "MCP-Protocol-Version") {
 			inv.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeValidationFailed,
@@ -467,7 +474,12 @@ func emitToolResult(
 			msg = fmt.Sprintf("MCP tool %q reported an error", toolName)
 		}
 		return &openbindings.InvocationError{
-			Code: openbindings.ErrCodeExecutionFailed, Message: msg,
+			Code:    openbindings.ErrCodeExecutionFailed,
+			Message: msg,
+			// Preserve the protocol-native application error for adapters
+			// (notably ob mcp) that can faithfully re-expose it. Generic
+			// consumers still branch on the canonical OpenBindings code.
+			Details: map[string]any{"mcpResult": completeMCPResult(rawResult, result)},
 		}, false
 	}
 

@@ -33,6 +33,17 @@ func synthesisCoverage(
 		byRef[binding.Ref] = id
 		byOperation[binding.Operation] = id
 	}
+	requirements := []string{}
+	sourceLocation := ""
+	for _, source := range iface.Sources {
+		if source.BindingSpec == BindingSpec {
+			sourceLocation = source.Location
+			break
+		}
+	}
+	if address, err := parseDialAddress(sourceLocation); err == nil && !address.explicit {
+		requirements = []string{"configuration.transport"}
+	}
 
 	sort.Slice(disc.services, func(i, j int) bool {
 		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
@@ -72,6 +83,7 @@ func synthesisCoverage(
 				Status:       openbindings.SynthesisRepresented,
 				OperationKey: id.operationKey,
 				BindingRef:   id.bindingRef,
+				Requirements: append([]string{}, requirements...),
 			})
 		}
 	}

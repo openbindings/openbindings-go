@@ -21,6 +21,10 @@ type discovery struct {
 	ResourceTemplates []*gomcp.ResourceTemplate
 	Prompts           []*gomcp.Prompt
 	ServerInfo        *gomcp.Implementation
+	// PinnedListing is the raw pagination-exhausted aggregate observed during
+	// live discovery. It retains protocol fields the typed SDK may not model
+	// (notably task execution metadata) and is suitable for source.content.
+	PinnedListing json.RawMessage
 }
 
 func clientInfo(version string) *gomcp.Implementation {
@@ -32,19 +36,17 @@ func clientInfo(version string) *gomcp.Implementation {
 
 func discover(ctx context.Context, clientVersion string, baseClient *http.Client, url string) (*discovery, error) {
 	requiredTaskTools := map[string]bool{}
+	capture := newListingCapture()
 	observe := func(method string, data []byte) {
+		entries := capture.observe(method, data)
 		if method != "tools/list" {
 			return
 		}
-		var envelope struct {
-			Result struct {
-				Tools []map[string]any `json:"tools"`
-			} `json:"result"`
-		}
-		if json.Unmarshal(data, &envelope) != nil {
-			return
-		}
-		for _, tool := range envelope.Result.Tools {
+		for _, raw := range entries {
+			var tool map[string]any
+			if json.Unmarshal(raw, &tool) != nil {
+				continue
+			}
 			name, _ := tool["name"].(string)
 			execution, _ := tool["execution"].(map[string]any)
 			if name != "" && execution["taskSupport"] == "required" {
@@ -105,8 +107,61 @@ func discover(ctx context.Context, clientVersion string, baseClient *http.Client
 			result.Prompts = append(result.Prompts, prompt)
 		}
 	}
+	result.PinnedListing = capture.content()
 
 	return result, nil
+}
+
+type listingCapture struct {
+	members map[string][]json.RawMessage
+	seen    map[string]bool
+}
+
+func newListingCapture() *listingCapture {
+	return &listingCapture{
+		members: map[string][]json.RawMessage{},
+		seen:    map[string]bool{},
+	}
+}
+
+func (c *listingCapture) observe(method string, data []byte) []json.RawMessage {
+	member := map[string]string{
+		"tools/list":               "tools",
+		"resources/list":           "resources",
+		"resources/templates/list": "resourceTemplates",
+		"prompts/list":             "prompts",
+	}[method]
+	if member == "" {
+		return nil
+	}
+	var envelope struct {
+		Result map[string]json.RawMessage `json:"result"`
+	}
+	if json.Unmarshal(data, &envelope) != nil {
+		return nil
+	}
+	var entries []json.RawMessage
+	if json.Unmarshal(envelope.Result[member], &entries) != nil {
+		return nil
+	}
+	c.seen[member] = true
+	c.members[member] = append(c.members[member], entries...)
+	return entries
+}
+
+func (c *listingCapture) content() json.RawMessage {
+	if c == nil || len(c.seen) == 0 {
+		return nil
+	}
+	content := map[string][]json.RawMessage{}
+	for member := range c.seen {
+		content[member] = c.members[member]
+	}
+	data, err := json.Marshal(content)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // readResourcePooled reads a resource using a pooled session.

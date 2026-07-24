@@ -21,6 +21,27 @@ func TestSynthesizeInterface_RefusesLossyReflectionEmbed(t *testing.T) {
 	}
 }
 
+func TestSynthesizeInterface_EmbeddedProtoDoesNotRequireLocation(t *testing.T) {
+	const proto = `syntax = "proto3";
+package offline;
+service Offline { rpc Ping(Request) returns (Reply); }
+message Request {}
+message Reply {}
+`
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Content:     openbindings.TextContent(proto),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("offline synthesis: %v", err)
+	}
+	if _, ok := iface.Operations["Ping"]; !ok {
+		t.Fatalf("embedded proto did not produce Ping: %#v", iface.Operations)
+	}
+}
+
 // buildTestDiscovery creates a Discovery with the given services for testing.
 // Files are registered into a shared protoregistry so later files can resolve
 // dependencies declared by earlier ones.

@@ -3,6 +3,7 @@ package openbindings
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,10 @@ type FetchedInterface struct {
 	// Synthesized is true when the OBI was synthesized from a non-OBI
 	// source (e.g. an OpenAPI document) via a synthesizer.
 	Synthesized bool
+	// Coverage is present when synthesis produced durable coverage evidence.
+	// It is nil for an interface fetched directly or through well-known
+	// discovery, because no synthesis occurred in this call.
+	Coverage *SynthesisCoverage
 }
 
 // FetchOption configures FetchInterface.
@@ -93,16 +98,39 @@ func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*F
 	}
 
 	combined := CombineSynthesizers(o.synthesizers...)
+	coverageCombined, hasCoverage := combined.(CoverageSynthesizer)
 	for _, fi := range combined.BindingSpecs() {
-		iface, err := combined.SynthesizeInterface(ctx, &SynthesizeInput{
+		input := &SynthesizeInput{
 			Sources: []SynthesizeSource{{BindingSpec: fi.BindingSpec, Location: target}},
-		})
+		}
+		var result *SynthesizeResult
+		var err error
+		if hasCoverage {
+			result, err = coverageCombined.SynthesizeInterfaceWithCoverage(ctx, input)
+		} else {
+			err = ErrSynthesisCoverageUnsupported
+		}
+		if errors.Is(err, ErrSynthesisCoverageUnsupported) {
+			iface, fallbackErr := combined.SynthesizeInterface(ctx, input)
+			if fallbackErr != nil {
+				err = fallbackErr
+			} else if iface != nil && len(iface.Operations) > 0 {
+				return &FetchedInterface{Interface: iface, Synthesized: true}, nil
+			} else {
+				err = nil
+			}
+		}
 		if err != nil {
 			trail = append(trail, fmt.Sprintf("synthesize as %s: %v", fi.BindingSpec, err))
 			continue
 		}
-		if iface != nil && len(iface.Operations) > 0 {
-			return &FetchedInterface{Interface: iface, Synthesized: true}, nil
+		if result != nil && result.Interface != nil && len(result.Interface.Operations) > 0 {
+			coverage := result.Coverage
+			return &FetchedInterface{
+				Interface:   result.Interface,
+				Synthesized: true,
+				Coverage:    &coverage,
+			}, nil
 		}
 		trail = append(trail, fmt.Sprintf("synthesize as %s: no operations derived", fi.BindingSpec))
 	}

@@ -32,6 +32,8 @@ type Scenario struct {
 }
 
 type Expected struct {
+	Outcome    string            `json:"outcome"`
+	Rules      []string          `json:"rules,omitempty"`
 	Operations []string          `json:"operations"`
 	Bindings   []BindingIdentity `json:"bindings"`
 	Coverage   ExpectedCoverage  `json:"coverage"`
@@ -69,7 +71,7 @@ func Load(root, family string) (*File, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return nil, err
 	}
-	if file.Format != "openbindings.binding-spec-synthesis-scenarios@1" {
+	if file.Format != "openbindings.binding-spec-synthesis-scenarios@2" {
 		return nil, fmt.Errorf("%s: unsupported synthesis scenario format %q", family, file.Format)
 	}
 	if file.Family != family || len(file.Scenarios) == 0 {
@@ -89,6 +91,15 @@ func Verify(ctx context.Context, root, family string, synth openbindings.Coverag
 		result, err := synth.SynthesizeInterfaceWithCoverage(ctx, &openbindings.SynthesizeInput{
 			Sources: []openbindings.SynthesizeSource{scenario.Source},
 		})
+		if scenario.Expected.Outcome == "refused" {
+			if err == nil {
+				return fmt.Errorf("%s: synthesis succeeded; the corpus requires whole-source refusal", scenario.ID)
+			}
+			continue
+		}
+		if scenario.Expected.Outcome != "synthesized" {
+			return fmt.Errorf("%s: unsupported expected outcome %q", scenario.ID, scenario.Expected.Outcome)
+		}
 		if err != nil {
 			return fmt.Errorf("%s: synthesis failed: %w", scenario.ID, err)
 		}
@@ -104,6 +115,7 @@ func Match(s Scenario, result *openbindings.SynthesizeResult) error {
 		return fmt.Errorf("%s: synthesizer returned no interface", s.ID)
 	}
 	got := Expected{
+		Outcome:    "synthesized",
 		Operations: operationKeys(result.Interface),
 		Bindings:   bindingIdentities(result.Interface),
 		Coverage: ExpectedCoverage{
@@ -162,6 +174,7 @@ func coverageEntries(entries []openbindings.SynthesisCoverageEntry) []CoverageEn
 
 func normalizedExpected(in Expected) Expected {
 	out := in
+	out.Rules = nil
 	out.Operations = append([]string{}, in.Operations...)
 	sort.Strings(out.Operations)
 	out.Bindings = append([]BindingIdentity{}, in.Bindings...)
