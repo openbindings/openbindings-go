@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -22,19 +23,26 @@ func TestMain(m *testing.M) {
 	// Build the test CLI binary.
 	tmp, err := os.MkdirTemp("", "usage-go-test-*")
 	if err != nil {
-		panic(err)
+		fmt.Fprintln(os.Stderr, "usage test setup: create temporary directory:", err)
+		os.Exit(1)
 	}
-	defer os.RemoveAll(tmp)
 
 	bin := filepath.Join(tmp, "testcli")
 	cmd := exec.Command("go", "build", "-o", bin, "./testdata/testcli")
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		panic("failed to build testcli: " + err.Error())
+		fmt.Fprintln(os.Stderr, "usage test setup: build testcli:", err)
+		_ = os.RemoveAll(tmp)
+		os.Exit(1)
 	}
 	testBinary = bin
 
-	os.Exit(m.Run())
+	code := m.Run()
+	if err := os.RemoveAll(tmp); err != nil && code == 0 {
+		fmt.Fprintln(os.Stderr, "usage test teardown: remove temporary directory:", err)
+		code = 1
+	}
+	os.Exit(code)
 }
 
 // testSpecKDL returns the usage-spec KDL text for the test CLI binary — the

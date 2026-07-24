@@ -1,7 +1,7 @@
 # Releasing openbindings-go
 
 This is a Go multi-module monorepo: the core SDK at the repository root plus
-nine sub-modules under `formats/`. Each module versions and tags
+eight active sub-modules under `formats/`. Each module versions and tags
 independently.
 
 **Upstream tag prerequisites:** none outside this repository — the SDK
@@ -28,6 +28,17 @@ Push each tag as it is cut: the pre-tag check below resolves against
 locally — before any format module is tagged.
 
 `pkg.go.dev` auto-discovers pushed tags; there is no publish step.
+
+After the core and all eight format tags are public, run the external-consumer
+gate:
+
+```bash
+scripts/verify-published-release.sh vX.Y.Z
+```
+
+It disables every local workspace, resolves each module through the public Go
+module path, and compiles a fresh consumer importing the core plus all format
+packages. A release is incomplete until this passes.
 
 ## Tag ordering (normative)
 

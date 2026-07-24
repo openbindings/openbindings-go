@@ -6,6 +6,12 @@ OpenBindings is an open standard: one interface, limitless bindings. An OBI (Ope
 
 **Spec version:** implements OpenBindings 0.2. To ask whether this SDK will accept a document of a given version, call `openbindings.IsSupportedVersion(version)` — the OBI-T-04 acceptance oracle: it returns true exactly when `Validate` / `ParseDocument` would process (not refuse) that version, so it is patch-lenient within a supported minor line (a 0.2.0 SDK accepts 0.2.1, 0.2.99, …) and refuses a different major, a pre-1.0 different minor, and unsupported prereleases. `openbindings.MinSupportedVersion` / `openbindings.MaxTestedVersion` / `openbindings.SupportedRange()` are a distinct, narrower notion — the maintainer-*tested* range — and a version can be accepted without falling inside it.
 
+> **Draft status:** this branch implements the unreleased 0.2 working draft.
+> The module manifests intentionally require `v0.2.0`, which does not exist
+> until the coordinated release is cut. The install commands below describe
+> the released package path; they do not install this branch today. Use the
+> source-workspace instructions to evaluate 0.2 before release.
+
 **Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through OBI-D-12 and OBI-D-16 through OBI-D-18, plus the OBI-T-04 version-refusal rule. OBI-D-13 and the binding-specification-defined address cases of OBI-D-05 require knowledge of the exact governing binding specification; a core-only validator leaves those conclusions unverified rather than claiming conformity or non-conformity, per [§10.5](https://github.com/openbindings/spec/blob/main/openbindings.md#105-verification-conclusions). OBI-D-14 and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and OBI-D-17 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema); the core schema and locally required JSON Schema 2020-12 meta-schemas are embedded at build time. To exercise the core conformance corpus, check out the spec repo alongside this one (at `../spec`, or `./spec` inside the repo) and run `go test ./...` from the root module.
 
 The cross-SDK equivalence policy and corresponding public names are recorded
@@ -41,6 +47,8 @@ The [`ob` CLI](https://github.com/openbindings/ob) is built on this SDK but live
 
 ## Install
 
+After 0.2 is released:
+
 Just the core SDK:
 
 ```
@@ -62,6 +70,12 @@ brew install --cask openbindings/tap/ob
 # or
 go install github.com/openbindings/ob/cmd/ob@latest
 ```
+
+To evaluate the 0.2 draft, clone this repository and create the local
+multi-module workspace described in
+[`CONTRIBUTING.md`](CONTRIBUTING.md#working-on-this-repo). Clone `spec` and
+`interfaces` alongside it to run the required conformance corpora. Do not add
+draft-only `replace` directives to an application intended for release.
 
 ## What this SDK does
 

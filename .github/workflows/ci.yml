@@ -72,3 +72,11 @@ jobs:
           OB_SPEC_CORPUS: ${{ github.workspace }}/spec/conformance
           OB_INTERFACES_CORPUS: ${{ matrix.module == '.' && format('{0}/interfaces/conformance', github.workspace) || '' }}
           OB_CORPUS_REQUIRED: "1"
+
+      - name: Stress accepted-output versus terminal race
+        if: matrix.module == '.'
+        # This regression is probabilistic by construction. Keep a dedicated
+        # Linux race-detector lane with substantially more schedules than the
+        # ordinary suite so an accepted EmitOutput can never silently vanish
+        # behind a racing terminal transition.
+        run: go test -race -run '^TestAcceptedEmitNeverLostUnderRacingTerminal$' -count=10 .
