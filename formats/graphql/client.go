@@ -3,14 +3,14 @@ package graphql
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
-	"sort"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 	openbindings "github.com/openbindings/openbindings-go"
@@ -84,15 +84,15 @@ func (s *introspectionSchema) typeMap() map[string]*fullType {
 // rootTypeName returns the actual type name for a root operation type.
 func (s *introspectionSchema) rootTypeName(rootType string) string {
 	switch rootType {
-	case "Query":
+	case "query":
 		if s.QueryType != nil {
 			return s.QueryType.Name
 		}
-	case "Mutation":
+	case "mutation":
 		if s.MutationType != nil {
 			return s.MutationType.Name
 		}
-	case "Subscription":
+	case "subscription":
 		if s.SubscriptionType != nil {
 			return s.SubscriptionType.Name
 		}
@@ -113,18 +113,24 @@ func discover(ctx context.Context, client *http.Client, endpointURL string, head
 func introspect(ctx context.Context, client *http.Client, endpointURL string, headers map[string]string) (*introspectionSchema, error) {
 	// Discovery lane: an artifact-side introspection fetch, not a delivery
 	// unit — it stays at the fixed default rather than any consumer bound.
-	data, _, errors, err := doGraphQLHTTP(ctx, client, endpointURL, introspectionQuery, nil, headers, openbindings.DefaultMaxDeliveryUnitBytes)
+	result, err := doGraphQLHTTP(ctx, client, endpointURL, introspectionQuery, "", nil, headers, openbindings.DefaultMaxDeliveryUnitBytes)
 	if err != nil {
 		return nil, fmt.Errorf("introspection: %w", err)
 	}
-	if len(errors) > 0 {
+	if rawErrors, present := result.Body["errors"]; present {
+		var errors []graphqlError
+		raw, _ := json.Marshal(rawErrors)
+		_ = json.Unmarshal(raw, &errors)
 		msgs := make([]string, len(errors))
-		for i, e := range errors {
-			msgs[i] = e.Message
+		for i, item := range errors {
+			msgs[i] = item.Message
 		}
 		return nil, fmt.Errorf("introspection errors: %s", strings.Join(msgs, "; "))
 	}
-
+	data, ok := result.Body["data"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("introspection response missing object data")
+	}
 	schemaData, ok := data["__schema"]
 	if !ok {
 		return nil, fmt.Errorf("introspection response missing __schema field")
@@ -140,36 +146,44 @@ func introspect(ctx context.Context, client *http.Client, endpointURL string, he
 	return &schema, nil
 }
 
-// doGraphQLHTTP sends a GraphQL query over HTTP POST and returns the parsed
-// data and errors from the response. maxBytes bounds the response body — for
-// the invocation lane it is the resolved delivery-unit bound
-// (BindingInvocationArgs.DeliveryUnitLimit); the discovery lane passes the
-// fixed default.
-func doGraphQLHTTP(ctx context.Context, client *http.Client, endpointURL, query string, variables map[string]any, headers map[string]string, maxBytes int64) (map[string]any, http.Header, []graphqlError, error) {
+type graphQLHTTPResult struct {
+	Body       map[string]any
+	Header     http.Header
+	StatusCode int
+	MediaType  string
+}
+
+// doGraphQLHTTP sends one GraphQL-over-HTTP POST and classifies the final
+// response using the incorporated media-type/status rules. A well-formed
+// application/graphql-response+json envelope is returned regardless of
+// status; application/json is returned only for a 2xx response.
+func doGraphQLHTTP(ctx context.Context, client *http.Client, endpointURL, query, operationName string, variables map[string]any, headers map[string]string, maxBytes int64) (*graphQLHTTPResult, error) {
 	body := map[string]any{"query": query}
+	if operationName != "" {
+		body["operationName"] = operationName
+	}
 	if variables != nil {
 		body["variables"] = variables
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("marshal request: %w", err)
+		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(raw))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "application/graphql-response+json, application/json;q=0.9")
 	for k, v := range headers {
-		if req.Header.Get(k) == "" {
-			req.Header.Set(k, v)
-		}
+		req.Header.Set(k, v)
 	}
 
-	resp, err := client.Do(req)
+	dispatchClient := clientWithGraphQLRedirectPolicy(client, raw)
+	resp, err := dispatchClient.Do(req)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("http request: %w", err)
+		return nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -177,32 +191,100 @@ func doGraphQLHTTP(ctx context.Context, client *http.Client, endpointURL, query 
 	// one (parity with openapi/connect).
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
-		return nil, resp.Header, nil, fmt.Errorf("read response: %w", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if int64(len(respBody)) > maxBytes {
-		return nil, resp.Header, nil, fmt.Errorf("response exceeds %d byte limit", maxBytes)
+		return nil, fmt.Errorf("response exceeds %d byte limit", maxBytes)
 	}
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, resp.Header, nil, &httpError{StatusCode: resp.StatusCode, Body: string(respBody)}
+	mediaType, _, mediaErr := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if mediaErr != nil {
+		return nil, fmt.Errorf("invalid GraphQL response Content-Type: %w", mediaErr)
 	}
-
-	// GraphQL-over-HTTP responses are legitimately any 2xx (a 201, for
-	// instance, from a server that treats mutations as resource creation at
-	// the transport level); only the envelope's `errors` array — checked
-	// below by the caller — decides success (TS parity).
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp.Header, nil, &httpError{StatusCode: resp.StatusCode, Body: string(respBody)}
+	mediaType = strings.ToLower(mediaType)
+	if mediaType != "application/graphql-response+json" && mediaType != "application/json" {
+		return nil, fmt.Errorf("unsupported GraphQL response media type %q", mediaType)
 	}
-
-	var result struct {
-		Data   map[string]any `json:"data"`
-		Errors []graphqlError `json:"errors"`
+	if mediaType == "application/json" && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+		return nil, &httpError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
+	var result any
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, resp.Header, nil, fmt.Errorf("parse response: %w", err)
+		return nil, fmt.Errorf("parse GraphQL response: %w", err)
 	}
-	return result.Data, resp.Header, result.Errors, nil
+	envelope, ok := result.(map[string]any)
+	if !ok || !wellFormedGraphQLResponse(envelope) {
+		return nil, fmt.Errorf("response is not a well-formed GraphQL response envelope")
+	}
+	return &graphQLHTTPResult{Body: envelope, Header: resp.Header, StatusCode: resp.StatusCode, MediaType: mediaType}, nil
+}
+
+func clientWithGraphQLRedirectPolicy(client *http.Client, body []byte) *http.Client {
+	clone := *client
+	prior := client.CheckRedirect
+	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.Method != http.MethodPost {
+			return http.ErrUseLastResponse
+		}
+		if req.Header.Get("Content-Type") != "application/json" ||
+			req.Header.Get("Accept") != "application/graphql-response+json, application/json;q=0.9" {
+			return http.ErrUseLastResponse
+		}
+		if req.GetBody == nil {
+			return http.ErrUseLastResponse
+		}
+		replay, err := req.GetBody()
+		if err != nil {
+			return http.ErrUseLastResponse
+		}
+		replayed, err := io.ReadAll(replay)
+		_ = replay.Close()
+		if err != nil || !bytes.Equal(replayed, body) {
+			return http.ErrUseLastResponse
+		}
+		if prior != nil {
+			return prior(req, via)
+		}
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		return nil
+	}
+	return &clone
+}
+
+func wellFormedGraphQLResponse(envelope map[string]any) bool {
+	data, hasData := envelope["data"]
+	errorsValue, hasErrors := envelope["errors"]
+	if !hasData && !hasErrors {
+		return false
+	}
+	if hasData && data != nil {
+		if _, ok := data.(map[string]any); !ok {
+			return false
+		}
+	}
+	if hasErrors {
+		errors, ok := errorsValue.([]any)
+		if !ok || len(errors) == 0 {
+			return false
+		}
+		for _, raw := range errors {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				return false
+			}
+			if message, ok := item["message"].(string); !ok || message == "" {
+				return false
+			}
+		}
+	}
+	if extensions, present := envelope["extensions"]; present && extensions != nil {
+		if _, ok := extensions.(map[string]any); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 type httpError struct {
@@ -219,31 +301,34 @@ func (e *httpError) Error() string {
 // is emitted as one output, a `complete` closes the output side, and an
 // `error`/transport failure fires a terminal error. The dial/handshake run
 // under ctx so a cancelled invocation tears the connection down.
-func streamSubscription(ctx context.Context, client *http.Client, endpointURL, query string, variables map[string]any, headers map[string]string, maxUnit int64, inv openbindings.BindingHandle[any, any]) {
-	wsURL := httpToWS(endpointURL)
-
-	wsHeaders := http.Header{}
-	for k, v := range headers {
-		wsHeaders.Set(k, v)
-	}
-
-	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+func streamSubscription(ctx context.Context, client *http.Client, target string, document *documentConfiguration, variables map[string]any, headers http.Header, initPayload any, initPayloadSet bool, maxUnit int64, inv openbindings.BindingHandle[any, any]) {
+	conn, _, err := websocket.Dial(ctx, target, &websocket.DialOptions{
 		Subprotocols: []string{"graphql-transport-ws"},
-		HTTPHeader:   wsHeaders,
+		HTTPHeader:   headers,
 		HTTPClient:   client,
 	})
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("websocket dial: %v", err)})
 		return
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	subscribed := false
+	defer func() {
+		if subscribed && ctx.Err() != nil {
+			sendSubscriptionComplete(conn)
+		}
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+	}()
 	// One WebSocket message is one delivery unit: apply the resolved bound
 	// as the per-message read limit (the library default is ~32 KiB — far
 	// below the documented 10 MiB convention). An over-limit message errors
 	// the read below and surfaces as ERR_STREAM_ERROR.
 	conn.SetReadLimit(maxUnit)
 
-	if err := writeJSON(ctx, conn, map[string]any{"type": "connection_init"}); err != nil {
+	init := map[string]any{"type": "connection_init"}
+	if initPayloadSet {
+		init["payload"] = initPayload
+	}
+	if err := writeJSON(ctx, conn, init); err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("connection_init: %v", err)})
 		return
 	}
@@ -260,7 +345,10 @@ func streamSubscription(ctx context.Context, client *http.Client, endpointURL, q
 		return
 	}
 
-	payload := map[string]any{"query": query}
+	payload := map[string]any{"query": document.Source}
+	if document.OperationName != "" {
+		payload["operationName"] = document.OperationName
+	}
 	if variables != nil {
 		payload["variables"] = variables
 	}
@@ -272,6 +360,7 @@ func streamSubscription(ctx context.Context, client *http.Client, endpointURL, q
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("subscribe: %v", err)})
 		return
 	}
+	subscribed = true
 
 	for {
 		_, raw, err := conn.Read(ctx)
@@ -302,23 +391,17 @@ func streamSubscription(ctx context.Context, client *http.Client, endpointURL, q
 
 		switch msg.Type {
 		case "next":
-			var payload struct {
-				Data   any            `json:"data"`
-				Errors []graphqlError `json:"errors"`
-			}
+			var payload any
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: fmt.Sprintf("parse next payload: %v", err)})
 				return
 			}
-			if len(payload.Errors) > 0 {
-				inv.FireError(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeExecutionFailed,
-					Message: payload.Errors[0].Message,
-					Details: map[string]any{"errors": payload.Errors},
-				})
+			envelope, ok := payload.(map[string]any)
+			if !ok || !wellFormedGraphQLResponse(envelope) {
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: "next payload is not a well-formed GraphQL response envelope"})
 				return
 			}
-			if err := inv.EmitOutput(payload.Data); err != nil {
+			if err := inv.EmitOutput(envelope); err != nil {
 				return // invocation terminated; stop reading
 			}
 
@@ -373,53 +456,10 @@ func expectMessage(ctx context.Context, conn *websocket.Conn, expectedType strin
 	return nil
 }
 
-func httpToWS(u string) string {
-	if strings.HasPrefix(u, "https://") {
-		return "wss://" + strings.TrimPrefix(u, "https://")
-	}
-	if strings.HasPrefix(u, "http://") {
-		return "ws://" + strings.TrimPrefix(u, "http://")
-	}
-	return u
-}
-
-// buildHTTPHeaders constructs HTTP headers from binding context and execution options.
-// Returns nil when there are no headers to set (matches the convention used by
-// other binding format libraries to avoid sending an empty map downstream).
-func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
-	var headers map[string]string
-	set := func(k, v string) {
-		if headers == nil {
-			headers = map[string]string{}
-		}
-		headers[k] = v
-	}
-
-	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
-		set("Authorization", "Bearer "+token)
-	} else if key := openbindings.ContextAPIKey(bindCtx); key != "" {
-		set("Authorization", "ApiKey "+key)
-	} else if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
-		set("Authorization", "Basic "+basicAuth(u, p))
-	}
-
-	for k, v := range openbindings.ContextHeaders(bindCtx) {
-		set(k, v)
-	}
-	if cookies := openbindings.ContextCookies(bindCtx); len(cookies) > 0 {
-		pairs := make([]string, 0, len(cookies))
-		for k, v := range cookies {
-			pairs = append(pairs, k+"="+v)
-		}
-		sort.Strings(pairs)
-		set("Cookie", strings.Join(pairs, "; "))
-	}
-
-	return headers
-}
-
-func basicAuth(username, password string) string {
-	return base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+func sendSubscriptionComplete(conn *websocket.Conn) {
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	_ = writeJSON(ctx, conn, map[string]any{"id": "1", "type": "complete"})
 }
 
 const introspectionQuery = `query IntrospectionQuery {

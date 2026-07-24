@@ -1,333 +1,108 @@
 package graphql
 
 import (
-	"strings"
+	"context"
+	"encoding/json"
+	"reflect"
+	"sort"
 	"testing"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestScalarToJSONSchema(t *testing.T) {
-	tests := []struct {
-		name     string
-		scalar   string
-		wantType string
-	}{
-		{"String", "String", "string"},
-		{"ID", "ID", "string"},
-		{"Int", "Int", "integer"},
-		{"Float", "Float", "number"},
-		{"Boolean", "Boolean", "boolean"},
-		{"custom", "DateTime", "string"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := scalarToJSONSchema(tt.scalar)
-			if got["type"] != tt.wantType {
-				t.Errorf("scalarToJSONSchema(%q) type = %v, want %v", tt.scalar, got["type"], tt.wantType)
-			}
-		})
-	}
-}
-
-func TestGraphqlTypeToJSONSchemaEnum(t *testing.T) {
-	tm := map[string]*fullType{
-		"Status": {
-			Kind: "ENUM",
-			Name: "Status",
-			EnumValues: []enumValue{
-				{Name: "ACTIVE"},
-				{Name: "INACTIVE"},
-			},
-		},
-	}
-	got := graphqlTypeToJSONSchema(typeRef{Kind: "ENUM", Name: "Status"}, tm, make(map[string]bool))
-	if got["type"] != "string" {
-		t.Errorf("enum type = %v, want string", got["type"])
-	}
-	vals, ok := got["enum"].([]any)
-	if !ok || len(vals) != 2 {
-		t.Errorf("enum values = %v", got["enum"])
-	}
-}
-
-func TestGraphqlTypeToJSONSchemaList(t *testing.T) {
-	tm := map[string]*fullType{}
-	got := graphqlTypeToJSONSchema(typeRef{
-		Kind:   "LIST",
-		OfType: &typeRef{Kind: "SCALAR", Name: "String"},
-	}, tm, make(map[string]bool))
-	if got["type"] != "array" {
-		t.Errorf("list type = %v, want array", got["type"])
-	}
-	items, ok := got["items"].(map[string]any)
-	if !ok || items["type"] != "string" {
-		t.Errorf("list items = %v", got["items"])
-	}
-}
-
-func TestGraphqlTypeToJSONSchemaObjectCycle(t *testing.T) {
-	tm := map[string]*fullType{
-		"Node": {
-			Kind: "OBJECT",
-			Name: "Node",
-			Fields: []field{
-				{Name: "id", Type: typeRef{Kind: "SCALAR", Name: "ID"}},
-				{Name: "parent", Type: typeRef{Kind: "OBJECT", Name: "Node"}},
-			},
-		},
-	}
-	got := graphqlTypeToJSONSchema(typeRef{Kind: "OBJECT", Name: "Node"}, tm, make(map[string]bool))
-	if got["type"] != "object" {
-		t.Errorf("cycle type = %v, want object", got["type"])
-	}
-	props, ok := got["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("expected properties")
-	}
-	parent, ok := props["parent"].(map[string]any)
-	if !ok {
-		t.Fatal("expected parent property")
-	}
-	// Cyclic reference should be a bare object with no properties.
-	if parent["type"] != "object" {
-		t.Errorf("cyclic parent type = %v, want object", parent["type"])
-	}
-	if _, hasProps := parent["properties"]; hasProps {
-		t.Error("cyclic parent should not have properties")
-	}
-}
-
-func TestGraphqlTypeToJSONSchemaUnion(t *testing.T) {
-	tm := map[string]*fullType{
-		"Result": {
-			Kind: "UNION",
-			Name: "Result",
-			PossibleTypes: []typeRef{
-				{Name: "TypeA"},
-				{Name: "TypeB"},
-			},
-		},
-		"TypeA": {
-			Kind: "OBJECT",
-			Name: "TypeA",
-			Fields: []field{
-				{Name: "a", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-			},
-		},
-		"TypeB": {
-			Kind: "OBJECT",
-			Name: "TypeB",
-			Fields: []field{
-				{Name: "b", Type: typeRef{Kind: "SCALAR", Name: "Int"}},
-			},
-		},
-	}
-	got := graphqlTypeToJSONSchema(typeRef{Kind: "UNION", Name: "Result"}, tm, make(map[string]bool))
-	oneOf, ok := got["oneOf"].([]any)
-	if !ok || len(oneOf) != 2 {
-		t.Errorf("union oneOf = %v", got["oneOf"])
-	}
-}
-
-func TestGraphqlTypeToJSONSchemaInputObject(t *testing.T) {
-	tm := map[string]*fullType{
-		"CreateUserInput": {
-			Kind: "INPUT_OBJECT",
-			Name: "CreateUserInput",
-			InputFields: []inputValue{
-				{Name: "name", Type: typeRef{Kind: "NON_NULL", OfType: &typeRef{Kind: "SCALAR", Name: "String"}}},
-				{Name: "email", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-			},
-		},
-	}
-	got := graphqlTypeToJSONSchema(typeRef{Kind: "INPUT_OBJECT", Name: "CreateUserInput"}, tm, make(map[string]bool))
-	if got["type"] != "object" {
-		t.Errorf("input object type = %v, want object", got["type"])
-	}
-	props := got["properties"].(map[string]any)
-	if len(props) != 2 {
-		t.Errorf("expected 2 properties, got %d", len(props))
-	}
-	req := got["required"].([]any)
-	if len(req) != 1 || req[0] != "name" {
-		t.Errorf("required = %v, want [name]", req)
-	}
-}
-
-func TestConvertToInterface(t *testing.T) {
-	schema := &introspectionSchema{
-		QueryType:    &typeRef{Name: "Query"},
-		MutationType: &typeRef{Name: "Mutation"},
+func synthesisSchema() *introspectionSchema {
+	return &introspectionSchema{
+		QueryType:        &typeRef{Kind: "OBJECT", Name: "ReadRoot"},
+		MutationType:     &typeRef{Kind: "OBJECT", Name: "WriteRoot"},
+		SubscriptionType: &typeRef{Kind: "OBJECT", Name: "StreamRoot"},
 		Types: []fullType{
-			{
-				Kind: "OBJECT",
-				Name: "Query",
-				Fields: []field{
-					{
-						Name:        "users",
-						Description: "List all users",
-						Type:        typeRef{Kind: "LIST", OfType: &typeRef{Kind: "OBJECT", Name: "User"}},
-					},
-				},
-			},
-			{
-				Kind: "OBJECT",
-				Name: "Mutation",
-				Fields: []field{
-					{
-						Name:         "deleteUser",
-						Description:  "Delete a user",
-						IsDeprecated: true,
-						Args: []inputValue{
-							{Name: "id", Type: typeRef{Kind: "NON_NULL", OfType: &typeRef{Kind: "SCALAR", Name: "ID"}}},
-						},
-						Type: typeRef{Kind: "SCALAR", Name: "Boolean"},
-					},
-				},
-			},
-			{
-				Kind: "OBJECT",
-				Name: "User",
-				Fields: []field{
-					{Name: "id", Type: typeRef{Kind: "SCALAR", Name: "ID"}},
-					{Name: "name", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-				},
-			},
+			{Kind: "OBJECT", Name: "ReadRoot", Fields: []field{
+				{Name: "status", Type: typeRef{Kind: "SCALAR", Name: "String"}},
+				{Name: "viewer", Description: "Current viewer", Type: typeRef{Kind: "OBJECT", Name: "User"}},
+			}},
+			{Kind: "OBJECT", Name: "WriteRoot", Fields: []field{{Name: "status", Type: typeRef{Kind: "SCALAR", Name: "String"}}}},
+			{Kind: "OBJECT", Name: "StreamRoot", Fields: []field{{Name: "status", Type: typeRef{Kind: "SCALAR", Name: "String"}}}},
+			{Kind: "OBJECT", Name: "User"},
+			{Kind: "SCALAR", Name: "String"},
 		},
-	}
-
-	iface, err := convertToInterface(schema, "https://api.example.com/graphql")
-	if err != nil {
-		t.Fatalf("convertToInterface() error = %v", err)
-	}
-
-	if len(iface.Operations) != 2 {
-		t.Fatalf("expected 2 operations, got %d", len(iface.Operations))
-	}
-
-	usersOp, ok := iface.Operations["users"]
-	if !ok {
-		t.Fatal("missing users operation")
-	}
-	if usersOp.Description != "List all users" {
-		t.Errorf("users description = %q", usersOp.Description)
-	}
-
-	deleteOp, ok := iface.Operations["deleteUser"]
-	if !ok {
-		t.Fatal("missing deleteUser operation")
-	}
-	if !deleteOp.Deprecated {
-		t.Error("deleteUser should be deprecated")
-	}
-	if deleteOp.Input == nil {
-		t.Error("deleteUser should have input schema")
-	}
-
-	if len(iface.Bindings) != 2 {
-		t.Fatalf("expected 2 bindings, got %d", len(iface.Bindings))
-	}
-
-	usersBinding := iface.Bindings["users.graphql"]
-	if usersBinding.Ref != "Query/users" {
-		t.Errorf("users binding ref = %q, want %q", usersBinding.Ref, "Query/users")
-	}
-
-	deleteBinding := iface.Bindings["deleteUser.graphql"]
-	if deleteBinding.Ref != "Mutation/deleteUser" {
-		t.Errorf("deleteUser binding ref = %q, want %q", deleteBinding.Ref, "Mutation/deleteUser")
-	}
-
-	src := iface.Sources[DefaultSourceName]
-	if src.BindingSpec != BindingSpec {
-		t.Errorf("source format = %q, want %q", src.BindingSpec, BindingSpec)
-	}
-	if src.Location != "https://api.example.com/graphql" {
-		t.Errorf("source location = %q", src.Location)
 	}
 }
 
-func TestConvertToInterfaceGeneratesQueryConst(t *testing.T) {
-	schema := &introspectionSchema{
-		QueryType: &typeRef{Name: "Query"},
-		Types: []fullType{
-			{
-				Kind: "OBJECT",
-				Name: "Query",
-				Fields: []field{
-					{
-						Name: "user",
-						Args: []inputValue{
-							{Name: "id", Type: typeRef{Kind: "NON_NULL", OfType: &typeRef{Kind: "SCALAR", Name: "ID"}}},
-						},
-						Type: typeRef{Kind: "OBJECT", Name: "User"},
-					},
-				},
-			},
-			{
-				Kind: "OBJECT",
-				Name: "User",
-				Fields: []field{
-					{Name: "id", Type: typeRef{Kind: "SCALAR", Name: "ID"}},
-					{Name: "name", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-				},
-			},
-		},
-	}
-
-	iface, err := convertToInterface(schema, "https://api.example.com/graphql")
+func TestConvertToInterfaceInventoriesRootFields(t *testing.T) {
+	iface, err := convertToInterface(synthesisSchema(), "https://api.example.test/graphql")
 	if err != nil {
-		t.Fatalf("convertToInterface() error = %v", err)
+		t.Fatal(err)
 	}
-
-	op := iface.Operations["user"]
-	if op.Input == nil {
-		t.Fatal("expected input schema")
+	keys := make([]string, 0, len(iface.Operations))
+	for key := range iface.Operations {
+		keys = append(keys, key)
 	}
-	props, ok := op.Input.(map[string]any)["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("expected properties in input schema")
+	sort.Strings(keys)
+	wantKeys := []string{"mutation_status", "status", "subscription_status", "viewer"}
+	if !reflect.DeepEqual(keys, wantKeys) {
+		t.Fatalf("operation keys = %#v, want %#v", keys, wantKeys)
 	}
-	queryProp, ok := props["_query"].(map[string]any)
-	if !ok {
-		t.Fatal("expected _query property in input schema")
+	var refs []string
+	for _, binding := range iface.Bindings {
+		refs = append(refs, binding.Ref)
 	}
-	constVal, ok := queryProp["const"].(string)
-	if !ok || constVal == "" {
-		t.Fatal("expected _query const value")
+	sort.Strings(refs)
+	wantRefs := []string{"mutation/status", "query/status", "query/viewer", "subscription/status"}
+	if !reflect.DeepEqual(refs, wantRefs) {
+		t.Fatalf("refs = %#v, want %#v", refs, wantRefs)
 	}
-	// The const should be a valid query with variable declarations and selection set.
-	if !strings.Contains(constVal, "$id: ID!") {
-		t.Errorf("_query const should contain variable declaration, got %q", constVal)
-	}
-	if !strings.Contains(constVal, "{ id name }") {
-		t.Errorf("_query const should contain selection set, got %q", constVal)
+	source := iface.Sources[DefaultSourceName]
+	if source.BindingSpec != BindingSpec {
+		t.Fatalf("bindingSpec = %q", source.BindingSpec)
 	}
 }
 
-func TestArgsToInputSchema(t *testing.T) {
-	tm := map[string]*fullType{}
-	args := []inputValue{
-		{Name: "id", Description: "User ID", Type: typeRef{Kind: "NON_NULL", OfType: &typeRef{Kind: "SCALAR", Name: "ID"}}},
-		{Name: "name", Type: typeRef{Kind: "SCALAR", Name: "String"}},
+func TestSynthesisUsesBroadBoundarySchemas(t *testing.T) {
+	iface, _ := convertToInterface(synthesisSchema(), "")
+	op := iface.Operations["viewer"]
+	if !reflect.DeepEqual(op.Input, map[string]any{"type": "object"}) {
+		t.Fatalf("input = %#v", op.Input)
 	}
-
-	schema := argsToInputSchema(args, tm)
-	if schema["type"] != "object" {
-		t.Errorf("type = %v, want object", schema["type"])
+	raw, _ := json.Marshal(op)
+	if string(raw) == "" || containsJSONText(raw, "_query") || containsJSONText(raw, `"viewer"`) {
+		t.Fatalf("operation invents document projection: %s", raw)
 	}
-
-	props := schema["properties"].(map[string]any)
-	if len(props) != 2 {
-		t.Errorf("expected 2 properties, got %d", len(props))
+	output := op.Output.(map[string]any)
+	if output["type"] != "object" {
+		t.Fatalf("output = %#v", output)
 	}
+}
 
-	idProp := props["id"].(map[string]any)
-	if idProp["description"] != "User ID" {
-		t.Errorf("id description = %v", idProp["description"])
+func containsJSONText(raw []byte, value string) bool {
+	for i := 0; i+len(value) <= len(raw); i++ {
+		if string(raw[i:i+len(value)]) == value {
+			return true
+		}
 	}
+	return false
+}
 
-	req := schema["required"].([]any)
-	if len(req) != 1 || req[0] != "id" {
-		t.Errorf("required = %v, want [id]", req)
+func TestSynthesisCoverageIsExhaustive(t *testing.T) {
+	content, _ := json.Marshal(map[string]any{"data": map[string]any{"__schema": synthesisSchema()}})
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Location:    "https://api.example.test/graphql",
+			Content:     content,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Coverage.Exhaustive || !result.Coverage.FullyRepresented || len(result.Coverage.Entries) != 4 {
+		t.Fatalf("coverage = %#v", result.Coverage)
+	}
+	for _, entry := range result.Coverage.Entries {
+		if len(entry.Requirements) == 0 || entry.Requirements[0] != "document" {
+			t.Fatalf("requirements = %#v", entry.Requirements)
+		}
+		if entry.SourceRef == "subscription/status" && !reflect.DeepEqual(entry.Requirements, []string{"document", "subscriptionTarget"}) {
+			t.Fatalf("subscription requirements = %#v", entry.Requirements)
+		}
 	}
 }

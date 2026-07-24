@@ -7,7 +7,11 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// convertToInterface converts a GraphQL introspection schema to an OpenBindings interface.
+// convertToInterface inventories every declared root field. The operation
+// schemas intentionally describe only the stable OpenBindings boundary:
+// caller input is an optional variables object and output is a complete
+// GraphQL response envelope. An executable document is runtime
+// configuration, never synthesized from introspection.
 func convertToInterface(schema *introspectionSchema, sourceLocation string) (openbindings.Interface, error) {
 	sourceEntry := openbindings.Source{
 		BindingSpec: BindingSpec,
@@ -33,9 +37,9 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string) (ope
 		label    string
 		typeName string
 	}{
-		{"Query", schema.rootTypeName("Query")},
-		{"Mutation", schema.rootTypeName("Mutation")},
-		{"Subscription", schema.rootTypeName("Subscription")},
+		{"query", schema.rootTypeName("query")},
+		{"mutation", schema.rootTypeName("mutation")},
+		{"subscription", schema.rootTypeName("subscription")},
 	}
 
 	for _, rt := range rootTypes {
@@ -71,18 +75,8 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string) (ope
 				op.Deprecated = true
 			}
 
-			// Build the full GraphQL query at creation time.
-			queryStr, _, _ := buildQueryFromIntrospection(schema, rt.label, f.Name, nil)
-
-			// Build input schema from field arguments, with the pre-built
-			// query embedded as a const property.
-			op.Input = argsToInputSchemaWithQuery(f.Args, tm, queryStr)
-
-			// Build output schema from return type.
-			returnTypeName := unwrapTypeName(f.Type)
-			if returnTypeName != "" {
-				op.Output = graphqlTypeToJSONSchema(f.Type, tm, make(map[string]bool))
-			}
+			op.Input = map[string]any{"type": "object"}
+			op.Output = graphQLResponseSchema()
 
 			iface.Operations[opKey] = op
 
@@ -95,236 +89,24 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string) (ope
 		}
 	}
 
-	// GraphQL introspection does not expose security metadata, so we
-	// leave the security section empty. If the server requires auth, a 401
-	// surfaces as a terminal ERR_AUTH_REQUIRED; credentials must be
-	// supplied via the binding context up front.
-
 	return iface, nil
 }
 
-// argsToInputSchemaWithQuery converts field arguments to a JSON Schema and
-// embeds the pre-built GraphQL query as a _query const property.
-func argsToInputSchemaWithQuery(args []inputValue, tm map[string]*fullType, queryStr string) map[string]any {
-	schema := argsToInputSchema(args, tm)
-	if queryStr == "" {
-		return schema
-	}
-	// Ensure properties map exists.
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		props = map[string]any{}
-		schema["properties"] = props
-	}
-	props[queryFieldName] = map[string]any{
-		"type":  "string",
-		"const": queryStr,
-	}
-	return schema
-}
-
-// argsToInputSchema converts a list of GraphQL field arguments to a JSON Schema
-// describing the operation's input.
-func argsToInputSchema(args []inputValue, tm map[string]*fullType) map[string]any {
-	properties := map[string]any{}
-	var required []string
-
-	for _, arg := range args {
-		isRequired := arg.Type.Kind == "NON_NULL"
-		argType := arg.Type
-		if isRequired && argType.OfType != nil {
-			argType = *argType.OfType
-		}
-
-		prop := graphqlTypeToJSONSchema(argType, tm, make(map[string]bool))
-		if arg.Description != "" {
-			prop["description"] = arg.Description
-		}
-		properties[arg.Name] = prop
-		if isRequired {
-			required = append(required, arg.Name)
-		}
-	}
-
-	schema := map[string]any{
-		"type":       "object",
-		"properties": properties,
-	}
-	if len(required) > 0 {
-		sort.Strings(required)
-		schema["required"] = toAnySlice(required)
-	}
-	return schema
-}
-
-// graphqlTypeToJSONSchema converts a GraphQL type reference to a JSON Schema.
-// Uses cycle detection via the visited set to handle recursive types.
-func graphqlTypeToJSONSchema(t typeRef, tm map[string]*fullType, visited map[string]bool) map[string]any {
-	switch t.Kind {
-	case "NON_NULL":
-		if t.OfType != nil {
-			return graphqlTypeToJSONSchema(*t.OfType, tm, visited)
-		}
-		return map[string]any{"type": "string"}
-
-	case "LIST":
-		var items map[string]any
-		if t.OfType != nil {
-			items = graphqlTypeToJSONSchema(*t.OfType, tm, visited)
-		} else {
-			items = map[string]any{}
-		}
-		return map[string]any{
-			"type":  "array",
-			"items": items,
-		}
-
-	case "SCALAR":
-		return scalarToJSONSchema(t.Name)
-
-	case "ENUM":
-		ft, ok := tm[t.Name]
-		if ok && len(ft.EnumValues) > 0 {
-			values := make([]any, len(ft.EnumValues))
-			for i, v := range ft.EnumValues {
-				values[i] = v.Name
-			}
-			return map[string]any{"type": "string", "enum": values}
-		}
-		return map[string]any{"type": "string"}
-
-	case "INPUT_OBJECT":
-		return inputObjectToJSONSchema(t.Name, tm, visited)
-
-	case "OBJECT":
-		return objectToJSONSchema(t.Name, tm, visited)
-
-	case "INTERFACE", "UNION":
-		return unionToJSONSchema(t.Name, tm, visited)
-
-	default:
-		// For named types not yet resolved, look up in the type map.
-		if t.Name != "" {
-			if ft, ok := tm[t.Name]; ok {
-				resolved := typeRef{Kind: ft.Kind, Name: ft.Name}
-				return graphqlTypeToJSONSchema(resolved, tm, visited)
-			}
-		}
-		return map[string]any{"type": "string"}
-	}
-}
-
-func scalarToJSONSchema(name string) map[string]any {
-	switch name {
-	case "String", "ID":
-		return map[string]any{"type": "string"}
-	case "Int":
-		return map[string]any{"type": "integer"}
-	case "Float":
-		return map[string]any{"type": "number"}
-	case "Boolean":
-		return map[string]any{"type": "boolean"}
-	default:
-		// Custom scalars default to string.
-		return map[string]any{"type": "string"}
-	}
-}
-
-func objectToJSONSchema(name string, tm map[string]*fullType, visited map[string]bool) map[string]any {
-	if visited[name] {
-		return map[string]any{"type": "object"}
-	}
-	visited[name] = true
-	// Delete on unwind so `visited` tracks only the types on the current
-	// recursion stack (a genuine cycle), never every type seen anywhere in
-	// the walk. Left permanently set, it would truncate a type reused in
-	// sibling (non-cyclic) positions to a bare {"type":"object"} — the same
-	// delete-on-unwind discipline this package's own query builder uses
-	// (invoke.go's buildObjectSelectionSet: `defer visited=false`).
-	defer delete(visited, name)
-
-	ft, ok := tm[name]
-	if !ok || len(ft.Fields) == 0 {
-		return map[string]any{"type": "object"}
-	}
-
-	properties := map[string]any{}
-	for _, f := range ft.Fields {
-		if strings.HasPrefix(f.Name, "__") {
-			continue
-		}
-		properties[f.Name] = graphqlTypeToJSONSchema(f.Type, tm, visited)
-	}
-
-	schema := map[string]any{
+func graphQLResponseSchema() map[string]any {
+	return map[string]any{
 		"type": "object",
+		"properties": map[string]any{
+			"data": map[string]any{"type": []any{"object", "null"}},
+			"errors": map[string]any{
+				"type":     "array",
+				"minItems": 1,
+				"items":    map[string]any{"type": "object"},
+			},
+			"extensions": map[string]any{"type": "object"},
+		},
+		"anyOf": []any{
+			map[string]any{"required": []any{"data"}},
+			map[string]any{"required": []any{"errors"}},
+		},
 	}
-	if len(properties) > 0 {
-		schema["properties"] = properties
-	}
-	return schema
-}
-
-func inputObjectToJSONSchema(name string, tm map[string]*fullType, visited map[string]bool) map[string]any {
-	if visited[name] {
-		return map[string]any{"type": "object"}
-	}
-	visited[name] = true
-	// Delete on unwind (see objectToJSONSchema): `visited` must track only the
-	// recursion stack, so an input type reused across sibling input fields
-	// keeps its full schema in every position.
-	defer delete(visited, name)
-
-	ft, ok := tm[name]
-	if !ok || len(ft.InputFields) == 0 {
-		return map[string]any{"type": "object"}
-	}
-
-	properties := map[string]any{}
-	var required []string
-
-	for _, f := range ft.InputFields {
-		isRequired := f.Type.Kind == "NON_NULL"
-		argType := f.Type
-		if isRequired && argType.OfType != nil {
-			argType = *argType.OfType
-		}
-
-		properties[f.Name] = graphqlTypeToJSONSchema(argType, tm, visited)
-		if isRequired {
-			required = append(required, f.Name)
-		}
-	}
-
-	schema := map[string]any{
-		"type":       "object",
-		"properties": properties,
-	}
-	if len(required) > 0 {
-		sort.Strings(required)
-		schema["required"] = toAnySlice(required)
-	}
-	return schema
-}
-
-func unionToJSONSchema(name string, tm map[string]*fullType, visited map[string]bool) map[string]any {
-	ft, ok := tm[name]
-	if !ok || len(ft.PossibleTypes) == 0 {
-		return map[string]any{"type": "object"}
-	}
-
-	var oneOf []any
-	for _, pt := range ft.PossibleTypes {
-		resolved := typeRef{Kind: "OBJECT", Name: pt.Name}
-		oneOf = append(oneOf, graphqlTypeToJSONSchema(resolved, tm, visited))
-	}
-	return map[string]any{"oneOf": oneOf}
-}
-
-func toAnySlice(ss []string) []any {
-	out := make([]any, len(ss))
-	for i, s := range ss {
-		out[i] = s
-	}
-	return out
 }

@@ -10,28 +10,38 @@ import (
 )
 
 // InspectSource introspects a GraphQL endpoint and returns all bindable
-// refs (Query/Mutation/Subscription fields).
+// refs (query/mutation/subscription fields).
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	endpoint := source.Location
-	if endpoint == "" {
-		return nil, fmt.Errorf("GraphQL source requires a location (endpoint URL)")
+	if err := validateHTTPLocation(endpoint); err != nil {
+		return nil, err
 	}
 
-	disc, err := discover(ctx, newDefaultHTTPClient(), endpoint, nil)
+	var schema *introspectionSchema
+	var err error
+	if source.ContentPresent() {
+		schema, err = parseIntrospectionContent(source.Content)
+	} else {
+		var disc *discovery
+		disc, err = discover(ctx, newDefaultHTTPClient(), endpoint, nil)
+		if disc != nil {
+			schema = disc.schema
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("GraphQL introspection: %w", err)
 	}
 
 	var targets []openbindings.BindableTarget
-	tm := disc.schema.typeMap()
+	tm := schema.typeMap()
 
 	rootTypes := []struct {
 		label    string
 		typeName string
 	}{
-		{"Query", disc.schema.rootTypeName("Query")},
-		{"Mutation", disc.schema.rootTypeName("Mutation")},
-		{"Subscription", disc.schema.rootTypeName("Subscription")},
+		{"query", schema.rootTypeName("query")},
+		{"mutation", schema.rootTypeName("mutation")},
+		{"subscription", schema.rootTypeName("subscription")},
 	}
 
 	// Suggest the same operation key SynthesizeInterface assigns (synthesize.go: a

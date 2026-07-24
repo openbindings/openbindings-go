@@ -6,6 +6,24 @@
 
 ### Changed
 
+- **The experimental Workers RPC stub was removed.** It could neither invoke
+  the runtime-local protocol from Go nor synthesize an interface, and no
+  published binding specification governed its legacy token. The Go SDK now
+  exposes only binding modules with complete first-party implementations.
+
+- **GraphQL now implements the published `openbindings.graphql@1`
+  specification end to end.** The legacy versionless token, generated
+  selection sets, `_query` metadata, type projection, implicit WebSocket
+  target, generic credential placement, and response unwrapping are removed.
+  Invocation requires the exact executable document (and an explicit
+  subscription target), verifies its selected kind and one-root-field
+  correspondence, passes caller input wholesale as variables, and emits
+  complete GraphQL response envelopes with errors in-band. Synthesis
+  inventories every observed root field using deliberately broad boundary
+  schemas and exhaustive coverage evidence; strict introspection pins,
+  processor scenarios, synthesis scenarios, and integration tests cover the
+  same revision-1 semantics as the TypeScript SDK.
+
 - **Comparison-engine cross-SDK canon (three rulings, 2026-07-20).**
   (1) `CheckInterfaceCompatibility`'s issue ordering — sorted
   required-operation-key order, output before input within an operation — is

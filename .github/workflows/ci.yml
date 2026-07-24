@@ -21,7 +21,6 @@ jobs:
           - formats/mcp
           - formats/usage
           - formats/operationgraph
-          - formats/workersrpc
     steps:
       - uses: actions/checkout@v7
       # The conformance corpora are normative and live in the sibling spec and

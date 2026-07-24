@@ -14,13 +14,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-const BindingSpec = "graphql"
+const BindingSpec = "openbindings.graphql@1"
 const DefaultSourceName = "graphql"
 
 // maxRedirects bounds the redirect chain a single request may follow.
@@ -85,7 +86,7 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 // (scheme://host/path): two GraphQL endpoints on one host must not share a
 // schema; trailing-slash and host-case differences still collapse.
 func (e *Invoker) cachedIntrospect(ctx context.Context, endpointURL string, headers map[string]string) (*introspectionSchema, error) {
-	key := introspectionCacheKey(endpointURL)
+	key := introspectionCacheKey(endpointURL, headers)
 
 	e.mu.RLock()
 	if s, ok := e.schemas[key]; ok {
@@ -107,6 +108,7 @@ func (e *Invoker) cachedIntrospect(ctx context.Context, endpointURL string, head
 }
 
 var _ openbindings.BindingInvoker = (*Invoker)(nil)
+var _ openbindings.BindingPreparer = (*Invoker)(nil)
 
 // InvokeBinding invokes a GraphQL binding and returns the invocation handle
 // synchronously; the work runs on its own goroutine. Queries and mutations
@@ -129,101 +131,99 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 
-	// Pre-dispatch validation: fail before any network I/O or input read, so
-	// a caller retry after resolving the location never re-sends
-	// already-consumed input (TS parity). `content` pins the schema but
-	// execution always POSTs to `location` — location/content composition is
-	// this binding specification's to define, within the content-primacy
-	// floor of core §5.4 — so this check is unconditional.
-	if args.Source.Location == "" {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: "GraphQL source requires a location (endpoint URL)"})
+	if err := validateHTTPLocation(args.Source.Location); err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
 		return
 	}
 
-	headers := buildHTTPHeaders(args.Context)
-
-	// Resolve the query plan BEFORE reading input, so "does this dispatch
-	// want a caller-supplied variables object" is known ahead of the read.
-	// A prebuilt `_query` const skips introspection outright — the schema
-	// declaring properties beyond `_query` answers the question; otherwise
-	// the field is resolved via inline content or (cached) network
-	// introspection and its declared args answer it (TS parity: schema/
-	// args-driven, the GraphQL-native signal).
-	inputSchemaObj, _ := args.InputSchema.(map[string]any)
-	prebuiltQuery, hasPrebuilt := queryFromSchema(inputSchemaObj)
-
-	var schema *introspectionSchema
-	wantsInput := true
-	if hasPrebuilt {
-		wantsInput = schemaDeclaresVariables(inputSchemaObj)
-	} else {
-		s, ierr := e.resolveSchema(bctx, args, headers)
-		if ierr != nil {
-			inv.FireError(ierr)
+	cfg, err := readConfiguration(args.Context)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		return
+	}
+	if cfg.Document == nil {
+		inv.FireError(openbindings.NewContextRequiredError(
+			"GraphQL invocation requires an executable document",
+			configurationRequirement(args.Source.Location, "document", "supply the exact GraphQL executable document and optional operationName"),
+		))
+		return
+	}
+	if rootType == "subscription" && cfg.SubscriptionTarget == "" {
+		inv.FireError(openbindings.NewContextRequiredError(
+			"GraphQL subscription requires a WebSocket target",
+			configurationRequirement(args.Source.Location, "subscriptionTarget", "supply an absolute ws or wss GraphQL subscription target"),
+		))
+		return
+	}
+	document, err := parseExecutableDocument(cfg.Document.Source)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("parse configuration.document: %v", err)})
+		return
+	}
+	httpHeaders, err := cfg.httpHeaders(args.Context)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		return
+	}
+	var websocketHeaders http.Header
+	if rootType == "subscription" {
+		websocketHeaders, err = cfg.websocketHeaders(args.Context)
+		if err != nil {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
 			return
 		}
-		schema = s
-		targetField, ferr := resolveField(schema, rootType, fieldName)
-		if ferr != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: ferr.Error()})
-			return
-		}
-		wantsInput = len(targetField.Args) > 0
 	}
 
-	// Operation-layer no-input convention (checked last so it can override
-	// the GraphQL-native signal above, mirroring every other format's
-	// invoker): the call came through the operation layer for an operation
-	// that declares no input at all. Dispatch with empty input even when
-	// the field takes GraphQL arguments the OBI did not express.
-	if args.Binding != nil && args.InputSchema == nil {
-		wantsInput = false
+	schema, ierr := e.resolveSchema(bctx, args, httpHeaders)
+	if ierr != nil {
+		inv.FireError(ierr)
+		return
+	}
+	if _, err := resolveField(schema, rootType, fieldName); err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: err.Error()})
+		return
 	}
 
-	// Input is the GraphQL variables object. A dispatch that wants no input
-	// closes input on entry — a caller of a no-input dispatch never writes
-	// nor closes, so reading would park forever; otherwise read the single
-	// variables object the caller writes.
-	var input any
-	if !wantsInput {
+	var variables map[string]any
+	if args.InputSchema == nil {
 		_ = inv.CloseInput()
 	} else {
-		v, rerr := inv.ReadInput(bctx)
+		value, rerr := inv.ReadInput(bctx)
 		switch {
 		case errors.Is(rerr, io.EOF):
-			// No variables written; dispatch with empty variables.
 		case rerr != nil:
 			inv.FireError(openbindings.AsInvocationError(rerr))
 			return
 		default:
-			input = v
+			object, ok := value.(map[string]any)
+			if !ok {
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: "GraphQL caller input must be one JSON object used wholesale as variables"})
+				return
+			}
+			variables = object
 		}
 		_ = inv.CloseInput()
 	}
 
-	// Build the query from the already-resolved plan.
-	var query string
-	var variables map[string]any
-	if hasPrebuilt {
-		query = prebuiltQuery
-		variables = inputToVariablesPassthrough(input)
-	} else {
-		q, vars, berr := buildQueryFromIntrospection(schema, rootType, fieldName, input)
-		if berr != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: berr.Error()})
-			return
-		}
-		query, variables = q, vars
-	}
-
-	if rootType == "Subscription" {
-		streamSubscription(bctx, e.client, args.Source.Location, query, variables, headers, args.DeliveryUnitLimit(), inv)
+	if err := document.verifySelection(cfg.Document.OperationName, rootType, fieldName, variables, schema); err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configured document does not denote binding ref %q: %v", args.Ref, err)})
 		return
 	}
 
-	// Query / mutation: unary HTTP dispatch. The response body is one
-	// delivery unit, consumer-bounded via args.MaxDeliveryUnitBytes.
-	data, respHeaders, gqlErrors, err := doGraphQLHTTP(bctx, e.client, args.Source.Location, query, variables, headers, args.DeliveryUnitLimit())
+	if rootType == "subscription" {
+		_ = inv.SetHeader(openbindings.Metadata{})
+		streamSubscription(
+			bctx, e.client, cfg.SubscriptionTarget, cfg.Document, variables,
+			websocketHeaders, cfg.Protocol.ConnectionInit, cfg.Protocol.ConnectionInitSet,
+			args.DeliveryUnitLimit(), inv,
+		)
+		return
+	}
+
+	result, err := doGraphQLHTTP(
+		bctx, e.client, args.Source.Location, cfg.Document.Source,
+		cfg.Document.OperationName, variables, httpHeaders, args.DeliveryUnitLimit(),
+	)
 	if err != nil {
 		if bctx.Err() != nil {
 			return
@@ -236,33 +236,38 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			inv.FireError(ierr)
 			return
 		}
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
 		return
 	}
 
-	_ = inv.SetHeader(toMetadata(respHeaders))
-
-	if len(gqlErrors) > 0 {
-		msgs := make([]string, len(gqlErrors))
-		for i, ge := range gqlErrors {
-			msgs[i] = ge.Message
-		}
-		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: strings.Join(msgs, "; "),
-			Details: map[string]any{"errors": gqlErrors},
-		})
-		return
-	}
-
-	var output any
-	if data != nil {
-		output = data[fieldName]
-	}
-	if err := inv.EmitOutput(output); err != nil {
+	_ = inv.SetHeader(toMetadata(result.Header))
+	if err := inv.EmitOutput(result.Body); err != nil {
 		return
 	}
 	inv.CloseOutput()
+}
+
+// PrepareBinding reports required configuration without parsing a source,
+// reading caller input, introspecting, or dispatching.
+func (e *Invoker) PrepareBinding(_ context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+	rootType, _, err := parseRef(args.Ref)
+	if err != nil {
+		return nil, nil
+	}
+	if err := validateHTTPLocation(args.Source.Location); err != nil {
+		return nil, nil
+	}
+	cfg, err := readConfiguration(args.Context)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Document == nil {
+		return configurationRequirement(args.Source.Location, "document", "supply the exact GraphQL executable document and optional operationName"), nil
+	}
+	if rootType == "subscription" && cfg.SubscriptionTarget == "" {
+		return configurationRequirement(args.Source.Location, "subscriptionTarget", "supply an absolute ws or wss GraphQL subscription target"), nil
+	}
+	return nil, nil
 }
 
 // resolveSchema returns the introspection schema for the binding, from inline
@@ -314,6 +319,12 @@ type Synthesizer struct{}
 // NewSynthesizer creates a new GraphQL interface synthesizer.
 func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
 
+var (
+	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
+	_ openbindings.CoverageSynthesizer  = (*Synthesizer)(nil)
+	_ openbindings.SourceInspector      = (*Synthesizer)(nil)
+)
+
 // Formats returns the source formats supported by the GraphQL synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "GraphQL APIs"}}
@@ -321,42 +332,120 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 
 // SynthesizeInterface introspects a GraphQL endpoint and converts to an OpenBindings interface.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+	iface, _, err := c.synthesizeObserved(ctx, in)
+	return iface, err
+}
+
+// SynthesizeInterfaceWithCoverage accounts for every non-introspection root
+// field in the same schema observation that produced the OBI.
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+	iface, schema, err := c.synthesizeObserved(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if schema == nil {
+		return openbindings.NewSynthesisResult(iface, []openbindings.SynthesisCoverageEntry{}, true)
+	}
+	return openbindings.NewSynthesisResult(iface, graphQLSynthesisCoverage(iface), true)
+}
+
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, *introspectionSchema, error) {
+	if in == nil || len(in.Sources) == 0 {
+		skeleton, err := openbindings.SynthesisSkeleton(in)
+		return &skeleton, nil, err
+	}
 	if len(in.Sources) == 0 {
-		return nil, openbindings.ErrNoSources
+		skeleton, err := openbindings.SynthesisSkeleton(in)
+		return &skeleton, nil, err
 	}
 	if len(in.Sources) > 1 {
-		return nil, openbindings.ErrMultipleSources
+		return nil, nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
+	if src.BindingSpec != BindingSpec {
+		return nil, nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	}
 	endpoint := src.Location
-	if endpoint == "" {
-		return nil, fmt.Errorf("GraphQL source requires a location (endpoint URL)")
+	if err := validateHTTPLocation(endpoint); err != nil {
+		return nil, nil, err
 	}
-	disc, err := discover(ctx, newDefaultHTTPClient(), endpoint, nil)
+	if src.OutputLocation != "" {
+		if err := validateHTTPLocation(src.OutputLocation); err != nil {
+			return nil, nil, fmt.Errorf("outputLocation: %w", err)
+		}
+	}
+
+	var schema *introspectionSchema
+	var artifactContent json.RawMessage
+	var err error
+	if src.Content != nil {
+		schema, err = parseIntrospectionContent(src.Content)
+		artifactContent = append(json.RawMessage(nil), src.Content...)
+	} else {
+		schema, err = introspect(ctx, newDefaultHTTPClient(), endpoint, nil)
+		if err == nil && src.Embed {
+			artifactContent, err = json.Marshal(map[string]any{"data": map[string]any{"__schema": schema}})
+		}
+	}
 	if err != nil {
-		return nil, fmt.Errorf("GraphQL introspection: %w", err)
+		return nil, nil, fmt.Errorf("GraphQL introspection: %w", err)
 	}
-	iface, err := convertToInterface(disc.schema, endpoint)
+	iface, err := convertToInterface(schema, endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("GraphQL convert: %w", err)
+		return nil, nil, fmt.Errorf("GraphQL convert: %w", err)
 	}
-	if in.Name != "" {
-		iface.Name = in.Name
+	if artifactContent != nil {
+		entry := iface.Sources[DefaultSourceName]
+		entry.Content = artifactContent
+		iface.Sources[DefaultSourceName] = entry
 	}
-	if in.Version != "" {
-		iface.Version = in.Version
+	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
+		return nil, nil, err
 	}
-	if in.Description != "" {
-		iface.Description = in.Description
+	return &iface, schema, nil
+}
+
+func graphQLSynthesisCoverage(iface *openbindings.Interface) []openbindings.SynthesisCoverageEntry {
+	type item struct {
+		key     string
+		binding openbindings.BindingEntry
 	}
-	return &iface, nil
+	items := make([]item, 0, len(iface.Bindings))
+	for key, binding := range iface.Bindings {
+		items = append(items, item{key: key, binding: binding})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].binding.Ref < items[j].binding.Ref
+	})
+	entries := make([]openbindings.SynthesisCoverageEntry, 0, len(items))
+	for _, item := range items {
+		requirements := []string{"document"}
+		if strings.HasPrefix(item.binding.Ref, "subscription/") {
+			requirements = append(requirements, "subscriptionTarget")
+		}
+		entries = append(entries, openbindings.SynthesisCoverageEntry{
+			SourceIndex:  0,
+			SourceRef:    item.binding.Ref,
+			Scope:        openbindings.SynthesisCoverageTarget,
+			Status:       openbindings.SynthesisRepresented,
+			OperationKey: item.binding.Operation,
+			BindingKey:   item.key,
+			BindingRef:   item.binding.Ref,
+			Requirements: requirements,
+		})
+	}
+	return entries
 }
 
 // introspectionCacheKey normalizes an endpoint URL to a schema cache key
 // preserving the full target (scheme://host/path[?query]) — keying by host
 // alone would let two endpoints on one host share a schema (wrong results).
 // Host case and a trailing slash still collapse to one key.
-func introspectionCacheKey(endpoint string) string {
+func introspectionCacheKey(endpoint string, headerSets ...map[string]string) string {
+	var headers map[string]string
+	if len(headerSets) > 0 {
+		headers = headerSets[0]
+	}
 	endpoint = strings.TrimSpace(endpoint)
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" {
@@ -366,43 +455,59 @@ func introspectionCacheKey(endpoint string) string {
 	if u.RawQuery != "" {
 		key += "?" + u.RawQuery
 	}
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, strings.ToLower(name))
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		for actual, value := range headers {
+			if strings.EqualFold(actual, name) {
+				key += "\x00" + name + ":" + value
+				break
+			}
+		}
+	}
 	return key
 }
 
 // parseIntrospectionContent parses inline Source.Content as a GraphQL
-// introspection result. Accepts the __schema object directly or wrapped
-// in {"data": {"__schema": ...}} (the standard introspection response shape).
+// introspection execution result. Revision 1 accepts only one successful
+// result object with no errors member and object data.__schema.
 func parseIntrospectionContent(content json.RawMessage) (*introspectionSchema, error) {
+	if openbindings.ContentKind(content) != "object" {
+		return nil, fmt.Errorf("content must be an introspection execution-result object, got %s", openbindings.ContentKind(content))
+	}
 	raw, err := openbindings.ContentToBytes(content)
 	if err != nil {
 		return nil, fmt.Errorf("convert content: %w", err)
 	}
-
-	// Try the full response shape first: {"data": {"__schema": ...}}
-	var fullResponse struct {
-		Data struct {
-			Schema *introspectionSchema `json:"__schema"`
-		} `json:"data"`
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("parse introspection execution result: %w", err)
 	}
-	if err := json.Unmarshal(raw, &fullResponse); err == nil && fullResponse.Data.Schema != nil {
-		return fullResponse.Data.Schema, nil
+	result, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("content must be an introspection execution-result object")
 	}
-
-	// Try the __schema object directly: {"__schema": ...}
-	var wrapper struct {
-		Schema *introspectionSchema `json:"__schema"`
+	if _, hasErrors := result["errors"]; hasErrors {
+		return nil, fmt.Errorf("introspection content must not contain an errors member")
 	}
-	if err := json.Unmarshal(raw, &wrapper); err == nil && wrapper.Schema != nil {
-		return wrapper.Schema, nil
+	data, ok := result["data"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("introspection content must contain object data")
 	}
-
-	// Try as a bare introspectionSchema.
+	schemaValue, ok := data["__schema"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("introspection content must contain object data.__schema")
+	}
+	schemaRaw, _ := json.Marshal(schemaValue)
 	var schema introspectionSchema
-	if err := json.Unmarshal(raw, &schema); err != nil {
-		return nil, fmt.Errorf("unrecognized introspection content format")
+	if err := json.Unmarshal(schemaRaw, &schema); err != nil {
+		return nil, fmt.Errorf("parse data.__schema: %w", err)
 	}
-	if schema.QueryType == nil && len(schema.Types) == 0 {
-		return nil, fmt.Errorf("unrecognized introspection content format")
+	if len(schema.Types) == 0 {
+		return nil, fmt.Errorf("introspection content data.__schema has no types")
 	}
 	return &schema, nil
 }

@@ -26,7 +26,6 @@ formats/
   mcp/                     ← .../formats/mcp
   usage/                   ← .../formats/usage
   operationgraph/          ← .../formats/operationgraph
-  workersrpc/              ← .../formats/workersrpc
 ```
 
 The format libraries previously lived in separate repos (`openbindings/openapi-go`, `openbindings/asyncapi-go`, etc.). They were consolidated into this monorepo because they all implement the same `BindingInvoker`/`InterfaceSynthesizer` interfaces from the core SDK and need to evolve in lockstep with it. This pattern matches the modern convention for first-party SDK families in Go (`aws-sdk-go-v2`, `googleapis/google-cloud-go`, `Azure/azure-sdk-for-go`, `open-telemetry/opentelemetry-go`, `kubernetes/kubernetes`).
@@ -210,20 +209,16 @@ opInv := openbindings.NewOperationInvoker(
 |--------|-----------------|-------------------|
 | `formats/openapi` | `openbindings.openapi@1` | yes |
 | `formats/asyncapi` | `openbindings.asyncapi@1` | yes |
-| `formats/graphql` | `graphql` | yes |
+| `formats/graphql` | `openbindings.graphql@1` | yes |
 | `formats/grpc` | `openbindings.grpc@1` | yes |
 | `formats/connect` | `openbindings.connect@1` | yes |
 | `formats/mcp` | `openbindings.mcp@1` | yes |
 | `formats/usage` | `openbindings.usage@1` | yes |
 | `formats/operationgraph` | `openbindings.operation-graph@1` | no (graphs are authored, then composed at invoke time) |
-| `formats/workersrpc` | `workers-rpc@^1.0.0` | no (Go-side stub; dispatch requires the Workers runtime) |
 
-Only OpenAPI, AsyncAPI, MCP, gRPC, Connect, and usage are published revision-1
-binding specifications and participate in the 0.2 cross-SDK coverage
-guarantee. `graphql` and `workers-rpc@^1.0.0` are retained legacy experimental
-tokens; their candidate specification documents have not been promoted and
-these packages must not be presented as implementations of
-`openbindings.graphql@1` or `openbindings.workers-rpc@1`.
+OpenAPI, AsyncAPI, MCP, gRPC, Connect, usage, and GraphQL are published
+revision-1 artifact/protocol binding specifications and participate in the
+0.2 cross-SDK coverage guarantee.
 
 Invokers implement `BindingInvoker`. Interface synthesizers implement
 `InterfaceSynthesizer`; synthesizers that can return durable, explicitly

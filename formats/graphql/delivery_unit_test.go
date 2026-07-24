@@ -2,127 +2,70 @@ package graphql
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/coder/websocket"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// prebuiltSubscriptionSchema carries a _query const so the invoker skips
-// introspection entirely and dials the WebSocket directly.
-var prebuiltSubscriptionSchema = map[string]any{
-	"type": "object",
-	"properties": map[string]any{
-		"_query": map[string]any{"type": "string", "const": "subscription { messageStream { id body } }"},
-	},
-}
-
-// largePayloadSubscriptionServer speaks just enough graphql-transport-ws to
-// deliver one `next` payload of the given size, then `complete`.
-func largePayloadSubscriptionServer(t *testing.T, payloadSize int) *httptest.Server {
+func payloadSubscriptionServer(t *testing.T, payloadSize int) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Upgrade") != "websocket" {
-			http.Error(w, "websocket only", http.StatusBadRequest)
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"graphql-transport-ws"}})
+		if err != nil {
 			return
 		}
-		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			Subprotocols: []string{"graphql-transport-ws"},
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		_, _, _ = conn.Read(r.Context())
+		_ = writeJSON(r.Context(), conn, map[string]any{"type": "connection_ack"})
+		_, raw, _ := conn.Read(r.Context())
+		var subscribe struct {
+			ID string `json:"id"`
+		}
+		_ = json.Unmarshal(raw, &subscribe)
+		_ = writeJSON(r.Context(), conn, map[string]any{
+			"id": subscribe.ID, "type": "next",
+			"payload": map[string]any{"data": map[string]any{"updates": strings.Repeat("x", payloadSize)}},
 		})
-		if err != nil {
-			t.Logf("websocket accept failed: %v", err)
-			return
-		}
-		defer conn.Close(websocket.StatusNormalClosure, "test done")
-
-		ctx := r.Context()
-		if err := expectClientMessage(ctx, conn, "connection_init"); err != nil {
-			t.Logf("server: %v", err)
-			return
-		}
-		if err := writeServerMessage(ctx, conn, map[string]any{"type": "connection_ack"}); err != nil {
-			t.Logf("server: %v", err)
-			return
-		}
-		subID, err := expectClientSubscribe(ctx, conn)
-		if err != nil {
-			t.Logf("server: %v", err)
-			return
-		}
-		payload := map[string]any{
-			"data": map[string]any{
-				"messageStream": map[string]any{"id": "1", "body": strings.Repeat("x", payloadSize)},
-			},
-		}
-		if err := writeServerMessage(ctx, conn, map[string]any{"id": subID, "type": "next", "payload": payload}); err != nil {
-			t.Logf("server: %v", err)
-			return
-		}
-		_ = writeServerMessage(ctx, conn, map[string]any{"id": subID, "type": "complete"})
+		_ = writeJSON(r.Context(), conn, map[string]any{"id": subscribe.ID, "type": "complete"})
 	}))
-	t.Cleanup(srv.Close)
-	return srv
 }
 
-// TestDeliveryUnitBound_WSLargeMessagePassesAtDefault proves the
-// accidental-cap fix on the subscription lane: a 64 KiB `next` message —
-// roughly double the library's ~32 KiB default read limit that previously
-// applied because no read limit was ever set — is delivered intact under
-// the SDK's default delivery-unit bound (10 MiB).
-func TestDeliveryUnitBound_WSLargeMessagePassesAtDefault(t *testing.T) {
-	srv := largePayloadSubscriptionServer(t, 64<<10)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:      openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
-		Ref:         "Subscription/messageStream",
-		InputSchema: prebuiltSubscriptionSchema,
-	})
-	events, ierr := driveOutputs(ctx, call, nil)
-	if ierr != nil {
-		t.Fatalf("expected a clean close, got %s: %s", ierr.Code, ierr.Message)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	data, _ := events[0].(map[string]any)
-	ms, _ := data["messageStream"].(map[string]any)
-	if body, _ := ms["body"].(string); len(body) != 64<<10 {
-		t.Fatalf("payload corrupted: got %d bytes, want %d", len(body), 64<<10)
+func subscriptionArgs(t *testing.T, srv *httptest.Server, limit int64) *openbindings.BindingInvocationArgs {
+	t.Helper()
+	return &openbindings.BindingInvocationArgs{
+		Source:               pinnedInvocationSource(t, srv.URL),
+		Ref:                  "subscription/updates",
+		MaxDeliveryUnitBytes: limit,
+		Context: map[string]any{"configuration": map[string]any{
+			"document":           "subscription { updates }",
+			"subscriptionTarget": "ws" + strings.TrimPrefix(srv.URL, "http"),
+		}},
 	}
 }
 
-// TestDeliveryUnitBound_WSTinyBoundRefusesLoudly verifies the bound is live
-// on the subscription lane: with a 1 KiB consumer bound set via
-// BindingInvocationArgs.MaxDeliveryUnitBytes, a ~4 KiB `next` message trips
-// the socket's read limit and the subscription fails loudly with the lane's
-// unchanged error identity (ERR_STREAM_ERROR), never a silent truncation.
-func TestDeliveryUnitBound_WSTinyBoundRefusesLoudly(t *testing.T) {
-	srv := largePayloadSubscriptionServer(t, 4<<10)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:               openbindings.InvocationSource{BindingSpec: "graphql", Location: srv.URL},
-		Ref:                  "Subscription/messageStream",
-		InputSchema:          prebuiltSubscriptionSchema,
-		MaxDeliveryUnitBytes: 1024,
-	})
-	events, ierr := driveOutputs(ctx, call, nil)
-	if len(events) != 0 {
-		t.Fatalf("expected no events, got %d", len(events))
+func TestSubscriptionDeliveryUnitDefaultAccepts64KiB(t *testing.T) {
+	srv := payloadSubscriptionServer(t, 64<<10)
+	defer srv.Close()
+	outputs, invocationErr := collectInvocation(context.Background(), NewInvoker().InvokeBinding(
+		context.Background(), subscriptionArgs(t, srv, 0),
+	), nil, false)
+	if invocationErr != nil || len(outputs) != 1 {
+		t.Fatalf("outputs = %d, err = %v", len(outputs), invocationErr)
 	}
-	if ierr == nil {
-		t.Fatal("expected a stream error, got clean close")
-	}
-	if ierr.Code != openbindings.ErrCodeStreamError {
-		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeStreamError)
+}
+
+func TestSubscriptionDeliveryUnitBoundRefusesOversize(t *testing.T) {
+	srv := payloadSubscriptionServer(t, 4<<10)
+	defer srv.Close()
+	outputs, invocationErr := collectInvocation(context.Background(), NewInvoker().InvokeBinding(
+		context.Background(), subscriptionArgs(t, srv, 1024),
+	), nil, false)
+	if len(outputs) != 0 || invocationErr == nil || invocationErr.Code != openbindings.ErrCodeStreamError {
+		t.Fatalf("outputs = %d, err = %v", len(outputs), invocationErr)
 	}
 }

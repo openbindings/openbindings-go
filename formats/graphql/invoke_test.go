@@ -1,370 +1,155 @@
 package graphql
 
 import (
+	"encoding/json"
 	"testing"
 )
 
-func TestParseRef(t *testing.T) {
-	tests := []struct {
-		name      string
-		ref       string
-		wantRoot  string
-		wantField string
-		wantErr   bool
-	}{
-		{"query", "Query/users", "Query", "users", false},
-		{"mutation", "Mutation/createUser", "Mutation", "createUser", false},
-		{"subscription", "Subscription/onOrderUpdated", "Subscription", "onOrderUpdated", false},
-		{"empty", "", "", "", true},
-		{"no slash", "QueryUsers", "", "", true},
-		{"invalid root", "Invalid/users", "", "", true},
-		{"trailing slash", "Query/", "", "", true},
-		{"leading slash", "/users", "", "", true},
-		{"lowercase root", "query/users", "", "", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root, field, err := parseRef(tt.ref)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseRef(%q) error = %v, wantErr %v", tt.ref, err, tt.wantErr)
-			}
-			if root != tt.wantRoot {
-				t.Errorf("parseRef(%q) rootType = %q, want %q", tt.ref, root, tt.wantRoot)
-			}
-			if field != tt.wantField {
-				t.Errorf("parseRef(%q) fieldName = %q, want %q", tt.ref, field, tt.wantField)
-			}
-		})
-	}
-}
-
-func TestTypeRefToGraphQL(t *testing.T) {
-	tests := []struct {
-		name string
-		ref  typeRef
-		want string
-	}{
-		{"scalar", typeRef{Kind: "SCALAR", Name: "String"}, "String"},
-		{"non-null scalar", typeRef{Kind: "NON_NULL", OfType: &typeRef{Kind: "SCALAR", Name: "ID"}}, "ID!"},
-		{"list", typeRef{Kind: "LIST", OfType: &typeRef{Kind: "SCALAR", Name: "String"}}, "[String]"},
-		{"non-null list of non-null", typeRef{
-			Kind: "NON_NULL",
-			OfType: &typeRef{
-				Kind: "LIST",
-				OfType: &typeRef{
-					Kind:   "NON_NULL",
-					OfType: &typeRef{Kind: "SCALAR", Name: "Int"},
-				},
-			},
-		}, "[Int!]!"},
-		{"named type", typeRef{Kind: "OBJECT", Name: "User"}, "User"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := typeRefToGraphQL(tt.ref)
-			if got != tt.want {
-				t.Errorf("typeRefToGraphQL() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestBuildSelectionSet(t *testing.T) {
-	tm := map[string]*fullType{
-		"User": {
-			Kind: "OBJECT",
-			Name: "User",
-			Fields: []field{
-				{Name: "id", Type: typeRef{Kind: "SCALAR", Name: "ID"}},
-				{Name: "name", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-				{Name: "email", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-			},
-		},
-	}
-
-	got := buildSelectionSet("User", tm, 0, make(map[string]bool))
-	if got != "{ id name email }" {
-		t.Errorf("buildSelectionSet(User) = %q, want %q", got, "{ id name email }")
-	}
-}
-
-func TestBuildSelectionSetNested(t *testing.T) {
-	tm := map[string]*fullType{
-		"User": {
-			Kind: "OBJECT",
-			Name: "User",
-			Fields: []field{
-				{Name: "id", Type: typeRef{Kind: "SCALAR", Name: "ID"}},
-				{Name: "posts", Type: typeRef{Kind: "LIST", OfType: &typeRef{Kind: "OBJECT", Name: "Post"}}},
-			},
-		},
-		"Post": {
-			Kind: "OBJECT",
-			Name: "Post",
-			Fields: []field{
-				{Name: "title", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-				{Name: "body", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-			},
-		},
-	}
-
-	got := buildSelectionSet("User", tm, 0, make(map[string]bool))
-	if got != "{ id posts { title body } }" {
-		t.Errorf("buildSelectionSet(User nested) = %q, want %q", got, "{ id posts { title body } }")
-	}
-}
-
-func TestBuildSelectionSetCycle(t *testing.T) {
-	tm := map[string]*fullType{
-		"User": {
-			Kind: "OBJECT",
-			Name: "User",
-			Fields: []field{
-				{Name: "id", Type: typeRef{Kind: "SCALAR", Name: "ID"}},
-				{Name: "friends", Type: typeRef{Kind: "LIST", OfType: &typeRef{Kind: "OBJECT", Name: "User"}}},
-			},
-		},
-	}
-
-	got := buildSelectionSet("User", tm, 0, make(map[string]bool))
-	// Should include id but not recurse infinitely into friends.
-	if got != "{ id }" {
-		t.Errorf("buildSelectionSet(cycle) = %q, want %q", got, "{ id }")
-	}
-}
-
-func TestBuildSelectionSetDepthLimit(t *testing.T) {
-	tm := map[string]*fullType{
-		"A": {
-			Kind: "OBJECT",
-			Name: "A",
-			Fields: []field{
-				{Name: "a_val", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-				{Name: "b", Type: typeRef{Kind: "OBJECT", Name: "B"}},
-			},
-		},
-		"B": {
-			Kind: "OBJECT",
-			Name: "B",
-			Fields: []field{
-				{Name: "b_val", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-				{Name: "c", Type: typeRef{Kind: "OBJECT", Name: "C"}},
-			},
-		},
-		"C": {
-			Kind: "OBJECT",
-			Name: "C",
-			Fields: []field{
-				{Name: "c_val", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-				{Name: "d", Type: typeRef{Kind: "OBJECT", Name: "D"}},
-			},
-		},
-		"D": {
-			Kind: "OBJECT",
-			Name: "D",
-			Fields: []field{
-				{Name: "value", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-			},
-		},
-	}
-
-	got := buildSelectionSet("A", tm, 0, make(map[string]bool))
-	// Depth 0: A, depth 1: B, depth 2: C (includes c_val but D is at depth 3, hits limit).
-	want := "{ a_val b { b_val c { c_val } } }"
-	if got != want {
-		t.Errorf("buildSelectionSet(depth limit) = %q, want %q", got, want)
-	}
-}
-
-func TestBuildSelectionSetUnion(t *testing.T) {
-	tm := map[string]*fullType{
-		"SearchResult": {
-			Kind: "UNION",
-			Name: "SearchResult",
-			PossibleTypes: []typeRef{
-				{Name: "User"},
-				{Name: "Post"},
-			},
-		},
-		"User": {
-			Kind: "OBJECT",
-			Name: "User",
-			Fields: []field{
-				{Name: "name", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-			},
-		},
-		"Post": {
-			Kind: "OBJECT",
-			Name: "Post",
-			Fields: []field{
-				{Name: "title", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-			},
-		},
-	}
-
-	got := buildSelectionSet("SearchResult", tm, 0, make(map[string]bool))
-	want := "{ __typename ... on User { name } ... on Post { title } }"
-	if got != want {
-		t.Errorf("buildSelectionSet(union) = %q, want %q", got, want)
-	}
-}
-
-func TestBuildQuery(t *testing.T) {
-	schema := &introspectionSchema{
-		QueryType: &typeRef{Name: "Query"},
+func minimalSchema() *introspectionSchema {
+	return &introspectionSchema{
+		QueryType:    &typeRef{Kind: "OBJECT", Name: "RootQuery"},
+		MutationType: &typeRef{Kind: "OBJECT", Name: "RootMutation"},
 		Types: []fullType{
 			{
-				Kind: "OBJECT",
-				Name: "Query",
+				Kind: "OBJECT", Name: "RootQuery",
 				Fields: []field{
-					{
-						Name: "user",
-						Args: []inputValue{
-							{Name: "id", Type: typeRef{Kind: "NON_NULL", OfType: &typeRef{Kind: "SCALAR", Name: "ID"}}},
-						},
-						Type: typeRef{Kind: "OBJECT", Name: "User"},
-					},
+					{Name: "viewer", Args: []inputValue{}, Type: typeRef{Kind: "SCALAR", Name: "String"}},
+					{Name: "health", Args: []inputValue{}, Type: typeRef{Kind: "SCALAR", Name: "String"}},
 				},
 			},
 			{
-				Kind: "OBJECT",
-				Name: "User",
-				Fields: []field{
-					{Name: "id", Type: typeRef{Kind: "SCALAR", Name: "ID"}},
-					{Name: "name", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-				},
+				Kind: "OBJECT", Name: "RootMutation",
+				Fields: []field{{Name: "save", Args: []inputValue{}, Type: typeRef{Kind: "SCALAR", Name: "String"}}},
 			},
+			{Kind: "SCALAR", Name: "String"},
 		},
-	}
-
-	query, vars, err := buildQuery(schema, "Query", "user", map[string]any{"id": "123"}, nil)
-	if err != nil {
-		t.Fatalf("buildQuery() error = %v", err)
-	}
-	if query != "query($id: ID!) { user(id: $id) { id name } }" {
-		t.Errorf("buildQuery() query = %q", query)
-	}
-	if vars["id"] != "123" {
-		t.Errorf("buildQuery() vars = %v", vars)
 	}
 }
 
-func TestBuildQueryWithSchemaQuery(t *testing.T) {
-	// When the input schema has a _query const, buildQuery should use it
-	// instead of introspecting.
-	schema := &introspectionSchema{
-		QueryType: &typeRef{Name: "Query"},
-		Types: []fullType{
-			{Kind: "OBJECT", Name: "Query", Fields: []field{
-				{Name: "user", Type: typeRef{Kind: "OBJECT", Name: "User"}},
-			}},
-			{Kind: "OBJECT", Name: "User", Fields: []field{
-				{Name: "id", Type: typeRef{Kind: "SCALAR", Name: "ID"}},
-				{Name: "name", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-				{Name: "email", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-			}},
-		},
-	}
-
-	customQuery := "query($id: ID!) { user(id: $id) { id name } }"
-	inputSchema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"id":     map[string]any{"type": "string"},
-			"_query": map[string]any{"type": "string", "const": customQuery},
-		},
-	}
-
-	query, vars, err := buildQuery(schema, "Query", "user", map[string]any{"id": "123"}, inputSchema)
-	if err != nil {
-		t.Fatalf("buildQuery() error = %v", err)
-	}
-	if query != customQuery {
-		t.Errorf("buildQuery() should use schema query, got %q", query)
-	}
-	if vars["id"] != "123" {
-		t.Errorf("buildQuery() vars = %v", vars)
-	}
-}
-
-func TestBuildQueryWithSchemaQueryExcludesQueryField(t *testing.T) {
-	schema := &introspectionSchema{
-		QueryType: &typeRef{Name: "Query"},
-		Types: []fullType{
-			{Kind: "OBJECT", Name: "Query", Fields: []field{
-				{Name: "user", Type: typeRef{Kind: "SCALAR", Name: "String"}},
-			}},
-		},
-	}
-
-	inputSchema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"_query": map[string]any{"type": "string", "const": "query { user }"},
-		},
-	}
-
-	// Even if _query somehow ends up in the input, it should not be passed as a variable.
-	_, vars, err := buildQuery(schema, "Query", "user", map[string]any{"_query": "ignored"}, inputSchema)
-	if err != nil {
-		t.Fatalf("buildQuery() error = %v", err)
-	}
-	if _, ok := vars["_query"]; ok {
-		t.Error("_query should not appear in variables")
-	}
-}
-
-func TestQueryFromSchema(t *testing.T) {
-	tests := []struct {
-		name   string
-		schema map[string]any
-		want   string
-		wantOK bool
+func TestParseRefCanonical(t *testing.T) {
+	for _, tc := range []struct {
+		ref, kind, field string
 	}{
-		{"nil schema", nil, "", false},
-		{"no properties", map[string]any{"type": "object"}, "", false},
-		{"no _query", map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"id": map[string]any{"type": "string"}},
-		}, "", false},
-		{"_query without const", map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"_query": map[string]any{"type": "string"}},
-		}, "", false},
-		{"_query with const", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"_query": map[string]any{"type": "string", "const": "query { users { id } }"},
-			},
-		}, "query { users { id } }", true},
+		{"query/viewer", "query", "viewer"},
+		{"mutation/save", "mutation", "save"},
+		{"subscription/updates", "subscription", "updates"},
+	} {
+		kind, field, err := parseRef(tc.ref)
+		if err != nil || kind != tc.kind || field != tc.field {
+			t.Fatalf("parseRef(%q) = %q, %q, %v", tc.ref, kind, field, err)
+		}
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := queryFromSchema(tt.schema)
-			if ok != tt.wantOK {
-				t.Errorf("queryFromSchema() ok = %v, want %v", ok, tt.wantOK)
-			}
-			if got != tt.want {
-				t.Errorf("queryFromSchema() = %q, want %q", got, tt.want)
-			}
-		})
+	for _, ref := range []string{"", "Query/viewer", "query/", "query/viewer/nested", "query/not-valid"} {
+		if _, _, err := parseRef(ref); err == nil {
+			t.Errorf("parseRef(%q) unexpectedly succeeded", ref)
+		}
 	}
 }
 
-func TestInputToVariables(t *testing.T) {
-	args := []inputValue{
-		{Name: "name"},
-		{Name: "age"},
+func TestExecutableDocumentCorrespondence(t *testing.T) {
+	doc, err := parseExecutableDocument(`
+		query Other { health }
+		query Viewer($skip: Boolean!) { ...RootFields }
+		fragment RootFields on RootQuery {
+			result: viewer @skip(if: $skip)
+			health @include(if: $skip)
+		}`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	input := map[string]any{"name": "Alice", "age": 30, "extra": "ignored"}
-	vars := inputToVariables(input, args)
-	if vars["name"] != "Alice" || vars["age"] != 30 {
-		t.Errorf("inputToVariables() = %v", vars)
+	if err := doc.verifySelection("Viewer", "query", "viewer", map[string]any{"skip": false}, minimalSchema()); err != nil {
+		t.Fatalf("valid selection refused: %v", err)
 	}
-	if _, ok := vars["extra"]; ok {
-		t.Error("inputToVariables() should not include extra keys")
+
+	cases := []struct {
+		source, name, kind, field string
+	}{
+		{"mutation { save }", "", "query", "save"},
+		{"{ viewer health }", "", "query", "viewer"},
+		{"{ health }", "", "query", "viewer"},
+		{"query A { viewer } query B { health }", "", "query", "viewer"},
+	}
+	for _, tc := range cases {
+		parsed, err := parseExecutableDocument(tc.source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := parsed.verifySelection(tc.name, tc.kind, tc.field, nil, minimalSchema()); err == nil {
+			t.Errorf("selection %q unexpectedly matched", tc.source)
+		}
+	}
+}
+
+func TestExecutableDocumentRejectsMalformedGraphQLSyntax(t *testing.T) {
+	for _, source := range []string{
+		`query Viewer() { viewer }`,
+		`query Viewer($id) { viewer(id: $id) }`,
+		`query Viewer($id: ID = $other) { viewer }`,
+		`query { viewer() }`,
+		`query { viewer(id) }`,
+		`query { viewer(filter: {id}) }`,
+		`query { viewer(limit: 01) }`,
+		"query { viewer(arg: \"bad\\q\") }",
+		"query { \u00e9xample }",
+	} {
+		if _, err := parseExecutableDocument(source); err == nil {
+			t.Errorf("malformed document unexpectedly parsed: %q", source)
+		}
+	}
+}
+
+func TestExecutableDocumentAcceptsGraphQLStringForms(t *testing.T) {
+	for _, source := range []string{
+		`query { viewer(arg: "\u{1F4A9}") }`,
+		`query { viewer(arg: """embedded \""" triple quote""") }`,
+	} {
+		doc, err := parseExecutableDocument(source)
+		if err != nil {
+			t.Fatalf("valid document refused: %v", err)
+		}
+		if err := doc.verifySelection("", "query", "viewer", nil, minimalSchema()); err != nil {
+			t.Fatalf("valid selection refused: %v", err)
+		}
+	}
+}
+
+func TestStrictIntrospectionContent(t *testing.T) {
+	schema := minimalSchema()
+	success, _ := json.Marshal(map[string]any{"data": map[string]any{"__schema": schema}})
+	if got, err := parseIntrospectionContent(success); err != nil || got.QueryType.Name != "RootQuery" {
+		t.Fatalf("successful execution result refused: %v", err)
+	}
+	bare, _ := json.Marshal(schema)
+	wrapper, _ := json.Marshal(map[string]any{"__schema": schema})
+	withErrors, _ := json.Marshal(map[string]any{"data": map[string]any{"__schema": schema}, "errors": []any{}})
+	stringified, _ := json.Marshal(string(success))
+	for _, raw := range []json.RawMessage{bare, wrapper, withErrors, stringified, json.RawMessage("null")} {
+		if _, err := parseIntrospectionContent(raw); err == nil {
+			t.Errorf("noncanonical content unexpectedly accepted: %s", raw)
+		}
+	}
+}
+
+func TestWellFormedGraphQLResponse(t *testing.T) {
+	valid := []map[string]any{
+		{"data": map[string]any{"viewer": "Ada"}},
+		{"data": nil, "errors": []any{map[string]any{"message": "failed"}}},
+		{"errors": []any{map[string]any{"message": "request rejected"}}},
+	}
+	for _, value := range valid {
+		if !wellFormedGraphQLResponse(value) {
+			t.Errorf("valid response refused: %#v", value)
+		}
+	}
+	invalid := []map[string]any{
+		{},
+		{"data": "not an object"},
+		{"errors": []any{}},
+		{"errors": []any{map[string]any{"code": "NO_MESSAGE"}}},
+	}
+	for _, value := range invalid {
+		if wellFormedGraphQLResponse(value) {
+			t.Errorf("invalid response accepted: %#v", value)
+		}
 	}
 }

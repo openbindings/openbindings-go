@@ -1,28 +1,20 @@
-# formats/graphql
+# `formats/graphql`
 
-GraphQL binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
+Go reference implementation of the published
+[`openbindings.graphql@1`](https://openbindings.com/binding-specs/graphql/1)
+binding specification.
 
-> **Legacy experimental adapter.** This package declares the historical
-> versionless `graphql` token. It is not an implementation of the unpromoted
-> `openbindings.graphql@1` candidate, is not one of the six published 0.2
-> binding specifications, and does not participate in the release's portable
-> synthesis-coverage guarantee.
+The package invokes GraphQL queries and mutations over GraphQL-over-HTTP,
+invokes subscriptions over the pinned `graphql-transport-ws` protocol,
+inspects GraphQL schemas, and synthesizes OpenBindings interfaces. It preserves
+the distinction the specification depends on: introspection identifies
+available root fields, but it cannot choose a caller's selection set.
 
-This package enables OpenBindings to invoke operations against GraphQL APIs and synthesize OBI documents from them. It discovers schemas via introspection, constructs queries with automatic selection sets, handles subscriptions over WebSocket, applies credentials as HTTP headers, and yields results through the SDK's cardinality-agnostic `Invocation` handle (subscriptions stream one output per event).
+## Install and register
 
-See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
-
-## Install
-
-```
+```sh
 go get github.com/openbindings/openbindings-go/formats/graphql
 ```
-
-Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the core SDK).
-
-## Usage
-
-### Register with OperationInvoker
 
 ```go
 import (
@@ -30,166 +22,126 @@ import (
     graphqlbinding "github.com/openbindings/openbindings-go/formats/graphql"
 )
 
-opInv := openbindings.NewOperationInvoker(graphqlbinding.NewInvoker())
+invoker := openbindings.NewOperationInvoker(graphqlbinding.NewInvoker())
 ```
 
-The invoker declares `graphql` and handles any GraphQL endpoint that supports introspection.
+The implementation advertises the exact identifier
+`openbindings.graphql@1`. Refs are exact and lower-case:
 
-### Invoke a binding
+```text
+query/<field>
+mutation/<field>
+subscription/<field>
+```
 
-Typically you don't call the invoker directly. The `OperationInvoker` routes operations to it based on the OBI's source format. But direct use is straightforward:
+The root-kind prefix is not a schema type name. Resolution follows the
+schema's actual query, mutation, or subscription root type.
+
+## Invoke
+
+Every invocation needs the exact executable GraphQL document. Supply it at
+`context.configuration.document` as either source text or an object with
+`source` and optional `operationName`:
 
 ```go
-invoker := graphqlbinding.NewInvoker()
+call := graphqlbinding.NewInvoker().InvokeBinding(ctx,
+    &openbindings.BindingInvocationArgs{
+        Source: openbindings.InvocationSource{
+            BindingSpec: graphqlbinding.BindingSpec,
+            Location:    "https://api.example.com/graphql",
+        },
+        Ref:         "query/viewer",
+        InputSchema: map[string]any{"type": "object"},
+        Context: map[string]any{
+            "configuration": map[string]any{
+                "document": map[string]any{
+                    "source":        "query Viewer($id: ID!) { viewer(id: $id) { id name } }",
+                    "operationName": "Viewer",
+                },
+                "protocolFields": map[string]any{
+                    "httpHeaders": map[string]any{
+                        "Authorization": "Bearer tok_123",
+                    },
+                },
+            },
+        },
+    })
 
-inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-    Source: openbindings.InvocationSource{
-        Format:   "graphql",
-        Location: "https://api.example.com/graphql",
-    },
-    Ref:     "Query/users",
-    Context: map[string]any{"bearerToken": "tok_123"},
-})
-
-// Input flows through the handle, not the args.
-if err := inv.Write(ctx, map[string]any{"limit": 10}); err != nil {
-    log.Fatal(err)
-}
-
-// Query: assert exactly one output.
-out, err := openbindings.Single(ctx, inv.Outputs())
-if err != nil {
-    log.Fatal(err) // terminal *openbindings.InvocationError
-}
-fmt.Println(out)
+_ = call.Write(ctx, map[string]any{"id": "user_1"})
+response, err := openbindings.Single(ctx, call.Outputs())
 ```
 
-### Synthesize an interface from a GraphQL endpoint
+The one caller input value, when present, must be an object and becomes the
+GraphQL variables map wholesale. `_query` is an ordinary variable name; this
+implementation never consumes it as metadata and never generates a document
+or selection set.
+
+The output is the complete GraphQL response envelope, including `data`,
+`errors`, and `extensions`. GraphQL errors remain in-band. Use an OBI
+`outputTransform` such as `data.viewer` when an operation contract
+intentionally exposes only the selected field.
+
+## Runtime configuration
+
+The Go implementation carries the specification's interpretation points below
+under `context.configuration`:
+
+- `document`: GraphQL source text, or
+  `{"source": "...", "operationName": "..."}`.
+- `subscriptionTarget`: required absolute `ws` or `wss` URI for a
+  subscription. It is never derived from the HTTP endpoint.
+- `protocolFields`: optional `httpHeaders`, `httpCookies`,
+  `websocketHeaders`, `websocketCookies`, and
+  `connectionInitPayload`.
+
+Header and cookie names identify their exact protocol locations. Generic
+`bearerToken`, `apiKey`, `basic`, and OAuth context do not identify such a
+location, so the invoker refuses them rather than inventing an Authorization
+scheme. Processor-owned HTTP and WebSocket fields, duplicate destinations,
+and raw-Cookie/cookie-entry collisions are also refused before dispatch.
+
+`content`, when present, must be one successful introspection execution-result
+object with no `errors` member and an object at `data.__schema`. It is a pin
+and completely displaces live introspection; wrapper-stripped, bare,
+stringified, and SDL representations are not accepted by revision 1.
+
+## Subscriptions
 
 ```go
-synth := graphqlbinding.NewSynthesizer()
-iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
-    Sources: []openbindings.SynthesizeSource{{
-        Format:   "graphql",
-        Location: "https://api.example.com/graphql",
-    }},
-})
-// iface is a fully-formed OBInterface with operations, bindings, and sources
-```
-
-## Conventions
-
-These are non-normative conventions specific to the `graphql` binding format. They define how this invoker and synthesizer interpret OBI fields.
-
-### Format token
-
-`graphql` (versionless). Matches any GraphQL endpoint that supports introspection.
-
-### Ref format
-
-Refs use the form `{RootType}/{fieldName}`:
-
-- `Query/users` - a query field
-- `Mutation/createUser` - a mutation field
-- `Subscription/onOrderUpdated` - a subscription field
-
-Root type names are PascalCase (`Query`, `Mutation`, `Subscription`), matching the canonical GraphQL type names. The ref identifies which field on which root type the binding targets.
-
-### Query construction via `_query` input property
-
-GraphQL requires a full query string including a selection set. The invoker determines what query to send using the operation's input schema.
-
-When the input schema contains a `_query` property with a `const` value, the invoker uses that as the query and passes all other input fields as GraphQL variables:
-
-```json
-{
-  "input": {
-    "type": "object",
-    "properties": {
-      "id": { "type": "string" },
-      "_query": {
-        "type": "string",
-        "const": "query($id: ID!) { user(id: $id) { id name email posts { title } } }"
-      }
+"configuration": map[string]any{
+    "document": "subscription { orderUpdates { id status } }",
+    "subscriptionTarget": "wss://api.example.com/graphql",
+    "protocolFields": map[string]any{
+        "connectionInitPayload": map[string]any{"token": "tok_123"},
     },
-    "required": ["id"]
-  }
 }
 ```
 
-The `_query` value is a complete, valid GraphQL query string with variable declarations and selection set. It is generated by the interface synthesizer at synthesis time from the introspected schema. Callers never need to provide it -- it's a const.
+Each `next.payload` is one complete output envelope. A protocol `error` is
+terminal without retracting already emitted outputs; cancellation attempts the
+protocol's `complete` exchange.
 
-When no `_query` const is present (e.g., direct invoker use without an OBI), the invoker falls back to building a query from introspection, auto-selecting all fields up to 3 levels deep with cycle detection. This fallback is useful for exploration but may not produce optimal queries for complex schemas.
+## Synthesis and coverage
 
-### Source expectations
+`NewSynthesizer()` inventories every non-introspection root field and creates
+one binding per field. Synthesized operations deliberately use broad schemas:
+an object variables boundary for input and a complete GraphQL response
+envelope for output. Projecting GraphQL argument or return types into a fixed
+JSON shape would falsely imply a selection set that introspection cannot
+choose.
 
-- **`location`**: The GraphQL HTTP endpoint URL (e.g., `https://api.example.com/graphql`). Required for invocation. Used for both queries/mutations (HTTP POST) and subscriptions (WebSocket upgrade).
-- **`content`**: Inline GraphQL introspection result (JSON). Accepts the standard response shape (`{"data": {"__schema": ...}}`), the `{"__schema": ...}` wrapper, or the bare schema object. When content is provided, the invoker skips the network introspection call.
-
-### Credential application
-
-GraphQL introspection does not expose security metadata. Credentials are applied as HTTP headers using the standard fallback chain:
-
-1. `bearerToken` context field sets `Authorization: Bearer <token>`
-2. `apiKey` context field sets `Authorization: ApiKey <key>`
-3. `basic` context fields set `Authorization: Basic <encoded>`
-
-Invocation options `headers` and `cookies` are also forwarded. If the server returns HTTP 401, the invocation fails with a terminal `ERR_AUTH_REQUIRED` error; GraphQL introspection exposes no security metadata, so there is no pre-dispatch `CONTEXT_REQUIRED` challenge — supply credentials via the binding context up front.
-
-### Subscriptions
-
-Subscription refs (e.g., `Subscription/onOrderUpdated`) are executed over WebSocket using the `graphql-transport-ws` sub-protocol. The invoker opens the connection, performs the protocol handshake, sends the subscribe message, and streams `next` payloads as outputs until `complete` or cancellation.
-
-### Consumer hooks
-
-The GraphQL `{ data, errors }` envelope is unambiguous: the invoker reads `data` as the output and treats a non-empty `errors` array as failure natively. This format **does not consult the consumer hooks seam** (`InvokeHooks`); a `DecodeOutput`, `Classify`, or `Route` hook has no effect, and `ob plan` reports it as `not-consulted`.
-
-### Type mapping (interface synthesis)
-
-When synthesizing an OBI from a GraphQL endpoint, types are mapped to JSON Schema as follows:
-
-| GraphQL | JSON Schema |
-|---------|-------------|
-| `String`, `ID` | `{"type": "string"}` |
-| `Int` | `{"type": "integer"}` |
-| `Float` | `{"type": "number"}` |
-| `Boolean` | `{"type": "boolean"}` |
-| Custom scalar | `{"type": "string"}` |
-| `[T]` | `{"type": "array", "items": <T>}` |
-| `T!` (NonNull) | Adds field to parent's `required` |
-| Object type | `{"type": "object", "properties": {...}}` |
-| Input object | Same, with NonNull fields in `required` |
-| Enum | `{"type": "string", "enum": [...]}` |
-| Union / Interface | `{"oneOf": [<member schemas>]}` |
-
-Recursive types are detected and terminated with `{"type": "object"}`. Fields are sorted alphabetically for deterministic output. Deprecated fields set `op.Deprecated = true`.
-
-## How it works
-
-### Invocation flow
-
-1. Reads the `_query` const from the operation's input schema if available
-2. If no `_query`, introspects the GraphQL endpoint (cached per URL) and builds a query with auto-generated selection set
-3. Sends the query as an HTTP POST with the caller's input as GraphQL variables
-4. Extracts the field-specific data from the response
-
-### Interface synthesis
-
-The synthesizer introspects the endpoint, extracts all Query/Mutation/Subscription fields, and generates an OBI with:
-
-- An operation per field, with input schema from arguments and output schema from return type
-- A `_query` const on each operation's input schema containing the pre-built query string
-- A binding per operation with a `{RootType}/{fieldName}` ref
+`SynthesizeInterfaceWithCoverage` reports exhaustive coverage of the observed
+root-field inventory. Each represented entry records the runtime requirement
+`document`; subscription entries additionally record `subscriptionTarget`.
+Pinned content is inspected without network access and displaces live schema
+acquisition.
 
 ## Resource bounds
 
-Delivery units — the query/mutation response body and each subscription
-WebSocket message (the socket's per-message read limit) — are
-consumer-bounded: set `MaxDeliveryUnitBytes` on the `OperationInvoker` (or
-per invocation on `BindingInvocationArgs`); zero selects
-`openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). The discovery-lane
-introspection fetch is deliberately fixed at the default — an artifact-side
-fetch, not a delivery unit.
+The invocation delivery-unit limit applies to each HTTP response body,
+introspection response, and subscription message. Set it on
+`BindingInvocationArgs` or the enclosing `OperationInvoker`; zero selects the
+SDK default.
 
 ## License
 
