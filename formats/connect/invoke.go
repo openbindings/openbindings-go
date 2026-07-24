@@ -42,12 +42,11 @@ type methodInfo struct {
 // mode; in descriptorless mode the segments ride verbatim into the
 // request URL.
 func parseRef(ref string) (string, string, error) {
-	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return "", "", fmt.Errorf("empty Connect ref")
 	}
-	idx := strings.LastIndex(ref, "/")
-	if idx < 0 || idx == 0 || idx == len(ref)-1 {
+	idx := strings.Index(ref, "/")
+	if idx < 0 || idx != strings.LastIndex(ref, "/") || idx == 0 || idx == len(ref)-1 {
 		return "", "", fmt.Errorf("Connect ref %q must be <fully-qualified-service>/<method> (openbindings.connect@1 CONN-D-03)", ref)
 	}
 	return ref[:idx], ref[idx+1:], nil

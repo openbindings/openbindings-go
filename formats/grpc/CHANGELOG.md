@@ -105,6 +105,10 @@
 
 ### Fixed
 
+- Binding refs now enforce GRPC-D-03's exactly-one-`/`, byte-exact grammar
+  before resolution. The parser no longer trims whitespace or lets an extra
+  separator survive until schema resolution.
+
 Schema-emission fixes that prevented real-world proto services from
 round-tripping through OB. OBI schemas now describe semantic types; wire
 encoding (JSON number vs string, proto varint, base64) is treated as an

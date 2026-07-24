@@ -6,6 +6,20 @@
 
 ### Changed
 
+- **Per-operation dependencies compose compatibility, invocability, and
+  caller policy without introducing a registry.** The core SDK now exposes
+  `OperationRequirement`, `CheckOperationCompatibility`,
+  `MatchOperationRequirement`, and `ResolveOperationRequirement`. A consumer
+  pairs an ordinary required OBI with a typed operation signature; an
+  application supplies concrete interfaces and its explicitly installed
+  `OperationInvoker`s. Matching is alias-aware, checks only the requested
+  operation against both complete schema graphs, performs side-effect-free
+  binding preflight, and carries advisory context requirements. The neutral
+  matcher returns every invocable match; the route-to-one convenience selects
+  a unique highest caller preference and refuses a tie as
+  `OperationRequirementAmbiguous`. Format modules remain optional and
+  separately linked.
+
 - **`FetchInterface` retains synthesis coverage.** A synthesized
   `FetchedInterface` now carries the durable `SynthesisCoverage` emitted by a
   coverage-capable synthesizer instead of discarding it at acquisition. A

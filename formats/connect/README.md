@@ -157,7 +157,10 @@ sources and bindings for the two access paths.
 
 ### Consumer hooks
 
-Like gRPC, protobuf framing plus the Connect envelope status fully determine decode and success. This format **does not consult the consumer hooks seam** (`InvokeHooks`); a `DecodeOutput`, `Classify`, or `Route` hook has no effect, and `ob plan` reports it as `not-consulted`.
+Like gRPC, protobuf framing plus the Connect envelope status fully determine
+decode and success. This binding implementation **does not consult the
+consumer hooks seam** (`InvokeHooks`); a `DecodeOutput`, `Classify`, or `Route`
+hook has no effect.
 
 ## Resource bounds
 

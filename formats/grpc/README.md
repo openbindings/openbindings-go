@@ -200,7 +200,11 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
 
 ### Consumer hooks
 
-protobuf framing is unambiguous: the response message type and the gRPC status code fully determine decode and success. This format **does not consult the consumer hooks seam** (`InvokeHooks`) — a `DecodeOutput`, `Classify`, or `Route` hook has no effect here, and `ob plan` reports it as `not-consulted`. Hooks matter for formats with open wire questions (openapi, asyncapi).
+protobuf framing is unambiguous: the response message type and the gRPC status
+code fully determine decode and success. This binding implementation **does
+not consult the consumer hooks seam** (`InvokeHooks`) — a `DecodeOutput`,
+`Classify`, or `Route` hook has no effect here. Hooks matter for binding
+specifications with exposed wire choices (OpenAPI and AsyncAPI).
 
 ## How it works
 

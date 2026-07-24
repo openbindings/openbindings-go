@@ -344,12 +344,11 @@ func toOBMetadata(md metadata.MD) openbindings.Metadata {
 // (`CoffeeShop/GetMenu` is legal), one '/', and the unqualified RPC name.
 // Matching downstream is byte-exact; no case folding.
 func parseRef(ref string) (string, string, error) {
-	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return "", "", fmt.Errorf("empty gRPC ref")
 	}
-	idx := strings.LastIndex(ref, "/")
-	if idx < 0 || idx == 0 || idx == len(ref)-1 {
+	idx := strings.Index(ref, "/")
+	if idx < 0 || idx != strings.LastIndex(ref, "/") || idx == 0 || idx == len(ref)-1 {
 		return "", "", fmt.Errorf("gRPC ref %q must be <fully-qualified-service>/<method> (openbindings.grpc@1 GRPC-D-03)", ref)
 	}
 	return ref[:idx], ref[idx+1:], nil

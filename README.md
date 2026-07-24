@@ -6,7 +6,7 @@ OpenBindings is an open standard: one interface, limitless bindings. An OBI (Ope
 
 **Spec version:** implements OpenBindings 0.2. To ask whether this SDK will accept a document of a given version, call `openbindings.IsSupportedVersion(version)` — the OBI-T-04 acceptance oracle: it returns true exactly when `Validate` / `ParseDocument` would process (not refuse) that version, so it is patch-lenient within a supported minor line (a 0.2.0 SDK accepts 0.2.1, 0.2.99, …) and refuses a different major, a pre-1.0 different minor, and unsupported prereleases. `openbindings.MinSupportedVersion` / `openbindings.MaxTestedVersion` / `openbindings.SupportedRange()` are a distinct, narrower notion — the maintainer-*tested* range — and a version can be accepted without falling inside it.
 
-**Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through OBI-D-12, OBI-D-16, and OBI-T-04 (OBI-D-13/D-14/D-15 take per-format knowledge and are left unverified, per the spec §14.2's partial-verification posture). OBI-D-02 (document validates against `openbindings.schema.json`) and OBI-D-11 (examples validate against their operation's input/output schemas) are enforced via [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema). The schema is embedded at build time (synced via `scripts/sync-schema.sh`). To exercise the core conformance corpus, check out the spec repo alongside this one (at `../spec`, or `./spec` inside the repo) and run `go test ./...` from the root module.
+**Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through OBI-D-12 and OBI-D-16 through OBI-D-18, plus the OBI-T-04 version-refusal rule. OBI-D-13 and the binding-specification-defined address cases of OBI-D-05 require knowledge of the exact governing binding specification; a core-only validator leaves those conclusions unverified rather than claiming conformity or non-conformity, per [§10.5](https://github.com/openbindings/spec/blob/main/openbindings.md#105-verification-conclusions). OBI-D-14 and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and OBI-D-17 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema); the core schema and locally required JSON Schema 2020-12 meta-schemas are embedded at build time. To exercise the core conformance corpus, check out the spec repo alongside this one (at `../spec`, or `./spec` inside the repo) and run `go test ./...` from the root module.
 
 The cross-SDK equivalence policy and corresponding public names are recorded
 in [`IMPLEMENTATION_PARITY.md`](IMPLEMENTATION_PARITY.md).
@@ -28,7 +28,14 @@ formats/
   operationgraph/          ← .../formats/operationgraph
 ```
 
-The format libraries previously lived in separate repos (`openbindings/openapi-go`, `openbindings/asyncapi-go`, etc.). They were consolidated into this monorepo because they all implement the same `BindingInvoker`/`InterfaceSynthesizer` interfaces from the core SDK and need to evolve in lockstep with it. This pattern matches the modern convention for first-party SDK families in Go (`aws-sdk-go-v2`, `googleapis/google-cloud-go`, `Azure/azure-sdk-for-go`, `open-telemetry/opentelemetry-go`, `kubernetes/kubernetes`).
+The binding libraries previously lived in separate repos
+(`openbindings/openapi-go`, `openbindings/asyncapi-go`, etc.). They were
+consolidated into this monorepo because they all implement the same
+`BindingInvoker`/`InterfaceSynthesizer` interfaces from the core SDK and need
+to evolve in lockstep with it. Their historical `formats/*` import paths are
+package locations, not a claim that every binding specification governs a
+document format: a binding specification may incorporate an artifact or
+protocol, define its own artifact, or govern an artifactless live surface.
 
 The [`ob` CLI](https://github.com/openbindings/ob) is built on this SDK but lives in its own repo, with its own versioning and release cadence.
 
@@ -104,7 +111,7 @@ import (
     openapi "github.com/openbindings/openbindings-go/formats/openapi"
 )
 
-// Wire up an operation invoker with the format(s) you need.
+// Wire up an operation invoker with the binding implementation(s) you need.
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 
 // Resolve an OBI from a URL (well-known discovery, with synthesis as the
@@ -141,6 +148,53 @@ for _, issue := range issues {
     fmt.Printf("%s: %s — %s\n", issue.Operation, issue.Kind, issue.Detail)
 }
 ```
+
+### Consume an operation contract
+
+An operation requirement is one typed signature paired with the ordinary,
+typically unbound OBI contract a consumer expects. The application supplies
+concrete, invocable interfaces; the consumer does not choose their protocols:
+
+```go
+requirement, err := openbindings.NewOperationRequirement(
+    requiredInterface,
+    OperationSignatures.CreateTask,
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+resolution, err := openbindings.ResolveOperationRequirement(
+    ctx,
+    requirement,
+    []openbindings.OperationImplementation{{
+        Interface: tasksAPI,
+        Invoker: openbindings.NewOperationInvoker(openapi.NewInvoker()),
+        Label: "tasks-api",
+    }},
+)
+if err != nil {
+    log.Fatal(err)
+}
+if resolution.Status == openbindings.OperationRequirementAvailable {
+    call := resolution.Match.Invoke(ctx)
+    _ = call.Write(ctx, CreateTaskInput{Title: "Ship it"})
+    task, err := openbindings.Single(ctx, call.Outputs())
+    // handle task / err
+}
+```
+
+Matching is per operation, alias-aware, schema-checked, and verifies that the
+supplied invoker can resolve a binding without side effects. Route-to-one
+resolution uses only caller-owned preference and refuses an equal tie as
+`OperationRequirementAmbiguous`. `MatchOperationRequirement` returns every
+match without imposing route, aggregate, race, fan-out, or fallback semantics.
+The SDK owns no registry; applications retain and refresh their own
+interface/delegate state.
+
+The core module imports no format module. An OpenAPI-only application depends
+only on the core module and `formats/openapi`; other binding implementations
+are neither linked nor shipped.
 
 ## Invocation model
 
@@ -331,24 +385,25 @@ behavior (the spec's tiebreak).
 
 ## Consumer configuration (hooks)
 
-Where a binding format's specification doesn't answer a wire question, the
-consumer configures the answer — the SDK never guesses from payload bytes.
+Where a binding specification exposes a consumer choice because its upstream
+authority does not answer a wire question, the consumer configures that
+choice — the SDK never guesses from payload bytes.
 Three hook axes cover the three wire questions:
 
 - **Decode** (`OutputDecoder`) — how raw bytes become an output value when
-  the format doesn't say (e.g. which lane a CLI's stdout carries).
+  the binding specification leaves configurable (e.g. which lane a CLI's
+  stdout carries).
 - **Classify** (`ResultClassifier`) — which outcomes are success when the
-  format doesn't say (e.g. diff(1)-style exit codes).
+  binding specification leaves configurable (e.g. diff(1)-style exit codes).
 - **Route** (`FieldRouter`) — which channel an input field rides (argv,
   stdin, a temp file) for exec-style formats.
 
 A hook declines by returning `ErrUseDefault`, falling through the chain:
-per-invocation (`WithOutputDecoder`, `WithResultClassifier`,
-`WithFieldRouter`) → invoker-level (the `OperationInvoker` fields) → the
-format's content-independent built-in assumption. Formats whose
-specifications answer their own wire questions (OpenAPI, gRPC) never
-consult hooks; the configuration burden is the honest signal of a format's
-completeness. See the invocation-configuration guide on
+  per-invocation (`WithOutputDecoder`, `WithResultClassifier`,
+  `WithFieldRouter`) → invoker-level (the `OperationInvoker` fields) → the
+  governing binding specification's explicitly documented fallback, if one
+  exists. Binding specifications whose upstream authorities answer their wire
+  questions do not expose that choice. See the invocation-configuration guide on
 [openbindings.com](https://openbindings.com/spec/invocation-configuration)
 for the full model.
 

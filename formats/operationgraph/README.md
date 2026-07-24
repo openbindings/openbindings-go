@@ -73,7 +73,7 @@ units.
 ## Links
 
 - [OpenBindings specification](https://openbindings.com/spec)
-- [Operation graph format spec](https://github.com/openbindings/spec/blob/main/formats/operation-graph/openbindings.operation-graph.md)
+- [Operation graph binding specification](https://github.com/openbindings/spec/blob/main/binding-specs/operation-graph/openbindings.operation-graph.md)
 - [Go SDK](https://github.com/openbindings/openbindings-go)
 
 ## License

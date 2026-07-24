@@ -145,7 +145,12 @@ HTTP leaves wire questions the OpenAPI document does not settle: which bytes-to-
 - **Classify** — the builtin verdict is HTTP status (2xx success); a `Classify` hook may reclassify (a 200 envelope carrying an application error, say).
 - **Route** — a hook may redirect where the payload is read from.
 
-Each invocation records how each decision was made in its trailer metadata (`x-ob-decode` / `x-ob-classify`), so a caller can see whether their hook fired: a builtin decision stamps a provenance token naming what decided it (`header/content-type` for decode, `assumption/2xx` for classify), and a hook decision stamps `hook`. Formats with unambiguous framing (grpc, connect, graphql, mcp) do not consult the seam; `ob plan` reports `not-consulted` for them.
+Each invocation records how each decision was made in its trailer metadata
+(`x-ob-decode` / `x-ob-classify`), so a caller can see whether their hook
+fired: a builtin decision stamps a provenance token naming what decided it
+(`header/content-type` for decode, `assumption/2xx` for classify), and a hook
+decision stamps `hook`. Binding families with unambiguous framing (gRPC,
+Connect, GraphQL, MCP) do not consult the seam.
 
 ### Interface synthesis
 

@@ -25,9 +25,14 @@ type CompatibilityIssue struct {
 	Detail    string
 }
 
-// CheckInterfaceCompatibility checks whether a provided interface satisfies
-// the requirements of a required interface. This is a tooling convention,
-// not a spec requirement: the spec leaves matching, comparison, and
+type requiredOperationEntry struct {
+	name      string
+	operation Operation
+}
+
+// CheckInterfaceCompatibility checks whether a provided interface is
+// compatible with a required interface. This is a tooling convention, not a
+// spec requirement: the spec leaves matching, comparison, and
 // selection to tools (see openbindings.md §2 Scope principle and the
 // schemaprofile package docstring). The algorithm below is the openbindings
 // reference tooling's matching convention; third-party tools may use
@@ -37,7 +42,8 @@ type CompatibilityIssue struct {
 // interface is searched by that name against its flat key+aliases namespace
 // (OBI-T-12): a provided operation matches if its key equals the required key
 // or one of its aliases does. Carrying the required contract's operation name
-// as an alias is exactly how an implementation claims to fulfill that contract.
+// asserts correspondence; the schema checks below separately evaluate
+// structural compatibility.
 //
 // For each matched pair, schemas are checked:
 //   - Output schemas must be compatible (provided output satisfies required output).
@@ -52,17 +58,53 @@ func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityI
 	if required == nil {
 		return nil
 	}
+
+	opKeys := make([]string, 0, len(required.Operations))
+	for k := range required.Operations {
+		opKeys = append(opKeys, k)
+	}
+	sort.Strings(opKeys)
+	entries := make([]requiredOperationEntry, 0, len(opKeys))
+	for _, opKey := range opKeys {
+		entries = append(entries, requiredOperationEntry{
+			name:      opKey,
+			operation: required.Operations[opKey],
+		})
+	}
+	return checkCompatibility(required, entries, provided)
+}
+
+// CheckOperationCompatibility checks one operation requirement against a
+// provided interface. operation is resolved against the required interface's
+// flat key+aliases namespace, then that exact identifier is matched against
+// the provided interface. Unrelated required operations neither help nor
+// prevent the result. Each side still normalizes schemas against its complete
+// containing document, preserving local $ref meaning.
+//
+// It returns ErrOperationNotFound when operation is not an identifier carried
+// by required.
+func CheckOperationCompatibility(required *Interface, operation string, provided *Interface) ([]CompatibilityIssue, error) {
+	if required == nil {
+		return nil, fmt.Errorf("%w: %s", ErrOperationNotFound, operation)
+	}
+	_, requiredOperation, ok := ResolveOperation(required, operation)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrOperationNotFound, operation)
+	}
+	return checkCompatibility(required, []requiredOperationEntry{{
+		name:      operation,
+		operation: requiredOperation,
+	}}, provided), nil
+}
+
+func checkCompatibility(required *Interface, requiredOperations []requiredOperationEntry, provided *Interface) []CompatibilityIssue {
 	if provided == nil {
-		// Sorted like the main lane below: issue order must never leak Go
-		// map iteration order.
-		opKeys := make([]string, 0, len(required.Operations))
-		for opKey := range required.Operations {
-			opKeys = append(opKeys, opKey)
-		}
-		sort.Strings(opKeys)
-		var issues []CompatibilityIssue
-		for _, opKey := range opKeys {
-			issues = append(issues, CompatibilityIssue{Operation: opKey, Kind: CompatibilityMissing})
+		issues := make([]CompatibilityIssue, 0, len(requiredOperations))
+		for _, entry := range requiredOperations {
+			issues = append(issues, CompatibilityIssue{
+				Operation: entry.name,
+				Kind:      CompatibilityMissing,
+			})
 		}
 		return issues
 	}
@@ -77,14 +119,9 @@ func CheckInterfaceCompatibility(required, provided *Interface) []CompatibilityI
 	reqNorm := &schemaprofile.Normalizer{Root: interfaceDocView(required)}
 	provNorm := &schemaprofile.Normalizer{Root: interfaceDocView(provided)}
 
-	opKeys := make([]string, 0, len(required.Operations))
-	for k := range required.Operations {
-		opKeys = append(opKeys, k)
-	}
-	sort.Strings(opKeys)
-
-	for _, opKey := range opKeys {
-		reqOp := required.Operations[opKey]
+	for _, entry := range requiredOperations {
+		opKey := entry.name
+		reqOp := entry.operation
 		_, provOp, ok := ResolveOperation(provided, opKey)
 		if !ok {
 			issues = append(issues, CompatibilityIssue{

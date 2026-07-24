@@ -105,6 +105,10 @@
 
 ### Fixed
 
+- Binding refs now enforce CONN-D-03's exactly-one-`/`, byte-exact grammar
+  before resolution. The parser no longer trims whitespace or lets an extra
+  separator survive until schema resolution.
+
 - **Non-2xx streaming error bodies read the full cap**: an off-by-one
   truncated a cap-sized Connect error body into invalid JSON, misclassifying
   the refusal.
