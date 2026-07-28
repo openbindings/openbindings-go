@@ -60,7 +60,7 @@ func minimalDoc() *openapi3.T {
 
 func mustConvertDocToInterface(t *testing.T, doc *openapi3.T, location string) openbindings.Interface {
 	t.Helper()
-	iface, err := convertDocToInterface(doc, location, nil)
+	iface, err := convertDocToInterface(doc, location, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

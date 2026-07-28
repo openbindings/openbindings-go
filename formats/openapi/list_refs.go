@@ -24,8 +24,10 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 
 	// Inspection and synthesis share the same realizability filter: an OAS
 	// operation whose revision-1 flattened boundary cannot be represented is
-	// not advertised as bindable merely because it appears under paths.
-	iface, err := convertDocToInterface(doc, source.Location, nil)
+	// not advertised as bindable merely because it appears under paths — it
+	// is filtered per operation (tolerant mode), never a reason to refuse
+	// inspecting the rest of the document.
+	iface, err := convertDocToInterface(doc, source.Location, nil, func(unrealizableTarget) {})
 	if err != nil {
 		return nil, err
 	}

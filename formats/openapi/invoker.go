@@ -230,23 +230,33 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
-	iface, _, err := c.synthesizeObserved(ctx, in)
+	iface, _, err := c.synthesizeObserved(ctx, in, nil)
 	return iface, err
 }
 
 // SynthesizeInterfaceWithCoverage converts an OpenAPI document and durably
 // accounts for every path operation, request-media alternative, callback, and
 // webhook observed by the same load.
+//
+// This surface is per-operation tolerant: an operation whose revision-1
+// flattened boundary cannot be represented is omitted from the OBI and
+// accounted for as an excluded target in coverage — a sound partial OBI with
+// every omission evidenced, never a whole-document refusal
+// (interface-synthesizer contract; core §10 posture). Strict synthesis
+// (SynthesizeInterface) is unchanged.
 func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
-	iface, doc, err := c.synthesizeObserved(ctx, in)
+	unrealizable := map[string]unrealizableTarget{}
+	iface, doc, err := c.synthesizeObserved(ctx, in, func(target unrealizableTarget) {
+		unrealizable[target.ref] = target
+	})
 	if err != nil {
 		return nil, err
 	}
-	entries := openAPISynthesisCoverage(doc, iface)
+	entries := openAPISynthesisCoverage(doc, iface, unrealizable)
 	return openbindings.NewSynthesisResult(iface, entries, true)
 }
 
-func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, *openapi3.T, error) {
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput, onUnrealizable func(unrealizableTarget)) (*openbindings.Interface, *openapi3.T, error) {
 	if len(in.Sources) == 0 {
 		skeleton, err := openbindings.SynthesisSkeleton(in)
 		return &skeleton, nil, err
@@ -288,7 +298,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 			in.OnWarning(w)
 		}
 	}
-	iface, err := convertDocToInterface(doc, loadLocation, warn)
+	iface, err := convertDocToInterface(doc, loadLocation, warn, onUnrealizable)
 	if err != nil {
 		return nil, nil, err
 	}

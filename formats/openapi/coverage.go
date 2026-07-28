@@ -19,7 +19,7 @@ import (
 // Incorporated parameter serialization, response selection, server
 // resolution, and security requirements are behavior of a represented target,
 // not independently addressable units.
-func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface) []openbindings.SynthesisCoverageEntry {
+func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, unrealizable map[string]unrealizableTarget) []openbindings.SynthesisCoverageEntry {
 	if doc == nil || iface == nil {
 		return []openbindings.SynthesisCoverageEntry{}
 	}
@@ -60,9 +60,23 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface) []
 				ref := buildJSONPointerRef(path, method)
 				identity, ok := byRef[ref]
 				if !ok {
-					// convertDocToInterface refuses before returning when a path
-					// operation admitted by the binding revision is not
-					// represented, so this is an implementation invariant.
+					// Tolerant synthesis skipped this operation with a
+					// recorded, spec-governed reason: a per-operation
+					// exclusion, not an implementation defect. Anything else
+					// genuinely missing remains an implementation invariant
+					// violation.
+					if skipped, recorded := unrealizable[ref]; recorded {
+						entries = append(entries, openbindings.SynthesisCoverageEntry{
+							SourceIndex: 0,
+							SourceRef:   ref,
+							Scope:       openbindings.SynthesisCoverageTarget,
+							Status:      openbindings.SynthesisExcluded,
+							ReasonCode:  skipped.reasonCode,
+							Rule:        skipped.rule,
+							Message:     skipped.message,
+						})
+						continue
+					}
 					entries = append(entries, openbindings.SynthesisCoverageEntry{
 						SourceIndex: 0,
 						SourceRef:   ref,

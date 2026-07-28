@@ -14,7 +14,30 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindings.SynthesizerWarning)) (openbindings.Interface, error) {
+// unrealizableTarget records a paths operation admitted by the artifact but
+// unrepresentable under revision 1's flattened boundary. Reported instead of
+// returned as an error when the caller opts into per-operation tolerance
+// (the coverage and inspection surfaces), so one unrepresentable operation
+// narrows coverage rather than vetoing the document (core §10's posture;
+// interface-synthesizer contract's "sound partial OBI").
+type unrealizableTarget struct {
+	ref          string
+	operationKey string
+	reasonCode   string
+	rule         string
+	message      string
+}
+
+// convertDocToInterface converts a loaded OpenAPI document into an
+// OpenBindings interface.
+//
+// When onUnrealizable is non-nil, an operation whose revision-1 flattened
+// boundary cannot be represented is reported and skipped — no operation, no
+// binding — and synthesis continues (tolerant mode). When nil, the same
+// condition returns an error (strict mode: SynthesizeInterface), preserving
+// the convenient strict surface's guarantee that it never returns a
+// statically unbindable partial interface without evidence.
+func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindings.SynthesizerWarning), onUnrealizable func(unrealizableTarget)) (openbindings.Interface, error) {
 	// The schema-dialect translation keys off the artifact's own declared
 	// version (3.0 vs 3.1); the identifier stays exact and version-free.
 	formatVersion := majorMinor(doc.OpenAPI)
@@ -50,6 +73,7 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 	// kin-openapi's MarshalJSON pass on operation input/output schemas.
 	// See inlineRefs / buildRefRegistry above for the rationale.
 	refRegistry := buildRefRegistry(doc)
+	cyclic := cyclicRefs(refRegistry)
 
 	usedKeys := map[string]bool{}
 
@@ -77,12 +101,24 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 
 			params := effectiveParameters(pathItem, op)
 			if field := unflattenableParam(params); field != "" {
-				return iface, unrealizableOperation(opKey, fmt.Sprintf("parameter %q has no unique revision-1 flattened identity", field))
+				reason := fmt.Sprintf("parameter %q has no unique revision-1 flattened identity", field)
+				if onUnrealizable != nil {
+					onUnrealizable(unrealizableTarget{
+						ref:          buildJSONPointerRef(path, method),
+						operationKey: opKey,
+						reasonCode:   "openapi.flattening_collision",
+						rule:         "OAPI-P-03",
+						message:      reason,
+					})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
 			}
 
 			var requestPlans []*bodyPlan
 			if op.RequestBody != nil && op.RequestBody.Value != nil {
 				plans, planErr := planRequestBodies(op)
+				plannedCount := len(plans)
 				if planErr == nil {
 					for _, plan := range plans {
 						if !candidateCollides(params, plan) {
@@ -95,6 +131,33 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 					reason := "no artifact-declared request media candidate can realize its required flattened input"
 					if planErr != nil {
 						reason = planErr.Error()
+					}
+					if onUnrealizable != nil {
+						// Every plannable candidate colliding with an
+						// independently declared parameter is the
+						// flattening-identity refusal (OAPI-P-03); a candidate
+						// set that never planned is the media-carriage refusal
+						// (OAPI-P-04).
+						allCollided := planErr == nil && plannedCount > 0
+						code := "openapi.unresolvable_request_body"
+						rule := "OAPI-P-04"
+						if allCollided {
+							code = "openapi.flattening_collision"
+							rule = "OAPI-P-03"
+						} else {
+							var dme *degenerateMediaError
+							if errors.As(planErr, &dme) {
+								code = "openapi.media_schema_mismatch"
+							}
+						}
+						onUnrealizable(unrealizableTarget{
+							ref:          buildJSONPointerRef(path, method),
+							operationKey: opKey,
+							reasonCode:   code,
+							rule:         rule,
+							message:      reason + "; the required request body has no faithful revision-1 carriage",
+						})
+						continue
 					}
 					return iface, unrealizableOperation(opKey, reason)
 				}
@@ -121,15 +184,16 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 				obiOp.Tags = op.Tags
 			}
 
+			opPointer := "#/operations/" + escapeJSONPointerSegment(opKey)
 			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, refRegistry)
 			if inputSchema != nil {
-				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry)
+				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry, cyclic, opPointer+"/input")
 				obiOp.Input = translateSchemaDialect(inlined, formatVersion)
 			}
 
 			outputSchema := buildOutputSchema(op)
 			if outputSchema != nil {
-				inlined := inlineRefsInOperationSchema(outputSchema, refRegistry)
+				inlined := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output")
 				obiOp.Output = translateSchemaDialect(inlined, formatVersion)
 			}
 
@@ -413,7 +477,10 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 			// the unresolved {"$ref"} in a phantom "body" property emits a
 			// contract the invoker then sends literally onto the wire.
 			if _, isRef := bodySchema["$ref"]; isRef {
-				if resolved, ok := inlineRefs(bodySchema, refRegistry, map[string]bool{}).(map[string]any); ok {
+				// nil decycle context: this expansion only informs the
+				// flatten decision; the embedded schema is decycled later by
+				// inlineRefsInOperationSchema.
+				if resolved, ok := inlineRefs(bodySchema, refRegistry, map[string]bool{}, nil).(map[string]any); ok {
 					bodySchema = resolved
 				}
 			}
@@ -685,6 +752,74 @@ func buildRefRegistry(doc *openapi3.T) map[string]any {
 	return registry
 }
 
+// cyclicRefs computes, once per document, the set of registry refs that
+// participate in a reference cycle (can reach themselves through $ref
+// strings). Mirrors the TS SDK's cyclicComponents (packages/openapi/src/util.ts).
+func cyclicRefs(registry map[string]any) map[string]bool {
+	// direct successor refs per registry entry
+	succ := make(map[string][]string, len(registry))
+	var collect func(node any, out *[]string)
+	collect = func(node any, out *[]string) {
+		switch v := node.(type) {
+		case map[string]any:
+			if ref, ok := v["$ref"].(string); ok && len(v) == 1 {
+				*out = append(*out, ref)
+				return
+			}
+			keys := make([]string, 0, len(v))
+			for k := range v {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				collect(v[k], out)
+			}
+		case []any:
+			for _, item := range v {
+				collect(item, out)
+			}
+		}
+	}
+	for ref, node := range registry {
+		var out []string
+		collect(node, &out)
+		succ[ref] = out
+	}
+	cyclic := make(map[string]bool)
+	for ref := range registry {
+		visited := map[string]bool{}
+		work := append([]string(nil), succ[ref]...)
+		for len(work) > 0 {
+			current := work[len(work)-1]
+			work = work[:len(work)-1]
+			if current == ref {
+				cyclic[ref] = true
+				break
+			}
+			if visited[current] {
+				continue
+			}
+			visited[current] = true
+			work = append(work, succ[current]...)
+		}
+	}
+	return cyclic
+}
+
+// defNameForRef derives the $defs key for a cyclic ref: the component name
+// for `#/components/schemas/X`, else the sanitized trailing pointer segment.
+func defNameForRef(ref string) string {
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		return ref[i+1:]
+	}
+	return ref
+}
+
+// escapeJSONPointerSegment escapes a string for use as an RFC 6901 segment.
+func escapeJSONPointerSegment(segment string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(segment, "~", "~0"), "/", "~1")
+}
+
 // inlineRefs walks `node` recursively and replaces every `{"$ref":
 // "#/components/schemas/X"}` object with the resolved schema from
 // `registry`. Resolution is iterative on the resolved value too, so
@@ -695,13 +830,33 @@ func buildRefRegistry(doc *openapi3.T) map[string]any {
 // the ref is left in place (the node keeps `{"$ref": "..."}`); the
 // codegen falls back to `unknown` for that field, which is the same
 // behavior the user would have seen before this fix.
-func inlineRefs(node any, registry map[string]any, seen map[string]bool) any {
+type decycleContext struct {
+	cyclic  map[string]bool
+	refBase string
+	defs    map[string]any
+}
+
+func inlineRefs(node any, registry map[string]any, seen map[string]bool, ctx *decycleContext) any {
 	switch v := node.(type) {
 	case map[string]any:
 		// Check if this object IS a ref.
 		if ref, ok := v["$ref"].(string); ok && len(v) == 1 {
+			if ctx != nil && ctx.cyclic[ref] {
+				// A cycle participant: every occurrence becomes a
+				// same-document reference to a hoisted $defs entry (the
+				// dialect's own recursion mechanism — OBI-D-16-resolvable
+				// from the OBI root). Mirrors the TS SDK's decycleSchema.
+				name := defNameForRef(ref)
+				if _, materialized := ctx.defs[name]; !materialized {
+					ctx.defs[name] = nil // reserve before expansion: terminates self-reference
+					if resolved, found := registry[ref]; found {
+						ctx.defs[name] = inlineRefs(resolved, registry, seen, ctx)
+					}
+				}
+				return map[string]any{"$ref": ctx.refBase + "/$defs/" + name}
+			}
 			if seen[ref] {
-				// Cycle: leave the ref in place.
+				// Cycle outside the registry graph: leave the ref in place.
 				return v
 			}
 			resolved, found := registry[ref]
@@ -711,20 +866,20 @@ func inlineRefs(node any, registry map[string]any, seen map[string]bool) any {
 			// Mark this ref as being expanded, recurse to inline
 			// any nested refs in the resolved value, then unmark.
 			seen[ref] = true
-			expanded := inlineRefs(resolved, registry, seen)
+			expanded := inlineRefs(resolved, registry, seen, ctx)
 			delete(seen, ref)
 			return expanded
 		}
 		// Recurse into each property.
 		out := make(map[string]any, len(v))
 		for k, val := range v {
-			out[k] = inlineRefs(val, registry, seen)
+			out[k] = inlineRefs(val, registry, seen, ctx)
 		}
 		return out
 	case []any:
 		out := make([]any, len(v))
 		for i, item := range v {
-			out[i] = inlineRefs(item, registry, seen)
+			out[i] = inlineRefs(item, registry, seen, ctx)
 		}
 		return out
 	default:
@@ -736,15 +891,20 @@ func inlineRefs(node any, registry map[string]any, seen map[string]bool) any {
 // input or output schema (a map[string]any built by schemaRefToMap or
 // buildInputSchema/buildOutputSchema). Returns the input map mutated
 // in place (and also returned, for chaining).
-func inlineRefsInOperationSchema(schema map[string]any, registry map[string]any) map[string]any {
+func inlineRefsInOperationSchema(schema map[string]any, registry map[string]any, cyclic map[string]bool, refBase string) map[string]any {
 	if schema == nil {
 		return nil
 	}
-	result := inlineRefs(schema, registry, map[string]bool{})
-	if m, ok := result.(map[string]any); ok {
-		return m
+	ctx := &decycleContext{cyclic: cyclic, refBase: refBase, defs: map[string]any{}}
+	result := inlineRefs(schema, registry, map[string]bool{}, ctx)
+	m, ok := result.(map[string]any)
+	if !ok {
+		return schema
 	}
-	return schema
+	if len(ctx.defs) > 0 {
+		m["$defs"] = ctx.defs
+	}
+	return m
 }
 
 // majorMinor reduces an artifact version string to its major.minor form
