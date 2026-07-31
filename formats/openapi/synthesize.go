@@ -188,13 +188,13 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, refRegistry)
 			if inputSchema != nil {
 				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry, cyclic, opPointer+"/input")
-				obiOp.Input = translateSchemaDialect(inlined, formatVersion)
+				obiOp.Input = normalizeOperationSchema(inlined, formatVersion, schemaSalvageWarner(warn, opKey, "input"))
 			}
 
 			outputSchema := buildOutputSchema(op)
 			if outputSchema != nil {
 				inlined := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output")
-				obiOp.Output = translateSchemaDialect(inlined, formatVersion)
+				obiOp.Output = normalizeOperationSchema(inlined, formatVersion, schemaSalvageWarner(warn, opKey, "output"))
 			}
 
 			iface.Operations[opKey] = obiOp
@@ -210,6 +210,25 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 	}
 
 	return iface, nil
+}
+
+// schemaSalvageWarner adapts the schema walker's drop callback to a
+// SynthesizerWarning at the operation's schema path. Salvage (dropping an
+// invalid `type` keyword the source spec shipped) must never be silent — the
+// warning is the evidence that the contract is looser than the artifact
+// claimed. Returns nil when there is no warn sink, which the walker treats
+// as "salvage without reporting".
+func schemaSalvageWarner(warn func(openbindings.SynthesizerWarning), opKey, side string) func(path, token string) {
+	if warn == nil {
+		return nil
+	}
+	return func(path, token string) {
+		warn(openbindings.SynthesizerWarning{
+			Code:    "openapi.invalid_schema_type",
+			Message: fmt.Sprintf("dropped invalid JSON Schema type %q declared by the source artifact; the salvaged position accepts any value", token),
+			Path:    fmt.Sprintf("operations.%s.%s%s", opKey, side, path),
+		})
+	}
 }
 
 func unrealizableOperation(operationKey, reason string) error {

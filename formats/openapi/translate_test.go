@@ -313,3 +313,93 @@ func TestTranslateSchemaDialect_DoesNotMutateInput(t *testing.T) {
 		t.Errorf("input was mutated: expected original type to remain 'string'")
 	}
 }
+
+// --- invalid-type salvage (OBI-D-17) -----------------------------------------
+// Real-world specs ship schemas like {type: ''} (PokeAPI does, on
+// evolution_detail.known_move). An invalid type constrains nothing; dropping
+// the keyword salvages the interface instead of rejecting every operation.
+
+func TestTranslateSchemaDialect_DropsEmptyStringType31(t *testing.T) {
+	in := map[string]any{"type": "", "nullable": true, "description": "x"}
+	// 3.1: nullable is a harmless unknown annotation and passes through; the
+	// invalid type keyword is dropped.
+	want := map[string]any{"nullable": true, "description": "x"}
+	got := translateSchemaDialect(in, "3.1")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestTranslateSchemaDialect_EmptyTypeWithNullable30KeepsNull(t *testing.T) {
+	in := map[string]any{"type": "", "nullable": true}
+	// 3.0: the nullable transform contributes "null"; the invalid member is
+	// filtered out of the resulting array.
+	want := map[string]any{"type": []any{"null"}}
+	got := translateSchemaDialect(in, "3.0")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestTranslateSchemaDialect_FiltersInvalidTypeArrayMembers(t *testing.T) {
+	in := map[string]any{"type": []any{"string", "", "integer"}}
+	want := map[string]any{"type": []any{"string", "integer"}}
+	got := translateSchemaDialect(in, "3.1")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestTranslateSchemaDialect_DropsNonStringType(t *testing.T) {
+	in := map[string]any{"type": float64(3)}
+	want := map[string]any{}
+	got := translateSchemaDialect(in, "3.1")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestTranslateSchemaDialect_SalvageRecursesIntoProperties31(t *testing.T) {
+	// A property literally named "type" stays a property; only the keyword
+	// position inside its schema is sanitized.
+	in := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"type": map[string]any{"type": ""},
+		},
+	}
+	want := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"type": map[string]any{},
+		},
+	}
+	got := translateSchemaDialect(in, "3.1")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestTranslateSchemaDialect_ValidTypesUntouched(t *testing.T) {
+	in := map[string]any{"type": []any{"string", "null"}, "description": "ok"}
+	got := translateSchemaDialect(in, "3.1")
+	if !reflect.DeepEqual(got, in) {
+		t.Errorf("got %#v, want %#v", got, in)
+	}
+}
+
+func TestNormalizeOperationSchema_ReportsDrops(t *testing.T) {
+	in := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"known_move": map[string]any{"type": ""},
+		},
+	}
+	var drops []string
+	normalizeOperationSchema(in, "3.1", func(path, token string) {
+		drops = append(drops, path+"="+token)
+	})
+	if len(drops) != 1 || drops[0] != "/properties/known_move/type=" {
+		t.Errorf("drops = %#v, want one entry at /properties/known_move/type", drops)
+	}
+}

@@ -1,6 +1,10 @@
 package openapi
 
-import "strings"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // translateSchemaDialect rewrites a JSON schema from OpenAPI 3.0's Draft-4
 // subset dialect into JSON Schema 2020-12. OBI documents are required to use
@@ -16,16 +20,31 @@ import "strings"
 //   - {exclusiveMinimum: false} (or unpaired) → drop the keyword
 //   - same for maximum / exclusiveMaximum
 //
-// 3.1 sources pass through unchanged (3.1 schemas are already 2020-12).
-// Unknown versions also pass through (forward-compatible).
+// For EVERY version (3.0 and 3.1 alike) the walk additionally salvages
+// obviously-invalid `type` constraints that would fail OBI validation
+// (OBI-D-17) — see normalizeOperationSchema. Unknown versions get the
+// salvage pass only (forward-compatible).
 func translateSchemaDialect(schema map[string]any, openapiVersion string) map[string]any {
-	if !isOpenAPI30(openapiVersion) {
-		return schema
-	}
+	return normalizeOperationSchema(schema, openapiVersion, nil)
+}
+
+// normalizeOperationSchema is translateSchemaDialect with drop evidence: it
+// rewrites the 3.0 dialect when applicable and, for all versions, salvages
+// `type` values that are not JSON Schema 2020-12 type names — a string that
+// is not one of the seven primitives is dropped, invalid members of a type
+// array are filtered out (dropping the keyword when nothing valid remains).
+// Real-world specs ship these (PokeAPI's openapi.yml declares `type: ''`),
+// and an invalid type constrains nothing — rejecting a whole
+// multi-operation interface over it hands the user a dead end for a spec
+// every other tool accepts. Salvage is never silent: each dropped token is
+// reported through onDrop with a JSON-pointer-style path into the schema so
+// callers can emit a SynthesizerWarning.
+func normalizeOperationSchema(schema map[string]any, openapiVersion string, onDrop func(path, token string)) map[string]any {
 	if schema == nil {
 		return nil
 	}
-	out, _ := translateNode(schema).(map[string]any)
+	w := &schemaWalker{legacy: isOpenAPI30(openapiVersion), onDrop: onDrop}
+	out, _ := w.node(schema, "").(map[string]any)
 	return out
 }
 
@@ -61,14 +80,35 @@ var schemaBearingSingleKeys = map[string]bool{
 	"unevaluatedProperties": true,
 }
 
-func translateNode(node any) any {
+// validSchemaTypes are the seven JSON Schema 2020-12 primitive type names —
+// the only values OBI-D-17 admits in a `type` keyword.
+var validSchemaTypes = map[string]bool{
+	"array":   true,
+	"boolean": true,
+	"integer": true,
+	"null":    true,
+	"number":  true,
+	"object":  true,
+	"string":  true,
+}
+
+// schemaWalker carries the per-run configuration through the recursive
+// rewrite: whether 3.0-dialect transforms apply, and where to report
+// salvage drops. Paths use JSON-pointer notation rooted at the schema
+// being normalized.
+type schemaWalker struct {
+	legacy bool
+	onDrop func(path, token string)
+}
+
+func (w *schemaWalker) node(node any, path string) any {
 	switch v := node.(type) {
 	case map[string]any:
-		return translateObject(v)
+		return w.object(v, path)
 	case []any:
 		out := make([]any, len(v))
 		for i, item := range v {
-			out[i] = translateNode(item)
+			out[i] = w.node(item, path+"/"+strconv.Itoa(i))
 		}
 		return out
 	default:
@@ -76,88 +116,132 @@ func translateNode(node any) any {
 	}
 }
 
-func translateObject(in map[string]any) map[string]any {
+func (w *schemaWalker) object(in map[string]any, path string) map[string]any {
 	out := make(map[string]any, len(in))
 
 	for k, v := range in {
-		if k == "nullable" || k == "exclusiveMinimum" || k == "exclusiveMaximum" {
+		if w.legacy && (k == "nullable" || k == "exclusiveMinimum" || k == "exclusiveMaximum") {
 			continue
 		}
 		switch {
 		case schemaBearingMapKeys[k]:
-			out[k] = translateSchemaMap(v)
+			out[k] = w.schemaMap(v, path+"/"+k)
 		case schemaBearingArrayKeys[k]:
-			out[k] = translateSchemaArray(v)
+			out[k] = w.schemaArray(v, path+"/"+k)
 		case schemaBearingSingleKeys[k]:
-			out[k] = translateNode(v)
+			out[k] = w.node(v, path+"/"+k)
 		default:
 			out[k] = v
 		}
 	}
 
-	if nullable, ok := in["nullable"].(bool); ok && nullable {
-		switch t := in["type"].(type) {
-		case string:
-			out["type"] = []any{t, "null"}
-		case []any:
-			if containsString(t, "null") {
-				cp := make([]any, len(t))
-				copy(cp, t)
-				out["type"] = cp
-			} else {
-				cp := make([]any, 0, len(t)+1)
-				cp = append(cp, t...)
-				cp = append(cp, "null")
-				out["type"] = cp
+	if w.legacy {
+		if nullable, ok := in["nullable"].(bool); ok && nullable {
+			switch t := in["type"].(type) {
+			case string:
+				out["type"] = []any{t, "null"}
+			case []any:
+				if containsString(t, "null") {
+					cp := make([]any, len(t))
+					copy(cp, t)
+					out["type"] = cp
+				} else {
+					cp := make([]any, 0, len(t)+1)
+					cp = append(cp, t...)
+					cp = append(cp, "null")
+					out["type"] = cp
+				}
 			}
+		}
+
+		if exMin, ok := in["exclusiveMinimum"].(bool); ok {
+			if exMin {
+				if m, hasMin := numericValue(in["minimum"]); hasMin {
+					out["exclusiveMinimum"] = m
+					delete(out, "minimum")
+				}
+			}
+		} else if m, hasNum := numericValue(in["exclusiveMinimum"]); hasNum {
+			out["exclusiveMinimum"] = m
+		}
+
+		if exMax, ok := in["exclusiveMaximum"].(bool); ok {
+			if exMax {
+				if m, hasMax := numericValue(in["maximum"]); hasMax {
+					out["exclusiveMaximum"] = m
+					delete(out, "maximum")
+				}
+			}
+		} else if m, hasNum := numericValue(in["exclusiveMaximum"]); hasNum {
+			out["exclusiveMaximum"] = m
 		}
 	}
 
-	if exMin, ok := in["exclusiveMinimum"].(bool); ok {
-		if exMin {
-			if m, hasMin := numericValue(in["minimum"]); hasMin {
-				out["exclusiveMinimum"] = m
-				delete(out, "minimum")
-			}
-		}
-	} else if m, hasNum := numericValue(in["exclusiveMinimum"]); hasNum {
-		out["exclusiveMinimum"] = m
-	}
-
-	if exMax, ok := in["exclusiveMaximum"].(bool); ok {
-		if exMax {
-			if m, hasMax := numericValue(in["maximum"]); hasMax {
-				out["exclusiveMaximum"] = m
-				delete(out, "maximum")
-			}
-		}
-	} else if m, hasNum := numericValue(in["exclusiveMaximum"]); hasNum {
-		out["exclusiveMaximum"] = m
-	}
+	w.salvageType(out, path)
 
 	return out
 }
 
-func translateSchemaMap(value any) any {
+// salvageType drops `type` values that no 2020-12 validator accepts. It runs
+// after the legacy transforms so a 3.0 {type: '', nullable: true} still keeps
+// the "null" member the nullable transform contributed.
+func (w *schemaWalker) salvageType(out map[string]any, path string) {
+	t, present := out["type"]
+	if !present {
+		return
+	}
+	switch v := t.(type) {
+	case string:
+		if !validSchemaTypes[v] {
+			delete(out, "type")
+			w.drop(path+"/type", v)
+		}
+	case []any:
+		kept := make([]any, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && validSchemaTypes[s] {
+				kept = append(kept, item)
+				continue
+			}
+			w.drop(path+"/type", stringify(item))
+		}
+		if len(kept) == 0 {
+			delete(out, "type")
+		} else if len(kept) < len(v) {
+			out["type"] = kept
+		}
+	default:
+		delete(out, "type")
+		w.drop(path+"/type", stringify(v))
+	}
+}
+
+func (w *schemaWalker) drop(path, token string) {
+	if w.onDrop != nil {
+		w.onDrop(path, token)
+	}
+}
+
+func (w *schemaWalker) schemaMap(value any, path string) any {
 	m, ok := value.(map[string]any)
 	if !ok {
 		return value
 	}
 	out := make(map[string]any, len(m))
 	for k, v := range m {
-		out[k] = translateNode(v)
+		out[k] = w.node(v, path+"/"+escapeJSONPointerSegment(k))
 	}
 	return out
 }
 
-func translateSchemaArray(value any) any {
+func (w *schemaWalker) schemaArray(value any, path string) any {
 	arr, ok := value.([]any)
 	if !ok {
 		return value
 	}
 	out := make([]any, len(arr))
 	for i, item := range arr {
-		out[i] = translateNode(item)
+		out[i] = w.node(item, path+"/"+strconv.Itoa(i))
 	}
 	return out
 }
@@ -181,4 +265,14 @@ func numericValue(v any) (any, bool) {
 		return v, true
 	}
 	return nil, false
+}
+
+// stringify renders a dropped token for the warning message. fmt.Sprintf
+// handles every JSON-decoded shape; strings pass through unchanged so the
+// common case (`type: ''` → "") reads literally.
+func stringify(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
 }

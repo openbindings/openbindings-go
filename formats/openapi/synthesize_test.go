@@ -670,3 +670,67 @@ func TestSynthesizeInterfaceWithCoverageCanProveFullRepresentation(t *testing.T)
 		t.Fatalf("ordinary paths-only document should be fully represented: %+v", result.Coverage.Entries)
 	}
 }
+
+// PokeAPI's published openapi.yml declares `type: ''` (empty string) inside
+// evolution-chain response schemas. Synthesis must salvage the dirty keyword
+// — with a warning — instead of failing validation and rejecting every
+// operation in the interface.
+func TestSynthesizeInterface_SalvagesInvalidTypeKeyword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dirty.json")
+	content := `{
+	  "openapi": "3.1.0",
+	  "info": {"title": "Dirty", "version": "1"},
+	  "paths": {
+	    "/chain": {
+	      "get": {
+	        "operationId": "getChain",
+	        "responses": {
+	          "200": {
+	            "description": "ok",
+	            "content": {
+	              "application/json": {
+	                "schema": {
+	                  "type": "object",
+	                  "properties": {
+	                    "known_move": {"type": "", "nullable": true},
+	                    "name": {"type": "string"}
+	                  }
+	                }
+	              }
+	            }
+	          }
+	        }
+	      }
+	    }
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var warnings []openbindings.SynthesizerWarning
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: path}},
+		OnWarning: func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) },
+	})
+	if err != nil {
+		t.Fatalf("synthesis must salvage the invalid type keyword, got: %v", err)
+	}
+	op, ok := iface.Operations["getChain"]
+	if !ok {
+		t.Fatalf("getChain missing from synthesized interface: %v", iface.Operations)
+	}
+	props, _ := op.Output.(map[string]any)["properties"].(map[string]any)
+	known, _ := props["known_move"].(map[string]any)
+	if _, still := known["type"]; still {
+		t.Errorf("invalid type keyword survived: %#v", known)
+	}
+	found := false
+	for _, w := range warnings {
+		if w.Code == "openapi.invalid_schema_type" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("salvage must not be silent; warnings = %#v", warnings)
+	}
+}
