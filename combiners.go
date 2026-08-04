@@ -164,5 +164,12 @@ func (c *combinedSynthesizer) InspectSource(ctx context.Context, source *Source)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrSourceInspectionUnsupported, source.BindingSpec)
 	}
-	return inspector.InspectSource(ctx, source)
+	inspection, err := inspector.InspectSource(ctx, source)
+	if inspection != nil && inspection.Targets == nil {
+		// A source with nothing bindable is a real, honest answer — but the
+		// contract declares targets as an array, and a nil slice marshals to
+		// JSON null, failing output validation at every wire consumer.
+		inspection.Targets = []BindableTarget{}
+	}
+	return inspection, err
 }
