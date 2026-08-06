@@ -26,14 +26,14 @@ jobs:
       # The conformance corpora are normative and live in the sibling spec and
       # interfaces repos; without these checkouts the corpus gates skip
       # silently (which is how the family + interface corpora went unverified
-      # on every PR). Unpinned default branch is deliberate: the SDK's main
-      # tracks the spec working draft, so main<->main is the correct pairing
-      # and drift should be loud. Every row needs the spec corpus (core + each
-      # family lane); only the root module runs the interface corpora
+      # on every PR). This pre-release integration branch tracks the matching
+      # non-default spec working branch. Every row needs the spec corpus (core
+      # + each family lane); only the root module runs the interface corpora
       # (selection + comparison), so interfaces is checked out on that row only.
       - uses: actions/checkout@v7
         with:
           repository: openbindings/spec
+          ref: chore/icon-refresh
           path: spec
       - uses: actions/checkout@v7
         if: matrix.module == '.'
