@@ -829,6 +829,18 @@ func (s *outputStream[I, O]) Read(ctx context.Context) (O, error) {
 			default:
 			}
 			if s.impl.pendingEmits.Load() == 0 {
+				// The final emitter publishes to outputCh before decrementing
+				// pendingEmits. The first drain above can race just ahead of
+				// that send, then observe the decrement and otherwise surface
+				// terminal with the accepted value still buffered. Once zero is
+				// observed, no new emitter can enter after done closed, so one
+				// final drain closes that window.
+				select {
+				case v := <-s.impl.outputCh:
+					return v, nil
+				default:
+					break
+				}
 				break
 			}
 			runtime.Gosched()
