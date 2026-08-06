@@ -257,7 +257,16 @@ paths:
 	}
 }
 
-func TestConvertDocToInterface_Preserves31Verbatim(t *testing.T) {
+func TestConvertDocToInterface_Salvages31StrayNullable(t *testing.T) {
+	// The wild's 3.1 documents routinely carry 3.0's removed `nullable`
+	// keyword — DRF hand-writes it into pagination schemas and
+	// drf-spectacular forwards it verbatim even in 3.1 mode (PokeAPI: 132
+	// occurrences). Preserved "verbatim", a 2020-12 validator ignores the
+	// unknown keyword and `type: string` rejects the very null the author
+	// declared, so pagination fails on exactly the first and last pages.
+	// The salvage matches the schema-comparison profile's unconditional
+	// normalization and, unlike 3.0 dialect translation, must leave drop
+	// evidence.
 	yaml := []byte(`openapi: 3.1.0
 info: { title: T, version: "1.0.0" }
 paths:
@@ -273,24 +282,65 @@ paths:
                 type: object
                 properties:
                   next: { type: [string, "null"], format: uri }
-                  legacy: { type: string, nullable: true }
+                  legacy: { type: string, nullable: true, format: uri }
+                  flagOff: { type: string, nullable: false }
 `)
 	doc, err := loadDocument("", yaml)
 	if err != nil {
 		t.Fatalf("loadDocument: %v", err)
 	}
-	iface := mustConvertDocToInterface(t, doc, "")
+	var warnings []openbindings.SynthesizerWarning
+	iface, err := convertDocToInterface(doc, "",
+		func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	op := iface.Operations["x"]
 	props := op.Output.(map[string]any)["properties"].(map[string]any)
 
-	legacy := props["legacy"].(map[string]any)
-	// In 3.1, nullable: true is an inert annotation; we pass it through.
-	if legacy["nullable"] != true {
-		t.Errorf("legacy.nullable = %#v, want true (3.1 inert annotation should pass through)", legacy["nullable"])
+	// A proper 3.1 type array passes through verbatim.
+	next := props["next"].(map[string]any)
+	nextType, ok := next["type"].([]any)
+	if !ok || len(nextType) != 2 || nextType[0] != "string" || nextType[1] != "null" {
+		t.Errorf("next.type = %#v, want [\"string\", \"null\"] verbatim", next["type"])
 	}
-	if legacy["type"] != "string" {
-		t.Errorf("legacy.type = %#v, want \"string\"", legacy["type"])
+
+	// A stray 3.0 nullable is translated, not preserved: union added,
+	// keyword gone, sibling keywords intact.
+	legacy := props["legacy"].(map[string]any)
+	legacyType, ok := legacy["type"].([]any)
+	if !ok || len(legacyType) != 2 || legacyType[0] != "string" || legacyType[1] != "null" {
+		t.Errorf("legacy.type = %#v, want [\"string\", \"null\"]", legacy["type"])
+	}
+	if _, still := legacy["nullable"]; still {
+		t.Errorf("legacy.nullable survived salvage: %#v", legacy)
+	}
+	if legacy["format"] != "uri" {
+		t.Errorf("legacy.format = %#v, want \"uri\" (siblings survive)", legacy["format"])
+	}
+
+	// nullable: false is meaningless in both dialects and simply drops.
+	flagOff := props["flagOff"].(map[string]any)
+	if _, still := flagOff["nullable"]; still {
+		t.Errorf("flagOff.nullable survived: %#v", flagOff)
+	}
+	if flagOff["type"] != "string" {
+		t.Errorf("flagOff.type = %#v, want \"string\" unchanged", flagOff["type"])
+	}
+
+	// Unlike 3.0 dialect translation, non-3.0 salvage is never silent.
+	var strays []openbindings.SynthesizerWarning
+	for _, w := range warnings {
+		if w.Code == "openapi.stray_nullable" {
+			strays = append(strays, w)
+		}
+	}
+	if len(strays) != 1 {
+		t.Fatalf("want exactly one stray_nullable warning (legacy only, not flagOff), got %#v", warnings)
+	}
+	if strays[0].Path != "operations.x.output/properties/legacy/nullable" {
+		t.Errorf("warning path = %q", strays[0].Path)
 	}
 }
 
@@ -721,8 +771,16 @@ func TestSynthesizeInterface_SalvagesInvalidTypeKeyword(t *testing.T) {
 	}
 	props, _ := op.Output.(map[string]any)["properties"].(map[string]any)
 	known, _ := props["known_move"].(map[string]any)
-	if _, still := known["type"]; still {
-		t.Errorf("invalid type keyword survived: %#v", known)
+	// {type: "", nullable: true} now lands the same place in every dialect:
+	// the nullable salvage contributes "null", the invalid "" member drops
+	// with evidence, and the union keeps what the author actually asserted —
+	// the outcome 3.0 has always documented for this exact shape.
+	knownType, isArray := known["type"].([]any)
+	if !isArray || len(knownType) != 1 || knownType[0] != "null" {
+		t.Errorf("known_move.type = %#v, want [\"null\"]", known["type"])
+	}
+	if _, still := known["nullable"]; still {
+		t.Errorf("stray nullable survived salvage: %#v", known)
 	}
 	found := false
 	for _, w := range warnings {

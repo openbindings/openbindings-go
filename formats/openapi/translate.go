@@ -13,17 +13,36 @@ import (
 //
 // Translations performed when openapiVersion is in the 3.0 family:
 //
-//   - {type: T, nullable: true}        → {type: [T, "null"]}
-//   - {type: [...], nullable: true}    → {type: [..., "null"]}
-//   - {nullable: true} without type    → drop the keyword
 //   - {minimum: N, exclusiveMinimum: true}   → {exclusiveMinimum: N}
 //   - {exclusiveMinimum: false} (or unpaired) → drop the keyword
 //   - same for maximum / exclusiveMaximum
 //
-// For EVERY version (3.0 and 3.1 alike) the walk additionally salvages
-// obviously-invalid `type` constraints that would fail OBI validation
-// (OBI-D-17) — see normalizeOperationSchema. Unknown versions get the
-// salvage pass only (forward-compatible).
+// Translations performed for EVERY version:
+//
+//   - {type: T, nullable: true}        → {type: [T, "null"]}
+//   - {type: [...], nullable: true}    → {type: [..., "null"]}
+//   - {nullable: true} without type    → drop the keyword
+//   - {nullable: false}                → drop the keyword
+//
+// The nullable transform is deliberately NOT gated on 3.0. OAS 3.1 removed
+// the keyword, but the median real-world 3.1 document still carries it —
+// not by authorial mistake but structurally: Django REST Framework's
+// pagination schemas hand-write `nullable: true` as raw dicts, and
+// drf-spectacular forwards them verbatim even in 3.1 mode, so every
+// DRF-backed 3.1 spec ships it (PokeAPI: 132 occurrences across 54 of 100
+// operations). A 2020-12 validator ignores the unknown keyword, leaving
+// `type: string` to reject the very null the author declared — pagination
+// then fails on exactly the first and last pages. The author's intent is
+// unambiguous, and the project's schema-comparison profile already
+// normalizes nullable unconditionally; synthesis matching it keeps
+// comparison and invocation telling the same story. In 3.0 the transform
+// is dialect translation and silent; in any other version it is SALVAGE of
+// a malformed document and reports drop evidence (openapi.stray_nullable).
+//
+// For EVERY version the walk additionally salvages obviously-invalid
+// `type` constraints that would fail OBI validation (OBI-D-17) — see
+// normalizeOperationSchema. Unknown versions get the salvage passes only
+// (forward-compatible).
 func translateSchemaDialect(schema map[string]any, openapiVersion string) map[string]any {
 	return normalizeOperationSchema(schema, openapiVersion, nil)
 }
@@ -39,11 +58,11 @@ func translateSchemaDialect(schema map[string]any, openapiVersion string) map[st
 // every other tool accepts. Salvage is never silent: each dropped token is
 // reported through onDrop with a JSON-pointer-style path into the schema so
 // callers can emit a SynthesizerWarning.
-func normalizeOperationSchema(schema map[string]any, openapiVersion string, onDrop func(path, token string)) map[string]any {
+func normalizeOperationSchema(schema map[string]any, openapiVersion string, report func(path, code, message string)) map[string]any {
 	if schema == nil {
 		return nil
 	}
-	w := &schemaWalker{legacy: isOpenAPI30(openapiVersion), onDrop: onDrop}
+	w := &schemaWalker{legacy: isOpenAPI30(openapiVersion), report: report}
 	out, _ := w.node(schema, "").(map[string]any)
 	return out
 }
@@ -98,7 +117,7 @@ var validSchemaTypes = map[string]bool{
 // being normalized.
 type schemaWalker struct {
 	legacy bool
-	onDrop func(path, token string)
+	report func(path, code, message string)
 }
 
 func (w *schemaWalker) node(node any, path string) any {
@@ -120,7 +139,9 @@ func (w *schemaWalker) object(in map[string]any, path string) map[string]any {
 	out := make(map[string]any, len(in))
 
 	for k, v := range in {
-		if w.legacy && (k == "nullable" || k == "exclusiveMinimum" || k == "exclusiveMaximum") {
+		// nullable never survives into the OBI in any version: translated
+		// into the type union when true (below), meaningless when false.
+		if k == "nullable" || (w.legacy && (k == "exclusiveMinimum" || k == "exclusiveMaximum")) {
 			continue
 		}
 		switch {
@@ -135,25 +156,34 @@ func (w *schemaWalker) object(in map[string]any, path string) map[string]any {
 		}
 	}
 
-	if w.legacy {
-		if nullable, ok := in["nullable"].(bool); ok && nullable {
-			switch t := in["type"].(type) {
-			case string:
-				out["type"] = []any{t, "null"}
-			case []any:
-				if containsString(t, "null") {
-					cp := make([]any, len(t))
-					copy(cp, t)
-					out["type"] = cp
-				} else {
-					cp := make([]any, 0, len(t)+1)
-					cp = append(cp, t...)
-					cp = append(cp, "null")
-					out["type"] = cp
-				}
+	// The nullable transform runs for every version: dialect translation in
+	// 3.0, salvage-with-evidence everywhere else (see the package comment for
+	// why the wild's 3.1 documents make the gate untenable).
+	if nullable, ok := in["nullable"].(bool); ok && nullable {
+		translated := false
+		switch t := in["type"].(type) {
+		case string:
+			out["type"] = []any{t, "null"}
+			translated = true
+		case []any:
+			if containsString(t, "null") {
+				cp := make([]any, len(t))
+				copy(cp, t)
+				out["type"] = cp
+			} else {
+				cp := make([]any, 0, len(t)+1)
+				cp = append(cp, t...)
+				cp = append(cp, "null")
+				out["type"] = cp
 			}
+			translated = true
 		}
+		if translated && !w.legacy {
+			w.strayNullable(path + "/nullable")
+		}
+	}
 
+	if w.legacy {
 		if exMin, ok := in["exclusiveMinimum"].(bool); ok {
 			if exMin {
 				if m, hasMin := numericValue(in["minimum"]); hasMin {
@@ -217,8 +247,24 @@ func (w *schemaWalker) salvageType(out map[string]any, path string) {
 }
 
 func (w *schemaWalker) drop(path, token string) {
-	if w.onDrop != nil {
-		w.onDrop(path, token)
+	if w.report != nil {
+		w.report(path, "openapi.invalid_schema_type", fmt.Sprintf(
+			"dropped invalid JSON Schema type %q declared by the source artifact; the salvaged position accepts any value",
+			token,
+		))
+	}
+}
+
+// strayNullable reports the non-3.0 nullable salvage. In 3.0 the same
+// transform is expected dialect translation and stays silent; under any
+// other version the keyword is malformed input whose repair must leave
+// evidence, per the salvage doctrine.
+func (w *schemaWalker) strayNullable(path string) {
+	if w.report != nil {
+		w.report(path, "openapi.stray_nullable",
+			"translated `nullable: true` carried by a non-3.0 artifact into a `type` union with \"null\"; "+
+				"OpenAPI 3.1 removed the keyword, and a 2020-12 validator would have ignored it and rejected null values",
+		)
 	}
 }
 

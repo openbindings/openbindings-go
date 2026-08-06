@@ -268,23 +268,34 @@ func TestTranslateSchemaDialect_PokeAPIPaginatedShape(t *testing.T) {
 	}
 }
 
-func TestTranslateSchemaDialect_Passthrough31(t *testing.T) {
+func TestTranslateSchemaDialect_Salvages31StrayNullable(t *testing.T) {
 	in := map[string]any{
 		"type":       []any{"string", "null"},
 		"properties": map[string]any{"x": map[string]any{"nullable": true}},
 	}
+	// The type array passes through verbatim; the stray nullable WITHOUT a
+	// type has no union to contribute to and simply drops (both dialects
+	// document that same outcome).
+	want := map[string]any{
+		"type":       []any{"string", "null"},
+		"properties": map[string]any{"x": map[string]any{}},
+	}
 	got := translateSchemaDialect(in, "3.1")
-	// passthrough returns the same map identity
-	if !reflect.DeepEqual(got, in) {
-		t.Errorf("got %#v, want %#v", got, in)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
 	}
 }
 
-func TestTranslateSchemaDialect_PassthroughUnknownVersion(t *testing.T) {
+func TestTranslateSchemaDialect_SalvagesNullableUnknownVersion(t *testing.T) {
+	// The nullable salvage is version-independent: the keyword means one
+	// thing wherever it appears, and OAPI-P-01 refuses genuinely unknown
+	// versions at load anyway, so this path only sees version strings from
+	// callers that bypassed discrimination.
 	in := map[string]any{"type": "string", "nullable": true}
+	want := map[string]any{"type": []any{"string", "null"}}
 	got := translateSchemaDialect(in, "4.0")
-	if !reflect.DeepEqual(got, in) {
-		t.Errorf("got %#v, want %#v", got, in)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
 	}
 }
 
@@ -321,9 +332,10 @@ func TestTranslateSchemaDialect_DoesNotMutateInput(t *testing.T) {
 
 func TestTranslateSchemaDialect_DropsEmptyStringType31(t *testing.T) {
 	in := map[string]any{"type": "", "nullable": true, "description": "x"}
-	// 3.1: nullable is a harmless unknown annotation and passes through; the
-	// invalid type keyword is dropped.
-	want := map[string]any{"nullable": true, "description": "x"}
+	// 3.1 now matches 3.0\'s documented outcome for this exact shape: the
+	// nullable transform contributes "null", the invalid "" member drops,
+	// and the union keeps what the author actually asserted.
+	want := map[string]any{"type": []any{"null"}, "description": "x"}
 	got := translateSchemaDialect(in, "3.1")
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %#v, want %#v", got, want)
@@ -396,10 +408,10 @@ func TestNormalizeOperationSchema_ReportsDrops(t *testing.T) {
 		},
 	}
 	var drops []string
-	normalizeOperationSchema(in, "3.1", func(path, token string) {
-		drops = append(drops, path+"="+token)
+	normalizeOperationSchema(in, "3.1", func(path, code, message string) {
+		drops = append(drops, path+"="+code)
 	})
-	if len(drops) != 1 || drops[0] != "/properties/known_move/type=" {
+	if len(drops) != 1 || drops[0] != "/properties/known_move/type=openapi.invalid_schema_type" {
 		t.Errorf("drops = %#v, want one entry at /properties/known_move/type", drops)
 	}
 }
