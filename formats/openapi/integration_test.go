@@ -554,12 +554,15 @@ func TestIntegration_MissingRequiredInput_NoDispatch(t *testing.T) {
 	}
 }
 
-// TestIntegration_NoInputOperationConvention verifies the operation-layer
-// no-input convention: a call carrying Binding != nil and InputSchema == nil
-// dispatches with empty input without waiting for a write — even when the
-// OpenAPI doc declares params (here a cookie-only param the OBI did not
-// express). The caller never writes nor closes.
-func TestIntegration_NoInputOperationConvention(t *testing.T) {
+// TestIntegration_BareCloseDispatchesWhenArtifactPermits verifies the
+// permissive half of bare-close adjudication (C2): a caller with nothing to
+// say says so by closing, and the ARTIFACT decides what that means. Here
+// /session declares only an optional cookie parameter the OBI never expressed,
+// so §9.1's required-declaration rule is satisfied and the call dispatches with
+// empty input. The operation's absent `input` member plays no part: it is not a
+// cardinality signal (core §6.2), and this same document dispatches identically
+// whether or not the OBI expressed a contract.
+func TestIntegration_BareCloseDispatchesWhenArtifactPermits(t *testing.T) {
 	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
@@ -572,13 +575,16 @@ func TestIntegration_NoInputOperationConvention(t *testing.T) {
 		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv.URL))},
 		Ref:     "#/paths/~1session/get",
 		Binding: &openbindings.BindingEntry{Operation: "getSession", Source: "api", Ref: "#/paths/~1session/get"},
-		// InputSchema nil → no-input operation; the binding closes input itself.
+		// InputSchema nil — the document makes no claim at this boundary.
 	})
-	// No Write, no Close: read directly (bounded by ctx so a parked binding
-	// fails the test instead of hanging it).
+	// The caller speaks: nothing to write, so it closes. Bounded by ctx so a
+	// parked binding fails the test instead of hanging it.
+	if err := call.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 	out, err := openbindings.Single(ctx, call.Outputs())
 	if err != nil {
-		t.Fatalf("no-input convention failed: %v", err)
+		t.Fatalf("bare close should dispatch when the artifact permits it: %v", err)
 	}
 	if m, _ := out.(map[string]any); m["ok"] != true {
 		t.Fatalf("got %v", out)
@@ -1354,5 +1360,65 @@ func TestIntegration_CollisionRefusesBeforeDispatch(t *testing.T) {
 	}
 	if requests.Load() != 0 {
 		t.Fatalf("collision refusal must precede dispatch, got %d requests", requests.Load())
+	}
+}
+
+// TestConformance_G1_AbsentInputIsNotNoInput is the executable form of the
+// core's §5.1 claim, and it FAILS today by design (conformance loop rev C1,
+// gap G-1).
+//
+// The core states that an absent `input` means no portable contract is
+// specified for that boundary — explicitly NOT that the interaction carries
+// zero values, because interaction shape is binding-specification-defined.
+// An author who omits `input` because the contract is unknown is making no
+// cardinality claim at all.
+//
+// Both reference implementations nonetheless read schema absence as a
+// no-input signal (see invoke.go's "Operation-layer no-input convention",
+// and the TypeScript mirror). The consequence is this test: an operation
+// whose artifact REQUIRES a request body, invoked through the operation
+// layer with `input` omitted, has its input side closed before the caller
+// can write — so a value the caller supplies is discarded and the service
+// receives an empty body.
+//
+// The correct signal is one line below the defect in the same switch:
+// `len(params) == 0 && !hasRequestBody(op)`, derived from the artifact,
+// which is where the spec says interaction shape lives.
+func TestConformance_G1_AbsentInputIsNotNoInput(t *testing.T) {
+	var body atomic.Value
+	body.Store("")
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		body.Store(string(raw))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"created": true})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// createWidget declares `requestBody: {required: true}`. The OBI omits
+	// `input`: no portable contract, no cardinality claim.
+	call := NewInvoker().InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv.URL))},
+		Ref:     "#/paths/~1widgets/post",
+		Binding: &openbindings.BindingEntry{Operation: "createWidget", Source: "api", Ref: "#/paths/~1widgets/post"},
+		// InputSchema nil — the document makes no claim at this boundary.
+	})
+
+	writeErr := call.Write(ctx, map[string]any{"name": "gadget"})
+	closeErr := call.Close()
+	_, readErr := openbindings.Single(ctx, call.Outputs())
+
+	sent, _ := body.Load().(string)
+	if !strings.Contains(sent, "gadget") {
+		t.Errorf("G-1: the caller's value never reached the service.\n"+
+			"  body received = %q\n"+
+			"  write err = %v, close err = %v, read err = %v\n"+
+			"  Absent `input` was read as a no-input cardinality signal; core §5.1 "+
+			"says absence means no CONTRACT is specified, not that the interaction "+
+			"carries zero values. Interaction shape is binding-specification-defined "+
+			"and must come from the artifact (here: requestBody.required), never from "+
+			"the document's schema slot.", sent, writeErr, closeErr, readErr)
 	}
 }
