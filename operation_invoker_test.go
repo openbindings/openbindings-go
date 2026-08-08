@@ -110,10 +110,9 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 		_ = h.SetHeader(Metadata{"x-mock": {"ping"}})
 		if m.opts.nativeFailure {
 			h.FireError(&InvocationError{
-				Code:    ErrCodeTimeout,
-				Message: "HTTP 504 Gateway Timeout",
-				Effects: EffectsPossible,
-				Details: map[string]any{
+				Code:    ErrCodeExecutionFailed,
+				Message: "upstream invocation failed",
+				Diagnostics: map[string]any{
 					"status": 504,
 					"httpResponse": map[string]any{
 						"body": map[string]any{"base64": "Z2F0ZXdheSB0aW1lb3V0", "byteLength": 15},
@@ -920,7 +919,7 @@ func TestOpPreflightWithoutResolverSurfaces(t *testing.T) {
 // Metadata pass-through
 // ---------------------------------------------------------------------------
 
-func TestOperationInvokerPreservesBindingNativeFailure(t *testing.T) {
+func TestOperationInvokerPreservesOptionalBindingDiagnostics(t *testing.T) {
 	op := newOpInvoker(&mockBindingInvoker{opts: mockOpts{nativeFailure: true}}, nil)
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("ping"))
 	_, err := drainOutputs(t, call)
@@ -928,14 +927,14 @@ func TestOperationInvokerPreservesBindingNativeFailure(t *testing.T) {
 	if !errors.As(err, &ie) {
 		t.Fatalf("expected InvocationError, got %v", err)
 	}
-	if ie.Code != ErrCodeTimeout || ie.Category != CategoryTransient || ie.Effects != EffectsPossible {
-		t.Fatalf("completion classification changed: %+v", ie)
+	if ie.Code != ErrCodeExecutionFailed {
+		t.Fatalf("completion code changed: %+v", ie)
 	}
-	details, _ := ie.Details.(map[string]any)
+	details, _ := ie.Diagnostics.(map[string]any)
 	response, _ := details["httpResponse"].(map[string]any)
 	body, _ := response["body"].(map[string]any)
 	if body["base64"] != "Z2F0ZXdheSB0aW1lb3V0" {
-		t.Fatalf("binding-native evidence changed: %+v", ie.Details)
+		t.Fatalf("binding-native diagnostics changed: %+v", ie.Diagnostics)
 	}
 }
 
@@ -1013,11 +1012,11 @@ func TestOpMetadataPassThrough(t *testing.T) {
 	if err != nil || len(vals) != 1 {
 		t.Fatalf("got %v err=%v", vals, err)
 	}
-	md, err := call.Header(shortCtx(t))
+	md, err := call.Diagnostics().Header(shortCtx(t))
 	if err != nil || len(md["x-mock"]) != 1 {
 		t.Fatalf("header: %v err=%v", md, err)
 	}
-	if tr := call.Trailer(); len(tr["x-mock-trailer"]) != 1 {
+	if tr := call.Diagnostics().Trailer(); len(tr["x-mock-trailer"]) != 1 {
 		t.Fatalf("trailer: %v", tr)
 	}
 }

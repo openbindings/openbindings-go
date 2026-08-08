@@ -336,7 +336,7 @@ func (e *httpError) invocationError() *openbindings.InvocationError {
 	if e.Truncated {
 		body["truncated"] = true
 	}
-	ierr.Details = map[string]any{
+	ierr.Diagnostics = map[string]any{
 		"status": e.StatusCode,
 		"body":   string(e.Body),
 		"httpResponse": map[string]any{
@@ -390,7 +390,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			// stable, library-independent message beats leaking the
 			// transport's raw close-frame text (TS parity: "WebSocket
 			// closed during handshake").
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: "WebSocket closed during handshake", Details: graphQLWSCloseDetails(err)})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: "WebSocket closed during handshake", Diagnostics: graphQLWSCloseDetails(err)})
 		} else {
 			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("connection_ack: %v", err)})
 		}
@@ -427,7 +427,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			// A stable message beats leaking the transport's raw close-frame
 			// text (TS parity: "WebSocket closed before subscription
 			// complete").
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: "WebSocket closed before subscription complete", Details: graphQLWSCloseDetails(err)})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: "WebSocket closed before subscription complete", Diagnostics: graphQLWSCloseDetails(err)})
 			return
 		}
 
@@ -471,7 +471,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			inv.FireError(&openbindings.InvocationError{
 				Code:    openbindings.ErrCodeExecutionFailed,
 				Message: message,
-				Details: map[string]any{"graphqlTransportWs": map[string]any{
+				Diagnostics: map[string]any{"graphqlTransportWs": map[string]any{
 					"type": "error", "payload": payload,
 					"payloadBase64": base64.StdEncoding.EncodeToString(msg.Payload),
 				}},

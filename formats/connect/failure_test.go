@@ -30,8 +30,8 @@ func TestFailureEvidenceFromHTTP(t *testing.T) {
 func TestFailureEvidenceFromEndStreamAndRejectsLocal(t *testing.T) {
 	payload := []byte(`{"error":{"code":"resource_exhausted","message":"quota"}}`)
 	err := &openbindings.InvocationError{
-		Code: openbindings.ErrCodeUnavailable,
-		Details: map[string]any{"connect": map[string]any{"endStream": map[string]any{
+		Code: openbindings.ErrCodeExecutionFailed,
+		Diagnostics: map[string]any{"connect": map[string]any{"endStream": map[string]any{
 			"error":   map[string]any{"code": "resource_exhausted", "message": "quota"},
 			"payload": map[string]any{"base64": base64.StdEncoding.EncodeToString(payload), "byteLength": len(payload)},
 		}}},

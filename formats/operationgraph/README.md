@@ -31,6 +31,16 @@ opInv.AddBindingInvoker(graphInv)
 
 Once registered, operation graph bindings are executed automatically when you call `Invoke` on an OBI that uses them.
 
+## Synthesis boundary
+
+This module intentionally provides a binding invoker, not an interface
+synthesizer. A graph composes operations named by its containing OBI and does
+not redeclare those operations' application input/output contracts. A graph
+artifact by itself therefore cannot determine a useful standalone OBI without
+inventing schemas or copying contracts from a separate interface. Author the
+composed operation and its graph binding in an OBI; use synthesis on the
+underlying brownfield sources that actually declare their application values.
+
 ## Node types
 
 The invoker supports all node types defined in the operation graph spec:

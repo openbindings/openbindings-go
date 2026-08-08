@@ -44,7 +44,7 @@ func TestUnaryPublish3xxIsFailure(t *testing.T) {
 	if ie.Code != openbindings.ErrCodeExecutionFailed {
 		t.Fatalf("3xx classifies via the SSE path's status table to ERR_EXECUTION_FAILED, got %s: %s", ie.Code, ie.Message)
 	}
-	if details, _ := ie.Details.(map[string]any); details["status"] != 302 {
+	if details, _ := ie.Diagnostics.(map[string]any); details["status"] != 302 {
 		t.Errorf("details.status = %v, want 302", details["status"])
 	}
 }

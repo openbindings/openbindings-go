@@ -8,9 +8,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// FailureEvidence is the source-native response preserved when an OpenAPI
-// invocation completes unsuccessfully. It is carried in InvocationError
-// details, never as an operation output.
+// FailureEvidence is optional source-native diagnostic evidence retained when
+// an OpenAPI invocation completes unsuccessfully. It is never an operation
+// output or an ordinary-caller dependency.
 type FailureEvidence struct {
 	HTTPResponse HTTPResponseEvidence
 	OpenAPI      FailureDeclaration
@@ -18,8 +18,7 @@ type FailureEvidence struct {
 
 // HTTPResponseEvidence is the HTTP response information available at the
 // binding boundary. BodyCaptured distinguishes an exact empty body from a body
-// that the invocation did not capture (currently possible for a non-2xx SSE
-// response, whose stream is cancelled at classification).
+// that the invocation did not capture.
 type HTTPResponseEvidence struct {
 	Status       int
 	StatusText   string
@@ -39,14 +38,14 @@ type FailureDeclaration struct {
 }
 
 // FailureEvidenceFrom extracts and validates the OpenAPI-native evidence from
-// an invocation error. It accepts details that crossed a JSON invoker frame as
+// an invocation error. It accepts diagnostics that crossed a JSON invoker frame as
 // well as the in-process map produced by this package.
 func FailureEvidenceFrom(err error) (FailureEvidence, bool) {
 	var invocationError *openbindings.InvocationError
-	if !errors.As(err, &invocationError) || invocationError == nil || invocationError.Details == nil {
+	if !errors.As(err, &invocationError) || invocationError == nil || invocationError.Diagnostics == nil {
 		return FailureEvidence{}, false
 	}
-	raw, marshalErr := json.Marshal(invocationError.Details)
+	raw, marshalErr := json.Marshal(invocationError.Diagnostics)
 	if marshalErr != nil {
 		return FailureEvidence{}, false
 	}

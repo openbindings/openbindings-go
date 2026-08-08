@@ -19,7 +19,7 @@ func TestFailureEvidenceFromInProcessAndJSONFrame(t *testing.T) {
 		},
 		"openapi": map[string]any{"declared": false},
 	}
-	err := &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: "HTTP 500", Details: details}
+	err := &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: "HTTP 500", Diagnostics: details}
 
 	assert := func(t *testing.T, err error) {
 		t.Helper()
@@ -51,7 +51,7 @@ func TestFailureEvidenceFromRejectsLocalErrorAndCorruptCapture(t *testing.T) {
 	}
 	corrupt := &openbindings.InvocationError{
 		Code: openbindings.ErrCodeExecutionFailed,
-		Details: map[string]any{
+		Diagnostics: map[string]any{
 			"httpResponse": map[string]any{"status": 500, "body": map[string]any{"base64": "AA==", "byteLength": 2}},
 			"openapi":      map[string]any{"declared": false},
 		},

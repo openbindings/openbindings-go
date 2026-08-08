@@ -51,7 +51,7 @@ func TestFailureEvidenceFromRejectsLocalAndMalformedEvidence(t *testing.T) {
 	}
 	malformed := &openbindings.InvocationError{
 		Code: openbindings.ErrCodeExecutionFailed,
-		Details: map[string]any{
+		Diagnostics: map[string]any{
 			"grpcStatus": map[string]any{
 				"code":    13,
 				"message": "bad detail",

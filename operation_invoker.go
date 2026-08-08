@@ -367,8 +367,9 @@ func (e *OperationInvoker) run(
 ) {
 	if (binding.InputTransform != nil || binding.OutputTransform != nil) && e.TransformEvaluator == nil {
 		caller.FireError(&InvocationError{
-			Code:    ErrCodeTransformError,
-			Message: fmt.Sprintf("%v: binding %q has a transform", ErrNoTransformEvaluator, bindingKey),
+			Code:        ErrCodeTransformError,
+			Message:     ErrNoTransformEvaluator.Error(),
+			Diagnostics: operationInvokerDiagnostics(bindingKey, nil),
 		})
 		return
 	}
@@ -384,8 +385,9 @@ func (e *OperationInvoker) run(
 		compiled, err := compileExampleSchema(op.Output, defs)
 		if err != nil {
 			caller.FireError(&InvocationError{
-				Code:    ErrCodeSchemaUnresolved,
-				Message: fmt.Sprintf("openbindings: output schema graph for %q could not be established: %v", bindingKey, err),
+				Code:        ErrCodeSchemaUnresolved,
+				Message:     fmt.Sprintf("openbindings: output schema graph for operation %q could not be established: %v", binding.Operation, err),
+				Diagnostics: operationInvokerDiagnostics(bindingKey, nil),
 			})
 			return
 		}
@@ -519,7 +521,7 @@ func (e *OperationInvoker) run(
 		// Bounded by the invocation ctx: our impl returns a settled header
 		// even under a cancelled ctx (non-blocking-first), and a foreign impl
 		// that never settles cannot hang the run loop.
-		if md, err := inner.Header(ctx); err == nil {
+		if md, err := inner.Diagnostics().Header(ctx); err == nil {
 			_ = caller.SetHeader(md)
 		}
 	}
@@ -529,7 +531,7 @@ func (e *OperationInvoker) run(
 		// Trailer panics on a not-yet-settled terminal race.
 		defer func() { _ = recover() }()
 		merged := Metadata{}
-		for k, v := range inner.Trailer() {
+		for k, v := range inner.Diagnostics().Trailer() {
 			merged[k] = v
 		}
 		// Per the conventions record (spec/binding-specs/README.md), the
@@ -684,8 +686,9 @@ func (e *OperationInvoker) pumpInputs(
 			if terr != nil {
 				inner.Cancel()
 				caller.FireError(&InvocationError{
-					Code:    ErrCodeTransformError,
-					Message: fmt.Sprintf("openbindings: input transform failed for %q: %v", bindingKey, terr),
+					Code:        ErrCodeTransformError,
+					Message:     fmt.Sprintf("openbindings: input transform failed: %v", terr),
+					Diagnostics: operationInvokerDiagnostics(bindingKey, nil),
 				})
 				return
 			}
@@ -738,8 +741,9 @@ func (e *OperationInvoker) runOutputs(
 			if terr != nil {
 				inner.Cancel()
 				return &InvocationError{
-					Code:    ErrCodeTransformError,
-					Message: fmt.Sprintf("openbindings: output transform failed for %q: %v", bindingKey, terr),
+					Code:        ErrCodeTransformError,
+					Message:     fmt.Sprintf("openbindings: output transform failed: %v", terr),
+					Diagnostics: operationInvokerDiagnostics(bindingKey, nil),
 				}, nil
 			}
 			data = transformed
@@ -751,26 +755,20 @@ func (e *OperationInvoker) runOutputs(
 			if verr := compiledOutput.Validate(data); verr != nil {
 				inner.Cancel()
 				lines := splitSchemaError(verr)
-				msg := fmt.Sprintf("openbindings: output validation failed for %q: %s", bindingKey, strings.Join(lines, "; "))
+				msg := fmt.Sprintf("openbindings: output validation failed for operation %q: %s", binding.Operation, strings.Join(lines, "; "))
 				// Contract-decided teaching: a hook-decoded value failing
 				// against a floor-stamped derived schema means the CONTRACT
 				// still declares the floor — the remedy is the schema
 				// election, not the hook.
 				if FloorStamped(outputSchema) && hooks.DecodeDecidedBy() == "hook" {
 					msg += " — the synthesized schema still declares the floor's string; elect the real output schema (a stored output-schema election on the operation)"
-				} else if tier := hooks.DecodeDecidedBy(); tier != "" {
-					// Decode-lane provenance in the MESSAGE, not only the
-					// x-ob-decode trailer stamp: a wrong decode lane (e.g.
-					// text when the payload was JSON but the header was
-					// absent) produces exactly this shape mismatch, and the
-					// first-touch reader needs the pointer where they look —
-					// in plain language, not the seam's internal vocabulary.
-					msg += fmt.Sprintf(" (the response was decoded as %s; if the service actually returned a different shape — say JSON without a Content-Type header — this mismatch is the symptom, and the fix is the response's declared type or a custom OutputDecoder)", describeDecodeTier(tier))
 				}
+				tier := hooks.DecodeDecidedBy()
 				return &InvocationError{
-					Code:    ErrCodeValidationFailed,
-					Message: msg,
-					Details: ValidationFailureDetails{Failures: collectValidationFailures(verr)},
+					Code:        ErrCodeValidationFailed,
+					Message:     msg,
+					Details:     ValidationFailureDetails{Failures: collectValidationFailures(verr)},
+					Diagnostics: operationInvokerDiagnostics(bindingKey, map[string]any{"decodeDecidedBy": tier}),
 				}, nil
 			}
 		}
@@ -784,6 +782,16 @@ func (e *OperationInvoker) runOutputs(
 			return nil, nil
 		}
 	}
+}
+
+func operationInvokerDiagnostics(bindingKey string, extra map[string]any) map[string]any {
+	details := map[string]any{"bindingKey": bindingKey}
+	for key, value := range extra {
+		if value != nil && value != "" {
+			details[key] = value
+		}
+	}
+	return map[string]any{"operationInvoker": details}
 }
 
 func (e *OperationInvoker) resolveContext(ctx context.Context, details *ContextRequiredDetails) (map[string]any, error) {
@@ -837,19 +845,6 @@ func makeInputValidator(op *Operation, iface *Interface, operationName string) f
 			}
 		}
 		return nil
-	}
-}
-
-// describeDecodeTier renders a decode tier for a first-touch error message:
-// the seam's internal names ("builtin", "hook") become plain descriptions.
-func describeDecodeTier(tier string) string {
-	switch tier {
-	case "builtin":
-		return "the format's default rule"
-	case "hook":
-		return "your custom OutputDecoder"
-	default:
-		return tier
 	}
 }
 

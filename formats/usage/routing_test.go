@@ -357,6 +357,18 @@ func TestHookTable_Hooks(t *testing.T) {
 	}
 	if _, err := decoder(usageSite("emit"), openbindings.RawResult{Body: []byte("not json")}); err == nil {
 		t.Error("decoder: expected a loud error on a non-JSON machine lane")
+	} else {
+		var invocationError *openbindings.InvocationError
+		if !errors.As(err, &invocationError) {
+			t.Fatalf("decoder: error = %T, want InvocationError", err)
+		}
+		if invocationError.Details != nil {
+			t.Fatalf("decoder: raw process evidence leaked into details: %#v", invocationError.Details)
+		}
+		diagnostics, ok := invocationError.Diagnostics.(map[string]any)
+		if !ok || diagnostics["usage"] == nil {
+			t.Fatalf("decoder: diagnostics = %#v, want explicit usage evidence", invocationError.Diagnostics)
+		}
 	}
 	if v, err := decoder(usageSite("emit"), openbindings.RawResult{Body: nil}); err != nil || v != nil {
 		t.Errorf("decoder empty: got (%v, %v), want (nil, nil)", v, err)

@@ -126,7 +126,7 @@ requests as enveloped `application/connect+json`. The Connect protocol permits
 `Connect-Protocol-Version: 1` to be sent or omitted; either artifact-permitted
 choice is valid.
 
-Responses are parsed as JSON. Connect error responses (with `code` and `message` fields) are mapped to standard error codes, mirroring the gRPC family per the binding-invoker contract: `unauthenticated` → `ERR_AUTH_REQUIRED`, `permission_denied` → `ERR_PERMISSION_DENIED`, `unavailable`/`resource_exhausted` → `ERR_UNAVAILABLE` (the server answered but refused as retryable — not a transport failure), `deadline_exceeded` → `ERR_TIMEOUT`, `canceled` → `ERR_CANCELLED`, anything else → `ERR_EXECUTION_FAILED`.
+Responses are parsed as JSON. Connect error responses complete unsuccessfully with the structural `ERR_EXECUTION_FAILED` code. Their native Connect error object and any HTTP response capture are optional diagnostics; the ordinary operation boundary does not derive portable auth, retry, or side-effect policy from Connect codes.
 
 Mapping does not replace native evidence. `FailureEvidenceFrom` recovers the
 complete parsed Connect error and either the exact non-200 HTTP response body
@@ -135,7 +135,7 @@ invoker-frame JSON round trip. A diagnostics-bound HTTP body is explicitly
 marked truncated rather than presented as complete. Data envelopes emitted
 before a later END_STREAM error remain outputs.
 
-Leading metadata (HTTP response headers) is available via the handle's `Header`; trailing metadata (Connect unary `Trailer-`-prefixed headers, or the streaming end-stream envelope's `metadata` field) via `Trailer`.
+Leading and trailing Connect/HTTP metadata is available only through the handle's explicit `Diagnostics()` view. It is not an operation value and correct ordinary invocation behavior must not depend on it.
 
 ### Streaming behavior
 

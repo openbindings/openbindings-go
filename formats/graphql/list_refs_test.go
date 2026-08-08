@@ -18,16 +18,19 @@ func TestInspectSourceUsesPinnedContentAndCanonicalRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !inspection.Exhaustive || len(inspection.Targets) != 4 {
+	if !inspection.Exhaustive || len(inspection.Targets) != 3 {
 		t.Fatalf("inspection = %#v", inspection)
 	}
 	refs := map[string]bool{}
 	for _, target := range inspection.Targets {
 		refs[target.Ref] = true
 	}
-	for _, ref := range []string{"query/status", "query/viewer", "mutation/status", "subscription/status"} {
+	for _, ref := range []string{"query/status", "query/viewer", "mutation/status"} {
 		if !refs[ref] {
 			t.Errorf("missing %q", ref)
 		}
+	}
+	if refs["subscription/status"] {
+		t.Fatal("revision 2 inspection exposed subscription/status")
 	}
 }

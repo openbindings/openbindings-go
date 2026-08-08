@@ -346,8 +346,29 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 			return
 		}
 		if !ok {
+			// A non-2xx event-stream response is one unsuccessful HTTP
+			// exchange, not a stream of successful operation values. Preserve
+			// its exact response bytes under the same consumer-owned delivery
+			// bound as the unary failure lane before emitting the terminal
+			// failure. Detecting SSE framing must never discard native evidence.
+			maxUnit := args.DeliveryUnitLimit()
+			failureBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxUnit+1))
 			_ = resp.Body.Close()
-			inv.FireError(openAPIFailureError(resp, nil, responseMatch))
+			if readErr != nil {
+				if bctx.Err() != nil {
+					return
+				}
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: readErr.Error()})
+				return
+			}
+			if int64(len(failureBody)) > maxUnit {
+				inv.FireError(&openbindings.InvocationError{
+					Code:    openbindings.ErrCodeResponseError,
+					Message: fmt.Sprintf("response exceeds %d byte limit", maxUnit),
+				})
+				return
+			}
+			inv.FireError(openAPIFailureError(resp, failureBody, responseMatch))
 			return
 		}
 		matched, mediaErr := governingResponseMedia(responseDecl, actualContentType)
@@ -586,18 +607,16 @@ func headerMetadata(h http.Header) openbindings.Metadata {
 	return md
 }
 
-// openAPIFailureError builds the binding-native evidence carried by an
-// unsuccessful OpenAPI HTTP exchange. The operation output stays empty; these
-// facts ride the invocation's error completion. httpResponse.body is base64 so
-// arbitrary wire bytes survive both in-process use and JSON invoker frames.
-// The older top-level status/body details are retained for SDK compatibility;
-// body there is only a convenience text view and is not the fidelity record.
+// openAPIFailureError retains expert diagnostic evidence for an unsuccessful
+// OpenAPI HTTP exchange. The operation output stays empty and ordinary callers
+// need none of these HTTP-shaped facts. httpResponse.body is base64 so the
+// optional diagnostic survives JSON invoker frames.
 func openAPIFailureError(resp *http.Response, body []byte, match *governingResponseMatch) *openbindings.InvocationError {
 	ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
-	details, _ := ierr.Details.(map[string]any)
+	details, _ := ierr.Diagnostics.(map[string]any)
 	if details == nil {
 		details = map[string]any{"status": resp.StatusCode}
-		ierr.Details = details
+		ierr.Diagnostics = details
 	}
 	if len(body) > 0 {
 		details["body"] = string(body)

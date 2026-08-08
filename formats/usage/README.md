@@ -121,7 +121,7 @@ Input schemas derived from usage specs inherit the source format's thin value ty
 2. Resolves the binding ref — a space-separated command path — against the command tree (empty ref = the root command)
 3. Consults the `FieldRouter` chain per input field and applies the channel mechanics (stdin piping, `-` operands, temp-file materialization) with loud slot-compatibility refusals, then builds argv from the remaining fields (flags by name, positionals in declared order)
 4. Executes the binary via `os/exec` with the constructed argv and routed stdin
-5. Classifies the exit through the seam (assumption: exit 0), decodes stdout through the seam (assumption: text), and emits the value with `x-exit-code`/`x-stderr` and the provenance stamps (`x-ob-decode`, `x-ob-classify`, per-field `x-ob-route`; see the conventions record, spec/binding-specs/README.md) as trailing metadata
+5. Classifies the exit through the seam (assumption: exit 0), decodes stdout through the seam (assumption: text), and emits the application value. Exit/stderr and decode/classify/route provenance are available only through the explicit `Diagnostics()` view.
 
 A rejected exit, signal termination, or post-process decode failure is terminal rather than an operation output. Its `usage.process` evidence preserves exit/signal identity, exact captured stdout/stderr bytes, and truncation markers; `FailureEvidenceFrom` validates and extracts that record after in-process use or an invoker-frame round trip. Successful stderr remains metadata, with a Base64 lane for arbitrary bytes.
 

@@ -1057,11 +1057,10 @@ func TestConformance_P07_BearerDoesNotSilentlyDropAPIKeyField(t *testing.T) {
 }
 
 // A non-200 streaming response's Connect error body is read whole so
-// applyConnectError can refine the terminal code, even when the body is
-// exactly the response cap: streaming.go reads maxResponseBytes+1 (matching
-// the unary path), so a cap-sized error payload is not truncated by one byte
-// into invalid JSON. Red before the +1 fix: the truncated body fails to parse
-// and the terminal code stays the HTTP-status-derived one.
+// applyConnectError retains the native Connect error diagnostically even when
+// the body is exactly the response cap: streaming.go reads
+// maxResponseBytes+1 (matching the unary path), so a cap-sized error payload
+// is not truncated by one byte into invalid JSON.
 func TestConformance_P06_StreamingErrorBodyReadWholeAtCapBoundary(t *testing.T) {
 	ctx := testContext(t)
 	// A Connect error body of exactly maxResponseBytes+1 (one byte over the
@@ -1074,9 +1073,8 @@ func TestConformance_P06_StreamingErrorBodyReadWholeAtCapBoundary(t *testing.T) 
 	body := prefix + strings.Repeat("x", padLen) + suffix
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 500 → HTTPError gives ERR_EXECUTION_FAILED; the Connect body code
-		// "unauthenticated" maps to ERR_AUTH_REQUIRED — distinct, so a read
-		// that parses the body changes the terminal code observably.
+		// The Connect body code stays native diagnostic evidence; it never
+		// selects a portable OpenBindings error code.
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = io.WriteString(w, body)
 	}))
@@ -1084,7 +1082,11 @@ func TestConformance_P06_StreamingErrorBodyReadWholeAtCapBoundary(t *testing.T) 
 
 	args := streamingArgs(srv.URL)
 	inv := invokeWith(t, ctx, NewInvoker(), args, map[string]any{"source": "s"})
-	_ = mustTerminalError(t, ctx, inv, openbindings.ErrCodeAuthRequired)
+	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
+	evidence, ok := FailureEvidenceFrom(ierr)
+	if !ok || evidence.Error["code"] != "unauthenticated" {
+		t.Fatalf("Connect error evidence was not retained: %+v", evidence)
+	}
 }
 
 // mustContent marshals a Go value into the raw-JSON content carriage

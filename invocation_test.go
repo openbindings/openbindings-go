@@ -536,10 +536,9 @@ func TestStopCancelsInvocation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Deadline vs. cancel classification (mid-stream) — parity with TS
-// invocation.test.ts. A lifetime DEADLINE is a TIMEOUT (transient / effects
-// possible: outputs may already have flowed, so retry-safety is "may have
-// executed"); an explicit cancel() is genuinely caller-initiated (cancelled).
+// Deadline vs. explicit cancellation (mid-stream) — parity with TS
+// invocation.test.ts. The codes remain distinct but imply no portable retry
+// or side-effect policy; outputs may already have flowed in either case.
 // ---------------------------------------------------------------------------
 
 func invErrOf(t *testing.T, err error) *InvocationError {
@@ -552,7 +551,7 @@ func invErrOf(t *testing.T, err error) *InvocationError {
 }
 
 // A mid-stream lifetime deadline: already-emitted outputs STAND, then exactly
-// one terminal ERR_TIMEOUT (transient / possible). Deterministic classification.
+// one terminal ERR_TIMEOUT. Previously emitted outputs still stand.
 func TestMidStreamDeadlineIsTimeout(t *testing.T) { // SS
 	ctx, cancel := context.WithTimeout(bg(), 60*time.Millisecond)
 	t.Cleanup(cancel)
@@ -576,16 +575,10 @@ func TestMidStreamDeadlineIsTimeout(t *testing.T) { // SS
 	if ie.Code != ErrCodeTimeout {
 		t.Fatalf("code = %q, want ERR_TIMEOUT", ie.Code)
 	}
-	if ie.Category != CategoryTransient {
-		t.Errorf("category = %q, want transient", ie.Category)
-	}
-	if ie.Effects != EffectsPossible {
-		t.Errorf("effects = %q, want possible", ie.Effects)
-	}
 }
 
 // An explicit cancel() mid-stream: outputs stand, then exactly one
-// ERR_CANCELLED (cancelled). Unchanged by the deadline fix.
+// ERR_CANCELLED. Unchanged by the deadline fix.
 func TestMidStreamCancelStaysCancelled(t *testing.T) { // SS
 	inv := NewInvocationImpl[any, int](bg())
 	if err := inv.EmitOutput(1); err != nil {
@@ -601,9 +594,6 @@ func TestMidStreamCancelStaysCancelled(t *testing.T) { // SS
 	if ie.Code != ErrCodeCancelled {
 		t.Fatalf("code = %q, want ERR_CANCELLED", ie.Code)
 	}
-	if ie.Category != CategoryCancelled {
-		t.Errorf("category = %q, want cancelled", ie.Category)
-	}
 }
 
 // A caller-supplied deadline that fires via the AfterFunc classifies as a
@@ -615,8 +605,8 @@ func TestDeadlineWithoutOutputIsTimeout(t *testing.T) {
 	inv := NewInvocationImpl[any, int](ctx)
 	_, err := collectStream(t, inv.Outputs())
 	ie := invErrOf(t, err)
-	if ie.Code != ErrCodeTimeout || ie.Category != CategoryTransient || ie.Effects != EffectsPossible {
-		t.Fatalf("deadline terminal = {%s %s %s}, want {ERR_TIMEOUT transient possible}", ie.Code, ie.Category, ie.Effects)
+	if ie.Code != ErrCodeTimeout {
+		t.Fatalf("deadline terminal code = %s, want ERR_TIMEOUT", ie.Code)
 	}
 }
 
@@ -634,11 +624,11 @@ func TestPreExpiredDeadlineIsTimeout(t *testing.T) {
 
 // AsInvocationError distinguishes a deadline (TIMEOUT) from a cancel (CANCELLED).
 func TestAsInvocationErrorDeadlineIsTimeout(t *testing.T) {
-	if ie := AsInvocationError(context.DeadlineExceeded); ie.Code != ErrCodeTimeout || ie.Category != CategoryTransient || ie.Effects != EffectsPossible {
-		t.Errorf("DeadlineExceeded → {%s %s %s}, want {ERR_TIMEOUT transient possible}", ie.Code, ie.Category, ie.Effects)
+	if ie := AsInvocationError(context.DeadlineExceeded); ie.Code != ErrCodeTimeout {
+		t.Errorf("DeadlineExceeded → %s, want ERR_TIMEOUT", ie.Code)
 	}
-	if ie := AsInvocationError(context.Canceled); ie.Code != ErrCodeCancelled || ie.Category != CategoryCancelled {
-		t.Errorf("Canceled → {%s %s}, want {ERR_CANCELLED cancelled}", ie.Code, ie.Category)
+	if ie := AsInvocationError(context.Canceled); ie.Code != ErrCodeCancelled {
+		t.Errorf("Canceled → %s, want ERR_CANCELLED", ie.Code)
 	}
 }
 

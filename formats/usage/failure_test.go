@@ -8,7 +8,7 @@ import (
 )
 
 func TestFailureEvidenceFrom(t *testing.T) {
-	err := &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Details: map[string]any{
+	err := &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Diagnostics: map[string]any{
 		"usage": map[string]any{"process": map[string]any{
 			"exitCode": -1, "signal": "SIGTERM",
 			"stdout": map[string]any{"base64": "cGFydGlhbA==", "byteLength": 7, "truncated": true},

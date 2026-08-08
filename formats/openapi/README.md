@@ -63,11 +63,10 @@ An HTTP response classified as unsuccessful completes with a terminal
 `openapi.FailureEvidenceFrom(err)` to recover the native HTTP status, headers,
 final URL/status text where available, exact response bytes, and the OpenAPI
 Response Object key/media that governed the response. `BodyCaptured` separates
-an exact empty body from an uncaptured body. The latter currently occurs for a
-non-2xx SSE response, which is classified and cancelled without waiting for a
-possibly unbounded stream to end. The legacy `openbindings.HTTPStatus` and
-`HTTPResponseBody` accessors remain available for status and a convenience
-text view.
+an exact empty body from an uncaptured body. Non-2xx SSE responses use the same
+bounded exact-byte capture as unary failures. The legacy
+`openbindings.HTTPStatus` and `HTTPResponseBody` accessors remain available for
+status and a convenience text view.
 
 ### Synthesize an interface from an OpenAPI spec
 

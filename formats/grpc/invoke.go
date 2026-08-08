@@ -429,42 +429,14 @@ func responseToJSON(resp proto.Message) (any, error) {
 	return result, nil
 }
 
-// grpcError maps a gRPC error to a terminal *InvocationError, implementing the
-// binding-invoker contract's gRPC status→code table. The gRPC status code (and
-// any status details) ride along in Details; the category follows from the
-// mapped code via the canonical code→category map, and Effects is stamped
-// where the status proves it — UNAVAILABLE and RESOURCE_EXHAUSTED are the
-// server refusing the request before it executed (EffectsNone, safe to
-// backoff-retry), while DEADLINE_EXCEEDED (mapped to ERR_TIMEOUT) was
-// dispatched and so is left to its EffectsPossible default. A status with no
-// named special mapping remains ERR_EXECUTION_FAILED per the interface's
-// native-status table. Only a non-status error — e.g. a local stream failure
-// with no gRPC status at all — falls back to fallbackCode.
+// grpcError reports unsuccessful completion without projecting gRPC's status
+// space into a portable error taxonomy. The complete native status is retained
+// only on the explicit diagnostic lane. A non-status local error uses the
+// caller-supplied SDK code.
 func grpcError(err error, fallbackCode string) *openbindings.InvocationError {
 	s, ok := status.FromError(err)
 	if !ok {
 		return &openbindings.InvocationError{Code: fallbackCode, Message: err.Error()}
-	}
-
-	// Once a real gRPC status exists, its native status space — not the point
-	// in the stream where it arrived — owns classification. The fallback is
-	// only for errors with no gRPC status.
-	code := openbindings.ErrCodeExecutionFailed
-	var effects openbindings.Effects
-	switch s.Code() {
-	case codes.Unauthenticated:
-		code = openbindings.ErrCodeAuthRequired
-	case codes.PermissionDenied:
-		code = openbindings.ErrCodePermissionDenied
-	case codes.Unavailable, codes.ResourceExhausted:
-		// The server answered, declining the request as retryable — reached,
-		// not a transport failure — and refused it before executing.
-		code = openbindings.ErrCodeUnavailable
-		effects = openbindings.EffectsNone
-	case codes.DeadlineExceeded:
-		code = openbindings.ErrCodeTimeout
-	case codes.Canceled:
-		code = openbindings.ErrCodeCancelled
 	}
 
 	statusDetails := make([]any, 0, len(s.Proto().GetDetails()))
@@ -481,7 +453,7 @@ func grpcError(err error, fallbackCode string) *openbindings.InvocationError {
 	if len(statusDetails) > 0 {
 		grpcStatus["details"] = statusDetails
 	}
-	details := map[string]any{
+	diagnostics := map[string]any{
 		"grpcCode":   s.Code().String(),
 		"grpcStatus": grpcStatus,
 	}
@@ -498,11 +470,15 @@ func grpcError(err error, fallbackCode string) *openbindings.InvocationError {
 			}
 		}
 		if len(ds) > 0 {
-			details["grpcDetails"] = ds
+			diagnostics["grpcDetails"] = ds
 		}
 	}
 
-	return &openbindings.InvocationError{Code: code, Message: err.Error(), Effects: effects, Details: details}
+	message := s.Message()
+	if message == "" {
+		message = "Invocation completed unsuccessfully"
+	}
+	return &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: message, Diagnostics: diagnostics}
 }
 
 // refResolveError maps a reflection-resolution failure. Transport-level

@@ -1398,7 +1398,7 @@ func headerMetadata(hdr http.Header) openbindings.Metadata {
 }
 
 // httpStatusError builds the terminal error for an HTTP error response,
-// attaching the (parsed) body to Details alongside the status.
+// attaching the bounded body to the explicit diagnostic lane.
 func httpStatusError(resp *http.Response) *openbindings.InvocationError {
 	ie := openbindings.HTTPError(resp.StatusCode, resp.Status)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
@@ -1409,12 +1409,12 @@ func httpStatusError(resp *http.Response) *openbindings.InvocationError {
 	if len(body) > maxResponseBytes {
 		details["body"] = fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes)
 	} else {
-		// The raw capture, verbatim: error details carry bytes-as-text,
+		// The raw capture, verbatim: diagnostics carry bytes-as-text,
 		// never a sniffed parse (payload-independence, per the conventions
 		// record's recommended built-in defaults).
 		details["body"] = string(body)
 	}
-	ie.Details = details
+	ie.Diagnostics = details
 	return ie
 }
 

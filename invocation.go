@@ -150,9 +150,7 @@ type ContextRequiredDetails struct {
 
 // NewContextRequiredError constructs the canonical CONTEXT_REQUIRED terminal error.
 func NewContextRequiredError(message string, details *ContextRequiredDetails) *InvocationError {
-	e := &InvocationError{Code: ErrCodeContextRequired, Message: message, Details: details}
-	e.classify()
-	return e
+	return &InvocationError{Code: ErrCodeContextRequired, Message: message, Details: details}
 }
 
 // ContextRequiredFrom narrows a terminal error to a CONTEXT_REQUIRED
@@ -201,7 +199,7 @@ func ContextRequiredFrom(err *InvocationError) *ContextRequiredDetails {
 // caller→binding channel and the binding decides when to dispatch.
 //
 // Outputs are outputs; errors are errors: OutputStream.Read returns one or
-// the other per call, never both. The method ctx on Write/Read/Header bounds
+// the other per call, never both. The method ctx on Write/Read bounds
 // that blocking call; the invocation's lifetime is governed by the ctx passed
 // to Invoke/InvokeBinding (its cancellation converges with Cancel()).
 //
@@ -236,12 +234,18 @@ type Invocation[I, O any] interface {
 	// without having to probe with a failing Write.
 	InputClosed() <-chan struct{}
 	Cancel()
+	// Diagnostics is the explicit expert escape hatch for binding-native
+	// evidence. Correct ordinary operation behavior must not depend on it.
+	Diagnostics() InvocationDiagnostics
+}
+
+// InvocationDiagnostics exposes optional binding-native evidence for an
+// in-process invocation without making it part of the ordinary value stream.
+type InvocationDiagnostics interface {
 	// Header returns leading metadata; blocks until the binding sets it, or
-	// until the first output / terminal, whichever is first. Empty for
-	// formats that carry none.
+	// until the first output / terminal, whichever is first.
 	Header(ctx context.Context) (Metadata, error)
-	// Trailer returns trailing metadata. Valid only after the invocation has
-	// terminated (Outputs read to io.EOF/terminal); panics if read before.
+	// Trailer returns trailing metadata after termination.
 	Trailer() Metadata
 }
 
@@ -418,12 +422,9 @@ func NewInvocationImpl[I, O any](ctx context.Context) *InvocationImpl[I, O] {
 			return i
 		}
 		stop := context.AfterFunc(ctx, func() {
-			// Distinguish a lifetime deadline from a caller cancel: a deadline
-			// is a TIMEOUT (transient, effects: possible — outputs may already
-			// have flowed, so the honest retry-safety answer is "may have
-			// executed"), while an explicit cancel is genuinely caller-initiated
-			// (cancelled). The classification (category + effects) is stamped by
-			// FireError → classify().
+			// Distinguish a local invocation-lifetime deadline from an explicit
+			// caller cancellation. Neither code implies a cross-protocol retry or
+			// side-effect policy.
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				i.FireError(&InvocationError{Code: ErrCodeTimeout, Message: "invocation deadline exceeded"})
 				return
@@ -590,6 +591,8 @@ func (i *InvocationImpl[I, O]) Trailer() Metadata {
 	return copyMetadata(i.trailerMD)
 }
 
+func (i *InvocationImpl[I, O]) Diagnostics() InvocationDiagnostics { return i }
+
 // ----- Binding-facing -----
 
 func (i *InvocationImpl[I, O]) ReadInput(ctx context.Context) (I, error) {
@@ -719,10 +722,6 @@ func (i *InvocationImpl[I, O]) FireError(err *InvocationError) {
 	if err == nil {
 		err = &InvocationError{Code: ErrCodeRuntime, Message: "unknown error"}
 	}
-	// Stamp the classification at the one terminal chokepoint: every format's
-	// FireError'd error (connect/timeout/stream/etc.) gets its Category and
-	// transport-code Effects here, so no per-site wiring is needed.
-	err.classify()
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.state != stateOpen {
@@ -940,11 +939,7 @@ func (t *TypedInvocation[I, O]) Cancel()      { t.inner.Cancel() }
 
 func (t *TypedInvocation[I, O]) InputClosed() <-chan struct{} { return t.inner.InputClosed() }
 
-func (t *TypedInvocation[I, O]) Header(ctx context.Context) (Metadata, error) {
-	return t.inner.Header(ctx)
-}
-
-func (t *TypedInvocation[I, O]) Trailer() Metadata { return t.inner.Trailer() }
+func (t *TypedInvocation[I, O]) Diagnostics() InvocationDiagnostics { return t.inner.Diagnostics() }
 
 func (t *TypedInvocation[I, O]) Outputs() OutputStream[O] {
 	return &typedOutputStream[O]{inner: t.inner.Outputs()}
@@ -1022,8 +1017,8 @@ func AsInvocationError(err error) *InvocationError {
 		return ie
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		// A deadline is a TIMEOUT (transient / effects: possible), not a
-		// caller-initiated cancel — outputs may already have flowed.
+		// A local lifetime deadline is distinct from caller cancellation; the
+		// code carries no cross-protocol retry implication.
 		return classifiedError(ErrCodeTimeout, err.Error())
 	}
 	if errors.Is(err, context.Canceled) {

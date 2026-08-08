@@ -577,14 +577,14 @@ func TestIntegration_UnaryHeaderTrailer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	md, err := inv.Header(ctx)
+	md, err := inv.Diagnostics().Header(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := md["x-test-header"]; len(got) != 1 || got[0] != "from-server" {
 		t.Errorf("header x-test-header = %v, want [from-server]", got)
 	}
-	if got := inv.Trailer()["x-test-trailer"]; len(got) != 1 || got[0] != "bye" {
+	if got := inv.Diagnostics().Trailer()["x-test-trailer"]; len(got) != 1 || got[0] != "bye" {
 		t.Errorf("trailer x-test-trailer = %v, want [bye]", got)
 	}
 }
@@ -621,14 +621,14 @@ func TestIntegration_InvokeServerStreaming(t *testing.T) {
 	}
 
 	// Stream metadata maps onto the handle.
-	md, err := inv.Header(ctx)
+	md, err := inv.Diagnostics().Header(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := md["x-stream-header"]; len(got) != 1 || got[0] != "sh" {
 		t.Errorf("header x-stream-header = %v, want [sh]", got)
 	}
-	if got := inv.Trailer()["x-stream-trailer"]; len(got) != 1 || got[0] != "st" {
+	if got := inv.Diagnostics().Trailer()["x-stream-trailer"]; len(got) != 1 || got[0] != "st" {
 		t.Errorf("trailer x-stream-trailer = %v, want [st]", got)
 	}
 }
@@ -669,12 +669,12 @@ func TestIntegration_Unauthenticated(t *testing.T) {
 	if len(vals) != 0 || terr == nil {
 		t.Fatalf("expected terminal error, got %d outputs terr=%v", len(vals), terr)
 	}
-	if terr.Code != openbindings.ErrCodeAuthRequired {
-		t.Errorf("code = %q, want ERR_AUTH_REQUIRED", terr.Code)
+	if terr.Code != openbindings.ErrCodeExecutionFailed {
+		t.Errorf("code = %q, want protocol-independent unsuccessful completion", terr.Code)
 	}
-	details, ok := terr.Details.(map[string]any)
+	details, ok := terr.Diagnostics.(map[string]any)
 	if !ok || details["grpcCode"] != "Unauthenticated" {
-		t.Errorf("details = %v, want grpcCode Unauthenticated", terr.Details)
+		t.Errorf("diagnostics = %v, want grpcCode Unauthenticated", terr.Diagnostics)
 	}
 }
 
@@ -765,12 +765,6 @@ func TestIntegration_DeadlineMidStream(t *testing.T) {
 	if terr.Code != openbindings.ErrCodeTimeout {
 		t.Fatalf("code = %q, want ERR_TIMEOUT", terr.Code)
 	}
-	if terr.Category != openbindings.CategoryTransient {
-		t.Errorf("category = %q, want transient", terr.Category)
-	}
-	if terr.Effects != openbindings.EffectsPossible {
-		t.Errorf("effects = %q, want possible", terr.Effects)
-	}
 }
 
 // readToTerminal drains an invocation to its terminal from a non-test
@@ -793,8 +787,10 @@ func readToTerminal(ctx context.Context, inv openbindings.Invocation[any, any]) 
 
 // Stress the server-stream deadline race (RecvMsg-error terminal vs. the
 // handle's AfterFunc terminal off the same deadline wakeup). Before the fix
-// this split ~284× ERR_CANCELLED / ~16× ERR_TIMEOUT; now every run must be a
-// deterministic ERR_TIMEOUT. Run under -race.
+// A local deadline is ERR_TIMEOUT when the handle observes its context first.
+// If the peer's native DeadlineExceeded status wins the race, it remains the
+// structural ERR_EXECUTION_FAILED rather than being compiled into that local
+// runtime code. Run under -race.
 func TestIntegration_DeadlineMidStream_Deterministic(t *testing.T) {
 	dialer, _ := setupTestServer(t)
 	invoker := newTestInvoker(t, dialer)
@@ -826,14 +822,9 @@ func TestIntegration_DeadlineMidStream_Deterministic(t *testing.T) {
 			continue
 		}
 		counts[terr.Code]++
-		if terr.Code == openbindings.ErrCodeTimeout {
-			if terr.Category != openbindings.CategoryTransient || terr.Effects != openbindings.EffectsPossible {
-				t.Errorf("timeout misclassified: category=%q effects=%q", terr.Category, terr.Effects)
-			}
-		}
 	}
-	if counts[openbindings.ErrCodeTimeout] != runs {
-		t.Fatalf("expected all %d runs ERR_TIMEOUT (deterministic), got distribution %v", runs, counts)
+	if counts[openbindings.ErrCodeTimeout]+counts[openbindings.ErrCodeExecutionFailed] != runs {
+		t.Fatalf("expected only local timeout or native unsuccessful completion across %d runs, got distribution %v", runs, counts)
 	}
 }
 

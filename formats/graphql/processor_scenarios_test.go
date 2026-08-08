@@ -178,7 +178,7 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	invoker := NewInvokerWithClient(&http.Client{Transport: transport})
 	var wsObservation *graphqlScenarioObservation
 	var wsServer *httptest.Server
-	if strings.HasPrefix(ref, "subscription/") {
+	if strings.HasPrefix(ref, "subscription/") && source.BindingSpec == LegacyBindingSpec {
 		originalTarget, _ := configuration["subscriptionTarget"].(string)
 		wsServer, wsObservation = graphqlScenarioServer(t, peer, originalTarget)
 		configuration["subscriptionTarget"] = "ws" + strings.TrimPrefix(wsServer.URL, "http")
@@ -195,7 +195,24 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	if inputPresent {
 		args.InputSchema = map[string]any{"type": "object"}
 	}
-	call := invoker.InvokeBinding(context.Background(), args)
+	joined := strings.HasPrefix(scenario.ID, "GQL-FI-")
+	var call openbindings.Invocation[any, any]
+	if joined {
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+			Sources: []openbindings.SynthesizeSource{{BindingSpec: source.BindingSpec, Location: source.Location, Content: source.Content}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		op := openbindings.NewOperationInvoker(invoker)
+		call = openbindings.Invoke(
+			context.Background(), op, iface,
+			openbindings.NewOperationSignature[any, any](graphQLOperationForRef(t, iface, ref)),
+			openbindings.WithContext(contextValue),
+		)
+	} else {
+		call = invoker.InvokeBinding(context.Background(), args)
+	}
 	outputs, terminal := collectInvocation(
 		context.Background(),
 		call,
@@ -207,8 +224,11 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		"outputs":               outputs,
 		"introspectionRequests": []any{},
 	}
+	if joined {
+		data["joinedSynthesis"] = true
+	}
 	trailer := map[string]any{}
-	for name, values := range call.Trailer() {
+	for name, values := range call.Diagnostics().Trailer() {
 		trailer[name] = values
 	}
 	data["trailer"] = trailer
@@ -235,18 +255,36 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "pre-dispatch", Data: data}
 	}
 	phase := "completion"
-	if scenario.ID == "GQL-PS-07" || hasGraphQLHTTPResponseEvidence(terminal) {
+	if scenario.ID == "GQL-PS-07" || len(outputs) == 0 && hasGraphQLHTTPResponseEvidence(terminal) {
 		phase = "response"
 	}
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
 }
 
+func graphQLOperationForRef(t *testing.T, iface *openbindings.Interface, ref string) string {
+	t.Helper()
+	for _, binding := range iface.Bindings {
+		if binding.Ref == ref {
+			return binding.Operation
+		}
+	}
+	t.Fatalf("synthesized GraphQL interface has no binding for %q", ref)
+	return ""
+}
+
 func hasGraphQLHTTPResponseEvidence(err *openbindings.InvocationError) bool {
-	details, ok := err.Details.(map[string]any)
+	details, ok := err.Diagnostics.(map[string]any)
 	if !ok {
 		return false
 	}
-	_, ok = details["httpResponse"]
+	if _, ok = details["httpResponse"]; ok {
+		return true
+	}
+	graphqlDetails, ok := details["graphql"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = graphqlDetails["response"]
 	return ok
 }
 

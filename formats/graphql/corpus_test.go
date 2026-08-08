@@ -2,6 +2,7 @@ package graphql
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -118,6 +119,9 @@ func judgeCorpusDocument(raw json.RawMessage) error {
 			kind, fieldName, err := parseRef(ref)
 			if err != nil {
 				return err
+			}
+			if kind == "subscription" {
+				return fmt.Errorf("subscription refs are outside %s", BindingSpec)
 			}
 			if schema != nil {
 				if _, err := resolveField(schema, kind, fieldName); err != nil {

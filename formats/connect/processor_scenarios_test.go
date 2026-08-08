@@ -196,7 +196,24 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		}
 	}
 	ref, _ := scenario.Given.Binding["ref"].(string)
-	call := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{Source: source, Ref: ref, Context: ctx})
+	joined := strings.HasPrefix(scenario.ID, "CONN-FI-")
+	var call openbindings.Invocation[any, any]
+	if joined {
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+			Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: source.Location, Content: source.Content}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		op := openbindings.NewOperationInvoker(invoker)
+		call = openbindings.Invoke(
+			context.Background(), op, iface,
+			openbindings.NewOperationSignature[any, any](connectOperationForRef(t, iface, ref)),
+			openbindings.WithContext(ctx),
+		)
+	} else {
+		call = invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{Source: source, Ref: ref, Context: ctx})
+	}
 	if writes, ok := scenario.Given.Invocation["writes"].([]any); ok {
 		for _, value := range writes {
 			_ = call.Write(context.Background(), value)
@@ -227,8 +244,11 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		"dispatches":         anySlice(transport.dispatches),
 		"peer":               map[string]any{"endStreamCount": transport.endStreamCount},
 	}
+	if joined {
+		data["joinedSynthesis"] = true
+	}
 	trailer := map[string]any{}
-	for name, values := range call.Trailer() {
+	for name, values := range call.Diagnostics().Trailer() {
 		trailer[name] = values
 	}
 	data["trailer"] = trailer
@@ -252,6 +272,17 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
 }
 
+func connectOperationForRef(t *testing.T, iface *openbindings.Interface, ref string) string {
+	t.Helper()
+	for _, binding := range iface.Bindings {
+		if binding.Ref == ref {
+			return binding.Operation
+		}
+	}
+	t.Fatalf("synthesized Connect interface has no binding for %q", ref)
+	return ""
+}
+
 func normalizedConnectInvocationError(t *testing.T, err *openbindings.InvocationError) map[string]any {
 	t.Helper()
 	encoded, marshalErr := json.Marshal(err)
@@ -266,7 +297,7 @@ func normalizedConnectInvocationError(t *testing.T, err *openbindings.Invocation
 }
 
 func hasHTTPResponseEvidence(err *openbindings.InvocationError) bool {
-	details, ok := err.Details.(map[string]any)
+	details, ok := err.Diagnostics.(map[string]any)
 	if !ok {
 		return false
 	}

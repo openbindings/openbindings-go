@@ -156,19 +156,19 @@ func invokeUsageWithTrailer(t *testing.T, invoker driver, args *openbindings.Bin
 	out := call.Outputs()
 	v, err := out.Read(ctx)
 	if errors.Is(err, io.EOF) {
-		return nil, call.Trailer(), nil // clean close with no output
+		return nil, call.Diagnostics().Trailer(), nil // clean close with no output
 	}
 	if err != nil {
 		var ie *openbindings.InvocationError
 		if !errors.As(err, &ie) {
 			t.Fatalf("expected *InvocationError, got %T: %v", err, err)
 		}
-		return nil, call.Trailer(), ie
+		return nil, call.Diagnostics().Trailer(), ie
 	}
 	if _, err2 := out.Read(ctx); !errors.Is(err2, io.EOF) {
 		t.Fatalf("expected a single output then io.EOF, got %v", err2)
 	}
-	return v, call.Trailer(), nil
+	return v, call.Diagnostics().Trailer(), nil
 }
 
 func TestIntegration_JSONOutput(t *testing.T) {
@@ -200,16 +200,16 @@ func TestIntegration_NonZeroExitCode(t *testing.T) {
 	}, map[string]any{"message": []any{"something went wrong"}})
 
 	// A non-ok exit is a terminal error carrying the exit code and the
-	// captured output (including stderr) in Details.
+	// captured output (including stderr) in Diagnostics.
 	if out != nil {
 		t.Fatalf("expected no output on non-ok exit, got %v", out)
 	}
 	if ierr == nil || ierr.Code != openbindings.ErrCodeExecutionFailed {
 		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", ierr)
 	}
-	details, ok := ierr.Details.(map[string]any)
+	details, ok := ierr.Diagnostics.(map[string]any)
 	if !ok {
-		t.Fatalf("expected map details, got %T", ierr.Details)
+		t.Fatalf("expected map diagnostics, got %T", ierr.Diagnostics)
 	}
 	if details["exitCode"] != 1 {
 		t.Errorf("exitCode = %v, want 1", details["exitCode"])

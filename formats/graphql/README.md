@@ -1,14 +1,15 @@
 # `formats/graphql`
 
-Go reference implementation of the published
+Go reference implementation of
+[`openbindings.graphql@2`](https://openbindings.com/binding-specs/graphql/2),
+plus the immutable
 [`openbindings.graphql@1`](https://openbindings.com/binding-specs/graphql/1)
-binding specification.
+compatibility revision.
 
-The package invokes GraphQL queries and mutations over GraphQL-over-HTTP,
-invokes subscriptions over the pinned `graphql-transport-ws` protocol,
-inspects GraphQL schemas, and synthesizes OpenBindings interfaces. It preserves
-the distinction the specification depends on: introspection identifies
-available root fields, but it cannot choose a caller's selection set.
+Revision 2 binds GraphQL queries and mutations as protocol-blind application
+operations. Schema introspection inventories root fields, while the caller
+supplies the exact executable document because introspection cannot choose a
+selection set.
 
 ## Install and register
 
@@ -25,23 +26,18 @@ import (
 invoker := openbindings.NewOperationInvoker(graphqlbinding.NewInvoker())
 ```
 
-The implementation advertises the exact identifier
-`openbindings.graphql@1`. Refs are exact and lower-case:
+The implementation advertises both exact identifiers, latest first:
 
-```text
-query/<field>
-mutation/<field>
-subscription/<field>
-```
+| Revision | Refs | Ordinary output |
+| --- | --- | --- |
+| `openbindings.graphql@2` | `query/<field>`, `mutation/<field>` | selected root-field application value |
+| `openbindings.graphql@1` | those refs plus `subscription/<field>` | complete GraphQL response envelope |
 
-The root-kind prefix is not a schema type name. Resolution follows the
-schema's actual query, mutation, or subscription root type.
+## Invoke revision 2
 
-## Invoke
-
-Every invocation needs the exact executable GraphQL document. Supply it at
-`context.configuration.document` as either source text or an object with
-`source` and optional `operationName`:
+Every invocation needs the exact executable GraphQL document at
+`context.configuration.document`, as source text or an object with `source`
+and optional `operationName`:
 
 ```go
 call := graphqlbinding.NewInvoker().InvokeBinding(ctx,
@@ -68,84 +64,65 @@ call := graphqlbinding.NewInvoker().InvokeBinding(ctx,
     })
 
 _ = call.Write(ctx, map[string]any{"id": "user_1"})
-response, err := openbindings.Single(ctx, call.Outputs())
+viewer, err := openbindings.Single(ctx, call.Outputs())
 ```
 
-The one caller input value, when present, must be an object and becomes the
-GraphQL variables map wholesale. `_query` is an ordinary variable name; this
-implementation never consumes it as metadata and never generates a document
-or selection set.
+The optional caller input, when present, must be an object and becomes the
+GraphQL variables map wholesale. `_query` is an ordinary variable name; the
+binding never consumes it as metadata or generates a document.
 
-The output is the complete GraphQL response envelope, including `data`,
-`errors`, and `extensions`. GraphQL errors remain in-band. Use an OBI
-`outputTransform` such as `data.viewer` when an operation contract
-intentionally exposes only the selected field.
-
-A legacy `application/json` non-2xx response and a
-`graphql-transport-ws` protocol `error` remain failure completions rather than
-outputs. `FailureEvidenceFrom` recovers exact HTTP response bytes and headers,
-or the complete WebSocket error/close evidence, from the terminal error.
-Local SDK and document-validation errors do not invent GraphQL-native evidence.
+On success, the output is `data[responseKey]`, where `responseKey` includes a
+root alias when present. The GraphQL envelope, HTTP status, headers, and bytes
+do not become ordinary output fields. If a trusted response contains GraphQL
+`errors`, any selected partial application value is emitted first and the
+invocation then completes unsuccessfully without retracting that value.
+Native response evidence may be inspected only through the invocation's
+explicit diagnostics surface; correct application use does not depend on it.
 
 ## Runtime configuration
 
-The Go implementation carries the specification's interpretation points below
-under `context.configuration`:
+Revision 2 carries these interpretation points under
+`context.configuration`:
 
 - `document`: GraphQL source text, or
   `{"source": "...", "operationName": "..."}`.
-- `subscriptionTarget`: required absolute `ws` or `wss` URI for a
-  subscription. It is never derived from the HTTP endpoint.
-- `protocolFields`: optional `httpHeaders`, `httpCookies`,
-  `websocketHeaders`, `websocketCookies`, and
-  `connectionInitPayload`.
+- `protocolFields`: optional explicitly named HTTP headers and cookies.
 
-Header and cookie names identify their exact protocol locations. Generic
-`bearerToken`, `apiKey`, `basic`, and OAuth context do not identify such a
-location, so the invoker refuses them rather than inventing an Authorization
-scheme. Processor-owned HTTP and WebSocket fields, duplicate destinations,
-and raw-Cookie/cookie-entry collisions are also refused before dispatch.
+Generic credentials do not identify a GraphQL protocol location, so the
+invoker refuses them rather than inventing an Authorization scheme.
+Processor-owned fields, duplicate destinations, and cookie collisions are
+also refused before dispatch.
 
-`content`, when present, must be one successful introspection execution-result
-object with no `errors` member and an object at `data.__schema`. It is a pin
-and completely displaces live introspection; wrapper-stripped, bare,
-stringified, and SDL representations are not accepted by revision 1.
-
-## Subscriptions
-
-```go
-"configuration": map[string]any{
-    "document": "subscription { orderUpdates { id status } }",
-    "subscriptionTarget": "wss://api.example.com/graphql",
-    "protocolFields": map[string]any{
-        "connectionInitPayload": map[string]any{"token": "tok_123"},
-    },
-}
-```
-
-Each `next.payload` is one complete output envelope. A protocol `error` is
-terminal without retracting already emitted outputs; cancellation attempts the
-protocol's `complete` exchange.
+Present `content` must be one successful introspection execution-result object
+with no `errors` member and an object at `data.__schema`. It is authoritative
+and displaces live introspection; wrapper-stripped, bare, stringified, and SDL
+representations are not accepted.
 
 ## Synthesis and coverage
 
-`NewSynthesizer()` inventories every non-introspection root field and creates
-one binding per field. Synthesized operations deliberately use broad schemas:
-an object variables boundary for input and a complete GraphQL response
-envelope for output. Projecting GraphQL argument or return types into a fixed
-JSON shape would falsely imply a selection set that introspection cannot
-choose.
+Revision-2 synthesis creates one operation for each non-introspection query or
+mutation root field. The input is an object variables boundary. The output
+schema is derived from the root field's GraphQL type; composite result objects
+remain open because nested selection names depend on the executable document.
 
-`SynthesizeInterfaceWithCoverage` reports exhaustive coverage of the observed
-root-field inventory. Each represented entry records the runtime requirement
-`document`; subscription entries additionally record `subscriptionTarget`.
-Pinned content is inspected without network access and displaces live schema
-acquisition.
+Subscription fields are reported as excluded with reason
+`graphql.subscription_lifecycle_not_representable` and rule `GQL-P-04`.
+GraphQL subscription events can contain partial data and errors while the
+native stream continues, which revision 2 deliberately refuses rather than
+approximates.
+
+## Revision 1 compatibility
+
+Use `graphqlbinding.LegacyBindingSpec` only when compatibility requires the
+published revision-1 contract. Revision 1 emits complete response envelopes
+and supports `graphql-transport-ws` subscriptions using the additional
+`subscriptionTarget` and WebSocket protocol fields. `FailureEvidenceFrom`
+recovers its native HTTP or WebSocket failure evidence from diagnostics.
 
 ## Resource bounds
 
-The invocation delivery-unit limit applies to each HTTP response body,
-introspection response, and subscription message. Set it on
+The delivery-unit limit applies to each HTTP response body, introspection
+response, and revision-1 subscription message. Set it on
 `BindingInvocationArgs` or the enclosing `OperationInvoker`; zero selects the
 SDK default.
 

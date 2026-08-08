@@ -181,14 +181,14 @@ func TestInvokeBinding_UnarySuccess(t *testing.T) {
 	}
 
 	// Leading metadata is the HTTP response headers.
-	md, err := inv.Header(ctx)
+	md, err := inv.Diagnostics().Header(ctx)
 	if err != nil {
 		t.Fatalf("Header: %v", err)
 	}
 	if got := md["Content-Type"]; len(got) != 1 || got[0] != "application/json" {
 		t.Errorf("header Content-Type = %v, want [application/json]", got)
 	}
-	if got := inv.Trailer(); len(got) != 0 {
+	if got := inv.Diagnostics().Trailer(); len(got) != 0 {
 		t.Errorf("Trailer = %v, want empty", got)
 	}
 }
@@ -211,14 +211,14 @@ func TestInvokeBinding_UnaryTrailer(t *testing.T) {
 		t.Fatalf("Single: %v", err)
 	}
 
-	md, err := inv.Header(ctx)
+	md, err := inv.Diagnostics().Header(ctx)
 	if err != nil {
 		t.Fatalf("Header: %v", err)
 	}
 	if _, present := md["Trailer-X-After"]; present {
 		t.Error("Trailer-X-After must not appear in leading metadata")
 	}
-	trailer := inv.Trailer()
+	trailer := inv.Diagnostics().Trailer()
 	if got := trailer["X-After"]; len(got) != 1 || got[0] != "done" {
 		t.Errorf("trailer X-After = %v, want [done]", got)
 	}
@@ -237,22 +237,21 @@ func TestInvokeBinding_HTTPError(t *testing.T) {
 	}
 }
 
-func TestInvokeBinding_ConnectErrorCodeMapping(t *testing.T) {
+func TestInvokeBinding_ConnectErrorsStayNativeDiagnostics(t *testing.T) {
 	tests := []struct {
-		name     string
-		status   int
-		body     string
-		wantCode string
+		name   string
+		status int
+		body   string
 	}{
-		{"unauthenticated", http.StatusUnauthorized, `{"code":"unauthenticated","message":"need token"}`, openbindings.ErrCodeAuthRequired},
-		{"permission_denied", http.StatusForbidden, `{"code":"permission_denied","message":"nope"}`, openbindings.ErrCodePermissionDenied},
-		{"unavailable", http.StatusServiceUnavailable, `{"code":"unavailable","message":"down"}`, openbindings.ErrCodeUnavailable},
-		{"resource_exhausted", http.StatusTooManyRequests, `{"code":"resource_exhausted","message":"slow down"}`, openbindings.ErrCodeUnavailable},
-		{"deadline_exceeded", http.StatusGatewayTimeout, `{"code":"deadline_exceeded","message":"too slow"}`, openbindings.ErrCodeTimeout},
-		{"canceled", http.StatusInternalServerError, `{"code":"canceled","message":"client went away"}`, openbindings.ErrCodeCancelled},
-		{"internal", http.StatusInternalServerError, `{"code":"internal","message":"broke"}`, openbindings.ErrCodeExecutionFailed},
-		{"plain 401 no connect body", http.StatusUnauthorized, ``, openbindings.ErrCodeAuthRequired},
-		{"plain 403 no connect body", http.StatusForbidden, ``, openbindings.ErrCodePermissionDenied},
+		{"unauthenticated", http.StatusUnauthorized, `{"code":"unauthenticated","message":"need token"}`},
+		{"permission_denied", http.StatusForbidden, `{"code":"permission_denied","message":"nope"}`},
+		{"unavailable", http.StatusServiceUnavailable, `{"code":"unavailable","message":"down"}`},
+		{"resource_exhausted", http.StatusTooManyRequests, `{"code":"resource_exhausted","message":"slow down"}`},
+		{"deadline_exceeded", http.StatusGatewayTimeout, `{"code":"deadline_exceeded","message":"too slow"}`},
+		{"canceled", http.StatusInternalServerError, `{"code":"canceled","message":"client went away"}`},
+		{"internal", http.StatusInternalServerError, `{"code":"internal","message":"broke"}`},
+		{"plain 401 no connect body", http.StatusUnauthorized, ``},
+		{"plain 403 no connect body", http.StatusForbidden, ``},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -261,19 +260,26 @@ func TestInvokeBinding_ConnectErrorCodeMapping(t *testing.T) {
 
 			inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 				map[string]any{"id": "abc"})
-			mustTerminalError(t, ctx, inv, tc.wantCode)
+			ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
+			if ierr.Details != nil {
+				t.Fatalf("native Connect evidence leaked into portable details: %#v", ierr.Details)
+			}
+			evidence, ok := FailureEvidenceFrom(ierr)
+			if !ok || evidence.HTTPResponse == nil || evidence.HTTPResponse.Status != tc.status {
+				t.Fatalf("native failure evidence = %+v, ok = %v", evidence, ok)
+			}
 		})
 	}
 }
 
-func TestInvokeBinding_AuthRequired(t *testing.T) {
+func TestInvokeBinding_UnauthenticatedMessageAndEvidence(t *testing.T) {
 	ctx := testContext(t)
 	srv := fakeConnectServer(t, http.StatusUnauthorized, `{"code":"unauthenticated","message":"need token"}`)
 
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
 
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeAuthRequired)
+	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
 	if ierr.Message != "need token" {
 		t.Errorf("error message = %q, want %q", ierr.Message, "need token")
 	}
@@ -678,14 +684,14 @@ func TestInvokeBinding_ServerStreaming_Success(t *testing.T) {
 		}
 	}
 
-	md, err := inv.Header(ctx)
+	md, err := inv.Diagnostics().Header(ctx)
 	if err != nil {
 		t.Fatalf("Header: %v", err)
 	}
 	if got := md["Content-Type"]; len(got) != 1 || got[0] != "application/connect+json" {
 		t.Errorf("header Content-Type = %v, want [application/connect+json]", got)
 	}
-	if got := inv.Trailer(); len(got) != 0 {
+	if got := inv.Diagnostics().Trailer(); len(got) != 0 {
 		t.Errorf("Trailer = %v, want empty", got)
 	}
 }
@@ -731,13 +737,17 @@ func TestInvokeBinding_ServerStreaming_EndStreamError(t *testing.T) {
 	}
 }
 
-func TestInvokeBinding_ServerStreaming_EndStreamErrorCodeMapping(t *testing.T) {
+func TestInvokeBinding_ServerStreaming_EndStreamErrorIsDiagnostic(t *testing.T) {
 	ctx := testContext(t)
 	srv := fakeConnectStreamingServer(t, nil,
 		`{"error":{"code":"unauthenticated","message":"token expired"}}`)
 
 	inv := invokeWith(t, ctx, NewInvoker(), streamingArgs(srv.URL), map[string]any{"source": "test"})
-	mustTerminalError(t, ctx, inv, openbindings.ErrCodeAuthRequired)
+	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
+	evidence, ok := FailureEvidenceFrom(ierr)
+	if !ok || evidence.EndStream == nil || evidence.EndStream.Error["code"] != "unauthenticated" {
+		t.Fatalf("END_STREAM failure evidence = %+v, ok = %v", evidence, ok)
+	}
 }
 
 func TestInvokeBinding_ServerStreaming_EndStreamMetadata(t *testing.T) {
@@ -757,7 +767,7 @@ func TestInvokeBinding_ServerStreaming_EndStreamMetadata(t *testing.T) {
 	if len(outputs) != 1 {
 		t.Fatalf("expected 1 output, got %d", len(outputs))
 	}
-	trailer := inv.Trailer()
+	trailer := inv.Diagnostics().Trailer()
 	if got := trailer["x-after"]; len(got) != 1 || got[0] != "done" {
 		t.Errorf("trailer x-after = %v, want [done]", got)
 	}

@@ -22,6 +22,10 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []openbin
 	for _, binding := range iface.Bindings {
 		represented[binding.Ref] = identity{operation: binding.Operation, ref: binding.Ref}
 	}
+	bindingSpec := LegacyBindingSpec
+	if source, ok := iface.Sources[DefaultSourceName]; ok && source.BindingSpec != "" {
+		bindingSpec = source.BindingSpec
+	}
 
 	toolCounts := map[string]int{}
 	resourceCounts := map[string]int{}
@@ -98,7 +102,11 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []openbin
 			continue
 		}
 		if disc.RequiredTaskTools[entity.Name] {
-			add("tools", entity.Name, index, 1, "", "mcp.required_task", "MCP-P-08", "the tool requires task augmentation, which revision 1 excludes")
+			add("tools", entity.Name, index, 1, "", "mcp.required_task", "MCP-P-08", "the tool requires task augmentation, which this binding revision excludes")
+			continue
+		}
+		if bindingSpec == BindingSpec && entity.OutputSchema == nil {
+			add("tools", entity.Name, index, 1, "", "mcp.missing_application_output_schema", "MCP-P-04", "the tool listing does not declare an application outputSchema")
 			continue
 		}
 		add("tools", entity.Name, index, 1, "", "", "", "")
@@ -110,6 +118,10 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []openbin
 		}
 		if resourceCounts[entity.URI] > 1 {
 			add("resources", entity.URI, index, resourceCounts[entity.URI], "", "mcp.ambiguous_identity", "MCP-P-02", "more than one listed resource has this ref identity")
+			continue
+		}
+		if bindingSpec == BindingSpec {
+			add("resources", entity.URI, index, 1, "", "mcp.no_application_output_contract", "MCP-P-04", "MCP resource listings do not declare an application output schema")
 			continue
 		}
 		add("resources", entity.URI, index, 1, "", "", "", "")
@@ -127,6 +139,10 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []openbin
 			add("resourceTemplates", entity.URITemplate, index, 1, "resource template is not valid RFC 6570: "+err.Error(), "", "", "")
 			continue
 		}
+		if bindingSpec == BindingSpec {
+			add("resourceTemplates", entity.URITemplate, index, 1, "", "mcp.no_application_output_contract", "MCP-P-04", "MCP resource-template listings do not declare an application output schema")
+			continue
+		}
 		add("resourceTemplates", entity.URITemplate, index, 1, "", "", "", "")
 	}
 	for index, entity := range disc.Prompts {
@@ -136,6 +152,10 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []openbin
 		}
 		if promptCounts[entity.Name] > 1 {
 			add("prompts", entity.Name, index, promptCounts[entity.Name], "", "mcp.ambiguous_identity", "MCP-P-02", "more than one listed prompt has this ref identity")
+			continue
+		}
+		if bindingSpec == BindingSpec {
+			add("prompts", entity.Name, index, 1, "", "mcp.no_application_output_contract", "MCP-P-04", "MCP prompt listings do not declare an application output schema")
 			continue
 		}
 		add("prompts", entity.Name, index, 1, "", "", "", "")

@@ -248,7 +248,7 @@ func shortCtx(t *testing.T) context.Context {
 
 func invocationArgs(url, ref string, bindCtx map[string]any) *openbindings.BindingInvocationArgs {
 	return &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: url},
+		Source:  openbindings.InvocationSource{BindingSpec: LegacyBindingSpec, Location: url},
 		Ref:     ref,
 		Context: bindCtx,
 	}
@@ -292,7 +292,7 @@ func TestIntegration_SynthesizeInterface(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			BindingSpec: BindingSpec,
+			BindingSpec: LegacyBindingSpec,
 			Location:    ts.URL,
 		}},
 	})
@@ -355,7 +355,7 @@ func TestIntegration_ExecuteTool(t *testing.T) {
 	}
 
 	// Leading metadata carries the call's HTTP response headers.
-	md, err := call.Header(shortCtx(t))
+	md, err := call.Diagnostics().Header(shortCtx(t))
 	if err != nil {
 		t.Fatalf("header: %v", err)
 	}
@@ -529,11 +529,12 @@ func TestIntegration_AuthRequired(t *testing.T) {
 	invoker := NewInvoker()
 	defer invoker.Close()
 
-	// No credentials: the 401 surfaces as terminal ERR_AUTH_REQUIRED.
+	// No credentials: the 401 is an unsuccessful execution; the native
+	// transport status is available only as diagnostic evidence.
 	call := invoker.InvokeBinding(bg(), invocationArgs(gated.URL, "resources/app://status", nil))
 	_, derr := drainOutputs(t, call)
-	if codeOf(t, derr) != openbindings.ErrCodeAuthRequired {
-		t.Errorf("code = %q, want ERR_AUTH_REQUIRED", codeOf(t, derr))
+	if codeOf(t, derr) != openbindings.ErrCodeExecutionFailed {
+		t.Errorf("code = %q, want ERR_EXECUTION_FAILED", codeOf(t, derr))
 	}
 
 	// With credentials the same call succeeds.

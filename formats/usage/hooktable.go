@@ -59,8 +59,11 @@ func (t HookTable) Hooks() (openbindings.OutputDecoder, openbindings.ResultClass
 		if err := json.Unmarshal(raw.Body, &v); err != nil {
 			return nil, &openbindings.InvocationError{
 				Code:    openbindings.ErrCodeResponseError,
-				Message: fmt.Sprintf("operation %q's machine lane declares JSON, but stdout is not valid JSON: %v", site.Operation, err),
-				Details: map[string]any{"stdout": string(raw.Body)},
+				Message: fmt.Sprintf("operation %q returned output that could not be decoded as its declared JSON value", site.Operation),
+				Diagnostics: map[string]any{"usage": map[string]any{"decode": map[string]any{
+					"cause":  err.Error(),
+					"stdout": capturedProcessBytes(raw.Body, false),
+				}}},
 			}
 		}
 		return v, nil

@@ -4,16 +4,26 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/processorscenarios"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
@@ -69,55 +79,222 @@ func TestInvocationFidelityScenarios(t *testing.T) {
 
 func runGRPCFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) processorscenarios.Observation {
 	t.Helper()
+	invoker, cancelled := newGRPCFidelityInvoker(t, scenario)
+	t.Cleanup(func() { _ = invoker.Close() })
+
+	content, _ := scenario.Given.Source["content"].(string)
+	location, _ := scenario.Given.Source["location"].(string)
+	ref, _ := scenario.Given.Binding["ref"].(string)
+	sourceContent := json.RawMessage(strconvQuote(content))
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: location, Content: sourceContent}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := ""
+	for _, binding := range iface.Bindings {
+		if binding.Ref == ref {
+			operation = binding.Operation
+			break
+		}
+	}
+	if operation == "" {
+		t.Fatalf("synthesized gRPC interface has no binding for %q", ref)
+	}
+	op := openbindings.NewOperationInvoker(invoker)
+	call := openbindings.Invoke(
+		context.Background(), op, iface,
+		openbindings.NewOperationSignature[any, any](operation),
+	)
+	stream := call.Outputs()
+	outputs := []any{}
+	if writes, ok := scenario.Given.Invocation["writes"].([]any); ok {
+		if len(writes) > 0 {
+			_ = call.Write(context.Background(), writes[0])
+			readCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			first, readErr := stream.Read(readCtx)
+			cancel()
+			if readErr != nil {
+				t.Fatalf("first bidirectional output: %v", readErr)
+			}
+			outputs = append(outputs, first)
+		}
+		for _, value := range writes[1:] {
+			_ = call.Write(context.Background(), value)
+		}
+	} else if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
+		_ = call.Write(context.Background(), scenario.Given.Invocation["input"])
+	}
+	_ = call.Close()
+
+	var terminal *openbindings.InvocationError
+	for {
+		value, readErr := stream.Read(context.Background())
+		if readErr == nil {
+			outputs = append(outputs, value)
+			continue
+		}
+		if readErr != io.EOF {
+			terminal = openbindings.AsInvocationError(readErr)
+		}
+		break
+	}
+	if scenario.ID == "GRPC-FI-03" {
+		deadline := time.Now().Add(time.Second)
+		for !cancelled.Load() && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	addr, _ := parseDialAddress(location)
 	data := map[string]any{
-		"outputs":            []any{},
+		"outputs":            outputs,
 		"reflectionRequests": []any{},
+		"joinedSynthesis":    true,
 		"dispatch": map[string]any{
-			"target":    "api.example:443",
-			"transport": "tls",
-			"cancelled": false,
+			"target":    addr.hostPort,
+			"transport": map[bool]string{true: "tls", false: "plaintext"}[addr.tls],
+			"cancelled": cancelled.Load(),
 		},
 	}
+	trailer := map[string]any{}
+	for name, values := range call.Diagnostics().Trailer() {
+		trailer[name] = values
+	}
+	data["trailer"] = trailer
+	if terminal == nil {
+		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
+	}
+	data["error"] = normalizedInvocationError(t, terminal)
+	phase := "completion"
+	if terminal.Code == openbindings.ErrCodeValidationFailed {
+		phase = "dispatch"
+	}
+	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
+}
 
+func newGRPCFidelityInvoker(t *testing.T, scenario processorscenarios.Scenario) (*Invoker, *atomic.Bool) {
+	t.Helper()
 	content, _ := scenario.Given.Source["content"].(string)
 	disc, err := discoverFromContent(context.Background(), json.RawMessage(strconvQuote(content)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, methodName, err := parseRef(scenario.Given.Binding["ref"].(string))
+	serviceName, methodName, err := parseRef(scenario.Given.Binding["ref"].(string))
 	if err != nil {
 		t.Fatal(err)
 	}
-	method, invocationErr := resolveMethod(disc, service, methodName)
+	method, invocationErr := resolveMethod(disc, serviceName, methodName)
 	if invocationErr != nil {
 		t.Fatal(invocationErr)
 	}
-
-	if scenario.ID == "GRPC-FI-03" {
-		writes := scenario.Given.Invocation["writes"].([]any)
-		if _, err := buildRequest(method, writes[0]); err != nil {
-			t.Fatal(err)
-		}
-		data["outputs"] = []any{scenario.Given.Peer["afterWrite"].(map[string]any)["responses"].([]any)[0]}
-		if _, err := buildRequest(method, writes[1]); err == nil {
-			t.Fatal("invalid later value accepted")
-		}
-		data["dispatch"].(map[string]any)["cancelled"] = true
-		data["trailer"] = map[string]any{}
-		data["error"] = normalizedInvocationError(t, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeValidationFailed,
-			Message: "local ProtoJSON validation failed",
-		})
-		return processorscenarios.Observation{Disposition: "error", Phase: "dispatch", Data: data}
+	peer := scenario.Given.Peer
+	cancelled := &atomic.Bool{}
+	server := grpc.NewServer()
+	description := &grpc.ServiceDesc{ServiceName: serviceName, HandlerType: (*any)(nil)}
+	if !method.IsStreamingClient() && !method.IsStreamingServer() {
+		description.Methods = []grpc.MethodDesc{{
+			MethodName: methodName,
+			Handler: func(_ any, ctx context.Context, decode func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+				request := dynamicpb.NewMessage(method.Input())
+				if err := decode(request); err != nil {
+					return nil, err
+				}
+				grpc.SetTrailer(ctx, grpcFidelityMetadata(t, peer["trailingMetadata"]))
+				if statusErr := nativeStatusError(t, peer); statusErr != nil {
+					return nil, statusErr
+				}
+				if value, ok := peer["responseMessage"]; ok {
+					return grpcFidelityMessage(t, method.Output(), value), nil
+				}
+				return dynamicpb.NewMessage(method.Output()), nil
+			},
+		}}
+	} else {
+		description.Streams = []grpc.StreamDesc{{
+			StreamName:    methodName,
+			ClientStreams: method.IsStreamingClient(),
+			ServerStreams: method.IsStreamingServer(),
+			Handler: func(_ any, stream grpc.ServerStream) error {
+				writes := 0
+				for {
+					request := dynamicpb.NewMessage(method.Input())
+					if err := stream.RecvMsg(request); err != nil {
+						if stream.Context().Err() != nil {
+							cancelled.Store(true)
+						}
+						if err != io.EOF {
+							return err
+						}
+						break
+					}
+					writes++
+					if after, ok := peer["afterWrite"].(map[string]any); ok {
+						index := int(after["index"].(float64))
+						if index == writes-1 {
+							if responses, ok := after["responses"].([]any); ok {
+								for _, response := range responses {
+									if err := stream.SendMsg(grpcFidelityMessage(t, method.Output(), response)); err != nil {
+										return err
+									}
+								}
+							}
+						}
+					}
+					if !method.IsStreamingClient() {
+						break
+					}
+				}
+				if responses, ok := peer["responseMessages"].([]any); ok {
+					for _, response := range responses {
+						if err := stream.SendMsg(grpcFidelityMessage(t, method.Output(), response)); err != nil {
+							return err
+						}
+					}
+				}
+				stream.SetTrailer(grpcFidelityMetadata(t, peer["trailingMetadata"]))
+				return nativeStatusError(t, peer)
+			},
+		}}
 	}
-
-	if responses, ok := scenario.Given.Peer["responseMessages"].([]any); ok {
-		data["outputs"] = responses
+	server.RegisterService(description, nil)
+	listener := bufconn.Listen(1024 * 1024)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	conn, err := grpc.NewClient(
+		"passthrough:///fidelity",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	data["trailer"] = peerTrailer(t, scenario.Given.Peer["trailingMetadata"])
-	native := nativeStatusError(t, scenario.Given.Peer)
-	data["error"] = normalizedInvocationError(t, grpcError(native, openbindings.ErrCodeStreamError))
-	return processorscenarios.Observation{Disposition: "error", Phase: "completion", Data: data}
+	t.Cleanup(func() { _ = conn.Close() })
+	location, _ := scenario.Given.Source["location"].(string)
+	addr, err := parseDialAddress(location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, transportTag, err := resolveTransport(nil, nil, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invoker := NewInvoker()
+	invoker.conns.Store(connKey(addr.hostPort, transportTag), conn)
+	return invoker, cancelled
+}
+
+func grpcFidelityMessage(t *testing.T, descriptor protoreflect.MessageDescriptor, value any) *dynamicpb.Message {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := dynamicpb.NewMessage(descriptor)
+	if err := protojson.Unmarshal(raw, message); err != nil {
+		t.Fatal(err)
+	}
+	return message
 }
 
 func nativeStatusError(t *testing.T, peer map[string]any) error {
@@ -160,11 +337,11 @@ func grpcCodeByName(t *testing.T, name string) codes.Code {
 	return code
 }
 
-func peerTrailer(t *testing.T, raw any) map[string]any {
+func grpcFidelityMetadata(t *testing.T, raw any) metadata.MD {
 	t.Helper()
 	record, ok := raw.(map[string]any)
 	if !ok {
-		return map[string]any{}
+		return metadata.MD{}
 	}
 	md := metadata.MD{}
 	for name, rawValues := range record {
@@ -184,11 +361,7 @@ func peerTrailer(t *testing.T, raw any) map[string]any {
 			md[name] = append(md[name], value)
 		}
 	}
-	result := map[string]any{}
-	for name, values := range toOBMetadata(md) {
-		result[name] = values
-	}
-	return result
+	return md
 }
 
 func normalizedInvocationError(t *testing.T, err *openbindings.InvocationError) map[string]any {

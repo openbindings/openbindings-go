@@ -83,7 +83,7 @@ for {
 }
 ```
 
-gRPC leading/trailing metadata maps onto the handle: `inv.Header(ctx)` returns the server's header metadata, and `inv.Trailer()` (valid after the invocation terminates) returns trailing metadata. Every value and its order are retained; binary `-bin` metadata values use base64 strings so arbitrary bytes survive the SDK surface.
+gRPC leading/trailing metadata is available only through the handle's explicit diagnostic view: `inv.Diagnostics().Header(ctx)` and `inv.Diagnostics().Trailer()`. Every value and its order are retained there; binary `-bin` metadata values use base64 strings. None of it is part of the ordinary operation value stream.
 
 If iteration terminates with a gRPC status, `FailureEvidenceFrom` recovers the
 native numeric code, message, and exact `google.protobuf.Any` payload bytes
@@ -210,7 +210,7 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
   | `google.protobuf.Any` | `object` with required `@type: string` plus `value` |
 
 - **Oneof groups**: a message with exactly one user-declared oneof group emits a top-level `oneOf`, one single-property required variant per member, preserving exactly-one-of semantics. Proto3 `optional` fields (synthetic single-field oneofs) are ordinary optional properties, never variants. A message with multiple oneof groups flattens every member to an independent optional property — the current schema profile cannot express multi-group exclusivity — and surfaces the `grpc.multi_group_oneof` warning so callers know the emitted OBI does not enforce it.
-- **No security metadata** exists in protobuf, so none is written to the OBI; an unauthenticated call surfaces post-dispatch as `ERR_AUTH_REQUIRED`, and credential resolution happens above the binding (operation-layer context negotiation).
+- **No security metadata** exists in protobuf, so none is written to the OBI; a post-dispatch unauthenticated status completes unsuccessfully and remains identifiable only through optional diagnostics, while pre-dispatch credential resolution happens above the binding.
 
 ### Consumer hooks
 
@@ -233,7 +233,7 @@ specifications with exposed wire choices (OpenAPI and AsyncAPI).
 5. Applies explicitly named context `headers` as gRPC metadata; generic credentials without an artifact-declared carriage are challenged before dispatch
 6. Invokes the RPC using its declared unary, server-streaming, client-streaming, or bidirectional interaction; message flow and half-close behavior emerge from that declaration, with handle backpressure flow-controlling streams
 
-gRPC status errors terminate the invocation with a mapped code (`Unauthenticated` → `ERR_AUTH_REQUIRED`, `PermissionDenied` → `ERR_PERMISSION_DENIED`, `Unavailable`/`ResourceExhausted` → `ERR_UNAVAILABLE` (transient, `effects: none` — the server refused before executing), `DeadlineExceeded` → `ERR_TIMEOUT`, `Canceled` → `ERR_CANCELLED`, every other status → `ERR_EXECUTION_FAILED`). `Details.grpcStatus` preserves the numeric native code, message, and each rich-status detail as its type URL plus exact base64 payload; `FailureEvidenceFrom` is the typed accessor. Response messages emitted before a later non-OK final status remain outputs. Leading/trailing gRPC metadata maps onto `Header(ctx)`/`Trailer()`. Cancelling the handle (or the invocation context) tears down the underlying stream.
+Every non-OK gRPC final status terminates with structural `ERR_EXECUTION_FAILED`; the binding does not derive a portable failure taxonomy or retry policy from native status. Optional `Diagnostics.grpcStatus` preserves the numeric native code, message, and each rich-status detail as its type URL plus exact base64 payload; `FailureEvidenceFrom` is the typed expert accessor. Response messages emitted before a later non-OK final status remain outputs. Leading/trailing metadata is available through `Diagnostics()`. Cancelling the handle (or the invocation context) tears down the underlying stream.
 
 ### Credential application
 

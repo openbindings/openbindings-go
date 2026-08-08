@@ -4,7 +4,7 @@ package mcp
 // repository's binding-specs/mcp fixtures (MCP-D-01..03) through this
 // module's own offline lanes — pinned-listing validation, endpoint grammar,
 // and ref grammar/resolution — under the subcorpus README's verdict
-// semantics: valid:false means a conformant openbindings.mcp@1 processor
+// semantics: valid:false means a conformant openbindings.mcp@2 processor
 // refuses the document's family-scoped material at or before bind time,
 // decidable offline with no network and no live source. Positive
 // location-only fixtures are judged by grammar alone (never connected), so
@@ -16,6 +16,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,8 +168,11 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 			if err != nil {
 				return err
 			}
+			if entityType != "tools" {
+				return fmt.Errorf("openbindings.mcp@2 ref must use tools/<name>, got %q", ref)
+			}
 			if pin != nil {
-				if _, rerr := resolveRef(pin, entityType, remainder); rerr != nil {
+				if _, rerr := resolveRef(pin, entityType, remainder, BindingSpec); rerr != nil {
 					return rerr
 				}
 			}

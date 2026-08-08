@@ -11,7 +11,7 @@ import (
 
 // FailureEvidence is the source-native final status preserved when a gRPC
 // invocation completes unsuccessfully. Response messages emitted before the
-// status remain outputs; this evidence rides the terminal InvocationError.
+// status remain outputs; this evidence is optional diagnostics.
 type FailureEvidence struct {
 	Code    codes.Code
 	Message string
@@ -30,10 +30,10 @@ type StatusDetailEvidence struct {
 // through a JSON invoker frame.
 func FailureEvidenceFrom(err error) (FailureEvidence, bool) {
 	var invocationError *openbindings.InvocationError
-	if !errors.As(err, &invocationError) || invocationError == nil || invocationError.Details == nil {
+	if !errors.As(err, &invocationError) || invocationError == nil || invocationError.Diagnostics == nil {
 		return FailureEvidence{}, false
 	}
-	raw, marshalErr := json.Marshal(invocationError.Details)
+	raw, marshalErr := json.Marshal(invocationError.Diagnostics)
 	if marshalErr != nil {
 		return FailureEvidence{}, false
 	}

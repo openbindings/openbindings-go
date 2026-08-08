@@ -789,9 +789,9 @@ func TestConformance_P05_P06_EmittedValuesStandOnLateFailure(t *testing.T) {
 	if terr == nil {
 		t.Fatal("a non-OK final status must classify the invocation as a failure (GRPC-P-06)")
 	}
-	details, ok := terr.Details.(map[string]any)
+	details, ok := terr.Diagnostics.(map[string]any)
 	if !ok || details["grpcCode"] != "ResourceExhausted" {
-		t.Errorf("the final status must ride the failure, got %v", terr.Details)
+		t.Errorf("the final status diagnostic is missing, got %v", terr.Diagnostics)
 	}
 	if vals[1].(map[string]any)["name"] != "second" {
 		t.Errorf("second emitted value = %v", vals[1])

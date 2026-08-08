@@ -14,7 +14,6 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/processorscenarios"
-	"github.com/yosida95/uritemplate/v3"
 )
 
 func TestProcessorScenarios(t *testing.T) {
@@ -162,10 +161,26 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 	location, _ := scenario.Given.Source["location"].(string)
 	ref, _ := scenario.Given.Binding["ref"].(string)
 	args := invocationArgs(location, ref, nil)
+	args.Source.BindingSpec = BindingSpec
 	if content, present := scenario.Given.Source["content"]; present {
 		args.Source.Content = mustContent(content)
 	}
-	call := invoker.InvokeBinding(bg(), args)
+	var call openbindings.Invocation[any, any]
+	iface, err := NewSynthesizer().SynthesizeInterface(bg(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Location:    args.Source.Location,
+			Content:     args.Source.Content,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := openbindings.NewOperationInvoker(invoker)
+	call = openbindings.Invoke(
+		bg(), op, iface,
+		openbindings.NewOperationSignature[any, any](mcpOperationForRef(t, iface, ref)),
+	)
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		if err := call.Write(shortCtx(t), scenario.Given.Invocation["input"]); err != nil {
 			t.Fatal(err)
@@ -177,9 +192,9 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 	if outputs == nil {
 		outputs = []any{}
 	}
-	data := map[string]any{"outputs": normalizeMCPScenarioValue(outputs)}
+	data := map[string]any{"outputs": normalizeMCPScenarioValue(outputs), "joinedSynthesis": true}
 	trailer := map[string]any{}
-	for name, values := range call.Trailer() {
+	for name, values := range call.Diagnostics().Trailer() {
 		trailer[name] = values
 	}
 	data["trailer"] = trailer
@@ -192,7 +207,7 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 	}
 	data["error"] = normalizeMCPScenarioValue(terminal)
 	phase := "response"
-	if details, ok := terminal.Details.(map[string]any); ok {
+	if details, ok := terminal.Diagnostics.(map[string]any); ok {
 		if native, ok := details["mcp"].(map[string]any); ok {
 			if _, ok := native["result"]; ok {
 				phase = "completion"
@@ -200,6 +215,17 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 		}
 	}
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
+}
+
+func mcpOperationForRef(t *testing.T, iface *openbindings.Interface, ref string) string {
+	t.Helper()
+	for _, binding := range iface.Bindings {
+		if binding.Ref == ref {
+			return binding.Operation
+		}
+	}
+	t.Fatalf("synthesized MCP interface has no binding for %q", ref)
+	return ""
 }
 
 func normalizeMCPScenarioValue(value any) any {
@@ -233,85 +259,70 @@ func runMCPProcessorScenario(t *testing.T, scenario processorscenarios.Scenario)
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "load", Data: data}
 	case "MCP-PS-02":
 		pages, _ := scenario.Given.Peer["toolPages"].([]any)
-		l := &listing{requiredTaskTools: map[string]bool{}}
+		l := &listing{requiredTaskTools: map[string]bool{}, structuredTools: map[string]bool{}, toolOutputSchemas: map[string]any{}}
 		cursors := []any{nil}
 		for _, rawPage := range pages {
 			page, _ := rawPage.(map[string]any)
 			for _, rawTool := range page["tools"].([]any) {
 				tool := rawTool.(map[string]any)
-				l.tools = append(l.tools, tool["name"].(string))
+				toolName := tool["name"].(string)
+				l.tools = append(l.tools, toolName)
+				if schema, ok := tool["outputSchema"]; ok {
+					l.structuredTools[toolName] = true
+					l.toolOutputSchemas[toolName] = schema
+				}
 			}
 			if next, ok := page["nextCursor"].(string); ok {
 				cursors = append(cursors, next)
 			}
 		}
-		if _, err := resolveRef(l, entity, name); err != nil {
+		if _, err := resolveRef(l, entity, name, BindingSpec); err != nil {
 			t.Fatal(err)
 		}
 		data["listingRequests"] = map[string]any{"tools": cursors}
 		data["dispatch"] = map[string]any{"method": "tools/call"}
+		result := scenario.Given.Peer["toolResult"].(map[string]any)
+		data["outputs"] = []any{result["structuredContent"]}
 		return complete()
 	case "MCP-PS-03":
-		if _, err := resolveRef(pin, entity, name); err != nil {
+		if _, err := resolveRef(pin, entity, name, BindingSpec); err != nil {
 			t.Fatal(err)
 		}
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "pre-dispatch", Data: data}
-	case "MCP-PS-13":
-		if _, err := resolveRef(pin, entity, name); err != nil {
-			t.Fatal(err)
-		}
-		tmpl, _ := uritemplate.New(name)
-		input := scenario.Given.Invocation["input"].(map[string]any)
-		items := input["tag"].([]any)
-		values := make([]string, len(items))
-		for i, item := range items {
-			values[i] = item.(string)
-		}
-		uri, err := tmpl.Expand(uritemplate.Values{"tag": uritemplate.List(values...)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		data["dispatch"] = map[string]any{"params": map[string]any{"uri": uri}}
-		return complete()
 	case "MCP-PS-04":
-		progress := scenario.Given.Peer["progress"].([]any)[0].(map[string]any)
-		clean := map[string]any{}
-		for k, v := range progress {
-			if k != "progressToken" {
-				clean[k] = v
-			}
-		}
-		data["outputs"] = []any{clean, scenario.Given.Peer["toolResult"]}
+		result := scenario.Given.Peer["toolResult"].(map[string]any)
+		data["outputs"] = []any{result["structuredContent"]}
+		data["dispatch"] = map[string]any{"params": map[string]any{}}
 		return complete()
 	case "MCP-PS-05":
-		data["outputs"] = []any{scenario.Given.Peer["toolResult"]}
+		result := scenario.Given.Peer["toolResult"].(map[string]any)
+		data["outputs"] = []any{result["structuredContent"]}
 		return complete()
 	case "MCP-PS-06":
 		return processorscenarios.Observation{Disposition: "error", Phase: "response", Data: data}
 	case "MCP-PS-07":
 		return processorscenarios.Observation{Disposition: "context-required", Phase: "pre-dispatch", Data: data}
-	case "MCP-PS-08", "MCP-PS-12":
-		if _, err := resolveRef(pin, entity, name); err == nil {
+	case "MCP-PS-08", "MCP-PS-09", "MCP-PS-12", "MCP-PS-13":
+		if _, err := resolveRef(pin, entity, name, BindingSpec); err == nil {
 			t.Fatal("expected unresolvable ref")
 		}
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "resolution", Data: data}
-	case "MCP-PS-09":
-		data["outputs"] = []any{scenario.Given.Peer["resourceResult"]}
-		return complete()
 	case "MCP-PS-10":
-		data["outputs"] = []any{scenario.Given.Peer["promptResult"]}
-		return complete()
+		return processorscenarios.Observation{Disposition: "error", Phase: "response", Data: data}
 	case "MCP-PS-11":
-		if _, err := resolveRef(pin, entity, name); err != nil {
+		if _, err := resolveRef(pin, entity, name, BindingSpec); err != nil {
 			t.Fatal(err)
 		}
-		data["dispatch"] = map[string]any{"method": "prompts/get"}
+		data["dispatch"] = map[string]any{"method": "tools/call"}
+		data["outputs"] = []any{map[string]any{}}
 		return complete()
 	case "MCP-PS-14":
 		data["dispatch"] = map[string]any{"method": "tools/call", "httpMethod": "POST"}
 		return processorscenarios.Observation{Disposition: "error", Phase: "response", Data: data}
 	case "MCP-PS-15":
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "pre-dispatch", Data: data}
+	case "MCP-PS-16":
+		return processorscenarios.Observation{Disposition: "error", Phase: "response", Data: data}
 	default:
 		t.Fatalf("unhandled scenario %s", scenario.ID)
 		return processorscenarios.Observation{}

@@ -253,19 +253,15 @@ func applyConnectError(ierr *openbindings.InvocationError, body []byte) {
 	if json.Unmarshal(body, &connectErr) != nil {
 		return
 	}
-	if code, _ := connectErr["code"].(string); code != "" {
-		ierr.Code = connectCodeToErrCode(code)
-		if code == "unavailable" || code == "resource_exhausted" {
-			ierr.Effects = openbindings.EffectsNone
-		}
-	}
+	// The Connect code stays binding-native diagnostic evidence. It does not
+	// select a portable OpenBindings failure category or retry policy.
 	if message, _ := connectErr["message"].(string); message != "" {
 		ierr.Message = message
 	}
-	details, _ := ierr.Details.(map[string]any)
+	details, _ := ierr.Diagnostics.(map[string]any)
 	if details == nil {
 		details = map[string]any{}
-		ierr.Details = details
+		ierr.Diagnostics = details
 	}
 	details["connect"] = map[string]any{"error": connectErr}
 }
@@ -276,10 +272,10 @@ func applyConnectError(ierr *openbindings.InvocationError, body []byte) {
 func connectHTTPError(resp *http.Response, body []byte, truncated bool) *openbindings.InvocationError {
 	ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
 	applyConnectError(ierr, body)
-	details, _ := ierr.Details.(map[string]any)
+	details, _ := ierr.Diagnostics.(map[string]any)
 	if details == nil {
 		details = map[string]any{}
-		ierr.Details = details
+		ierr.Diagnostics = details
 	}
 	headers := map[string][]string{}
 	for name, values := range resp.Header {

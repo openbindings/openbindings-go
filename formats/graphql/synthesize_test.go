@@ -52,7 +52,7 @@ func TestConvertToInterfaceInventoriesRootFields(t *testing.T) {
 		t.Fatalf("refs = %#v, want %#v", refs, wantRefs)
 	}
 	source := iface.Sources[DefaultSourceName]
-	if source.BindingSpec != BindingSpec {
+	if source.BindingSpec != LegacyBindingSpec {
 		t.Fatalf("bindingSpec = %q", source.BindingSpec)
 	}
 }
@@ -94,15 +94,33 @@ func TestSynthesisCoverageIsExhaustive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Coverage.Exhaustive || !result.Coverage.FullyRepresented || len(result.Coverage.Entries) != 4 {
+	if !result.Coverage.Exhaustive || result.Coverage.FullyRepresented || len(result.Coverage.Entries) != 4 {
 		t.Fatalf("coverage = %#v", result.Coverage)
 	}
 	for _, entry := range result.Coverage.Entries {
-		if len(entry.Requirements) == 0 || entry.Requirements[0] != "document" {
-			t.Fatalf("requirements = %#v", entry.Requirements)
+		if entry.SourceRef == "subscription/status" {
+			if entry.Status != openbindings.SynthesisExcluded || entry.ReasonCode != "graphql.subscription_lifecycle_not_representable" || entry.Rule != "GQL-P-04" || len(entry.Requirements) != 0 {
+				t.Fatalf("subscription coverage = %#v", entry)
+			}
+			continue
 		}
-		if entry.SourceRef == "subscription/status" && !reflect.DeepEqual(entry.Requirements, []string{"document", "subscriptionTarget"}) {
-			t.Fatalf("subscription requirements = %#v", entry.Requirements)
+		if entry.Status != openbindings.SynthesisRepresented || !reflect.DeepEqual(entry.Requirements, []string{"document"}) {
+			t.Fatalf("represented coverage = %#v", entry)
 		}
+	}
+}
+
+func TestRevisionTwoProjectsRootFieldSchemas(t *testing.T) {
+	iface, err := convertToInterface(synthesisSchema(), "", BindingSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := iface.Operations["subscription_status"]; ok {
+		t.Fatal("revision 2 synthesized a subscription operation")
+	}
+	if got := iface.Operations["status"].Output; !reflect.DeepEqual(got, map[string]any{
+		"anyOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "null"}},
+	}) {
+		t.Fatalf("query/status output = %#v", got)
 	}
 }

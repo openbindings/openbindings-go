@@ -68,7 +68,7 @@ func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	synthesizer := NewSynthesizer()
 	iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			BindingSpec: BindingSpec,
+			BindingSpec: LegacyBindingSpec,
 			Location:    ts.URL,
 		}},
 	})
@@ -153,7 +153,7 @@ func TestInspectSource_PinnedListingIsOffline(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		BindingSpec: BindingSpec,
+		BindingSpec: LegacyBindingSpec,
 		Location:    ts.URL,
 		Content:     mustContent(pin),
 	})

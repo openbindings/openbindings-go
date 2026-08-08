@@ -313,8 +313,8 @@ func TestConvertToInterface_SourceEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := iface.Sources[DefaultSourceName]
-	if src.BindingSpec != BindingSpec {
-		t.Errorf("format = %q, want %q", src.BindingSpec, BindingSpec)
+	if src.BindingSpec != LegacyBindingSpec {
+		t.Errorf("format = %q, want %q", src.BindingSpec, LegacyBindingSpec)
 	}
 	if src.Location != "https://mcp.example.com/sse" {
 		t.Errorf("location = %q, want https://mcp.example.com/sse", src.Location)
@@ -445,7 +445,7 @@ func TestSynthesizeInterface_PinnedListingIsOffline(t *testing.T) {
 	synth := NewSynthesizer(WithSynthesizerHTTPClient(failingCountingClient(&requests)))
 	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			BindingSpec: BindingSpec,
+			BindingSpec: LegacyBindingSpec,
 			Location:    "https://mcp.example.test",
 			Content:     mustContent(pin),
 		}},
@@ -509,7 +509,7 @@ func TestSynthesizeInterfaceWithCoverage_DisclosesPinnedListingExclusions(t *tes
 	}
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			BindingSpec: BindingSpec,
+			BindingSpec: LegacyBindingSpec,
 			Location:    "https://mcp.example.test",
 			Content:     mustContent(pin),
 		}},

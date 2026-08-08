@@ -2,91 +2,37 @@ package openbindings
 
 import (
 	"errors"
-	"fmt"
-	"net/http"
-	"strconv"
 	"strings"
 )
 
-// HTTPError builds the terminal *InvocationError for an HTTP error response,
-// carrying the status in Details ("status": int; HTTP-speaking invokers also
-// add "body": string with the error response payload). Read them through
-// HTTPStatus and HTTPResponseBody rather than asserting the Details shape.
-// status is typically resp.Status from net/http (e.g. "401 Unauthorized"),
-// not a bare reason phrase. Format invokers fire it via
-// BindingHandle.FireError.
-func HTTPError(statusCode int, status string) *InvocationError {
-	reason := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(status), strconv.Itoa(statusCode)))
-	if reason == "" {
-		reason = http.StatusText(statusCode)
-	}
+// HTTPError builds the terminal *InvocationError for an HTTP error response.
+// The status is retained only as explicit Diagnostics. Read it through
+// HTTPStatus rather than asserting the diagnostic shape.
+// The native status text is deliberately not copied into the ordinary
+// message; format invokers fire this via BindingHandle.FireError and retain
+// the native response only on Diagnostics.
+func HTTPError(statusCode int, _ string) *InvocationError {
 	return &InvocationError{
-		Code:    HTTPErrorCode(statusCode),
-		Message: fmt.Sprintf("HTTP %d %s", statusCode, reason),
-		Effects: httpErrorEffects(statusCode),
-		Details: map[string]any{"status": statusCode},
+		Code:        HTTPErrorCode(statusCode),
+		Message:     "Invocation completed unsuccessfully",
+		Diagnostics: map[string]any{"status": statusCode},
 	}
 }
 
-// httpErrorEffects reports what an HTTP error status proves about side
-// effects. A 429 or 503 is the server refusing the request before it executed
-// (rate-limited / unavailable), so the call provably did not take hold —
-// EffectsNone licenses a backoff-retry. Every other status is left unset and
-// so is treated as EffectsPossible by consumers: a 502 Bad Gateway may already
-// have reached the backend, a 408/504 timeout was dispatched, and any other
-// 5xx may have executed — none is safe to blind-retry for a non-idempotent
-// operation. (ERR_UNAVAILABLE deliberately carries no effects default of its
-// own, because its effects are per-status: none for 429/503, possible for 502;
-// classify() supplies EffectsPossible for the transport-transient ERR_TIMEOUT
-// that 408/504 map to.)
-func httpErrorEffects(statusCode int) Effects {
-	switch statusCode {
-	case http.StatusTooManyRequests, http.StatusServiceUnavailable: // 429, 503
-		return EffectsNone
-	default:
-		return ""
-	}
-}
-
-// HTTPErrorCode maps an HTTP status code to a standard error code constant,
-// implementing the binding-invoker contract's HTTP status→code table. The
-// category follows from the returned code via the canonical code→category map.
-// Shared utility for format invokers that handle HTTP responses.
-//
-//   - 401 Unauthorized          → ERR_AUTH_REQUIRED     (auth)
-//   - 403 Forbidden             → ERR_PERMISSION_DENIED (auth)
-//   - 408, 504                  → ERR_TIMEOUT           (transient)
-//   - 429, 502, 503             → ERR_UNAVAILABLE       (transient)
-//   - every other 4xx and 5xx   → ERR_EXECUTION_FAILED  (service)
-//
-// The numeric status is preserved on the error's Details, so callers can still
-// branch on 404, 422, and the like via HTTPStatus.
+// HTTPErrorCode returns the SDK's open, non-portable code for a concrete HTTP
+// failure. The invocation interface deliberately does not map status numbers
+// into a closed cross-protocol taxonomy; callers observe unsuccessful
+// completion structurally and may inspect HTTPStatus only on an expert
+// diagnostic path.
 func HTTPErrorCode(statusCode int) string {
-	switch statusCode {
-	case http.StatusUnauthorized: // 401
-		return ErrCodeAuthRequired
-	case http.StatusForbidden: // 403
-		return ErrCodePermissionDenied
-	case http.StatusRequestTimeout, http.StatusGatewayTimeout: // 408, 504
-		return ErrCodeTimeout
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable: // 429, 502, 503
-		return ErrCodeUnavailable
-	default:
-		// Every other 4xx and every 5xx: the request reached the server and
-		// was refused on its merits — a service error, not a blind-retry.
-		return ErrCodeExecutionFailed
-	}
+	return ErrCodeExecutionFailed
 }
 
-// HTTPStatus extracts the HTTP status code from an invocation error whose
-// binding spoke HTTP. The status→code table folds several statuses onto a
-// shared code (429/502/503 → ERR_UNAVAILABLE, 408/504 → ERR_TIMEOUT, every
-// other 4xx/5xx → ERR_EXECUTION_FAILED, and 401/403 to the auth codes), so
-// real REST error handling still branches on the numeric status — 404
-// not-found vs 422 caller bug vs a specific retry backoff — and this accessor
-// is the supported way to reach it (the Details shape is not a contract).
+// HTTPStatus extracts the HTTP status code from an invocation error's explicit
+// diagnostic escape hatch. Ordinary protocol-blind operation behavior must not
+// depend on this value.
 func HTTPStatus(err error) (int, bool) {
-	m := detailsMap(err)
+	m := diagnosticsMap(err)
 	if m == nil {
 		return 0, false
 	}
@@ -99,10 +45,9 @@ func HTTPStatus(err error) (int, bool) {
 	return 0, false
 }
 
-// HTTPResponseBody extracts the error response body an HTTP-speaking
-// invoker preserved alongside the status, when there was one.
+// HTTPResponseBody extracts a diagnostically retained HTTP error body.
 func HTTPResponseBody(err error) (string, bool) {
-	m := detailsMap(err)
+	m := diagnosticsMap(err)
 	if m == nil {
 		return "", false
 	}
@@ -110,12 +55,12 @@ func HTTPResponseBody(err error) (string, bool) {
 	return body, ok
 }
 
-func detailsMap(err error) map[string]any {
+func diagnosticsMap(err error) map[string]any {
 	var ie *InvocationError
 	if !errors.As(err, &ie) || ie == nil {
 		return nil
 	}
-	m, _ := ie.Details.(map[string]any)
+	m, _ := ie.Diagnostics.(map[string]any)
 	return m
 }
 

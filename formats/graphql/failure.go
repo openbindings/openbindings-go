@@ -13,6 +13,7 @@ import (
 type FailureEvidence struct {
 	HTTPResponse *HTTPFailureEvidence
 	MediaType    string
+	Response     map[string]any
 	TransportWS  *TransportWSFailureEvidence
 }
 
@@ -37,10 +38,10 @@ type TransportWSFailureEvidence struct {
 // after either in-process use or an invoker-frame JSON round trip.
 func FailureEvidenceFrom(err error) (FailureEvidence, bool) {
 	var invocationError *openbindings.InvocationError
-	if !errors.As(err, &invocationError) || invocationError == nil || invocationError.Details == nil {
+	if !errors.As(err, &invocationError) || invocationError == nil || invocationError.Diagnostics == nil {
 		return FailureEvidence{}, false
 	}
-	raw, marshalErr := json.Marshal(invocationError.Details)
+	raw, marshalErr := json.Marshal(invocationError.Diagnostics)
 	if marshalErr != nil {
 		return FailureEvidence{}, false
 	}
@@ -57,7 +58,8 @@ func FailureEvidenceFrom(err error) (FailureEvidence, bool) {
 			} `json:"body"`
 		} `json:"httpResponse"`
 		GraphQL *struct {
-			MediaType string `json:"mediaType"`
+			MediaType string         `json:"mediaType"`
+			Response  map[string]any `json:"response"`
 		} `json:"graphql"`
 		TransportWS *struct {
 			Type     string `json:"type"`
@@ -71,6 +73,10 @@ func FailureEvidenceFrom(err error) (FailureEvidence, bool) {
 		return FailureEvidence{}, false
 	}
 	evidence := FailureEvidence{}
+	if wire.GraphQL != nil {
+		evidence.MediaType = wire.GraphQL.MediaType
+		evidence.Response = wire.GraphQL.Response
+	}
 	if wire.HTTPResponse != nil && wire.HTTPResponse.Body != nil {
 		body, decodeErr := base64.StdEncoding.DecodeString(wire.HTTPResponse.Body.Base64)
 		if decodeErr != nil || len(body) != wire.HTTPResponse.Body.ByteLength {
@@ -85,9 +91,6 @@ func FailureEvidenceFrom(err error) (FailureEvidence, bool) {
 			URL: wire.HTTPResponse.URL, Headers: headers, Body: body,
 			Truncated: wire.HTTPResponse.Body.Truncated,
 		}
-		if wire.GraphQL != nil {
-			evidence.MediaType = wire.GraphQL.MediaType
-		}
 	}
 	if wire.TransportWS != nil {
 		if wire.TransportWS.Type != "error" && wire.TransportWS.Type != "close" {
@@ -99,7 +102,7 @@ func FailureEvidenceFrom(err error) (FailureEvidence, bool) {
 			WasClean: wire.TransportWS.WasClean,
 		}
 	}
-	if evidence.HTTPResponse == nil && evidence.TransportWS == nil {
+	if evidence.HTTPResponse == nil && evidence.TransportWS == nil && evidence.Response == nil {
 		return FailureEvidence{}, false
 	}
 	return evidence, true

@@ -40,10 +40,10 @@ type EndStreamFailureEvidence struct {
 // from an in-process or invoker-frame-round-tripped InvocationError.
 func FailureEvidenceFrom(err error) (FailureEvidence, bool) {
 	var invocationError *openbindings.InvocationError
-	if !errors.As(err, &invocationError) || invocationError == nil || invocationError.Details == nil {
+	if !errors.As(err, &invocationError) || invocationError == nil || invocationError.Diagnostics == nil {
 		return FailureEvidence{}, false
 	}
-	raw, marshalErr := json.Marshal(invocationError.Details)
+	raw, marshalErr := json.Marshal(invocationError.Diagnostics)
 	if marshalErr != nil {
 		return FailureEvidence{}, false
 	}

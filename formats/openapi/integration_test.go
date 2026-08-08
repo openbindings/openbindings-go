@@ -940,12 +940,6 @@ func TestIntegration_SSEResponse_MidStreamDeadlineIsTimeout(t *testing.T) {
 	if terr.Code != openbindings.ErrCodeTimeout {
 		t.Fatalf("code = %q, want ERR_TIMEOUT", terr.Code)
 	}
-	if terr.Category != openbindings.CategoryTransient {
-		t.Errorf("category = %q, want transient", terr.Category)
-	}
-	if terr.Effects != openbindings.EffectsPossible {
-		t.Errorf("effects = %q, want possible", terr.Effects)
-	}
 }
 
 func TestIntegration_SSEResponse_NotSSE_StaysUnary(t *testing.T) {

@@ -26,10 +26,10 @@ type ProcessBytes struct {
 // either in-process use or an invoker-frame JSON round trip.
 func FailureEvidenceFrom(err error) (FailureEvidence, bool) {
 	var invocationError *openbindings.InvocationError
-	if !errors.As(err, &invocationError) || invocationError == nil || invocationError.Details == nil {
+	if !errors.As(err, &invocationError) || invocationError == nil || invocationError.Diagnostics == nil {
 		return FailureEvidence{}, false
 	}
-	raw, marshalErr := json.Marshal(invocationError.Details)
+	raw, marshalErr := json.Marshal(invocationError.Diagnostics)
 	if marshalErr != nil {
 		return FailureEvidence{}, false
 	}

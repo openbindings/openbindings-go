@@ -456,7 +456,7 @@ func TestUnarySendAppliesBearerAndYieldsResponse(t *testing.T) {
 		t.Fatalf("got %v", v)
 	}
 
-	md, err := call.Header(shortCtx(t))
+	md, err := call.Diagnostics().Header(shortCtx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestUnarySendAppliesBearerAndYieldsResponse(t *testing.T) {
 	}
 }
 
-func TestServer401MapsToAuthRequired(t *testing.T) {
+func TestServer401IsStructuralAndRetainsDiagnostics(t *testing.T) {
 	srv, _ := newHTTPFixture(t)
 	binv := NewInvoker()
 	defer binv.Close()
@@ -481,17 +481,20 @@ func TestServer401MapsToAuthRequired(t *testing.T) {
 	}
 	_, err := drainOutputs(t, call)
 	var ie *openbindings.InvocationError
-	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeAuthRequired {
-		t.Fatalf("expected ERR_AUTH_REQUIRED, got %v", err)
+	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", err)
 	}
-	details, _ := ie.Details.(map[string]any)
+	if ie.Details != nil {
+		t.Fatalf("HTTP evidence leaked into portable details: %#v", ie.Details)
+	}
+	details, _ := ie.Diagnostics.(map[string]any)
 	if details["status"] != 401 {
-		t.Errorf("details.status = %v, want 401", details["status"])
+		t.Errorf("diagnostics.status = %v, want 401", details["status"])
 	}
-	// Error details carry the raw capture verbatim (bytes-as-text, never a
+	// Diagnostics carry the raw capture verbatim (bytes-as-text, never a
 	// sniffed parse — payload-independence).
 	if body, _ := details["body"].(string); !strings.Contains(body, "unauthorized") {
-		t.Errorf("details.body = %v", details["body"])
+		t.Errorf("diagnostics.body = %v", details["body"])
 	}
 }
 

@@ -64,7 +64,7 @@ func discover(ctx context.Context, clientVersion string, baseClient *http.Client
 		if init != nil {
 			negotiated = init.ProtocolVersion
 		}
-		return nil, fmt.Errorf("MCP negotiated protocol revision %q; openbindings.mcp@1 accepts only 2025-11-25", negotiated)
+		return nil, fmt.Errorf("MCP negotiated protocol revision %q; this implementation accepts only 2025-11-25", negotiated)
 	}
 
 	result := &discovery{RequiredTaskTools: requiredTaskTools}

@@ -19,6 +19,8 @@ import (
 type listing struct {
 	tools             []string // Tool.name
 	requiredTaskTools map[string]bool
+	structuredTools   map[string]bool // Tool declares outputSchema
+	toolOutputSchemas map[string]any
 	resources         []string // Resource.uri
 	templates         []string // ResourceTemplate.uriTemplate
 	prompts           []string // Prompt.name
@@ -74,7 +76,7 @@ func parsePinnedListing(content json.RawMessage) (*listing, error) {
 		}
 	}
 
-	l := &listing{pinned: true, requiredTaskTools: map[string]bool{}}
+	l := &listing{pinned: true, requiredTaskTools: map[string]bool{}, structuredTools: map[string]bool{}, toolOutputSchemas: map[string]any{}}
 	var perr error
 	if l.tools, perr = pinEntityIdentities(members["tools"], "tools", "name"); perr != nil {
 		return nil, perr
@@ -84,6 +86,10 @@ func parsePinnedListing(content json.RawMessage) (*listing, error) {
 		_ = json.Unmarshal(raw, &entries)
 		for _, entry := range entries {
 			name, _ := entry["name"].(string)
+			if output, present := entry["outputSchema"]; present && output != nil {
+				l.structuredTools[name] = true
+				l.toolOutputSchemas[name] = output
+			}
 			execution, _ := entry["execution"].(map[string]any)
 			if execution["taskSupport"] == "required" {
 				l.requiredTaskTools[name] = true
@@ -181,12 +187,12 @@ var maxListItems = 1_000_000
 func paginationOverflow() error {
 	return &openbindings.InvocationError{
 		Code:    openbindings.ErrCodeProtocol,
-		Message: fmt.Sprintf("MCP server did not terminate pagination: exceeded %d items (openbindings.mcp@1 MCP-P-02)", maxListItems),
+		Message: fmt.Sprintf("MCP server did not terminate pagination: exceeded %d items (MCP-P-02)", maxListItems),
 	}
 }
 
 func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listing, error) {
-	l := &listing{requiredTaskTools: map[string]bool{}}
+	l := &listing{requiredTaskTools: map[string]bool{}, structuredTools: map[string]bool{}, toolOutputSchemas: map[string]any{}}
 	init := s.session.InitializeResult()
 	if init == nil {
 		return l, nil
@@ -212,6 +218,10 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 				return nil, berr
 			}
 			l.tools = append(l.tools, tool.Name)
+			if tool.OutputSchema != nil {
+				l.structuredTools[tool.Name] = true
+				l.toolOutputSchemas[tool.Name] = tool.OutputSchema
+			}
 			if s.toolRequiresTask(tool.Name) {
 				l.requiredTaskTools[tool.Name] = true
 			}
@@ -263,7 +273,11 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 // resourceTemplates matches only declared template strings (§7, R5): the two
 // are separate namespaces, so a resource URI and a byte-identical template
 // string never collide — each is reached by its own entity token.
-func resolveRef(l *listing, entityType, remainder string) (targetKind, *openbindings.InvocationError) {
+func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string) (targetKind, *openbindings.InvocationError) {
+	bindingSpec := LegacyBindingSpec
+	if len(bindingSpecs) > 0 {
+		bindingSpec = bindingSpecs[0]
+	}
 	where := "server listing"
 	if l.pinned {
 		where = "pinned listing"
@@ -298,7 +312,13 @@ func resolveRef(l *listing, entityType, remainder string) (targetKind, *openbind
 			if l.requiredTaskTools[remainder] {
 				return 0, &openbindings.InvocationError{
 					Code:    openbindings.ErrCodeInvalidRef,
-					Message: fmt.Sprintf("MCP tool %q requires task augmentation, which openbindings.mcp@1 intentionally does not implement (MCP-P-08)", remainder),
+					Message: fmt.Sprintf("MCP tool %q requires task augmentation, which %s does not implement (MCP-P-08)", remainder, bindingSpec),
+				}
+			}
+			if bindingSpec == BindingSpec && !l.structuredTools[remainder] {
+				return 0, &openbindings.InvocationError{
+					Code:    openbindings.ErrCodeInvalidRef,
+					Message: fmt.Sprintf("MCP tool %q has no outputSchema application contract and is not bindable through %s (MCP-P-04)", remainder, BindingSpec),
 				}
 			}
 			return targetTool, nil
@@ -307,6 +327,9 @@ func resolveRef(l *listing, entityType, remainder string) (targetKind, *openbind
 		}
 		return notFound("tool")
 	case "prompts":
+		if bindingSpec == BindingSpec {
+			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP prompts have no application output schema and are excluded by openbindings.mcp@2 (MCP-P-04)"}
+		}
 		switch n := count(l.prompts); {
 		case n == 1:
 			return targetPrompt, nil
@@ -315,6 +338,9 @@ func resolveRef(l *listing, entityType, remainder string) (targetKind, *openbind
 		}
 		return notFound("prompt")
 	case "resources":
+		if bindingSpec == BindingSpec {
+			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP resources have no application output schema and are excluded by openbindings.mcp@2 (MCP-P-04)"}
+		}
 		switch n := count(l.resources); {
 		case n == 1:
 			return targetStaticResource, nil
@@ -323,6 +349,9 @@ func resolveRef(l *listing, entityType, remainder string) (targetKind, *openbind
 		}
 		return notFound("resource")
 	case "resourceTemplates":
+		if bindingSpec == BindingSpec {
+			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP resource templates have no application output schema and are excluded by openbindings.mcp@2 (MCP-P-04)"}
+		}
 		switch n := count(l.templates); {
 		case n == 1:
 			return targetTemplateResource, nil

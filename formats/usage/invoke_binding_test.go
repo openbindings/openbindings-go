@@ -49,7 +49,7 @@ func TestCappedBuffer_StopsAtLimit(t *testing.T) {
 
 func TestBuiltinDecodeText_RefusesInvalidUTF8(t *testing.T) {
 	_, err := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte{0xff}})
-	if err == nil || !strings.Contains(err.Error(), "not valid UTF-8") {
+	if err == nil || err.Error() != "Invocation result could not be decoded" {
 		t.Fatalf("invalid UTF-8 must fail loudly, got %v", err)
 	}
 	got, err := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte("ok\r\n\n")})

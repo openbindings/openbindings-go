@@ -21,7 +21,8 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-const BindingSpec = "openbindings.graphql@1"
+const BindingSpec = "openbindings.graphql@2"
+const LegacyBindingSpec = "openbindings.graphql@1"
 const DefaultSourceName = "graphql"
 
 // maxRedirects bounds the redirect chain a single request may follow.
@@ -78,7 +79,10 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 
 // Formats returns the source formats supported by the GraphQL invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "GraphQL APIs"}}
+	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpec, Description: "GraphQL query and mutation application values"},
+		{BindingSpec: LegacyBindingSpec, Description: "GraphQL response-envelope compatibility"},
+	}
 }
 
 // cachedIntrospect returns a cached introspection result or performs a fresh
@@ -128,6 +132,14 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	rootType, fieldName, err := parseRef(args.Ref)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: err.Error()})
+		return
+	}
+	if args.Source.BindingSpec != BindingSpec && args.Source.BindingSpec != LegacyBindingSpec {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("GraphQL invoker supports exact binding specifications %q and %q, got %q", BindingSpec, LegacyBindingSpec, args.Source.BindingSpec)})
+		return
+	}
+	if args.Source.BindingSpec == BindingSpec && rootType == "subscription" {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: fmt.Sprintf("GraphQL revision 2 does not bind subscription target %q (GQL-P-04)", args.Ref)})
 		return
 	}
 
@@ -205,7 +217,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		_ = inv.CloseInput()
 	}
 
-	if err := document.verifySelection(cfg.Document.OperationName, rootType, fieldName, variables, schema); err != nil {
+	responseKey, err := document.responseKey(cfg.Document.OperationName, rootType, fieldName, variables, schema)
+	if err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configured document does not denote binding ref %q: %v", args.Ref, err)})
 		return
 	}
@@ -238,10 +251,14 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 
 	_ = inv.SetHeader(toMetadata(result.Header))
-	if err := inv.EmitOutput(result.Body); err != nil {
+	if args.Source.BindingSpec == LegacyBindingSpec {
+		if err := inv.EmitOutput(result.Body); err != nil {
+			return
+		}
+		inv.CloseOutput()
 		return
 	}
-	inv.CloseOutput()
+	emitProjectedGraphQLResult(inv, result, responseKey)
 }
 
 // PrepareBinding reports required configuration without parsing a source,
@@ -318,7 +335,10 @@ var (
 
 // Formats returns the source formats supported by the GraphQL synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "GraphQL APIs"}}
+	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpec, Description: "GraphQL query and mutation application values"},
+		{BindingSpec: LegacyBindingSpec, Description: "GraphQL response-envelope compatibility"},
+	}
 }
 
 // SynthesizeInterface introspects a GraphQL endpoint and converts to an OpenBindings interface.
@@ -337,7 +357,7 @@ func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *o
 	if schema == nil {
 		return openbindings.NewSynthesisResult(iface, []openbindings.SynthesisCoverageEntry{}, true)
 	}
-	return openbindings.NewSynthesisResult(iface, graphQLSynthesisCoverage(iface), true)
+	return openbindings.NewSynthesisResult(iface, graphQLSynthesisCoverage(schema, iface, iface.Sources[DefaultSourceName].BindingSpec), true)
 }
 
 func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, *introspectionSchema, error) {
@@ -353,8 +373,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpec {
-		return nil, nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpec && src.BindingSpec != LegacyBindingSpec {
+		return nil, nil, fmt.Errorf("synthesizer supports exact binding specifications %q and %q, got %q", BindingSpec, LegacyBindingSpec, src.BindingSpec)
 	}
 	endpoint := src.Location
 	if err := validateHTTPLocation(endpoint); err != nil {
@@ -381,7 +401,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 	if err != nil {
 		return nil, nil, fmt.Errorf("GraphQL introspection: %w", err)
 	}
-	iface, err := convertToInterface(schema, endpoint)
+	iface, err := convertToInterface(schema, endpoint, src.BindingSpec)
 	if err != nil {
 		return nil, nil, fmt.Errorf("GraphQL convert: %w", err)
 	}
@@ -390,13 +410,13 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		entry.Content = artifactContent
 		iface.Sources[DefaultSourceName] = entry
 	}
-	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
+	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, src.BindingSpec); err != nil {
 		return nil, nil, err
 	}
 	return &iface, schema, nil
 }
 
-func graphQLSynthesisCoverage(iface *openbindings.Interface) []openbindings.SynthesisCoverageEntry {
+func graphQLSynthesisCoverage(schema *introspectionSchema, iface *openbindings.Interface, bindingSpec string) []openbindings.SynthesisCoverageEntry {
 	type item struct {
 		key     string
 		binding openbindings.BindingEntry
@@ -425,7 +445,70 @@ func graphQLSynthesisCoverage(iface *openbindings.Interface) []openbindings.Synt
 			Requirements: requirements,
 		})
 	}
+	if bindingSpec == BindingSpec {
+		tm := schema.typeMap()
+		rootName := schema.rootTypeName("subscription")
+		if root := tm[rootName]; root != nil {
+			fields := append([]field(nil), root.Fields...)
+			sort.Slice(fields, func(i, j int) bool { return fields[i].Name < fields[j].Name })
+			for _, field := range fields {
+				if strings.HasPrefix(field.Name, "__") {
+					continue
+				}
+				entries = append(entries, openbindings.SynthesisCoverageEntry{
+					SourceIndex: 0, SourceRef: "subscription/" + field.Name,
+					Scope: openbindings.SynthesisCoverageTarget, Status: openbindings.SynthesisExcluded,
+					ReasonCode: "graphql.subscription_lifecycle_not_representable", Rule: "GQL-P-04",
+					Message: "subscription events may carry partial data and errors while the native stream continues; revision 2 does not approximate that lifecycle",
+				})
+			}
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].SourceRef < entries[j].SourceRef })
+	}
 	return entries
+}
+
+func emitProjectedGraphQLResult(inv *openbindings.InvocationImpl[any, any], result *graphQLHTTPResult, responseKey string) {
+	data, _ := result.Body["data"].(map[string]any)
+	value, present := data[responseKey]
+	_, hasErrors := result.Body["errors"]
+	if present {
+		if err := inv.EmitOutput(value); err != nil {
+			return
+		}
+	}
+	if hasErrors {
+		inv.FireError(&openbindings.InvocationError{
+			Code: openbindings.ErrCodeExecutionFailed, Message: graphQLErrorMessage(result.Body),
+			Diagnostics: map[string]any{"graphql": map[string]any{
+				"response": result.Body, "mediaType": result.MediaType,
+			}},
+		})
+		return
+	}
+	if !present {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeResponseError,
+			Message: fmt.Sprintf("GraphQL response data does not contain selected response key %q", responseKey),
+			Diagnostics: map[string]any{"graphql": map[string]any{
+				"response": result.Body, "mediaType": result.MediaType,
+			}},
+		})
+		return
+	}
+	inv.CloseOutput()
+}
+
+func graphQLErrorMessage(response map[string]any) string {
+	errors, _ := response["errors"].([]any)
+	if len(errors) > 0 {
+		if first, ok := errors[0].(map[string]any); ok {
+			if message, ok := first["message"].(string); ok && message != "" {
+				return message
+			}
+		}
+	}
+	return "GraphQL execution completed unsuccessfully"
 }
 
 // introspectionCacheKey normalizes an endpoint URL to a schema cache key

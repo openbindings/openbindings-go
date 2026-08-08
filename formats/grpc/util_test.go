@@ -3,7 +3,6 @@ package grpc
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -68,75 +67,20 @@ func TestParseRef_LeadingSlash(t *testing.T) {
 	}
 }
 
-func TestGRPCError_StatusMapping(t *testing.T) {
-	// Wire values pinned as literals: consumers switch on these strings.
-	cases := []struct {
-		grpcCode codes.Code
-		want     string
-	}{
-		{codes.Unauthenticated, "ERR_AUTH_REQUIRED"},
-		{codes.PermissionDenied, "ERR_PERMISSION_DENIED"},
-		{codes.Unavailable, "ERR_UNAVAILABLE"},
-		{codes.ResourceExhausted, "ERR_UNAVAILABLE"},
-		{codes.DeadlineExceeded, "ERR_TIMEOUT"},
-		{codes.Canceled, "ERR_CANCELLED"},
-		{codes.Internal, "ERR_EXECUTION_FAILED"},
-		{codes.NotFound, "ERR_EXECUTION_FAILED"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.grpcCode.String(), func(t *testing.T) {
-			err := status.Error(tc.grpcCode, "boom")
-			ie := grpcError(err, openbindings.ErrCodeExecutionFailed)
-			if ie.Code != tc.want {
-				t.Errorf("code = %q, want %q", ie.Code, tc.want)
+func TestGRPCError_StatusIsDiagnosticNotPortableClassification(t *testing.T) {
+	for _, grpcCode := range []codes.Code{
+		codes.Unauthenticated, codes.PermissionDenied, codes.Unavailable,
+		codes.ResourceExhausted, codes.DeadlineExceeded, codes.Canceled,
+		codes.Internal, codes.NotFound,
+	} {
+		t.Run(grpcCode.String(), func(t *testing.T) {
+			ie := grpcError(status.Error(grpcCode, "boom"), openbindings.ErrCodeExecutionFailed)
+			if ie.Code != openbindings.ErrCodeExecutionFailed {
+				t.Errorf("code = %q, want protocol-independent unsuccessful completion", ie.Code)
 			}
-			details, ok := ie.Details.(map[string]any)
-			if !ok || details["grpcCode"] != tc.grpcCode.String() {
-				t.Errorf("details = %v, want grpcCode %q", ie.Details, tc.grpcCode.String())
-			}
-		})
-	}
-}
-
-// TestGRPCError_CategoryAndEffects pins the full gRPC status→code→category→
-// effects table of the binding-invoker contract. Category and the effects
-// default are derived at the consumer boundary (InvocationError.MarshalJSON —
-// the same view the wire and FireError produce), so we round-trip through JSON
-// to read them exactly as a consumer would.
-func TestGRPCError_CategoryAndEffects(t *testing.T) {
-	cases := []struct {
-		grpcCode codes.Code
-		wantCode string
-		wantCat  string
-		wantEff  string
-	}{
-		{codes.Unauthenticated, "ERR_AUTH_REQUIRED", "auth", ""},
-		{codes.PermissionDenied, "ERR_PERMISSION_DENIED", "auth", ""},
-		{codes.Unavailable, "ERR_UNAVAILABLE", "transient", "none"},
-		{codes.ResourceExhausted, "ERR_UNAVAILABLE", "transient", "none"},
-		{codes.DeadlineExceeded, "ERR_TIMEOUT", "transient", "possible"},
-		{codes.Canceled, "ERR_CANCELLED", "cancelled", ""},
-		{codes.Internal, "ERR_EXECUTION_FAILED", "service", ""}, // one status without a specialized mapping
-	}
-	for _, tc := range cases {
-		t.Run(tc.grpcCode.String(), func(t *testing.T) {
-			ie := grpcError(status.Error(tc.grpcCode, "boom"), openbindings.ErrCodeExecutionFailed)
-			if ie.Code != tc.wantCode {
-				t.Errorf("code = %q, want %q", ie.Code, tc.wantCode)
-			}
-			raw, err := json.Marshal(ie)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var seen openbindings.InvocationError
-			if err := json.Unmarshal(raw, &seen); err != nil {
-				t.Fatal(err)
-			}
-			if string(seen.Category) != tc.wantCat {
-				t.Errorf("category = %q, want %q", seen.Category, tc.wantCat)
-			}
-			if string(seen.Effects) != tc.wantEff {
-				t.Errorf("effects = %q, want %q", seen.Effects, tc.wantEff)
+			diagnostics, ok := ie.Diagnostics.(map[string]any)
+			if !ok || diagnostics["grpcCode"] != grpcCode.String() {
+				t.Errorf("diagnostics = %v, want grpcCode %q", ie.Diagnostics, grpcCode.String())
 			}
 		})
 	}
@@ -165,9 +109,9 @@ func TestGRPCError_StatusDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	ie := grpcError(st.Err(), openbindings.ErrCodeExecutionFailed)
-	details, ok := ie.Details.(map[string]any)
+	details, ok := ie.Diagnostics.(map[string]any)
 	if !ok {
-		t.Fatalf("details = %T", ie.Details)
+		t.Fatalf("diagnostics = %T", ie.Diagnostics)
 	}
 	ds, ok := details["grpcDetails"].([]any)
 	if !ok || len(ds) != 1 {
@@ -194,10 +138,10 @@ func TestGRPCError_StatusDetails(t *testing.T) {
 }
 
 func TestRefResolveError_TransportVsNotFound(t *testing.T) {
-	// A reflection-time transport status maps through grpcError: UNAVAILABLE is
-	// the transient ERR_UNAVAILABLE, not a missing ref.
-	if ie := refResolveError("pkg.Svc", status.Error(codes.Unavailable, "down")); ie.Code != "ERR_UNAVAILABLE" {
-		t.Errorf("unavailable: code = %q, want ERR_UNAVAILABLE", ie.Code)
+	// A reflection-time transport status is unsuccessful completion, not a
+	// missing ref; its native gRPC status remains diagnostic only.
+	if ie := refResolveError("pkg.Svc", status.Error(codes.Unavailable, "down")); ie.Code != openbindings.ErrCodeExecutionFailed {
+		t.Errorf("unavailable: code = %q, want %s", ie.Code, openbindings.ErrCodeExecutionFailed)
 	}
 	if ie := refResolveError("pkg.Svc", errors.New("symbol not found")); ie.Code != "ERR_REF_NOT_FOUND" {
 		t.Errorf("not found: code = %q, want ERR_REF_NOT_FOUND", ie.Code)

@@ -21,17 +21,12 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// BindingSpec is the format identifier for MCP sources.
-// Targets the 2025-11-25 MCP spec revision. Supported features:
-//   - tools/list, tools/call (incl. structuredContent and outputSchema)
-//   - resources/list, resources/read
-//   - resources/templates/list
-//   - prompts/list, prompts/get
-//
-// Not yet supported: resource subscriptions and server-to-client primitives
-// such as sampling and elicitation. Descriptor metadata (including icons) is
-// preserved by synthesis even though it is not itself an invocable operation.
-const BindingSpec = "openbindings.mcp@1"
+// BindingSpec is the latest MCP binding-specification identifier. Revision 2
+// exposes only artifact-declared application values: tools with outputSchema
+// produce their structuredContent value. LegacyBindingSpec remains supported
+// exactly for existing revision-1 OBIs, whose result boundary is MCP-shaped.
+const BindingSpec = "openbindings.mcp@2"
+const LegacyBindingSpec = "openbindings.mcp@1"
 
 // Invoker handles binding invocation for MCP sources.
 //
@@ -128,7 +123,14 @@ func (e *Invoker) Close() error {
 
 // BindingSpecs returns the binding-spec identifiers supported by the MCP invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Model Context Protocol"}}
+	return mcpBindingSpecInfos()
+}
+
+func mcpBindingSpecInfos() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpec, Description: "Model Context Protocol application-contract tools"},
+		{BindingSpec: LegacyBindingSpec, Description: "Model Context Protocol revision-1 compatibility"},
+	}
 }
 
 // InvokeBinding invokes an MCP binding and returns the Invocation handle
@@ -201,7 +203,7 @@ func NewSynthesizer(opts ...SynthesizerOption) *Synthesizer {
 
 // BindingSpecs returns the binding-spec identifiers supported by the MCP synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Model Context Protocol"}}
+	return mcpBindingSpecInfos()
 }
 
 // SynthesizeInterface converts an MCP server's capabilities to an
@@ -247,8 +249,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpec {
-		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpec && src.BindingSpec != LegacyBindingSpec {
+		return nil, fmt.Errorf("synthesizer supports exact binding specifications %q and %q, got %q", BindingSpec, LegacyBindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateEndpoint(src.OutputLocation); err != nil {
@@ -273,7 +275,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		disc = d
 	}
 
-	iface, err := convertToInterface(disc, src.Location)
+	iface, err := convertToInterface(disc, src.Location, src.BindingSpec)
 	if err != nil {
 		return nil, fmt.Errorf("MCP convert: %w", err)
 	}
@@ -290,7 +292,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		entry.Content = disc.PinnedListing
 		iface.Sources[DefaultSourceName] = entry
 	}
-	if err := openbindings.FinalizeSynthesis(iface, in, DefaultSourceName, BindingSpec); err != nil {
+	if err := openbindings.FinalizeSynthesis(iface, in, DefaultSourceName, src.BindingSpec); err != nil {
 		return nil, err
 	}
 

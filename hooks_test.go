@@ -120,8 +120,8 @@ func TestInvokeHooks_InvocationErrorPassthrough(t *testing.T) {
 	if !errors.As(err, &ie) || ie.Code != ErrCodeStreamError {
 		t.Fatalf("InvocationError must pass through with its code, got %v", err)
 	}
-	if m, ok := ie.Details.(map[string]any); !ok || m["decidedBy"] != "per-invocation hook" {
-		t.Fatalf("passthrough must carry tier provenance, got %#v", ie.Details)
+	if m, ok := ie.Diagnostics.(map[string]any); !ok || m["decidedBy"] != "per-invocation hook" {
+		t.Fatalf("passthrough must carry diagnostic tier provenance, got %#v", ie.Diagnostics)
 	}
 }
 

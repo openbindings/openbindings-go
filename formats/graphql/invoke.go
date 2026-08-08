@@ -8,7 +8,7 @@ import (
 
 var graphqlName = regexp.MustCompile(`^[_A-Za-z][_0-9A-Za-z]*$`)
 
-// parseRef parses the exact openbindings.graphql@1 ref forms:
+// parseRef parses the ref forms shared by the supported GraphQL revisions:
 // query/<field>, mutation/<field>, or subscription/<field>.
 func parseRef(ref string) (rootType string, fieldName string, err error) {
 	if ref == "" {

@@ -8,7 +8,7 @@ import (
 )
 
 func TestFailureEvidenceFromHTTPAndWebSocket(t *testing.T) {
-	httpErr := &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Details: map[string]any{
+	httpErr := &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Diagnostics: map[string]any{
 		"httpResponse": map[string]any{
 			"status": 500, "headers": map[string][]string{"x-id": {"1"}},
 			"body": map[string]any{"base64": "AP+AQQ==", "byteLength": 4},
@@ -20,7 +20,7 @@ func TestFailureEvidenceFromHTTPAndWebSocket(t *testing.T) {
 		t.Fatalf("evidence = %+v, ok = %v", evidence, ok)
 	}
 
-	wsErr := &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Details: map[string]any{
+	wsErr := &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Diagnostics: map[string]any{
 		"graphqlTransportWs": map[string]any{"type": "error", "payload": []any{map[string]any{"message": "rejected"}}},
 	}}
 	evidence, ok = FailureEvidenceFrom(wsErr)

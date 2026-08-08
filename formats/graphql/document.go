@@ -132,49 +132,55 @@ func parseExecutableDocument(source string) (*executableDocument, error) {
 }
 
 func (d *executableDocument) verifySelection(operationName, wantKind, wantField string, variables map[string]any, schema *introspectionSchema) error {
+	_, err := d.responseKey(operationName, wantKind, wantField, variables, schema)
+	return err
+}
+
+func (d *executableDocument) responseKey(operationName, wantKind, wantField string, variables map[string]any, schema *introspectionSchema) (string, error) {
 	var selected *gqlOperation
 	if operationName != "" {
 		for i := range d.operations {
 			if d.operations[i].name == operationName {
 				if selected != nil {
-					return fmt.Errorf("operationName %q is ambiguous", operationName)
+					return "", fmt.Errorf("operationName %q is ambiguous", operationName)
 				}
 				selected = &d.operations[i]
 			}
 		}
 		if selected == nil {
-			return fmt.Errorf("operationName %q selects no operation", operationName)
+			return "", fmt.Errorf("operationName %q selects no operation", operationName)
 		}
 	} else {
 		if len(d.operations) != 1 {
-			return fmt.Errorf("operationName is required when a document contains multiple operations")
+			return "", fmt.Errorf("operationName is required when a document contains multiple operations")
 		}
 		selected = &d.operations[0]
 	}
 	if selected.kind != wantKind {
-		return fmt.Errorf("selected operation kind %q does not match binding ref kind %q", selected.kind, wantKind)
+		return "", fmt.Errorf("selected operation kind %q does not match binding ref kind %q", selected.kind, wantKind)
 	}
 
 	rootName := schema.rootTypeName(wantKind)
 	if rootName == "" {
-		return fmt.Errorf("schema has no %s root type", wantKind)
+		return "", fmt.Errorf("schema has no %s root type", wantKind)
 	}
 	groups := map[string][]string{}
 	visiting := map[string]bool{}
 	if err := d.collect(selected.selections, nil, rootName, variables, schema, groups, visiting); err != nil {
-		return err
+		return "", err
 	}
 	if len(groups) != 1 {
-		return fmt.Errorf("selected operation must collect exactly one root response-key group, got %d", len(groups))
+		return "", fmt.Errorf("selected operation must collect exactly one root response-key group, got %d", len(groups))
 	}
-	for _, fields := range groups {
+	for responseKey, fields := range groups {
 		for _, field := range fields {
 			if field != wantField {
-				return fmt.Errorf("selected root field %q does not match binding ref field %q", field, wantField)
+				return "", fmt.Errorf("selected root field %q does not match binding ref field %q", field, wantField)
 			}
 		}
+		return responseKey, nil
 	}
-	return nil
+	return "", fmt.Errorf("selected operation has no root response key")
 }
 
 func (d *executableDocument) collect(selections []gqlSelection, inherited []gqlDirective, rootName string, variables map[string]any, schema *introspectionSchema, groups map[string][]string, visiting map[string]bool) error {

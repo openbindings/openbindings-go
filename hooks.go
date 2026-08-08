@@ -88,9 +88,9 @@ type OutputDecoder func(site InvokeSite, raw RawResult) (any, error)
 
 // ResultClassifier decides whether a completed transport exchange is a
 // success. Return ErrUseDefault to decline. Classify-false produces the
-// format's NATIVE failure (exec: ErrCodeExecutionFailed with
-// {exitCode, output} details) — hooks change the verdict, never the error
-// vocabulary. A returned non-sentinel error is a deliberate terminal
+// format's own unsuccessful-completion path — hooks change the verdict,
+// never define portable protocol-to-error mappings. A returned non-sentinel
+// error is a deliberate terminal
 // (ErrCodeExecutionFailed unless it is already an *InvocationError).
 type ResultClassifier func(site InvokeSite, raw RawResult) (bool, error)
 
@@ -243,9 +243,9 @@ const (
 // terminal (failure channel iii).
 func hookPanicError(tier string, r any) *InvocationError {
 	return &InvocationError{
-		Code:    ErrCodeRuntime,
-		Message: fmt.Sprintf("openbindings: %s panicked: %v", tier, r),
-		Details: map[string]any{"decidedBy": tier},
+		Code:        ErrCodeRuntime,
+		Message:     fmt.Sprintf("openbindings: %s panicked: %v", tier, r),
+		Diagnostics: map[string]any{"decidedBy": tier},
 	}
 }
 
@@ -257,20 +257,28 @@ func hookPanicError(tier string, r any) *InvocationError {
 func hookTerminal(tier, nativeCode string, err error) error {
 	var ie *InvocationError
 	if errors.As(err, &ie) {
-		if m, ok := ie.Details.(map[string]any); ok {
-			if _, has := m["decidedBy"]; !has {
-				m["decidedBy"] = tier
-			}
-		} else if ie.Details == nil {
-			ie.Details = map[string]any{"decidedBy": tier}
-		}
+		ie.Diagnostics = withDiagnostic(ie.Diagnostics, "decidedBy", tier)
 		return ie
 	}
 	return &InvocationError{
-		Code:    nativeCode,
-		Message: fmt.Sprintf("%s: %v", tier, err),
-		Details: map[string]any{"decidedBy": tier},
+		Code:        nativeCode,
+		Message:     err.Error(),
+		Diagnostics: map[string]any{"decidedBy": tier},
 	}
+}
+
+func withDiagnostic(existing any, key string, value any) map[string]any {
+	if diagnostics, ok := existing.(map[string]any); ok {
+		if _, present := diagnostics[key]; !present {
+			diagnostics[key] = value
+		}
+		return diagnostics
+	}
+	diagnostics := map[string]any{key: value}
+	if existing != nil {
+		diagnostics["cause"] = existing
+	}
+	return diagnostics
 }
 
 // DecodeOutput runs the decode chain: per-invocation → invoker-level →

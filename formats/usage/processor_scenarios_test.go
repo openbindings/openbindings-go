@@ -130,7 +130,24 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 		}
 	}
 	ref, _ := scenario.Given.Binding["ref"].(string)
-	call := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{Source: source, Ref: ref, Context: bindCtx})
+	joined := len(scenario.ID) >= len("USAGE-FI-") && scenario.ID[:len("USAGE-FI-")] == "USAGE-FI-"
+	var call openbindings.Invocation[any, any]
+	if joined {
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+			Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: source.Location, Content: source.Content}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		op := openbindings.NewOperationInvoker(invoker)
+		call = openbindings.Invoke(
+			context.Background(), op, iface,
+			openbindings.NewOperationSignature[any, any](usageOperationForRef(t, iface, ref)),
+			openbindings.WithContext(bindCtx),
+		)
+	} else {
+		call = invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{Source: source, Ref: ref, Context: bindCtx})
+	}
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		_ = call.Write(context.Background(), scenario.Given.Invocation["input"])
 	}
@@ -156,12 +173,15 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 		"auxiliaryProcesses":       []any{},
 		"artifactDiscoveryProcess": nil,
 	}
+	if joined {
+		data["joinedSynthesis"] = true
+	}
 	delete(data, "artifactDiscoveryProcess")
 	if dispatch != nil {
 		data["dispatch"] = dispatch
 	}
 	trailer := map[string]any{}
-	for name, values := range call.Trailer() {
+	for name, values := range call.Diagnostics().Trailer() {
 		trailer[name] = values
 	}
 	data["trailer"] = trailer
@@ -171,7 +191,7 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	if terminal.Code == openbindings.ErrCodeContextRequired {
 		return processorscenarios.Observation{Disposition: "context-required", Phase: "pre-dispatch", Data: data}
 	}
-	if len(scenario.ID) >= len("USAGE-FI-") && scenario.ID[:len("USAGE-FI-")] == "USAGE-FI-" {
+	if joined {
 		data["error"] = normalizeUsageScenarioValue(terminal)
 		return processorscenarios.Observation{Disposition: "error", Phase: "completion", Data: data}
 	}
@@ -182,6 +202,17 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 		phase = "resolution"
 	}
 	return processorscenarios.Observation{Disposition: "refusal", Phase: phase, Data: data}
+}
+
+func usageOperationForRef(t *testing.T, iface *openbindings.Interface, ref string) string {
+	t.Helper()
+	for _, binding := range iface.Bindings {
+		if binding.Ref == ref {
+			return binding.Operation
+		}
+	}
+	t.Fatalf("synthesized Usage interface has no binding for %q", ref)
+	return ""
 }
 
 func stringField(value map[string]any, name string) string {

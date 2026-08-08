@@ -196,7 +196,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		data["dispatches"] = anySlice(roundTripper.dispatches)
 	}
 	if terminal == nil {
-		trailer := call.Trailer()
+		trailer := call.Diagnostics().Trailer()
 		if values := trailer["x-ob-governing-media"]; len(values) == 1 {
 			data["response"] = map[string]any{"governingMedia": values[0]}
 		}
@@ -220,6 +220,7 @@ func openAPIFidelityOperationID(scenarioID string) string {
 		"OAPI-FI-02": "fidelityItems",
 		"OAPI-FI-03": "fidelityBinary",
 		"OAPI-FI-04": "fidelitySlow",
+		"OAPI-FI-05": "fidelitySSEFailure",
 	}[scenarioID]
 }
 

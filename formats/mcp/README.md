@@ -2,21 +2,15 @@
 
 MCP (Model Context Protocol) binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
 
-This package enables OpenBindings to invoke operations against MCP servers and synthesize OBI documents from them. It connects to MCP servers via the Streamable HTTP transport, discovers tools, resources, and prompts, and executes them through the MCP JSON-RPC protocol.
-
-See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
+The package implements `openbindings.mcp@2` and retains `openbindings.mcp@1` compatibility for existing OBIs. Both revisions use MCP 2025-11-25 over Streamable HTTP.
 
 ## Install
 
-```
+```sh
 go get github.com/openbindings/openbindings-go/formats/mcp
 ```
 
-Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the core SDK).
-
-## Usage
-
-### Register with OperationInvoker
+## Register
 
 ```go
 import (
@@ -27,9 +21,11 @@ import (
 opInv := openbindings.NewOperationInvoker(mcpbinding.NewInvoker())
 ```
 
-The invoker declares `openbindings.mcp@1` (the [published binding specification](https://github.com/openbindings/spec), defined against MCP revision 2025-11-25).
+The invoker and synthesizer advertise revision 2 first and revision 1 as a compatibility revision.
 
-### Invoke a binding
+## Revision 2: protocol-blind tools
+
+`openbindings.mcp@2` binds only `tools/<name>` targets whose MCP listing declares an `outputSchema`. That schema is the application's output contract; successful invocation emits `structuredContent` alone after checking it against the schema.
 
 ```go
 invoker := mcpbinding.NewInvoker()
@@ -37,180 +33,86 @@ defer invoker.Close()
 
 call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        BindingSpec: "openbindings.mcp@1",
+        BindingSpec: "openbindings.mcp@2",
         Location:    "https://mcp.example.com/mcp",
     },
     Ref:     "tools/get_weather",
     Context: map[string]any{"bearerToken": "tok_123"},
 })
 
-// Tool and prompt arguments are the operation's single input message.
 if err := call.Write(ctx, map[string]any{"city": "Seattle"}); err != nil {
     log.Fatal(err)
 }
 
-// The output stream is the result value alone unless progress is solicited
-// (the `solicit` configuration point, default off): opt in per invocation
-// via context {"configuration": {"solicit": true}} or per invoker via
-// WithSolicitProgress(true), and progress values then precede the result.
 out, err := openbindings.Single(ctx, call.Outputs())
 if err != nil {
     log.Fatal(err)
 }
-fmt.Println(out)
+fmt.Println(out) // the tool's structuredContent, not an MCP result envelope
 ```
 
-Static resource reads (`resources/<uri>`) take no input: skip the `Write`
-and read outputs directly. A resource template (`resources/<template>`)
-takes one input — an object of its RFC 6570 variables, every value a
-string — and the invoker expands the template before `resources/read`.
+Revision 2 deliberately does not turn MCP `content`, `_meta`, `isError`, progress notifications, JSON-RPC fields, HTTP fields, or session facts into ordinary operation values. It also does not solicit progress. A tool error, transport or JSON-RPC failure, or missing/nonconforming `structuredContent` completes the invocation unsuccessfully. Native evidence may be retained only through the invocation's explicit `Diagnostics()` view.
 
-### Synthesize an interface from an MCP server
+Tools without `outputSchema`, required-task tools, resources, resource templates, and prompts are reported as coverage exclusions during synthesis. Their MCP-native result shapes are not recompiled into application schemas merely to make them bindable.
+
+## Synthesize revision 2
 
 ```go
 synth := mcpbinding.NewSynthesizer()
 iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
     Sources: []openbindings.SynthesizeSource{{
-        BindingSpec: "openbindings.mcp@1",
+        BindingSpec: "openbindings.mcp@2",
         Location:    "https://mcp.example.com/mcp",
     }},
 })
-// iface is a fully-formed OBInterface with operations, bindings, and sources
 ```
 
-## The binding specification
+Live synthesis negotiates MCP 2025-11-25 and exhausts all advertised listing pages. Present `content` may instead pin the complete listing. In revision 2, each eligible tool becomes one operation:
 
-This package implements **`openbindings.mcp@1`**, the openbindings project's published binding specification for MCP (`spec/binding-specs/mcp/openbindings.mcp.md`), defined against MCP revision 2025-11-25. The normative answers live there; the highlights as implemented here:
+| OBI field | MCP source |
+|---|---|
+| `binding.ref` | `tools/<name>` |
+| operation input | tool `inputSchema` |
+| operation output | tool `outputSchema` |
+| successful output value | `CallToolResult.structuredContent` |
 
-### Ref format (MCP-D-03)
+Operation naming is synthesizer policy rather than binding semantics.
 
-`<entity>/<remainder>` — the entity family followed by the identity, matched byte-exactly against the (pagination-exhausted) listing before dispatch; unresolvable and ambiguous refs are refused (`ERR_REF_NOT_FOUND`):
+## Revision 1 compatibility
 
-- `tools/get_weather` - a tool's `name`
-- `resources/file:///data.csv` - a resource's `uri`
-- `resources/users/{id}` - a resource template, addressed by its template string
-- `prompts/summarize` - a prompt's `name`
+`openbindings.mcp@1` remains available so previously synthesized OBIs keep their published meaning. Revision 1 supports tools, resources, resource templates, and prompts; its output mapping retains the legacy MCP-shaped result behavior, and its optional `solicit` configuration can surface progress values. Use revision 1 only when consuming an existing revision-1 OBI or when those native MCP families and shapes are intentionally required.
 
-### Source expectations
+The two revisions are not silently interchangeable. A source requesting revision 1 is processed as revision 1, and a source requesting revision 2 receives the narrower protocol-blind contract.
 
-- **`location`** (MCP-D-02): The MCP server's Streamable HTTP endpoint URL (HTTP/HTTPS), required.
-- **`content`** (MCP-D-01): Optional **pinned listing** — a JSON object of pagination-exhausted entity arrays under `tools`/`resources`/`resourceTemplates`/`prompts` in the 2025-11-25 result shapes. A pin makes ref resolution offline-checkable and displaces the list requests entirely; stray members (`nextCursor`, `_meta`, anything else) invalidate it loudly. Without `content`, the listing is obtained live, each list request followed to pagination exhaustion.
+## Source, refs, and credentials
 
-### Credential application
+- `location` is a required absolute HTTP(S) Streamable HTTP endpoint.
+- Revision-2 refs are byte-exact `tools/<name>` references resolved against the pagination-exhausted listing before dispatch.
+- Present `content` is an authoritative pinned listing; it avoids live list calls but does not replace the endpoint used for invocation.
+- `bearerToken` maps to `Authorization: Bearer`.
+- Explicitly named headers and cookies use their named HTTP carriers.
+- Generic `apiKey` or `basic` values have no MCP-declared carrier and surface as context requirements rather than receiving an invented destination.
 
-Credentials from the invocation context are applied as HTTP headers:
+## Custom HTTP client
 
-- `bearerToken`: `Authorization: Bearer <token>`
-- explicitly named `headers` and structured `cookies`: their named HTTP carriers
-
-MCP declares no carrier for a generic `apiKey` or `basic` credential, so those values produce `CONTEXT_REQUIRED` rather than an invented Authorization scheme. An HTTP 401 surfaces as a terminal `ERR_AUTH_REQUIRED`.
-
-### Custom HTTP client
-
-The Streamable HTTP transport always installs an internal header injector (needed for per-call response capture). To run that injector over your own transport, pass a base `*http.Client`:
+The transport installs an internal header injector for per-call diagnostics. Supply a base client when discovery or invocation needs a proxy, mTLS, a custom CA pool, or another transport policy:
 
 ```go
-invoker := mcp.NewInvoker(mcp.WithHTTPClient(myClient))       // invocation lane
-synth := mcp.NewSynthesizer(mcp.WithSynthesizerHTTPClient(myClient)) // discovery lane
+invoker := mcpbinding.NewInvoker(mcpbinding.WithHTTPClient(myClient))
+synth := mcpbinding.NewSynthesizer(
+    mcpbinding.WithSynthesizerHTTPClient(myClient),
+)
 ```
 
-The client's `Transport` becomes the round-trip base beneath the injector; its `Timeout`, redirect policy, and cookie jar are preserved. Use it for a corporate proxy, mTLS client certificates, or a custom CA pool. Discovery connects live, so a setup the invocation lane needs is needed on the synthesizer too. This is the MCP counterpart to the openapi invoker's `NewInvokerWithClient`.
+## Session and size behavior
 
-### Consumer hooks
+The invoker pools MCP sessions by endpoint and authentication headers, idles unused sessions for 30 seconds by default, and closes them through `Invoker.Close`.
 
-This format consults the **decode axis** of the consumer hooks seam (`InvokeHooks`) on its text lanes; classification and routing stay protocol-native (`isError` decides success; MCP has no field routing), so `Classify` and `Route` hooks have no effect.
+Response reading is delegated to the official MCP Go SDK, which currently exposes no delivery-unit read-bound seam. `MaxDeliveryUnitBytes` therefore does not bound this lane. This is a named implementation exclusion, not a different MCP binding meaning.
 
-The decode lanes are content-independent, per the specification's `decode` configuration point (§9.3):
+## Specification
 
-- **Tool results.** `structuredContent` is MCP's declared structured lane (2025-11-25: servers MUST conform it to `outputSchema`) and wins outright. Absent it, a single text content is a **string, verbatim** — MCP defines JSON-serialized-into-text as the backwards-compatibility *shadow* of `structuredContent`, so parsing it is a consumer choice made through a `DecodeOutput` hook, never a payload sniff. Other content shapes pass through as generic values.
-- **Resources.** The output value is **always the array** of decoded contents items, in order (`contents: []` yields `[]`); a bare single value is an `outputTransform` concern. Each item decodes structurally first — a `blob` item passes as its Base64 string whatever `mimeType` it declares — and a `text` item decodes by its declared `mimeType`, exactly like the HTTP header rule: `application/json`/`+json` parses strictly (a parse failure is a loud error, never a silent fall-through); anything else is text.
-
-Success provenance rides the `x-ob-decode` trailer stamp (`structuredContent`, `text`, `contents/declared`, or `hook`); classification stamps `protocol/isError`.
-
-### Progress solicitation (the `solicit` configuration point)
-
-Default **off**: no `progressToken` rides `tools/call` and the output stream is the result value alone. Opt in per invocation (`context.configuration.solicit: true`) or per invoker (`WithSolicitProgress(true)`); per-invocation wins. When solicited, each correlated `notifications/progress` emits one output value — the notification's params minus `progressToken`, presence-preserving (an explicit `total: 0` survives) — ahead of the result, which is always last; correlated notifications arriving after the result are discarded.
-
-### Entity type mapping
-
-| Entity | Ref format | Input | Output |
-|--------|-----------|-------|--------|
-| **Tool** | `tools/<name>` | Tool's `inputSchema` | Tool's `outputSchema` or content array |
-| **Resource** | `resources/<uri>` | None (the URI is the ref) | Array of decoded contents items |
-| **Resource template** | `resources/<template>` | RFC 6570 variables (string-typed) | Array of decoded contents items |
-| **Prompt** | `prompts/<name>` | Prompt arguments (string-typed) | `{messages: [...]}` |
-
-### Interface synthesis
-
-- Each MCP entity type discovered via capability negotiation
-- Tools, resources, resource templates, and prompts sorted alphabetically
-- Tool input/output schemas preserved as-is from the MCP server
-- Static resources declare no input; template inputs are the template's RFC 6570 variables as string properties
-- No security metadata exposed
-
-## How it works
-
-### Invocation flow
-
-`InvokeBinding` returns the `Invocation` handle synchronously; the MCP work runs on its own goroutine:
-
-1. Parses the ref to determine entity type: `tools/`, `resources/`, or `prompts/` (a bad ref, a missing/non-HTTP endpoint, or an invalid pinned listing terminates the handle before any network I/O)
-2. Resolves the ref against the listing before dispatch — offline against a pinned listing, otherwise against the live capability-gated, pagination-exhausted listing after the handshake; unresolvable or ambiguous refs are refused
-3. Reads the operation's single input message from the handle (tools, prompts, and resource templates — whose input is validated as string variables and expanded per RFC 6570); static resource reads take no input. An absent input omits the `arguments` member entirely
-4. Acquires a pooled MCP session (Streamable HTTP transport, JSON-RPC over HTTP), applying credentials from the context as HTTP headers
-5. Calls the appropriate MCP method (`tools/call`, `resources/read`, or `prompts/get`)
-6. Emits the result and closes the output side; when progress was solicited, correlated `notifications/progress` events emit as outputs ahead of the result
-
-The call's HTTP response headers surface as the invocation's leading metadata (`Header`). Errors map to terminal invocation errors while retaining native evidence: complete `isError` results, JSON-RPC `code`/`message`/`data`, and exact Streamable HTTP response status, headers, and bytes. `FailureEvidenceFrom` validates and extracts those lanes after either in-process use or an invoker-frame JSON round trip.
-
-### Session pooling
-
-The invoker pools MCP sessions by server URL + auth headers. Multiple `InvokeBinding` calls against the same server share one session (one `initialize` handshake). A session stays alive while any invocation uses it, then idles for 30 seconds (configurable via `WithIdleTimeout`) before closing. Call `Invoker.Close` to shut down all pooled sessions.
-
-### Credential application
-
-Credentials are applied only where MCP defines or the caller explicitly names an HTTP carrier:
-
-- **bearer**: Sets `Authorization: Bearer <token>` from `bearerToken` context field
-- **headers/cookies**: Forwarded on their explicitly named HTTP fields
-
-Generic `apiKey` and `basic` values are surfaced as `CONTEXT_REQUIRED`; the binding never invents a destination or scheme for them.
-
-### Interface synthesis
-
-Connects to an MCP server and discovers capabilities by:
-
-- Reading server info (name, version, title) from the initialization handshake
-- Listing tools (if the server declares tool capabilities)
-- Listing resources and resource templates (if declared)
-- Listing prompts (if declared)
-- Sorting all entities alphabetically for deterministic output
-- Generating `tools/name`, `resources/uri`, or `prompts/name` refs for each binding
-
-### MCP entity type mapping
-
-MCP exposes three entity types, each mapped to OBI operations differently:
-
-| Entity | Ref format | Input | Output | Notes |
-|--------|-----------|-------|--------|-------|
-| **Tool** | `tools/<name>` | Tool's `inputSchema` (JSON Schema) | Tool's `outputSchema` or content array | Closest analog to a traditional API operation |
-| **Resource** | `resources/<uri>` | None (the URI is the ref) | Array of decoded contents items | Read-only data access; URI is predetermined by the binding |
-| **Resource template** | `resources/<template>` | The template's RFC 6570 variables (string-typed) | Array of decoded contents items | Parameterized read; the invoker expands the template |
-| **Prompt** | `prompts/<name>` | Prompt arguments (string-typed) | `{messages: [...], description: "..."}` | Returns LLM message sequences, not API results |
-
-Tools map cleanly to OBI operations. Resources and prompts have different semantics -- resources are read-only data access points, and prompts return LLM-oriented message templates rather than traditional API results.
-
-## Resource bounds
-
-Named exclusion: this format wires no `MaxDeliveryUnitBytes` read site.
-Response reading is delegated to the official MCP Go SDK
-(`modelcontextprotocol/go-sdk`), which exposes no read-bound seam: JSON
-response bodies are read unbounded, a body-read failure fails the whole
-client connection (not just the one call), and SSE event assembly is
-internal and unbounded. An HTTP-middleware whole-body bound would not be a
-delivery-unit bound either — a Streamable HTTP POST response is
-content-negotiated between one JSON message and a session-long SSE stream.
-Re-examine when the SDK exports a message-size limit.
+The normative behavior lives in [`spec/binding-specs/mcp/openbindings.mcp.md`](https://github.com/openbindings/spec/blob/main/binding-specs/mcp/openbindings.mcp.md). Published revisions are immutable.
 
 ## License
 

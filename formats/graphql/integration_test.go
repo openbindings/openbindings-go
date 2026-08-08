@@ -32,7 +32,7 @@ func pinnedInvocationSource(t *testing.T, location string) openbindings.Invocati
 	if err != nil {
 		t.Fatal(err)
 	}
-	return openbindings.InvocationSource{BindingSpec: BindingSpec, Location: location, Content: content}
+	return openbindings.InvocationSource{BindingSpec: LegacyBindingSpec, Location: location, Content: content}
 }
 
 func collectInvocation(ctx context.Context, call openbindings.Invocation[any, any], input any, inputPresent bool) ([]any, *openbindings.InvocationError) {
@@ -105,7 +105,7 @@ func TestHTTPInvocationPreservesDocumentVariablesAndEnvelope(t *testing.T) {
 	if variables["_query"] != "ordinary variable" || variables["unused"] != float64(7) {
 		t.Fatalf("variables were filtered: %#v", variables)
 	}
-	header, err := call.Header(context.Background())
+	header, err := call.Diagnostics().Header(context.Background())
 	if err != nil || len(header["X-Request-Id"]) != 1 || header["X-Request-Id"][0] != "req-1" {
 		t.Fatalf("header = %#v, %v", header, err)
 	}

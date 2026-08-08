@@ -291,7 +291,7 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 					inv.FireError(&openbindings.InvocationError{
 						Code:    openbindings.ErrCodeStreamError,
 						Message: fmt.Sprintf("connect END_STREAM payload does not parse as JSON: %v (openbindings.connect@1 CONN-P-05)", uerr),
-						Details: map[string]any{"connect": map[string]any{"endStream": map[string]any{
+						Diagnostics: map[string]any{"connect": map[string]any{"endStream": map[string]any{
 							"payload": map[string]any{"base64": base64.StdEncoding.EncodeToString(payload), "byteLength": len(payload)},
 						}}},
 					})
@@ -310,15 +310,10 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 				if msg == "" {
 					msg = code
 				}
-				effects := openbindings.Effects("")
-				if code == "unavailable" || code == "resource_exhausted" {
-					effects = openbindings.EffectsNone
-				}
 				inv.FireError(&openbindings.InvocationError{
-					Code:    connectCodeToErrCode(code),
+					Code:    openbindings.ErrCodeExecutionFailed,
 					Message: msg,
-					Effects: effects,
-					Details: map[string]any{"connect": map[string]any{"endStream": map[string]any{
+					Diagnostics: map[string]any{"connect": map[string]any{"endStream": map[string]any{
 						"error":   endStream.Error,
 						"payload": map[string]any{"base64": base64.StdEncoding.EncodeToString(payload), "byteLength": len(payload)},
 					}}},

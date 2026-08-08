@@ -8,7 +8,7 @@ import (
 )
 
 func TestFailureEvidenceFrom(t *testing.T) {
-	err := &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Details: map[string]any{
+	err := &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Diagnostics: map[string]any{
 		"mcp": map[string]any{
 			"result": map[string]any{"isError": true, "structuredContent": map[string]any{"reason": "policy"}},
 			"jsonrpcError": map[string]any{

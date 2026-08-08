@@ -183,7 +183,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		if res != nil {
 			details = usageProcessDetails(res)
 		}
-		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error(), Details: details})
+		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error(), Diagnostics: details})
 		return
 	}
 
@@ -210,9 +210,9 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		// error vocabulary. Provenance: the deciding layer is named on the
 		// error's decidedBy stamp.
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: fmt.Sprintf("command exited with status %d", res.exitCode),
-			Details: usageProcessDetails(res),
+			Code:        openbindings.ErrCodeExecutionFailed,
+			Message:     "Invocation completed unsuccessfully",
+			Diagnostics: usageProcessDetails(res),
 		})
 		return
 	}
@@ -221,10 +221,10 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	if derr != nil {
 		ierr := openbindings.AsInvocationError(derr)
 		details := usageProcessDetails(res)
-		if ierr.Details != nil {
-			details["cause"] = ierr.Details
+		if ierr.Diagnostics != nil {
+			details["cause"] = ierr.Diagnostics
 		}
-		ierr.Details = details
+		ierr.Diagnostics = details
 		inv.FireError(ierr)
 		return
 	}
@@ -262,7 +262,7 @@ func builtinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (boo
 // artifact-native declaration).
 func builtinDecodeText(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
 	if !utf8.Valid(raw.Body) {
-		return nil, fmt.Errorf("process output decode failed: stdout is not valid UTF-8")
+		return nil, fmt.Errorf("Invocation result could not be decoded")
 	}
 	return strings.TrimRight(string(raw.Body), "\r\n"), nil
 }
@@ -365,21 +365,21 @@ func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvoc
 		if res != nil {
 			details = usageProcessDetails(res)
 		}
-		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error(), Details: details})
+		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error(), Diagnostics: details})
 		return
 	}
 	if res.exitCode != 0 {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: fmt.Sprintf("command exited with status %d", res.exitCode),
-			Details: usageProcessDetails(res),
+			Code:        openbindings.ErrCodeExecutionFailed,
+			Message:     "Invocation completed unsuccessfully",
+			Diagnostics: usageProcessDetails(res),
 		})
 		return
 	}
 	output, decodeErr := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte(res.stdout)})
 	if decodeErr != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeRuntime, Message: decodeErr.Error(), Details: usageProcessDetails(res),
+			Code: openbindings.ErrCodeRuntime, Message: "Invocation result could not be decoded", Diagnostics: usageProcessDetails(res),
 		})
 		return
 	}

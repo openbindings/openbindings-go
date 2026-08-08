@@ -111,13 +111,17 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// dispatch.
 	var kind targetKind
 	resolved := false
+	var applicationOutputSchema any
 	if pin != nil {
-		k, rerr := resolveRef(pin, entityType, name)
+		k, rerr := resolveRef(pin, entityType, name, args.Source.BindingSpec)
 		if rerr != nil {
 			inv.FireError(rerr)
 			return
 		}
 		kind, resolved = k, true
+		if args.Source.BindingSpec == BindingSpec {
+			applicationOutputSchema = pin.toolOutputSchemas[name]
+		}
 	}
 
 	// --- Collect input from the handle (tools and prompts). ---
@@ -200,7 +204,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		}
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceLoadFailed,
-			Message: fmt.Sprintf("MCP negotiated protocol revision %q; openbindings.mcp@1 accepts only 2025-11-25", negotiated),
+			Message: fmt.Sprintf("MCP negotiated protocol revision %q; %s accepts only 2025-11-25", negotiated, args.Source.BindingSpec),
 		})
 		return
 	}
@@ -218,12 +222,15 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			inv.FireError(mapMCPError(lerr, hc, openbindings.ErrCodeSourceLoadFailed))
 			return
 		}
-		k, rerr := resolveRef(l, entityType, name)
+		k, rerr := resolveRef(l, entityType, name, args.Source.BindingSpec)
 		if rerr != nil {
 			inv.FireError(rerr)
 			return
 		}
 		kind = k
+		if args.Source.BindingSpec == BindingSpec {
+			applicationOutputSchema = l.toolOutputSchemas[name]
+		}
 	}
 
 	// --- Resource input (post-resolution: static vs template decides the
@@ -267,7 +274,10 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	switch kind {
 	case targetTool:
 		solicit := resolveSolicit(args.Context, e.solicitProgress)
-		derr, suspect = runTool(operationCtx, session, name, toolArgs, solicit, inv, hc, setHeader, site, args.Hooks, rawResult)
+		if args.Source.BindingSpec == BindingSpec {
+			solicit = false
+		}
+		derr, suspect = runTool(operationCtx, session, name, toolArgs, solicit, args.Source.BindingSpec, applicationOutputSchema, inv, hc, setHeader, site, args.Hooks, rawResult)
 	case targetPrompt:
 		derr, suspect = runPrompt(operationCtx, session, name, promptArgs, inv, hc, setHeader, rawResult)
 	default: // static resource, or a template expanded to targetURI
@@ -355,6 +365,8 @@ func runTool(
 	toolName string,
 	toolArgs map[string]any,
 	solicit bool,
+	bindingSpec string,
+	applicationOutputSchema any,
 	inv *openbindings.InvocationImpl[any, any],
 	hc *headerCapture,
 	setHeader func(),
@@ -381,7 +393,7 @@ func runTool(
 		if callErr != nil {
 			return mapMCPError(callErr, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(callErr)
 		}
-		return emitToolResult(result, toolName, inv, setHeader, site, hooks, rawResult)
+		return emitToolResult(result, toolName, bindingSpec, applicationOutputSchema, inv, setHeader, site, hooks, rawResult)
 	}
 
 	// Each solicited call gets a fresh progress token so the server can
@@ -451,7 +463,7 @@ func runTool(
 	if callErr != nil {
 		return mapMCPError(callErr, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(callErr)
 	}
-	return emitToolResult(result, toolName, inv, setHeader, site, hooks, rawResult)
+	return emitToolResult(result, toolName, bindingSpec, applicationOutputSchema, inv, setHeader, site, hooks, rawResult)
 }
 
 // emitToolResult classifies and emits a completed tools/call result: an
@@ -460,6 +472,8 @@ func runTool(
 func emitToolResult(
 	result *gomcp.CallToolResult,
 	toolName string,
+	bindingSpec string,
+	applicationOutputSchema any,
 	inv *openbindings.InvocationImpl[any, any],
 	setHeader func(),
 	site openbindings.InvokeSite,
@@ -476,10 +490,8 @@ func emitToolResult(
 		return &openbindings.InvocationError{
 			Code:    openbindings.ErrCodeExecutionFailed,
 			Message: msg,
-			// Preserve the protocol-native application error for adapters
-			// (notably ob mcp) that can faithfully re-expose it. Generic
-			// consumers still branch on the canonical OpenBindings code.
-			Details: map[string]any{
+			// Retain protocol-native evidence only for explicit diagnostics.
+			Diagnostics: map[string]any{
 				"mcpResult": completeMCPResult(rawResult, result),
 				"mcp":       map[string]any{"result": completeMCPResult(rawResult, result)},
 			},
@@ -488,6 +500,24 @@ func emitToolResult(
 
 	setHeader()
 	value := completeMCPResult(rawResult, result)
+	if bindingSpec == BindingSpec {
+		var ok bool
+		value, ok = structuredContentValue(result.StructuredContent)
+		if !ok {
+			return &openbindings.InvocationError{
+				Code:        openbindings.ErrCodeResponseError,
+				Message:     fmt.Sprintf("MCP tool %q declared outputSchema but returned no structuredContent application value", toolName),
+				Diagnostics: map[string]any{"mcp": map[string]any{"result": completeMCPResult(rawResult, result)}},
+			}, false
+		}
+		if err := openbindings.ValidateAgainstSchema(value, applicationOutputSchema, nil); err != nil {
+			return &openbindings.InvocationError{
+				Code:        openbindings.ErrCodeResponseError,
+				Message:     fmt.Sprintf("MCP tool %q returned structuredContent that does not satisfy its outputSchema: %v", toolName, err),
+				Diagnostics: map[string]any{"mcp": map[string]any{"result": completeMCPResult(rawResult, result)}},
+			}, false
+		}
+	}
 	inv.SetTrailer(openbindings.Metadata{
 		"x-ob-classify": {"protocol/isError"},
 	})
@@ -496,6 +526,22 @@ func emitToolResult(
 	}
 	inv.CloseOutput()
 	return nil, false
+}
+
+func structuredContentValue(value any) (any, bool) {
+	if value == nil {
+		return nil, false
+	}
+	if raw, ok := value.(json.RawMessage); ok {
+		var decoded any
+		dec := json.NewDecoder(strings.NewReader(string(raw)))
+		dec.UseNumber()
+		if dec.Decode(&decoded) != nil {
+			return nil, false
+		}
+		return decoded, true
+	}
+	return value, true
 }
 
 // runResource reads an MCP resource. Resource reads take no input.
@@ -752,9 +798,9 @@ func validateEndpoint(location string) error {
 // ---------------------------------------------------------------------------
 
 // mapMCPError converts an error from the go-mcp SDK into a terminal
-// *InvocationError. JSON-RPC errors carry the MCP error code/data in
-// Details (ERR_EXECUTION_FAILED); HTTP error responses map via the captured
-// status code (401 → ERR_AUTH_REQUIRED, 403 → ERR_PERMISSION_DENIED);
+// *InvocationError. JSON-RPC errors carry the MCP error code/data in explicit
+// diagnostics (ERR_EXECUTION_FAILED); HTTP error responses retain their
+// captured status only in diagnostics;
 // cancellation maps to ERR_CANCELLED; anything else falls back to the
 // phase's code (ERR_CONNECT_FAILED during the initialize handshake,
 // ERR_EXECUTION_FAILED during dispatch).
@@ -767,35 +813,39 @@ func mapMCPError(err error, hc *headerCapture, fallback string) *openbindings.In
 	// JSON-RPC error: the server replied with a structured error.
 	if werr := serverJSONRPCError(err); werr != nil {
 		native := map[string]any{"code": werr.Code, "message": werr.Message}
-		details := map[string]any{"code": werr.Code, "mcp": map[string]any{"jsonrpcError": native}}
+		diagnostics := map[string]any{"code": werr.Code, "mcp": map[string]any{"jsonrpcError": native}}
 		if len(werr.Data) > 0 {
 			var data any
 			if json.Unmarshal(werr.Data, &data) == nil {
-				details["data"] = data
+				diagnostics["data"] = data
 				native["data"] = data
 			}
 		}
-		hc.addHTTPFailureEvidence(details)
+		hc.addHTTPFailureEvidence(diagnostics)
+		message := werr.Message
+		if message == "" {
+			message = "Invocation completed unsuccessfully"
+		}
 		return &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: err.Error(),
-			Details: details,
+			Code:        openbindings.ErrCodeExecutionFailed,
+			Message:     message,
+			Diagnostics: diagnostics,
 		}
 	}
 
 	// HTTP error response: the capture saw the failing POST's status.
 	if status, statusText := hc.lastStatus(); status >= 400 {
 		ierr := openbindings.HTTPError(status, statusText)
-		if details, ok := ierr.Details.(map[string]any); ok {
-			hc.addHTTPFailureEvidence(details)
+		if diagnostics, ok := ierr.Diagnostics.(map[string]any); ok {
+			hc.addHTTPFailureEvidence(diagnostics)
 		}
 		return ierr
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		// A deadline is a TIMEOUT (transient / effects: possible), agreeing with
-		// the handle's AfterFunc so a deadline that races both terminals settles
-		// deterministically as ERR_TIMEOUT. An explicit cancel stays ERR_CANCELLED.
+		// A local deadline stays distinct from explicit caller cancellation and
+		// agrees with the handle's race resolution. It carries no portable retry
+		// implication.
 		return &openbindings.InvocationError{
 			Code: openbindings.ErrCodeTimeout, Message: err.Error(),
 		}

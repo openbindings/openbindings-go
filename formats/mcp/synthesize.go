@@ -11,13 +11,17 @@ import (
 
 const DefaultSourceName = "mcpServer"
 
-func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.Interface, error) {
+func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...string) (*openbindings.Interface, error) {
 	if disc == nil {
 		return nil, fmt.Errorf("nil discovery result")
 	}
+	bindingSpec := LegacyBindingSpec
+	if len(bindingSpecs) > 0 {
+		bindingSpec = bindingSpecs[0]
+	}
 
 	sourceEntry := openbindings.Source{
-		BindingSpec: BindingSpec,
+		BindingSpec: bindingSpec,
 	}
 	if sourceLocation != "" {
 		sourceEntry.Location = sourceLocation
@@ -42,7 +46,7 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 
 	usedKeys := map[string]string{}
 
-	disc = bindableDiscovery(disc)
+	disc = bindableDiscovery(disc, bindingSpec)
 	sort.Slice(disc.Tools, func(i, j int) bool { return disc.Tools[i].Name < disc.Tools[j].Name })
 	sort.Slice(disc.Resources, func(i, j int) bool { return disc.Resources[i].Name < disc.Resources[j].Name })
 	sort.Slice(disc.ResourceTemplates, func(i, j int) bool { return disc.ResourceTemplates[i].Name < disc.ResourceTemplates[j].Name })
@@ -68,11 +72,16 @@ func convertToInterface(disc *discovery, sourceLocation string) (*openbindings.I
 			}
 		}
 
-		// The binding emits the complete successful CallToolResult, not just
-		// structuredContent. MCP's outputSchema constrains only that member, so
-		// copying it onto the operation would reject the protocol result object
-		// at the OpenBindings boundary.
-		op.Output = toolResultOutputSchema(tool.OutputSchema)
+		if bindingSpec == BindingSpec {
+			// Revision 2 projects the artifact-declared application object; the
+			// tool is eligible only when bindableDiscovery found outputSchema.
+			if schemaMap, ok := tool.OutputSchema.(map[string]any); ok {
+				op.Output = schemaMap
+			}
+		} else {
+			// Revision 1 preserves the complete MCP result envelope.
+			op.Output = toolResultOutputSchema(tool.OutputSchema)
+		}
 
 		iface.Operations[opKey] = op
 
@@ -212,9 +221,13 @@ func templateInputSchema(template string) map[string]any {
 // templates are not binding targets in revision 1. Filtering them is not a
 // partial interface; the binding specification itself declares them
 // unresolvable. Both synthesis and inspection call this helper.
-func bindableDiscovery(disc *discovery) *discovery {
+func bindableDiscovery(disc *discovery, bindingSpecs ...string) *discovery {
 	if disc == nil {
 		return &discovery{}
+	}
+	bindingSpec := LegacyBindingSpec
+	if len(bindingSpecs) > 0 {
+		bindingSpec = bindingSpecs[0]
 	}
 	toolCounts := map[string]int{}
 	resourceCounts := map[string]int{}
@@ -242,9 +255,18 @@ func bindableDiscovery(disc *discovery) *discovery {
 	}
 	out := &discovery{ServerInfo: disc.ServerInfo, RequiredTaskTools: disc.RequiredTaskTools}
 	for _, v := range disc.Tools {
-		if v != nil && v.Name != "" && toolCounts[v.Name] == 1 && !disc.RequiredTaskTools[v.Name] {
+		if v == nil {
+			continue
+		}
+		applicationContract := bindingSpec != BindingSpec || v.OutputSchema != nil
+		if v.Name != "" && toolCounts[v.Name] == 1 && !disc.RequiredTaskTools[v.Name] && applicationContract {
 			out.Tools = append(out.Tools, v)
 		}
+	}
+	if bindingSpec == BindingSpec {
+		// Revision 2 deliberately excludes entity families whose listings do
+		// not declare application output schemas.
+		return out
 	}
 	for _, v := range disc.Resources {
 		if v != nil && v.URI != "" && resourceCounts[v.URI] == 1 {
