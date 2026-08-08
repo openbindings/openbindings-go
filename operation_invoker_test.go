@@ -26,6 +26,7 @@ var bearerDetails = &ContextRequiredDetails{
 
 type mockOpts struct {
 	token               string
+	nativeFailure       bool // ping returns one binding-native failure completion
 	requireBearer       bool // getUser challenges when context lacks bearerToken (after reading input)
 	requireServerConfig bool // getUser challenges with config.value until context.configuration.server is present
 	challengeAlways     bool // getUser challenges unconditionally (tests the retry cap)
@@ -107,6 +108,20 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 	case "ping":
 		_ = h.CloseInput()
 		_ = h.SetHeader(Metadata{"x-mock": {"ping"}})
+		if m.opts.nativeFailure {
+			h.FireError(&InvocationError{
+				Code:    ErrCodeTimeout,
+				Message: "HTTP 504 Gateway Timeout",
+				Effects: EffectsPossible,
+				Details: map[string]any{
+					"status": 504,
+					"httpResponse": map[string]any{
+						"body": map[string]any{"base64": "Z2F0ZXdheSB0aW1lb3V0", "byteLength": 15},
+					},
+				},
+			})
+			return nil
+		}
 		if err := h.EmitOutput(map[string]any{"ok": true}); err != nil {
 			return nil
 		}
@@ -904,6 +919,25 @@ func TestOpPreflightWithoutResolverSurfaces(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Metadata pass-through
 // ---------------------------------------------------------------------------
+
+func TestOperationInvokerPreservesBindingNativeFailure(t *testing.T) {
+	op := newOpInvoker(&mockBindingInvoker{opts: mockOpts{nativeFailure: true}}, nil)
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("ping"))
+	_, err := drainOutputs(t, call)
+	var ie *InvocationError
+	if !errors.As(err, &ie) {
+		t.Fatalf("expected InvocationError, got %v", err)
+	}
+	if ie.Code != ErrCodeTimeout || ie.Category != CategoryTransient || ie.Effects != EffectsPossible {
+		t.Fatalf("completion classification changed: %+v", ie)
+	}
+	details, _ := ie.Details.(map[string]any)
+	response, _ := details["httpResponse"].(map[string]any)
+	body, _ := response["body"].(map[string]any)
+	if body["base64"] != "Z2F0ZXdheSB0aW1lb3V0" {
+		t.Fatalf("binding-native evidence changed: %+v", ie.Details)
+	}
+}
 
 func TestPrepareOperation(t *testing.T) {
 	// Reports the resolved binding's requirements without invoking (no attempt).

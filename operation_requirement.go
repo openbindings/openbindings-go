@@ -148,6 +148,14 @@ func MatchOperationRequirement[I, O any](
 	matches := make([]preferredOperationMatch[I, O], 0)
 
 	for _, implementation := range implementations {
+		// Honor cancellation between candidates: each PrepareOperation below
+		// may do real work (schema compilation, discovery), so a cancelled
+		// context must stop the assessment loop rather than run to
+		// completion. Parity with the TS SDK, which throwIfAborted()s per
+		// candidate.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if math.IsNaN(implementation.Preference) || math.IsInf(implementation.Preference, 0) {
 			assessments = append(assessments, OperationImplementationAssessment{
 				Implementation: implementation,

@@ -3,6 +3,7 @@ package usage
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,7 +179,11 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		if errors.Is(runErr, exec.ErrNotFound) {
 			code = openbindings.ErrCodeSourceConfigError
 		}
-		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error()})
+		var details any
+		if res != nil {
+			details = usageProcessDetails(res)
+		}
+		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error(), Details: details})
 		return
 	}
 
@@ -207,14 +212,20 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeExecutionFailed,
 			Message: fmt.Sprintf("command exited with status %d", res.exitCode),
-			Details: map[string]any{"exitCode": res.exitCode, "output": wrapText(res.stdout, res.stderr)},
+			Details: usageProcessDetails(res),
 		})
 		return
 	}
 
 	output, derr := args.Hooks.DecodeOutput(site, raw, builtinDecodeText)
 	if derr != nil {
-		inv.FireError(openbindings.AsInvocationError(derr))
+		ierr := openbindings.AsInvocationError(derr)
+		details := usageProcessDetails(res)
+		if ierr.Details != nil {
+			details["cause"] = ierr.Details
+		}
+		ierr.Details = details
+		inv.FireError(ierr)
 		return
 	}
 
@@ -293,6 +304,12 @@ func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.Resul
 // fires when the capture itself overflowed.
 func emitWithDiagnostics(inv *openbindings.InvocationImpl[any, any], output any, res *cliResult, hooks *openbindings.InvokeHooks, record map[string]string) {
 	trailer := openbindings.Metadata{"x-exit-code": {strconv.Itoa(res.exitCode)}}
+	stderrBytes := []byte(res.stderr)
+	trailer["x-stderr-base64"] = []string{base64.StdEncoding.EncodeToString(stderrBytes)}
+	trailer["x-stderr-byte-length"] = []string{strconv.Itoa(len(stderrBytes))}
+	if res.signal != "" {
+		trailer["x-signal"] = []string{res.signal}
+	}
 	decodeStamp, classifyStamp := "assumption/text", "assumption/exit-0"
 	if hooks.DecodeDecidedBy() == "hook" {
 		decodeStamp = "hook"
@@ -344,20 +361,26 @@ func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvoc
 		if errors.Is(runErr, exec.ErrNotFound) {
 			code = openbindings.ErrCodeSourceConfigError
 		}
-		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error()})
+		var details any
+		if res != nil {
+			details = usageProcessDetails(res)
+		}
+		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error(), Details: details})
 		return
 	}
 	if res.exitCode != 0 {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeExecutionFailed,
 			Message: fmt.Sprintf("command exited with status %d", res.exitCode),
-			Details: map[string]any{"exitCode": res.exitCode, "output": wrapText(res.stdout, res.stderr)},
+			Details: usageProcessDetails(res),
 		})
 		return
 	}
 	output, decodeErr := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte(res.stdout)})
 	if decodeErr != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRuntime, Message: decodeErr.Error()})
+		inv.FireError(&openbindings.InvocationError{
+			Code: openbindings.ErrCodeRuntime, Message: decodeErr.Error(), Details: usageProcessDetails(res),
+		})
 		return
 	}
 	// Direct-binary dispatch consults no hooks (stated in run); a nil
@@ -806,7 +829,10 @@ func (e *Invoker) executeProcess(ctx context.Context, binary string, args []stri
 	if err != nil {
 		return nil, err
 	}
-	return &cliResult{stdout: result.Stdout, stderr: result.Stderr, exitCode: result.ExitCode}, nil
+	return &cliResult{
+		stdout: result.Stdout, stderr: result.Stderr, exitCode: result.ExitCode,
+		signal: result.Signal, stdoutTruncated: result.StdoutTruncated, stderrTruncated: result.StderrTruncated,
+	}, nil
 }
 
 func buildDirectArgsFromRef(ref string, input any) ([]string, error) {
@@ -1118,9 +1144,11 @@ func argvToken(v any) string {
 // output value is a separate step (decodeStdout) driven by the binding's
 // declared stdout mode.
 type cliResult struct {
-	stdout   string
-	stderr   string
-	exitCode int
+	stdout          string
+	stderr          string
+	exitCode        int
+	signal          string
+	stdoutTruncated bool
 	// stderrTruncated records that the stderr capture overflowed its cap.
 	// Diagnostics volume never fails a successful invocation (truncate, mark,
 	// carry on); only stdout overflow is fatal, because a truncated document
@@ -1153,24 +1181,61 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 	err := cmd.Run()
 
 	exitCode := 0
+	signal := ""
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
+			if status, ok := exitErr.ProcessState.Sys().(interface {
+				Signaled() bool
+				Signal() os.Signal
+			}); ok && status.Signaled() {
+				signal = status.Signal().String()
+			}
 		} else {
 			return nil, err
 		}
 	}
 
-	if stdout.overflow {
-		return nil, fmt.Errorf("command %q output exceeded %d bytes", binName, maxStdoutBytes)
-	}
-
-	return &cliResult{
+	result := &cliResult{
 		stdout:          stdout.String(),
 		stderr:          stderr.String(),
 		exitCode:        exitCode,
+		signal:          signal,
+		stdoutTruncated: stdout.overflow,
 		stderrTruncated: stderr.truncated,
-	}, nil
+	}
+	if stdout.overflow {
+		return result, fmt.Errorf("command %q output exceeded %d bytes", binName, maxStdoutBytes)
+	}
+	return result, nil
+}
+
+func usageProcessDetails(res *cliResult) map[string]any {
+	process := map[string]any{
+		"exitCode": res.exitCode,
+		"stdout":   capturedProcessBytes([]byte(res.stdout), res.stdoutTruncated),
+		"stderr":   capturedProcessBytes([]byte(res.stderr), res.stderrTruncated),
+	}
+	if res.signal != "" {
+		process["signal"] = res.signal
+	}
+	return map[string]any{
+		// Legacy keys remain for compatibility; usage.process is the lossless
+		// canonical lane shared with the TypeScript implementation.
+		"exitCode": res.exitCode,
+		"output":   wrapText(res.stdout, res.stderr),
+		"usage":    map[string]any{"process": process},
+	}
+}
+
+func capturedProcessBytes(value []byte, truncated bool) map[string]any {
+	captured := map[string]any{
+		"base64": base64.StdEncoding.EncodeToString(value), "byteLength": len(value),
+	}
+	if truncated {
+		captured["truncated"] = true
+	}
+	return captured
 }
 
 // wrapText is the raw-capture record used in non-zero-exit error details.

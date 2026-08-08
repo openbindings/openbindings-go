@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -447,5 +448,29 @@ func TestResolveOperationRequirementReportsMalformedCandidates(t *testing.T) {
 				t.Fatalf("resolution = %#v", resolution)
 			}
 		})
+	}
+}
+
+// A cancelled context must stop MatchOperationRequirement rather than run the
+// full candidate assessment: each candidate's PrepareOperation can do real
+// work (schema compilation, discovery). Parity with the TS SDK, which
+// throwIfAborted()s per candidate.
+func TestMatchOperationRequirementHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	requirement := newCreateRequirement(t)
+	one := operationRequirementImplementation("example.protocol-one@1", "one", -1, nil, nil)
+
+	_, err := MatchOperationRequirement(
+		ctx,
+		requirement,
+		[]OperationImplementation{one},
+	)
+	if err == nil {
+		t.Fatal("cancelled context produced no error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got: %v", err)
 	}
 }

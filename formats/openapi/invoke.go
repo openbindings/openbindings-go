@@ -316,7 +316,11 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	_ = inv.SetHeader(headerMetadata(resp.Header))
 
 	site := siteFor(args, baseURL)
-	responseDecl := governingResponse(op, resp.StatusCode)
+	responseMatch := governingResponse(op, resp.StatusCode)
+	var responseDecl *openapi3.Response
+	if responseMatch != nil {
+		responseDecl = responseMatch.response
+	}
 	actualContentType := resp.Header.Get("Content-Type")
 
 	// Interaction-shape dispatch (§8, OAPI-P-06): the shape is bounded by
@@ -343,7 +347,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		}
 		if !ok {
 			_ = resp.Body.Close()
-			inv.FireError(openbindings.HTTPError(resp.StatusCode, resp.Status))
+			inv.FireError(openAPIFailureError(resp, nil, responseMatch))
 			return
 		}
 		matched, mediaErr := governingResponseMedia(responseDecl, actualContentType)
@@ -408,13 +412,12 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 	if !ok {
-		// The format's NATIVE failure: hooks change the verdict, never
-		// the error vocabulary. The raw body rides Details for callers.
-		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
-		if d, okd := ierr.Details.(map[string]any); okd && len(respBody) > 0 {
-			d["body"] = string(respBody)
-		}
-		inv.FireError(ierr)
+		// The format's NATIVE failure: hooks change the verdict, never the
+		// error vocabulary. It is not an operation output, but the complete
+		// native response and the OpenAPI declaration match remain available
+		// on the failure completion. The legacy status/body members remain for
+		// callers using HTTPStatus/HTTPResponseBody.
+		inv.FireError(openAPIFailureError(resp, respBody, responseMatch))
 		return
 	}
 	// An empty successful response carries absence, not an invented JSON
@@ -581,6 +584,56 @@ func headerMetadata(h http.Header) openbindings.Metadata {
 		md[k] = append([]string(nil), vs...)
 	}
 	return md
+}
+
+// openAPIFailureError builds the binding-native evidence carried by an
+// unsuccessful OpenAPI HTTP exchange. The operation output stays empty; these
+// facts ride the invocation's error completion. httpResponse.body is base64 so
+// arbitrary wire bytes survive both in-process use and JSON invoker frames.
+// The older top-level status/body details are retained for SDK compatibility;
+// body there is only a convenience text view and is not the fidelity record.
+func openAPIFailureError(resp *http.Response, body []byte, match *governingResponseMatch) *openbindings.InvocationError {
+	ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
+	details, _ := ierr.Details.(map[string]any)
+	if details == nil {
+		details = map[string]any{"status": resp.StatusCode}
+		ierr.Details = details
+	}
+	if len(body) > 0 {
+		details["body"] = string(body)
+	}
+
+	headers := map[string]any{}
+	for name, values := range resp.Header {
+		headers[strings.ToLower(name)] = append([]string(nil), values...)
+	}
+	httpResponse := map[string]any{
+		"status":  resp.StatusCode,
+		"headers": headers,
+	}
+	if body != nil {
+		httpResponse["body"] = map[string]any{
+			"base64":     base64.StdEncoding.EncodeToString(body),
+			"byteLength": len(body),
+		}
+	}
+	if reason := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(resp.Status), fmt.Sprintf("%d", resp.StatusCode))); reason != "" {
+		httpResponse["statusText"] = reason
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		httpResponse["url"] = resp.Request.URL.String()
+	}
+	details["httpResponse"] = httpResponse
+
+	artifact := map[string]any{"declared": match != nil}
+	if match != nil {
+		artifact["responseKey"] = match.key
+		if media, err := governingResponseMedia(match.response, resp.Header.Get("Content-Type")); err == nil {
+			artifact["governingMedia"] = media.canonical
+		}
+	}
+	details["openapi"] = artifact
+	return ierr
 }
 
 // requiredContext derives the operation's authentication requirements from

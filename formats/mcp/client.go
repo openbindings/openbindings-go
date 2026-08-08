@@ -304,6 +304,9 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, rerr
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(body))
+		if hc, ok := req.Context().Value(headerCaptureKey{}).(*headerCapture); ok {
+			hc.recordBody(body)
+		}
 		observeRawResult(req.Context(), requestMethod, body, t.observeResult)
 	}
 	return resp, err

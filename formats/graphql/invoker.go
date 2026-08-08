@@ -229,11 +229,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			return
 		}
 		if he, ok := err.(*httpError); ok {
-			ierr := openbindings.HTTPError(he.StatusCode, fmt.Sprintf("HTTP %d", he.StatusCode))
-			if d, ok := ierr.Details.(map[string]any); ok && he.Body != "" {
-				d["body"] = he.Body
-			}
-			inv.FireError(ierr)
+			_ = inv.SetHeader(toMetadata(he.Header))
+			inv.FireError(he.invocationError())
 			return
 		}
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
@@ -286,16 +283,10 @@ func (e *Invoker) resolveSchema(ctx context.Context, args *openbindings.BindingI
 	s, err := e.cachedIntrospect(ctx, args.Source.Location, headers)
 	if err != nil {
 		var he *httpError
-		if errors.As(err, &he) && (he.StatusCode == 401 || he.StatusCode == 403) {
-			// 401 → ERR_AUTH_REQUIRED, 403 → ERR_PERMISSION_DENIED (TS
-			// parity), with the response body in Details for diagnosis.
-			ierr := &openbindings.InvocationError{
-				Code:    openbindings.HTTPErrorCode(he.StatusCode),
-				Message: err.Error(),
-				Details: map[string]any{"status": he.StatusCode},
-			}
-			if he.Body != "" {
-				ierr.Details.(map[string]any)["body"] = he.Body
+		if errors.As(err, &he) {
+			ierr := he.invocationError()
+			if he.StatusCode != 401 && he.StatusCode != 403 {
+				ierr.Code = openbindings.ErrCodeSourceLoadFailed
 			}
 			return nil, ierr
 		}

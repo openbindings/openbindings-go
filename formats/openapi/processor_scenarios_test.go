@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -39,14 +40,18 @@ func (r *scenarioRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	r.dispatches = append(r.dispatches, dispatch)
 
 	status := 599
-	body := ""
+	body := []byte{}
 	headers := http.Header{}
 	if r.peer != nil {
 		if value, ok := numberAsInt(r.peer["status"]); ok {
 			status = value
 		}
-		if value, ok := r.peer["body"].(string); ok {
-			body = value
+		if value, ok := r.peer["bodyBase64"].(string); ok {
+			if decoded, err := base64.StdEncoding.DecodeString(value); err == nil {
+				body = decoded
+			}
+		} else if value, ok := r.peer["body"].(string); ok {
+			body = []byte(value)
 		}
 		if raw, ok := r.peer["headers"].(map[string]any); ok {
 			for name, value := range raw {
@@ -60,7 +65,7 @@ func (r *scenarioRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 		StatusCode: status,
 		Status:     http.StatusText(status),
 		Header:     headers,
-		Body:       io.NopCloser(strings.NewReader(body)),
+		Body:       io.NopCloser(strings.NewReader(string(body))),
 		Request:    req,
 	}, nil
 }
@@ -71,6 +76,33 @@ func TestProcessorScenarios(t *testing.T) {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
 	file, err := processorscenarios.Load(root, "openapi")
+	if err != nil {
+		if os.Getenv("OB_CORPUS_REQUIRED") != "" {
+			t.Fatal(err)
+		}
+		t.Skip(err)
+	}
+	for _, scenario := range file.Scenarios {
+		scenario := scenario
+		t.Run(scenario.ID, func(t *testing.T) {
+			observation := runOpenAPIProcessorScenario(t, scenario)
+			if _, err := processorscenarios.Match(scenario, observation); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestInvocationFidelityScenarios(t *testing.T) {
+	root := os.Getenv("OB_SPEC_CORPUS")
+	if root == "" {
+		root = filepath.Join("..", "..", "..", "spec", "conformance")
+	}
+	file, err := processorscenarios.LoadPath(
+		filepath.Join(root, "invocation-fidelity", "openapi.json"),
+		"openapi",
+		"openbindings.invocation-fidelity-scenarios@1",
+	)
 	if err != nil {
 		if os.Getenv("OB_CORPUS_REQUIRED") != "" {
 			t.Fatal(err)
@@ -114,7 +146,25 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		Ref:     ref,
 		Context: scenarioContext(scenario),
 	}
-	call := NewInvokerWithClient(client).InvokeBinding(context.Background(), args)
+	joined := strings.HasPrefix(scenario.ID, "OAPI-FI-")
+	var call openbindings.Invocation[any, any]
+	if joined {
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+			Sources: []openbindings.SynthesizeSource{{
+				BindingSpec: BindingSpec, Location: source.Location, Content: source.Content,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		op := openbindings.NewOperationInvoker(NewInvokerWithClient(client))
+		call = openbindings.Invoke(
+			context.Background(), op, iface,
+			openbindings.NewOperationSignature[any, any](openAPIFidelityOperationID(scenario.ID)),
+		)
+	} else {
+		call = NewInvokerWithClient(client).InvokeBinding(context.Background(), args)
+	}
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		if err := call.Write(context.Background(), scenario.Given.Invocation["input"]); err != nil {
 			// The output terminal remains authoritative and is read below.
@@ -138,6 +188,9 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	}
 
 	data := map[string]any{"outputs": outputs}
+	if joined {
+		data["joinedSynthesis"] = true
+	}
 	if len(roundTripper.dispatches) > 0 {
 		data["dispatch"] = roundTripper.dispatches[0]
 		data["dispatches"] = anySlice(roundTripper.dispatches)
@@ -157,7 +210,30 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		disposition = "error"
 	}
 	phase := openAPIErrorPhase(terminal, len(roundTripper.dispatches) > 0)
+	data["error"] = normalizedInvocationError(t, terminal)
 	return processorscenarios.Observation{Disposition: disposition, Phase: phase, Data: data}
+}
+
+func openAPIFidelityOperationID(scenarioID string) string {
+	return map[string]string{
+		"OAPI-FI-01": "fidelityJobs",
+		"OAPI-FI-02": "fidelityItems",
+		"OAPI-FI-03": "fidelityBinary",
+		"OAPI-FI-04": "fidelitySlow",
+	}[scenarioID]
+}
+
+func normalizedInvocationError(t *testing.T, terminal *openbindings.InvocationError) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var normalized map[string]any
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		t.Fatal(err)
+	}
+	return normalized
 }
 
 func scenarioContext(scenario processorscenarios.Scenario) map[string]any {

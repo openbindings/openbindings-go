@@ -101,10 +101,9 @@ This package implements **`openbindings.mcp@1`**, the openbindings project's pub
 Credentials from the invocation context are applied as HTTP headers:
 
 - `bearerToken`: `Authorization: Bearer <token>`
-- `apiKey`: `Authorization: ApiKey <key>`
-- `basic`: `Authorization: Basic <base64(user:pass)>`
+- explicitly named `headers` and structured `cookies`: their named HTTP carriers
 
-Context `headers` and `cookies` are forwarded. No security metadata in MCP; an HTTP 401 surfaces as a terminal `ERR_AUTH_REQUIRED` and context resolution happens above the binding.
+MCP declares no carrier for a generic `apiKey` or `basic` credential, so those values produce `CONTEXT_REQUIRED` rather than an invented Authorization scheme. An HTTP 401 surfaces as a terminal `ERR_AUTH_REQUIRED`.
 
 ### Custom HTTP client
 
@@ -162,7 +161,7 @@ Default **off**: no `progressToken` rides `tools/call` and the output stream is 
 5. Calls the appropriate MCP method (`tools/call`, `resources/read`, or `prompts/get`)
 6. Emits the result and closes the output side; when progress was solicited, correlated `notifications/progress` events emit as outputs ahead of the result
 
-The call's HTTP response headers surface as the invocation's leading metadata (`Header`). Errors map to terminal invocation errors: JSON-RPC errors → `ERR_EXECUTION_FAILED` with the `{code, data}` in details, HTTP 401/403 → `ERR_AUTH_REQUIRED`/`ERR_PERMISSION_DENIED`, connection failures → `ERR_CONNECT_FAILED`.
+The call's HTTP response headers surface as the invocation's leading metadata (`Header`). Errors map to terminal invocation errors while retaining native evidence: complete `isError` results, JSON-RPC `code`/`message`/`data`, and exact Streamable HTTP response status, headers, and bytes. `FailureEvidenceFrom` validates and extracts those lanes after either in-process use or an invoker-frame JSON round trip.
 
 ### Session pooling
 
@@ -170,13 +169,12 @@ The invoker pools MCP sessions by server URL + auth headers. Multiple `InvokeBin
 
 ### Credential application
 
-Credentials are applied as HTTP headers in priority order:
+Credentials are applied only where MCP defines or the caller explicitly names an HTTP carrier:
 
 - **bearer**: Sets `Authorization: Bearer <token>` from `bearerToken` context field
-- **apiKey**: Sets `Authorization: ApiKey <key>` from `apiKey` context field
-- **basic**: Sets `Authorization: Basic <credentials>` from the `basic` context field
+- **headers/cookies**: Forwarded on their explicitly named HTTP fields
 
-Context `headers` and `cookies` are also forwarded to the MCP transport.
+Generic `apiKey` and `basic` values are surfaced as `CONTEXT_REQUIRED`; the binding never invents a destination or scheme for them.
 
 ### Interface synthesis
 

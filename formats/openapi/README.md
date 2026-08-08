@@ -58,6 +58,17 @@ if err != nil {
 fmt.Println(out)
 ```
 
+An HTTP response classified as unsuccessful completes with a terminal
+`*openbindings.InvocationError`; it does not become an operation output. Use
+`openapi.FailureEvidenceFrom(err)` to recover the native HTTP status, headers,
+final URL/status text where available, exact response bytes, and the OpenAPI
+Response Object key/media that governed the response. `BodyCaptured` separates
+an exact empty body from an uncaptured body. The latter currently occurs for a
+non-2xx SSE response, which is classified and cancelled without waiting for a
+possibly unbounded stream to end. The legacy `openbindings.HTTPStatus` and
+`HTTPResponseBody` accessors remain available for status and a convenience
+text view.
+
 ### Synthesize an interface from an OpenAPI spec
 
 ```go
@@ -173,7 +184,7 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
 3. Resolves the server (effective list + variables + the `server` configuration point)
 4. Routes input fields per the flattened model — parameters serialize per the OAS style/explode rules; unmatched fields pass into a declared request body and refuse loudly otherwise — and selects the request media type per the specification's preference order
 5. Applies credentials from the context using the spec's `securitySchemes` (bearer, basic, apiKey with correct placement), refusing credential/parameter channel collisions pre-dispatch
-6. Makes the HTTP request; the declared success media bound the interaction shape (unary, or server-streaming for a declared `text/event-stream` response), and results emit through the invocation handle
+6. Makes the HTTP request; the declared success media bound the interaction shape (unary, or server-streaming for a declared `text/event-stream` response), successful results emit through the invocation handle, and unsuccessful completion preserves the native response through `FailureEvidenceFrom`
 
 ### Credential application
 

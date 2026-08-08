@@ -3,6 +3,7 @@ package connect
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -78,10 +79,16 @@ func (r *connectScenarioTransport) RoundTrip(req *http.Request) (*http.Response,
 				payload, _ := json.Marshal(value)
 				_ = writeConnectEnvelope(&framed, connectFlagEndStream, payload)
 			}
+			if value, present := item["endStreamBase64"].(string); present {
+				payload, _ := base64.StdEncoding.DecodeString(value)
+				_ = writeConnectEnvelope(&framed, connectFlagEndStream, payload)
+			}
 		}
 		responseBody = framed.Bytes()
 	} else {
-		if value, present := r.peer["body"]; present {
+		if value, present := r.peer["bodyBase64"].(string); present {
+			responseBody, _ = base64.StdEncoding.DecodeString(value)
+		} else if value, present := r.peer["body"]; present {
 			if text, ok := value.(string); ok && text == "" {
 				responseBody = nil
 			} else {
@@ -103,6 +110,33 @@ func (r *connectScenarioTransport) RoundTrip(req *http.Request) (*http.Response,
 		Body:       io.NopCloser(bytes.NewReader(responseBody)),
 		Request:    req,
 	}, nil
+}
+
+func TestInvocationFidelityScenarios(t *testing.T) {
+	root := os.Getenv("OB_SPEC_CORPUS")
+	if root == "" {
+		root = filepath.Join("..", "..", "..", "spec", "conformance")
+	}
+	file, err := processorscenarios.LoadPath(
+		filepath.Join(root, "invocation-fidelity", "connect.json"),
+		"connect",
+		"openbindings.invocation-fidelity-scenarios@1",
+	)
+	if err != nil {
+		if os.Getenv("OB_CORPUS_REQUIRED") != "" {
+			t.Fatal(err)
+		}
+		t.Skip(err)
+	}
+	for _, scenario := range file.Scenarios {
+		scenario := scenario
+		t.Run(scenario.ID, func(t *testing.T) {
+			observation := runConnectProcessorScenario(t, scenario)
+			if _, err := processorscenarios.Match(scenario, observation); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestProcessorScenarios(t *testing.T) {
@@ -193,12 +227,18 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		"dispatches":         anySlice(transport.dispatches),
 		"peer":               map[string]any{"endStreamCount": transport.endStreamCount},
 	}
+	trailer := map[string]any{}
+	for name, values := range call.Trailer() {
+		trailer[name] = values
+	}
+	data["trailer"] = trailer
 	if len(transport.dispatches) > 0 {
 		data["dispatch"] = transport.dispatches[0]
 	}
 	if terminal == nil {
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
+	data["error"] = normalizedConnectInvocationError(t, terminal)
 	if terminal.Code == openbindings.ErrCodeContextRequired {
 		return processorscenarios.Observation{Disposition: "context-required", Phase: "pre-dispatch", Data: data}
 	}
@@ -206,10 +246,32 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "pre-dispatch", Data: data}
 	}
 	phase := "completion"
-	if scenario.ID == "CONN-PS-02" || scenario.ID == "CONN-PS-09" || scenario.ID == "CONN-PS-13" || scenario.ID == "CONN-PS-15" {
+	if scenario.ID == "CONN-PS-02" || scenario.ID == "CONN-PS-09" || scenario.ID == "CONN-PS-13" || scenario.ID == "CONN-PS-15" || hasHTTPResponseEvidence(terminal) {
 		phase = "response"
 	}
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
+}
+
+func normalizedConnectInvocationError(t *testing.T, err *openbindings.InvocationError) map[string]any {
+	t.Helper()
+	encoded, marshalErr := json.Marshal(err)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	var result map[string]any
+	if unmarshalErr := json.Unmarshal(encoded, &result); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	return result
+}
+
+func hasHTTPResponseEvidence(err *openbindings.InvocationError) bool {
+	details, ok := err.Details.(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = details["httpResponse"]
+	return ok
 }
 
 func normalizedConnectHeaders(headers http.Header) map[string]any {

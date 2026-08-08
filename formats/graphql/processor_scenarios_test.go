@@ -3,6 +3,7 @@ package graphql
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -33,6 +34,33 @@ func TestProcessorScenarios(t *testing.T) {
 	}
 	if file.BindingSpec != BindingSpec {
 		t.Fatalf("bindingSpec = %q", file.BindingSpec)
+	}
+	for _, scenario := range file.Scenarios {
+		scenario := scenario
+		t.Run(scenario.ID, func(t *testing.T) {
+			observation := runGraphQLProcessorScenario(t, scenario)
+			if _, err := processorscenarios.Match(scenario, observation); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestInvocationFidelityScenarios(t *testing.T) {
+	root := os.Getenv("OB_SPEC_CORPUS")
+	if root == "" {
+		root = filepath.Join("..", "..", "..", "spec", "conformance")
+	}
+	file, err := processorscenarios.LoadPath(
+		filepath.Join(root, "invocation-fidelity", "graphql.json"),
+		"graphql",
+		"openbindings.invocation-fidelity-scenarios@1",
+	)
+	if err != nil {
+		if os.IsNotExist(err) && os.Getenv("OB_CORPUS_REQUIRED") == "" {
+			t.Skip(err)
+		}
+		t.Fatal(err)
 	}
 	for _, scenario := range file.Scenarios {
 		scenario := scenario
@@ -97,11 +125,22 @@ func (t *graphqlScenarioTransport) RoundTrip(request *http.Request) (*http.Respo
 		status = int(value)
 	}
 	contentType, _ := t.peer["contentType"].(string)
-	responseBody, _ := json.Marshal(t.peer["body"])
+	responseHeader := http.Header{"Content-Type": []string{contentType}}
+	if rawHeaders, ok := t.peer["headers"].(map[string]any); ok {
+		for name, value := range rawHeaders {
+			responseHeader.Set(name, stringValue(value))
+		}
+	}
+	var responseBody []byte
+	if encoded, ok := t.peer["bodyBase64"].(string); ok {
+		responseBody, _ = base64.StdEncoding.DecodeString(encoded)
+	} else {
+		responseBody, _ = json.Marshal(t.peer["body"])
+	}
 	return &http.Response{
 		StatusCode: status,
 		Status:     http.StatusText(status),
-		Header:     http.Header{"Content-Type": []string{contentType}},
+		Header:     responseHeader,
 		Body:       io.NopCloser(bytes.NewReader(responseBody)),
 		Request:    request,
 	}, nil
@@ -168,6 +207,11 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		"outputs":               outputs,
 		"introspectionRequests": []any{},
 	}
+	trailer := map[string]any{}
+	for name, values := range call.Trailer() {
+		trailer[name] = values
+	}
+	data["trailer"] = trailer
 	if outputs == nil {
 		data["outputs"] = []any{}
 	}
@@ -186,14 +230,29 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	if terminal == nil {
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
+	data["error"] = normalizeScenarioValue(terminal)
 	if dispatch == nil {
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "pre-dispatch", Data: data}
 	}
 	phase := "completion"
-	if scenario.ID == "GQL-PS-07" {
+	if scenario.ID == "GQL-PS-07" || hasGraphQLHTTPResponseEvidence(terminal) {
 		phase = "response"
 	}
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
+}
+
+func hasGraphQLHTTPResponseEvidence(err *openbindings.InvocationError) bool {
+	details, ok := err.Details.(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = details["httpResponse"]
+	return ok
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func normalizeScenarioValue(value any) any {

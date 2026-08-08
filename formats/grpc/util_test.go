@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -115,7 +116,7 @@ func TestGRPCError_CategoryAndEffects(t *testing.T) {
 		{codes.ResourceExhausted, "ERR_UNAVAILABLE", "transient", "none"},
 		{codes.DeadlineExceeded, "ERR_TIMEOUT", "transient", "possible"},
 		{codes.Canceled, "ERR_CANCELLED", "cancelled", ""},
-		{codes.Internal, "ERR_EXECUTION_FAILED", "service", ""}, // one unmapped status → fallback
+		{codes.Internal, "ERR_EXECUTION_FAILED", "service", ""}, // one status without a specialized mapping
 	}
 	for _, tc := range cases {
 		t.Run(tc.grpcCode.String(), func(t *testing.T) {
@@ -141,10 +142,10 @@ func TestGRPCError_CategoryAndEffects(t *testing.T) {
 	}
 }
 
-func TestGRPCError_FallbackCode(t *testing.T) {
+func TestGRPCError_StatusOverridesStreamFallback(t *testing.T) {
 	err := status.Error(codes.Internal, "mid-stream")
-	if ie := grpcError(err, openbindings.ErrCodeStreamError); ie.Code != "ERR_STREAM_ERROR" {
-		t.Errorf("code = %q, want ERR_STREAM_ERROR", ie.Code)
+	if ie := grpcError(err, openbindings.ErrCodeStreamError); ie.Code != "ERR_EXECUTION_FAILED" {
+		t.Errorf("code = %q, want ERR_EXECUTION_FAILED", ie.Code)
 	}
 }
 
@@ -172,6 +173,24 @@ func TestGRPCError_StatusDetails(t *testing.T) {
 	if !ok || len(ds) != 1 {
 		t.Fatalf("grpcDetails = %v", details["grpcDetails"])
 	}
+	grpcStatus, ok := details["grpcStatus"].(map[string]any)
+	if !ok {
+		t.Fatalf("grpcStatus = %T", details["grpcStatus"])
+	}
+	if grpcStatus["code"] != int32(codes.PermissionDenied) || grpcStatus["message"] != "nope" {
+		t.Errorf("grpcStatus = %v", grpcStatus)
+	}
+	rawDetails, ok := grpcStatus["details"].([]any)
+	if !ok || len(rawDetails) != 1 {
+		t.Fatalf("grpcStatus.details = %v", grpcStatus["details"])
+	}
+	raw, ok := rawDetails[0].(map[string]any)
+	if !ok {
+		t.Fatalf("grpcStatus.details[0] = %T", rawDetails[0])
+	}
+	if raw["typeUrl"] != "type.googleapis.com/google.protobuf.StringValue" || raw["valueBase64"] != "CgVleHRyYQ==" {
+		t.Errorf("grpcStatus.details[0] = %v", raw)
+	}
 }
 
 func TestRefResolveError_TransportVsNotFound(t *testing.T) {
@@ -192,10 +211,14 @@ func TestToOBMetadata(t *testing.T) {
 	if got := toOBMetadata(metadata.MD{}); got != nil {
 		t.Errorf("empty md: got %v, want nil", got)
 	}
-	src := metadata.Pairs("x-a", "1", "x-a", "2", "x-b", "3")
+	rawBinary := string([]byte{0x00, 0xff, 0x41})
+	src := metadata.Pairs("x-a", "1", "x-a", "2", "x-b", "3", "trace-bin", rawBinary, "trace-bin", "second")
 	got := toOBMetadata(src)
 	if len(got["x-a"]) != 2 || got["x-a"][0] != "1" || got["x-a"][1] != "2" || got["x-b"][0] != "3" {
 		t.Errorf("got %v", got)
+	}
+	if want := []string{base64.StdEncoding.EncodeToString([]byte(rawBinary)), base64.StdEncoding.EncodeToString([]byte("second"))}; len(got["trace-bin"]) != 2 || got["trace-bin"][0] != want[0] || got["trace-bin"][1] != want[1] {
+		t.Errorf("trace-bin = %v, want %v", got["trace-bin"], want)
 	}
 	// Values are copied, not aliased.
 	got["x-a"][0] = "mutated"

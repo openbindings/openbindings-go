@@ -128,6 +128,13 @@ choice is valid.
 
 Responses are parsed as JSON. Connect error responses (with `code` and `message` fields) are mapped to standard error codes, mirroring the gRPC family per the binding-invoker contract: `unauthenticated` → `ERR_AUTH_REQUIRED`, `permission_denied` → `ERR_PERMISSION_DENIED`, `unavailable`/`resource_exhausted` → `ERR_UNAVAILABLE` (the server answered but refused as retryable — not a transport failure), `deadline_exceeded` → `ERR_TIMEOUT`, `canceled` → `ERR_CANCELLED`, anything else → `ERR_EXECUTION_FAILED`.
 
+Mapping does not replace native evidence. `FailureEvidenceFrom` recovers the
+complete parsed Connect error and either the exact non-200 HTTP response body
+or exact END_STREAM payload from the terminal error, including after an
+invoker-frame JSON round trip. A diagnostics-bound HTTP body is explicitly
+marked truncated rather than presented as complete. Data envelopes emitted
+before a later END_STREAM error remain outputs.
+
 Leading metadata (HTTP response headers) is available via the handle's `Header`; trailing metadata (Connect unary `Trailer-`-prefixed headers, or the streaming end-stream envelope's `metadata` field) via `Trailer`.
 
 ### Streaming behavior

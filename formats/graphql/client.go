@@ -3,6 +3,7 @@ package graphql
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -194,27 +195,27 @@ func doGraphQLHTTP(ctx context.Context, client *http.Client, endpointURL, query,
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if int64(len(respBody)) > maxBytes {
-		return nil, fmt.Errorf("response exceeds %d byte limit", maxBytes)
+		return nil, newGraphQLHTTPError(resp, respBody[:maxBytes], "", true, true, fmt.Sprintf("response exceeds %d byte limit", maxBytes))
 	}
 
 	mediaType, _, mediaErr := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if mediaErr != nil {
-		return nil, fmt.Errorf("invalid GraphQL response Content-Type: %w", mediaErr)
+		return nil, newGraphQLHTTPError(resp, respBody, "", true, false, fmt.Sprintf("invalid GraphQL response Content-Type: %v", mediaErr))
 	}
 	mediaType = strings.ToLower(mediaType)
 	if mediaType != "application/graphql-response+json" && mediaType != "application/json" {
-		return nil, fmt.Errorf("unsupported GraphQL response media type %q", mediaType)
+		return nil, newGraphQLHTTPError(resp, respBody, mediaType, true, false, fmt.Sprintf("unsupported GraphQL response media type %q", mediaType))
 	}
 	if mediaType == "application/json" && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
-		return nil, &httpError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		return nil, newGraphQLHTTPError(resp, respBody, mediaType, false, false, "")
 	}
 	var result any
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("parse GraphQL response: %w", err)
+		return nil, newGraphQLHTTPError(resp, respBody, mediaType, true, false, fmt.Sprintf("parse GraphQL response: %v", err))
 	}
 	envelope, ok := result.(map[string]any)
 	if !ok || !wellFormedGraphQLResponse(envelope) {
-		return nil, fmt.Errorf("response is not a well-formed GraphQL response envelope")
+		return nil, newGraphQLHTTPError(resp, respBody, mediaType, true, false, "response is not a well-formed GraphQL response envelope")
 	}
 	return &graphQLHTTPResult{Body: envelope, Header: resp.Header, StatusCode: resp.StatusCode, MediaType: mediaType}, nil
 }
@@ -289,11 +290,62 @@ func wellFormedGraphQLResponse(envelope map[string]any) bool {
 
 type httpError struct {
 	StatusCode int
-	Body       string
+	Status     string
+	URL        string
+	Header     http.Header
+	Body       []byte
+	MediaType  string
+	Protocol   bool
+	Truncated  bool
+	Message    string
 }
 
 func (e *httpError) Error() string {
-	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Body)
+	if e.Message != "" {
+		return e.Message
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, string(e.Body))
+}
+
+func newGraphQLHTTPError(resp *http.Response, body []byte, mediaType string, protocol, truncated bool, message string) *httpError {
+	url := ""
+	if resp.Request != nil && resp.Request.URL != nil {
+		url = resp.Request.URL.String()
+	}
+	return &httpError{
+		StatusCode: resp.StatusCode, Status: resp.Status, URL: url,
+		Header: resp.Header.Clone(), Body: append([]byte(nil), body...),
+		MediaType: mediaType, Protocol: protocol, Truncated: truncated, Message: message,
+	}
+}
+
+func (e *httpError) invocationError() *openbindings.InvocationError {
+	var ierr *openbindings.InvocationError
+	if e.Protocol {
+		ierr = &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: e.Error()}
+	} else {
+		ierr = openbindings.HTTPError(e.StatusCode, e.Status)
+	}
+	headers := map[string][]string{}
+	for name, values := range e.Header {
+		headers[strings.ToLower(name)] = append([]string(nil), values...)
+	}
+	body := map[string]any{
+		"base64": base64.StdEncoding.EncodeToString(e.Body), "byteLength": len(e.Body),
+	}
+	if e.Truncated {
+		body["truncated"] = true
+	}
+	ierr.Details = map[string]any{
+		"status": e.StatusCode,
+		"body":   string(e.Body),
+		"httpResponse": map[string]any{
+			"status": e.StatusCode, "statusText": e.Status, "url": e.URL,
+			"headers": headers, "body": body,
+		},
+		"graphql": map[string]any{"mediaType": e.MediaType},
+	}
+	return ierr
 }
 
 // streamSubscription opens a WebSocket connection using the graphql-ws
@@ -338,7 +390,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			// stable, library-independent message beats leaking the
 			// transport's raw close-frame text (TS parity: "WebSocket
 			// closed during handshake").
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: "WebSocket closed during handshake"})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: "WebSocket closed during handshake", Details: graphQLWSCloseDetails(err)})
 		} else {
 			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("connection_ack: %v", err)})
 		}
@@ -375,7 +427,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			// A stable message beats leaking the transport's raw close-frame
 			// text (TS parity: "WebSocket closed before subscription
 			// complete").
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: "WebSocket closed before subscription complete"})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: "WebSocket closed before subscription complete", Details: graphQLWSCloseDetails(err)})
 			return
 		}
 
@@ -406,16 +458,24 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			}
 
 		case "error":
-			var errs []graphqlError
-			if err := json.Unmarshal(msg.Payload, &errs); err != nil || len(errs) == 0 {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: string(msg.Payload)})
-			} else {
-				inv.FireError(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeExecutionFailed,
-					Message: errs[0].Message,
-					Details: map[string]any{"errors": errs},
-				})
+			var payload any
+			_ = json.Unmarshal(msg.Payload, &payload)
+			message := string(msg.Payload)
+			if values, ok := payload.([]any); ok && len(values) > 0 {
+				if first, ok := values[0].(map[string]any); ok {
+					if nativeMessage, ok := first["message"].(string); ok && nativeMessage != "" {
+						message = nativeMessage
+					}
+				}
 			}
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeExecutionFailed,
+				Message: message,
+				Details: map[string]any{"graphqlTransportWs": map[string]any{
+					"type": "error", "payload": payload,
+					"payloadBase64": base64.StdEncoding.EncodeToString(msg.Payload),
+				}},
+			})
 			return
 
 		case "complete":
@@ -423,6 +483,16 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			return
 		}
 	}
+}
+
+func graphQLWSCloseDetails(err error) map[string]any {
+	var closeErr websocket.CloseError
+	if !errors.As(err, &closeErr) {
+		return nil
+	}
+	return map[string]any{"graphqlTransportWs": map[string]any{
+		"type": "close", "code": int(closeErr.Code), "reason": closeErr.Reason,
+	}}
 }
 
 func writeJSON(ctx context.Context, conn *websocket.Conn, v any) error {
@@ -442,7 +512,7 @@ var errWSClosed = errors.New("websocket closed")
 func expectMessage(ctx context.Context, conn *websocket.Conn, expectedType string) error {
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errWSClosed, err)
+		return fmt.Errorf("%w: %w", errWSClosed, err)
 	}
 	var msg struct {
 		Type string `json:"type"`

@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -333,6 +334,14 @@ func toOBMetadata(md metadata.MD) openbindings.Metadata {
 	}
 	out := make(openbindings.Metadata, len(md))
 	for k, vs := range md {
+		if strings.HasSuffix(k, "-bin") {
+			encoded := make([]string, len(vs))
+			for i, value := range vs {
+				encoded[i] = base64.StdEncoding.EncodeToString([]byte(value))
+			}
+			out[k] = encoded
+			continue
+		}
 		out[k] = append([]string(nil), vs...)
 	}
 	return out
@@ -428,16 +437,19 @@ func responseToJSON(resp proto.Message) (any, error) {
 // server refusing the request before it executed (EffectsNone, safe to
 // backoff-retry), while DEADLINE_EXCEEDED (mapped to ERR_TIMEOUT) was
 // dispatched and so is left to its EffectsPossible default. A status with no
-// entry here — and a non-status error, e.g. a dial failure with no gRPC status
-// at all — falls back to fallbackCode (ERR_EXECUTION_FAILED on the invoke path,
-// ERR_STREAM_ERROR on the streaming path).
+// named special mapping remains ERR_EXECUTION_FAILED per the interface's
+// native-status table. Only a non-status error — e.g. a local stream failure
+// with no gRPC status at all — falls back to fallbackCode.
 func grpcError(err error, fallbackCode string) *openbindings.InvocationError {
 	s, ok := status.FromError(err)
 	if !ok {
 		return &openbindings.InvocationError{Code: fallbackCode, Message: err.Error()}
 	}
 
-	code := fallbackCode
+	// Once a real gRPC status exists, its native status space — not the point
+	// in the stream where it arrived — owns classification. The fallback is
+	// only for errors with no gRPC status.
+	code := openbindings.ErrCodeExecutionFailed
 	var effects openbindings.Effects
 	switch s.Code() {
 	case codes.Unauthenticated:
@@ -455,7 +467,24 @@ func grpcError(err error, fallbackCode string) *openbindings.InvocationError {
 		code = openbindings.ErrCodeCancelled
 	}
 
-	details := map[string]any{"grpcCode": s.Code().String()}
+	statusDetails := make([]any, 0, len(s.Proto().GetDetails()))
+	for _, detail := range s.Proto().GetDetails() {
+		statusDetails = append(statusDetails, map[string]any{
+			"typeUrl":     detail.GetTypeUrl(),
+			"valueBase64": base64.StdEncoding.EncodeToString(detail.GetValue()),
+		})
+	}
+	grpcStatus := map[string]any{
+		"code":    int32(s.Code()),
+		"message": s.Message(),
+	}
+	if len(statusDetails) > 0 {
+		grpcStatus["details"] = statusDetails
+	}
+	details := map[string]any{
+		"grpcCode":   s.Code().String(),
+		"grpcStatus": grpcStatus,
+	}
 	if msgs := s.Proto().GetDetails(); len(msgs) > 0 {
 		var ds []any
 		for _, m := range msgs {

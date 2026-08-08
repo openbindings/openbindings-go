@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,6 +37,33 @@ func TestProcessorScenarios(t *testing.T) {
 	}
 }
 
+func TestInvocationFidelityScenarios(t *testing.T) {
+	root := os.Getenv("OB_SPEC_CORPUS")
+	if root == "" {
+		root = filepath.Join("..", "..", "..", "spec", "conformance")
+	}
+	file, err := processorscenarios.LoadPath(
+		filepath.Join(root, "invocation-fidelity", "usage.json"),
+		"usage",
+		"openbindings.invocation-fidelity-scenarios@1",
+	)
+	if err != nil {
+		if os.IsNotExist(err) && os.Getenv("OB_CORPUS_REQUIRED") == "" {
+			t.Skip(err)
+		}
+		t.Fatal(err)
+	}
+	for _, scenario := range file.Scenarios {
+		scenario := scenario
+		t.Run(scenario.ID, func(t *testing.T) {
+			observation := runUsageProcessorScenario(t, scenario)
+			if _, err := processorscenarios.Match(scenario, observation); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenario) processorscenarios.Observation {
 	t.Helper()
 	var dispatch map[string]any
@@ -55,7 +83,22 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 			"argv":        stringAnySlice(request.Argv),
 			"environment": stringMapAny(request.Environment),
 		}
-		return ProcessResult{Stdout: "", ExitCode: 0}, nil
+		fixture, _ := scenario.Given.Peer["processResult"].(map[string]any)
+		if fixture == nil {
+			return ProcessResult{Stdout: "", ExitCode: 0}, nil
+		}
+		stdout, _ := base64.StdEncoding.DecodeString(stringField(fixture, "stdoutBase64"))
+		stderr, _ := base64.StdEncoding.DecodeString(stringField(fixture, "stderrBase64"))
+		exitCode := 0
+		if value, ok := fixture["exitCode"].(float64); ok {
+			exitCode = int(value)
+		}
+		return ProcessResult{
+			Stdout: string(stdout), Stderr: string(stderr), ExitCode: exitCode,
+			Signal:          stringField(fixture, "signal"),
+			StdoutTruncated: fixture["stdoutTruncated"] == true,
+			StderrTruncated: fixture["stderrTruncated"] == true,
+		}, nil
 	}
 	invoker.Encoders = map[string]TokenEncoder{
 		"decimal-token": func(value any) (string, error) {
@@ -117,11 +160,20 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	if dispatch != nil {
 		data["dispatch"] = dispatch
 	}
+	trailer := map[string]any{}
+	for name, values := range call.Trailer() {
+		trailer[name] = values
+	}
+	data["trailer"] = trailer
 	if terminal == nil {
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
 	if terminal.Code == openbindings.ErrCodeContextRequired {
 		return processorscenarios.Observation{Disposition: "context-required", Phase: "pre-dispatch", Data: data}
+	}
+	if len(scenario.ID) >= len("USAGE-FI-") && scenario.ID[:len("USAGE-FI-")] == "USAGE-FI-" {
+		data["error"] = normalizeUsageScenarioValue(terminal)
+		return processorscenarios.Observation{Disposition: "error", Phase: "completion", Data: data}
 	}
 	phase := "pre-dispatch"
 	if scenario.ID == "USAGE-PS-01" || scenario.ID == "USAGE-PS-02" || scenario.ID == "USAGE-PS-13" || scenario.ID == "USAGE-PS-14" || scenario.ID == "USAGE-PS-17" || scenario.ID == "USAGE-PS-18" || scenario.ID == "USAGE-PS-19" {
@@ -130,6 +182,18 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 		phase = "resolution"
 	}
 	return processorscenarios.Observation{Disposition: "refusal", Phase: phase, Data: data}
+}
+
+func stringField(value map[string]any, name string) string {
+	text, _ := value[name].(string)
+	return text
+}
+
+func normalizeUsageScenarioValue(value any) any {
+	raw, _ := json.Marshal(value)
+	var normalized any
+	_ = json.Unmarshal(raw, &normalized)
+	return normalized
 }
 
 func stringAnySlice(values []string) []any {

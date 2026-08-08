@@ -69,6 +69,10 @@ type ProcessResult struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+	// Signal is the native signal name when termination was signal-driven.
+	Signal          string
+	StdoutTruncated bool
+	StderrTruncated bool
 }
 
 // ProcessExecutor executes one assembled process request.

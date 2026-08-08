@@ -123,6 +123,8 @@ Input schemas derived from usage specs inherit the source format's thin value ty
 4. Executes the binary via `os/exec` with the constructed argv and routed stdin
 5. Classifies the exit through the seam (assumption: exit 0), decodes stdout through the seam (assumption: text), and emits the value with `x-exit-code`/`x-stderr` and the provenance stamps (`x-ob-decode`, `x-ob-classify`, per-field `x-ob-route`; see the conventions record, spec/binding-specs/README.md) as trailing metadata
 
+A rejected exit, signal termination, or post-process decode failure is terminal rather than an operation output. Its `usage.process` evidence preserves exit/signal identity, exact captured stdout/stderr bytes, and truncation markers; `FailureEvidenceFrom` validates and extracts that record after in-process use or an invoker-frame round trip. Successful stderr remains metadata, with a Base64 lane for arbitrary bytes.
+
 ### Credential application
 
 Usage-spec bindings execute local CLI binaries, not network services. Credentials are applied via environment variables through the `environment` key in the `BindingContext`, not HTTP headers.

@@ -3,6 +3,7 @@ package connect
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -108,10 +109,7 @@ func readConnectEnvelope(r io.Reader, maxPayload int64) (flags byte, payload []b
 
 // connectEndStream is the JSON payload of an end-stream envelope.
 type connectEndStream struct {
-	Error *struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
+	Error    map[string]any      `json:"error,omitempty"`
 	Metadata map[string][]string `json:"metadata,omitempty"`
 }
 
@@ -226,11 +224,16 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 		// exactly the cap by one byte, which can break the Connect error
 		// JSON that applyConnectError parses. +1 lets a cap-sized error
 		// payload be read whole.
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+		// Preserve the historical cap-plus-one boundary (the final byte can
+		// complete a cap-sized JSON diagnostic), and read one further sentinel
+		// so evidence never claims a captured prefix is the complete body.
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+2))
+		truncated := int64(len(bodyBytes)) > maxResponseBytes+1
+		if truncated {
+			bodyBytes = bodyBytes[:maxResponseBytes+1]
+		}
 		_ = inv.SetHeader(headerMetadata(resp.Header))
-		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
-		applyConnectError(ierr, bodyBytes)
-		inv.FireError(ierr)
+		inv.FireError(connectHTTPError(resp, bodyBytes, truncated))
 		return
 	}
 
@@ -288,6 +291,9 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 					inv.FireError(&openbindings.InvocationError{
 						Code:    openbindings.ErrCodeStreamError,
 						Message: fmt.Sprintf("connect END_STREAM payload does not parse as JSON: %v (openbindings.connect@1 CONN-P-05)", uerr),
+						Details: map[string]any{"connect": map[string]any{"endStream": map[string]any{
+							"payload": map[string]any{"base64": base64.StdEncoding.EncodeToString(payload), "byteLength": len(payload)},
+						}}},
 					})
 					return
 				}
@@ -299,13 +305,23 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 				inv.SetTrailer(openbindings.Metadata(endStream.Metadata))
 			}
 			if endStream.Error != nil {
-				msg := endStream.Error.Message
+				code, _ := endStream.Error["code"].(string)
+				msg, _ := endStream.Error["message"].(string)
 				if msg == "" {
-					msg = endStream.Error.Code
+					msg = code
+				}
+				effects := openbindings.Effects("")
+				if code == "unavailable" || code == "resource_exhausted" {
+					effects = openbindings.EffectsNone
 				}
 				inv.FireError(&openbindings.InvocationError{
-					Code:    connectCodeToErrCode(endStream.Error.Code),
+					Code:    connectCodeToErrCode(code),
 					Message: msg,
+					Effects: effects,
+					Details: map[string]any{"connect": map[string]any{"endStream": map[string]any{
+						"error":   endStream.Error,
+						"payload": map[string]any{"base64": base64.StdEncoding.EncodeToString(payload), "byteLength": len(payload)},
+					}}},
 				})
 				return
 			}

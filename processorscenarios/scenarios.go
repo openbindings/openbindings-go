@@ -112,7 +112,14 @@ func CorpusRoot(fallback string) (string, error) {
 
 // Load reads and minimally validates one family file.
 func Load(root, family string) (*File, error) {
-	data, err := os.ReadFile(filepath.Join(root, "binding-specs", "processor", family+".json"))
+	return LoadPath(filepath.Join(root, "binding-specs", "processor", family+".json"), family, "openbindings.binding-spec-processor-scenarios@1")
+}
+
+// LoadPath reads a scenario file from an explicit path. It lets stronger
+// project profiles reuse the same language-neutral harness without claiming
+// that their assertions are published binding-specification conformance.
+func LoadPath(path, family, format string) (*File, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +127,7 @@ func Load(root, family string) (*File, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return nil, err
 	}
-	if file.Format != "openbindings.binding-spec-processor-scenarios@1" {
+	if file.Format != format {
 		return nil, fmt.Errorf("%s: unsupported scenario format %q", family, file.Format)
 	}
 	if file.Family != family || len(file.Scenarios) == 0 {

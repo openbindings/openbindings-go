@@ -81,6 +81,12 @@ The output is the complete GraphQL response envelope, including `data`,
 `outputTransform` such as `data.viewer` when an operation contract
 intentionally exposes only the selected field.
 
+A legacy `application/json` non-2xx response and a
+`graphql-transport-ws` protocol `error` remain failure completions rather than
+outputs. `FailureEvidenceFrom` recovers exact HTTP response bytes and headers,
+or the complete WebSocket error/close evidence, from the terminal error.
+Local SDK and document-validation errors do not invent GraphQL-native evidence.
+
 ## Runtime configuration
 
 The Go implementation carries the specification's interpretation points below

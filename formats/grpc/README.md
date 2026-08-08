@@ -83,7 +83,21 @@ for {
 }
 ```
 
-gRPC leading/trailing metadata maps onto the handle: `inv.Header(ctx)` returns the server's header metadata, and `inv.Trailer()` (valid after the invocation terminates) returns trailing metadata.
+gRPC leading/trailing metadata maps onto the handle: `inv.Header(ctx)` returns the server's header metadata, and `inv.Trailer()` (valid after the invocation terminates) returns trailing metadata. Every value and its order are retained; binary `-bin` metadata values use base64 strings so arbitrary bytes survive the SDK surface.
+
+If iteration terminates with a gRPC status, `FailureEvidenceFrom` recovers the
+native numeric code, message, and exact `google.protobuf.Any` payload bytes
+from the terminal error, including after an invoker-frame JSON round trip:
+
+```go
+if evidence, ok := grpcbinding.FailureEvidenceFrom(err); ok {
+    log.Printf("gRPC status %s: %s", evidence.Code, evidence.Message)
+}
+```
+
+Application result messages remain ordinary outputs even when their fields
+look error-shaped. A non-OK final gRPC status is a failure completion, and a
+local SDK or ProtoJSON validation error carries no invented gRPC evidence.
 
 ### Synthesize an interface from a gRPC server
 
@@ -216,22 +230,18 @@ specifications with exposed wire choices (OpenAPI and AsyncAPI).
 2. Resolves service and method descriptors via inline content or server reflection (load failure → `ERR_SOURCE_LOAD_FAILED`; unresolved symbol → `ERR_REF_NOT_FOUND`)
 3. Resolves or reuses a cached gRPC client connection (transport per the §4 address form — `grpc://` means plaintext and `grpcs://` means TLS; a bare `host:port` requires an explicit transport election — unless the transport configuration point overrides it)
 4. Reads the single request message from the handle (`Write` one input; methods with empty request messages dispatch without one) and builds a dynamic protobuf request from it
-5. Applies credentials from the context as gRPC metadata (bearer, basic, apiKey)
-6. Invokes the RPC: unary methods emit one output then close; server-streaming methods emit per received message, with backpressure flow-controlling the stream
+5. Applies explicitly named context `headers` as gRPC metadata; generic credentials without an artifact-declared carriage are challenged before dispatch
+6. Invokes the RPC using its declared unary, server-streaming, client-streaming, or bidirectional interaction; message flow and half-close behavior emerge from that declaration, with handle backpressure flow-controlling streams
 
-gRPC status errors terminate the invocation with a mapped code (`Unauthenticated` → `ERR_AUTH_REQUIRED`, `PermissionDenied` → `ERR_PERMISSION_DENIED`, `Unavailable`/`ResourceExhausted` → `ERR_UNAVAILABLE` (transient, `effects: none` — the server refused before executing), `DeadlineExceeded` → `ERR_TIMEOUT`, `Canceled` → `ERR_CANCELLED`, every other status → `ERR_EXECUTION_FAILED`); the gRPC code and any status details ride in the error's `Details`. Leading/trailing gRPC metadata maps onto `Header(ctx)`/`Trailer()`. Cancelling the handle (or the invocation context) tears down the underlying stream.
-
-Client-streaming and bidi methods are not supported and terminate pre-dispatch with `ERR_EXECUTION_FAILED`.
+gRPC status errors terminate the invocation with a mapped code (`Unauthenticated` → `ERR_AUTH_REQUIRED`, `PermissionDenied` → `ERR_PERMISSION_DENIED`, `Unavailable`/`ResourceExhausted` → `ERR_UNAVAILABLE` (transient, `effects: none` — the server refused before executing), `DeadlineExceeded` → `ERR_TIMEOUT`, `Canceled` → `ERR_CANCELLED`, every other status → `ERR_EXECUTION_FAILED`). `Details.grpcStatus` preserves the numeric native code, message, and each rich-status detail as its type URL plus exact base64 payload; `FailureEvidenceFrom` is the typed accessor. Response messages emitted before a later non-OK final status remain outputs. Leading/trailing gRPC metadata maps onto `Header(ctx)`/`Trailer()`. Cancelling the handle (or the invocation context) tears down the underlying stream.
 
 ### Credential application
 
-Credentials are applied as gRPC metadata in priority order:
-
-- **bearer**: Sets `authorization: Bearer <token>` from `bearerToken` context field
-- **apiKey**: Sets `authorization: ApiKey <key>` from `apiKey` context field
-- **basic**: Sets `authorization: Basic <encoded>` from `basic.username`/`basic.password` context fields
-
-The context's `headers` map is also forwarded as gRPC metadata.
+Only the context's explicitly named `headers` map is forwarded as gRPC
+metadata. Protobuf has no declaration saying that a generic bearer token,
+API key, or username/password belongs in a particular metadata field, so the
+binding does not invent one. The operation/context layer may satisfy a
+challenge by supplying the service's documented metadata field explicitly.
 
 ### Interface synthesis
 

@@ -479,7 +479,10 @@ func emitToolResult(
 			// Preserve the protocol-native application error for adapters
 			// (notably ob mcp) that can faithfully re-expose it. Generic
 			// consumers still branch on the canonical OpenBindings code.
-			Details: map[string]any{"mcpResult": completeMCPResult(rawResult, result)},
+			Details: map[string]any{
+				"mcpResult": completeMCPResult(rawResult, result),
+				"mcp":       map[string]any{"result": completeMCPResult(rawResult, result)},
+			},
 		}, false
 	}
 
@@ -763,13 +766,16 @@ func mapMCPError(err error, hc *headerCapture, fallback string) *openbindings.In
 
 	// JSON-RPC error: the server replied with a structured error.
 	if werr := serverJSONRPCError(err); werr != nil {
-		details := map[string]any{"code": werr.Code}
+		native := map[string]any{"code": werr.Code, "message": werr.Message}
+		details := map[string]any{"code": werr.Code, "mcp": map[string]any{"jsonrpcError": native}}
 		if len(werr.Data) > 0 {
 			var data any
 			if json.Unmarshal(werr.Data, &data) == nil {
 				details["data"] = data
+				native["data"] = data
 			}
 		}
+		hc.addHTTPFailureEvidence(details)
 		return &openbindings.InvocationError{
 			Code:    openbindings.ErrCodeExecutionFailed,
 			Message: err.Error(),
@@ -779,7 +785,11 @@ func mapMCPError(err error, hc *headerCapture, fallback string) *openbindings.In
 
 	// HTTP error response: the capture saw the failing POST's status.
 	if status, statusText := hc.lastStatus(); status >= 400 {
-		return openbindings.HTTPError(status, statusText)
+		ierr := openbindings.HTTPError(status, statusText)
+		if details, ok := ierr.Details.(map[string]any); ok {
+			hc.addHTTPFailureEvidence(details)
+		}
+		return ierr
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -815,7 +825,10 @@ type headerCapture struct {
 	mu         sync.Mutex
 	statusCode int
 	status     string
+	url        string
 	header     openbindings.Metadata
+	body       []byte
+	bodySeen   bool
 }
 
 func (hc *headerCapture) record(resp *http.Response) {
@@ -826,7 +839,19 @@ func (hc *headerCapture) record(resp *http.Response) {
 	hc.mu.Lock()
 	hc.statusCode = resp.StatusCode
 	hc.status = resp.Status
+	if resp.Request != nil && resp.Request.URL != nil {
+		hc.url = resp.Request.URL.String()
+	}
 	hc.header = md
+	hc.body = nil
+	hc.bodySeen = false
+	hc.mu.Unlock()
+}
+
+func (hc *headerCapture) recordBody(body []byte) {
+	hc.mu.Lock()
+	hc.body = append([]byte(nil), body...)
+	hc.bodySeen = true
 	hc.mu.Unlock()
 }
 
@@ -843,6 +868,27 @@ func (hc *headerCapture) lastStatus() (int, string) {
 	hc.mu.Lock()
 	defer hc.mu.Unlock()
 	return hc.statusCode, hc.status
+}
+
+func (hc *headerCapture) addHTTPFailureEvidence(details map[string]any) {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	if hc.statusCode == 0 {
+		return
+	}
+	headers := map[string][]string{}
+	for name, values := range hc.header {
+		headers[strings.ToLower(name)] = append([]string(nil), values...)
+	}
+	response := map[string]any{
+		"status": hc.statusCode, "statusText": hc.status, "url": hc.url, "headers": headers,
+	}
+	if hc.bodySeen {
+		response["body"] = map[string]any{
+			"base64": base64.StdEncoding.EncodeToString(hc.body), "byteLength": len(hc.body),
+		}
+	}
+	details["httpResponse"] = response
 }
 
 // ---------------------------------------------------------------------------

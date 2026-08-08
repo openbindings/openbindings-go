@@ -249,19 +249,59 @@ func applyConnectError(ierr *openbindings.InvocationError, body []byte) {
 	if len(body) == 0 {
 		return
 	}
-	var connectErr struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	}
+	var connectErr map[string]any
 	if json.Unmarshal(body, &connectErr) != nil {
 		return
 	}
-	if connectErr.Code != "" {
-		ierr.Code = connectCodeToErrCode(connectErr.Code)
+	if code, _ := connectErr["code"].(string); code != "" {
+		ierr.Code = connectCodeToErrCode(code)
+		if code == "unavailable" || code == "resource_exhausted" {
+			ierr.Effects = openbindings.EffectsNone
+		}
 	}
-	if connectErr.Message != "" {
-		ierr.Message = connectErr.Message
+	if message, _ := connectErr["message"].(string); message != "" {
+		ierr.Message = message
 	}
+	details, _ := ierr.Details.(map[string]any)
+	if details == nil {
+		details = map[string]any{}
+		ierr.Details = details
+	}
+	details["connect"] = map[string]any{"error": connectErr}
+}
+
+// connectHTTPError preserves the complete native HTTP failure response in
+// addition to the parsed Connect error object. Body bytes are base64 because
+// Connect failures may be emitted by proxies and need not be JSON or UTF-8.
+func connectHTTPError(resp *http.Response, body []byte, truncated bool) *openbindings.InvocationError {
+	ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
+	applyConnectError(ierr, body)
+	details, _ := ierr.Details.(map[string]any)
+	if details == nil {
+		details = map[string]any{}
+		ierr.Details = details
+	}
+	headers := map[string][]string{}
+	for name, values := range resp.Header {
+		headers[strings.ToLower(name)] = append([]string(nil), values...)
+	}
+	response := map[string]any{
+		"status":     resp.StatusCode,
+		"statusText": resp.Status,
+		"headers":    headers,
+		"body": map[string]any{
+			"base64":     base64.StdEncoding.EncodeToString(body),
+			"byteLength": len(body),
+		},
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		response["url"] = resp.Request.URL.String()
+	}
+	if truncated {
+		response["body"].(map[string]any)["truncated"] = true
+	}
+	details["httpResponse"] = response
+	return ierr
 }
 
 // headerMetadata clones HTTP headers into invocation Metadata.
@@ -372,9 +412,7 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 		// CONN-P-06: success iff the final status is 200; anything else —
 		// a Connect error, a proxy status, a 2xx that is not 200 — is a
 		// failure outcome.
-		ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
-		applyConnectError(ierr, respBody)
-		inv.FireError(ierr)
+		inv.FireError(connectHTTPError(resp, respBody, false))
 		return
 	}
 
