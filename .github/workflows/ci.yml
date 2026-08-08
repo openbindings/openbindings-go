@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "experiment/**"]
+    branches: [main, "release/**"]
   pull_request:
 
 jobs:
@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: openbindings/spec
-          ref: chore/icon-refresh
+          ref: release/0.2
           path: spec
       - uses: actions/checkout@v7
         if: matrix.module == '.'
