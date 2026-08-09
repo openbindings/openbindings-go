@@ -397,12 +397,7 @@ func buildMultipartBody(doc *openapi3.T, media *openapi3.MediaType, fields map[s
 	schema := mediaSchema(media)
 	for _, name := range names {
 		value := fields[name]
-		var propSchema *openapi3.Schema
-		if schema != nil {
-			if ref, ok := schema.Properties[name]; ok && ref != nil {
-				propSchema = ref.Value
-			}
-		}
+		propSchema := resolvedMultipartProperty(schema, name, map[*openapi3.Schema]bool{})
 		var enc *openapi3.Encoding
 		if media != nil {
 			enc = media.Encoding[name]
@@ -411,12 +406,9 @@ func buildMultipartBody(doc *openapi3.T, media *openapi3.MediaType, fields map[s
 		// A declared array expands into repeated parts of the same name,
 		// each element encoded per the items schema (the multipart way to
 		// carry arrays — including arrays of files).
-		if propSchema != nil && propSchema.Type.Is("array") {
+		if schemaTypeIs(propSchema, "array", map[*openapi3.Schema]bool{}) {
 			if arr, ok := asArray(value); ok {
-				var items *openapi3.Schema
-				if propSchema.Items != nil {
-					items = propSchema.Items.Value
-				}
+				items := resolvedMultipartItems(propSchema, map[*openapi3.Schema]bool{})
 				for _, elem := range arr {
 					if err := writeMultipartPart(writer, name, elem, items, enc, is30); err != nil {
 						return nil, "", err
@@ -436,6 +428,82 @@ func buildMultipartBody(doc *openapi3.T, media *openapi3.MediaType, fields map[s
 	return &buf, writer.FormDataContentType(), nil
 }
 
+func resolvedMultipartProperty(schema *openapi3.Schema, name string, seen map[*openapi3.Schema]bool) *openapi3.Schema {
+	if schema == nil || seen[schema] {
+		return nil
+	}
+	seen[schema] = true
+	defer delete(seen, schema)
+
+	var matches []*openapi3.Schema
+	if ref := schema.Properties[name]; ref != nil && ref.Value != nil {
+		matches = append(matches, ref.Value)
+	}
+	for _, member := range schema.AllOf {
+		if member == nil || member.Value == nil {
+			continue
+		}
+		if match := resolvedMultipartProperty(member.Value, name, seen); match != nil {
+			matches = append(matches, match)
+		}
+	}
+	return allOfSchema(matches)
+}
+
+func resolvedMultipartItems(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) *openapi3.Schema {
+	if schema == nil || seen[schema] {
+		return nil
+	}
+	seen[schema] = true
+	defer delete(seen, schema)
+
+	var matches []*openapi3.Schema
+	if schema.Items != nil && schema.Items.Value != nil {
+		matches = append(matches, schema.Items.Value)
+	}
+	for _, member := range schema.AllOf {
+		if member == nil || member.Value == nil {
+			continue
+		}
+		if match := resolvedMultipartItems(member.Value, seen); match != nil {
+			matches = append(matches, match)
+		}
+	}
+	return allOfSchema(matches)
+}
+
+func allOfSchema(matches []*openapi3.Schema) *openapi3.Schema {
+	switch len(matches) {
+	case 0:
+		return nil
+	case 1:
+		return matches[0]
+	default:
+		combined := &openapi3.Schema{}
+		for _, match := range matches {
+			combined.AllOf = append(combined.AllOf, &openapi3.SchemaRef{Value: match})
+		}
+		return combined
+	}
+}
+
+func schemaTypeIs(schema *openapi3.Schema, want string, seen map[*openapi3.Schema]bool) bool {
+	if schema == nil || seen[schema] {
+		return false
+	}
+	seen[schema] = true
+	defer delete(seen, schema)
+	if schema.Type.Is(want) {
+		return true
+	}
+	for _, member := range schema.AllOf {
+		if member != nil && schemaTypeIs(member.Value, want, seen) {
+			return true
+		}
+	}
+	return false
+}
+
 func writeMultipartPart(writer *multipart.Writer, name string, value any, schema *openapi3.Schema, enc *openapi3.Encoding, is30 bool) error {
 	if binarySignaled(schema, is30) {
 		data, err := binaryPartBytes(name, value, declaredContentEncoding(schema, is30))
@@ -445,7 +513,7 @@ func writeMultipartPart(writer *multipart.Writer, name string, value any, schema
 		ct := ""
 		if enc != nil && enc.ContentType != "" {
 			ct = enc.ContentType
-		} else if cmt := schemaExtensionString(schema, "contentMediaType"); cmt != "" {
+		} else if cmt := schemaExtensionString(schema, "contentMediaType", map[*openapi3.Schema]bool{}); cmt != "" {
 			ct = cmt
 		} else {
 			ct = "application/octet-stream"
@@ -548,16 +616,30 @@ func isComplexPartValue(value any, schema *openapi3.Schema) bool {
 // `format: binary`; 3.1.x with a string schema carrying contentMediaType
 // or contentEncoding.
 func binarySignaled(schema *openapi3.Schema, is30 bool) bool {
-	if schema == nil {
+	return binarySignaledWithSeen(schema, is30, map[*openapi3.Schema]bool{})
+}
+
+func binarySignaledWithSeen(schema *openapi3.Schema, is30 bool, seen map[*openapi3.Schema]bool) bool {
+	if schema == nil || seen[schema] {
 		return false
 	}
+	seen[schema] = true
+	defer delete(seen, schema)
 	if is30 {
-		return schema.Format == "binary"
+		if schema.Format == "binary" {
+			return true
+		}
+	} else if schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) &&
+		(schemaExtensionString(schema, "contentMediaType", map[*openapi3.Schema]bool{}) != "" ||
+			schemaExtensionString(schema, "contentEncoding", map[*openapi3.Schema]bool{}) != "") {
+		return true
 	}
-	if !schema.Type.Is("string") {
-		return false
+	for _, member := range schema.AllOf {
+		if member != nil && binarySignaledWithSeen(member.Value, is30, seen) {
+			return true
+		}
 	}
-	return schemaExtensionString(schema, "contentMediaType") != "" || schemaExtensionString(schema, "contentEncoding") != ""
+	return false
 }
 
 // declaredContentEncoding returns the 3.1 schema's declared contentEncoding
@@ -566,17 +648,32 @@ func declaredContentEncoding(schema *openapi3.Schema, is30 bool) string {
 	if is30 {
 		return ""
 	}
-	return schemaExtensionString(schema, "contentEncoding")
+	return schemaExtensionString(schema, "contentEncoding", map[*openapi3.Schema]bool{})
 }
 
 // schemaExtensionString reads a 3.1 keyword kin-openapi carries in the
-// schema's extensions map (contentMediaType, contentEncoding).
-func schemaExtensionString(schema *openapi3.Schema, key string) string {
-	if schema == nil || schema.Extensions == nil {
+// schema's extensions map (contentMediaType, contentEncoding), including a
+// declaration contributed through allOf.
+func schemaExtensionString(schema *openapi3.Schema, key string, seen map[*openapi3.Schema]bool) string {
+	if schema == nil || seen[schema] {
 		return ""
 	}
-	s, _ := schema.Extensions[key].(string)
-	return s
+	seen[schema] = true
+	defer delete(seen, schema)
+	if schema.Extensions != nil {
+		if s, _ := schema.Extensions[key].(string); s != "" {
+			return s
+		}
+	}
+	for _, member := range schema.AllOf {
+		if member == nil {
+			continue
+		}
+		if s := schemaExtensionString(member.Value, key, seen); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // binaryPartBytes decodes a binary-signaled part's bytes from the caller's

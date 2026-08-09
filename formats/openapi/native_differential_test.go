@@ -246,6 +246,108 @@ func TestOpenAPIV2CollisionDifferential(t *testing.T) {
 	}
 }
 
+// TestOpenAPIAllOfMultipartDifferential is the minimized wild-corpus
+// regression for OAPI-P-03's rule that allOf contributes its recursive body
+// property union. Synthesis and invocation must agree on those properties;
+// neither may invent a literal multipart part named "body".
+func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
+	type observation struct {
+		transaction string
+		fileName    string
+		file        []byte
+		hasBodyPart bool
+	}
+	observations := make(chan observation, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse multipart request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Errorf("read multipart file: %v (values=%#v files=%#v)", err, r.MultipartForm.Value, r.MultipartForm.File)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		fileBytes, err := io.ReadAll(file)
+		_ = file.Close()
+		if err != nil {
+			t.Errorf("read multipart file bytes: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_, bodyValue := r.MultipartForm.Value["body"]
+		_, bodyFile := r.MultipartForm.File["body"]
+		observations <- observation{
+			transaction: r.FormValue("transaction"),
+			fileName:    r.FormValue("fileName"),
+			file:        fileBytes,
+			hasBodyPart: bodyValue || bodyFile,
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	spec := fmt.Sprintf(`{
+	  "openapi":"3.0.3",
+	  "info":{"title":"multipart allOf","version":"1"},
+	  "servers":[{"url":%q}],
+	  "paths":{"/upload":{"post":{
+	    "operationId":"uploadAllOf",
+	    "requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"allOf":[
+	      {"type":"object","properties":{"transaction":{"type":"string"},"fileName":{"type":"string"}},"required":["transaction","fileName"]},
+	      {"type":"object","properties":{"file":{"type":"string","format":"binary"}},"required":["file"]}
+	    ]}}}},
+	    "responses":{"204":{"description":"done"}}
+	  }}}
+	}`, server.URL)
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV2, Content: openbindings.TextContent(spec)}},
+	})
+	if err != nil {
+		t.Fatalf("synthesis failed: %v", err)
+	}
+	input, ok := iface.Operations["uploadAllOf"].Input.(map[string]any)
+	if !ok {
+		t.Fatalf("operation input is not an object schema: %#v", iface.Operations["uploadAllOf"].Input)
+	}
+	properties, _ := input["properties"].(map[string]any)
+	for _, name := range []string{"transaction", "fileName", "file"} {
+		if _, present := properties[name]; !present {
+			t.Fatalf("synthesized input omitted allOf property %q: %#v", name, properties)
+		}
+	}
+	if _, present := properties["body"]; present {
+		t.Fatalf("synthesized input invented a body wrapper: %#v", properties)
+	}
+
+	call := openbindings.Invoke(
+		context.Background(),
+		openbindings.NewOperationInvoker(NewInvokerWithClient(server.Client())),
+		iface,
+		openbindings.NewOperationSignature[any, any]("uploadAllOf"),
+	)
+	if err := call.Write(context.Background(), map[string]any{
+		"transaction": "tx-1", "fileName": "a.bin", "file": "AQID",
+	}); err != nil {
+		t.Fatalf("write operation input: %v", err)
+	}
+	_ = call.Close()
+	outputs, terminal := differentialOutputs(call)
+	if terminal != nil {
+		t.Fatalf("invocation failed: %v", terminal)
+	}
+	if len(outputs) != 0 {
+		t.Fatalf("unexpected outputs: %#v", outputs)
+	}
+	got := <-observations
+	want := observation{transaction: "tx-1", fileName: "a.bin", file: []byte{1, 2, 3}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("multipart allOf differential\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
 type openAPIJSONataEvaluator struct{}
 
 func (openAPIJSONataEvaluator) Evaluate(expression string, data any) (any, error) {

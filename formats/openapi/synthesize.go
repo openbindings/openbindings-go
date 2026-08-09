@@ -511,9 +511,10 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 					bodySchema = resolved
 				}
 			}
-			bodyProps, hasProps := bodySchema["properties"].(map[string]any)
+			bodyObject, bodyProps, bodyRequired := resolvedSynthesisBodyShape(requestPlan.media.Schema.Value, map[*openapi3.Schema]bool{})
+			hasProps := len(bodyProps) > 0
 			switch {
-			case !bodySchemaFlattens(hasProps, isObjectTypedSchema(bodySchema)):
+			case !bodyObject:
 				// A non-object body schema — array, scalar, binary, or
 				// TYPELESS (neither `properties` nor an explicit object
 				// type; §9.1's determination is declaration-only): the
@@ -531,7 +532,7 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 				for k, v := range bodyProps {
 					properties[routes.bodyField(k)] = v
 				}
-				for _, name := range stringSlice(bodySchema["required"]) {
+				for name := range bodyRequired {
 					required = append(required, routes.bodyField(name))
 				}
 			default:
@@ -573,6 +574,47 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 		schema["required"] = requiredValues
 	}
 	return schema
+}
+
+// resolvedSynthesisBodyShape resolves the declaration-only object surface
+// used by OAPI-P-03 synthesis. allOf contributes its recursive property and
+// required-name union; wrapping the allOf node as a synthetic whole body
+// would publish a contract that the invoker (correctly) routes as object
+// properties.
+func resolvedSynthesisBodyShape(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) (bool, map[string]any, map[string]bool) {
+	properties := map[string]any{}
+	required := map[string]bool{}
+	if schema == nil || seen[schema] {
+		return false, properties, required
+	}
+	seen[schema] = true
+	defer delete(seen, schema)
+
+	object := schema.Type.Is("object") || schema.Properties != nil
+	for name, property := range schema.Properties {
+		properties[name] = schemaRefToMap(property)
+	}
+	for _, name := range schema.Required {
+		required[name] = true
+	}
+	for _, member := range schema.AllOf {
+		if member == nil || member.Value == nil {
+			continue
+		}
+		memberObject, memberProperties, memberRequired := resolvedSynthesisBodyShape(member.Value, seen)
+		object = object || memberObject
+		for name, property := range memberProperties {
+			if existing, present := properties[name]; present {
+				properties[name] = map[string]any{"allOf": []any{existing, property}}
+			} else {
+				properties[name] = property
+			}
+		}
+		for name := range memberRequired {
+			required[name] = true
+		}
+	}
+	return object, properties, required
 }
 
 func mergeParameters(pathParams, opParams openapi3.Parameters) openapi3.Parameters {
@@ -1033,35 +1075,4 @@ func majorMinor(version string) string {
 		return parts[0] + "." + parts[1]
 	}
 	return version
-}
-
-// bodySchemaFlattens is THE §9.1 flatten-vs-synthetic determination, in one
-// place for the two sites that must never disagree: buildInputSchema, which
-// publishes the flattened contract, and planRequestBody (media.go), which
-// routes the wire. A declared request-body schema participates in the
-// flattened model by property name iff it declares `properties` or an
-// explicit object type; ANY other schema — array, scalar, binary, and the
-// TYPELESS schema that declares neither — rides the synthetic `body`
-// property, unwrapped at the wire. The determination is declaration-only:
-// what the schema might admit at runtime never participates. Each caller
-// extracts the two declaration facts from its own schema representation
-// (the raw map here, kin-openapi's typed form in media.go) and routes the
-// decision through this one predicate, so the published contract and the
-// wire cannot diverge again.
-func bodySchemaFlattens(hasProperties, objectTyped bool) bool {
-	return hasProperties || objectTyped
-}
-
-// isObjectTypedSchema reports whether a body schema is explicitly
-// object-typed (3.0 string form or a single-element 3.1 type array): the
-// object half of bodySchemaFlattens' declaration facts, in the raw-map
-// representation.
-func isObjectTypedSchema(schema map[string]any) bool {
-	switch ty := schema["type"].(type) {
-	case string:
-		return ty == "object"
-	case []any:
-		return len(ty) == 1 && ty[0] == "object"
-	}
-	return false
 }
