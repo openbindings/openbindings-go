@@ -314,6 +314,16 @@
 
 ### Fixed
 
+- **Operation-boundary schema validation now preserves the OBI document as
+  the same-document reference root.** Input, output, and example validation
+  compile schemas at their canonical `#/operations/...` addresses instead of
+  extracting them into a synthetic root, so operation-local recursive
+  `$defs`, cross-operation pointers, escaped operation keys, named schemas,
+  and embedded absolute `$id` resources retain their JSON Schema meaning.
+  `ValidateOperationInput` and `ValidateOperationOutput` expose the same
+  interface-aware boundary to applications that drive binding invokers
+  directly.
+
 - **Schema-comparison `allOf` normalization is sound.** Branches normalize
   fully before merging (`$ref` branches resolved and profile-checked, nested
   `allOf` flattened), sibling keywords merge as one additional branch, and

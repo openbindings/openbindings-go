@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	neturl "net/url"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -131,7 +132,7 @@ func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 		}
 		var inputSchema, outputSchema *jsonschema.Schema
 		if op.Input != nil && !defsExternal && !schemaHasExternalRef(op.Input) {
-			compiled, err := compileExampleSchema(op.Input, defs)
+			compiled, err := compileOperationSchema(&i, opKey, "input")
 			if err != nil {
 				*errs = append(*errs, fmt.Sprintf("operations[%q].input: cannot compile schema: %v (OBI-D-11)", opKey, err))
 			} else {
@@ -139,7 +140,7 @@ func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 			}
 		}
 		if op.Output != nil && !defsExternal && !schemaHasExternalRef(op.Output) {
-			compiled, err := compileExampleSchema(op.Output, defs)
+			compiled, err := compileOperationSchema(&i, opKey, "output")
 			if err != nil {
 				*errs = append(*errs, fmt.Sprintf("operations[%q].output: cannot compile schema: %v (OBI-D-11)", opKey, err))
 			} else {
@@ -211,9 +212,11 @@ func buildSchemaDefs(schemas map[string]JSONSchema) map[string]any {
 	return defs
 }
 
-// compileExampleSchema builds a compound JSON Schema rooted at the
-// operation's input/output schema, with the document's schemas map
-// exposed under $defs, then compiles it.
+// compileExampleSchema builds a compound JSON Schema rooted at an isolated
+// schema, with a named schema map exposed under $defs, then compiles it. It
+// cannot preserve arbitrary references into an OBI document because it does
+// not receive that document; interface-aware callers use
+// compileOperationSchema instead.
 func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema.Schema, error) {
 	var root any
 	switch v := opSchema.(type) {
@@ -248,6 +251,140 @@ func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema
 		return nil, err
 	}
 	return c.Compile(url)
+}
+
+// compileOperationSchema compiles an operation's input/output schema at its
+// canonical fragment inside the complete OBI document. The document, not an
+// extracted schema object, is the resolution root for same-document references
+// (OBI-D-16 / OBI-T-16).
+func compileOperationSchema(i *Interface, operationName, position string) (*jsonschema.Schema, error) {
+	if i == nil {
+		return nil, fmt.Errorf("interface is nil")
+	}
+	op, ok := i.Operations[operationName]
+	if !ok {
+		return nil, fmt.Errorf("operation %q is not defined", operationName)
+	}
+	var target JSONSchema
+	switch position {
+	case "input":
+		target = op.Input
+	case "output":
+		target = op.Output
+	default:
+		return nil, fmt.Errorf("unknown operation schema position %q", position)
+	}
+	if target == nil {
+		return nil, fmt.Errorf("operation %q has no %s schema", operationName, position)
+	}
+
+	data, err := json.Marshal(i)
+	if err != nil {
+		return nil, fmt.Errorf("marshal OBI document for schema compilation: %w", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		return nil, fmt.Errorf("decode OBI document for schema compilation: %w", err)
+	}
+	// The OBI root is a resolution container, not a schema. Unknown fields are
+	// ignored by Core and must not accidentally act as schema-control keywords
+	// when the generic backend indexes the container.
+	delete(document, "$id")
+	delete(document, "$schema")
+	delete(document, "$anchor")
+	delete(document, "$dynamicAnchor")
+
+	c := jsonschema.NewCompiler()
+	c.UseRegexpEngine(ECMARegexpEngine)
+	const url = "openbindings:///document"
+	if err := registerInterfaceSchemaResources(c, i); err != nil {
+		return nil, err
+	}
+	if err := c.AddResource(url, document); err != nil {
+		return nil, err
+	}
+	escape := strings.NewReplacer("~", "~0", "/", "~1").Replace
+	fragment := "#/operations/" + escape(operationName) + "/" + position
+	return c.Compile(url + fragment)
+}
+
+// registerInterfaceSchemaResources makes absolute `$id` resources embedded at
+// Core-defined schema positions visible to the generic JSON Schema compiler.
+// OBI's `schemas` and `operations` fields are intentionally not JSON Schema
+// keywords, so a backend cannot discover those resources merely by compiling
+// the OBI document container.
+func registerInterfaceSchemaResources(c *jsonschema.Compiler, i *Interface) error {
+	seen := map[string]bool{}
+	var visit func(any, *neturl.URL) error
+	visit = func(node any, base *neturl.URL) error {
+		object, ok := node.(map[string]any)
+		if !ok {
+			return nil
+		}
+		currentBase := base
+		if rawID, ok := object["$id"].(string); ok {
+			parsed, err := neturl.Parse(rawID)
+			if err != nil {
+				return fmt.Errorf("parse embedded schema $id %q: %w", rawID, err)
+			}
+			if base != nil {
+				parsed = base.ResolveReference(parsed)
+			}
+			if !parsed.IsAbs() {
+				return fmt.Errorf("embedded schema $id %q has no absolute base", rawID)
+			}
+			resourceID := parsed.String()
+			if !seen[resourceID] {
+				if err := c.AddResource(resourceID, object); err != nil {
+					return fmt.Errorf("register embedded schema resource %q: %w", resourceID, err)
+				}
+				seen[resourceID] = true
+			}
+			// The compiler traverses this registered resource's recognized schema
+			// positions and discovers any nested `$id` resources itself.
+			return nil
+		}
+
+		for keyword, child := range object {
+			switch {
+			case schemaMapKeywords[keyword]:
+				if entries, ok := child.(map[string]any); ok {
+					for _, entry := range entries {
+						if err := visit(entry, currentBase); err != nil {
+							return err
+						}
+					}
+				}
+			case singleSchemaKeywords[keyword]:
+				if err := visit(child, currentBase); err != nil {
+					return err
+				}
+			case arraySchemaKeywords[keyword]:
+				if entries, ok := child.([]any); ok {
+					for _, entry := range entries {
+						if err := visit(entry, currentBase); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		return nil
+	}
+	for _, schema := range i.Schemas {
+		if err := visit(schema, nil); err != nil {
+			return err
+		}
+	}
+	for _, operation := range i.Operations {
+		if err := visit(operation.Input, nil); err != nil {
+			return err
+		}
+		if err := visit(operation.Output, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func rewriteSchemaRefs(v any) any {
@@ -367,6 +504,24 @@ func summarizeValidationError(ve *jsonschema.ValidationError) string {
 // or test wire conformance on values they carry themselves.
 func ValidateAgainstSchema(value any, schema JSONSchema, schemas map[string]JSONSchema) error {
 	compiled, err := compileExampleSchema(schema, buildSchemaDefs(schemas))
+	return validateCompiledSchema(value, compiled, err)
+}
+
+// ValidateOperationInput validates a value against an operation input schema
+// with the complete OBI document retained as the same-document `$ref` root.
+func ValidateOperationInput(value any, iface *Interface, operationName string) error {
+	compiled, err := compileOperationSchema(iface, operationName, "input")
+	return validateCompiledSchema(value, compiled, err)
+}
+
+// ValidateOperationOutput validates a value against an operation output schema
+// with the complete OBI document retained as the same-document `$ref` root.
+func ValidateOperationOutput(value any, iface *Interface, operationName string) error {
+	compiled, err := compileOperationSchema(iface, operationName, "output")
+	return validateCompiledSchema(value, compiled, err)
+}
+
+func validateCompiledSchema(value any, compiled *jsonschema.Schema, err error) error {
 	if err != nil {
 		return &SchemaGraphUnavailableError{Cause: err}
 	}

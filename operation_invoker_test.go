@@ -647,6 +647,62 @@ func TestOpT08ValidatesAfterTransform(t *testing.T) {
 // An unresolvable governing schema graph means the claim could not be
 // EVALUATED: ERR_SCHEMA_UNRESOLVED, distinct from a value mismatch, never
 // partial validation.
+func TestOpT16ResolvesInputRefFromOBIDocumentRoot(t *testing.T) {
+	iface := opTestInterface()
+	op := iface.Operations["getUser"]
+	op.Input = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"id": map[string]any{"$ref": "#/operations/getUser/input/$defs/Identifier"},
+		},
+		"required":             []any{"id"},
+		"additionalProperties": false,
+		"$defs": map[string]any{
+			"Identifier": map[string]any{"type": "string"},
+		},
+	}
+	iface.Operations["getUser"] = op
+
+	inv := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := Invoke(bg(), inv, iface, NewOperationSignature[any, any]("getUser"))
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatalf("document-root ref should resolve: %v", err)
+	}
+	v, err := Single(shortCtx(t), call.Outputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.(map[string]any)["name"] != "Ada" {
+		t.Fatalf("got %v", v)
+	}
+}
+
+func TestOpT16ResolvesStreamingOutputRefFromOBIDocumentRoot(t *testing.T) {
+	iface := opTestInterface()
+	op := iface.Operations["watchTyped"]
+	op.Output = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"n": map[string]any{"$ref": "#/operations/watchTyped/output/$defs/Count"},
+		},
+		"required": []any{"n"},
+		"$defs": map[string]any{
+			"Count": map[string]any{"type": "number"},
+		},
+	}
+	iface.Operations["watchTyped"] = op
+
+	inv := newOpInvoker(&mockBindingInvoker{}, nil)
+	call := Invoke(bg(), inv, iface, NewOperationSignature[any, any]("watchTyped"))
+	vals, err := drainOutputs(t, call)
+	if len(vals) != 1 {
+		t.Fatalf("expected valid prefix before mismatch, got %v", vals)
+	}
+	if codeOf(t, err) != ErrCodeValidationFailed {
+		t.Fatalf("expected ERR_VALIDATION_FAILED after valid prefix, got %v", err)
+	}
+}
+
 func TestOpT16UnresolvableOutputGraphIsSchemaUnresolved(t *testing.T) {
 	iface := opTestInterface()
 	op := iface.Operations["watchTyped"]

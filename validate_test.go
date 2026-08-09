@@ -810,6 +810,28 @@ func TestInterfaceValidate_ExampleValidation_InvalidInputFails(t *testing.T) {
 	}
 }
 
+func TestInterfaceValidate_ExampleValidation_UsesOBIDocumentRoot(t *testing.T) {
+	i := newInterfaceWithExamples(
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"$ref": "#/operations/greet/input/$defs/Name"},
+			},
+			"required": []any{"name"},
+			"$defs": map[string]any{
+				"Name": map[string]any{"type": "string"},
+			},
+		},
+		nil,
+		map[string]OperationExample{
+			"bad": {Input: map[string]any{"name": float64(42)}},
+		},
+	)
+	if err := i.Validate(); !containsProblemSubstring(err, "OBI-D-11") {
+		t.Fatalf("expected document-root schema to reject example, got %v", err)
+	}
+}
+
 func TestInterfaceValidate_ExampleValidation_InvalidOutputFails(t *testing.T) {
 	i := newInterfaceWithExamples(
 		nil, // no input schema

@@ -299,7 +299,7 @@ func testSchemaCycleScenario(t *testing.T, raw json.RawMessage) {
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
-	_, operation, found := ResolveOperation(iface, scenario.Given.Operation)
+	operationKey, operation, found := ResolveOperation(iface, scenario.Given.Operation)
 	if !found {
 		t.Fatalf("operation %q not found", scenario.Given.Operation)
 	}
@@ -312,7 +312,13 @@ func testSchemaCycleScenario(t *testing.T, raw json.RawMessage) {
 	}
 	outcome := make(chan string, 1)
 	go func() {
-		if err := ValidateAgainstSchema(scenario.Given.Value, schema, iface.Schemas); err != nil {
+		var err error
+		if scenario.Given.Side == "output" {
+			err = ValidateOperationOutput(scenario.Given.Value, iface, operationKey)
+		} else {
+			err = ValidateOperationInput(scenario.Given.Value, iface, operationKey)
+		}
+		if err != nil {
 			if slices.Contains(scenario.Expected.AllowedOutcomes, "resolver-error") {
 				outcome <- "resolver-error"
 			} else {
@@ -352,7 +358,7 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
-	_, operation, found := ResolveOperation(iface, scenario.Given.Operation)
+	operationKey, operation, found := ResolveOperation(iface, scenario.Given.Operation)
 	if !found {
 		t.Fatalf("operation %q not found", scenario.Given.Operation)
 	}
@@ -365,7 +371,12 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 	}
 	actual := make([]string, 0, len(scenario.Given.Values))
 	for _, value := range scenario.Given.Values {
-		err := ValidateAgainstSchema(value, schema, iface.Schemas)
+		var err error
+		if scenario.Given.Side == "output" {
+			err = ValidateOperationOutput(value, iface, operationKey)
+		} else {
+			err = ValidateOperationInput(value, iface, operationKey)
+		}
 		if err == nil {
 			actual = append(actual, "valid")
 			continue

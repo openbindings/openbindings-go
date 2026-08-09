@@ -374,15 +374,14 @@ func (e *OperationInvoker) run(
 		return
 	}
 
-	// Compile the output schema once per invocation, over the complete
-	// statically reachable schema graph (every document schema rides as
-	// $defs). A graph that cannot be established is ERR_SCHEMA_UNRESOLVED —
+	// Compile the output schema once per invocation at its canonical address
+	// inside the OBI document, preserving the complete statically reachable
+	// schema graph. A graph that cannot be established is ERR_SCHEMA_UNRESOLVED —
 	// the claim could not be evaluated — never partial validation
 	// (OBI-T-16).
 	var compiledOutput *jsonschema.Schema
 	if op.Output != nil {
-		defs := buildSchemaDefs(iface.Schemas)
-		compiled, err := compileExampleSchema(op.Output, defs)
+		compiled, err := compileOperationSchema(iface, binding.Operation, "output")
 		if err != nil {
 			caller.FireError(&InvocationError{
 				Code:        ErrCodeSchemaUnresolved,
@@ -822,8 +821,7 @@ func makeInputValidator(op *Operation, iface *Interface, operationName string) f
 	)
 	return func(input any) *InvocationError {
 		once.Do(func() {
-			defs := buildSchemaDefs(iface.Schemas)
-			c, err := compileExampleSchema(op.Input, defs)
+			c, err := compileOperationSchema(iface, operationName, "input")
 			if err != nil {
 				compileError = &InvocationError{
 					Code:    ErrCodeSchemaUnresolved,

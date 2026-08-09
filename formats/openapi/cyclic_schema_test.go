@@ -3,6 +3,9 @@ package openapi
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -74,6 +77,54 @@ func TestRecursiveComponentSynthesizesAsDefs(t *testing.T) {
 		if strings.Contains(string(text), `#/components/schemas/`) {
 			t.Fatalf("%s carries a dangling components reference", name)
 		}
+	}
+}
+
+func TestRecursiveComponentSynthesizesAndInvokesThroughCoreDocumentRoot(t *testing.T) {
+	doc := strings.Replace(recursiveDoc, `"paths":`, `"servers": [{"url": "https://api.example.test"}], "paths":`, 1)
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+	})
+	if err != nil {
+		t.Fatalf("synthesis failed: %v", err)
+	}
+	tree := map[string]any{
+		"label": "root",
+		"children": []any{
+			map[string]any{"label": "leaf", "children": []any{}},
+		},
+	}
+	body, err := json.Marshal(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+		}, nil
+	})}
+	invoker := openbindings.NewOperationInvoker(NewInvokerWithClient(client))
+	invoker.TransformEvaluator = openAPIJSONataEvaluator{}
+	call := openbindings.Invoke(
+		context.Background(),
+		invoker,
+		result.Interface,
+		openbindings.NewOperationSignature[any, any]("createTree"),
+	)
+	if err := call.Write(context.Background(), tree); err != nil {
+		t.Fatalf("write recursive input: %v", err)
+	}
+	if err := call.Close(); err != nil {
+		t.Fatalf("close input: %v", err)
+	}
+	output, err := openbindings.Single(context.Background(), call.Outputs())
+	if err != nil {
+		t.Fatalf("read recursive output: %v", err)
+	}
+	if !reflect.DeepEqual(output, tree) {
+		t.Fatalf("output = %#v, want %#v", output, tree)
 	}
 }
 

@@ -129,7 +129,7 @@ func Invoke[I, O any](
 	}
 
 	caller := NewInvocationImpl[any, any](ctx)
-	caller.validateInput = makeInputValidator(op, obi, sig.key)
+	caller.validateInput = makeInputValidator(op, obi, binding.Operation)
 
 	go func() {
 		// A panicking third-party invoker must not kill the process: it
