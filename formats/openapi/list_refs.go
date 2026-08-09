@@ -17,10 +17,11 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	if err != nil {
 		return nil, err
 	}
-	doc, err := loadDocument(loadLocation, source.Content)
+	doc, err := loadDocumentWithResolver(ctx, c.resolverClient(), loadLocation, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
+	doc.InternalizeRefs(ctx, internalizedRefName)
 
 	// Inspection and synthesis share the same realizability filter: an OAS
 	// operation whose revision-1 flattened boundary cannot be represented is

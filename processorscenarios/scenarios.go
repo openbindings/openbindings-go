@@ -44,6 +44,7 @@ type Given struct {
 	Invocation    map[string]any `json:"invocation"`
 	Peer          map[string]any `json:"peer,omitempty"`
 	Runtime       map[string]any `json:"runtime,omitempty"`
+	Resources     map[string]any `json:"resources,omitempty"`
 }
 
 // Expected is one permitted observation alternative. Alternative order has

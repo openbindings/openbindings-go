@@ -9,6 +9,7 @@ package openapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -98,7 +99,7 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 
 // cachedLoadDocument loads an OpenAPI doc, caching by location within a process.
 // When content is provided, the cache is bypassed and updated with the fresh parse.
-func (e *Invoker) cachedLoadDocument(location string, content json.RawMessage) (*openapi3.T, error) {
+func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, content json.RawMessage) (*openapi3.T, error) {
 	if location != "" && content == nil {
 		e.mu.RLock()
 		if doc, ok := e.docCache[location]; ok {
@@ -108,7 +109,7 @@ func (e *Invoker) cachedLoadDocument(location string, content json.RawMessage) (
 		e.mu.RUnlock()
 	}
 
-	doc, err := loadDocument(location, content)
+	doc, err := loadDocumentWithResolver(ctx, e.client, location, content)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +147,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 }
 
 func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) error {
-	doc, err := e.cachedLoadDocument(args.Source.Location, args.Source.Content)
+	doc, err := e.cachedLoadDocument(ctx, args.Source.Location, args.Source.Content)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceLoadFailed,
@@ -222,7 +223,9 @@ func (e *Invoker) prepareDoc(location string, content json.RawMessage) *openapi3
 }
 
 // Synthesizer handles interface synthesis from OpenAPI documents.
-type Synthesizer struct{}
+type Synthesizer struct {
+	client *http.Client
+}
 
 var (
 	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
@@ -232,7 +235,25 @@ var (
 
 // NewSynthesizer creates a new OpenAPI interface synthesizer.
 func NewSynthesizer() *Synthesizer {
-	return &Synthesizer{}
+	return NewSynthesizerWithClient(http.DefaultClient)
+}
+
+// NewSynthesizerWithClient creates an OpenAPI interface synthesizer whose
+// artifact retrievals, including external references, use client. The client
+// is an implementation seam only: resolver configuration is not represented
+// in the synthesized OBI.
+func NewSynthesizerWithClient(client *http.Client) *Synthesizer {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return &Synthesizer{client: client}
+}
+
+func (c *Synthesizer) resolverClient() *http.Client {
+	if c != nil && c.client != nil {
+		return c.client
+	}
+	return http.DefaultClient
 }
 
 // BindingSpecs returns the binding-spec identifiers this synthesizer supports.
@@ -298,16 +319,23 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 	}
 	artifactContent := src.Content
 	if src.Embed && artifactContent == nil {
-		data, embedErr := readAuthoringArtifact(ctx, loadLocation)
+		data, embedErr := readAuthoringArtifact(ctx, c.resolverClient(), loadLocation)
 		if embedErr != nil {
 			return nil, nil, fmt.Errorf("embed OpenAPI source: %w", embedErr)
 		}
 		artifactContent = openbindings.TextContent(string(data))
 	}
-	doc, err := loadDocument(loadLocation, artifactContent)
+	doc, err := loadDocumentWithResolver(ctx, c.resolverClient(), loadLocation, artifactContent)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
+	// kin-openapi resolves external SchemaRefs into Value but intentionally
+	// retains their artifact-relative Ref spelling. That spelling would dangle
+	// after a schema is projected into an operation-local OBI contract.
+	// Internalize the already-resolved closure before projection so the
+	// existing self-contained-schema pass can materialize every reachable
+	// schema without exposing artifact reference semantics in the OBI.
+	doc.InternalizeRefs(ctx, internalizedRefName)
 	warn := func(w openbindings.SynthesizerWarning) {
 		if in.OnWarning != nil {
 			in.OnWarning(w)
@@ -332,7 +360,20 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 	return &iface, doc, nil
 }
 
-func readAuthoringArtifact(ctx context.Context, location string) ([]byte, error) {
+// internalizedRefName is stable and collision-resistant across the complete
+// artifact closure. The upstream default is human-readable but explicitly not
+// injective for every URI; fidelity matters more than generated component
+// aesthetics because these names never escape the binding processor.
+func internalizedRefName(_ *openapi3.T, ref openapi3.ComponentRef) string {
+	identity := ref.CollectionName() + "\x00" + ref.RefString()
+	if path := ref.RefPath(); path != nil {
+		identity = ref.CollectionName() + "\x00" + path.String()
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("ob_%x", sum)
+}
+
+func readAuthoringArtifact(ctx context.Context, client *http.Client, location string) ([]byte, error) {
 	u, err := url.Parse(location)
 	if err != nil {
 		return nil, err
@@ -345,7 +386,7 @@ func readAuthoringArtifact(ctx context.Context, location string) ([]byte, error)
 		if err != nil {
 			return nil, err
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err
 		}

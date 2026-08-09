@@ -17,10 +17,26 @@ import (
 
 type scenarioRoundTripper struct {
 	peer       map[string]any
+	resources  map[string]any
 	dispatches []map[string]any
 }
 
 func (r *scenarioRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if resource, ok := r.resources[req.URL.String()]; ok {
+		var body []byte
+		if text, ok := resource.(string); ok {
+			body = []byte(text)
+		} else {
+			body, _ = json.Marshal(resource)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     http.StatusText(http.StatusOK),
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader(string(body))),
+			Request:    req,
+		}, nil
+	}
 	dispatch := map[string]any{
 		"method":  req.Method,
 		"url":     req.URL.String(),
@@ -122,7 +138,7 @@ func TestInvocationFidelityScenarios(t *testing.T) {
 
 func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scenario, bindingSpec string) processorscenarios.Observation {
 	t.Helper()
-	roundTripper := &scenarioRoundTripper{peer: scenario.Given.Peer}
+	roundTripper := &scenarioRoundTripper{peer: scenario.Given.Peer, resources: scenario.Given.Resources}
 	client := &http.Client{
 		Transport: roundTripper,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {

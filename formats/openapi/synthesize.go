@@ -1,15 +1,18 @@
 package openapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	openbindings "github.com/openbindings/openbindings-go"
@@ -260,8 +263,27 @@ var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "p
 // mapping keys are refused loudly by the YAML layer itself, satisfying the
 // §3 duplicate-key pin.
 func loadDocument(location string, content json.RawMessage) (*openapi3.T, error) {
+	return loadDocumentWithResolver(context.Background(), http.DefaultClient, location, content)
+}
+
+// loadDocumentWithResolver loads a complete OpenAPI description using the
+// supplied invocation/synthesis context and HTTP client for both the entry
+// document and every reachable external reference. Resolver configuration is
+// deliberately processor-private; it never changes the OBI document model.
+func loadDocumentWithResolver(ctx context.Context, client *http.Client, location string, content json.RawMessage) (*openapi3.T, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
 	loader := openapi3.NewLoader()
+	loader.Context = ctx
 	loader.IsExternalRefsAllowed = true
+	retrievalURIs := map[string]*url.URL{}
+	var retrievalMu sync.RWMutex
+	loader.ReadFromURIFunc = artifactReadFunc(client, content != nil && location == "", retrievalURIs, &retrievalMu)
+	loader.JoinFunc = artifactJoinFunc(retrievalURIs, &retrievalMu)
 
 	doc, err := loadDocumentRaw(loader, location, content)
 	if err != nil {
@@ -334,7 +356,6 @@ func loadDocumentRaw(loader *openapi3.Loader, location string, content json.RawM
 		// still resolve; anything else (a relative $ref in particular) has
 		// nothing to resolve against and refuses with a readable error —
 		// never a silent working-directory file read.
-		loader.ReadFromURIFunc = selfContainedReadFunc()
 		return loader.LoadFromData(data)
 	}
 
@@ -363,18 +384,98 @@ func loadDocumentRaw(loader *openapi3.Loader, location string, content json.RawM
 	return nil, fmt.Errorf("openapi location scheme %q is not dereferenced by this processor (supported: file, http, https)", u.Scheme)
 }
 
-// selfContainedReadFunc allows absolute http(s) reference targets (they
-// resolve without a base) and refuses everything else: with no co-present
-// location the embedded artifact has no base URI, so a relative reference is
-// unresolvable by definition (§6 — bundle before embedding).
-func selfContainedReadFunc() openapi3.ReadFromURIFunc {
-	httpRead := openapi3.ReadFromHTTP(http.DefaultClient)
+// artifactReadFunc reads the entry document and its complete reference closure
+// through one client, caches successful retrievals for the load, and records a
+// redirect's final retrieval URI for subsequent relative-reference joins. In
+// the content-only lane it permits absolute HTTP(S) targets (which need no
+// base) and refuses relative/file targets: with no co-present location the
+// embedded artifact has no base URI (§6 — bundle before embedding).
+func artifactReadFunc(client *http.Client, selfContained bool, retrievalURIs map[string]*url.URL, retrievalMu *sync.RWMutex) openapi3.ReadFromURIFunc {
+	cache := map[string][]byte{}
 	return func(loader *openapi3.Loader, u *url.URL) ([]byte, error) {
-		if u.IsAbs() && (u.Scheme == "http" || u.Scheme == "https") {
-			return httpRead(loader, u)
+		key := u.String()
+		if data, ok := cache[key]; ok {
+			return append([]byte(nil), data...), nil
 		}
-		return nil, fmt.Errorf("reference %q cannot resolve: embedded content with no co-present location has no base URI and must be self-contained (bundle the document before embedding, or set the source's location)", u)
+
+		var data []byte
+		var err error
+		switch u.Scheme {
+		case "http", "https":
+			if !u.IsAbs() || u.Host == "" {
+				return nil, fmt.Errorf("reference %q is not an absolute HTTP URI", u)
+			}
+			ctx := loader.Context
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			req, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+			if requestErr != nil {
+				return nil, requestErr
+			}
+			resp, requestErr := client.Do(req)
+			if requestErr != nil {
+				return nil, requestErr
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+				return nil, fmt.Errorf("error loading %q: request returned status code %d", u.String(), resp.StatusCode)
+			}
+			finalURI := u
+			if resp.Request != nil && resp.Request.URL != nil {
+				finalURI = resp.Request.URL
+			}
+			retrievalMu.Lock()
+			retrievalURIs[artifactResourceKey(u)] = cloneURL(finalURI)
+			retrievalMu.Unlock()
+			data, err = io.ReadAll(resp.Body)
+		case "", "file":
+			if selfContained {
+				return nil, fmt.Errorf("reference %q cannot resolve: embedded content with no co-present location has no base URI and must be self-contained (bundle the document before embedding, or set the source's location)", u)
+			}
+			data, err = openapi3.ReadFromFile(loader, u)
+		default:
+			return nil, fmt.Errorf("openapi reference scheme %q is not dereferenced by this processor (supported: file, http, https)", u.Scheme)
+		}
+		if err != nil {
+			return nil, err
+		}
+		cache[key] = append([]byte(nil), data...)
+		return data, nil
 	}
+}
+
+func artifactJoinFunc(retrievalURIs map[string]*url.URL, retrievalMu *sync.RWMutex) func(*url.URL, *url.URL) *url.URL {
+	return func(base, relative *url.URL) *url.URL {
+		if base == nil {
+			return relative
+		}
+		retrievalMu.RLock()
+		resolvedBase := retrievalURIs[artifactResourceKey(base)]
+		retrievalMu.RUnlock()
+		if resolvedBase == nil {
+			resolvedBase = base
+		}
+		return resolvedBase.ResolveReference(relative)
+	}
+}
+
+func artifactResourceKey(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	copy := *u
+	copy.Fragment = ""
+	return copy.String()
+}
+
+func cloneURL(u *url.URL) *url.URL {
+	if u == nil {
+		return nil
+	}
+	copy := *u
+	copy.Fragment = ""
+	return &copy
 }
 
 // checkAcceptedOpenAPIVersion discriminates the exact accepted editions per

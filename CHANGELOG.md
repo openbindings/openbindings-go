@@ -6,6 +6,16 @@
 
 ### Changed
 
+- **OpenAPI invocation, inspection, and synthesis now resolve complete
+  multi-document descriptions through the caller-supplied HTTP client and
+  context.** External artifact retrieval is cached, cancellation propagates,
+  redirects contribute their final retrieval URI, non-success retrievals fail
+  loudly, and resolved external SchemaRefs are internalized with stable
+  collision-resistant local identities before OBI projection so
+  artifact-relative references cannot escape as dangling OBI schema
+  references. Resolver configuration remains binding-private and does not
+  alter the protocol-blind OBI document model.
+
 - **The OpenAPI module now defaults to `openbindings.openapi@2`.** Its
   synthesizer preserves independent same-named parameter and request-body
   values through a binding-private transform while keeping the operation
