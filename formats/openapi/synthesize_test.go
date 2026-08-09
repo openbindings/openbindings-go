@@ -388,6 +388,33 @@ paths:
 	}
 }
 
+func TestSynthesizeInterface_PreservesNumericExclusiveBoundsIn31(t *testing.T) {
+	content := `{
+  "openapi":"3.1.0",
+  "info":{"title":"T","version":"1.0.0"},
+  "paths":{"/q":{"get":{
+    "operationId":"q",
+    "parameters":[{"name":"page","in":"query","schema":{
+      "type":"integer","exclusiveMinimum":0,"exclusiveMaximum":100
+    }}],
+    "responses":{"204":{"description":"ok"}}
+  }}}
+}`
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
+	})
+	if err != nil {
+		t.Fatalf("synthesize valid OpenAPI 3.1 numeric bounds: %v", err)
+	}
+	page := iface.Operations["q"].Input.(map[string]any)["properties"].(map[string]any)["page"].(map[string]any)
+	if got, ok := page["exclusiveMinimum"].(float64); !ok || got != 0 {
+		t.Fatalf("exclusiveMinimum = %#v, want numeric 0", page["exclusiveMinimum"])
+	}
+	if got, ok := page["exclusiveMaximum"].(float64); !ok || got != 100 {
+		t.Fatalf("exclusiveMaximum = %#v, want numeric 100", page["exclusiveMaximum"])
+	}
+}
+
 // Content-fed synthesis must emit an invocable source: with no location,
 // the provided artifact is embedded (a source needs location or content;
 // dropping the content would emit neither).
@@ -721,7 +748,7 @@ func TestSynthesizeInterfaceWithCoverageCanProveFullRepresentation(t *testing.T)
 	}
 }
 
-// PokeAPI's published openapi.yml declares `type: ''` (empty string) inside
+// PokeAPI's published openapi.yml declares `type: ”` (empty string) inside
 // evolution-chain response schemas. Synthesis must salvage the dirty keyword
 // — with a warning — instead of failing validation and rejecting every
 // operation in the interface.
@@ -759,7 +786,7 @@ func TestSynthesizeInterface_SalvagesInvalidTypeKeyword(t *testing.T) {
 	}
 	var warnings []openbindings.SynthesizerWarning
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: path}},
+		Sources:   []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: path}},
 		OnWarning: func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
 	if err != nil {

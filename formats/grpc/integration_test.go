@@ -762,8 +762,14 @@ func TestIntegration_DeadlineMidStream(t *testing.T) {
 	if !errors.As(err, &terr) {
 		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
 	}
-	if terr.Code != openbindings.ErrCodeTimeout {
-		t.Fatalf("code = %q, want ERR_TIMEOUT", terr.Code)
+	// The local deadline and grpc-go's native DeadlineExceeded completion are
+	// two observations of the same wakeup. If the invocation context wins, the
+	// runtime reports ERR_TIMEOUT; if the peer status wins before ctx.Err is
+	// observable, it remains a protocol-native unsuccessful completion and is
+	// abstracted as ERR_EXECUTION_FAILED. Neither result exposes gRPC status on
+	// the caller-facing code lane.
+	if terr.Code != openbindings.ErrCodeTimeout && terr.Code != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("code = %q, want ERR_TIMEOUT or ERR_EXECUTION_FAILED", terr.Code)
 	}
 }
 

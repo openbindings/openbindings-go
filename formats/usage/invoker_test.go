@@ -25,7 +25,7 @@ func TestBindingSpecs(t *testing.T) {
 // The version gate spans both supported tool majors: a 3.x
 // min_usage_version passes, one beyond MaxTestedVersion refuses.
 func TestVersionGate_ToolMajors(t *testing.T) {
-	for _, v := range []string{"2.0.0", "2.13.1", "3.0.0", MaxTestedVersion} {
+	for _, v := range []string{"1.3", "2.0.0", "2.13.1", "3.0.0", MaxTestedVersion} {
 		ok, err := IsSupportedVersion(v)
 		if err != nil || !ok {
 			t.Errorf("IsSupportedVersion(%q) = %v, %v; want true", v, ok, err)

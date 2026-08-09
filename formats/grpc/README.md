@@ -186,7 +186,7 @@ The resulting OBI will have `bindingSpec: "openbindings.grpc@1"`, reflecting the
 
 Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.grpc@1` §10); these are this package's conventions:
 
-- **Discovery**: services come from embedded protobuf content or gRPC server reflection. Infrastructure services (`grpc.reflection.*`, `grpc.health.*`) are excluded. All four declared method kinds are synthesized.
+- **Discovery**: services come from embedded protobuf content or gRPC reflection. Reflection machinery (`grpc.reflection.*`) is excluded; declared health services remain ordinary invocable operations. All four declared method kinds are synthesized.
 - **Determinism**: services iterate by fully-qualified name, methods by name; the same schema yields an identical OBI.
 - **Operation keys** are the method's unqualified name, sanitized to the OBI key grammar; a cross-service collision is disambiguated with the service's name. Binding refs are the full `package.Service/Method` form.
 - **Schema translation** mirrors protobuf's canonical JSON mapping. Field names use their `json_name` (camelCase) spellings; enums emit `{"type": "string", "enum": [...declared value names]}`; maps emit `additionalProperties`; repeated fields emit arrays; recursive message cycles degrade to a bare `{"type": "object"}`.
@@ -248,7 +248,7 @@ challenge by supplying the service's documented metadata field explicitly.
 Converts a live gRPC server into an OBI by:
 
 - Discovering services via gRPC reflection or `.proto` file parsing
-- Filtering out infrastructure services (`grpc.reflection.*`, `grpc.health.*`)
+- Filtering out reflection infrastructure (`grpc.reflection.*`) without discarding declared health operations
 - Including unary, server-streaming, client-streaming, and bidirectional RPCs exactly as declared
 - Converting protobuf message types to JSON Schema (input and output)
 - Generating `package.Service/Method` refs for each binding

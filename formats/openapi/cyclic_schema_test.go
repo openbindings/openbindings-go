@@ -76,3 +76,66 @@ func TestRecursiveComponentSynthesizesAsDefs(t *testing.T) {
 		}
 	}
 }
+
+func TestResolvedParameterSchemaRefDoesNotEscapeIntoOBI(t *testing.T) {
+	doc := `{
+  "openapi": "3.1.0",
+  "info": {"title": "parameters", "version": "1.0.0"},
+  "paths": {"/items": {"get": {
+    "operationId": "listItems",
+    "parameters": [{
+      "name": "ordering",
+      "in": "query",
+      "description": "requested ordering",
+      "schema": {"$ref": "#/components/schemas/Ordering"}
+    }],
+    "responses": {"200": {"description": "ok", "content": {
+      "application/json": {"schema": {"$ref": "#/components/schemas/Envelope"}}
+    }}}
+  }}},
+  "components": {"schemas": {
+    "Ordering": {"type": "string", "enum": ["weak", "strong"]},
+    "Definitions": {"type": "object", "properties": {
+      "ordering": {"type": "string", "enum": ["weak", "strong"]}
+    }},
+    "Envelope": {"type": "object", "properties": {
+      "ordering": {
+        "$ref": "#/components/schemas/Definitions/properties/ordering",
+        "description": "resolved through a nested pointer"
+      }
+    }}
+  }}
+}`
+
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+	})
+	if err != nil {
+		t.Fatalf("synthesis failed: %v", err)
+	}
+	op := result.Interface.Operations["listItems"]
+	encoded, err := json.Marshal(op.Input)
+	if err != nil {
+		t.Fatalf("input must serialize: %v", err)
+	}
+	if strings.Contains(string(encoded), `#/components/schemas/`) {
+		t.Fatalf("input carries a dangling source-artifact reference: %s", encoded)
+	}
+	properties := op.Input.(map[string]any)["properties"].(map[string]any)
+	ordering := properties["ordering"].(map[string]any)
+	if ordering["type"] != "string" || ordering["description"] != "requested ordering" {
+		t.Fatalf("resolved parameter schema lost constraints or annotation: %#v", ordering)
+	}
+	output, err := json.Marshal(op.Output)
+	if err != nil {
+		t.Fatalf("output must serialize: %v", err)
+	}
+	if strings.Contains(string(output), `#/components/schemas/`) {
+		t.Fatalf("output carries a dangling nested source-artifact reference: %s", output)
+	}
+	outputProperties := op.Output.(map[string]any)["properties"].(map[string]any)
+	outputOrdering := outputProperties["ordering"].(map[string]any)
+	if outputOrdering["type"] != "string" {
+		t.Fatalf("nested pointer constraints were lost: %#v", outputOrdering)
+	}
+}

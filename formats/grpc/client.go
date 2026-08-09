@@ -382,8 +382,11 @@ type dialConfig struct {
 }
 
 func isInfraService(name string) bool {
-	return strings.HasPrefix(name, "grpc.reflection.") ||
-		strings.HasPrefix(name, "grpc.health.")
+	// Reflection exists only to describe the application surface. The standard
+	// health service is an ordinary declared and invocable service, and callers
+	// may intentionally depend on it; removing it would make synthesis
+	// observably incomplete.
+	return strings.HasPrefix(name, "grpc.reflection.")
 }
 
 // discoverFromContent interprets an embedded content value per GRPC-D-01's

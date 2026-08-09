@@ -998,3 +998,31 @@ service TestService {
 		t.Fatalf("excluded entry = %+v", entry)
 	}
 }
+
+func TestSynthesizeInterfaceWithCoverage_PreservesDeclaredHealthService(t *testing.T) {
+	proto := `
+syntax = "proto3";
+package grpc.health.v1;
+message HealthCheckRequest { string service = 1; }
+message HealthCheckResponse { string status = 1; }
+service Health {
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+  rpc Watch(HealthCheckRequest) returns (stream HealthCheckResponse);
+}`
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{
+			BindingSpec: BindingSpec,
+			Location:    "grpc://127.0.0.1:1",
+			Content:     openbindings.TextContent(proto),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(result.Interface.Operations); got != 2 {
+		t.Fatalf("operations = %d, want 2", got)
+	}
+	if !result.Coverage.Exhaustive || !result.Coverage.FullyRepresented || len(result.Coverage.Entries) != 2 {
+		t.Fatalf("unexpected coverage: %#v", result.Coverage)
+	}
+}

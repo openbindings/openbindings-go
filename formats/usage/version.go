@@ -7,14 +7,14 @@ import (
 	"strings"
 )
 
-// Supported Usage versions for this SDK. Usage version numbers track the
-// jdx usage TOOL (which is what an artifact's min_usage_version pins), not
-// a separately-versioned KDL vocabulary — the vocabulary is unchanged
-// across the 2.x → 3.x tool line per the spec docs, which is why one
-// parser serves both.
+// Accepted Usage versions for openbindings.usage@1. min_usage_version is a
+// lower-bound requirement declared by the artifact, not the artifact's own
+// format revision. The binding specification incorporates usage v3.5.6 and
+// therefore accepts every valid non-negative requirement through that pinned
+// version. A later requirement needs a new binding-specification revision.
 const (
-	MinSupportedVersion = "2.0.0"
-	MaxTestedVersion    = "3.5.3"
+	MinSupportedVersion = "0.0.0"
+	MaxTestedVersion    = "3.5.6"
 )
 
 // Parsed constants, validated at init time.

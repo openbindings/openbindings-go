@@ -218,30 +218,18 @@ func openAPICallbackCoverage(op *openapi3.Operation, parentRef string) []openbin
 }
 
 func openAPIWebhookCoverage(doc *openapi3.T) []openbindings.SynthesisCoverageEntry {
-	raw, ok := doc.Extensions["webhooks"]
-	if !ok {
+	if len(doc.Webhooks) == 0 {
 		return nil
 	}
-	webhooks, ok := raw.(map[string]any)
-	if !ok {
-		return []openbindings.SynthesisCoverageEntry{{
-			SourceIndex: 0,
-			SourceRef:   "#/webhooks",
-			Scope:       openbindings.SynthesisCoverageTarget,
-			Status:      openbindings.SynthesisInvalid,
-			ReasonCode:  "openapi.invalid_webhooks",
-			Message:     "the OpenAPI 3.1 webhooks member is not an object",
-		}}
-	}
-	names := make([]string, 0, len(webhooks))
-	for name := range webhooks {
+	names := make([]string, 0, len(doc.Webhooks))
+	for name := range doc.Webhooks {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	var entries []openbindings.SynthesisCoverageEntry
 	for _, name := range names {
-		pathItem, ok := webhooks[name].(map[string]any)
-		if !ok {
+		pathItem := doc.Webhooks[name]
+		if pathItem == nil {
 			entries = append(entries, openbindings.SynthesisCoverageEntry{
 				SourceIndex: 0,
 				SourceRef:   "#/webhooks/" + escapeJSONPointerToken(name),
@@ -253,7 +241,7 @@ func openAPIWebhookCoverage(doc *openapi3.T) []openbindings.SynthesisCoverageEnt
 			continue
 		}
 		for _, method := range httpMethods {
-			if _, exists := pathItem[method]; !exists {
+			if pathItem.GetOperation(strings.ToUpper(method)) == nil {
 				continue
 			}
 			entries = append(entries, excludedReverseOpenAPIInteraction(

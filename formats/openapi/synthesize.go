@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -721,7 +722,12 @@ func schemaRefToMap(ref *openapi3.SchemaRef) map[string]any {
 		return nil
 	}
 
-	data, err := ref.MarshalJSON()
+	// The loader has already resolved ref.Value. Marshal that resolved schema,
+	// not the SchemaRef wrapper: the wrapper intentionally serializes as the
+	// original `$ref`, which is meaningful inside the OpenAPI artifact but
+	// dangles once this schema is projected into an operation-local OBI
+	// contract. Nested refs remain visible and are handled by inlineRefs.
+	data, err := ref.Value.MarshalJSON()
 	if err != nil {
 		return map[string]any{"type": "object", "x-conversion-error": err.Error()}
 	}
@@ -758,7 +764,10 @@ func buildRefRegistry(doc *openapi3.T) map[string]any {
 		if schemaRef == nil || schemaRef.Value == nil {
 			continue
 		}
-		data, err := schemaRef.MarshalJSON()
+		// Marshal the resolved component value. A SchemaRef wrapper whose
+		// component is itself an alias would otherwise register only the alias
+		// `$ref` and fail to materialize the schema at an operation boundary.
+		data, err := schemaRef.Value.MarshalJSON()
 		if err != nil {
 			continue
 		}
@@ -767,7 +776,7 @@ func buildRefRegistry(doc *openapi3.T) map[string]any {
 			continue
 		}
 		delete(v, "__origin__")
-		registry["#/components/schemas/"+name] = v
+		registry["#/components/schemas/"+escapeJSONPointerSegment(name)] = v
 	}
 	return registry
 }
@@ -782,9 +791,8 @@ func cyclicRefs(registry map[string]any) map[string]bool {
 	collect = func(node any, out *[]string) {
 		switch v := node.(type) {
 		case map[string]any:
-			if ref, ok := v["$ref"].(string); ok && len(v) == 1 {
+			if ref, ok := v["$ref"].(string); ok {
 				*out = append(*out, ref)
-				return
 			}
 			keys := make([]string, 0, len(v))
 			for k := range v {
@@ -830,7 +838,7 @@ func cyclicRefs(registry map[string]any) map[string]bool {
 // for `#/components/schemas/X`, else the sanitized trailing pointer segment.
 func defNameForRef(ref string) string {
 	if i := strings.LastIndex(ref, "/"); i >= 0 {
-		return ref[i+1:]
+		return unescapeJSONPointerSegment(ref[i+1:])
 	}
 	return ref
 }
@@ -838,6 +846,53 @@ func defNameForRef(ref string) string {
 // escapeJSONPointerSegment escapes a string for use as an RFC 6901 segment.
 func escapeJSONPointerSegment(segment string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(segment, "~", "~0"), "/", "~1")
+}
+
+func unescapeJSONPointerSegment(segment string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(segment, "~1", "/"), "~0", "~")
+}
+
+// resolveRegistryRef resolves both a named component ref and a JSON Pointer
+// into a position below that component. OpenAPI permits refs such as
+// `#/components/schemas/Envelope/properties/id`; registering only component
+// roots leaves those valid source-artifact pointers dangling after the schema
+// is projected into an operation-local OBI contract.
+func resolveRegistryRef(ref string, registry map[string]any) (any, bool) {
+	if value, found := registry[ref]; found {
+		return value, true
+	}
+	const prefix = "#/components/schemas/"
+	if !strings.HasPrefix(ref, prefix) {
+		return nil, false
+	}
+	segments := strings.Split(strings.TrimPrefix(ref, prefix), "/")
+	if len(segments) < 2 {
+		return nil, false
+	}
+	rootRef := prefix + segments[0]
+	current, found := registry[rootRef]
+	if !found {
+		return nil, false
+	}
+	for _, encoded := range segments[1:] {
+		segment := unescapeJSONPointerSegment(encoded)
+		switch node := current.(type) {
+		case map[string]any:
+			current, found = node[segment]
+		case []any:
+			index, err := strconv.Atoi(segment)
+			if err != nil || index < 0 || index >= len(node) {
+				return nil, false
+			}
+			current, found = node[index], true
+		default:
+			return nil, false
+		}
+		if !found {
+			return nil, false
+		}
+	}
+	return current, true
 }
 
 // inlineRefs walks `node` recursively and replaces every `{"$ref":
@@ -860,7 +915,8 @@ func inlineRefs(node any, registry map[string]any, seen map[string]bool, ctx *de
 	switch v := node.(type) {
 	case map[string]any:
 		// Check if this object IS a ref.
-		if ref, ok := v["$ref"].(string); ok && len(v) == 1 {
+		if ref, ok := v["$ref"].(string); ok {
+			var expanded any
 			if ctx != nil && ctx.cyclic[ref] {
 				// A cycle participant: every occurrence becomes a
 				// same-document reference to a hoisted $defs entry (the
@@ -869,26 +925,57 @@ func inlineRefs(node any, registry map[string]any, seen map[string]bool, ctx *de
 				name := defNameForRef(ref)
 				if _, materialized := ctx.defs[name]; !materialized {
 					ctx.defs[name] = nil // reserve before expansion: terminates self-reference
-					if resolved, found := registry[ref]; found {
+					if resolved, found := resolveRegistryRef(ref, registry); found {
 						ctx.defs[name] = inlineRefs(resolved, registry, seen, ctx)
 					}
 				}
-				return map[string]any{"$ref": ctx.refBase + "/$defs/" + name}
-			}
-			if seen[ref] {
+				expanded = map[string]any{"$ref": ctx.refBase + "/$defs/" + escapeJSONPointerSegment(name)}
+			} else if seen[ref] {
 				// Cycle outside the registry graph: leave the ref in place.
-				return v
+				expanded = map[string]any{"$ref": ref}
+			} else if resolved, found := resolveRegistryRef(ref, registry); found {
+				// Mark this ref as being expanded, recurse to inline
+				// any nested refs in the resolved value, then unmark.
+				seen[ref] = true
+				expanded = inlineRefs(resolved, registry, seen, ctx)
+				delete(seen, ref)
+			} else {
+				expanded = map[string]any{"$ref": ref}
 			}
-			resolved, found := registry[ref]
-			if !found {
-				return v
+
+			// JSON Schema 2020-12 permits `$ref` siblings. Preserve their
+			// intersection semantics when moving the schema into OBI: merge
+			// non-conflicting keywords directly, and use allOf when the resolved
+			// target declares the same keyword. This also retains descriptive
+			// siblings found in common OpenAPI 3.0 documents without leaking the
+			// source-artifact reference.
+			siblings := make(map[string]any, len(v)-1)
+			for key, value := range v {
+				if key != "$ref" {
+					siblings[key] = inlineRefs(value, registry, seen, ctx)
+				}
 			}
-			// Mark this ref as being expanded, recurse to inline
-			// any nested refs in the resolved value, then unmark.
-			seen[ref] = true
-			expanded := inlineRefs(resolved, registry, seen, ctx)
-			delete(seen, ref)
-			return expanded
+			if len(siblings) == 0 {
+				return expanded
+			}
+			if base, ok := expanded.(map[string]any); ok {
+				merged := make(map[string]any, len(base)+len(siblings))
+				conflict := false
+				for key, value := range base {
+					merged[key] = value
+				}
+				for key, value := range siblings {
+					if _, present := merged[key]; present {
+						conflict = true
+						break
+					}
+					merged[key] = value
+				}
+				if !conflict {
+					return merged
+				}
+			}
+			return map[string]any{"allOf": []any{expanded, siblings}}
 		}
 		// Recurse into each property.
 		out := make(map[string]any, len(v))

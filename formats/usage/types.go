@@ -57,15 +57,6 @@ func (v Value) Bool() (bool, bool) {
 	if b, ok := v.Raw.(bool); ok {
 		return b, true
 	}
-	// KDL v2 uses #true/#false which some parsers return as strings
-	if s, ok := v.Raw.(string); ok {
-		switch s {
-		case "#true", "true":
-			return true, true
-		case "#false", "false":
-			return false, true
-		}
-	}
 	return false, false
 }
 

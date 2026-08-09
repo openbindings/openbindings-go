@@ -65,6 +65,23 @@ func resolveRefs(doc *document) {
 				}
 			}
 		}
+
+		// 2a. Resolve reusable Channel Parameter Objects. A channel commonly
+		// references these through #/components/parameters/{name}; retaining
+		// only the Reference Object would discard defaults, enums, schemas,
+		// and (critically for subscriptions) the artifact's runtime-expression
+		// location.
+		for name, parameter := range doc.Components.Parameters {
+			if parameter.Ref != "" {
+				if resolved := resolveParameterRefByPointer(parameter.Ref, rawDoc); resolved != nil {
+					parameter = *resolved
+				}
+			}
+			if parameter.Schema != nil {
+				parameter.Schema = resolveSchemaRefs(parameter.Schema, rawDoc, nil)
+			}
+			doc.Components.Parameters[name] = parameter
+		}
 	}
 
 	// 3. Resolve message payloads in channels.
@@ -79,6 +96,17 @@ func resolveRefs(doc *document) {
 				msg.Payload = resolveSchemaRefs(msg.Payload, rawDoc, nil)
 			}
 			ch.Messages[msgName] = msg
+		}
+		for parameterName, parameter := range ch.Parameters {
+			if parameter.Ref != "" {
+				if resolved := resolveParameterRefByPointer(parameter.Ref, rawDoc); resolved != nil {
+					parameter = *resolved
+				}
+			}
+			if parameter.Schema != nil {
+				parameter.Schema = resolveSchemaRefs(parameter.Schema, rawDoc, nil)
+			}
+			ch.Parameters[parameterName] = parameter
 		}
 		doc.Channels[chName] = ch
 	}
@@ -227,6 +255,32 @@ func resolveMessageRefByPointer(ref string, rawDoc map[string]any) *message {
 	}
 
 	return &msg
+}
+
+// resolveParameterRefByPointer resolves a Channel Parameter Reference Object.
+// A non-internal, dangling, or non-object target is left unresolved so the
+// caller can preserve the artifact evidence rather than inventing a value.
+func resolveParameterRefByPointer(ref string, rawDoc map[string]any) *parameter {
+	if !strings.HasPrefix(ref, "#/") {
+		return nil
+	}
+
+	resolved, ok := resolveJSONPointer(rawDoc, ref).(map[string]any)
+	if !ok {
+		return nil
+	}
+	data, err := json.Marshal(resolved)
+	if err != nil {
+		return nil
+	}
+	var parameter parameter
+	if err := json.Unmarshal(data, &parameter); err != nil {
+		return nil
+	}
+	if parameter.Ref != "" {
+		return resolveParameterRefByPointer(parameter.Ref, rawDoc)
+	}
+	return &parameter
 }
 
 // deepCopyMap creates a deep copy of a map[string]any.

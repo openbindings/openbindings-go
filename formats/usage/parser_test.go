@@ -35,10 +35,10 @@ func TestValueBool(t *testing.T) {
 	}{
 		{"true", true, true, true},
 		{"false", false, false, true},
-		{"string true", "true", true, true},    // KDL compat: string "true" is truthy
-		{"string false", "false", false, true}, // KDL compat: string "false" is falsy
-		{"string #true", "#true", true, true},  // KDL v2 boolean syntax
-		{"string #false", "#false", false, true},
+		{"string true", "true", false, false},
+		{"string false", "false", false, false},
+		{"string #true", "#true", false, false},
+		{"string #false", "#false", false, false},
 		{"string other", "hello", false, false}, // non-boolean string
 		{"int", 1, false, false},
 	}
@@ -54,6 +54,33 @@ func TestValueBool(t *testing.T) {
 				t.Errorf("got %v, want %v", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestParseKDLPinnedUsageGrammar(t *testing.T) {
+	spec, err := ParseKDL([]byte(`
+min_usage_version "1.3"
+name fnox
+bin fnox
+about #"a pinned Usage descriptor"#
+flag --debug global=#true
+`))
+	if err != nil {
+		t.Fatalf("ParseKDL() rejected pinned Usage v3.5.6 grammar: %v", err)
+	}
+	if got := spec.Meta().Name; got != "fnox" {
+		t.Fatalf("name = %q, want fnox", got)
+	}
+	flags := spec.Flags()
+	if len(flags) != 1 || !flags[0].Global {
+		t.Fatalf("flags = %#v, want one global flag", flags)
+	}
+}
+
+func TestParseKDLRejectsLegacyKDL1Grammar(t *testing.T) {
+	_, err := ParseKDL([]byte("name mise\nbin mise\nlong_about r\"legacy KDL v1 raw string\"\n"))
+	if err == nil {
+		t.Fatal("ParseKDL() accepted KDL v1 syntax outside the pinned Usage grammar")
 	}
 }
 

@@ -147,6 +147,7 @@ type serverRef struct {
 }
 
 type parameter struct {
+	Ref         string         `json:"$ref,omitempty" yaml:"$ref,omitempty"`
 	Description string         `json:"description,omitempty" yaml:"description,omitempty"`
 	Default     string         `json:"default,omitempty" yaml:"default,omitempty"`
 	Enum        []string       `json:"enum,omitempty" yaml:"enum,omitempty"`
@@ -204,5 +205,6 @@ type components struct {
 	Schemas         map[string]any            `json:"schemas,omitempty" yaml:"schemas,omitempty"`
 	Channels        map[string]channel        `json:"channels,omitempty" yaml:"channels,omitempty"`
 	Operations      map[string]asyncOperation `json:"operations,omitempty" yaml:"operations,omitempty"`
+	Parameters      map[string]parameter      `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 	SecuritySchemes map[string]securityScheme `json:"securitySchemes,omitempty" yaml:"securitySchemes,omitempty"`
 }

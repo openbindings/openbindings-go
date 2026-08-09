@@ -239,8 +239,8 @@ func TestIsInfraService(t *testing.T) {
 	if !isInfraService("grpc.reflection.v1alpha.ServerReflection") {
 		t.Error("expected grpc.reflection.* to be infra")
 	}
-	if !isInfraService("grpc.health.v1.Health") {
-		t.Error("expected grpc.health.* to be infra")
+	if isInfraService("grpc.health.v1.Health") {
+		t.Error("expected declared grpc.health.* services to remain invocable")
 	}
 	if isInfraService("mypackage.MyService") {
 		t.Error("expected mypackage.MyService to not be infra")

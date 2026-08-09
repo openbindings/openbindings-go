@@ -126,6 +126,42 @@ func TestResolveRefs_MessageRefInChannel(t *testing.T) {
 	}
 }
 
+func TestResolveRefs_ComponentParameterRefPreservesLocation(t *testing.T) {
+	doc := &document{
+		AsyncAPI: "3.0.0",
+		Info:     info{Title: "Test", Version: "1.0.0"},
+		Channels: map[string]channel{
+			"requests": {
+				Address: "requests/{requestId}",
+				Parameters: map[string]parameter{
+					"requestId": {Ref: "#/components/parameters/requestId"},
+				},
+			},
+		},
+		Operations: map[string]asyncOperation{},
+		Components: &components{Parameters: map[string]parameter{
+			"requestId": {
+				Location: "$message.payload#/requestId",
+				Default:  "fallback",
+				Schema:   map[string]any{"type": "string"},
+			},
+		}},
+	}
+
+	resolveRefs(doc)
+
+	got := doc.Channels["requests"].Parameters["requestId"]
+	if got.Ref != "" {
+		t.Fatalf("parameter Ref = %q, want resolved object", got.Ref)
+	}
+	if got.Location != "$message.payload#/requestId" {
+		t.Fatalf("parameter Location = %q, want component runtime expression", got.Location)
+	}
+	if got.Default != "fallback" {
+		t.Fatalf("parameter Default = %q, want component default", got.Default)
+	}
+}
+
 func TestResolveRefs_NestedSchemaRef(t *testing.T) {
 	doc := &document{
 		AsyncAPI: "3.0.0",

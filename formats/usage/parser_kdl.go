@@ -6,15 +6,18 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sblinch/kdl-go"
-	"github.com/sblinch/kdl-go/document"
+	"github.com/calico32/kdl-go"
 )
 
 // ParseKDL parses a Usage spec from KDL bytes.
 // Include directives are not resolved (no base path available).
 // Use ParseFile for file-based parsing with automatic include resolution.
 func ParseKDL(b []byte) (*Spec, error) {
-	doc, err := kdl.Parse(bytes.NewReader(b))
+	// openbindings.usage@1 incorporates usage v3.5.6, whose descriptor
+	// grammar is KDL v2. Parse that grammar explicitly: auto-falling back to
+	// KDL v1 would make the same binding-spec identifier mean different
+	// artifact languages in different processors.
+	doc, err := kdl.Parse(bytes.NewReader(b), kdl.WithVersion(kdl.Version2))
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +49,7 @@ func parseFileResolving(absPath string, visited map[string]bool) (*Spec, error) 
 		return nil, err
 	}
 
-	doc, err := kdl.Parse(bytes.NewReader(b))
+	doc, err := kdl.Parse(bytes.NewReader(b), kdl.WithVersion(kdl.Version2))
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +108,7 @@ func resolveIncludes(nodes []Node, baseDir string, visited map[string]bool) ([]N
 }
 
 // rawFromDocument converts a KDL document to Node slices.
-func rawFromDocument(doc *document.Document) []Node {
+func rawFromDocument(doc *kdl.Document) []Node {
 	raw := make([]Node, 0, len(doc.Nodes))
 	for _, n := range doc.Nodes {
 		raw = append(raw, rawFromNode(n))
@@ -113,37 +116,24 @@ func rawFromDocument(doc *document.Document) []Node {
 	return raw
 }
 
-func rawFromNode(n *document.Node) Node {
+func rawFromNode(n *kdl.Node) Node {
 	node := Node{
-		Name:  nodeNameString(n),
-		Args:  make([]Value, 0, len(n.Arguments)),
+		Name:  n.Name(),
+		Args:  make([]Value, 0, len(n.Arguments())),
 		Props: map[string]Value{},
 	}
 
-	for _, a := range n.Arguments {
-		node.Args = append(node.Args, Value{Raw: a.Value})
+	for _, a := range n.Arguments() {
+		node.Args = append(node.Args, Value{Raw: a.RawValue()})
 	}
 
-	for k, v := range n.Properties {
-		node.Props[k] = Value{Raw: v.Value}
+	for key, value := range n.Properties() {
+		node.Props[key] = Value{Raw: value.RawValue()}
 	}
 
-	if n.Children != nil {
-		for _, c := range n.Children {
-			node.Children = append(node.Children, rawFromNode(c))
-		}
+	for _, child := range n.Children().Nodes {
+		node.Children = append(node.Children, rawFromNode(child))
 	}
 
 	return node
-}
-
-// nodeNameString extracts the name string from a KDL node.
-func nodeNameString(n *document.Node) string {
-	if n.Name == nil {
-		return ""
-	}
-	if s, ok := n.Name.Value.(string); ok {
-		return s
-	}
-	return n.Name.String()
 }

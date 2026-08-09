@@ -125,6 +125,10 @@ func loadDocument(ctx context.Context, client *http.Client, location string, con
 	if err != nil {
 		return nil, err
 	}
+	data, err = resolveArtifactReferences(ctx, client, location, data)
+	if err != nil {
+		return nil, err
+	}
 	return parseDocument(data)
 }
 
@@ -258,15 +262,15 @@ func resolveMessageRef(doc *document, ref messageRef) *message {
 
 	if len(parts) == 3 && parts[0] == "components" && parts[1] == "messages" {
 		if doc.Components != nil {
-			if msg, ok := doc.Components.Messages[parts[2]]; ok {
+			if msg, ok := doc.Components.Messages[unescapeRefToken(parts[2])]; ok {
 				return &msg
 			}
 		}
 	}
 
 	if len(parts) == 4 && parts[0] == "channels" && parts[2] == "messages" {
-		if ch, ok := doc.Channels[parts[1]]; ok {
-			if msg, ok := ch.Messages[parts[3]]; ok {
+		if ch, ok := doc.Channels[unescapeRefToken(parts[1])]; ok {
+			if msg, ok := ch.Messages[unescapeRefToken(parts[3])]; ok {
 				return &msg
 			}
 		}
@@ -282,7 +286,11 @@ func extractRefName(ref string) string {
 	path := strings.TrimPrefix(ref, "#/")
 	parts := strings.Split(path, "/")
 	if len(parts) > 0 {
-		return parts[len(parts)-1]
+		return unescapeRefToken(parts[len(parts)-1])
 	}
 	return ""
+}
+
+func unescapeRefToken(token string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
 }
