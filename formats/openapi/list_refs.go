@@ -17,7 +17,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	if err != nil {
 		return nil, err
 	}
-	doc, err := loadDocumentWithResolver(ctx, c.resolverClient(), loadLocation, source.Content)
+	doc, schemaOverlays, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
@@ -32,7 +32,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	if bindingSpec == "" {
 		bindingSpec = BindingSpec
 	}
-	iface, err := convertDocToInterface(doc, source.Location, bindingSpec, nil, func(unrealizableTarget) {})
+	iface, err := convertDocToInterfaceWithOverlay(doc, source.Location, bindingSpec, nil, func(unrealizableTarget) {}, schemaOverlays)
 	if err != nil {
 		return nil, err
 	}

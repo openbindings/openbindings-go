@@ -24,6 +24,7 @@ type rawRefSiblingNormalizer struct {
 	fallbackVersion string
 	targets         map[string]map[rawRefTarget]struct{}
 	join            func(*url.URL, *url.URL) *url.URL
+	schemaOverlays  *rawSchemaOverlayCollector
 }
 
 type rawRefTarget struct {
@@ -172,6 +173,39 @@ func (n *rawRefSiblingNormalizer) normalizeResourceAt(data []byte, requested, re
 		}
 		if !progress {
 			break
+		}
+	}
+
+	// Synthesis may ask for a raw-presence sidecar. Mark only Schema Objects
+	// reached through known OpenAPI positions, and do it after reference
+	// normalization so OAS 3.0's ignored $ref siblings have already vanished.
+	// The injected markers live solely in this loader's private bytes and are
+	// consumed from typed objects before InternalizeRefs.
+	if n.schemaOverlays != nil {
+		seenSchemas := map[uintptr]bool{}
+		mark := func(schema any, _ string) {
+			changed = n.schemaOverlays.markRawSchemaTree(schema, seenSchemas) || changed
+		}
+		if object != nil {
+			if declared, ok := object["openapi"].(string); ok && declared != "" {
+				rawForEachSchemaRoot(root, mark)
+			}
+		}
+		for resourceKey := range resourceKeys {
+			for _, target := range n.targetsForKey(resourceKey) {
+				var node any
+				var ok bool
+				if target.kind == rawSchemaTarget {
+					if scope := schemaScopes[resourceKey]; scope != nil {
+						node, _, ok = scope.fragment(target.fragment)
+					}
+				} else if resourceKey == artifactResourceKey(requested) || resourceKey == artifactResourceKey(retrieval) {
+					node, ok = rawFragmentTarget(root, target.fragment, target.kind)
+				}
+				if ok {
+					rawForEachSchemaInTarget(node, target.kind, "", mark)
+				}
+			}
 		}
 	}
 
@@ -965,8 +999,28 @@ func rawForEachSchemaInTarget(value any, kind rawRefTargetKind, pointer string, 
 		mediaValues, _ := value.(map[string]any)
 		for mediaName, mediaValue := range mediaValues {
 			media, _ := mediaValue.(map[string]any)
-			if media != nil {
-				visit(media["schema"], contentPointer+"/"+escapeJSONPointerSegment(mediaName)+"/schema")
+			if media == nil {
+				continue
+			}
+			mediaPointer := contentPointer + "/" + escapeJSONPointerSegment(mediaName)
+			visit(media["schema"], mediaPointer+"/schema")
+			if encodings, ok := media["encoding"].(map[string]any); ok {
+				for encodingName, encodingValue := range encodings {
+					encoding, _ := encodingValue.(map[string]any)
+					if encoding == nil {
+						continue
+					}
+					if headers, ok := encoding["headers"].(map[string]any); ok {
+						for headerName, header := range headers {
+							rawForEachSchemaInTarget(
+								header,
+								rawHeaderTarget,
+								mediaPointer+"/encoding/"+escapeJSONPointerSegment(encodingName)+"/headers/"+escapeJSONPointerSegment(headerName),
+								visit,
+							)
+						}
+					}
+				}
 			}
 		}
 	}

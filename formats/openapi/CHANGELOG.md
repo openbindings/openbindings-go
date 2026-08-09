@@ -65,8 +65,11 @@
   overlay them, while 3.0 Reference Object siblings retain strict ignore
   semantics and examples/extensions remain opaque data. Legal 3.1 Reference
   Object descriptions remain site-local rather than mutating a shared target;
-  unsupported custom schema dialects refuse portable synthesis without
-  globally disabling artifact-native invocation or reference listing.
+  a per-load synthesis sidecar restores authored null, empty, zero, false, and
+  `x-*` Schema Object values erased by the typed parser without restoring
+  ignored 3.0 `$ref` siblings or changing invocation; and unsupported custom
+  schema dialects refuse portable synthesis without globally disabling
+  artifact-native invocation or reference listing.
 
 - **A typeless request-body schema rides the synthetic `body` property on
   the wire, matching the published contract** (`openbindings.openapi@1`

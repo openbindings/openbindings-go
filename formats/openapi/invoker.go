@@ -347,7 +347,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		}
 		artifactContent = openbindings.TextContent(string(data))
 	}
-	doc, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, artifactContent)
+	doc, schemaOverlays, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, artifactContent)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
@@ -363,7 +363,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 			in.OnWarning(w)
 		}
 	}
-	iface, err := convertDocToInterface(doc, loadLocation, src.BindingSpec, warn, onUnrealizable)
+	iface, err := convertDocToInterfaceWithOverlay(doc, loadLocation, src.BindingSpec, warn, onUnrealizable, schemaOverlays)
 	if err != nil {
 		return nil, nil, err
 	}

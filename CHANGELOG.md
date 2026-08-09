@@ -26,9 +26,13 @@
   constraints and annotations compose; strict 3.0 Reference Object siblings
   remain ignored, and legal 3.1 Reference Object descriptions remain local to
   each reference site. Schema-shaped data in examples/extensions remains
-  opaque. Unsupported custom schema dialects fail portable synthesis honestly
-  without globally disabling artifact-native invocation or reference listing.
-  This stays within the OpenAPI loader/projection layer and does not alter Core.
+  opaque. A synthesis-only raw presence sidecar now preserves authored null,
+  empty, zero, false, and `x-*` Schema Object values that the typed upstream
+  parser cannot distinguish from absence; typed OpenAPI objects remain the
+  operational authority, and invocation does not use the sidecar. Unsupported
+  custom schema dialects fail portable synthesis honestly without globally
+  disabling artifact-native invocation or reference listing. This stays
+  within the OpenAPI loader/projection layer and does not alter Core.
 
 - **OpenAPI invocation, inspection, and synthesis now resolve complete
   multi-document descriptions through the caller-supplied HTTP client and
