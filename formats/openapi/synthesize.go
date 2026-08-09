@@ -119,6 +119,21 @@ func convertDocToInterface(doc *openapi3.T, location, bindingSpec string, warn f
 				return iface, unrealizableOperation(opKey, reason)
 			}
 
+			if parameter := unsupportedParameterContent(params); parameter != "" {
+				reason := fmt.Sprintf("parameter %q declares content with no faithful revision-2 carriage", parameter)
+				if onUnrealizable != nil {
+					onUnrealizable(unrealizableTarget{
+						ref:          buildJSONPointerRef(path, method),
+						operationKey: opKey,
+						reasonCode:   "openapi.parameter_content_excluded",
+						rule:         "OAPI-P-02",
+						message:      reason,
+					})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
+			}
+
 			var requestPlans []*bodyPlan
 			if op.RequestBody != nil && op.RequestBody.Value != nil {
 				plans, planErr := planRequestBodies(op)
@@ -178,6 +193,16 @@ func convertDocToInterface(doc *openapi3.T, location, bindingSpec string, warn f
 					warn(openbindings.SynthesizerWarning{Code: code, Message: reason + "; optional body omitted from the synthesized contract", Path: fmt.Sprintf("operations.%s.input", opKey)})
 				}
 			}
+			if formatVersion == "3.1" {
+				if dialectErr := validateProjectedOperationDialects(doc, op, params, requestPlans); dialectErr != nil {
+					reason := dialectErr.Error()
+					if onUnrealizable != nil {
+						onUnrealizable(unrealizableTarget{ref: buildJSONPointerRef(path, method), operationKey: opKey, reasonCode: "openapi.unsupported_schema_dialect", rule: "OBI-D-06", message: reason})
+						continue
+					}
+					return iface, unrealizableOperation(opKey, reason)
+				}
+			}
 
 			obiOp := openbindings.Operation{
 				Description: operationDescription(op),
@@ -193,13 +218,15 @@ func convertDocToInterface(doc *openapi3.T, location, bindingSpec string, warn f
 			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, refRegistry, routes)
 			if inputSchema != nil {
 				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry, cyclic, opPointer+"/input")
-				obiOp.Input = normalizeOperationSchema(inlined, formatVersion, schemaSalvageWarner(warn, opKey, "input"))
+				projected := projectOpenAPISchema(inlined, openAPIRequestSchema, requestSchemaProjectionExemptions(routes))
+				obiOp.Input = normalizeOperationSchema(projected, formatVersion, schemaSalvageWarner(warn, opKey, "input"))
 			}
 
 			outputSchema := buildOutputSchema(op)
 			if outputSchema != nil {
 				inlined := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output")
-				obiOp.Output = normalizeOperationSchema(inlined, formatVersion, schemaSalvageWarner(warn, opKey, "output"))
+				projected := projectOpenAPISchema(inlined, openAPIResponseSchema, nil)
+				obiOp.Output = normalizeOperationSchema(projected, formatVersion, schemaSalvageWarner(warn, opKey, "output"))
 			}
 
 			iface.Operations[opKey] = obiOp
@@ -271,6 +298,14 @@ func loadDocument(location string, content json.RawMessage) (*openapi3.T, error)
 // document and every reachable external reference. Resolver configuration is
 // deliberately processor-private; it never changes the OBI document model.
 func loadDocumentWithResolver(ctx context.Context, client *http.Client, location string, content json.RawMessage) (*openapi3.T, error) {
+	return loadDocumentWithResolverInternal(ctx, client, location, content)
+}
+
+func loadDocumentForSynthesis(ctx context.Context, client *http.Client, location string, content json.RawMessage) (*openapi3.T, error) {
+	return loadDocumentWithResolverInternal(ctx, client, location, content)
+}
+
+func loadDocumentWithResolverInternal(ctx context.Context, client *http.Client, location string, content json.RawMessage) (*openapi3.T, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -282,13 +317,22 @@ func loadDocumentWithResolver(ctx context.Context, client *http.Client, location
 	loader.IsExternalRefsAllowed = true
 	retrievalURIs := map[string]*url.URL{}
 	var retrievalMu sync.RWMutex
-	loader.ReadFromURIFunc = artifactReadFunc(client, content != nil && location == "", retrievalURIs, &retrievalMu)
 	loader.JoinFunc = artifactJoinFunc(retrievalURIs, &retrievalMu)
+	normalizer := newRawRefSiblingNormalizer(loader.JoinFunc)
+	readArtifact := artifactReadFunc(client, content != nil && location == "", retrievalURIs, &retrievalMu)
+	loader.ReadFromURIFunc = func(loader *openapi3.Loader, resource *url.URL) ([]byte, error) {
+		data, err := readArtifact(loader, resource)
+		if err != nil {
+			return nil, err
+		}
+		return normalizer.normalizeResourceAt(data, resource, artifactRetrievalURI(resource, retrievalURIs, &retrievalMu))
+	}
 
-	doc, err := loadDocumentRaw(loader, location, content)
+	doc, err := loadDocumentRaw(loader, normalizer, location, content)
 	if err != nil {
 		return nil, err
 	}
+	localizeReferenceMetadata(doc)
 	if err := checkAcceptedOpenAPIVersion(doc); err != nil {
 		return nil, err
 	}
@@ -330,7 +374,7 @@ func validateDocumentAddress(location string) error {
 	return nil
 }
 
-func loadDocumentRaw(loader *openapi3.Loader, location string, content json.RawMessage) (*openapi3.T, error) {
+func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalizer, location string, content json.RawMessage) (*openapi3.T, error) {
 	// `location`, when present, must be an absolute URI (OAPI-D-02) —
 	// whether it is the fetch target or only the embedded content's base.
 	// The former bare-path lenience ("for local tooling") is gone: the
@@ -346,10 +390,17 @@ func loadDocumentRaw(loader *openapi3.Loader, location string, content json.RawM
 		if err != nil {
 			return nil, err
 		}
+		var resource *url.URL
 		if location != "" {
-			loc, err := url.Parse(location)
-			if err == nil {
-				return loader.LoadFromDataWithPath(data, loc)
+			resource, _ = url.Parse(location)
+		}
+		data, err = normalizer.normalizeResource(data, resource)
+		if err != nil {
+			return nil, err
+		}
+		if location != "" {
+			if resource != nil {
+				return loader.LoadFromDataWithPath(data, resource)
 			}
 		}
 		// No co-present location: no base URI. Absolute http(s) references
@@ -458,6 +509,19 @@ func artifactJoinFunc(retrievalURIs map[string]*url.URL, retrievalMu *sync.RWMut
 		}
 		return resolvedBase.ResolveReference(relative)
 	}
+}
+
+func artifactRetrievalURI(resource *url.URL, retrievalURIs map[string]*url.URL, retrievalMu *sync.RWMutex) *url.URL {
+	if resource == nil {
+		return nil
+	}
+	retrievalMu.RLock()
+	resolved := cloneURL(retrievalURIs[artifactResourceKey(resource)])
+	retrievalMu.RUnlock()
+	if resolved != nil {
+		return resolved
+	}
+	return resource
 }
 
 func artifactResourceKey(u *url.URL) string {
@@ -778,6 +842,29 @@ func paramToSchema(param *openapi3.Parameter) map[string]any {
 	return prop
 }
 
+// unsupportedParameterContent returns the first content-form parameter whose
+// single media declaration revision 2 cannot serialize. Creation-time
+// soundness requires excluding the target rather than emitting an operation
+// that is statically guaranteed to refuse when that parameter is populated.
+func unsupportedParameterContent(params openapi3.Parameters) string {
+	for _, ref := range params {
+		if ref == nil || ref.Value == nil || len(ref.Value.Content) == 0 {
+			continue
+		}
+		param := ref.Value
+		if len(param.Content) != 1 {
+			return param.Name
+		}
+		for mediaKey := range param.Content {
+			parsed, err := parseMediaType(mediaKey)
+			if err != nil || (!isJSONMediaType(parsed.base) && parsed.base != "text/plain") {
+				return param.Name
+			}
+		}
+	}
+	return ""
+}
+
 func buildOutputSchema(op *openapi3.Operation) map[string]any {
 	if op.Responses == nil {
 		return nil
@@ -941,12 +1028,17 @@ func buildRefRegistry(doc *openapi3.T) map[string]any {
 func cyclicRefs(registry map[string]any) map[string]bool {
 	// direct successor refs per registry entry
 	succ := make(map[string][]string, len(registry))
-	var collect func(node any, out *[]string)
-	collect = func(node any, out *[]string) {
+	var collect func(node any, position schemaTraversalPosition, out *[]string)
+	collect = func(node any, position schemaTraversalPosition, out *[]string) {
+		if position == schemaDataPosition {
+			return
+		}
 		switch v := node.(type) {
 		case map[string]any:
-			if ref, ok := v["$ref"].(string); ok {
-				*out = append(*out, ref)
+			if position == schemaObjectPosition {
+				if ref, ok := v["$ref"].(string); ok {
+					*out = append(*out, ref)
+				}
 			}
 			keys := make([]string, 0, len(v))
 			for k := range v {
@@ -954,17 +1046,28 @@ func cyclicRefs(registry map[string]any) map[string]bool {
 			}
 			sort.Strings(keys)
 			for _, k := range keys {
-				collect(v[k], out)
+				childPosition := schemaDataPosition
+				switch position {
+				case schemaObjectPosition:
+					childPosition = schemaChildPosition(k)
+				case schemaMapPosition:
+					childPosition = schemaObjectPosition
+				}
+				collect(v[k], childPosition, out)
 			}
 		case []any:
+			childPosition := schemaDataPosition
+			if position == schemaArrayPosition {
+				childPosition = schemaObjectPosition
+			}
 			for _, item := range v {
-				collect(item, out)
+				collect(item, childPosition, out)
 			}
 		}
 	}
 	for ref, node := range registry {
 		var out []string
-		collect(node, &out)
+		collect(node, schemaObjectPosition, &out)
 		succ[ref] = out
 	}
 	cyclic := make(map[string]bool)
@@ -986,6 +1089,171 @@ func cyclicRefs(registry map[string]any) map[string]bool {
 		}
 	}
 	return cyclic
+}
+
+// schemaTraversalPosition keeps JSON-shaped annotation and extension data
+// opaque while walking a JSON Schema. A key named "$ref" has reference
+// semantics only at a schema position; the same spelling in default,
+// example, enum, const, or an extension is ordinary application data.
+type schemaTraversalPosition uint8
+
+const (
+	schemaObjectPosition schemaTraversalPosition = iota
+	schemaMapPosition
+	schemaArrayPosition
+	schemaDataPosition
+)
+
+func schemaChildPosition(key string) schemaTraversalPosition {
+	switch {
+	case schemaBearingSingleKeys[key]:
+		return schemaObjectPosition
+	case schemaBearingMapKeys[key]:
+		return schemaMapPosition
+	case schemaBearingArrayKeys[key]:
+		return schemaArrayPosition
+	default:
+		return schemaDataPosition
+	}
+}
+
+func validateProjectedOperationDialects(doc *openapi3.T, op *openapi3.Operation, params openapi3.Parameters, requestPlans []*bodyPlan) error {
+	documentDialect := doc.JSONSchemaDialect
+	if documentDialect == "" {
+		documentDialect = "https://spec.openapis.org/oas/3.1/dialect/base"
+	}
+	seen := map[struct {
+		schema  *openapi3.Schema
+		dialect string
+	}]bool{}
+	validate := func(side string, ref *openapi3.SchemaRef) error {
+		if err := validateSchemaRefDialect(ref, documentDialect, seen); err != nil {
+			return fmt.Errorf("%s schema uses %w", side, err)
+		}
+		return nil
+	}
+	for _, parameterRef := range params {
+		if parameterRef == nil || parameterRef.Value == nil {
+			continue
+		}
+		parameter := parameterRef.Value
+		if parameter.Schema != nil {
+			if err := validate("input", parameter.Schema); err != nil {
+				return err
+			}
+			continue
+		}
+		keys := make([]string, 0, len(parameter.Content))
+		for key := range parameter.Content {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if len(keys) > 0 {
+			if media := parameter.Content[keys[0]]; media != nil && media.Schema != nil {
+				if err := validate("input", media.Schema); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, plan := range requestPlans {
+		if plan != nil && plan.media != nil && plan.media.Schema != nil {
+			if err := validate("input", plan.media.Schema); err != nil {
+				return err
+			}
+		}
+	}
+	for _, ref := range projectedOutputSchemaRefs(op) {
+		if err := validate("output", ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSchemaRefDialect(ref *openapi3.SchemaRef, inherited string, seen map[struct {
+	schema  *openapi3.Schema
+	dialect string
+}]bool) error {
+	if ref == nil || ref.Value == nil {
+		return nil
+	}
+	schema := ref.Value
+	dialect := inherited
+	if schema.SchemaDialect != "" {
+		dialect = schema.SchemaDialect
+	}
+	if !supportedComposingDialect(dialect) {
+		return fmt.Errorf("unsupported OpenAPI 3.1 schema dialect %q; portable OBI synthesis is pinned to JSON Schema 2020-12 (OBI-D-06)", dialect)
+	}
+	key := struct {
+		schema  *openapi3.Schema
+		dialect string
+	}{schema: schema, dialect: dialect}
+	if seen[key] {
+		return nil
+	}
+	seen[key] = true
+	children := make([]*openapi3.SchemaRef, 0, len(schema.OneOf)+len(schema.AnyOf)+len(schema.AllOf)+len(schema.Properties)+len(schema.PatternProperties)+len(schema.DependentSchemas)+len(schema.Defs)+12)
+	children = append(children, schema.OneOf...)
+	children = append(children, schema.AnyOf...)
+	children = append(children, schema.AllOf...)
+	children = append(children, schema.Not, schema.Items, schema.Contains, schema.PropertyNames, schema.If, schema.Then, schema.Else, schema.ContentSchema)
+	children = append(children, schema.AdditionalProperties.Schema, schema.UnevaluatedItems.Schema, schema.UnevaluatedProperties.Schema)
+	children = append(children, schema.PrefixItems...)
+	for _, schemas := range []openapi3.Schemas{schema.Properties, schema.PatternProperties, schema.DependentSchemas, schema.Defs} {
+		for _, child := range schemas {
+			children = append(children, child)
+		}
+	}
+	for _, child := range children {
+		if err := validateSchemaRefDialect(child, dialect, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func projectedOutputSchemaRefs(op *openapi3.Operation) []*openapi3.SchemaRef {
+	if op == nil || op.Responses == nil {
+		return nil
+	}
+	responses := op.Responses.Map()
+	keys := make([]string, 0, len(responses))
+	hasRange := false
+	exactSuccesses := 0
+	for key := range responses {
+		keys = append(keys, key)
+		if key == "2XX" {
+			hasRange = true
+		}
+		if len(key) == 3 && key[0] == '2' && key[1] >= '0' && key[1] <= '9' && key[2] >= '0' && key[2] <= '9' {
+			exactSuccesses++
+		}
+	}
+	sort.Strings(keys)
+	var refs []*openapi3.SchemaRef
+	for _, key := range keys {
+		isExact := len(key) == 3 && key[0] == '2' && key[1] >= '0' && key[1] <= '9' && key[2] >= '0' && key[2] <= '9'
+		if !isExact && key != "2XX" && !(key == "default" && !hasRange && exactSuccesses < 100) {
+			continue
+		}
+		responseRef := responses[key]
+		if responseRef == nil || responseRef.Value == nil {
+			continue
+		}
+		for mediaKey, media := range responseRef.Value.Content {
+			parsed, err := parseMediaType(mediaKey)
+			if err != nil || !isJSONMediaType(parsed.base) {
+				continue
+			}
+			if media == nil || media.Schema == nil {
+				return nil // buildOutputSchema publishes no contract in this case
+			}
+			refs = append(refs, media.Schema)
+		}
+	}
+	return refs
 }
 
 // defNameForRef derives the $defs key for a cyclic ref: the component name
@@ -1066,10 +1334,17 @@ type decycleContext struct {
 }
 
 func inlineRefs(node any, registry map[string]any, seen map[string]bool, ctx *decycleContext) any {
+	return inlineRefsAt(node, schemaObjectPosition, registry, seen, ctx)
+}
+
+func inlineRefsAt(node any, position schemaTraversalPosition, registry map[string]any, seen map[string]bool, ctx *decycleContext) any {
+	if position == schemaDataPosition {
+		return node
+	}
 	switch v := node.(type) {
 	case map[string]any:
 		// Check if this object IS a ref.
-		if ref, ok := v["$ref"].(string); ok {
+		if ref, ok := v["$ref"].(string); position == schemaObjectPosition && ok {
 			var expanded any
 			if ctx != nil && ctx.cyclic[ref] {
 				// A cycle participant: every occurrence becomes a
@@ -1080,7 +1355,7 @@ func inlineRefs(node any, registry map[string]any, seen map[string]bool, ctx *de
 				if _, materialized := ctx.defs[name]; !materialized {
 					ctx.defs[name] = nil // reserve before expansion: terminates self-reference
 					if resolved, found := resolveRegistryRef(ref, registry); found {
-						ctx.defs[name] = inlineRefs(resolved, registry, seen, ctx)
+						ctx.defs[name] = inlineRefsAt(resolved, schemaObjectPosition, registry, seen, ctx)
 					}
 				}
 				expanded = map[string]any{"$ref": ctx.refBase + "/$defs/" + escapeJSONPointerSegment(name)}
@@ -1091,7 +1366,7 @@ func inlineRefs(node any, registry map[string]any, seen map[string]bool, ctx *de
 				// Mark this ref as being expanded, recurse to inline
 				// any nested refs in the resolved value, then unmark.
 				seen[ref] = true
-				expanded = inlineRefs(resolved, registry, seen, ctx)
+				expanded = inlineRefsAt(resolved, schemaObjectPosition, registry, seen, ctx)
 				delete(seen, ref)
 			} else {
 				expanded = map[string]any{"$ref": ref}
@@ -1106,7 +1381,7 @@ func inlineRefs(node any, registry map[string]any, seen map[string]bool, ctx *de
 			siblings := make(map[string]any, len(v)-1)
 			for key, value := range v {
 				if key != "$ref" {
-					siblings[key] = inlineRefs(value, registry, seen, ctx)
+					siblings[key] = inlineRefsAt(value, schemaChildPosition(key), registry, seen, ctx)
 				}
 			}
 			if len(siblings) == 0 {
@@ -1131,16 +1406,28 @@ func inlineRefs(node any, registry map[string]any, seen map[string]bool, ctx *de
 			}
 			return map[string]any{"allOf": []any{expanded, siblings}}
 		}
-		// Recurse into each property.
+		// Recurse only through JSON Schema-bearing keywords. Annotation and
+		// extension payloads are data even when they contain schema-like keys.
 		out := make(map[string]any, len(v))
 		for k, val := range v {
-			out[k] = inlineRefs(val, registry, seen, ctx)
+			childPosition := schemaDataPosition
+			switch position {
+			case schemaObjectPosition:
+				childPosition = schemaChildPosition(k)
+			case schemaMapPosition:
+				childPosition = schemaObjectPosition
+			}
+			out[k] = inlineRefsAt(val, childPosition, registry, seen, ctx)
 		}
 		return out
 	case []any:
 		out := make([]any, len(v))
+		childPosition := schemaDataPosition
+		if position == schemaArrayPosition {
+			childPosition = schemaObjectPosition
+		}
 		for i, item := range v {
-			out[i] = inlineRefs(item, registry, seen, ctx)
+			out[i] = inlineRefsAt(item, childPosition, registry, seen, ctx)
 		}
 		return out
 	default:

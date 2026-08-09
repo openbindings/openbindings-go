@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -207,7 +208,7 @@ func TestRequiredContext(t *testing.T) {
 		Security: openapi3.NewSecurityRequirements().With(openapi3.NewSecurityRequirement().Authenticate("bearerAuth")),
 	}
 
-	if d := requiredContext(doc, op, nil, "https://api.example.com"); d == nil {
+	if d := requiredContext(doc, op, nil, "https://api.example.com", nil); d == nil {
 		t.Fatal("expected a challenge when no token is present")
 	} else if len(d.Alternatives) != 1 || d.Alternatives[0].Requirements[0].Type != "auth.bearer" {
 		t.Errorf("unexpected challenge shape: %+v", d)
@@ -218,12 +219,12 @@ func TestRequiredContext(t *testing.T) {
 		t.Errorf("Name = %q, want the securitySchemes key %q", got, "bearerAuth")
 	}
 
-	if d := requiredContext(doc, op, map[string]any{"bearerToken": "tok"}, "https://api.example.com"); d != nil {
+	if d := requiredContext(doc, op, map[string]any{"bearerToken": "tok"}, "https://api.example.com", nil); d != nil {
 		t.Errorf("expected no challenge when token is present, got %+v", d)
 	}
 
 	noSecOp := &openapi3.Operation{}
-	if d := requiredContext(doc, noSecOp, nil, "https://api.example.com"); d != nil {
+	if d := requiredContext(doc, noSecOp, nil, "https://api.example.com", nil); d != nil {
 		t.Errorf("expected no challenge for an op without security, got %+v", d)
 	}
 }
@@ -251,7 +252,7 @@ func TestRequiredContext_NameDistinguishesANDedSchemes(t *testing.T) {
 			openapi3.NewSecurityRequirement().Authenticate("headerKey").Authenticate("queryKey"),
 		),
 	}
-	d := requiredContext(doc, op, nil, "https://api.example.com")
+	d := requiredContext(doc, op, nil, "https://api.example.com", nil)
 	if d == nil || len(d.Alternatives) != 1 || len(d.Alternatives[0].Requirements) != 2 {
 		t.Fatalf("expected one AND'd alternative with 2 requirements, got %+v", d)
 	}
@@ -317,8 +318,8 @@ func TestSchemeToRequirementType_UnmappedCarriesDescription(t *testing.T) {
 
 // TestOAuth2Requirement_CarriesFlowFields verifies an oauth2 authorization-code
 // scheme carries the flow's authorize/token URLs (relative ones absolutized)
-// and scopes into the requirement's Extra fields, so a resolver can drive the
-// flow without out-of-band knowledge.
+// and the scopes required by the Security Requirement Object, so a resolver
+// can drive the flow without out-of-band knowledge.
 func TestOAuth2Requirement_CarriesFlowFields(t *testing.T) {
 	scheme := &openapi3.SecurityScheme{
 		Type: "oauth2",
@@ -330,10 +331,11 @@ func TestOAuth2Requirement_CarriesFlowFields(t *testing.T) {
 			},
 		},
 	}
-	req, ok := schemeToRequirement(scheme, "https://api.example.com")
-	if !ok || req.Type != "auth.oauth2" {
-		t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+	requirements := oauth2Requirements(scheme, "https://api.example.com", []string{"write"})
+	if len(requirements) != 1 || requirements[0].Type != "auth.oauth2" {
+		t.Fatalf("expected one auth.oauth2 requirement, got %+v", requirements)
 	}
+	req := requirements[0]
 	if got := req.Extra["authorizeUrl"]; got != "https://api.example.com/oauth/authorize" {
 		t.Errorf("authorizeUrl = %v, want absolutized host URL", got)
 	}
@@ -341,8 +343,8 @@ func TestOAuth2Requirement_CarriesFlowFields(t *testing.T) {
 		t.Errorf("tokenUrl = %v", got)
 	}
 	scopes, _ := req.Extra["scopes"].([]string)
-	if len(scopes) != 2 || scopes[0] != "read" || scopes[1] != "write" {
-		t.Errorf("scopes = %v, want [read write]", req.Extra["scopes"])
+	if len(scopes) != 1 || scopes[0] != "write" {
+		t.Errorf("scopes = %v, want the required scope [write]", req.Extra["scopes"])
 	}
 	// R2.b ruling: the selected flow's grantType rides alongside authorizeUrl/tokenUrl/scopes.
 	if got := req.Extra["grantType"]; got != "authorization_code" {
@@ -352,12 +354,15 @@ func TestOAuth2Requirement_CarriesFlowFields(t *testing.T) {
 	// openIdConnect carries its discovery URL and NO grantType (R2.b ruling:
 	// openIdConnect has no `flows`, so no flow is ever genuinely selected).
 	oidc := &openapi3.SecurityScheme{Type: "openIdConnect", OpenIdConnectUrl: "https://auth.example.com/.well-known/openid-configuration"}
-	r2, _ := schemeToRequirement(oidc, "https://api.example.com")
+	r2 := schemeRequirements(oidc, "https://api.example.com", []string{"openid", "profile"})[0]
 	if r2.Extra["openIdConnectUrl"] != "https://auth.example.com/.well-known/openid-configuration" {
 		t.Errorf("openIdConnectUrl not carried: %+v", r2.Extra)
 	}
 	if _, present := r2.Extra["grantType"]; present {
 		t.Errorf("openIdConnect must carry no grantType, got %v", r2.Extra["grantType"])
+	}
+	if got, _ := r2.Extra["scopes"].([]string); !reflect.DeepEqual(got, []string{"openid", "profile"}) {
+		t.Errorf("openIdConnect scopes = %v, want [openid profile]", got)
 	}
 }
 
@@ -395,10 +400,11 @@ func TestOAuth2Requirement_GrantTypeSurfacesSelectedFlow(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			scheme := &openapi3.SecurityScheme{Type: "oauth2", Flows: tc.flows}
-			req, ok := schemeToRequirement(scheme, "https://api.example.com")
-			if !ok || req.Type != "auth.oauth2" {
-				t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+			requirements := oauth2Requirements(scheme, "https://api.example.com", nil)
+			if len(requirements) != 1 || requirements[0].Type != "auth.oauth2" {
+				t.Fatalf("expected one auth.oauth2 requirement, got %+v", requirements)
 			}
+			req := requirements[0]
 			if got := req.Extra["grantType"]; got != tc.want {
 				t.Errorf("grantType = %v, want %q", got, tc.want)
 			}
@@ -420,10 +426,11 @@ func TestOAuth2Requirement_ClientCredentialsOnly(t *testing.T) {
 			},
 		},
 	}
-	req, ok := schemeToRequirement(scheme, "https://api.example.com")
-	if !ok || req.Type != "auth.oauth2" {
-		t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+	requirements := oauth2Requirements(scheme, "https://api.example.com", []string{"read", "write"})
+	if len(requirements) != 1 || requirements[0].Type != "auth.oauth2" {
+		t.Fatalf("expected one auth.oauth2 requirement, got %+v", requirements)
 	}
+	req := requirements[0]
 	if got := req.Extra["tokenUrl"]; got != "https://api.example.com/oauth/token" {
 		t.Errorf("tokenUrl = %v, want absolutized host URL", got)
 	}
@@ -448,10 +455,11 @@ func TestOAuth2Requirement_PasswordOnly(t *testing.T) {
 			},
 		},
 	}
-	req, ok := schemeToRequirement(scheme, "https://api.example.com")
-	if !ok || req.Type != "auth.oauth2" {
-		t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+	requirements := oauth2Requirements(scheme, "https://api.example.com", []string{"profile"})
+	if len(requirements) != 1 || requirements[0].Type != "auth.oauth2" {
+		t.Fatalf("expected one auth.oauth2 requirement, got %+v", requirements)
 	}
+	req := requirements[0]
 	if got := req.Extra["tokenUrl"]; got != "https://auth.example.com/oauth/token" {
 		t.Errorf("tokenUrl = %v", got)
 	}
@@ -461,13 +469,10 @@ func TestOAuth2Requirement_PasswordOnly(t *testing.T) {
 	}
 }
 
-// TestOAuth2Requirement_PasswordPriorityOverClientCredentials pins the fixed
-// selection order (password before clientCredentials) when a scheme offers
-// both token-only flows, so the same scheme always resolves to the same flow
-// regardless of field iteration order. The TS SDK mirrors this exact order
-// (it previously fell back to object insertion order, which was
-// non-deterministic across differently-authored but equivalent documents).
-func TestOAuth2Requirement_PasswordPriorityOverClientCredentials(t *testing.T) {
+// TestOAuth2Requirements_PreservesPasswordAndClientCredentials verifies that
+// declared OAuth flows remain distinct runtime alternatives. Canonical order
+// is deterministic but does not collapse them into an invented preference.
+func TestOAuth2Requirements_PreservesPasswordAndClientCredentials(t *testing.T) {
 	scheme := &openapi3.SecurityScheme{
 		Type: "oauth2",
 		Flows: &openapi3.OAuthFlows{
@@ -481,26 +486,26 @@ func TestOAuth2Requirement_PasswordPriorityOverClientCredentials(t *testing.T) {
 			},
 		},
 	}
-	req, ok := schemeToRequirement(scheme, "https://api.example.com")
-	if !ok || req.Type != "auth.oauth2" {
-		t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+	requirements := oauth2Requirements(scheme, "https://api.example.com", nil)
+	if len(requirements) != 2 {
+		t.Fatalf("requirements = %+v, want password and client_credentials alternatives", requirements)
 	}
-	if got := req.Extra["tokenUrl"]; got != "https://auth.example.com/password/token" {
-		t.Errorf("tokenUrl = %v, want password's tokenUrl (fixed priority over clientCredentials)", got)
+	if got := requirements[0].Extra["grantType"]; got != "password" {
+		t.Errorf("first grantType = %v, want password", got)
 	}
-	scopes, _ := req.Extra["scopes"].([]string)
-	if len(scopes) != 1 || scopes[0] != "pw" {
-		t.Errorf("scopes = %v, want [pw] (password flow's scopes)", req.Extra["scopes"])
+	if got := requirements[1].Extra["grantType"]; got != "client_credentials" {
+		t.Errorf("second grantType = %v, want client_credentials", got)
 	}
-	if got := req.Extra["grantType"]; got != "password" {
-		t.Errorf("grantType = %v, want password (fixed priority over clientCredentials)", got)
+	for _, req := range requirements {
+		if scopes, _ := req.Extra["scopes"].([]string); len(scopes) != 0 {
+			t.Errorf("scopes = %v, want the empty required-scope set", scopes)
+		}
 	}
 }
 
-// TestOAuth2Requirement_AuthorizationCodeWinsOverAll pins that
-// authorizationCode is selected over every other flow when present,
-// including when implicit/password/clientCredentials are also declared.
-func TestOAuth2Requirement_AuthorizationCodeWinsOverAll(t *testing.T) {
+// TestOAuth2Requirements_PreservesEveryUsableFlow verifies that every usable
+// declared flow is surfaced, including when authorizationCode is present.
+func TestOAuth2Requirements_PreservesEveryUsableFlow(t *testing.T) {
 	scheme := &openapi3.SecurityScheme{
 		Type: "oauth2",
 		Flows: &openapi3.OAuthFlows{
@@ -519,18 +524,122 @@ func TestOAuth2Requirement_AuthorizationCodeWinsOverAll(t *testing.T) {
 			},
 		},
 	}
-	req, ok := schemeToRequirement(scheme, "https://api.example.com")
-	if !ok || req.Type != "auth.oauth2" {
-		t.Fatalf("expected auth.oauth2, got (%+v, %v)", req, ok)
+	requirements := oauth2Requirements(scheme, "https://api.example.com", nil)
+	if len(requirements) != 4 {
+		t.Fatalf("requirements = %+v, want all four declared flow alternatives", requirements)
 	}
-	if got := req.Extra["authorizeUrl"]; got != "https://auth.example.com/authorize" {
-		t.Errorf("authorizeUrl = %v, want authorizationCode's authorizeUrl", got)
+	want := []string{"authorization_code", "implicit", "password", "client_credentials"}
+	for i, req := range requirements {
+		if got := req.Extra["grantType"]; got != want[i] {
+			t.Errorf("requirement %d grantType = %v, want %s", i, got, want[i])
+		}
 	}
-	if got := req.Extra["tokenUrl"]; got != "https://auth.example.com/authcode/token" {
-		t.Errorf("tokenUrl = %v, want authorizationCode's tokenUrl", got)
+}
+
+// The Security Requirement Object's scope array is the requested capability.
+// A higher-priority-looking flow that cannot grant it is not surfaced; a later
+// declared flow that can grant it remains a complete runtime alternative.
+func TestRequiredContext_OAuthRequiredScopesSelectCapableFlow(t *testing.T) {
+	doc := &openapi3.T{
+		Components: &openapi3.Components{SecuritySchemes: openapi3.SecuritySchemes{
+			"oauth": &openapi3.SecuritySchemeRef{Value: &openapi3.SecurityScheme{
+				Type: "oauth2",
+				Flows: &openapi3.OAuthFlows{
+					AuthorizationCode: &openapi3.OAuthFlow{
+						AuthorizationURL: "https://auth.example.com/authorize",
+						TokenURL:         "https://auth.example.com/auth-code/token",
+						Scopes:           map[string]string{"read": "Read"},
+					},
+					ClientCredentials: &openapi3.OAuthFlow{
+						TokenURL: "https://auth.example.com/client/token",
+						Scopes:   map[string]string{"read": "Read", "write": "Write"},
+					},
+				},
+			}},
+		}},
 	}
-	if got := req.Extra["grantType"]; got != "authorization_code" {
-		t.Errorf("grantType = %v, want authorization_code (wins over every other flow)", got)
+	security := openapi3.SecurityRequirements{
+		openapi3.SecurityRequirement{"oauth": []string{"write"}},
+	}
+	op := &openapi3.Operation{Security: &security}
+	details := requiredContext(doc, op, nil, "https://api.example.com", nil)
+	if details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 {
+		t.Fatalf("challenge = %+v, want one capable OAuth flow", details)
+	}
+	req := details.Alternatives[0].Requirements[0]
+	if got := req.Extra["grantType"]; got != "client_credentials" {
+		t.Errorf("grantType = %v, want client_credentials", got)
+	}
+	if got := req.Extra["tokenUrl"]; got != "https://auth.example.com/client/token" {
+		t.Errorf("tokenUrl = %v, want capable flow's endpoint", got)
+	}
+	if got, _ := req.Extra["scopes"].([]string); !reflect.DeepEqual(got, []string{"write"}) {
+		t.Errorf("scopes = %v, want authoritative required scope [write]", got)
+	}
+}
+
+// When no declared flow advertises every required scope, the invoker must not
+// claim that an insufficient flow can resolve the challenge. It retains a bare
+// scoped OAuth requirement for an externally acquired token and performs no
+// unauthenticated dispatch.
+func TestRequiredContext_OAuthInsufficientFlowChallengesBareRequiredScopes(t *testing.T) {
+	doc := &openapi3.T{
+		Components: &openapi3.Components{SecuritySchemes: openapi3.SecuritySchemes{
+			"oauth": &openapi3.SecuritySchemeRef{Value: &openapi3.SecurityScheme{
+				Type: "oauth2",
+				Flows: &openapi3.OAuthFlows{AuthorizationCode: &openapi3.OAuthFlow{
+					AuthorizationURL: "https://auth.example.com/authorize",
+					TokenURL:         "https://auth.example.com/token",
+					Scopes:           map[string]string{"read": "Read"},
+				}},
+			}},
+		}},
+	}
+	security := openapi3.SecurityRequirements{
+		openapi3.SecurityRequirement{"oauth": []string{"write"}},
+	}
+	details := requiredContext(doc, &openapi3.Operation{Security: &security}, nil, "https://api.example.com", nil)
+	if details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 {
+		t.Fatalf("challenge = %+v, want one bare scoped OAuth requirement", details)
+	}
+	req := details.Alternatives[0].Requirements[0]
+	if _, ok := req.Extra["grantType"]; ok {
+		t.Errorf("insufficient declared flow must not be surfaced as usable: %+v", req.Extra)
+	}
+	if _, ok := req.Extra["authorizeUrl"]; ok {
+		t.Errorf("insufficient declared flow endpoint must not be surfaced: %+v", req.Extra)
+	}
+	if got, _ := req.Extra["scopes"].([]string); !reflect.DeepEqual(got, []string{"write"}) {
+		t.Errorf("scopes = %v, want [write]", got)
+	}
+}
+
+// OAPI-P-10 ownership is part of security-plan viability, not something a
+// resolver should discover after provisioning credentials. A colliding
+// alternative is removed from the challenge while a later complete safe
+// alternative remains available.
+func TestRequiredContext_FiltersCollidingSecurityAlternative(t *testing.T) {
+	doc := &openapi3.T{
+		Components: &openapi3.Components{SecuritySchemes: openapi3.SecuritySchemes{
+			"cookieKey": &openapi3.SecuritySchemeRef{Value: &openapi3.SecurityScheme{Type: "apiKey", In: "cookie", Name: "session"}},
+			"bearer":    &openapi3.SecuritySchemeRef{Value: &openapi3.SecurityScheme{Type: "http", Scheme: "bearer"}},
+		}},
+	}
+	security := openapi3.SecurityRequirements{
+		openapi3.SecurityRequirement{"cookieKey": []string{}},
+		openapi3.SecurityRequirement{"bearer": []string{}},
+	}
+	op := &openapi3.Operation{Security: &security}
+	params := openapi3.Parameters{
+		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "Cookie", In: openapi3.ParameterInHeader}},
+	}
+	details := requiredContext(doc, op, nil, "https://api.example.com", params)
+	if details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 {
+		t.Fatalf("challenge = %+v, want only the safe bearer alternative", details)
+	}
+	req := details.Alternatives[0].Requirements[0]
+	if req.Type != "auth.bearer" || req.Name != "bearer" {
+		t.Errorf("surviving requirement = %+v, want named auth.bearer", req)
 	}
 }
 
@@ -554,7 +663,7 @@ func TestRequiredContext_DigestOnlyAlternativeSurfaced(t *testing.T) {
 	op := &openapi3.Operation{
 		Security: openapi3.NewSecurityRequirements().With(openapi3.NewSecurityRequirement().Authenticate("digestAuth")),
 	}
-	d := requiredContext(doc, op, nil, "https://api.example.com")
+	d := requiredContext(doc, op, nil, "https://api.example.com", nil)
 	if d == nil {
 		t.Fatal("expected a challenge surfacing the unmapped digest scheme, got nil")
 	}
@@ -573,6 +682,21 @@ func TestRequiredContext_DigestOnlyAlternativeSurfaced(t *testing.T) {
 	// no context can satisfy it.
 	if openbindings.ContextSatisfies(map[string]any{"bearerToken": "t"}, d) {
 		t.Error("an unmapped requirement must never be satisfiable by the built-in check")
+	}
+}
+
+func TestSecurityConfigurationErrorRefusesMixedValidAndMissingAlternatives(t *testing.T) {
+	doc := &openapi3.T{Components: &openapi3.Components{SecuritySchemes: openapi3.SecuritySchemes{
+		"bearer": {Value: &openapi3.SecurityScheme{Type: "http", Scheme: "bearer"}},
+	}}}
+	security := openapi3.SecurityRequirements{
+		openapi3.SecurityRequirement{"bearer": []string{}},
+		openapi3.SecurityRequirement{"missing": []string{}},
+	}
+	op := &openapi3.Operation{Security: &security}
+	err := securityConfigurationError(doc, op)
+	if err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("mixed valid/missing alternatives must refuse invalid source, got %v", err)
 	}
 }
 

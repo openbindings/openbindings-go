@@ -129,6 +129,23 @@ func TestTranslateSchemaDialect_AdditionalPropertiesBool(t *testing.T) {
 	}
 }
 
+func TestTranslateSchemaDialect_ContentSchema(t *testing.T) {
+	in := map[string]any{
+		"type":             "string",
+		"contentMediaType": "application/json",
+		"contentSchema":    map[string]any{"type": "string", "nullable": true},
+	}
+	want := map[string]any{
+		"type":             "string",
+		"contentMediaType": "application/json",
+		"contentSchema":    map[string]any{"type": []any{"string", "null"}},
+	}
+	got := translateSchemaDialect(in, "3.0")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
 func TestTranslateSchemaDialect_DoesNotRecurseIntoExampleEnumDefault(t *testing.T) {
 	in := map[string]any{
 		"type":    "string",
@@ -268,17 +285,16 @@ func TestTranslateSchemaDialect_PokeAPIPaginatedShape(t *testing.T) {
 	}
 }
 
-func TestTranslateSchemaDialect_Salvages31StrayNullable(t *testing.T) {
+func TestTranslateSchemaDialect_Preserves31NullableAsInertAnnotation(t *testing.T) {
 	in := map[string]any{
 		"type":       []any{"string", "null"},
 		"properties": map[string]any{"x": map[string]any{"nullable": true}},
 	}
-	// The type array passes through verbatim; the stray nullable WITHOUT a
-	// type has no union to contribute to and simply drops (both dialects
-	// document that same outcome).
+	// The type array and unknown annotation both pass through verbatim. The
+	// 3.1 dialect gives nullable no validation meaning.
 	want := map[string]any{
 		"type":       []any{"string", "null"},
-		"properties": map[string]any{"x": map[string]any{}},
+		"properties": map[string]any{"x": map[string]any{"nullable": true}},
 	}
 	got := translateSchemaDialect(in, "3.1")
 	if !reflect.DeepEqual(got, want) {
@@ -286,13 +302,10 @@ func TestTranslateSchemaDialect_Salvages31StrayNullable(t *testing.T) {
 	}
 }
 
-func TestTranslateSchemaDialect_SalvagesNullableUnknownVersion(t *testing.T) {
-	// The nullable salvage is version-independent: the keyword means one
-	// thing wherever it appears, and OAPI-P-01 refuses genuinely unknown
-	// versions at load anyway, so this path only sees version strings from
-	// callers that bypassed discrimination.
+func TestTranslateSchemaDialect_DoesNotInterpretNullableForUnknownVersion(t *testing.T) {
+	// An unknown dialect supplies no authority for assigning 3.0 semantics.
 	in := map[string]any{"type": "string", "nullable": true}
-	want := map[string]any{"type": []any{"string", "null"}}
+	want := map[string]any{"type": "string", "nullable": true}
 	got := translateSchemaDialect(in, "4.0")
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %#v, want %#v", got, want)
@@ -332,10 +345,9 @@ func TestTranslateSchemaDialect_DoesNotMutateInput(t *testing.T) {
 
 func TestTranslateSchemaDialect_DropsEmptyStringType31(t *testing.T) {
 	in := map[string]any{"type": "", "nullable": true, "description": "x"}
-	// 3.1 now matches 3.0\'s documented outcome for this exact shape: the
-	// nullable transform contributes "null", the invalid "" member drops,
-	// and the union keeps what the author actually asserted.
-	want := map[string]any{"type": []any{"null"}, "description": "x"}
+	// The invalid type is salvaged independently; nullable remains an inert
+	// annotation and cannot contribute an invented null assertion.
+	want := map[string]any{"nullable": true, "description": "x"}
 	got := translateSchemaDialect(in, "3.1")
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %#v, want %#v", got, want)

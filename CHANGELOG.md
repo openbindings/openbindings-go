@@ -6,6 +6,30 @@
 
 ### Changed
 
+- **OpenAPI security and request-channel handling now preserves artifact
+  alternatives without leaking HTTP concepts into OBI contracts.** Invocation
+  selects one complete Security Requirement Object instead of unioning OR
+  alternatives, never volunteers ambient credentials when the operation
+  declares no security, and refuses processor-owned `Host`, `Content-Length`,
+  and conflicting raw/structured cookie declarations before dispatch.
+  Synthesis excludes parameter-content media that revision 2 cannot
+  faithfully carry instead of emitting an operation guaranteed to refuse.
+  Undefined security-scheme names fail closed, including in mixed OR sets.
+  These changes remain entirely in the OpenAPI binding adapter; the core OBI
+  document model is unchanged.
+
+- **OpenAPI synthesis now projects request and response schemas in their
+  authored data directions.** Request contracts omit `readOnly` properties,
+  response contracts omit `writeOnly` properties, and nested, composed, map,
+  and recursive required sets remain coherent. OpenAPI 3.1 Schema Object
+  `$ref` siblings are normalized before typed artifact resolution so their
+  constraints and annotations compose; strict 3.0 Reference Object siblings
+  remain ignored, and legal 3.1 Reference Object descriptions remain local to
+  each reference site. Schema-shaped data in examples/extensions remains
+  opaque. Unsupported custom schema dialects fail portable synthesis honestly
+  without globally disabling artifact-native invocation or reference listing.
+  This stays within the OpenAPI loader/projection layer and does not alter Core.
+
 - **OpenAPI invocation, inspection, and synthesis now resolve complete
   multi-document descriptions through the caller-supplied HTTP client and
   context.** External artifact retrieval is cached, cancellation propagates,

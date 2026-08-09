@@ -1174,6 +1174,395 @@ func TestInvoke_CredentialCollisionRefused(t *testing.T) {
 	}
 }
 
+// Security Requirement Objects are alternatives, not a pool of schemes. Even
+// when context can satisfy both alternatives, the invoker applies exactly one
+// complete alternative and does not leak the other credential onto the wire.
+func TestInvoke_SecurityORSelectsOneCompleteAlternative(t *testing.T) {
+	var gotHeader string
+	var gotQuery string
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("X-Header-Key")
+		gotQuery = r.URL.Query().Get("query_key")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/x": {"get": {
+	    "operationId": "x",
+	    "security": [{"headerKey": []}, {"queryKey": []}],
+	    "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {}}}}}
+	  }}},
+	  "components": {"securitySchemes": {
+	    "headerKey": {"type": "apiKey", "in": "header", "name": "X-Header-Key"},
+	    "queryKey": {"type": "apiKey", "in": "query", "name": "query_key"}
+	  }}
+	}`, srv.URL)
+
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Ref:    "#/paths/~1x/get",
+		Context: map[string]any{"apiKeys": map[string]any{
+			"headerKey": "header-secret",
+			"queryKey":  "query-secret",
+		}},
+	})
+	if _, ierr := driveSingle(t, call, nil); ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	if gotHeader != "header-secret" {
+		t.Errorf("selected alternative header = %q, want header-secret", gotHeader)
+	}
+	if gotQuery != "" {
+		t.Errorf("unselected alternative credential leaked into query: %q", gotQuery)
+	}
+}
+
+// A credential satisfying only part of one AND alternative must not be mixed
+// with a separate complete OR alternative. Only the latter reaches the wire.
+func TestInvoke_SecurityORDoesNotCombineIncompleteAlternativeFragments(t *testing.T) {
+	var gotFirstHeader string
+	var gotSecondHeader string
+	var gotQuery string
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotFirstHeader = r.Header.Get("X-First-Key")
+		gotSecondHeader = r.Header.Get("X-Second-Key")
+		gotQuery = r.URL.Query().Get("query_key")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/x": {"get": {
+	    "operationId": "x",
+	    "security": [{"firstHeader": [], "secondHeader": []}, {"queryKey": []}],
+	    "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {}}}}}
+	  }}},
+	  "components": {"securitySchemes": {
+	    "firstHeader": {"type": "apiKey", "in": "header", "name": "X-First-Key"},
+	    "secondHeader": {"type": "apiKey", "in": "header", "name": "X-Second-Key"},
+	    "queryKey": {"type": "apiKey", "in": "query", "name": "query_key"}
+	  }}
+	}`, srv.URL)
+
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Ref:    "#/paths/~1x/get",
+		Context: map[string]any{"apiKeys": map[string]any{
+			"firstHeader": "incomplete-fragment",
+			"queryKey":    "complete-alternative",
+		}},
+	})
+	if _, ierr := driveSingle(t, call, nil); ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	if gotFirstHeader != "" || gotSecondHeader != "" {
+		t.Errorf("incomplete alternative leaked headers: first=%q second=%q", gotFirstHeader, gotSecondHeader)
+	}
+	if gotQuery != "complete-alternative" {
+		t.Errorf("complete alternative query credential = %q, want complete-alternative", gotQuery)
+	}
+}
+
+// Credentials in ambient context have no wire meaning unless the artifact's
+// effective security declaration selects them.
+func TestInvoke_NoDeclaredSecurityDoesNotSendContextCredentials(t *testing.T) {
+	var gotAuthorization string
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/x": {"get": {
+	    "operationId": "x",
+	    "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {}}}}}
+	  }}}
+	}`, srv.URL)
+
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Ref:    "#/paths/~1x/get",
+		Context: map[string]any{
+			"bearerToken": "unrelated-bearer",
+			"apiKey":      "unrelated-key",
+			"basic":       map[string]any{"username": "u", "password": "p"},
+		},
+	})
+	if _, ierr := driveSingle(t, call, nil); ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	if gotAuthorization != "" {
+		t.Errorf("undeclared credential leaked into Authorization: %q", gotAuthorization)
+	}
+}
+
+func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
+	t.Run("structured cookie parameter", func(t *testing.T) {
+		srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+		spec := fmt.Sprintf(`{
+		  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+		  "servers": [{"url": %q}],
+		  "paths": {"/x": {"get": {
+		    "operationId": "x",
+		    "parameters": [
+		      {"name": "Cookie", "in": "header", "schema": {"type": "string"}},
+		      {"name": "session", "in": "cookie", "schema": {"type": "string"}}
+		    ],
+		    "responses": {"200": {"description": "ok"}}
+		  }}}
+		}`, srv.URL)
+		call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Ref:    "#/paths/~1x/get",
+		})
+		_, ierr := driveSingle(t, call, map[string]any{})
+		if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(ierr.Message, "OAPI-P-10") {
+			t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
+		}
+		if requests.Load() != 0 {
+			t.Error("refusal must precede dispatch")
+		}
+	})
+
+	t.Run("selected cookie credential", func(t *testing.T) {
+		srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+		spec := fmt.Sprintf(`{
+		  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+		  "servers": [{"url": %q}],
+		  "paths": {"/x": {"get": {
+		    "operationId": "x",
+		    "security": [{"cookieKey": []}],
+		    "parameters": [{"name": "Cookie", "in": "header", "schema": {"type": "string"}}],
+		    "responses": {"200": {"description": "ok"}}
+		  }}},
+		  "components": {"securitySchemes": {
+		    "cookieKey": {"type": "apiKey", "in": "cookie", "name": "auth_token"}
+		  }}
+		}`, srv.URL)
+		call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Ref:     "#/paths/~1x/get",
+			Context: map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
+		})
+		_, ierr := driveSingle(t, call, map[string]any{})
+		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "OAPI-P-10") {
+			t.Fatalf("expected validation OAPI-P-10 refusal, got %v", ierr)
+		}
+		if requests.Load() != 0 {
+			t.Error("refusal must precede dispatch")
+		}
+	})
+}
+
+func TestPrepareBinding_FiltersCollidingSecurityAlternative(t *testing.T) {
+	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/x": {"get": {
+	    "operationId": "x",
+	    "security": [{"cookieKey": []}, {"bearer": []}],
+	    "parameters": [{"name": "Cookie", "in": "header", "schema": {"type": "string"}}],
+	    "responses": {"200": {"description": "ok"}}
+	  }}},
+	  "components": {"securitySchemes": {
+	    "cookieKey": {"type": "apiKey", "in": "cookie", "name": "session"},
+	    "bearer": {"type": "http", "scheme": "bearer"}
+	  }}
+	}`, srv.URL)
+
+	details, err := NewInvoker().PrepareBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Ref:    "#/paths/~1x/get",
+	})
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 {
+		t.Fatalf("challenge = %+v, want only the safe bearer alternative", details)
+	}
+	req := details.Alternatives[0].Requirements[0]
+	if req.Type != "auth.bearer" || req.Name != "bearer" {
+		t.Errorf("surviving requirement = %+v, want named auth.bearer", req)
+	}
+	if requests.Load() != 0 {
+		t.Error("prepareBinding must perform no network I/O")
+	}
+}
+
+func TestInvoke_AllMissingSecurityAlternativesRefuseBeforeDispatch(t *testing.T) {
+	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/x": {"get": {
+	    "operationId": "x",
+	    "security": [{"missingA": []}, {"missingB": []}],
+	    "responses": {"200": {"description": "ok"}}
+	  }}}
+	}`, srv.URL)
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Ref:    "#/paths/~1x/get",
+	})
+	_, ierr := driveSingle(t, call, nil)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(ierr.Message, "missingA") || !strings.Contains(ierr.Message, "missingB") {
+		t.Fatalf("expected closed security-configuration refusal, got %v", ierr)
+	}
+	if requests.Load() != 0 {
+		t.Error("invalid security declaration must refuse before dispatch")
+	}
+}
+
+func TestSchemaFreeCustomDocumentDialectRemainsInvocableAndSynthesizable(t *testing.T) {
+	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.1.0",
+	  "jsonSchemaDialect": "https://example.test/custom-dialect",
+	  "info": {"title": "custom dialect", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/x": {"get": {
+	    "operationId": "x",
+	    "responses": {"200": {"description": "ok", "content": {"application/json": {}}}}
+	  }}}
+	}`, srv.URL)
+	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Ref:    "#/paths/~1x/get",
+	})
+	if _, ierr := driveSingle(t, call, nil); ierr != nil {
+		t.Fatalf("schema-free artifact-native invocation failed: %s: %s", ierr.Code, ierr.Message)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("invocation requests = %d, want 1", requests.Load())
+	}
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	})
+	if err != nil {
+		t.Fatalf("schema-free portable synthesis should not interpret the custom dialect: %v", err)
+	}
+	if _, ok := iface.Operations["x"]; !ok {
+		t.Fatal("schema-free operation was omitted")
+	}
+}
+
+func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
+	t.Run("structured context cookies", func(t *testing.T) {
+		srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+		spec := fmt.Sprintf(`{
+		  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+		  "servers": [{"url": %q}],
+		  "paths": {"/x": {"get": {"operationId": "x", "responses": {"200": {"description": "ok"}}}}}
+		}`, srv.URL)
+		call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Ref:    "#/paths/~1x/get",
+			Context: map[string]any{
+				"headers": map[string]any{"Cookie": "raw=1"},
+				"cookies": map[string]any{"session": "structured"},
+			},
+		})
+		_, ierr := driveSingle(t, call, nil)
+		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "OAPI-P-10") {
+			t.Fatalf("expected Cookie context collision, got %v", ierr)
+		}
+		if requests.Load() != 0 {
+			t.Error("Cookie collision must refuse before dispatch")
+		}
+	})
+
+	t.Run("selected cookie credential", func(t *testing.T) {
+		srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+		spec := fmt.Sprintf(`{
+		  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+		  "servers": [{"url": %q}],
+		  "paths": {"/x": {"get": {
+		    "operationId": "x", "security": [{"cookieKey": []}],
+		    "responses": {"200": {"description": "ok"}}
+		  }}},
+		  "components": {"securitySchemes": {"cookieKey": {"type": "apiKey", "in": "cookie", "name": "session"}}}
+		}`, srv.URL)
+		call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Ref:    "#/paths/~1x/get",
+			Context: map[string]any{
+				"headers": map[string]any{"cookie": "raw=1"},
+				"apiKeys": map[string]any{"cookieKey": "secret"},
+			},
+		})
+		_, ierr := driveSingle(t, call, nil)
+		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "OAPI-P-10") {
+			t.Fatalf("expected Cookie credential/context collision, got %v", ierr)
+		}
+		if requests.Load() != 0 {
+			t.Error("Cookie collision must refuse before dispatch")
+		}
+	})
+}
+
+func TestPrepareBindingReturnsNoChallengeForOwnershipConflict(t *testing.T) {
+	spec := `{
+	  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": "https://api.example.com"}],
+	  "paths": {"/x": {"get": {
+	    "operationId": "x", "security": [{"bearer": []}],
+	    "parameters": [
+	      {"name": "Cookie", "in": "header", "schema": {"type": "string"}},
+	      {"name": "session", "in": "cookie", "schema": {"type": "string"}}
+	    ],
+	    "responses": {"200": {"description": "ok"}}
+	  }}},
+	  "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}}
+	}`
+	details, err := NewInvoker().PrepareBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Ref:    "#/paths/~1x/get",
+	})
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if details != nil {
+		t.Fatalf("unresolvable operation must not emit an auth challenge: %+v", details)
+	}
+}
+
+func TestInvoke_ProcessorOwnedHeaderParametersRefused(t *testing.T) {
+	for _, name := range []string{"Host", "Content-Length"} {
+		t.Run(name, func(t *testing.T) {
+			srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+			spec := fmt.Sprintf(`{
+			  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+			  "servers": [{"url": %q}],
+			  "paths": {"/x": {"get": {
+			    "operationId": "x",
+			    "parameters": [{"name": %q, "in": "header", "schema": {"type": "string"}}],
+			    "responses": {"200": {"description": "ok"}}
+			  }}}
+			}`, srv.URL, name)
+			call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+				Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+				Ref:    "#/paths/~1x/get",
+			})
+			_, ierr := driveSingle(t, call, map[string]any{})
+			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(ierr.Message, "OAPI-P-10") {
+				t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
+			}
+			if requests.Load() != 0 {
+				t.Error("refusal must precede dispatch")
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // OAPI-P-05 — servers end to end
 // ---------------------------------------------------------------------------

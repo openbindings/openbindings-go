@@ -129,6 +129,13 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		})
 		return
 	}
+	if err := checkEffectiveParameterOwnership(params); err != nil {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: err.Error(),
+		})
+		return
+	}
 	baseURL, err := resolveServer(doc, pathItem, op, args.Context, args.Source.Location)
 	if err != nil {
 		inv.FireError(configOrSourceError(err))
@@ -138,7 +145,15 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	// CONTEXT_REQUIRED is raised before any input is consumed and before any
 	// network I/O, so a no-input-consumed retry (after the operation layer
 	// resolves context) is safe.
-	if details := requiredContext(doc, op, args.Context, baseURL); details != nil {
+	if err := securityConfigurationError(doc, op); err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		return
+	}
+	if err := securityAlternativesCollision(doc, op, baseURL, params); err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+		return
+	}
+	if details := requiredContext(doc, op, args.Context, baseURL, params); details != nil {
 		inv.FireError(openbindings.NewContextRequiredError(
 			"OpenAPI operation requires authentication context", details))
 		return
@@ -284,8 +299,12 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 
 	// ----- Channel assembly (§9.6, OAPI-P-10). -----
 
-	placements := credentialPlacements(doc, op, args.Context)
-	if err := checkCredentialCollisions(placements, params, routed.populated); err != nil {
+	placements, err := selectCredentialPlacements(doc, op, args.Context, baseURL, params, routed.populated)
+	if err != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+		return
+	}
+	if err := contextChannelCollision(args.Context, params, placements); err != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
 		return
 	}
@@ -714,53 +733,19 @@ func openAPIFailureError(resp *http.Response, body []byte, match *governingRespo
 // OpenAPI `security` is a disjunction (OR) of requirement objects, each a
 // conjunction (AND) of scheme names — exactly the alternatives/requirements
 // shape of ContextRequiredDetails.
-func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string) *openbindings.ContextRequiredDetails {
-	var requirements *openapi3.SecurityRequirements
-	if op != nil && op.Security != nil {
-		requirements = op.Security
-	} else {
-		requirements = &doc.Security
-	}
-	if requirements == nil || len(*requirements) == 0 {
-		return nil // no authentication required
-	}
-	if doc.Components == nil || doc.Components.SecuritySchemes == nil {
+func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters) *openbindings.ContextRequiredDetails {
+	plans := viableSecurityPlans(doc, op, baseURL, params)
+	if len(plans) == 0 {
 		return nil
 	}
-
-	var alternatives []openbindings.ContextAlternative
-	for _, secReq := range *requirements {
-		if len(secReq) == 0 {
+	alternatives := make([]openbindings.ContextAlternative, 0, len(plans))
+	for _, plan := range plans {
+		if len(plan.context.Requirements) == 0 {
 			// An empty requirement object means anonymous access is allowed;
-			// no challenge is warranted for the whole operation.
+			// the context contract intentionally has no empty alternatives.
 			return nil
 		}
-		var reqs []openbindings.ContextRequirement
-		expressible := true
-		for schemeName := range secReq {
-			ref, ok := doc.Components.SecuritySchemes[schemeName]
-			if !ok || ref.Value == nil {
-				expressible = false
-				break
-			}
-			req, ok := schemeToRequirement(ref.Value, baseURL)
-			if !ok {
-				expressible = false
-				break
-			}
-			// R2.a ruling: every requirement carries the securitySchemes key
-			// that named it — distinguishes two ANDed schemes of the same
-			// type within this alternative and keys the scheme-scoped
-			// 'apiKeys' credential lookup.
-			req.Name = schemeName
-			reqs = append(reqs, req)
-		}
-		if expressible && len(reqs) > 0 {
-			alternatives = append(alternatives, openbindings.ContextAlternative{Requirements: reqs})
-		}
-	}
-	if len(alternatives) == 0 {
-		return nil
+		alternatives = append(alternatives, plan.context)
 	}
 
 	details := &openbindings.ContextRequiredDetails{
@@ -772,6 +757,163 @@ func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string
 		return nil
 	}
 	return details
+}
+
+// effectiveSecurityRequirements applies OpenAPI's operation-over-document
+// security inheritance rule. A non-nil empty operation list explicitly
+// disables document-level security.
+func effectiveSecurityRequirements(doc *openapi3.T, op *openapi3.Operation) *openapi3.SecurityRequirements {
+	if op != nil && op.Security != nil {
+		return op.Security
+	}
+	return &doc.Security
+}
+
+type namedSecurityScheme struct {
+	name   string
+	scheme *openapi3.SecurityScheme
+}
+
+type securityPlan struct {
+	context openbindings.ContextAlternative
+	schemes []namedSecurityScheme
+}
+
+// securityConfigurationError refuses every undefined SecurityScheme name.
+// An unresolved name is invalid OpenAPI source configuration, not an
+// anonymous or skippable OR alternative: dropping it would silently weaken
+// the API author's security declaration and diverge from the TS processor.
+func securityConfigurationError(doc *openapi3.T, op *openapi3.Operation) error {
+	requirements := effectiveSecurityRequirements(doc, op)
+	if requirements == nil || len(*requirements) == 0 {
+		return nil
+	}
+	missing := map[string]bool{}
+	for _, requirement := range *requirements {
+		for name := range requirement {
+			if doc.Components == nil || doc.Components.SecuritySchemes == nil {
+				missing[name] = true
+				continue
+			}
+			ref, found := doc.Components.SecuritySchemes[name]
+			if !found || ref == nil || ref.Value == nil {
+				missing[name] = true
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(missing))
+	for name := range missing {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	suffix := ""
+	if len(names) > 1 {
+		suffix = "s"
+	}
+	return fmt.Errorf("OpenAPI security requirement references undefined security scheme%s: %s", suffix, strings.Join(names, ", "))
+}
+
+// securityPlans expands the artifact's OR-of-AND Security Requirement
+// Objects without flattening them. An OAuth scheme may contribute multiple
+// usable declared flows, so one authored AND-set expands to the Cartesian
+// product of its schemes' runtime alternatives. Every expanded plan still
+// represents exactly one complete artifact-declared requirement object.
+func securityPlans(doc *openapi3.T, op *openapi3.Operation, baseURL string) []securityPlan {
+	requirements := effectiveSecurityRequirements(doc, op)
+	if requirements == nil || len(*requirements) == 0 {
+		return nil
+	}
+	var plans []securityPlan
+	for _, secReq := range *requirements {
+		if len(secReq) == 0 {
+			plans = append(plans, securityPlan{})
+			continue
+		}
+		expanded := []securityPlan{{}}
+		expressible := true
+		names := make([]string, 0, len(secReq))
+		for schemeName := range secReq {
+			names = append(names, schemeName)
+		}
+		sort.Strings(names)
+		for _, schemeName := range names {
+			if doc.Components == nil || doc.Components.SecuritySchemes == nil {
+				expressible = false
+				break
+			}
+			ref, ok := doc.Components.SecuritySchemes[schemeName]
+			if !ok || ref.Value == nil {
+				expressible = false
+				break
+			}
+			requiredScopes := append([]string(nil), secReq[schemeName]...)
+			options := schemeRequirements(ref.Value, baseURL, requiredScopes)
+			if len(options) == 0 {
+				expressible = false
+				break
+			}
+			next := make([]securityPlan, 0, len(expanded)*len(options))
+			for _, plan := range expanded {
+				for _, option := range options {
+					option.Name = schemeName
+					if ref.Value.Description != "" {
+						option.Description = ref.Value.Description
+					}
+					reqs := append([]openbindings.ContextRequirement(nil), plan.context.Requirements...)
+					reqs = append(reqs, option)
+					schemes := append([]namedSecurityScheme(nil), plan.schemes...)
+					schemes = append(schemes, namedSecurityScheme{name: schemeName, scheme: ref.Value})
+					next = append(next, securityPlan{
+						context: openbindings.ContextAlternative{Requirements: reqs},
+						schemes: schemes,
+					})
+				}
+			}
+			expanded = next
+		}
+		if expressible {
+			plans = append(plans, expanded...)
+		}
+	}
+	return plans
+}
+
+func viableSecurityPlans(doc *openapi3.T, op *openapi3.Operation, baseURL string, params openapi3.Parameters) []securityPlan {
+	plans := securityPlans(doc, op, baseURL)
+	if len(plans) == 0 {
+		return nil
+	}
+	viable := make([]securityPlan, 0, len(plans))
+	for _, plan := range plans {
+		if err := checkCredentialCollisions(credentialDestinations(plan), params, nil); err == nil {
+			viable = append(viable, plan)
+		}
+	}
+	return viable
+}
+
+// securityAlternativesCollision reports an ownership conflict only when every
+// complete runtime alternative is unusable. A later channel-safe alternative
+// remains selectable and is the only one surfaced during context negotiation.
+func securityAlternativesCollision(doc *openapi3.T, op *openapi3.Operation, baseURL string, params openapi3.Parameters) error {
+	plans := securityPlans(doc, op, baseURL)
+	if len(plans) == 0 {
+		return nil
+	}
+	var first error
+	for _, plan := range plans {
+		err := checkCredentialCollisions(credentialDestinations(plan), params, nil)
+		if err == nil {
+			return nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // schemeToRequirement maps an OpenAPI security scheme to a context
@@ -786,56 +928,61 @@ func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string
 // now returns true; the bool is kept for signature stability (and as a hook
 // for a genuinely inexpressible future case) rather than removed.
 func schemeToRequirement(s *openapi3.SecurityScheme, baseURL string) (openbindings.ContextRequirement, bool) {
+	options := schemeRequirements(s, baseURL, nil)
+	if len(options) == 0 {
+		return openbindings.ContextRequirement{}, false
+	}
+	return options[0], true
+}
+
+// schemeRequirements maps one security scheme to its runtime requirement
+// choices. Only OAuth2 expands: every declared flow capable of granting the
+// Security Requirement Object's authoritative scope array becomes a distinct
+// alternative. Other schemes contribute exactly one requirement.
+func schemeRequirements(s *openapi3.SecurityScheme, baseURL string, requiredScopes []string) []openbindings.ContextRequirement {
 	switch s.Type {
 	case "http":
 		switch strings.ToLower(s.Scheme) {
 		case "basic":
-			return openbindings.ContextRequirement{Type: "auth.basic"}, true
+			return []openbindings.ContextRequirement{{Type: "auth.basic"}}
 		case "bearer":
-			return openbindings.ContextRequirement{Type: "auth.bearer"}, true
+			return []openbindings.ContextRequirement{{Type: "auth.bearer"}}
 		default:
 			// digest, negotiate, etc.: not a family this SDK resolves
 			// itself, but SURFACED (R2.c ruling), not dropped. A missing
 			// scheme value degrades to the bare family, never a trailing
 			// dot (TS parity).
-			return openbindings.ContextRequirement{
+			return []openbindings.ContextRequirement{{
 				Type:        httpRequirementType(s.Scheme),
 				Description: s.Description,
-			}, true
+			}}
 		}
 	case "apiKey":
-		return openbindings.ContextRequirement{Type: "auth.apiKey"}, true
+		return []openbindings.ContextRequirement{{Type: "auth.apiKey"}}
 	case "oauth2":
-		return oauth2Requirement(s, baseURL), true
+		return oauth2Requirements(s, baseURL, requiredScopes)
 	case "openIdConnect":
 		// OpenID Connect resolves to an OAuth2 access token; the discovery URL
 		// lets a resolver fetch the authorize/token endpoints. No flow is
 		// selected here (openIdConnect has no `flows` object), so this
 		// requirement carries no grantType (R2.b ruling).
-		req := openbindings.ContextRequirement{Type: "auth.oauth2"}
+		req := openbindings.ContextRequirement{Type: "auth.oauth2", Extra: map[string]any{
+			"scopes": append([]string{}, requiredScopes...),
+		}}
 		if s.OpenIdConnectUrl != "" {
-			req.Extra = map[string]any{"openIdConnectUrl": absolutizeURL(s.OpenIdConnectUrl, baseURL)}
+			req.Extra["openIdConnectUrl"] = absolutizeURL(s.OpenIdConnectUrl, baseURL)
 		}
-		return req, true
+		return []openbindings.ContextRequirement{req}
 	default:
 		// Any other artifact type this SDK doesn't itself resolve (e.g.
 		// "mutualTLS"): surfaced verbatim (R2.c ruling) rather than dropped.
-		return openbindings.ContextRequirement{
+		return []openbindings.ContextRequirement{{
 			Type:        "auth." + s.Type,
 			Description: s.Description,
-		}, true
+		}}
 	}
 }
 
-// oauth2Requirement builds an auth.oauth2 requirement carrying the SELECTED
-// flow's grantType (R2.b ruling) alongside its authorize/token URLs and
-// scopes, under the binding-invoker contract's convention field names
-// (grantType, authorizeUrl, tokenUrl, scopes). Fixed priority — surfaced,
-// never changed by this ruling: authorizationCode (the only interactive,
-// PKCE-capable flow) > implicit > password > clientCredentials, the last two
-// selected only when they carry a tokenUrl (OpenAPI 3.x defines
-// authorizationUrl only for authorizationCode/implicit). Relative URLs are
-// resolved against the base URL.
 // httpRequirementType derives the surfaced type for an http scheme this SDK
 // does not itself resolve: "auth.http.<scheme>" (lowercased), degrading to
 // the bare "auth.http" when the artifact omits the scheme value (TS parity —
@@ -847,43 +994,77 @@ func httpRequirementType(scheme string) string {
 	return "auth.http." + strings.ToLower(scheme)
 }
 
-func oauth2Requirement(s *openapi3.SecurityScheme, baseURL string) openbindings.ContextRequirement {
-	req := openbindings.ContextRequirement{Type: "auth.oauth2"}
-	if s.Flows == nil {
-		return req
+// oauth2Requirements builds one auth.oauth2 requirement per usable declared
+// flow. The scopes field carries the Security Requirement Object's required
+// scopes, never the scheme's complete advertised catalogue. Canonical flow
+// order is deterministic only; it does not invent a preference. When no
+// declared flow can grant the required scopes, a bare scoped requirement
+// remains discoverable so an already-acquired token may still satisfy it.
+func oauth2Requirements(s *openapi3.SecurityScheme, baseURL string, requiredScopes []string) []openbindings.ContextRequirement {
+	type candidate struct {
+		grantType string
+		flow      *openapi3.OAuthFlow
 	}
-	var flow *openapi3.OAuthFlow
-	var grantType string
-	switch {
-	case s.Flows.AuthorizationCode != nil:
-		flow, grantType = s.Flows.AuthorizationCode, "authorization_code"
-	case s.Flows.Implicit != nil:
-		flow, grantType = s.Flows.Implicit, "implicit"
-	case s.Flows.Password != nil && s.Flows.Password.TokenURL != "":
-		flow, grantType = s.Flows.Password, "password"
-	case s.Flows.ClientCredentials != nil && s.Flows.ClientCredentials.TokenURL != "":
-		flow, grantType = s.Flows.ClientCredentials, "client_credentials"
+	var flows *openapi3.OAuthFlows
+	if s != nil {
+		flows = s.Flows
 	}
-	if flow == nil {
-		return req
-	}
-	extra := map[string]any{"grantType": grantType}
-	if flow.AuthorizationURL != "" {
-		extra["authorizeUrl"] = absolutizeURL(flow.AuthorizationURL, baseURL)
-	}
-	if flow.TokenURL != "" {
-		extra["tokenUrl"] = absolutizeURL(flow.TokenURL, baseURL)
-	}
-	if len(flow.Scopes) > 0 {
-		scopes := make([]string, 0, len(flow.Scopes))
-		for k := range flow.Scopes {
-			scopes = append(scopes, k)
+	var candidates []candidate
+	if flows != nil {
+		candidates = []candidate{
+			{grantType: "authorization_code", flow: flows.AuthorizationCode},
+			{grantType: "implicit", flow: flows.Implicit},
+			{grantType: "password", flow: flows.Password},
+			{grantType: "client_credentials", flow: flows.ClientCredentials},
 		}
-		sort.Strings(scopes)
-		extra["scopes"] = scopes
 	}
-	req.Extra = extra
-	return req
+	var requirements []openbindings.ContextRequirement
+	for _, candidate := range candidates {
+		if candidate.flow == nil || !oauthFlowUsable(candidate.grantType, candidate.flow, requiredScopes) {
+			continue
+		}
+		extra := map[string]any{
+			"grantType": candidate.grantType,
+			"scopes":    append([]string{}, requiredScopes...),
+		}
+		if candidate.flow.AuthorizationURL != "" {
+			extra["authorizeUrl"] = absolutizeURL(candidate.flow.AuthorizationURL, baseURL)
+		}
+		if candidate.flow.TokenURL != "" {
+			extra["tokenUrl"] = absolutizeURL(candidate.flow.TokenURL, baseURL)
+		}
+		requirements = append(requirements, openbindings.ContextRequirement{Type: "auth.oauth2", Extra: extra})
+	}
+	if len(requirements) == 0 {
+		return []openbindings.ContextRequirement{{
+			Type:  "auth.oauth2",
+			Extra: map[string]any{"scopes": append([]string{}, requiredScopes...)},
+		}}
+	}
+	return requirements
+}
+
+func oauthFlowUsable(grantType string, flow *openapi3.OAuthFlow, requiredScopes []string) bool {
+	switch grantType {
+	case "authorization_code":
+		if flow.AuthorizationURL == "" || flow.TokenURL == "" {
+			return false
+		}
+	case "implicit":
+		if flow.AuthorizationURL == "" {
+			return false
+		}
+	case "password", "client_credentials":
+		if flow.TokenURL == "" {
+			return false
+		}
+	}
+	for _, scope := range requiredScopes {
+		if _, ok := flow.Scopes[scope]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // absolutizeURL resolves a possibly-relative URL against the server base;
@@ -1016,59 +1197,61 @@ type credentialPlacement struct {
 	value   string
 }
 
-// credentialPlacements derives the credential wire applications for an
-// operation from the artifact's security declarations (read at invocation
-// time, never extracted into the OBI) and the supplied context: an apiKey
-// scheme's credential rides its declared in/name; http basic and bearer,
-// oauth2, and openIdConnect ride the Authorization header. When the document
-// declares no security schemes, well-known context credentials fall back to
-// the Authorization header. Placements are computed BEFORE dispatch so the
-// OAPI-P-10 collision refusal can run pre-dispatch; duplicate channel+name
-// placements collapse to the first.
-func credentialPlacements(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any) []credentialPlacement {
-	if len(bindCtx) == 0 {
-		return nil
-	}
-
-	var placements []credentialPlacement
-	seen := map[string]bool{}
-	add := func(channel, name, value string) {
-		key := channel + "\x00" + name
-		if channel == "header" {
-			key = channel + "\x00" + http.CanonicalHeaderKey(name)
+// selectCredentialPlacements chooses one complete, satisfiable OpenAPI
+// Security Requirement Object in artifact order. Security Requirement Objects
+// are alternatives (OR); schemes inside one object are conjunctive (AND).
+// Consequently credentials are never pooled across alternatives. A
+// collision makes that alternative unusable but does not prevent selecting a
+// later complete alternative. No declared security means no credential wire
+// application, even when unrelated credentials exist in context.
+func selectCredentialPlacements(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters, populated map[string]map[string]bool) ([]credentialPlacement, error) {
+	for _, plan := range viableSecurityPlans(doc, op, baseURL, params) {
+		if len(plan.context.Requirements) == 0 {
+			return nil, nil // this complete alternative explicitly allows anonymous access
 		}
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		placements = append(placements, credentialPlacement{channel: channel, name: name, value: value})
-	}
-
-	schemes := resolveSecuritySchemes(doc, op)
-	for _, named := range schemes {
-		if named.Scheme.Value == nil {
+		if !openbindings.ContextSatisfies(bindCtx, &openbindings.ContextRequiredDetails{
+			Alternatives: []openbindings.ContextAlternative{plan.context},
+		}) {
 			continue
 		}
-		s := named.Scheme.Value
+		placements := credentialValues(plan, bindCtx)
+		if err := checkCredentialCollisions(placements, params, populated); err != nil {
+			return nil, err
+		}
+		return placements, nil
+	}
+	// requiredContext prevents dispatch when no alternative is satisfied. This
+	// path is therefore defensive for invalid or extension-only artifacts; it
+	// must still not leak unrelated credentials onto the wire.
+	return nil, nil
+}
+
+// credentialValues applies every scheme in exactly one selected security
+// plan. It deliberately retains duplicate wire destinations so collision
+// checks can refuse an impossible AND rather than silently dropping one.
+func credentialValues(plan securityPlan, bindCtx map[string]any) []credentialPlacement {
+	placements := make([]credentialPlacement, 0, len(plan.schemes))
+	for _, named := range plan.schemes {
+		s := named.scheme
 		switch s.Type {
 		case "apiKey":
-			val := openbindings.ContextAPIKeyFor(bindCtx, named.Name)
+			val := openbindings.ContextAPIKeyFor(bindCtx, named.name)
 			if val == "" {
 				continue
 			}
 			switch s.In {
 			case "header", "query", "cookie":
-				add(s.In, s.Name, val)
+				placements = append(placements, credentialPlacement{channel: s.In, name: s.Name, value: val})
 			}
 		case "http":
 			switch strings.ToLower(s.Scheme) {
 			case "bearer":
 				if token := openbindings.ContextBearerToken(bindCtx); token != "" {
-					add("header", "Authorization", "Bearer "+token)
+					placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Bearer " + token})
 				}
 			case "basic":
 				if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
-					add("header", "Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(u+":"+p)))
+					placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Basic " + base64.StdEncoding.EncodeToString([]byte(u+":"+p))})
 				}
 			}
 		case "oauth2", "openIdConnect":
@@ -1077,21 +1260,35 @@ func credentialPlacements(doc *openapi3.T, op *openapi3.Operation, bindCtx map[s
 				token = openbindings.ContextBearerToken(bindCtx)
 			}
 			if token != "" {
-				add("header", "Authorization", "Bearer "+token)
+				placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Bearer " + token})
 			}
 		}
 	}
+	return placements
+}
 
-	if len(placements) == 0 {
-		// No scheme applied a credential (typically no securitySchemes
-		// declared): well-known context credentials fall back to the
-		// Authorization header.
-		if token := openbindings.ContextBearerToken(bindCtx); token != "" {
-			add("header", "Authorization", "Bearer "+token)
-		} else if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
-			add("header", "Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(u+":"+p)))
-		} else if key := openbindings.ContextAPIKey(bindCtx); key != "" {
-			add("header", "Authorization", "ApiKey "+key)
+// credentialDestinations is the artifact-only wire footprint of one security
+// plan. It lets context negotiation discard OAPI-P-10-colliding alternatives
+// before credentials exist, so an unusable alternative is never challenged.
+func credentialDestinations(plan securityPlan) []credentialPlacement {
+	placements := make([]credentialPlacement, 0, len(plan.schemes))
+	for _, named := range plan.schemes {
+		s := named.scheme
+		switch s.Type {
+		case "apiKey":
+			switch s.In {
+			case "header", "query", "cookie":
+				if s.Name != "" {
+					placements = append(placements, credentialPlacement{channel: s.In, name: s.Name})
+				}
+			}
+		case "http":
+			switch strings.ToLower(s.Scheme) {
+			case "basic", "bearer":
+				placements = append(placements, credentialPlacement{channel: "header", name: "Authorization"})
+			}
+		case "oauth2", "openIdConnect":
+			placements = append(placements, credentialPlacement{channel: "header", name: "Authorization"})
 		}
 	}
 	return placements
@@ -1103,6 +1300,7 @@ func credentialPlacements(doc *openapi3.T, op *openapi3.Operation, bindCtx map[s
 // either direction. Header names compare case-insensitively.
 func checkCredentialCollisions(placements []credentialPlacement, params openapi3.Parameters, populated map[string]map[string]bool) error {
 	declared := map[string]map[string]bool{"header": {}, "query": {}, "cookie": {}, "path": {}}
+	rawCookieHeader := false
 	for _, ref := range params {
 		if ref == nil || ref.Value == nil {
 			continue
@@ -1110,13 +1308,32 @@ func checkCredentialCollisions(placements []credentialPlacement, params openapi3
 		name := ref.Value.Name
 		if ref.Value.In == openapi3.ParameterInHeader {
 			name = http.CanonicalHeaderKey(name)
+			if name == "Cookie" {
+				rawCookieHeader = true
+			}
 		}
 		declared[ref.Value.In][name] = true
 	}
 	ownedHeaders := map[string]bool{"Host": true, "Content-Length": true, "Content-Type": true, "Accept": true}
+	hasRawCookieOwner := rawCookieHeader
+	hasStructuredCookieOwner := len(declared[openapi3.ParameterInCookie]) > 0
+	for _, placement := range placements {
+		if placement.channel == "header" && http.CanonicalHeaderKey(placement.name) == "Cookie" {
+			hasRawCookieOwner = true
+		}
+		if placement.channel == "cookie" {
+			hasStructuredCookieOwner = true
+		}
+	}
+	if hasRawCookieOwner && hasStructuredCookieOwner {
+		return fmt.Errorf("raw Cookie header source collides with structured cookie assembly (OAPI-P-10)")
+	}
 	seen := map[string]bool{}
 	for _, pl := range placements {
 		name := pl.name
+		if pl.channel == "cookie" && rawCookieHeader {
+			return fmt.Errorf("cookie credential %q conflicts with a raw Cookie header parameter (OAPI-P-10: refused before dispatch)", pl.name)
+		}
 		if pl.channel == "header" {
 			name = http.CanonicalHeaderKey(name)
 			if ownedHeaders[name] {
@@ -1135,54 +1352,44 @@ func checkCredentialCollisions(placements []credentialPlacement, params openapi3
 	return nil
 }
 
-// namedSecurityScheme pairs a resolved OpenAPI security scheme with the
-// securitySchemes map key it was resolved from — the same key requiredContext
-// stamps onto the ContextRequirement's Name (R2.a ruling), needed here so
-// credential application can look up a NAMED apiKey scheme's key via
-// ContextAPIKeyFor without re-deriving the name.
-type namedSecurityScheme struct {
-	Name   string
-	Scheme *openapi3.SecuritySchemeRef
-}
-
-// resolveSecuritySchemes returns the security schemes applicable to an
-// operation, each paired with its securitySchemes key. Operation-level
-// security overrides top-level; falls back to top-level if not set. Scheme
-// names within each requirement iterate sorted so placement order is
-// deterministic.
-func resolveSecuritySchemes(doc *openapi3.T, op *openapi3.Operation) []namedSecurityScheme {
-	var requirements *openapi3.SecurityRequirements
-	if op != nil {
-		requirements = op.Security
-	}
-	if requirements == nil {
-		requirements = &doc.Security
-	}
-	if requirements == nil || len(*requirements) == 0 {
-		return nil
-	}
-
-	if doc.Components == nil || doc.Components.SecuritySchemes == nil {
-		return nil
-	}
-
-	var result []namedSecurityScheme
-	seen := map[string]bool{}
-	for _, req := range *requirements {
-		names := make([]string, 0, len(req))
-		for schemeName := range req {
-			names = append(names, schemeName)
-		}
-		sort.Strings(names)
-		for _, schemeName := range names {
-			if seen[schemeName] {
-				continue
-			}
-			seen[schemeName] = true
-			if ref, ok := doc.Components.SecuritySchemes[schemeName]; ok {
-				result = append(result, namedSecurityScheme{Name: schemeName, Scheme: ref})
-			}
+// contextChannelCollision keeps the context transport-hint channel from
+// overwriting the structured Cookie assembly. Cookie is one HTTP field with
+// two intentionally distinct caller surfaces (`headers.Cookie` and
+// `cookies`); ambiguous ownership is refused before dispatch.
+func contextChannelCollision(bindCtx map[string]any, params openapi3.Parameters, placements []credentialPlacement) error {
+	rawContextCookie := false
+	for name := range openbindings.ContextHeaders(bindCtx) {
+		if http.CanonicalHeaderKey(name) == "Cookie" {
+			rawContextCookie = true
+			break
 		}
 	}
-	return result
+	hasRawCookieOwner := false
+	hasStructuredCookie := len(openbindings.ContextCookies(bindCtx)) > 0
+	for _, ref := range params {
+		if ref == nil || ref.Value == nil {
+			continue
+		}
+		if ref.Value.In == openapi3.ParameterInHeader && http.CanonicalHeaderKey(ref.Value.Name) == "Cookie" {
+			hasRawCookieOwner = true
+		}
+		if ref.Value.In == openapi3.ParameterInCookie {
+			hasStructuredCookie = true
+		}
+	}
+	for _, placement := range placements {
+		if placement.channel == "header" && http.CanonicalHeaderKey(placement.name) == "Cookie" {
+			hasRawCookieOwner = true
+		}
+		if placement.channel == "cookie" {
+			hasStructuredCookie = true
+		}
+	}
+	if rawContextCookie && (hasRawCookieOwner || hasStructuredCookie) {
+		return fmt.Errorf("raw Cookie context header collides with another raw or structured cookie source (OAPI-P-10: refused before dispatch, never a silent overwrite)")
+	}
+	if hasRawCookieOwner && len(openbindings.ContextCookies(bindCtx)) > 0 {
+		return fmt.Errorf("raw Cookie header source collides with structured context cookies (OAPI-P-10: refused before dispatch, never a silent overwrite)")
+	}
+	return nil
 }

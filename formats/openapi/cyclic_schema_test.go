@@ -80,6 +80,50 @@ func TestRecursiveComponentSynthesizesAsDefs(t *testing.T) {
 	}
 }
 
+func TestSynthesisTreatsRefShapedSchemaDataAsOpaque(t *testing.T) {
+	doc := `{
+  "openapi": "3.1.0",
+  "info": {"title": "opaque refs", "version": "1"},
+  "paths": {"/value": {"get": {
+    "operationId": "value",
+    "responses": {"200": {"description": "ok", "content": {
+      "application/json": {"schema": {"$ref": "#/components/schemas/Value"}}
+    }}}
+  }}},
+  "components": {"schemas": {
+    "Value": {
+      "type": "object",
+      "properties": {"id": {"type": "string"}},
+      "default": {"$ref": "#/components/schemas/Value", "kind": "default"},
+      "example": {"$ref": "#/components/schemas/Value", "kind": "example"},
+      "enum": [{"$ref": "#/components/schemas/Value", "kind": "enum"}],
+      "x-literal": {"$ref": "#/components/schemas/Value", "kind": "extension"}
+    }
+  }}
+}`
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+	})
+	if err != nil {
+		t.Fatalf("synthesis failed: %v", err)
+	}
+	output := iface.Operations["value"].Output.(map[string]any)
+	if _, invented := output["$defs"]; invented {
+		t.Fatalf("ref-shaped annotation data invented a schema cycle: %#v", output)
+	}
+	assertLiteral := func(name string, value any) {
+		t.Helper()
+		literal := value.(map[string]any)
+		if literal["$ref"] != "#/components/schemas/Value" || literal["kind"] != name {
+			t.Fatalf("%s data was dereferenced or rewritten: %#v", name, literal)
+		}
+	}
+	assertLiteral("default", output["default"])
+	assertLiteral("example", output["example"])
+	assertLiteral("enum", output["enum"].([]any)[0])
+	assertLiteral("extension", output["x-literal"])
+}
+
 func TestRecursiveComponentSynthesizesAndInvokesThroughCoreDocumentRoot(t *testing.T) {
 	doc := strings.Replace(recursiveDoc, `"paths":`, `"servers": [{"url": "https://api.example.test"}], "paths":`, 1)
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
@@ -125,6 +169,67 @@ func TestRecursiveComponentSynthesizesAndInvokesThroughCoreDocumentRoot(t *testi
 	}
 	if !reflect.DeepEqual(output, tree) {
 		t.Fatalf("output = %#v, want %#v", output, tree)
+	}
+}
+
+func TestRecursiveComponentReachedThroughArrayItemsValidatesThroughCoreDocumentRoot(t *testing.T) {
+	// Mirrors the gogs Repository shape: the operation root is an array whose
+	// items reference a component that recursively references itself. Go may
+	// hoist the named component at the first schema-position occurrence; what
+	// matters for fidelity is that the resulting OBI-root reference graph is
+	// complete and applies every nested constraint.
+	doc := `{
+  "openapi": "3.0.3",
+  "info": {"title": "repositories", "version": "1"},
+  "paths": {"/repositories": {"get": {
+    "operationId": "listRepositories",
+    "responses": {"200": {"description": "ok", "content": {
+      "application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Repository"}}}
+    }}}
+  }}},
+  "components": {"schemas": {"Repository": {
+    "type": "object",
+    "required": ["id"],
+    "properties": {
+      "id": {"type": "integer"},
+      "parent": {
+        "$ref": "#/components/schemas/Repository",
+        "nullable": true,
+        "description": "ignored OAS 3.0 schema-ref siblings"
+      }
+    }
+  }}}
+}`
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+	})
+	if err != nil {
+		t.Fatalf("synthesis failed: %v", err)
+	}
+	valid := []any{map[string]any{
+		"id": float64(1),
+		"parent": map[string]any{
+			"id": float64(2),
+		},
+	}}
+	if err := openbindings.ValidateOperationOutput(valid, iface, "listRepositories"); err != nil {
+		t.Fatalf("complete recursive array output was rejected: %v", err)
+	}
+	invalid := []any{map[string]any{
+		"id": float64(1),
+		"parent": map[string]any{
+			"id": "not-an-integer",
+		},
+	}}
+	if err := openbindings.ValidateOperationOutput(invalid, iface, "listRepositories"); err == nil {
+		t.Fatal("recursive array item constraint was not applied through operation-local $defs")
+	}
+	encoded, err := json.Marshal(iface.Operations["listRepositories"].Output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "#/components/schemas/") {
+		t.Fatalf("recursive array output carries a dangling artifact ref: %s", encoded)
 	}
 }
 
@@ -186,7 +291,8 @@ func TestResolvedParameterSchemaRefDoesNotEscapeIntoOBI(t *testing.T) {
 	}
 	outputProperties := op.Output.(map[string]any)["properties"].(map[string]any)
 	outputOrdering := outputProperties["ordering"].(map[string]any)
-	if outputOrdering["type"] != "string" {
+	allOf, ok := outputOrdering["allOf"].([]any)
+	if !ok || len(allOf) != 1 || allOf[0].(map[string]any)["type"] != "string" {
 		t.Fatalf("nested pointer constraints were lost: %#v", outputOrdering)
 	}
 }

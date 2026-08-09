@@ -194,7 +194,14 @@ func (e *Invoker) PrepareBinding(_ context.Context, args *openbindings.BindingIn
 		// before auth matters, so there is no context to report.
 		return nil, nil
 	}
-	return requiredContext(doc, op, args.Context, baseURL), nil
+	params := effectiveParameters(pathItem, op)
+	if err := checkEffectiveParameterOwnership(params); err != nil {
+		return nil, nil
+	}
+	if err := securityConfigurationError(doc, op); err != nil {
+		return nil, nil
+	}
+	return requiredContext(doc, op, args.Context, baseURL, params), nil
 }
 
 // prepareDoc returns the OpenAPI document without performing network I/O:
@@ -207,11 +214,26 @@ func (e *Invoker) prepareDoc(location string, content json.RawMessage) *openapi3
 		if err != nil {
 			return nil
 		}
-		loader := openapi3.NewLoader() // external refs NOT allowed: no I/O
-		doc, err := loader.LoadFromData(data)
+		var resource *url.URL
+		if location != "" {
+			resource, _ = url.Parse(location)
+		}
+		normalizer := newRawRefSiblingNormalizer(nil)
+		data, err = normalizer.normalizeResource(data, resource)
 		if err != nil {
 			return nil
 		}
+		loader := openapi3.NewLoader() // external refs NOT allowed: no I/O
+		var doc *openapi3.T
+		if resource != nil {
+			doc, err = loader.LoadFromDataWithPath(data, resource)
+		} else {
+			doc, err = loader.LoadFromData(data)
+		}
+		if err != nil {
+			return nil
+		}
+		localizeReferenceMetadata(doc)
 		return doc
 	}
 	if location == "" {
@@ -325,7 +347,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		}
 		artifactContent = openbindings.TextContent(string(data))
 	}
-	doc, err := loadDocumentWithResolver(ctx, c.resolverClient(), loadLocation, artifactContent)
+	doc, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, artifactContent)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}

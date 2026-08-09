@@ -17,27 +17,18 @@ import (
 //   - {exclusiveMinimum: false} (or unpaired) → drop the keyword
 //   - same for maximum / exclusiveMaximum
 //
-// Translations performed for EVERY version:
+// Additional translations performed only for OpenAPI 3.0:
 //
 //   - {type: T, nullable: true}        → {type: [T, "null"]}
 //   - {type: [...], nullable: true}    → {type: [..., "null"]}
 //   - {nullable: true} without type    → drop the keyword
 //   - {nullable: false}                → drop the keyword
 //
-// The nullable transform is deliberately NOT gated on 3.0. OAS 3.1 removed
-// the keyword, but the median real-world 3.1 document still carries it —
-// not by authorial mistake but structurally: Django REST Framework's
-// pagination schemas hand-write `nullable: true` as raw dicts, and
-// drf-spectacular forwards them verbatim even in 3.1 mode, so every
-// DRF-backed 3.1 spec ships it (PokeAPI: 132 occurrences across 54 of 100
-// operations). A 2020-12 validator ignores the unknown keyword, leaving
-// `type: string` to reject the very null the author declared — pagination
-// then fails on exactly the first and last pages. The author's intent is
-// unambiguous, and the project's schema-comparison profile already
-// normalizes nullable unconditionally; synthesis matching it keeps
-// comparison and invocation telling the same story. In 3.0 the transform
-// is dialect translation and silent; in any other version it is SALVAGE of
-// a malformed document and reports drop evidence (openapi.stray_nullable).
+// OpenAPI 3.1 uses JSON Schema 2020-12 and removed nullable. There it is an
+// unknown, inert annotation: synthesis preserves it when the typed source
+// path retained it, but never widens the artifact's asserted type. Guessing
+// that a stray 3.0 spelling carries the old meaning would overfit to common
+// generators and change the accepted instance set without 3.1 authority.
 //
 // For EVERY version the walk additionally salvages obviously-invalid
 // `type` constraints that would fail OBI validation (OBI-D-17) — see
@@ -52,7 +43,7 @@ func translateSchemaDialect(schema map[string]any, openapiVersion string) map[st
 // `type` values that are not JSON Schema 2020-12 type names — a string that
 // is not one of the seven primitives is dropped, invalid members of a type
 // array are filtered out (dropping the keyword when nothing valid remains).
-// Real-world specs ship these (PokeAPI's openapi.yml declares `type: ''`),
+// Real-world specs ship these (PokeAPI's openapi.yml declares `type: ”`),
 // and an invalid type constrains nothing — rejecting a whole
 // multi-operation interface over it hands the user a dead end for a spec
 // every other tool accepts. Salvage is never silent: each dropped token is
@@ -95,6 +86,7 @@ var schemaBearingSingleKeys = map[string]bool{
 	"else":                  true,
 	"propertyNames":         true,
 	"contains":              true,
+	"contentSchema":         true,
 	"unevaluatedItems":      true,
 	"unevaluatedProperties": true,
 }
@@ -139,9 +131,9 @@ func (w *schemaWalker) object(in map[string]any, path string) map[string]any {
 	out := make(map[string]any, len(in))
 
 	for k, v := range in {
-		// nullable never survives into the OBI in any version: translated
-		// into the type union when true (below), meaningless when false.
-		if k == "nullable" || (w.legacy && (k == "exclusiveMinimum" || k == "exclusiveMaximum")) {
+		// nullable is a dialect keyword only in 3.0. In 3.1 it is unknown
+		// annotation data and remains inert rather than widening type.
+		if w.legacy && (k == "nullable" || k == "exclusiveMinimum" || k == "exclusiveMaximum") {
 			continue
 		}
 		switch {
@@ -156,15 +148,11 @@ func (w *schemaWalker) object(in map[string]any, path string) map[string]any {
 		}
 	}
 
-	// The nullable transform runs for every version: dialect translation in
-	// 3.0, salvage-with-evidence everywhere else (see the package comment for
-	// why the wild's 3.1 documents make the gate untenable).
-	if nullable, ok := in["nullable"].(bool); ok && nullable {
-		translated := false
+	// nullable changes validation semantics only in the OpenAPI 3.0 dialect.
+	if nullable, ok := in["nullable"].(bool); w.legacy && ok && nullable {
 		switch t := in["type"].(type) {
 		case string:
 			out["type"] = []any{t, "null"}
-			translated = true
 		case []any:
 			if containsString(t, "null") {
 				cp := make([]any, len(t))
@@ -176,10 +164,6 @@ func (w *schemaWalker) object(in map[string]any, path string) map[string]any {
 				cp = append(cp, "null")
 				out["type"] = cp
 			}
-			translated = true
-		}
-		if translated && !w.legacy {
-			w.strayNullable(path + "/nullable")
 		}
 	}
 
@@ -213,7 +197,7 @@ func (w *schemaWalker) object(in map[string]any, path string) map[string]any {
 }
 
 // salvageType drops `type` values that no 2020-12 validator accepts. It runs
-// after the legacy transforms so a 3.0 {type: '', nullable: true} still keeps
+// after the legacy transforms so a 3.0 {type: ”, nullable: true} still keeps
 // the "null" member the nullable transform contributed.
 func (w *schemaWalker) salvageType(out map[string]any, path string) {
 	t, present := out["type"]
@@ -252,19 +236,6 @@ func (w *schemaWalker) drop(path, token string) {
 			"dropped invalid JSON Schema type %q declared by the source artifact; the salvaged position accepts any value",
 			token,
 		))
-	}
-}
-
-// strayNullable reports the non-3.0 nullable salvage. In 3.0 the same
-// transform is expected dialect translation and stays silent; under any
-// other version the keyword is malformed input whose repair must leave
-// evidence, per the salvage doctrine.
-func (w *schemaWalker) strayNullable(path string) {
-	if w.report != nil {
-		w.report(path, "openapi.stray_nullable",
-			"translated `nullable: true` carried by a non-3.0 artifact into a `type` union with \"null\"; "+
-				"OpenAPI 3.1 removed the keyword, and a 2020-12 validator would have ignored it and rejected null values",
-		)
 	}
 }
 
@@ -315,7 +286,7 @@ func numericValue(v any) (any, bool) {
 
 // stringify renders a dropped token for the warning message. fmt.Sprintf
 // handles every JSON-decoded shape; strings pass through unchanged so the
-// common case (`type: ''` → "") reads literally.
+// common case (`type: ”` → "") reads literally.
 func stringify(v any) string {
 	if s, ok := v.(string); ok {
 		return s

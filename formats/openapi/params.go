@@ -45,6 +45,38 @@ func effectiveParameters(pathItem *openapi3.PathItem, op *openapi3.Operation) op
 	return out
 }
 
+// checkEffectiveParameterOwnership enforces the declaration-only portions of
+// OAPI-P-10. Host and Content-Length are owned by the HTTP processor and
+// therefore cannot be caller-routed parameters. A raw Cookie header also
+// cannot coexist with structured cookie parameters because both would own the
+// single HTTP Cookie field. These are artifact-shape failures, independent of
+// any invocation input, and must be refused before input consumption.
+func checkEffectiveParameterOwnership(params openapi3.Parameters) error {
+	var rawCookieHeader bool
+	var structuredCookieParameter bool
+	for _, pref := range params {
+		if pref == nil || pref.Value == nil {
+			continue
+		}
+		p := pref.Value
+		switch p.In {
+		case openapi3.ParameterInHeader:
+			switch http.CanonicalHeaderKey(p.Name) {
+			case "Host", "Content-Length":
+				return fmt.Errorf("operation declares processor-owned header parameter %q (OAPI-P-10: unresolvable)", p.Name)
+			case "Cookie":
+				rawCookieHeader = true
+			}
+		case openapi3.ParameterInCookie:
+			structuredCookieParameter = true
+		}
+	}
+	if rawCookieHeader && structuredCookieParameter {
+		return fmt.Errorf("operation declares both a raw Cookie header parameter and structured cookie parameters (OAPI-P-10: unresolvable)")
+	}
+	return nil
+}
+
 // unflattenableParam reports the first parameter name declared in two
 // DIFFERENT locations (legal per the OAS's name-plus-location identity, but
 // unrepresentable by the flattened model): such an operation is refused

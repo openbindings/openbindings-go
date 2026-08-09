@@ -257,16 +257,10 @@ paths:
 	}
 }
 
-func TestConvertDocToInterface_Salvages31StrayNullable(t *testing.T) {
-	// The wild's 3.1 documents routinely carry 3.0's removed `nullable`
-	// keyword — DRF hand-writes it into pagination schemas and
-	// drf-spectacular forwards it verbatim even in 3.1 mode (PokeAPI: 132
-	// occurrences). Preserved "verbatim", a 2020-12 validator ignores the
-	// unknown keyword and `type: string` rejects the very null the author
-	// declared, so pagination fails on exactly the first and last pages.
-	// The salvage matches the schema-comparison profile's unconditional
-	// normalization and, unlike 3.0 dialect translation, must leave drop
-	// evidence.
+func TestConvertDocToInterface_Preserves31NullableWithoutWideningType(t *testing.T) {
+	// OpenAPI 3.1 removed nullable. A 2020-12 evaluator treats it as an inert
+	// unknown annotation, so synthesis must not guess the 3.0 meaning even
+	// when a familiar generator emits the old spelling.
 	yaml := []byte(`openapi: 3.1.0
 info: { title: T, version: "1.0.0" }
 paths:
@@ -306,21 +300,21 @@ paths:
 		t.Errorf("next.type = %#v, want [\"string\", \"null\"] verbatim", next["type"])
 	}
 
-	// A stray 3.0 nullable is translated, not preserved: union added,
-	// keyword gone, sibling keywords intact.
+	// The stray spelling remains inert: the explicit string assertion stays
+	// narrow and the unknown annotation survives when kin-openapi retained it.
 	legacy := props["legacy"].(map[string]any)
-	legacyType, ok := legacy["type"].([]any)
-	if !ok || len(legacyType) != 2 || legacyType[0] != "string" || legacyType[1] != "null" {
-		t.Errorf("legacy.type = %#v, want [\"string\", \"null\"]", legacy["type"])
+	if legacy["type"] != "string" {
+		t.Errorf("legacy.type = %#v, want \"string\"", legacy["type"])
 	}
-	if _, still := legacy["nullable"]; still {
-		t.Errorf("legacy.nullable survived salvage: %#v", legacy)
+	if legacy["nullable"] != true {
+		t.Errorf("legacy.nullable was not preserved as annotation: %#v", legacy)
 	}
 	if legacy["format"] != "uri" {
 		t.Errorf("legacy.format = %#v, want \"uri\" (siblings survive)", legacy["format"])
 	}
 
-	// nullable: false is meaningless in both dialects and simply drops.
+	// kin-openapi's typed model omits an explicit false value; importantly it
+	// still does not affect the asserted type.
 	flagOff := props["flagOff"].(map[string]any)
 	if _, still := flagOff["nullable"]; still {
 		t.Errorf("flagOff.nullable survived: %#v", flagOff)
@@ -329,18 +323,11 @@ paths:
 		t.Errorf("flagOff.type = %#v, want \"string\" unchanged", flagOff["type"])
 	}
 
-	// Unlike 3.0 dialect translation, non-3.0 salvage is never silent.
-	var strays []openbindings.SynthesizerWarning
+	// No nullable salvage occurred, so no warning claims an invented rewrite.
 	for _, w := range warnings {
 		if w.Code == "openapi.stray_nullable" {
-			strays = append(strays, w)
+			t.Fatalf("unexpected nullable salvage warning: %#v", w)
 		}
-	}
-	if len(strays) != 1 {
-		t.Fatalf("want exactly one stray_nullable warning (legacy only, not flagOff), got %#v", warnings)
-	}
-	if strays[0].Path != "operations.x.output/properties/legacy/nullable" {
-		t.Errorf("warning path = %q", strays[0].Path)
 	}
 }
 
@@ -798,16 +785,13 @@ func TestSynthesizeInterface_SalvagesInvalidTypeKeyword(t *testing.T) {
 	}
 	props, _ := op.Output.(map[string]any)["properties"].(map[string]any)
 	known, _ := props["known_move"].(map[string]any)
-	// {type: "", nullable: true} now lands the same place in every dialect:
-	// the nullable salvage contributes "null", the invalid "" member drops
-	// with evidence, and the union keeps what the author actually asserted —
-	// the outcome 3.0 has always documented for this exact shape.
-	knownType, isArray := known["type"].([]any)
-	if !isArray || len(knownType) != 1 || knownType[0] != "null" {
-		t.Errorf("known_move.type = %#v, want [\"null\"]", known["type"])
+	// The invalid type drops with evidence. The 3.1 nullable spelling remains
+	// inert and cannot manufacture a null-only schema.
+	if _, present := known["type"]; present {
+		t.Errorf("known_move.type = %#v, want invalid type removed", known["type"])
 	}
-	if _, still := known["nullable"]; still {
-		t.Errorf("stray nullable survived salvage: %#v", known)
+	if known["nullable"] != true {
+		t.Errorf("stray nullable annotation was not preserved: %#v", known)
 	}
 	found := false
 	for _, w := range warnings {

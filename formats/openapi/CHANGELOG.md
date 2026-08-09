@@ -47,6 +47,27 @@
 
 ### Fixed
 
+- **Security alternatives, credential ownership, and synthesis soundness now
+  follow OpenAPI revision 2 exactly.** Security Requirement Objects remain an
+  OR of complete AND sets; a selected request never combines credentials from
+  separate alternatives or sends undeclared fallback credentials. Effective
+  `Host` and `Content-Length` parameters and ambiguous raw/structured cookie
+  ownership refuse before dispatch, while a later complete collision-free
+  security alternative may still be used. Content-form parameters outside the
+  revision-2 JSON/text carriage are excluded during synthesis with explicit
+  exhaustive coverage rather than becoming statically uninvocable operations.
+
+- **Schema projection is now direction- and edition-aware.** Request schemas
+  omit `readOnly` properties, response schemas omit `writeOnly` properties,
+  and required lists are repaired through nested, composed, map, and recursive
+  graphs. Raw OpenAPI resources are normalized at the loader boundary so 3.1
+  Schema Object `$ref` siblings compose before kin-openapi resolution can
+  overlay them, while 3.0 Reference Object siblings retain strict ignore
+  semantics and examples/extensions remain opaque data. Legal 3.1 Reference
+  Object descriptions remain site-local rather than mutating a shared target;
+  unsupported custom schema dialects refuse portable synthesis without
+  globally disabling artifact-native invocation or reference listing.
+
 - **A typeless request-body schema rides the synthetic `body` property on
   the wire, matching the published contract** (`openbindings.openapi@1`
   §9.1's declaration-only object determination: a body schema is object
