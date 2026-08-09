@@ -72,6 +72,30 @@ func unflattenableParam(params openapi3.Parameters) string {
 	return ""
 }
 
+// unflattenableParamForRevision keeps revision 1's complete flattened-model
+// refusal while letting revision 2 disambiguate names across protocol
+// locations. Case-distinct header declarations remain unresolvable in both
+// revisions because HTTP field names themselves are case-insensitive: no
+// routing envelope can create two semantically distinct wire destinations.
+func unflattenableParamForRevision(params openapi3.Parameters, bindingSpec string) string {
+	if bindingSpec != BindingSpecV2 {
+		return unflattenableParam(params)
+	}
+	headerNames := map[string]string{}
+	for _, pref := range params {
+		if pref == nil || pref.Value == nil || pref.Value.In != openapi3.ParameterInHeader {
+			continue
+		}
+		name := pref.Value.Name
+		folded := strings.ToLower(name)
+		if previous, ok := headerNames[folded]; ok && previous != name {
+			return name
+		}
+		headerNames[folded] = name
+	}
+	return ""
+}
+
 // ---------------------------------------------------------------------------
 // Routing (the flatten, wire side)
 // ---------------------------------------------------------------------------

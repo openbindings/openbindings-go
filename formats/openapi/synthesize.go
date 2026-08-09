@@ -38,13 +38,13 @@ type unrealizableTarget struct {
 // condition returns an error (strict mode: SynthesizeInterface), preserving
 // the convenient strict surface's guarantee that it never returns a
 // statically unbindable partial interface without evidence.
-func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindings.SynthesizerWarning), onUnrealizable func(unrealizableTarget)) (openbindings.Interface, error) {
+func convertDocToInterface(doc *openapi3.T, location, bindingSpec string, warn func(openbindings.SynthesizerWarning), onUnrealizable func(unrealizableTarget)) (openbindings.Interface, error) {
 	// The schema-dialect translation keys off the artifact's own declared
 	// version (3.0 vs 3.1); the identifier stays exact and version-free.
 	formatVersion := majorMinor(doc.OpenAPI)
 
 	sourceEntry := openbindings.Source{
-		BindingSpec: BindingSpec,
+		BindingSpec: bindingSpec,
 	}
 	if location != "" {
 		sourceEntry.Location = location
@@ -101,7 +101,7 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 			usedKeys[opKey] = true
 
 			params := effectiveParameters(pathItem, op)
-			if field := unflattenableParam(params); field != "" {
+			if field := unflattenableParamForRevision(params, bindingSpec); field != "" {
 				reason := fmt.Sprintf("parameter %q has no unique revision-1 flattened identity", field)
 				if onUnrealizable != nil {
 					onUnrealizable(unrealizableTarget{
@@ -122,7 +122,7 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 				plannedCount := len(plans)
 				if planErr == nil {
 					for _, plan := range plans {
-						if !candidateCollides(params, plan) {
+						if bindingSpec == BindingSpecV2 || !candidateCollides(params, plan) {
 							requestPlans = append(requestPlans, plan)
 						}
 					}
@@ -186,7 +186,8 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 			}
 
 			opPointer := "#/operations/" + escapeJSONPointerSegment(opKey)
-			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, refRegistry)
+			routes := planAbstractInputRoutes(params, requestPlans)
+			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, refRegistry, routes)
 			if inputSchema != nil {
 				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry, cyclic, opPointer+"/input")
 				obiOp.Input = normalizeOperationSchema(inlined, formatVersion, schemaSalvageWarner(warn, opKey, "input"))
@@ -202,11 +203,15 @@ func convertDocToInterface(doc *openapi3.T, location string, warn func(openbindi
 
 			ref := buildJSONPointerRef(path, method)
 			bindingKey := opKey + "." + DefaultSourceName
-			iface.Bindings[bindingKey] = openbindings.BindingEntry{
+			binding := openbindings.BindingEntry{
 				Operation: opKey,
 				Source:    DefaultSourceName,
 				Ref:       ref,
 			}
+			if bindingSpec == BindingSpecV2 && routes.needsTransform {
+				binding.InputTransform = &openbindings.TransformOrRef{Inline: routes.transformExpression()}
+			}
+			iface.Bindings[bindingKey] = binding
 		}
 	}
 
@@ -425,18 +430,18 @@ func buildJSONPointerRef(path, method string) string {
 	return "#/paths/" + escaped + "/" + strings.ToLower(method)
 }
 
-func buildInputSchemaForPlans(op *openapi3.Operation, allParams openapi3.Parameters, requestPlans []*bodyPlan, refRegistry map[string]any) map[string]any {
+func buildInputSchemaForPlans(op *openapi3.Operation, allParams openapi3.Parameters, requestPlans []*bodyPlan, refRegistry map[string]any, routes abstractInputRoutes) map[string]any {
 	if op.RequestBody == nil || op.RequestBody.Value == nil {
-		return buildInputSchema(op, allParams, nil, refRegistry)
+		return buildInputSchema(op, allParams, nil, refRegistry, routes)
 	}
 	var variants []map[string]any
 	if !op.RequestBody.Value.Required {
-		if parameterOnly := buildInputSchema(op, allParams, nil, refRegistry); parameterOnly != nil {
+		if parameterOnly := buildInputSchema(op, allParams, nil, refRegistry, routes); parameterOnly != nil {
 			variants = append(variants, parameterOnly)
 		}
 	}
 	for _, plan := range requestPlans {
-		if schema := buildInputSchema(op, allParams, plan, refRegistry); schema != nil {
+		if schema := buildInputSchema(op, allParams, plan, refRegistry, routes); schema != nil {
 			variants = append(variants, schema)
 		}
 	}
@@ -463,7 +468,7 @@ func buildInputSchemaForPlans(op *openapi3.Operation, allParams openapi3.Paramet
 	return map[string]any{"anyOf": anyOf}
 }
 
-func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, requestPlan *bodyPlan, refRegistry map[string]any) map[string]any {
+func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, requestPlan *bodyPlan, refRegistry map[string]any, routes abstractInputRoutes) map[string]any {
 	properties := map[string]any{}
 	var required []string
 	// Only JSON-family object candidates can carry undeclared fields. The
@@ -477,12 +482,13 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 		param := paramRef.Value
 
 		prop := paramToSchema(param)
+		field := routes.parameterField(param.In, param.Name)
 		if prop != nil {
-			properties[param.Name] = prop
+			properties[field] = prop
 		}
 
 		if param.Required {
-			required = append(required, param.Name)
+			required = append(required, field)
 		}
 	}
 
@@ -513,16 +519,21 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 				// type; §9.1's determination is declaration-only): the
 				// flattened contract carries it under the synthetic
 				// `body` property, unwrapped at the wire.
-				properties["body"] = bodySchema
+				field := routes.wholeBodyField
+				if field == "" {
+					field = syntheticBodyProperty
+				}
+				properties[field] = bodySchema
 				if rb.Required {
-					required = append(required, "body")
+					required = append(required, field)
 				}
 			case hasProps:
 				for k, v := range bodyProps {
-					// Colliding candidates were removed before this plan was chosen.
-					properties[k] = v
+					properties[routes.bodyField(k)] = v
 				}
-				required = append(required, stringSlice(bodySchema["required"])...)
+				for _, name := range stringSlice(bodySchema["required"]) {
+					required = append(required, routes.bodyField(name))
+				}
 			default:
 				// A free-form object body (type object, no named
 				// properties): the flattened model passes unmatched input

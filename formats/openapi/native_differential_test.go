@@ -17,6 +17,7 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/processorscenarios"
+	"github.com/recolabs/gnata"
 )
 
 // TestOpenAPINativeDifferential is the independent-client gate for the first
@@ -78,7 +79,7 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 
 			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 				Sources: []openbindings.SynthesizeSource{{
-					BindingSpec: BindingSpec,
+					BindingSpec: file.BindingSpec,
 					Content:     content,
 				}},
 			})
@@ -133,6 +134,145 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOpenAPIV2CollisionDifferential proves the first revision-2 fidelity
+// repair end to end. Three independently authored values named "id" (path,
+// query, and JSON body) remain independently writable through a
+// protocol-neutral synthesized operation and arrive at the server exactly as
+// native HTTP code sends them.
+func TestOpenAPIV2CollisionDifferential(t *testing.T) {
+	type observation struct {
+		method  string
+		pathID  string
+		queryID string
+		body    map[string]any
+	}
+	observations := make(chan observation, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		observations <- observation{
+			method:  r.Method,
+			pathID:  strings.TrimPrefix(r.URL.Path, "/items/"),
+			queryID: r.URL.Query().Get("id"),
+			body:    body,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(server.Close)
+
+	nativeBody := strings.NewReader(`{"id":"body-value","name":"widget"}`)
+	nativeReq, err := http.NewRequest(http.MethodPost, server.URL+"/items/path-value?id=query-value", nativeBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeReq.Header.Set("Content-Type", "application/json")
+	nativeResp, err := server.Client().Do(nativeReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, nativeResp.Body)
+	_ = nativeResp.Body.Close()
+	want := <-observations
+
+	spec := fmt.Sprintf(`{
+	  "openapi":"3.1.0",
+	  "info":{"title":"collision","version":"1"},
+	  "servers":[{"url":%q}],
+	  "paths":{"/items/{id}":{"post":{
+	    "operationId":"createItem",
+	    "parameters":[
+	      {"name":"id","in":"path","required":true,"description":"resource identifier","schema":{"type":"string"}},
+	      {"name":"id","in":"query","description":"request correlation identifier","schema":{"type":"string"}}
+	    ],
+	    "requestBody":{"required":true,"content":{"application/json":{"schema":{
+	      "type":"object",
+	      "properties":{"id":{"type":"string","description":"body identifier"},"name":{"type":"string"}},
+	      "required":["id","name"]
+	    }}}},
+	    "responses":{
+	      "200":{
+	        "description":"ok",
+	        "content":{"application/json":{"schema":{"type":"object","properties":{"ok":{"type":"boolean"}}}}}
+	      }
+	    }
+	  }}}
+	}`, server.URL)
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV2, Content: openbindings.TextContent(spec)}},
+	})
+	if err != nil {
+		t.Fatalf("revision-2 synthesis failed: %v", err)
+	}
+	binding := iface.Bindings["createItem.openapi"]
+	if binding.InputTransform == nil {
+		t.Fatal("collision-preserving synthesis omitted its binding-private input transform")
+	}
+	props := iface.Operations["createItem"].Input.(map[string]any)["properties"].(map[string]any)
+	for _, field := range []string{"id", "id_2", "id_3", "name"} {
+		if _, ok := props[field]; !ok {
+			t.Fatalf("synthesized operation input omitted abstract field %q: %#v", field, props)
+		}
+	}
+
+	opInvoker := openbindings.NewOperationInvoker(NewInvokerWithClient(server.Client()))
+	opInvoker.TransformEvaluator = openAPIJSONataEvaluator{}
+	call := openbindings.Invoke(
+		context.Background(),
+		opInvoker,
+		iface,
+		openbindings.NewOperationSignature[any, any]("createItem"),
+	)
+	if err := call.Write(context.Background(), map[string]any{
+		"id": "path-value", "id_2": "query-value", "id_3": "body-value", "name": "widget",
+	}); err != nil {
+		t.Fatalf("write operation input: %v", err)
+	}
+	_ = call.Close()
+	outputs, terminal := differentialOutputs(call)
+	if terminal != nil {
+		t.Fatalf("OpenBindings invocation failed: %v", terminal)
+	}
+	if !reflect.DeepEqual(outputs, []any{map[string]any{"ok": true}}) {
+		t.Fatalf("unexpected outputs: %#v", outputs)
+	}
+	got := <-observations
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("native/OB request differential\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+type openAPIJSONataEvaluator struct{}
+
+func (openAPIJSONataEvaluator) Evaluate(expression string, data any) (any, error) {
+	compiled, err := gnata.Compile(expression)
+	if err != nil {
+		return nil, err
+	}
+	input, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	result, err := compiled.EvalBytes(context.Background(), input)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, openbindings.ErrTransformUndefined
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	var normalized any
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
 
 func differentialArtifact(t *testing.T, scenario processorscenarios.Scenario, serverURL string) json.RawMessage {

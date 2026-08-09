@@ -116,13 +116,16 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 
-	// The flattened model's structural refusals (§9.1) are declaration-only:
-	// they precede input consumption.
+	revision2 := args.Source.BindingSpec == BindingSpecV2
+	// The input model's structural refusals (§9.1) are declaration-only and
+	// precede input consumption. Revision 2 lifts cross-location name
+	// collisions through its routed source value; it cannot lift two
+	// case-distinct declarations that HTTP itself treats as one header name.
 	params := effectiveParameters(pathItem, op)
-	if name := unflattenableParam(params); name != "" {
+	if name := unflattenableParamForRevision(params, args.Source.BindingSpec); name != "" {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: fmt.Sprintf("operation declares parameter %q in two different locations: it cannot be represented by the flattened model (OAPI-P-03, unflattenable)", name),
+			Message: fmt.Sprintf("operation declares parameter %q without a distinct wire identity under %s (OAPI-P-03, unflattenable/unresolvable)", name, args.Source.BindingSpec),
 		})
 		return
 	}
@@ -148,6 +151,8 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	// portable claim at that boundary", not that the interaction carries zero
 	// values. A caller with nothing to say says it by closing. -----
 	inputMap := map[string]any{}
+	inputSupplied := false
+	var envelope *routedEnvelope
 	switch {
 	case len(params) == 0 && !hasRequestBody(op):
 		_ = inv.CloseInput()
@@ -170,8 +175,21 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 			inv.FireError(openbindings.AsInvocationError(rerr))
 			return
 		default:
-			if m, ok := openbindings.ToStringAnyMap(v); ok {
-				inputMap = m
+			inputSupplied = true
+			if revision2 {
+				envelope, err = parseRoutedEnvelope(v)
+				if err != nil {
+					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+					return
+				}
+			}
+			if envelope == nil {
+				if m, ok := openbindings.ToStringAnyMap(v); ok {
+					inputMap = m
+				} else {
+					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: "OpenAPI input value must be a JSON object"})
+					return
+				}
 			}
 		}
 		_ = inv.CloseInput()
@@ -179,28 +197,59 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 
 	// ----- Routing (§9.1) and body construction (§9.2): still pre-dispatch. -----
 
+	if revision2 && inputSupplied && envelope == nil && flatInputHasAmbiguousParameter(params, inputMap) {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeValidationFailed,
+			Message: "this revision-2 input supplies one flat field for independently declared same-named parameters and requires a routed source input (normally produced by the binding's inputTransform)",
+		})
+		return
+	}
+
 	var plans []*bodyPlan
-	if requestWillEmitBody(params, inputMap, op) {
+	willEmitBody := requestWillEmitBody(params, inputMap, op)
+	if envelope != nil {
+		willEmitBody = envelopeWillEmitBody(envelope, op)
+	}
+	if willEmitBody || envelope != nil {
 		plans, err = planRequestBodies(op)
 		if err != nil {
 			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
 			return
 		}
 	}
+	if envelope != nil {
+		if err := validateEnvelopeRoutes(params, plans, envelope); err != nil {
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+			return
+		}
+	}
+	if !willEmitBody {
+		plans = nil
+	}
 
 	var routed *routedInput
 	var bodyReader io.Reader
 	var contentType string
 	if len(plans) == 0 {
-		routed, err = routeInput(params, inputMap, pathTemplate, &bodyPlan{})
+		if envelope != nil {
+			routed, err = routeEnvelope(params, envelope, pathTemplate, &bodyPlan{})
+		} else {
+			routed, err = routeInput(params, inputMap, pathTemplate, &bodyPlan{})
+		}
 	} else {
 		var reasons []string
 		for _, candidate := range configuredRequestPlans(plans, args.Context) {
-			if candidateCollides(params, candidate) {
+			if envelope == nil && candidateCollides(params, candidate) {
 				reasons = append(reasons, fmt.Sprintf("request media candidate %s collides with an independently declared parameter", candidate.mediaType))
 				continue
 			}
-			candidateRouted, routeErr := routeInput(params, inputMap, pathTemplate, candidate)
+			var candidateRouted *routedInput
+			var routeErr error
+			if envelope != nil {
+				candidateRouted, routeErr = routeEnvelope(params, envelope, pathTemplate, candidate)
+			} else {
+				candidateRouted, routeErr = routeInput(params, inputMap, pathTemplate, candidate)
+			}
 			if routeErr != nil {
 				if errors.Is(routeErr, errMissingPathParam) {
 					err = routeErr

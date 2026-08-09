@@ -27,7 +27,7 @@ import (
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 ```
 
-The invoker declares the binding specification `openbindings.openapi@1` — it handles exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents.
+The invoker declares current `openbindings.openapi@2` and immutable `openbindings.openapi@1` compatibility. Both handle exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents; revision 2 additionally preserves independent same-named inputs.
 
 ### Invoke a binding
 
@@ -38,7 +38,7 @@ invoker := openapi.NewInvoker()
 
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@1"
+        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@2"
         Location:    "https://api.example.com/openapi.json",
     },
     Ref:     "#/paths/~1users/get",
@@ -83,11 +83,11 @@ iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 
 ## Behavior
 
-This package implements the published [`openbindings.openapi@1`](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md) binding specification; that document is normative for input mapping (the flattened model, OAS style/explode serialization), request media selection, server resolution, interaction shape, and channel assembly.
+This package implements current [`openbindings.openapi@2`](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md) and retains immutable `openbindings.openapi@1` compatibility. The current document is normative for routed input mapping, OAS serialization, request media selection, server resolution, interaction shape, and channel assembly.
 
 ### Binding specification identifier
 
-`openbindings.openapi@1` (exact, opaque). Accepts exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own `openapi` field.
+`openbindings.openapi@2` (exact, opaque; current) and `openbindings.openapi@1` (exact, opaque; compatibility). Both accept exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own `openapi` field.
 
 ### Ref format
 
@@ -164,14 +164,14 @@ Connect, GraphQL, MCP) do not consult the seam.
 
 ### Interface synthesis
 
-Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@1` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
+Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@2` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
 
 - **Operation keys** come from `operationId` when present, sanitized to the OBI key grammar (non-key characters become `_`, leading/trailing `_` trimmed, a leading non-letter gets an `_` prefix). An `operationId` whose sanitized key is already taken falls through to path+method derivation: template segments (`{id}`) dropped, remaining segments joined with `.`, the lowercased method appended (`/users/{id}` + `GET` → `users.get`), then deduplicated deterministically with `_2`, `_3`, … suffixes.
 - **Iteration order is fixed**: paths alphabetically, methods in the order get, put, post, delete, options, head, patch, trace.
-- **Input schemas** merge effective path-level and operation-level parameters from every supported location (path, query, header, cookie) with each realizable request-media candidate's own body surface. Distinct candidate surfaces are preserved with `anyOf`; parameter-only and non-JSON surfaces are closed against fields the invoker would refuse, while JSON object candidates remain open for the binding's declared passthrough rule.
+- **Input schemas** merge effective path-level and operation-level parameters from every supported location (path, query, header, cookie) with each realizable request-media candidate's own body surface. Distinct declarations keep their application names when unique; collisions receive deterministic neutral suffixes and a binding-private `inputTransform` carries the exact protocol route. Distinct candidate surfaces are preserved with `anyOf`; parameter-only and non-JSON surfaces are closed against fields the invoker would refuse, while JSON object candidates remain open for the binding's declared passthrough rule.
 - **Output schemas** conservatively union every value-bearing success lane that can govern a 2xx response: exact 2xx entries, `2XX`, and an unshadowed `default`. JSON declarations contribute their schemas, non-JSON/SSE declarations contribute strings, and a schema-less JSON lane leaves output unspecified rather than inventing a shape.
 - **Schema translation** targets JSON Schema 2020-12 (spec OBI-D-06), keyed on the artifact's declared `openapi` version: 3.0.x schemas are normalized out of the Draft-4 subset dialect; 3.1.x schemas pass through unchanged.
-- **Unrealizable targets fail synthesis**: cross-location parameter collisions and required bodies with no non-colliding, supported media candidate make the whole synthesis call fail. An optional body may be omitted with a warning only when the remaining no-body operation is still faithfully invocable.
+- **Unrealizable targets fail synthesis**: conditional/combinatorial body shapes without one declaration-defined route, case-colliding HTTP header declarations, and required bodies with no supported media candidate make the whole strict synthesis call fail. An optional body may be omitted with a warning only when the remaining no-body operation is still faithfully invocable.
 - **No security metadata is written to the OBI**; `securitySchemes` are honored at invocation time via context negotiation (`CONTEXT_REQUIRED` challenges and the `BindingPreparer` preflight).
 
 ## How it works
@@ -181,7 +181,7 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
 1. Loads and caches the OpenAPI document (JSON or YAML, local or remote), discriminating the exact accepted 3.0.0–3.0.4 and 3.1.0–3.1.2 editions
 2. Parses the ref as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)
 3. Resolves the server (effective list + variables + the `server` configuration point)
-4. Routes input fields per the flattened model — parameters serialize per the OAS style/explode rules; unmatched fields pass into a declared request body and refuse loudly otherwise — and selects the request media type per the specification's preference order
+4. Routes application fields to their artifact declarations — using the binding-private revision-2 route when names collide — serializes parameters per OAS style/explode rules, and selects an artifact-declared request media candidate
 5. Applies credentials from the context using the spec's `securitySchemes` (bearer, basic, apiKey with correct placement), refusing credential/parameter channel collisions pre-dispatch
 6. Makes the HTTP request; the declared success media bound the interaction shape (unary, or server-streaming for a declared `text/event-stream` response), successful results emit through the invocation handle, and unsuccessful completion preserves the native response through `FailureEvidenceFrom`
 

@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Current `openbindings.openapi@2` preserves same-named application inputs.**
+  Synthesis retains unique author names, assigns deterministic neutral suffixes
+  only where declarations collide, and carries their exact OpenAPI
+  name/location correspondence in a binding-private core `inputTransform`.
+  Invocation validates and consumes that routed value before dispatch; no HTTP
+  identity enters the operation schema. Immutable `openbindings.openapi@1`
+  remains available as `LegacyBindingSpec`. Native differential tests cover
+  path/query/body collisions, and the shared portable corpus covers the new
+  processor and synthesis behavior.
+
 - **Degenerate media/schema combinations refuse pre-dispatch**
   (`openbindings.openapi@1` §9.2, amended 2026-07-21): a request-media
   selection landing on `multipart/form-data` or

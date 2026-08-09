@@ -6,6 +6,12 @@
 
 ### Changed
 
+- **The OpenAPI module now defaults to `openbindings.openapi@2`.** Its
+  synthesizer preserves independent same-named parameter and request-body
+  values through a binding-private transform while keeping the operation
+  contract protocol-blind. Immutable revision 1 remains available through
+  `openapi.LegacyBindingSpec`.
+
 - **Per-operation dependencies compose compatibility, invocability, and
   caller policy without introducing a registry.** The core SDK now exposes
   `OperationRequirement`, `CheckOperationCompatibility`,

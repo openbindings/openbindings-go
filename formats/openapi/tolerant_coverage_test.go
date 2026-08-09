@@ -52,7 +52,7 @@ const mixedDoc = `{
 func mixedInput() *openbindings.SynthesizeInput {
 	return &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			BindingSpec: BindingSpec,
+			BindingSpec: LegacyBindingSpec,
 			Content:     json.RawMessage(mixedDoc),
 		}},
 	}
@@ -128,7 +128,7 @@ func TestCoverageSynthesisReturnsSoundPartialOBI(t *testing.T) {
 func TestInspectSourceFiltersUnrepresentableTargets(t *testing.T) {
 	synth := &Synthesizer{}
 	inspection, err := synth.InspectSource(context.Background(), &openbindings.Source{
-		BindingSpec: BindingSpec,
+		BindingSpec: LegacyBindingSpec,
 		Content:     json.RawMessage(mixedDoc),
 	})
 	if err != nil {
@@ -161,7 +161,7 @@ func TestAllUnrepresentableYieldsEmptySoundOBI(t *testing.T) {
 	}`
 	synth := &Synthesizer{}
 	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: LegacyBindingSpec, Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("coverage synthesis failed: %v", err)

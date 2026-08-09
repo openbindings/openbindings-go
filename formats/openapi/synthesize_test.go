@@ -60,7 +60,7 @@ func minimalDoc() *openapi3.T {
 
 func mustConvertDocToInterface(t *testing.T, doc *openapi3.T, location string) openbindings.Interface {
 	t.Helper()
-	iface, err := convertDocToInterface(doc, location, nil, nil)
+	iface, err := convertDocToInterface(doc, location, BindingSpec, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ paths:
 		t.Fatalf("loadDocument: %v", err)
 	}
 	var warnings []openbindings.SynthesizerWarning
-	iface, err := convertDocToInterface(doc, "",
+	iface, err := convertDocToInterface(doc, "", BindingSpec,
 		func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) }, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -481,7 +481,7 @@ func TestSynthesize_ParamBodyCollisionRefusesPartialInterface(t *testing.T) {
 	var warnings []openbindings.SynthesizerWarning
 	synth := NewSynthesizer()
 	_, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources:   []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		Sources:   []openbindings.SynthesizeSource{{BindingSpec: LegacyBindingSpec, Content: openbindings.TextContent(spec)}},
 		OnWarning: func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
 	if err == nil || !strings.Contains(err.Error(), `"updateUser"`) || !strings.Contains(err.Error(), "statically unbindable partial interface") {

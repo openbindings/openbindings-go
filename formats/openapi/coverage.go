@@ -33,9 +33,11 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 		byRef[binding.Ref] = bindingIdentity{operationKey: binding.Operation, ref: binding.Ref}
 	}
 	sourceLocation := ""
+	bindingSpec := BindingSpec
 	for _, source := range iface.Sources {
-		if source.BindingSpec == BindingSpec {
+		if source.BindingSpec == BindingSpec || source.BindingSpec == LegacyBindingSpec {
 			sourceLocation = source.Location
+			bindingSpec = source.BindingSpec
 			break
 		}
 	}
@@ -96,7 +98,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					BindingRef:   identity.ref,
 					Requirements: openAPIServerRequirements(doc, pathItem, op, sourceLocation),
 				})
-				entries = append(entries, openAPIRequestMediaCoverage(op, pathItem, identity)...)
+				entries = append(entries, openAPIRequestMediaCoverage(op, pathItem, identity, bindingSpec)...)
 				entries = append(entries, openAPICallbackCoverage(op, ref)...)
 			}
 		}
@@ -120,7 +122,7 @@ func openAPIServerRequirements(
 func openAPIRequestMediaCoverage(op *openapi3.Operation, pathItem *openapi3.PathItem, identity struct {
 	operationKey string
 	ref          string
-}) []openbindings.SynthesisCoverageEntry {
+}, bindingSpec string) []openbindings.SynthesisCoverageEntry {
 	if op.RequestBody == nil || op.RequestBody.Value == nil || len(op.RequestBody.Value.Content) == 0 {
 		return nil
 	}
@@ -130,7 +132,7 @@ func openAPIRequestMediaCoverage(op *openapi3.Operation, pathItem *openapi3.Path
 	represented := make(map[string]bool, len(plans))
 	for _, plan := range plans {
 		planned[plan.mediaKey] = true
-		if !candidateCollides(params, plan) {
+		if bindingSpec == BindingSpecV2 || !candidateCollides(params, plan) {
 			represented[plan.mediaKey] = true
 		}
 	}

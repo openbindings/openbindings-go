@@ -22,8 +22,17 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// BindingSpec identifies this package as an OpenAPI 3.x handler.
-const BindingSpec = "openbindings.openapi@1"
+// BindingSpec identifies the current OpenAPI binding revision.
+const BindingSpec = "openbindings.openapi@2"
+
+// LegacyBindingSpec identifies the immutable revision-1 OpenAPI binding.
+const LegacyBindingSpec = "openbindings.openapi@1"
+
+// BindingSpecV2 identifies the collision-preserving OpenAPI binding. Revision
+// 2 retains revision 1's wire behavior while admitting independently declared
+// same-named parameter and body values through a binding-private routed input
+// representation.
+const BindingSpecV2 = BindingSpec
 
 // DefaultSourceName is the default source key used when registering an OpenAPI source in an OBI.
 const DefaultSourceName = "openapi"
@@ -114,7 +123,10 @@ func (e *Invoker) cachedLoadDocument(location string, content json.RawMessage) (
 
 // BindingSpecs returns the binding-spec identifiers this invoker supports.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"}}
+	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs (collision-preserving revision)"},
+		{BindingSpec: LegacyBindingSpec, Description: "OpenAPI 3.x HTTP APIs (revision-1 compatibility)"},
+	}
 }
 
 // InvokeBinding invokes an HTTP request based on an OpenAPI binding. The
@@ -225,7 +237,10 @@ func NewSynthesizer() *Synthesizer {
 
 // BindingSpecs returns the binding-spec identifiers this synthesizer supports.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"}}
+	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs (collision-preserving revision)"},
+		{BindingSpec: LegacyBindingSpec, Description: "OpenAPI 3.x HTTP APIs (revision-1 compatibility)"},
+	}
 }
 
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.
@@ -265,8 +280,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpec {
-		return nil, nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpec && src.BindingSpec != LegacyBindingSpec {
+		return nil, nil, fmt.Errorf("synthesizer supports exact binding specifications %q and %q, got %q", BindingSpec, LegacyBindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {
@@ -298,7 +313,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 			in.OnWarning(w)
 		}
 	}
-	iface, err := convertDocToInterface(doc, loadLocation, warn, onUnrealizable)
+	iface, err := convertDocToInterface(doc, loadLocation, src.BindingSpec, warn, onUnrealizable)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -311,7 +326,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 			iface.Sources[DefaultSourceName] = entry
 		}
 	}
-	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
+	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, src.BindingSpec); err != nil {
 		return nil, nil, err
 	}
 	return &iface, doc, nil

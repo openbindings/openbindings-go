@@ -4,7 +4,7 @@ package openapi
 // repository's binding-specs/openapi fixtures (OAPI-D-01..03) through this
 // module's own offline lanes — content load, location grammar, and ref
 // grammar/resolution — under the subcorpus README's verdict semantics:
-// valid:false means a conformant openbindings.openapi@1 processor refuses
+// valid:false means a conformant latest-revision OpenAPI processor refuses
 // the document's family-scoped material at or before bind time, decidable
 // offline with no network and no live source. Positive location-only
 // fixtures are judged by grammar alone (never dereferenced), so the run
@@ -96,8 +96,8 @@ func TestBindingSpecCorpus(t *testing.T) {
 		if err := json.Unmarshal(raw, &fix); err != nil {
 			t.Fatalf("parse %s: %v", e.Name(), err)
 		}
-		if fix.BindingSpec != BindingSpec {
-			t.Fatalf("%s: fixture bindingSpec %q is not %q", e.Name(), fix.BindingSpec, BindingSpec)
+		if fix.BindingSpec != BindingSpecV2 {
+			t.Fatalf("%s: fixture bindingSpec %q is not %q", e.Name(), fix.BindingSpec, BindingSpecV2)
 		}
 		ran = true
 		for _, tt := range fix.Tests {
@@ -128,7 +128,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 		t.Fatalf("fixture document does not parse: %v", err)
 	}
 	for name, src := range obiDoc.Sources {
-		if src.BindingSpec != BindingSpec {
+		if src.BindingSpec != BindingSpecV2 {
 			continue
 		}
 

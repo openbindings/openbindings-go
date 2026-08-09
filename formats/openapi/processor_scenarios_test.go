@@ -85,7 +85,7 @@ func TestProcessorScenarios(t *testing.T) {
 	for _, scenario := range file.Scenarios {
 		scenario := scenario
 		t.Run(scenario.ID, func(t *testing.T) {
-			observation := runOpenAPIProcessorScenario(t, scenario)
+			observation := runOpenAPIProcessorScenario(t, scenario, file.BindingSpec)
 			if _, err := processorscenarios.Match(scenario, observation); err != nil {
 				t.Fatal(err)
 			}
@@ -112,7 +112,7 @@ func TestInvocationFidelityScenarios(t *testing.T) {
 	for _, scenario := range file.Scenarios {
 		scenario := scenario
 		t.Run(scenario.ID, func(t *testing.T) {
-			observation := runOpenAPIProcessorScenario(t, scenario)
+			observation := runOpenAPIProcessorScenario(t, scenario, file.BindingSpec)
 			if _, err := processorscenarios.Match(scenario, observation); err != nil {
 				t.Fatal(err)
 			}
@@ -120,7 +120,7 @@ func TestInvocationFidelityScenarios(t *testing.T) {
 	}
 }
 
-func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scenario) processorscenarios.Observation {
+func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scenario, bindingSpec string) processorscenarios.Observation {
 	t.Helper()
 	roundTripper := &scenarioRoundTripper{peer: scenario.Given.Peer}
 	client := &http.Client{
@@ -129,7 +129,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			return http.ErrUseLastResponse
 		},
 	}
-	source := openbindings.InvocationSource{BindingSpec: BindingSpec}
+	source := openbindings.InvocationSource{BindingSpec: bindingSpec}
 	if location, ok := scenario.Given.Source["location"].(string); ok {
 		source.Location = location
 	}
@@ -151,7 +151,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	if joined {
 		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 			Sources: []openbindings.SynthesizeSource{{
-				BindingSpec: BindingSpec, Location: source.Location, Content: source.Content,
+				BindingSpec: bindingSpec, Location: source.Location, Content: source.Content,
 			}},
 		})
 		if err != nil {

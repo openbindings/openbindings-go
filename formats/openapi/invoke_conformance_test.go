@@ -7,20 +7,25 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// Integration tests keyed to openbindings.openapi@1 rules, driving the
-// invoker against local httptest servers.
+// Integration tests driving the current invoker against local httptest
+// servers. Revision-specific compatibility cases name the legacy identifier.
 
 func invokeWith(t *testing.T, spec, ref string, input any) (any, *openbindings.InvocationError) {
+	return invokeWithBindingSpec(t, BindingSpec, spec, ref, input)
+}
+
+func invokeWithBindingSpec(t *testing.T, bindingSpec, spec, ref string, input any) (any, *openbindings.InvocationError) {
 	t.Helper()
 	spec = withDeclaredJSONResponses(t, spec)
 	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source: openbindings.InvocationSource{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    ref,
 	})
 	return driveSingle(t, call, input)
@@ -184,7 +189,7 @@ func TestInvoke_UnflattenableOperationRefused(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1items~1{id}/get", map[string]any{"id": "1"})
+	_, ierr := invokeWithBindingSpec(t, LegacyBindingSpec, spec, "#/paths/~1items~1{id}/get", map[string]any{"id": "1"})
 	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("expected the unflattenable refusal, got %v", ierr)
 	}
@@ -337,6 +342,47 @@ func TestInvoke_PropertiesWithoutTypeStillFlattens(t *testing.T) {
 	}
 	if string(gotBody) != `{"name":"x"}` {
 		t.Errorf("wire body = %s, want the flattened property carried by name: {\"name\":\"x\"}", gotBody)
+	}
+}
+
+func TestInvoke_EnvelopeShapedApplicationBodyRemainsApplicationData(t *testing.T) {
+	var got map[string]any
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.1.0",
+	  "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/objects": {"post": {
+	    "requestBody": {"required": true, "content": {"application/json": {"schema": {
+	      "type": "object",
+	      "properties": {
+	        "$openbindings": {"type": "string"},
+	        "value": {"type": "object"},
+	        "parameters": {"type": "array"},
+	        "body": {"type": "object"}
+	      }
+	    }}}},
+	    "responses": {"200": {"description": "ok"}}
+	  }}}
+	}`, srv.URL)
+	input := map[string]any{
+		"$openbindings": BindingSpecV2,
+		"value":         map[string]any{"application": true},
+		"parameters":    []any{},
+		"body":          map[string]any{"application": true},
+	}
+
+	if _, ierr := invokeWith(t, spec, "#/paths/~1objects/post", input); ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	}
+	if !reflect.DeepEqual(got, input) {
+		t.Fatalf("request body = %#v, want application input %#v", got, input)
 	}
 }
 
