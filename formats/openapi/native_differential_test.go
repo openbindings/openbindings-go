@@ -133,11 +133,18 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 					}
 					return
 				}
-				var nativeValue any
-				if err := json.Unmarshal(nativeBody, &nativeValue); err != nil {
-					t.Fatalf("native JSON decode failed: %v", err)
+				var want any
+				for _, alternative := range scenario.Expected {
+					if alternative.Disposition != "complete" {
+						continue
+					}
+					for _, assertion := range alternative.Assertions {
+						if assertion.Path == "/outputs" {
+							want = assertion.Equals
+						}
+					}
 				}
-				if want := []any{nativeValue}; !reflect.DeepEqual(outputs, want) {
+				if want == nil || !reflect.DeepEqual(outputs, want) {
 					t.Fatalf("output differential\ngot:  %#v\nwant: %#v", outputs, want)
 				}
 				return

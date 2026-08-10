@@ -418,7 +418,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	actualContentType := resp.Header.Get("Content-Type")
 	revision3ClassifiedSuccess := false
 	var revision3ContentTypeErr error
-	if args.Source.BindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(args.Source.BindingSpec) {
 		buffered := bufio.NewReader(resp.Body)
 		_, peekErr := buffered.Peek(1)
 		if errors.Is(peekErr, io.EOF) {
@@ -445,7 +445,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		}
 		resp.Body = bufferedResponseBody{Reader: buffered, Closer: resp.Body}
 		actualContentType, revision3ContentTypeErr = singletonResponseHeader(resp.Header, "Content-Type")
-		if revision3ContentTypeErr == nil && isSSEContentTypeFor(actualContentType, BindingSpecV3) {
+		if revision3ContentTypeErr == nil && isSSEContentTypeFor(actualContentType, args.Source.BindingSpec) {
 			// A stream cannot be buffered without destroying its lifecycle. Its
 			// classifier sees the real status/headers and no invented body, as in
 			// prior revisions; unary lanes retain the complete-body seam below.
@@ -488,7 +488,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		// final status remains the native HTTP failure even when its body uses
 		// event-stream framing.
 		ok := revision3ClassifiedSuccess
-		if args.Source.BindingSpec != BindingSpecV3 {
+		if !hasMediaFidelity(args.Source.BindingSpec) {
 			status := resp.StatusCode
 			var cerr error
 			ok, cerr = args.Hooks.Classify(site, openbindings.RawResult{Status: &status, Meta: headerMetadata(resp.Header)}, BuiltinClassify)
@@ -533,7 +533,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 			return
 		}
 		matched, mediaErr := governingResponseMediaFor(responseDecl, actualContentType, args.Source.BindingSpec)
-		if mediaErr != nil || matched.base != "text/event-stream" {
+		if mediaErr != nil || (!hasResponseFidelity(args.Source.BindingSpec) && matched.base != "text/event-stream") {
 			_ = resp.Body.Close()
 			message := "response arrived as text/event-stream, but the governing response does not declare that media type"
 			if mediaErr != nil {
@@ -606,7 +606,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		inv.FireError(openAPIFailureError(resp, respBody, responseMatch, args.Source.BindingSpec))
 		return
 	}
-	if args.Source.BindingSpec == BindingSpecV3 && revision3ContentTypeErr != nil {
+	if hasMediaFidelity(args.Source.BindingSpec) && revision3ContentTypeErr != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeProtocol, Message: revision3ContentTypeErr.Error()})
 		return
 	}
@@ -618,13 +618,19 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 
-	matched, mediaErr := governingResponseMediaFor(responseDecl, actualContentType, args.Source.BindingSpec)
+	matched, mediaErr := governingResponseMediaMatchFor(responseDecl, actualContentType, args.Source.BindingSpec)
 	if mediaErr != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeProtocol, Message: mediaErr.Error()})
 		return
 	}
 
-	output, derr := args.Hooks.DecodeOutput(site, raw, decodeByContentTypeFor(actualContentType, args.Source.BindingSpec))
+	decoder := decodeByContentTypeFor(actualContentType, args.Source.BindingSpec)
+	if hasResponseFidelity(args.Source.BindingSpec) && responseUsesRawBoundary(doc, matched.media, actualContentType) {
+		decoder = func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+			return base64.StdEncoding.EncodeToString(raw.Body), nil
+		}
+	}
+	output, derr := args.Hooks.DecodeOutput(site, raw, decoder)
 	if derr != nil {
 		inv.FireError(openbindings.AsInvocationError(derr))
 		return
@@ -635,7 +641,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	// hook when overridden; classify is always assumption/2xx unless a hook
 	// widened it.
 	trailer := decodeClassifyTrailer(args.Hooks, "header/content-type")
-	trailer["x-ob-governing-media"] = []string{matched.canonical}
+	trailer["x-ob-governing-media"] = []string{matched.declared.canonical}
 	inv.SetTrailer(trailer)
 	if err := inv.EmitOutput(output); err != nil {
 		return
@@ -644,7 +650,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 }
 
 func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindingSpec string, bindCtx map[string]any) (*openbindings.ContextRequiredDetails, error) {
-	if bindingSpec != BindingSpecV3 || op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
+	if !hasMediaFidelity(bindingSpec) || op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
 		return nil, nil
 	}
 	plans, err := planRequestBodiesFor(doc, op, bindingSpec)
@@ -761,7 +767,7 @@ func decodeTextLane(contentType string, body []byte) (any, error) {
 func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any, error) {
 	charset := "utf-8"
 	if contentType != "" {
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			if parsed, err := parseRevision3MediaType(contentType); err == nil {
 				if cs, present := parsed.params["charset"]; present {
 					charset = cs
@@ -814,7 +820,7 @@ func isJSONContentType(contentType string) bool {
 }
 
 func isJSONContentTypeFor(contentType, bindingSpec string) bool {
-	if bindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(bindingSpec) {
 		parsed, err := parseRevision3MediaType(contentType)
 		return err == nil && isJSONMediaType(parsed.base)
 	}
@@ -889,7 +895,7 @@ func openAPIFailureError(resp *http.Response, body []byte, match *governingRespo
 	if match != nil {
 		artifact["responseKey"] = match.key
 		contentType := resp.Header.Get("Content-Type")
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			contentType, _ = singletonResponseHeader(resp.Header, "Content-Type")
 		}
 		if media, err := governingResponseMediaFor(match.response, contentType, bindingSpec); err == nil {
@@ -903,7 +909,7 @@ func openAPIFailureError(resp *http.Response, body []byte, match *governingRespo
 func singletonResponseHeader(header http.Header, name string) (string, error) {
 	values := header.Values(name)
 	if len(values) > 1 {
-		return "", fmt.Errorf("response contains %d %s field instances; revision 3 requires a singleton", len(values), name)
+		return "", fmt.Errorf("response contains %d %s field instances; this binding revision requires a singleton", len(values), name)
 	}
 	if len(values) == 0 {
 		return "", nil

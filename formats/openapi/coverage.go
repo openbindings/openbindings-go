@@ -35,7 +35,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 	sourceLocation := ""
 	bindingSpec := BindingSpec
 	for _, source := range iface.Sources {
-		if source.BindingSpec == BindingSpecV3 || source.BindingSpec == BindingSpecV2 || source.BindingSpec == LegacyBindingSpec {
+		if source.BindingSpec == BindingSpecV4 || source.BindingSpec == BindingSpecV3 || source.BindingSpec == BindingSpecV2 || source.BindingSpec == LegacyBindingSpec {
 			sourceLocation = source.Location
 			bindingSpec = source.BindingSpec
 			break
@@ -110,7 +110,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 }
 
 func openAPIRequestMediaRequirements(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Operation, bindingSpec string) []string {
-	if bindingSpec != BindingSpecV3 || op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
+	if !hasMediaFidelity(bindingSpec) || op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
 		return nil
 	}
 	plans, err := planRequestBodiesFor(doc, op, bindingSpec)

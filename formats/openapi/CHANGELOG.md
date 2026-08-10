@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Current `openbindings.openapi@4` adds declaration-led response range and
+  raw-byte carriage without changing Core.** The actual concrete response
+  media selects the most-specific exact or wildcard declaration. Strict JSON,
+  text/SSE, and artifact-authorized raw-byte lanes produce protocol-independent
+  application values; exact bytes use canonical Base64. Revision 3 remains an
+  exact compatibility path.
+
 - **Current `openbindings.openapi@3` adds declaration-led raw-octet and range
   request carriage without changing Core.** OAS 3.0 concrete binary schemas
   and OAS 3.1 schema-omitted concrete media use a canonical Base64 JSON

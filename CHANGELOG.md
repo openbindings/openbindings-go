@@ -44,7 +44,12 @@
   references. Resolver configuration remains binding-private and does not
   alter the protocol-blind OBI document model.
 
-- **The OpenAPI module now defaults to `openbindings.openapi@3`.** It adds
+- **The OpenAPI module now defaults to `openbindings.openapi@4`.** It adds
+  response media-range selection and exact artifact-authorized raw response
+  bytes as canonical Base64 application values, without exposing HTTP facts
+  in ordinary outputs. Exact revision 3 remains available for compatibility.
+
+- **`openbindings.openapi@3` added request-media fidelity.** It adds
   declaration-led raw-octet requests and configured media-range selection
   while keeping HTTP identities out of operation contracts. Exact revision 2
   retains collision-preserving routed inputs and immutable revision 1 remains

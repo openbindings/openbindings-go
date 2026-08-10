@@ -262,7 +262,7 @@ func routeParameter(r *routedInput, p *openapi3.Parameter, value any) error {
 }
 
 func routeParameterFor(r *routedInput, p *openapi3.Parameter, value any, bindingSpec string) error {
-	if bindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(bindingSpec) {
 		if err := validateRevision3ParameterSerialization(p); err != nil {
 			return fmt.Errorf("parameter %q: %w", p.Name, err)
 		}
@@ -278,12 +278,12 @@ func routeParameterFor(r *routedInput, p *openapi3.Parameter, value any, binding
 		switch p.In {
 		case openapi3.ParameterInPath:
 			escaped := encodePathValue(serialized)
-			if bindingSpec == BindingSpecV3 {
+			if hasMediaFidelity(bindingSpec) {
 				escaped = revision3URIEscape(serialized, false, false)
 			}
 			r.resolvedPath = strings.ReplaceAll(r.resolvedPath, "{"+p.Name+"}", escaped)
 		case openapi3.ParameterInQuery:
-			if bindingSpec == BindingSpecV3 {
+			if hasMediaFidelity(bindingSpec) {
 				r.queryUnits = append(r.queryUnits, revision3URIEscape(p.Name, false, false)+"="+revision3URIEscape(serialized, p.AllowReserved, false))
 			} else {
 				r.queryUnits = append(r.queryUnits, queryEscape(p.Name, false)+"="+queryEscape(serialized, p.AllowReserved))
@@ -300,7 +300,7 @@ func routeParameterFor(r *routedInput, p *openapi3.Parameter, value any, binding
 	}
 
 	sm, err := p.SerializationMethod() // compatibility defaults
-	if bindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(bindingSpec) {
 		sm, err = revision3ParameterSerializationMethod(p)
 	}
 	if err != nil {
@@ -428,7 +428,7 @@ func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec stri
 	}
 	mt := normalizeMediaType(mediaKey)
 	var parsed parsedMediaType
-	if bindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(bindingSpec) {
 		var err error
 		parsed, err = parseRevision3MediaType(mediaKey)
 		if err != nil {
@@ -448,7 +448,7 @@ func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec stri
 		if !ok {
 			return "", fmt.Errorf("parameter %q declares content %q: the value must be a string, got %T", p.Name, mediaKey, value)
 		}
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			encoded, err := encodeTextString(s, parsed)
 			if err != nil {
 				return "", fmt.Errorf("parameter %q declares content %q: %w", p.Name, mediaKey, err)
@@ -475,7 +475,7 @@ func serializePathValue(name string, value any, style string, explode bool) (str
 
 func serializePathValueForRevision(name string, value any, style string, explode bool, bindingSpec string) (string, error) {
 	esc := encodePathValue
-	if bindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(bindingSpec) {
 		esc = func(value string) string { return revision3URIEscape(value, false, false) }
 	}
 	switch style {
@@ -510,7 +510,7 @@ func serializeQueryValueForRevision(name string, value any, style string, explod
 	n := queryEscape(name, false)
 	esc := func(s string) string { return queryEscape(s, allowReserved) }
 	keyEsc := func(s string) string { return queryEscape(s, false) }
-	if bindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(bindingSpec) {
 		n = revision3URIEscape(name, false, formSafe)
 		esc = func(value string) string { return revision3URIEscape(value, allowReserved, formSafe) }
 		keyEsc = func(value string) string { return revision3URIEscape(value, false, formSafe) }

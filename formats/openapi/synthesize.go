@@ -198,7 +198,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				}
 			}
 			if formatVersion == "3.1" {
-				if dialectErr := validateProjectedOperationDialects(doc, op, params, requestPlans); dialectErr != nil {
+				if dialectErr := validateProjectedOperationDialects(doc, op, params, requestPlans, bindingSpec); dialectErr != nil {
 					reason := dialectErr.Error()
 					if onUnrealizable != nil {
 						onUnrealizable(unrealizableTarget{ref: buildJSONPointerRef(path, method), operationKey: opKey, reasonCode: "openapi.unsupported_schema_dialect", rule: "OBI-D-06", message: reason})
@@ -231,7 +231,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				}
 			}
 
-			outputSchema := buildOutputSchema(op, schemaOverlays, bindingSpec)
+			outputSchema := buildOutputSchema(op, schemaOverlays, bindingSpec, doc.OpenAPI)
 			if outputSchema != nil {
 				inlined := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output")
 				projected := projectOpenAPISchema(inlined, openAPIResponseSchema, nil)
@@ -705,7 +705,7 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 			bodySchema = schemaRefToMap(requestPlan.media.Schema, schemaOverlays)
 		} else if requestPlan.rawBoundary {
 			bodySchema = map[string]any{"type": "string", "contentEncoding": "base64"}
-		} else if requestPlan.bindingSpec == BindingSpecV3 && requestPlan.synthetic {
+		} else if hasMediaFidelity(requestPlan.bindingSpec) && requestPlan.synthetic {
 			// A schema-omitted revision-3 JSON/range declaration allows any
 			// application JSON value. Preserve that unconstrained whole-body
 			// value under the protocol-neutral body field.
@@ -740,7 +740,7 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 				bodyRequired = map[string]bool{}
 			}
 			hasProps := len(bodyProps) > 0
-			if requestPlan.bindingSpec == BindingSpecV3 && requestPlan.oas30 && requestPlan.family == familyMultipart {
+			if hasMediaFidelity(requestPlan.bindingSpec) && requestPlan.oas30 && requestPlan.family == familyMultipart {
 				for _, property := range bodyProps {
 					if propertySchema, ok := property.(map[string]any); ok {
 						decorateMultipartPartBinaryBoundary(propertySchema)
@@ -990,7 +990,7 @@ func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec stri
 			continue
 		}
 		param := ref.Value
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			if err := validateRevision3ParameterSerialization(param); err != nil {
 				return param.Name
 			}
@@ -1004,7 +1004,7 @@ func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec stri
 		for mediaKey := range param.Content {
 			var parsed parsedMediaType
 			var err error
-			if bindingSpec == BindingSpecV3 {
+			if hasMediaFidelity(bindingSpec) {
 				parsed, err = parseRevision3MediaType(mediaKey)
 			} else {
 				parsed, err = parseMediaType(mediaKey)
@@ -1012,7 +1012,7 @@ func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec stri
 			if err != nil || (!isJSONMediaType(parsed.base) && parsed.base != "text/plain") {
 				return param.Name
 			}
-			if bindingSpec == BindingSpecV3 && parsed.base == "text/plain" && supportedTextCharset(parsed) != nil {
+			if hasMediaFidelity(bindingSpec) && parsed.base == "text/plain" && supportedTextCharset(parsed) != nil {
 				return param.Name
 			}
 		}
@@ -1020,7 +1020,11 @@ func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec stri
 	return ""
 }
 
-func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayCollector, bindingSpec string) map[string]any {
+func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayCollector, bindingSpec string, openapiVersions ...string) map[string]any {
+	openapiVersion := "3.0"
+	if len(openapiVersions) > 0 {
+		openapiVersion = openapiVersions[0]
+	}
 	if op.Responses == nil {
 		return nil
 	}
@@ -1041,6 +1045,14 @@ func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayC
 	sort.Strings(keys)
 	var schemas []map[string]any
 	seen := map[string]bool{}
+	appendSchema := func(schema map[string]any) {
+		encoded, _ := json.Marshal(schema)
+		identity := string(encoded)
+		if !seen[identity] {
+			seen[identity] = true
+			schemas = append(schemas, schema)
+		}
+	}
 	for _, key := range keys {
 		isExact := len(key) == 3 && key[0] == '2' && key[1] >= '0' && key[1] <= '9' && key[2] >= '0' && key[2] <= '9'
 		if !isExact && key != "2XX" && !(key == "default" && !hasRange && exactSuccesses < 100) {
@@ -1058,31 +1070,35 @@ func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayC
 		for _, mediaKey := range mediaKeys {
 			var parsed parsedMediaType
 			var err error
-			if bindingSpec == BindingSpecV3 {
+			if hasMediaFidelity(bindingSpec) {
 				parsed, err = parseMediaDeclaration(mediaKey)
 			} else {
 				parsed, err = parseMediaType(mediaKey)
 			}
-			if err != nil || parsed.rangeSpecificity < 2 {
+			if err != nil || (parsed.rangeSpecificity < 2 && !hasResponseFidelity(bindingSpec)) {
 				continue
 			}
-			var schema map[string]any
-			if isJSONMediaType(parsed.base) {
-				media := ref.Value.Content[mediaKey]
+			media := ref.Value.Content[mediaKey]
+			admitsJSON := isJSONMediaType(parsed.base) || (parsed.rangeSpecificity < 2 && (parsed.base == "application/*" || parsed.base == "*/*"))
+			if admitsJSON {
 				if media == nil || media.Schema == nil {
 					return nil // an unconstrained JSON success can emit any JSON value
 				}
-				schema = schemaRefToMap(media.Schema, schemaOverlays)
-			} else {
-				// The revision-1 builtin non-JSON lane emits text, including
-				// one text value per SSE event.
-				schema = map[string]any{"type": "string"}
+				appendSchema(schemaRefToMap(media.Schema, schemaOverlays))
 			}
-			encoded, _ := json.Marshal(schema)
-			identity := string(encoded)
-			if !seen[identity] {
-				seen[identity] = true
-				schemas = append(schemas, schema)
+			admitsNonJSON := !isJSONMediaType(parsed.base) || parsed.rangeSpecificity < 2
+			if admitsNonJSON {
+				rawBoundary := hasResponseFidelity(bindingSpec) && !strings.HasPrefix(parsed.base, "text/") &&
+					((isOpenAPI30(majorMinor(openapiVersion)) && binarySignaled(mediaSchema(media), true)) ||
+						(!isOpenAPI30(majorMinor(openapiVersion)) && media != nil && media.Schema == nil))
+				// The revision-1 builtin non-JSON lane emits text, including
+				// one text value per SSE event. Revision 4's artifact-authorized
+				// byte lane uses canonical Base64 at the operation boundary.
+				if rawBoundary {
+					appendSchema(map[string]any{"type": "string", "contentEncoding": "base64"})
+				} else {
+					appendSchema(map[string]any{"type": "string"})
+				}
 			}
 		}
 	}
@@ -1284,7 +1300,7 @@ func schemaChildPosition(key string) schemaTraversalPosition {
 	}
 }
 
-func validateProjectedOperationDialects(doc *openapi3.T, op *openapi3.Operation, params openapi3.Parameters, requestPlans []*bodyPlan) error {
+func validateProjectedOperationDialects(doc *openapi3.T, op *openapi3.Operation, params openapi3.Parameters, requestPlans []*bodyPlan, bindingSpec string) error {
 	documentDialect := doc.JSONSchemaDialect
 	if documentDialect == "" {
 		documentDialect = "https://spec.openapis.org/oas/3.1/dialect/base"
@@ -1330,7 +1346,7 @@ func validateProjectedOperationDialects(doc *openapi3.T, op *openapi3.Operation,
 			}
 		}
 	}
-	for _, ref := range projectedOutputSchemaRefs(op) {
+	for _, ref := range projectedOutputSchemaRefs(op, bindingSpec) {
 		if err := validate("output", ref); err != nil {
 			return err
 		}
@@ -1381,7 +1397,7 @@ func validateSchemaRefDialect(ref *openapi3.SchemaRef, inherited string, seen ma
 	return nil
 }
 
-func projectedOutputSchemaRefs(op *openapi3.Operation) []*openapi3.SchemaRef {
+func projectedOutputSchemaRefs(op *openapi3.Operation, bindingSpec string) []*openapi3.SchemaRef {
 	if op == nil || op.Responses == nil {
 		return nil
 	}
@@ -1410,8 +1426,15 @@ func projectedOutputSchemaRefs(op *openapi3.Operation) []*openapi3.SchemaRef {
 			continue
 		}
 		for mediaKey, media := range responseRef.Value.Content {
-			parsed, err := parseMediaType(mediaKey)
-			if err != nil || !isJSONMediaType(parsed.base) {
+			var parsed parsedMediaType
+			var err error
+			if hasMediaFidelity(bindingSpec) {
+				parsed, err = parseMediaDeclaration(mediaKey)
+			} else {
+				parsed, err = parseMediaType(mediaKey)
+			}
+			admitsJSON := err == nil && (isJSONMediaType(parsed.base) || (hasResponseFidelity(bindingSpec) && parsed.rangeSpecificity < 2 && (parsed.base == "application/*" || parsed.base == "*/*")))
+			if !admitsJSON {
 				continue
 			}
 			if media == nil || media.Schema == nil {

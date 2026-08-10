@@ -245,6 +245,7 @@ func openAPIFidelityOperationID(scenarioID string) string {
 		"OAPI-FI-06": "fidelityUploadImage",
 		"OAPI-FI-07": "fidelityCreateItem",
 		"OAPI-FI-08": "fidelityCreateItemWithContext",
+		"OAPI-FI-09": "fidelityImage",
 	}[scenarioID]
 }
 

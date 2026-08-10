@@ -294,7 +294,7 @@ func parseRoutedEnvelopeFor(input any, bindingSpec string) (*routedEnvelope, err
 }
 
 func usesRoutedInput(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV2 || bindingSpec == BindingSpecV3
+	return hasRoutedInputs(bindingSpec)
 }
 
 // validateEnvelopeRoutes proves that every concrete identity named by a

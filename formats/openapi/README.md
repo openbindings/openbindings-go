@@ -27,7 +27,7 @@ import (
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 ```
 
-The invoker declares current `openbindings.openapi@3` plus exact `openbindings.openapi@2` and immutable `openbindings.openapi@1` compatibility. All three handle exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents. Revision 2 added collision-preserving routed inputs; revision 3 inherits them and adds generic raw-octet request carriage plus configured request-media ranges.
+The invoker declares current `openbindings.openapi@4` plus exact `openbindings.openapi@3`, `openbindings.openapi@2`, and immutable `openbindings.openapi@1` compatibility. All four handle exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents. Revision 2 added collision-preserving routed inputs; revision 3 added generic raw-octet request carriage plus configured request-media ranges; revision 4 adds response ranges and exact raw-response byte carriage.
 
 ### Invoke a binding
 
@@ -38,7 +38,7 @@ invoker := openapi.NewInvoker()
 
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@3"
+        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@4"
         Location:    "https://api.example.com/openapi.json",
     },
     Ref:     "#/paths/~1users/get",
@@ -83,11 +83,11 @@ iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 
 ## Behavior
 
-This package implements current [`openbindings.openapi@3`](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md) and retains exact revision-2 and revision-1 compatibility. The current document is normative for routed input mapping, OAS serialization, request media selection, server resolution, interaction shape, and channel assembly.
+This package implements current [`openbindings.openapi@4`](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md) and retains exact revision-3, revision-2, and revision-1 compatibility. The current document is normative for routed input mapping, OAS serialization, request and response media selection, server resolution, interaction shape, and channel assembly.
 
 ### Binding specification identifier
 
-`openbindings.openapi@3` (exact, opaque; current), `openbindings.openapi@2`, and `openbindings.openapi@1` (exact compatibility identifiers). They accept exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own `openapi` field.
+`openbindings.openapi@4` (exact, opaque; current), `openbindings.openapi@3`, `openbindings.openapi@2`, and `openbindings.openapi@1` (exact compatibility identifiers). They accept exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own `openapi` field.
 
 ### Ref format
 
@@ -116,6 +116,15 @@ Media ranges require a concrete `context.configuration.requestMedia`; exact,
 emitted as `Content-Type`. A required range-only body surfaces this as
 preflight `CONTEXT_REQUIRED`, while coverage records
 `configuration.requestMedia` without changing the application schema.
+
+### Revision-4 response media
+
+Revision 4 lets the actual concrete response `Content-Type` select the most
+specific exact, `type/*`, or `*/*` declaration in the governing Response
+Object. JSON remains strict application JSON, text and SSE remain application
+strings, and OAS 3.0 binary schemas plus OAS 3.1 schema-omitted non-text media
+emit canonical Base64 of the exact response bytes. Status, headers, and media
+identity remain binding-native diagnostics rather than operation values.
 
 ### Server selection
 
@@ -196,12 +205,12 @@ Connect, GraphQL, MCP) do not consult the seam.
 
 ### Interface synthesis
 
-Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@3` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
+Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@4` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
 
 - **Operation keys** come from `operationId` when present, sanitized to the OBI key grammar (non-key characters become `_`, leading/trailing `_` trimmed, a leading non-letter gets an `_` prefix). An `operationId` whose sanitized key is already taken falls through to path+method derivation: template segments (`{id}`) dropped, remaining segments joined with `.`, the lowercased method appended (`/users/{id}` + `GET` → `users.get`), then deduplicated deterministically with `_2`, `_3`, … suffixes.
 - **Iteration order is fixed**: paths alphabetically, methods in the order get, put, post, delete, options, head, patch, trace.
 - **Input schemas** merge effective path-level and operation-level parameters from every supported location (path, query, header, cookie) with each realizable request-media candidate's own body surface. Distinct declarations keep their application names when unique; collisions receive deterministic neutral suffixes and a binding-private `inputTransform` carries the exact protocol route. Distinct candidate surfaces are preserved with `anyOf`; parameter-only and non-JSON surfaces are closed against fields the invoker would refuse, while JSON object candidates remain open for the binding's declared passthrough rule.
-- **Output schemas** conservatively union every value-bearing success lane that can govern a 2xx response: exact 2xx entries, `2XX`, and an unshadowed `default`. JSON declarations contribute their schemas, non-JSON/SSE declarations contribute strings, and a schema-less JSON lane leaves output unspecified rather than inventing a shape.
+- **Output schemas** conservatively union every value-bearing success lane that can govern a 2xx response: exact 2xx entries, `2XX`, and an unshadowed `default`. Exact and ranged JSON declarations contribute their schemas, text/SSE declarations contribute strings, artifact-authorized raw-byte lanes contribute canonical Base64 strings, and a schema-less JSON lane leaves output unspecified rather than inventing a shape.
 - **Schema projection** targets JSON Schema 2020-12 (spec OBI-D-06), keyed on the artifact's declared `openapi` version and operation direction. OpenAPI 3.0.x schemas are translated from their subset dialect and ignore Reference Object siblings; 3.1.x Schema Object `$ref` siblings compose under JSON Schema semantics before typed resolution, while legal non-schema Reference Object descriptions remain local to each reference site. A per-load synthesis sidecar preserves authored null, empty, zero, false, and `x-*` Schema Object values that the typed parser otherwise cannot distinguish from absence; typed OpenAPI objects remain authoritative for structure and invocation never consults the sidecar. Request contracts omit `readOnly` properties and response contracts omit `writeOnly` properties, with required lists repaired through nested and recursive graphs. An operation whose projected contract inherits a custom 3.1 schema dialect that cannot be losslessly projected to 2020-12 is excluded by tolerant synthesis and fails strict synthesis explicitly; schema-free operations and supported per-schema overrides remain available, and the dialect does not by itself prevent artifact-native invocation.
 - **Unrealizable targets fail synthesis**: conditional/combinatorial body shapes without one declaration-defined route, case-colliding HTTP header declarations, and required bodies with no supported media candidate make the whole strict synthesis call fail. An optional body may be omitted with a warning only when the remaining no-body operation is still faithfully invocable.
 - **No security metadata is written to the OBI**; `securitySchemes` are honored at invocation time via context negotiation (`CONTEXT_REQUIRED` challenges and the `BindingPreparer` preflight).

@@ -24,7 +24,7 @@ import (
 )
 
 // BindingSpec identifies the current OpenAPI binding revision.
-const BindingSpec = "openbindings.openapi@3"
+const BindingSpec = "openbindings.openapi@4"
 
 // LegacyBindingSpec identifies the immutable revision-1 OpenAPI binding.
 const LegacyBindingSpec = "openbindings.openapi@1"
@@ -35,10 +35,27 @@ const LegacyBindingSpec = "openbindings.openapi@1"
 // representation.
 const BindingSpecV2 = "openbindings.openapi@2"
 
-// BindingSpecV3 identifies the media-fidelity OpenAPI binding. Revision 3
+// BindingSpecV3 identifies the immutable media-fidelity OpenAPI binding. Revision 3
 // inherits revision 2's routed input representation and adds declaration-led
 // raw-octet request carriage plus configured media-range selection.
-const BindingSpecV3 = BindingSpec
+const BindingSpecV3 = "openbindings.openapi@3"
+
+// BindingSpecV4 identifies the response-carriage-fidelity OpenAPI binding.
+// It inherits revision 3 and adds response media-range selection plus an
+// exact raw-byte output boundary.
+const BindingSpecV4 = BindingSpec
+
+func hasRoutedInputs(bindingSpec string) bool {
+	return bindingSpec == BindingSpecV2 || bindingSpec == BindingSpecV3 || bindingSpec == BindingSpecV4
+}
+
+func hasMediaFidelity(bindingSpec string) bool {
+	return bindingSpec == BindingSpecV3 || bindingSpec == BindingSpecV4
+}
+
+func hasResponseFidelity(bindingSpec string) bool {
+	return bindingSpec == BindingSpecV4
+}
 
 // DefaultSourceName is the default source key used when registering an OpenAPI source in an OBI.
 const DefaultSourceName = "openapi"
@@ -130,7 +147,8 @@ func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, conte
 // BindingSpecs returns the binding-spec identifiers this invoker supports.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpecV3, Description: "OpenAPI 3.x HTTP APIs (media-fidelity revision)"},
+		{BindingSpec: BindingSpecV4, Description: "OpenAPI 3.x HTTP APIs (response-carriage fidelity revision)"},
+		{BindingSpec: BindingSpecV3, Description: "OpenAPI 3.x HTTP APIs (request-carriage fidelity revision)"},
 		{BindingSpec: BindingSpecV2, Description: "OpenAPI 3.x HTTP APIs (collision-preserving revision)"},
 		{BindingSpec: LegacyBindingSpec, Description: "OpenAPI 3.x HTTP APIs (revision-1 compatibility)"},
 	}
@@ -292,7 +310,8 @@ func (c *Synthesizer) resolverClient() *http.Client {
 // BindingSpecs returns the binding-spec identifiers this synthesizer supports.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpecV3, Description: "OpenAPI 3.x HTTP APIs (media-fidelity revision)"},
+		{BindingSpec: BindingSpecV4, Description: "OpenAPI 3.x HTTP APIs (response-carriage fidelity revision)"},
+		{BindingSpec: BindingSpecV3, Description: "OpenAPI 3.x HTTP APIs (request-carriage fidelity revision)"},
 		{BindingSpec: BindingSpecV2, Description: "OpenAPI 3.x HTTP APIs (collision-preserving revision)"},
 		{BindingSpec: LegacyBindingSpec, Description: "OpenAPI 3.x HTTP APIs (revision-1 compatibility)"},
 	}
@@ -335,8 +354,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpecV3 && src.BindingSpec != BindingSpecV2 && src.BindingSpec != LegacyBindingSpec {
-		return nil, nil, fmt.Errorf("synthesizer supports exact binding specifications %q, %q, and %q, got %q", BindingSpecV3, BindingSpecV2, LegacyBindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpecV4 && src.BindingSpec != BindingSpecV3 && src.BindingSpec != BindingSpecV2 && src.BindingSpec != LegacyBindingSpec {
+		return nil, nil, fmt.Errorf("synthesizer supports exact binding specifications %q, %q, %q, and %q, got %q", BindingSpecV4, BindingSpecV3, BindingSpecV2, LegacyBindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {

@@ -31,7 +31,7 @@ func isSSEContentType(contentType string) bool {
 }
 
 func isSSEContentTypeFor(contentType, bindingSpec string) bool {
-	if bindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(bindingSpec) {
 		parsed, err := parseRevision3MediaType(contentType)
 		return err == nil && parsed.base == "text/event-stream"
 	}

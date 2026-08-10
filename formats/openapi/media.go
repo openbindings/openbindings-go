@@ -437,7 +437,7 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 	for key := range rb.Content {
 		var parsed parsedMediaType
 		var err error
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			parsed, err = parseMediaDeclaration(key)
 		} else {
 			parsed, err = parseMediaType(key)
@@ -448,7 +448,7 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 		}
 		declared = append(declared, parsed.canonical)
 		identity := parsed.identity
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			identity = parsed.semanticIdentity
 		}
 		if previous, exists := identities[identity]; exists {
@@ -538,7 +538,7 @@ func buildBodyPlanFromMedia(rb *openapi3.RequestBody, key string, parsed parsedM
 }
 
 func applyRevision3BodyShape(plan *bodyPlan) {
-	if plan == nil || plan.bindingSpec != BindingSpecV3 || mediaSchema(plan.media) != nil {
+	if plan == nil || !hasMediaFidelity(plan.bindingSpec) || mediaSchema(plan.media) != nil {
 		return
 	}
 	if plan.family == familyJSON {
@@ -555,31 +555,31 @@ func exactRequestFamily(doc *openapi3.T, parsed parsedMediaType, media *openapi3
 	case isJSONMediaType(parsed.base):
 		return familyJSON, false, nil
 	case parsed.base == "multipart/form-data":
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			if err := validateRevision3MultipartMedia(doc, media); err != nil {
 				return "", false, err
 			}
 		}
 		return familyMultipart, false, nil
 	case parsed.base == "application/x-www-form-urlencoded":
-		if bindingSpec == BindingSpecV3 && mediaSchema(media) == nil {
+		if hasMediaFidelity(bindingSpec) && mediaSchema(media) == nil {
 			return "", false, fmt.Errorf("schema-omitted form media has no revision-3 caller route")
 		}
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			if err := validateRevision3URLEncodedMedia(doc, media); err != nil {
 				return "", false, err
 			}
 		}
 		return familyURLEncoded, false, nil
 	case parsed.base == "text/plain":
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			if err := supportedTextCharset(parsed); err != nil {
 				return "", false, err
 			}
 		}
 		return familyText, false, nil
 	}
-	if bindingSpec != BindingSpecV3 || doc == nil {
+	if !hasMediaFidelity(bindingSpec) || doc == nil {
 		return "", false, nil
 	}
 	eligible, rawBoundary, err := octetRequestCarriage(doc, media)
@@ -658,7 +658,7 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 			enc = media.Encoding[name]
 		}
 		if enc != nil && len(enc.Headers) > 0 {
-			return fmt.Errorf("multipart part %q declares encoding.headers, but revision 3 defines no caller source for dynamic part-header values", name)
+			return fmt.Errorf("multipart part %q declares encoding.headers, but this binding revision defines no caller source for dynamic part-header values", name)
 		}
 		if encodingUsesSerialization(enc) {
 			if err := validateMultipartSerializationMethod(name, partSchema, enc); err != nil {
@@ -740,7 +740,7 @@ func revision3EncodingSerializationMethod(enc *openapi3.Encoding) openapi3.Seria
 
 func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, is30 bool) (parsedMediaType, error) {
 	if schema == nil {
-		return parsedMediaType{}, fmt.Errorf("an absent part schema defaults to application/octet-stream, but revision 3 defines no JSON-to-octet boundary")
+		return parsedMediaType{}, fmt.Errorf("an absent part schema defaults to application/octet-stream, but this binding revision defines no JSON-to-octet boundary")
 	}
 	if _, boolean := booleanSchemaLiteral(schema); boolean {
 		return parsedMediaType{}, fmt.Errorf("an unconstrained boolean part schema has no revision-3 octet boundary")
@@ -767,14 +767,14 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 			return parsedMediaType{}, fmt.Errorf("invalid encoding.contentType: %w", err)
 		}
 		if len(members) != 1 {
-			return parsedMediaType{}, fmt.Errorf("encoding.contentType has %d members; revision 3 defines no per-part member selection rule", len(members))
+			return parsedMediaType{}, fmt.Errorf("encoding.contentType has %d members; this binding revision defines no per-part member selection rule", len(members))
 		}
 		declared = members[0]
 	} else {
 		var ok bool
 		declared, ok = defaultRevision3PartContentType(schema, is30)
 		if !ok {
-			return parsedMediaType{}, fmt.Errorf("typeless part schema defaults to application/octet-stream, but revision 3 defines no JSON-to-octet boundary")
+			return parsedMediaType{}, fmt.Errorf("typeless part schema defaults to application/octet-stream, but this binding revision defines no JSON-to-octet boundary")
 		}
 	}
 	parsed, err := parseRevision3MediaType(declared)
@@ -965,6 +965,20 @@ func mediaSchema(media *openapi3.MediaType) *openapi3.Schema {
 	return media.Schema.Value
 }
 
+// responseUsesRawBoundary reports whether revision 4 carries the exact
+// response octets as canonical Base64 at the protocol-independent operation
+// boundary. JSON, text, and SSE retain their application-value lanes.
+func responseUsesRawBoundary(doc *openapi3.T, media *openapi3.MediaType, actualContentType string) bool {
+	actual, err := parseRevision3MediaType(actualContentType)
+	if err != nil || isJSONMediaType(actual.base) || strings.HasPrefix(actual.base, "text/") {
+		return false
+	}
+	if doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI)) {
+		return binarySignaled(mediaSchema(media), true)
+	}
+	return media != nil && media.Schema == nil
+}
+
 func booleanSchemaLiteral(schema *openapi3.Schema) (bool, bool) {
 	if schema == nil {
 		return false, false
@@ -1066,7 +1080,7 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 	cfg := openbindings.ContextConfiguration(bindCtx)
 	raw, configured := cfg["requestMedia"]
 	if !configured || raw == nil {
-		if bindingSpec != BindingSpecV3 {
+		if !hasMediaFidelity(bindingSpec) {
 			return plans, nil
 		}
 		concrete := make([]*bodyPlan, 0, len(plans))
@@ -1096,7 +1110,7 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 	}
 	var parsedWanted parsedMediaType
 	var err error
-	if bindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(bindingSpec) {
 		parsedWanted, err = parseRevision3MediaType(wanted)
 	} else {
 		parsedWanted, err = parseMediaType(wanted)
@@ -1104,8 +1118,8 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 	if err != nil {
 		return nil, fmt.Errorf("configuration.requestMedia: %w", err)
 	}
-	if bindingSpec == BindingSpecV3 {
-		return selectRevision3RequestPlan(doc, op, plans, parsedWanted)
+	if hasMediaFidelity(bindingSpec) {
+		return selectRevision3RequestPlan(doc, op, plans, parsedWanted, bindingSpec)
 	}
 	for _, plan := range plans {
 		parsed, err := parseMediaType(plan.mediaKey)
@@ -1116,7 +1130,11 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 	return nil, nil
 }
 
-func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans []*bodyPlan, wanted parsedMediaType) ([]*bodyPlan, error) {
+func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans []*bodyPlan, wanted parsedMediaType, bindingSpecs ...string) ([]*bodyPlan, error) {
+	bindingSpec := BindingSpecV3
+	if len(bindingSpecs) > 0 {
+		bindingSpec = bindingSpecs[0]
+	}
 	if op == nil || op.RequestBody == nil || op.RequestBody.Value == nil {
 		return nil, nil
 	}
@@ -1171,7 +1189,7 @@ func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans [
 		copy.mediaType = wanted.canonical
 		return []*bodyPlan{&copy}, nil
 	}
-	family, rawBoundary, carriageErr := exactRequestFamily(doc, wanted, op.RequestBody.Value.Content[selected.key], BindingSpecV3)
+	family, rawBoundary, carriageErr := exactRequestFamily(doc, wanted, op.RequestBody.Value.Content[selected.key], bindingSpec)
 	if carriageErr != nil {
 		return nil, carriageErr
 	}
@@ -1185,7 +1203,7 @@ func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans [
 	plan.mediaRange = true
 	plan.mediaType = wanted.canonical
 	plan.rawBoundary = rawBoundary
-	plan.bindingSpec = BindingSpecV3
+	plan.bindingSpec = bindingSpec
 	plan.oas30 = doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
 	applyRevision3BodyShape(plan)
 	if plan.synthetic != skeleton.synthetic {
@@ -1301,7 +1319,7 @@ func buildRequestBody(doc *openapi3.T, plan *bodyPlan, routed *routedInput) (io.
 			// when the body value is a string (OAPI-P-04).
 			return nil, "", fmt.Errorf("request media text/plain was selected but the body value is %T, not a string", routed.bodyValue)
 		}
-		if plan.bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(plan.bindingSpec) {
 			parsed, err := parseRevision3MediaType(plan.mediaType)
 			if err != nil {
 				return nil, "", err
@@ -1358,7 +1376,7 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 	var selected parsedMediaType
-	if bindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(bindingSpec) {
 		var err error
 		selected, err = parseRevision3MediaType(selectedMediaType)
 		if err != nil {
@@ -1389,10 +1407,10 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 		if media != nil {
 			enc = media.Encoding[name]
 		}
-		if bindingSpec == BindingSpecV3 && enc != nil && len(enc.Headers) > 0 {
-			return nil, "", fmt.Errorf("multipart part %q declares encoding.headers, but revision 3 defines no caller source for dynamic part-header values", name)
+		if hasMediaFidelity(bindingSpec) && enc != nil && len(enc.Headers) > 0 {
+			return nil, "", fmt.Errorf("multipart part %q declares encoding.headers, but this binding revision defines no caller source for dynamic part-header values", name)
 		}
-		if bindingSpec == BindingSpecV3 && encodingUsesSerialization(enc) {
+		if hasMediaFidelity(bindingSpec) && encodingUsesSerialization(enc) {
 			units, err := serializeMultipartValue(name, value, enc)
 			if err != nil {
 				return nil, "", fmt.Errorf("multipart part %q: %w", name, err)
@@ -1429,7 +1447,7 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 	if err := writer.Close(); err != nil {
 		return nil, "", fmt.Errorf("close multipart writer: %w", err)
 	}
-	if bindingSpec != BindingSpecV3 {
+	if !hasMediaFidelity(bindingSpec) {
 		return &buf, writer.FormDataContentType(), nil
 	}
 	params := make(map[string]string, len(selected.renderedParams)+1)
@@ -1595,7 +1613,7 @@ func schemaTypeIs(schema *openapi3.Schema, want string, seen map[*openapi3.Schem
 }
 
 func writeMultipartPart(writer *multipart.Writer, name string, value any, schema *openapi3.Schema, enc *openapi3.Encoding, is30 bool, bindingSpec string) error {
-	revision3 := bindingSpec == BindingSpecV3
+	revision3 := hasMediaFidelity(bindingSpec)
 	if revision3 {
 		return writeRevision3MultipartPart(writer, name, value, schema, enc, is30)
 	}
@@ -1724,7 +1742,7 @@ func writeMultipartPart(writer *multipart.Writer, name string, value any, schema
 
 func writeRevision3MultipartPart(writer *multipart.Writer, name string, value any, schema *openapi3.Schema, enc *openapi3.Encoding, is30 bool) error {
 	if enc != nil && len(enc.Headers) > 0 {
-		return fmt.Errorf("multipart part %q declares encoding.headers, but revision 3 defines no caller source for dynamic part-header values", name)
+		return fmt.Errorf("multipart part %q declares encoding.headers, but this binding revision defines no caller source for dynamic part-header values", name)
 	}
 	parsedContentType, err := revision3PartContentType(schema, enc, is30)
 	if err != nil {
@@ -2027,7 +2045,7 @@ func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, 
 		if media != nil {
 			enc = media.Encoding[name]
 		}
-		if bindingSpec == BindingSpecV3 && !legacyOpenAPIFormEncoding(openapiVersion) && !encodingUsesSerialization(enc) {
+		if hasMediaFidelity(bindingSpec) && !legacyOpenAPIFormEncoding(openapiVersion) && !encodingUsesSerialization(enc) {
 			propertySchema := resolvedMultipartProperty(schema, name, map[*openapi3.Schema]bool{})
 			contentType, err := revision3PartContentType(propertySchema, enc, is30)
 			if err != nil {
@@ -2048,7 +2066,7 @@ func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, 
 		}
 		var u []string
 		var err error
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			u, err = serializeQueryValueForRevision(name, fields[name], style, explode, allowReserved, bindingSpec, true)
 		} else {
 			u, err = serializeQueryValue(name, fields[name], style, explode, allowReserved)
@@ -2137,86 +2155,101 @@ func governingResponseMedia(response *openapi3.Response, actual string) (parsedM
 }
 
 func governingResponseMediaFor(response *openapi3.Response, actual, bindingSpec string) (parsedMediaType, error) {
+	match, err := governingResponseMediaMatchFor(response, actual, bindingSpec)
+	if err != nil {
+		return parsedMediaType{}, err
+	}
+	return match.declared, nil
+}
+
+type governingResponseMediaMatch struct {
+	key      string
+	declared parsedMediaType
+	media    *openapi3.MediaType
+}
+
+func governingResponseMediaMatchFor(response *openapi3.Response, actual, bindingSpec string) (governingResponseMediaMatch, error) {
 	if response == nil || len(response.Content) == 0 {
-		return parsedMediaType{}, fmt.Errorf("the governing response declares no concrete media")
+		return governingResponseMediaMatch{}, fmt.Errorf("the governing response declares no media")
 	}
 	var parsedActual parsedMediaType
 	var err error
-	if bindingSpec == BindingSpecV3 {
+	if hasMediaFidelity(bindingSpec) {
 		parsedActual, err = parseRevision3MediaType(actual)
 	} else {
 		parsedActual, err = parseMediaType(actual)
 	}
 	if err != nil {
-		return parsedMediaType{}, fmt.Errorf("response Content-Type: %w", err)
+		return governingResponseMediaMatch{}, fmt.Errorf("response Content-Type: %w", err)
 	}
 	identities := map[string]string{}
-	var declarations []parsedMediaType
-	for key := range response.Content {
+	var declarations []governingResponseMediaMatch
+	for key, media := range response.Content {
 		var declared parsedMediaType
 		var err error
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			declared, err = parseMediaDeclaration(key)
 		} else {
 			declared, err = parseMediaType(key)
 		}
 		if err != nil {
-			if bindingSpec == BindingSpecV3 {
-				return parsedMediaType{}, fmt.Errorf("invalid response media declaration %q: %w", key, err)
+			if hasMediaFidelity(bindingSpec) {
+				return governingResponseMediaMatch{}, fmt.Errorf("invalid response media declaration %q: %w", key, err)
 			}
 			continue
 		}
 		identity := declared.identity
-		if bindingSpec == BindingSpecV3 {
+		if hasMediaFidelity(bindingSpec) {
 			identity = declared.semanticIdentity
 		}
 		if previous, exists := identities[identity]; exists {
-			return parsedMediaType{}, fmt.Errorf("response content declarations %q and %q denote the same parsed media type", previous, key)
+			return governingResponseMediaMatch{}, fmt.Errorf("response content declarations %q and %q denote the same parsed media type or range declaration", previous, key)
 		}
 		identities[identity] = key
-		if declared.rangeSpecificity < 2 {
+		if declared.rangeSpecificity < 2 && !hasResponseFidelity(bindingSpec) {
 			// Range identities participate in collision inventory, but response
 			// ranges do not compete with a concrete match and cannot authorize
 			// a decode lane in revision 3.
 			continue
 		}
-		declarations = append(declarations, declared)
+		declarations = append(declarations, governingResponseMediaMatch{key: key, declared: declared, media: media})
 	}
 
-	bestSpecificity := -1
-	var matches []parsedMediaType
-	for _, declared := range declarations {
-		if declared.base != parsedActual.base {
+	bestRangeSpecificity, bestParameters := -1, -1
+	var matches []governingResponseMediaMatch
+	for _, declaration := range declarations {
+		declared := declaration.declared
+		if hasMediaFidelity(bindingSpec) {
+			if !requestMediaDeclarationMatches(declared, parsedActual) {
+				continue
+			}
+		} else if declared.base != parsedActual.base {
 			continue
-		}
-		matchesParams := true
-		for name, value := range declared.params {
-			if bindingSpec == BindingSpecV3 {
-				actualValue, present := parsedActual.params[name]
-				if !present || !mediaParameterValuesEqual(name, actualValue, value) {
+		} else {
+			matchesParams := true
+			for name, value := range declared.params {
+				if actualValue, present := parsedActual.params[name]; !present || actualValue != value {
 					matchesParams = false
 					break
 				}
-			} else if actualValue, present := parsedActual.params[name]; !present || actualValue != value {
-				matchesParams = false
-				break
+			}
+			if !matchesParams {
+				continue
 			}
 		}
-		if !matchesParams {
-			continue
-		}
-		specificity := len(declared.params)
-		if specificity > bestSpecificity {
-			bestSpecificity, matches = specificity, []parsedMediaType{declared}
-		} else if specificity == bestSpecificity {
-			matches = append(matches, declared)
+		rangeSpecificity, parameters := declared.rangeSpecificity, len(declared.params)
+		if rangeSpecificity > bestRangeSpecificity || (rangeSpecificity == bestRangeSpecificity && parameters > bestParameters) {
+			bestRangeSpecificity, bestParameters = rangeSpecificity, parameters
+			matches = []governingResponseMediaMatch{declaration}
+		} else if rangeSpecificity == bestRangeSpecificity && parameters == bestParameters {
+			matches = append(matches, declaration)
 		}
 	}
 	if len(matches) == 0 {
-		return parsedMediaType{}, fmt.Errorf("response Content-Type %q matches no concrete media in the governing response", actual)
+		return governingResponseMediaMatch{}, fmt.Errorf("response Content-Type %q matches no media in the governing response", actual)
 	}
 	if len(matches) != 1 {
-		return parsedMediaType{}, fmt.Errorf("response Content-Type %q ambiguously matches %d equally specific declarations", actual, len(matches))
+		return governingResponseMediaMatch{}, fmt.Errorf("response Content-Type %q ambiguously matches %d equally specific declarations", actual, len(matches))
 	}
 	return matches[0], nil
 }
@@ -2250,16 +2283,16 @@ func successMediaTypesFor(op *openapi3.Operation, bindingSpec string) []string {
 		for mt := range ref.Value.Content {
 			var parsed parsedMediaType
 			var err error
-			if bindingSpec == BindingSpecV3 {
+			if hasMediaFidelity(bindingSpec) {
 				parsed, err = parseMediaDeclaration(mt)
 			} else {
 				parsed, err = parseMediaType(mt)
 			}
-			if err != nil || parsed.rangeSpecificity < 2 {
+			if err != nil || (parsed.rangeSpecificity < 2 && !hasResponseFidelity(bindingSpec)) {
 				continue
 			}
 			identity := parsed.identity
-			if bindingSpec == BindingSpecV3 {
+			if hasMediaFidelity(bindingSpec) {
 				identity = parsed.semanticIdentity
 			}
 			if identities[identity] {
@@ -2304,12 +2337,12 @@ func isStreamingCapable(op *openapi3.Operation) bool {
 }
 
 func isStreamingCapableFor(op *openapi3.Operation, bindingSpec string) bool {
-	if bindingSpec != BindingSpecV3 {
+	if !hasMediaFidelity(bindingSpec) {
 		return isStreamingCapable(op)
 	}
 	for _, mt := range successMediaTypesFor(op, bindingSpec) {
-		parsed, err := parseRevision3MediaType(mt)
-		if err == nil && parsed.base == "text/event-stream" {
+		parsed, err := parseMediaDeclaration(mt)
+		if err == nil && mediaRangeBaseMatches(parsed.base, "text/event-stream") {
 			return true
 		}
 	}

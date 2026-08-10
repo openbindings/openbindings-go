@@ -16,15 +16,18 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestBindingSpecV3IsLatestWithoutAliasingV2(t *testing.T) {
-	if BindingSpec != "openbindings.openapi@3" || BindingSpecV3 != BindingSpec {
-		t.Fatalf("latest binding constants = (%q, %q), want exact @3", BindingSpec, BindingSpecV3)
+func TestBindingSpecV4IsLatestWithoutAliasingCompatibilityRevisions(t *testing.T) {
+	if BindingSpec != "openbindings.openapi@4" || BindingSpecV4 != BindingSpec {
+		t.Fatalf("latest binding constants = (%q, %q), want exact @4", BindingSpec, BindingSpecV4)
+	}
+	if BindingSpecV3 != "openbindings.openapi@3" {
+		t.Fatalf("BindingSpecV3 = %q, want immutable exact @3", BindingSpecV3)
 	}
 	if BindingSpecV2 != "openbindings.openapi@2" {
 		t.Fatalf("BindingSpecV2 = %q, want immutable exact @2", BindingSpecV2)
 	}
 	got := NewInvoker().BindingSpecs()
-	want := []string{BindingSpecV3, BindingSpecV2, LegacyBindingSpec}
+	want := []string{BindingSpecV4, BindingSpecV3, BindingSpecV2, LegacyBindingSpec}
 	var ids []string
 	for _, info := range got {
 		ids = append(ids, info.BindingSpec)
@@ -784,7 +787,7 @@ func TestRevision3ResponseRangesAndCollisions(t *testing.T) {
 	if err != nil || matched.base != "application/json" {
 		t.Fatalf("concrete response beside range = %#v, %v", matched, err)
 	}
-	if _, err := governingResponseMediaFor(&openapi3.Response{Content: openapi3.Content{"application/*": emptyMedia()}}, "application/json", BindingSpecV3); err == nil || !strings.Contains(err.Error(), "matches no concrete media") {
+	if _, err := governingResponseMediaFor(&openapi3.Response{Content: openapi3.Content{"application/*": emptyMedia()}}, "application/json", BindingSpecV3); err == nil || !strings.Contains(err.Error(), "matches no media") {
 		t.Fatalf("range-only response error = %v", err)
 	}
 
