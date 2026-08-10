@@ -45,6 +45,20 @@ func TestParseRoutedEnvelopeLeavesMarkerShapedObjectFlat(t *testing.T) {
 	}
 }
 
+func TestTransformExpressionUsesArrayForEmptyParameterRoutes(t *testing.T) {
+	routes := abstractInputRoutes{
+		wholeBodyField: "payload",
+		needsTransform: true,
+	}
+	expression := routes.transformExpressionFor(BindingSpecV5)
+	if !strings.Contains(expression, `"parameters":[]`) {
+		t.Fatalf("empty parameter routes must remain an array: %s", expression)
+	}
+	if strings.Contains(expression, `"parameters":null`) {
+		t.Fatalf("empty parameter routes must not be encoded as null: %s", expression)
+	}
+}
+
 func TestValidateEnvelopeRoutesRejectsUnknownIdentity(t *testing.T) {
 	envelope := &routedEnvelope{
 		value:      map[string]any{},

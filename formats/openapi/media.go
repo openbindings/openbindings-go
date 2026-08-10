@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dlclark/regexp2"
 	"github.com/getkin/kin-openapi/openapi3"
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -71,6 +72,7 @@ type bodyPlan struct {
 	media       *openapi3.MediaType
 	family      string
 	synthetic   bool
+	wholeObject bool            // explicitly dynamic object rides as one application value
 	props       map[string]bool // declared top-level body property names (object mode)
 	mediaRange  bool            // mediaKey is a revision-3 media-range declaration
 	rawBoundary bool            // caller string is Base64 boundary carriage for raw bytes
@@ -492,6 +494,9 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 		plan.bindingSpec = bindingSpec
 		plan.oas30 = doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
 		applyRevision3BodyShape(plan)
+		if hasDynamicObjectCarriage(bindingSpec) {
+			applyDynamicObjectShape(plan)
+		}
 		if candidate.mediaRange {
 			// A range is never a Content-Type. The representative family exists
 			// only to project its declaration-shaped operation surface.
@@ -503,6 +508,44 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 		return nil, &degenerateMediaError{msg: strings.Join(rejected, "; ")}
 	}
 	return plans, nil
+}
+
+func applyDynamicObjectShape(plan *bodyPlan) {
+	if plan == nil || plan.synthetic || !hasExplicitDynamicProperties(mediaSchema(plan.media), map[*openapi3.Schema]bool{}) {
+		return
+	}
+	plan.wholeObject = true
+	plan.props = nil
+}
+
+func hasExplicitDynamicProperties(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) bool {
+	if schema == nil || seen[schema] {
+		return false
+	}
+	seen[schema] = true
+	defer delete(seen, schema)
+	if len(schema.PatternProperties) > 0 || explicitDynamicAdditionalProperties(schema.AdditionalProperties) {
+		return true
+	}
+	for _, member := range schema.AllOf {
+		if member != nil && hasExplicitDynamicProperties(member.Value, seen) {
+			return true
+		}
+	}
+	return false
+}
+
+func explicitDynamicAdditionalProperties(additional openapi3.AdditionalProperties) bool {
+	if additional.Has != nil {
+		return *additional.Has
+	}
+	if additional.Schema == nil || additional.Schema.Value == nil {
+		return false
+	}
+	if literal, boolean := booleanSchemaLiteral(additional.Schema.Value); boolean {
+		return literal
+	}
+	return true
 }
 
 func buildBodyPlan(rb *openapi3.RequestBody, key string, parsed parsedMediaType, family string) (*bodyPlan, error) {
@@ -1064,7 +1107,8 @@ func candidateCollides(params openapi3.Parameters, plan *bodyPlan) bool {
 			continue
 		}
 		name := ref.Value.Name
-		if (plan.synthetic && name == syntheticBodyProperty) || (!plan.synthetic && plan.props[name]) {
+		if ((plan.synthetic || plan.wholeObject) && name == syntheticBodyProperty) ||
+			(!plan.synthetic && !plan.wholeObject && plan.props[name]) {
 			return true
 		}
 	}
@@ -1206,7 +1250,10 @@ func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans [
 	plan.bindingSpec = bindingSpec
 	plan.oas30 = doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
 	applyRevision3BodyShape(plan)
-	if plan.synthetic != skeleton.synthetic {
+	if hasDynamicObjectCarriage(bindingSpec) {
+		applyDynamicObjectShape(plan)
+	}
+	if plan.synthetic != skeleton.synthetic || plan.wholeObject != skeleton.wholeObject {
 		return nil, fmt.Errorf("configured requestMedia %q selects range %q with no single revision-3 routed body shape", wanted.canonical, selected.key)
 	}
 	return []*bodyPlan{plan}, nil
@@ -1271,7 +1318,7 @@ func buildRequestBody(doc *openapi3.T, plan *bodyPlan, routed *routedInput) (io.
 	}
 	switch plan.family {
 	case familyJSON:
-		if plan.synthetic {
+		if plan.synthetic || plan.wholeObject {
 			if !routed.bodySet {
 				// A supplied input missing the synthetic body member is sent
 				// as-is (the server's declared validation is the authority):
@@ -1296,15 +1343,23 @@ func buildRequestBody(doc *openapi3.T, plan *bodyPlan, routed *routedInput) (io.
 		}
 		return bytes.NewReader(b), plan.mediaType, nil
 	case familyMultipart:
-		if len(routed.bodyFields) == 0 && !plan.required {
+		fields, err := objectBodyFields(plan, routed)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(fields) == 0 && !plan.required {
 			return nil, "", nil
 		}
-		return buildMultipartBodyForMediaType(doc, plan.media, routed.bodyFields, plan.bindingSpec, plan.mediaType)
+		return buildMultipartBodyForMediaType(doc, plan.media, fields, plan.bindingSpec, plan.mediaType)
 	case familyURLEncoded:
-		if len(routed.bodyFields) == 0 && !plan.required {
+		fields, err := objectBodyFields(plan, routed)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(fields) == 0 && !plan.required {
 			return nil, "", nil
 		}
-		body, err := buildURLEncodedBodyForRevision(doc, plan.media, routed.bodyFields, plan.bindingSpec)
+		body, err := buildURLEncodedBodyForRevision(doc, plan.media, fields, plan.bindingSpec)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1402,7 +1457,12 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 	schema := mediaSchema(media)
 	for _, name := range names {
 		value := fields[name]
-		propSchema := resolvedMultipartProperty(schema, name, map[*openapi3.Schema]bool{})
+		propSchema := resolvedMultipartPropertyFor(
+			schema,
+			name,
+			map[*openapi3.Schema]bool{},
+			hasDynamicObjectCarriage(bindingSpec),
+		)
 		var enc *openapi3.Encoding
 		if media != nil {
 			enc = media.Encoding[name]
@@ -1493,6 +1553,20 @@ func serializeMultipartValue(name string, value any, enc *openapi3.Encoding) ([]
 	}
 }
 
+func objectBodyFields(plan *bodyPlan, routed *routedInput) (map[string]any, error) {
+	if !plan.wholeObject {
+		return routed.bodyFields, nil
+	}
+	if !routed.bodySet {
+		return map[string]any{}, nil
+	}
+	fields, ok := toStringAnyMap(routed.bodyValue)
+	if !ok {
+		return nil, fmt.Errorf("request media %s requires the whole body value to be an object", plan.mediaType)
+	}
+	return fields, nil
+}
+
 func multipartFormUnits(name string, value any, explode bool, delimiter string) ([]multipartSerializedUnit, error) {
 	if array, ok := asArray(value); ok {
 		values, err := arrayStrings(array)
@@ -1537,6 +1611,10 @@ func writeMultipartSerializedField(writer *multipart.Writer, name, value string)
 }
 
 func resolvedMultipartProperty(schema *openapi3.Schema, name string, seen map[*openapi3.Schema]bool) *openapi3.Schema {
+	return resolvedMultipartPropertyFor(schema, name, seen, false)
+}
+
+func resolvedMultipartPropertyFor(schema *openapi3.Schema, name string, seen map[*openapi3.Schema]bool, dynamic bool) *openapi3.Schema {
 	if schema == nil || seen[schema] {
 		return nil
 	}
@@ -1544,14 +1622,50 @@ func resolvedMultipartProperty(schema *openapi3.Schema, name string, seen map[*o
 	defer delete(seen, schema)
 
 	var matches []*openapi3.Schema
+	exact := false
 	if ref := schema.Properties[name]; ref != nil && ref.Value != nil {
+		exact = true
 		matches = append(matches, ref.Value)
+	}
+	patternMatched := false
+	if dynamic {
+		patterns := make([]string, 0, len(schema.PatternProperties))
+		for pattern := range schema.PatternProperties {
+			patterns = append(patterns, pattern)
+		}
+		sort.Strings(patterns)
+		for _, pattern := range patterns {
+			re, err := regexp2.Compile(pattern, regexp2.ECMAScript)
+			if err != nil {
+				continue // document validation owns invalid JSON Schema patterns
+			}
+			matched, err := re.MatchString(name)
+			if err != nil || !matched {
+				continue
+			}
+			patternMatched = true
+			if ref := schema.PatternProperties[pattern]; ref != nil && ref.Value != nil {
+				matches = append(matches, ref.Value)
+			}
+		}
+		if !exact && !patternMatched {
+			switch {
+			case schema.AdditionalProperties.Schema != nil && schema.AdditionalProperties.Schema.Value != nil:
+				if literal, boolean := booleanSchemaLiteral(schema.AdditionalProperties.Schema.Value); !boolean {
+					matches = append(matches, schema.AdditionalProperties.Schema.Value)
+				} else if literal {
+					matches = append(matches, &openapi3.Schema{})
+				}
+			case schema.AdditionalProperties.Has == nil || *schema.AdditionalProperties.Has:
+				matches = append(matches, &openapi3.Schema{})
+			}
+		}
 	}
 	for _, member := range schema.AllOf {
 		if member == nil || member.Value == nil {
 			continue
 		}
-		if match := resolvedMultipartProperty(member.Value, name, seen); match != nil {
+		if match := resolvedMultipartPropertyFor(member.Value, name, seen, dynamic); match != nil {
 			matches = append(matches, match)
 		}
 	}
@@ -2046,7 +2160,12 @@ func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, 
 			enc = media.Encoding[name]
 		}
 		if hasMediaFidelity(bindingSpec) && !legacyOpenAPIFormEncoding(openapiVersion) && !encodingUsesSerialization(enc) {
-			propertySchema := resolvedMultipartProperty(schema, name, map[*openapi3.Schema]bool{})
+			propertySchema := resolvedMultipartPropertyFor(
+				schema,
+				name,
+				map[*openapi3.Schema]bool{},
+				hasDynamicObjectCarriage(bindingSpec),
+			)
 			contentType, err := revision3PartContentType(propertySchema, enc, is30)
 			if err != nil {
 				return "", fmt.Errorf("form field %q: %w", name, err)

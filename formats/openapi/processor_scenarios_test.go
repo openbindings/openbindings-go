@@ -176,6 +176,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			t.Fatal(err)
 		}
 		op := openbindings.NewOperationInvoker(NewInvokerWithClient(client))
+		op.TransformEvaluator = openAPIJSONataEvaluator{}
 		call = openbindings.Invoke(
 			context.Background(), op, iface,
 			openbindings.NewOperationSignature[any, any](openAPIFidelityOperationID(scenario.ID)),
@@ -246,6 +247,7 @@ func openAPIFidelityOperationID(scenarioID string) string {
 		"OAPI-FI-07": "fidelityCreateItem",
 		"OAPI-FI-08": "fidelityCreateItemWithContext",
 		"OAPI-FI-09": "fidelityImage",
+		"OAPI-FI-10": "fidelityDynamicItem",
 	}[scenarioID]
 }
 

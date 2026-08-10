@@ -4,7 +4,14 @@
 
 ### Added
 
-- **Current `openbindings.openapi@4` adds declaration-led response range and
+- **Current `openbindings.openapi@5` preserves explicitly dynamic object
+  bodies without changing Core.** Explicit `additionalProperties` and
+  `patternProperties` schemas stay under one protocol-neutral application
+  property and a binding-private whole-body route. Runtime form and multipart
+  members resolve their effective exact, pattern, additional-property, and
+  `allOf` schemas. Revision 4 remains an exact compatibility path.
+
+- **`openbindings.openapi@4` added declaration-led response range and
   raw-byte carriage without changing Core.** The actual concrete response
   media selects the most-specific exact or wildcard declaration. Strict JSON,
   text/SSE, and artifact-authorized raw-byte lanes produce protocol-independent

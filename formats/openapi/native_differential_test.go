@@ -109,9 +109,11 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 			if err != nil {
 				t.Fatalf("synthesis failed: %v", err)
 			}
+			opInvoker := openbindings.NewOperationInvoker(NewInvokerWithClient(server.Client()))
+			opInvoker.TransformEvaluator = openAPIJSONataEvaluator{}
 			call := openbindings.Invoke(
 				context.Background(),
-				openbindings.NewOperationInvoker(NewInvokerWithClient(server.Client())),
+				opInvoker,
 				iface,
 				openbindings.NewOperationSignature[any, any](openAPIFidelityOperationID(scenario.ID)),
 				openbindings.WithContext(scenarioContext(scenario)),

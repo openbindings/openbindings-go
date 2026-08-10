@@ -225,7 +225,7 @@ func TestInvoke_UnmatchedFieldsRefusedWithoutBody(t *testing.T) {
 // loudly, naming the unroutable field (same species of refusal as the
 // no-body unmatched case above).
 func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
-	const wantMsg = `field(s) stray match no declared parameter, and the declared request body is non-object (its flattened contract carries only the synthetic "body" property)`
+	const wantMsg = `field(s) stray match no declared parameter, and the declared request body uses whole-value carriage (its flattened contract carries only the synthetic "body" property)`
 	cases := []struct {
 		name    string
 		content string

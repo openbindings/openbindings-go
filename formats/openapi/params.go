@@ -220,7 +220,7 @@ func routeInputFor(params openapi3.Parameters, input map[string]any, pathTemplat
 		switch {
 		case plan == nil || !plan.declared:
 			unmatched = append(unmatched, name)
-		case plan.synthetic:
+		case plan.synthetic || plan.wholeObject:
 			if name == syntheticBodyProperty {
 				r.bodyValue, r.bodySet = value, true
 			} else {
@@ -237,8 +237,8 @@ func routeInputFor(params openapi3.Parameters, input map[string]any, pathTemplat
 		}
 	}
 	if len(unmatched) > 0 {
-		if plan != nil && plan.declared && plan.synthetic {
-			return nil, fmt.Errorf("field(s) %s match no declared parameter, and the declared request body is non-object (its flattened contract carries only the synthetic %q property)", strings.Join(unmatched, ", "), syntheticBodyProperty)
+		if plan != nil && plan.declared && (plan.synthetic || plan.wholeObject) {
+			return nil, fmt.Errorf("field(s) %s match no declared parameter, and the declared request body uses whole-value carriage (its flattened contract carries only the synthetic %q property)", strings.Join(unmatched, ", "), syntheticBodyProperty)
 		}
 		return nil, fmt.Errorf("field(s) %s match no declared parameter, and the operation declares no request body to pass them through to", strings.Join(unmatched, ", "))
 	}

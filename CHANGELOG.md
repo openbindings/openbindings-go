@@ -6,6 +6,12 @@
 
 ### Changed
 
+- **The OpenAPI module now defaults to `openbindings.openapi@5`.** Explicit
+  `additionalProperties` and `patternProperties` request bodies remain one
+  protocol-neutral application object while binding-private routing preserves
+  every runtime member through JSON, form, and multipart carriage. Exact
+  revisions 4, 3, 2, and 1 remain compatible; Core is unchanged.
+
 - **OpenAPI security and request-channel handling now preserves artifact
   alternatives without leaking HTTP concepts into OBI contracts.** Invocation
   selects one complete Security Requirement Object instead of unioning OR
@@ -44,7 +50,7 @@
   references. Resolver configuration remains binding-private and does not
   alter the protocol-blind OBI document model.
 
-- **The OpenAPI module now defaults to `openbindings.openapi@4`.** It adds
+- **`openbindings.openapi@4` added response-carriage fidelity.** It adds
   response media-range selection and exact artifact-authorized raw response
   bytes as canonical Base64 application values, without exposing HTTP facts
   in ordinary outputs. Exact revision 3 remains available for compatibility.

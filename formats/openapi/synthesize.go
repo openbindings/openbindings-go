@@ -748,8 +748,11 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 				}
 			}
 			switch {
-			case !bodyObject:
-				// A non-object body schema — array, scalar, binary, or
+			case !bodyObject || requestPlan.wholeObject:
+				// A non-object body, or an explicitly dynamic object whose
+				// names cannot be safely interleaved with parameters, rides as
+				// one protocol-independent application value. Non-object
+				// schemas include array, scalar, binary, or
 				// TYPELESS (neither `properties` nor an explicit object
 				// type; §9.1's determination is declaration-only): the
 				// flattened contract carries it under the synthetic

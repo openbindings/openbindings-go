@@ -49,12 +49,14 @@ func planAbstractInputRoutes(params openapi3.Parameters, plans []*bodyPlan) abst
 
 	bodyNames := map[string]bool{}
 	wholeBody := false
+	dynamicObjectBody := false
 	for _, plan := range plans {
 		if plan == nil {
 			continue
 		}
-		if plan.synthetic {
+		if plan.synthetic || plan.wholeObject {
 			wholeBody = true
+			dynamicObjectBody = dynamicObjectBody || plan.wholeObject
 			continue
 		}
 		for name := range plan.props {
@@ -70,7 +72,11 @@ func planAbstractInputRoutes(params openapi3.Parameters, plans []*bodyPlan) abst
 		slots = append(slots, inputSlot{kind: "body", name: name, base: name})
 	}
 	if wholeBody {
-		slots = append(slots, inputSlot{kind: "wholeBody", base: syntheticBodyProperty})
+		base := syntheticBodyProperty
+		if dynamicObjectBody {
+			base = "payload"
+		}
+		slots = append(slots, inputSlot{kind: "wholeBody", base: base})
 	}
 
 	reserved := map[string]bool{}
@@ -95,6 +101,7 @@ func planAbstractInputRoutes(params openapi3.Parameters, plans []*bodyPlan) abst
 		assigned[i] = field
 		needsTransform = needsTransform || field != slot.base
 	}
+	needsTransform = needsTransform || dynamicObjectBody
 
 	routes := abstractInputRoutes{
 		bodyFields:     map[string]string{},
@@ -161,7 +168,15 @@ func (r abstractInputRoutes) transformExpression() string {
 }
 
 func (r abstractInputRoutes) transformExpressionFor(bindingSpec string) string {
-	params, _ := json.Marshal(r.parameters)
+	parameters := r.parameters
+	if parameters == nil {
+		// The private routing descriptor is an exact tuple shape. Keep an
+		// empty parameter route set as an array rather than JSON null so the
+		// generated transform is accepted by the same parser as a populated
+		// route set and remains byte-for-byte aligned across SDKs.
+		parameters = []abstractParameterRoute{}
+	}
+	params, _ := json.Marshal(parameters)
 	body := map[string]any{}
 	if len(r.bodyFields) > 0 {
 		body["properties"] = r.bodyFields
@@ -322,7 +337,7 @@ func validateEnvelopeRoutes(params openapi3.Parameters, plans []*bodyPlan, envel
 		if plan == nil {
 			continue
 		}
-		if plan.synthetic {
+		if plan.synthetic || plan.wholeObject {
 			wholeBody = true
 			continue
 		}
@@ -336,7 +351,7 @@ func validateEnvelopeRoutes(params openapi3.Parameters, plans []*bodyPlan, envel
 		}
 	}
 	if envelope.wholeBodyField != "" && !wholeBody {
-		return fmt.Errorf("revision-2 routed whole-body field does not identify any admissible non-object request-body candidate")
+		return fmt.Errorf("revision-2 routed whole-body field does not identify any admissible whole-value request-body candidate")
 	}
 	return nil
 }
@@ -433,7 +448,7 @@ func routeEnvelopeFor(params openapi3.Parameters, envelope *routedEnvelope, path
 	}
 
 	if plan != nil && plan.declared {
-		if plan.synthetic {
+		if plan.synthetic || plan.wholeObject {
 			if envelope.wholeBodyField != "" {
 				if value, present := envelope.value[envelope.wholeBodyField]; present {
 					r.bodyValue, r.bodySet = value, true
@@ -491,7 +506,7 @@ func routeEnvelopeFor(params openapi3.Parameters, envelope *routedEnvelope, path
 }
 
 func planAllowsObjectPassthrough(plan *bodyPlan) bool {
-	return plan != nil && plan.declared && !plan.synthetic && plan.family == familyJSON
+	return plan != nil && plan.declared && !plan.synthetic && !plan.wholeObject && plan.family == familyJSON
 }
 
 func envelopeWillEmitBody(envelope *routedEnvelope, op *openapi3.Operation) bool {
