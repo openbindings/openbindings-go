@@ -23,6 +23,12 @@ jobs:
           - formats/operationgraph
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        if: matrix.module == 'formats/openapi'
+        with:
+          repository: openbindings/openapi-client
+          ref: main
+          path: openapi-client
       # The conformance corpora are normative and live in the sibling spec and
       # interfaces repos; without these checkouts the corpus gates skip
       # silently (which is how the family + interface corpora went unverified
@@ -53,9 +59,16 @@ jobs:
         # post-tag (the replace maps the tagged version to this checkout).
         if: matrix.module != '.'
         run: |
-          go work init . ${{ matrix.module }}
+          if [ "${{ matrix.module }}" = "formats/openapi" ]; then
+            go work init . ${{ matrix.module }} openapi-client/go
+          else
+            go work init . ${{ matrix.module }}
+          fi
           ver=$(awk '/github.com\/openbindings\/openbindings-go v/ {print $NF}' ${{ matrix.module }}/go.mod)
           go work edit -replace "github.com/openbindings/openbindings-go@${ver}=."
+          if [ "${{ matrix.module }}" = "formats/openapi" ]; then
+            go work edit -replace "github.com/openbindings/openapi-client/go@v0.1.0=./openapi-client/go"
+          fi
       - name: vet ${{ matrix.module }}
         working-directory: ${{ matrix.module }}
         run: go vet ./...

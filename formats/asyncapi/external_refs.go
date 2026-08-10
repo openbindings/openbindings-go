@@ -173,19 +173,12 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 				if err != nil {
 					return nil, err
 				}
-				// Reference Object siblings such as summary/description remain
-				// local declarations and therefore override the resolved target.
+				// AsyncAPI 3.0 Reference Object siblings are ignored; only the
+				// referenced target contributes artifact semantics.
 				if object, ok := resolved.(map[string]any); ok {
-					for name, sibling := range typed {
-						if name == "$ref" {
-							continue
-						}
-						resolvedSibling, siblingErr := resolver.walk(sibling, current, stack)
-						if siblingErr != nil {
-							return nil, siblingErr
-						}
-						object[name] = resolvedSibling
-					}
+					// AsyncAPI 3.0 Reference Objects cannot be extended; their
+					// siblings are ignored. Retain only private source identity.
+					object["x-ob-asyncapi-channel-ref"] = ref
 				}
 				return resolved, nil
 			}

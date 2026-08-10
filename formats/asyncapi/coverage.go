@@ -21,6 +21,10 @@ func synthesisCoverage(doc *document, iface *openbindings.Interface) []openbindi
 	if doc == nil || iface == nil {
 		return []openbindings.SynthesisCoverageEntry{}
 	}
+	bindingSpec := BindingSpec
+	if source, ok := iface.Sources[DefaultSourceName]; ok && source.BindingSpec != "" {
+		bindingSpec = source.BindingSpec
+	}
 	type identity struct {
 		operation string
 		ref       string
@@ -41,7 +45,7 @@ func synthesisCoverage(doc *document, iface *openbindings.Interface) []openbindi
 		op := doc.Operations[operationID]
 		ref := operationRef(operationID)
 		id, emitted := represented[ref]
-		exclusion := operationExclusion(doc, &op)
+		exclusion := operationExclusion(doc, &op, bindingSpec)
 		if exclusion != nil {
 			entries = append(entries, coverageExclusion(ref, openbindings.SynthesisCoverageTarget, exclusion))
 		} else if !emitted {
@@ -67,7 +71,7 @@ func synthesisCoverage(doc *document, iface *openbindings.Interface) []openbindi
 		for _, candidate := range governingMessageInventory(doc, &op, &ch, ref+"#message") {
 			entries = append(entries, messageCoverage(doc, candidate, id, emitted, exclusion))
 		}
-		if op.Action == "receive" && op.Reply != nil {
+		if op.Reply != nil {
 			for _, candidate := range replyMessageInventory(doc, &op, ref+"#reply-message") {
 				entries = append(entries, messageCoverage(doc, candidate, id, emitted, exclusion))
 			}
@@ -83,7 +87,7 @@ func synthesisCoverage(doc *document, iface *openbindings.Interface) []openbindi
 				})
 				continue
 			}
-			if cell := protocolCellExclusion(doc, &op, &ch, protocol); cell != nil {
+			if cell := protocolCellExclusion(doc, &op, &ch, protocol, bindingSpec); cell != nil {
 				entries = append(entries, coverageExclusion(sourceRef, openbindings.SynthesisCoverageAlternative, cell))
 				continue
 			}
@@ -148,11 +152,18 @@ func governingMessageInventory(doc *document, op *asyncOperation, ch *channel, p
 	for index, name := range names {
 		msg := ch.Messages[name]
 		out = append(out, observedMessage{
-			sourceRef: fmt.Sprintf("%s[%d]=#/channels/%s/messages/%s", prefix, index, extractRefName(op.Channel.Ref), name),
+			sourceRef: fmt.Sprintf("%s[%d]=%s/messages/%s", prefix, index, channelSourceRef(op, ch), name),
 			message:   &msg,
 		})
 	}
 	return out
+}
+
+func channelSourceRef(op *asyncOperation, ch *channel) string {
+	if ch != nil && ch.SourceRef != "" {
+		return ch.SourceRef
+	}
+	return "#/channels/" + extractRefName(op.Channel.Ref)
 }
 
 func replyMessageInventory(doc *document, op *asyncOperation, prefix string) []observedMessage {
@@ -235,7 +246,7 @@ func messageCoverage(doc *document, candidate observedMessage, id struct {
 	}
 }
 
-func protocolCellExclusion(doc *document, op *asyncOperation, ch *channel, protocol string) *authoringExclusion {
+func protocolCellExclusion(doc *document, op *asyncOperation, ch *channel, protocol, bindingSpec string) *authoringExclusion {
 	switch protocol {
 	case "http", "https":
 		if op.Action == "send" {
@@ -251,8 +262,8 @@ func protocolCellExclusion(doc *document, op *asyncOperation, ch *channel, proto
 			return &authoringExclusion{"excluded", "asyncapi.reply_carriage_unrepresentable", "ASYNC-P-05", "an HTTP reply message uses carriage outside revision 1"}
 		}
 	case "ws", "wss":
-		if op.Action == "receive" && op.Reply != nil {
-			return &authoringExclusion{"excluded", "asyncapi.websocket_reply", "ASYNC-P-02", "reply-bearing publish is not representable over the WebSocket cell"}
+		if op.Reply != nil && (op.Action == "receive" || preservesSendReplies(bindingSpec)) {
+			return &authoringExclusion{"excluded", "asyncapi.websocket_reply", "ASYNC-P-02", "reply-bearing WebSocket operations require request/reply session semantics this revision does not define"}
 		}
 		if !wsFieldsMayBeStrings(ch) {
 			return &authoringExclusion{"excluded", "asyncapi.protocol_fields_unrepresentable", "ASYNC-P-04", "required WebSocket protocol fields do not admit string values"}

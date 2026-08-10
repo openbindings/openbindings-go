@@ -238,7 +238,7 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	switch scenario.ID {
 	case "ASYNC-PS-01":
 		phase = "load"
-	case "ASYNC-PS-02", "ASYNC-PS-03", "ASYNC-PS-12", "ASYNC-PS-13", "ASYNC-PS-15":
+	case "ASYNC-PS-02", "ASYNC-PS-03", "ASYNC-PS-12", "ASYNC-PS-13", "ASYNC-PS-15", "ASYNC-PS-19":
 		phase = "resolution"
 	}
 	disposition := "refusal"

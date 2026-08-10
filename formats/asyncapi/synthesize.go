@@ -15,7 +15,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const BindingSpec = "openbindings.asyncapi@1"
+// BindingSpec identifies the current reply-preserving AsyncAPI revision.
+const BindingSpec = "openbindings.asyncapi@2"
+
+// LegacyBindingSpec identifies the immutable revision-1 AsyncAPI binding.
+const LegacyBindingSpec = "openbindings.asyncapi@1"
+
+func preservesSendReplies(bindingSpec string) bool { return bindingSpec == BindingSpec }
 
 // DefaultSourceName is the key used in the interface's Sources map for the AsyncAPI source.
 const DefaultSourceName = "asyncapi"
@@ -27,7 +33,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 	src := in.Sources[0]
 
 	sourceEntry := openbindings.Source{
-		BindingSpec: BindingSpec,
+		BindingSpec: src.BindingSpec,
 	}
 	if src.Location != "" {
 		sourceEntry.Location = src.Location
@@ -57,7 +63,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 
 	usedKeys := map[string]bool{}
 
-	opIDs := bindableOperationIDs(doc)
+	opIDs := bindableOperationIDs(doc, src.BindingSpec)
 
 	for _, opID := range opIDs {
 		asyncOp := doc.Operations[opID]
@@ -125,6 +131,9 @@ func loadDocument(ctx context.Context, client *http.Client, location string, con
 	if err != nil {
 		return nil, err
 	}
+	if err := discriminateDocument(data); err != nil {
+		return nil, err
+	}
 	data, err = resolveArtifactReferences(ctx, client, location, data)
 	if err != nil {
 		return nil, err
@@ -138,6 +147,20 @@ func loadDocument(ctx context.Context, client *http.Client, location string, con
 // ParseDocument.
 func parseDocument(data []byte) (*document, error) {
 	var doc document
+	var envelope map[string]any
+	if err := yaml.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("parse AsyncAPI document: %w", err)
+	}
+	if err := discriminateEnvelope(envelope); err != nil {
+		return nil, err
+	}
+	infoValue, hasInfo := envelope["info"]
+	infoObject, infoIsObject := infoValue.(map[string]any)
+	_, hasTitle := infoObject["title"].(string)
+	_, hasVersion := infoObject["version"].(string)
+	if !hasInfo || !infoIsObject || !hasTitle || !hasVersion {
+		return nil, fmt.Errorf("not a valid AsyncAPI document (info.title and info.version are required strings)")
+	}
 
 	if isJSON(data) {
 		if err := json.Unmarshal(data, &doc); err != nil {
@@ -149,16 +172,35 @@ func parseDocument(data []byte) (*document, error) {
 		}
 	}
 
-	// ASYNC-P-01: the artifact's own `asyncapi` field discriminates the
-	// accepted revision — exactly 3.0.0. A later edition requires a new
-	// binding-specification identifier, never range inference.
-	if doc.AsyncAPI != "3.0.0" {
-		return nil, fmt.Errorf("unsupported AsyncAPI version %q: openbindings.asyncapi@1 accepts exactly 3.0.0 (ASYNC-P-01)", doc.AsyncAPI)
-	}
-
 	resolveRefs(&doc)
 
 	return &doc, nil
+}
+
+// discriminateDocument applies ASYNC-P-01 before external-reference
+// resolution. An unsupported edition must not trigger network requests for a
+// closure this binding will never interpret.
+func discriminateDocument(data []byte) error {
+	var envelope map[string]any
+	if err := yaml.Unmarshal(data, &envelope); err != nil {
+		return fmt.Errorf("parse AsyncAPI document: %w", err)
+	}
+	return discriminateEnvelope(envelope)
+}
+
+func discriminateEnvelope(envelope map[string]any) error {
+	value, ok := envelope["asyncapi"]
+	if !ok {
+		return fmt.Errorf("not a valid AsyncAPI document (missing 'asyncapi' field)")
+	}
+	version, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("unsupported AsyncAPI version %v: the supported openbindings.asyncapi revisions accept exactly 3.0.0 (ASYNC-P-01)", value)
+	}
+	if version != "3.0.0" {
+		return fmt.Errorf("unsupported AsyncAPI version %q: the supported openbindings.asyncapi revisions accept exactly 3.0.0 (ASYNC-P-01)", version)
+	}
+	return nil
 }
 
 // absolutizeArtifactLocation lifts a bare filesystem path to the file://

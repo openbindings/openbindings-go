@@ -38,6 +38,17 @@ func resolveRefs(doc *document) {
 			doc.Operations[opID] = *resolved
 		}
 	}
+	for opID, op := range doc.Operations {
+		for index, operationTag := range op.Tags {
+			if operationTag.Ref == "" {
+				continue
+			}
+			if resolved := resolveTagRefByPointer(operationTag.Ref, rawDoc); resolved != nil {
+				op.Tags[index] = *resolved
+			}
+		}
+		doc.Operations[opID] = op
+	}
 
 	// Resolve $refs in schema maps (map[string]any) throughout the document.
 	// Schemas live in: message payloads, component schemas, etc.
@@ -128,6 +139,9 @@ func resolveSchemaRefs(schema map[string]any, rawDoc map[string]any, visited map
 	if visited == nil {
 		visited = map[string]bool{}
 	}
+	// The external-composition pass uses this private marker only to retain
+	// an operation channel's source identity. It is never schema vocabulary.
+	delete(schema, "x-ob-asyncapi-channel-ref")
 
 	// Check if this is a $ref object.
 	if ref, ok := schema["$ref"].(string); ok && strings.HasPrefix(ref, "#/") {
@@ -281,6 +295,25 @@ func resolveParameterRefByPointer(ref string, rawDoc map[string]any) *parameter 
 		return resolveParameterRefByPointer(parameter.Ref, rawDoc)
 	}
 	return &parameter
+}
+
+func resolveTagRefByPointer(ref string, rawDoc map[string]any) *tag {
+	if !strings.HasPrefix(ref, "#/") {
+		return nil
+	}
+	resolved, ok := resolveJSONPointer(rawDoc, ref).(map[string]any)
+	if !ok {
+		return nil
+	}
+	data, err := json.Marshal(resolved)
+	if err != nil {
+		return nil
+	}
+	var resolvedTag tag
+	if err := json.Unmarshal(data, &resolvedTag); err != nil || resolvedTag.Ref != "" {
+		return nil
+	}
+	return &resolvedTag
 }
 
 // deepCopyMap creates a deep copy of a map[string]any.

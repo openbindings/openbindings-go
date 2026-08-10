@@ -3,7 +3,7 @@ package asyncapi
 import "fmt"
 
 // This file is the format seam's endpoint-resolution export: the server and
-// address configuration points of openbindings.asyncapi@1 §9.2 (ASYNC-P-04),
+// address configuration points of openbindings.asyncapi@2 §9.2 (ASYNC-P-04),
 // resolved for one operation WITHOUT dispatching an invocation. It exists for
 // consumers that dial an AsyncAPI-described endpoint with their own transport
 // (the ob CLI's delegate frame lane is the consumer) and must not re-derive
@@ -44,7 +44,7 @@ func ParseDocument(data []byte) (*Document, error) {
 }
 
 // Endpoint is one operation's resolved connection endpoint: the target URL
-// assembly of openbindings.asyncapi@1 §9.2, with the deciding protocol.
+// assembly of openbindings.asyncapi@2 §9.2, with the deciding protocol.
 type Endpoint struct {
 	// URL is the complete connection URL: scheme from the deciding
 	// protocol; authority from the resolved server's `host` with every
@@ -63,7 +63,7 @@ type Endpoint struct {
 
 // ResolveEndpoint resolves the connection endpoint of the operation a
 // binding ref names, per the server and address configuration points of
-// openbindings.asyncapi@1 §9.2 (ASYNC-P-04). Pure: nothing is dialed, and
+// openbindings.asyncapi@2 §9.2 (ASYNC-P-04). Pure: nothing is dialed, and
 // every unresolvable input is an error, never a guess.
 //
 // ref is ASYNC-D-03's JSON Pointer `#/operations/<operation-key>` — the only

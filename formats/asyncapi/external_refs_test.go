@@ -2,12 +2,21 @@ package asyncapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
+
+type countingRejectTransport struct{ calls int }
+
+func (t *countingRejectTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	t.calls++
+	return nil, errors.New("must not fetch")
+}
 
 func TestLoadDocumentResolvesExternalServerChannelAndMessageClosure(t *testing.T) {
 	mux := http.NewServeMux()
@@ -45,7 +54,7 @@ operations:
 	if got := doc.Channels["events"].Messages["event"].Payload["type"]; got != "object" {
 		t.Fatalf("message payload type = %v, want object", got)
 	}
-	if !operationBindable(doc, addressableOperation(t, doc, "subscribe")) {
+	if !operationBindable(doc, addressableOperation(t, doc, "subscribe"), BindingSpec) {
 		t.Fatal("externally composed subscription should be bindable")
 	}
 }
@@ -79,7 +88,7 @@ operations:
 	if channelName == "" || doc.Channels[channelName].Address != "/data" {
 		t.Fatalf("resolved channel %q was not hoisted into the primary document", channelName)
 	}
-	if !operationBindable(doc, op) {
+	if !operationBindable(doc, op, BindingSpec) {
 		t.Fatal("direct externally referenced channel should be bindable")
 	}
 }
@@ -94,6 +103,27 @@ operations: {}
 	_, err := loadDocument(context.Background(), nil, "", content)
 	if err == nil {
 		t.Fatal("expected a relative external ref without a base URI to be refused")
+	}
+}
+
+func TestLoadDocumentDiscriminatesUnsupportedEditionBeforeExternalRefs(t *testing.T) {
+	transport := &countingRejectTransport{}
+	client := &http.Client{Transport: transport}
+	content := openbindings.TextContent(`asyncapi: 2.0.0
+info: {title: Legacy external schema, version: "1"}
+channels: {}
+components:
+  messages:
+    Event:
+      payload: {$ref: "https://schema.example.com/shared.json"}
+`)
+
+	_, err := loadDocument(context.Background(), client, "https://artifact.example/asyncapi.yaml", content)
+	if err == nil || !strings.Contains(err.Error(), "ASYNC-P-01") {
+		t.Fatalf("loadDocument error = %v, want ASYNC-P-01", err)
+	}
+	if transport.calls != 0 {
+		t.Fatalf("unsupported edition performed %d external fetches, want zero", transport.calls)
 	}
 }
 

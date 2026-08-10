@@ -2,7 +2,7 @@
 
 AsyncAPI 3.x binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
 
-This package enables OpenBindings to invoke operations against AsyncAPI documents and synthesize OBI documents from them. Revision 1 supports unary HTTP publishes using the artifact-declared method, WebSocket client-streaming publishes, and WebSocket server-streaming subscriptions. Standalone HTTP `send` operations, broker protocols, and message carriage the core value boundary cannot preserve are reported as explicit exclusions. Credentials are applied only through the document's security schemes.
+This package enables OpenBindings to invoke operations against AsyncAPI documents and synthesize OBI documents from them. Revision 2 supports unary HTTP publishes using the artifact-declared method, WebSocket client-streaming publishes, and WebSocket server-streaming subscriptions. It refuses any reply-bearing WebSocket operation rather than discarding the declared reply contract. Standalone HTTP `send` operations, broker protocols, and message carriage the core value boundary cannot preserve are reported as explicit exclusions. Credentials are applied only through the document's security schemes. Immutable revision 1 remains supported by exact identifier for compatibility.
 
 See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 
@@ -27,7 +27,7 @@ import (
 opInv := openbindings.NewOperationInvoker(asyncapi.NewInvoker())
 ```
 
-The invoker declares the binding-spec identifier `openbindings.asyncapi@1` — exact and opaque, never a version range. The operation invoker routes a source to this invoker by string equality on the source's `bindingSpec`.
+The invoker declares the binding-spec identifier `openbindings.asyncapi@2` — exact and opaque, never a version range. The operation invoker routes a source to this invoker by string equality on the source's `bindingSpec`.
 
 ### Invoke a binding
 
@@ -38,7 +38,7 @@ invoker := asyncapi.NewInvoker()
 defer invoker.Close()
 
 source := openbindings.InvocationSource{
-    BindingSpec: "openbindings.asyncapi@1",
+    BindingSpec: "openbindings.asyncapi@2",
     Location:    "https://api.example.com/asyncapi.json",
 }
 
@@ -95,7 +95,7 @@ for {
 synth := asyncapi.NewSynthesizer()
 iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
     Sources: []openbindings.SynthesizeSource{{
-        BindingSpec: "openbindings.asyncapi@1",
+        BindingSpec: "openbindings.asyncapi@2",
         Location:    "https://api.example.com/asyncapi.json",
     }},
 })
@@ -107,7 +107,7 @@ These behaviors are pinned by the binding specification (`binding-specs/asyncapi
 
 ### Binding-spec identifier
 
-`openbindings.asyncapi@1` — exact and opaque, matched by string equality; never interpreted as a version range. Accepted artifacts declare exactly AsyncAPI **3.0.0**, discriminated by the document's own `asyncapi` field (ASYNC-P-01); accepting another edition publishes a new binding-specification identifier, never an in-place widening.
+`openbindings.asyncapi@2` — exact and opaque, matched by string equality; never interpreted as a version range. Accepted artifacts declare exactly AsyncAPI **3.0.0**, discriminated by the document's own `asyncapi` field (ASYNC-P-01); accepting another edition publishes a new binding-specification identifier, never an in-place widening.
 
 ### Ref format
 
@@ -188,7 +188,7 @@ Converts an AsyncAPI 3.x document into an OBI by:
 ## Endpoint resolution
 
 `ParseDocument` and `Document.ResolveEndpoint` export the server and address
-configuration points of `openbindings.asyncapi@1` §9.2 (ASYNC-P-04) for
+configuration points of `openbindings.asyncapi@2` §9.2 (ASYNC-P-04) for
 consumers that dial an AsyncAPI-described endpoint with their own transport:
 parse the document bytes (no I/O — fetching is the caller's business),
 resolve one operation's connection URL and deciding protocol per the

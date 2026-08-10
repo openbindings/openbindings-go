@@ -10,7 +10,7 @@ import (
 )
 
 // This file implements the server and address configuration points of
-// openbindings.asyncapi@1 §9.2 (ASYNC-P-04): the effective server set and
+// openbindings.asyncapi@2 §9.2 (ASYNC-P-04): the effective server set and
 // its deterministic ordering, server-variable substitution, channel-address
 // parameter expansion, and the concatenation URL-assembly rule. Every
 // unresolvable input is a pre-dispatch refusal, never a guess — this
@@ -169,7 +169,7 @@ func resolveTarget(doc *document, ch *channel, bindCtx map[string]any) (resolved
 			if def == nil {
 				names := boundServerNames(candidates)
 				if len(names) == 0 {
-					return resolvedTarget{}, fmt.Errorf("the effective server set declares no server with a protocol bound by openbindings.asyncapi@1")
+					return resolvedTarget{}, fmt.Errorf("the effective server set declares no server with a protocol bound by the supported openbindings.asyncapi revisions")
 				}
 				return resolvedTarget{}, &configRequired{
 					point: "server", key: "key",
@@ -184,7 +184,7 @@ func resolveTarget(doc *document, ch *channel, bindCtx map[string]any) (resolved
 	if def == nil {
 		names := boundServerNames(candidates)
 		if len(names) == 0 {
-			return resolvedTarget{}, fmt.Errorf("the effective server set declares no server with a protocol bound by openbindings.asyncapi@1")
+			return resolvedTarget{}, fmt.Errorf("the effective server set declares no server with a protocol bound by the supported openbindings.asyncapi revisions")
 		}
 		return resolvedTarget{}, &configRequired{
 			point:       "server",
@@ -267,7 +267,7 @@ func resolveServerConfig(raw any, candidates []namedServer, def *namedServer) (r
 	if member == nil {
 		names := boundServerNames(candidates)
 		if len(names) == 0 {
-			return resolvedTarget{}, fmt.Errorf("the effective server set declares no server with a protocol bound by openbindings.asyncapi@1")
+			return resolvedTarget{}, fmt.Errorf("the effective server set declares no server with a protocol bound by the supported openbindings.asyncapi revisions")
 		}
 		return resolvedTarget{}, &configRequired{
 			point: "server", key: "key",
@@ -341,7 +341,7 @@ func fullURLOverride(full string, selected *namedServer) (resolvedTarget, error)
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if !isBoundProtocol(scheme) {
-		return resolvedTarget{}, fmt.Errorf("connection URL %q: scheme %q is not bound by openbindings.asyncapi@1 (supported: http, https, ws, wss)", full, scheme)
+		return resolvedTarget{}, fmt.Errorf("connection URL %q: scheme %q is not bound by the supported openbindings.asyncapi revisions (supported: http, https, ws, wss)", full, scheme)
 	}
 	selectedProtocol := strings.ToLower(selected.Server.Protocol)
 	if scheme != selectedProtocol {
@@ -388,7 +388,7 @@ func assembleServer(member *namedServer, supplied map[string]string) (resolvedTa
 	srv := member.Server
 	proto := strings.ToLower(srv.Protocol)
 	if !isBoundProtocol(proto) {
-		return resolvedTarget{}, fmt.Errorf("server %q: protocol %q is not bound by openbindings.asyncapi@1 (supported: http, https, ws, wss)", member.Name, srv.Protocol)
+		return resolvedTarget{}, fmt.Errorf("server %q: protocol %q is not bound by the supported openbindings.asyncapi revisions (supported: http, https, ws, wss)", member.Name, srv.Protocol)
 	}
 
 	if err := validateSuppliedServerVariables(member, supplied); err != nil {

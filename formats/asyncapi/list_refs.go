@@ -21,7 +21,11 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 
 	var targets []openbindings.BindableTarget
 
-	opIDs := bindableOperationIDs(doc)
+	bindingSpec := source.BindingSpec
+	if bindingSpec != LegacyBindingSpec {
+		bindingSpec = BindingSpec
+	}
+	opIDs := bindableOperationIDs(doc, bindingSpec)
 
 	// Suggest the same operation key SynthesizeInterface assigns (synthesize.go: same
 	// sorted iteration and SanitizeKey + UniqueKey de-duplication), so an

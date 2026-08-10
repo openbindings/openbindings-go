@@ -106,7 +106,10 @@ func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, conte
 
 // BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "AsyncAPI 3.x event-driven APIs"}}
+	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpec, Description: "AsyncAPI 3.0 event-driven APIs (reply-preserving revision)"},
+		{BindingSpec: LegacyBindingSpec, Description: "AsyncAPI 3.0 event-driven APIs (revision-1 compatibility)"},
+	}
 }
 
 // InvokeBinding invokes an AsyncAPI binding, returning the invocation handle
@@ -203,7 +206,10 @@ func NewSynthesizer() *Synthesizer {
 
 // BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "AsyncAPI 3.x event-driven APIs"}}
+	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpec, Description: "AsyncAPI 3.0 event-driven APIs (reply-preserving revision)"},
+		{BindingSpec: LegacyBindingSpec, Description: "AsyncAPI 3.0 event-driven APIs (revision-1 compatibility)"},
+	}
 }
 
 // SynthesizeInterface converts an AsyncAPI document to an OpenBindings interface.
@@ -241,8 +247,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpec {
-		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpec && src.BindingSpec != LegacyBindingSpec {
+		return nil, fmt.Errorf("synthesizer supports exact binding specifications %q and %q, got %q", BindingSpec, LegacyBindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {
@@ -285,7 +291,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 			iface.Sources[DefaultSourceName] = entry
 		}
 	}
-	if err := openbindings.FinalizeSynthesis(iface, in, DefaultSourceName, BindingSpec); err != nil {
+	if err := openbindings.FinalizeSynthesis(iface, in, DefaultSourceName, src.BindingSpec); err != nil {
 		return nil, err
 	}
 	return &synthesisObservation{iface: iface, doc: doc}, nil

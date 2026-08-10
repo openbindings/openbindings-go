@@ -6,6 +6,13 @@
 
 ### Changed
 
+- **The OpenAPI module now exposes a standalone artifact runtime.** Direct
+  callers can use `openapi.Runtime` without constructing an OBI, while
+  `openapi.Invoker` remains the thin SDK adapter and `openapi.Synthesizer`
+  owns OBI construction. The extraction preserves current revision-7 behavior
+  and every immutable compatibility path; it changes neither Core nor the
+  OpenAPI binding specification.
+
 - **The OpenAPI module now defaults to `openbindings.openapi@7`.** Exact
   schema-omitted OAS 3.0 non-JSON request and response representations cross
   the protocol-independent boundary as canonical Base64. Media ranges and

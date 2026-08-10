@@ -222,6 +222,58 @@ func TestSynthesizeInterfaceWithCoverage_AccountsForMessagesAndProtocolCells(t *
 	}
 }
 
+func TestSynthesizeInterfaceWithCoverage_RefusesReplyBearingWSSendInRevision2(t *testing.T) {
+	content := json.RawMessage(`{
+	  "asyncapi": "3.0.0",
+	  "info": {"title": "Reply-bearing send", "version": "1"},
+	  "servers": {"ws": {"host": "api.example", "protocol": "wss"}},
+	  "channels": {
+	    "events": {"address": "/events", "messages": {"event": {"payload": {"type": "object"}}}},
+	    "commands": {"address": "/commands", "messages": {"command": {"payload": {"type": "string"}}}}
+	  },
+	  "operations": {
+	    "subscribe": {
+	      "action": "send",
+	      "channel": {"$ref": "#/channels/events"},
+	      "messages": [{"$ref": "#/channels/events/messages/event"}],
+	      "reply": {"messages": [{"$ref": "#/channels/commands/messages/command"}]}
+	    }
+	  }
+	}`)
+
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Interface.Operations) != 0 {
+		t.Fatalf("revision 2 synthesized reply-bearing send: %#v", result.Interface.Operations)
+	}
+	found := false
+	for _, entry := range result.Coverage.Entries {
+		if entry.SourceRef == "#/operations/subscribe" && entry.Status == openbindings.SynthesisExcluded && entry.ReasonCode == "asyncapi.websocket_reply" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing reply-bearing send exclusion: %#v", result.Coverage.Entries)
+	}
+
+	legacy, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: LegacyBindingSpec, Content: content}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := legacy.Operations["subscribe"]; !ok {
+		t.Fatalf("revision 1 compatibility lost its send operation: %#v", legacy.Operations)
+	}
+	if got := legacy.Sources[DefaultSourceName].BindingSpec; got != LegacyBindingSpec {
+		t.Fatalf("legacy source bindingSpec = %q, want %q", got, LegacyBindingSpec)
+	}
+}
+
 func TestSynthesizeInterface_SourceLocationConditional(t *testing.T) {
 	doc := &document{AsyncAPI: "3.0.0", Operations: map[string]asyncOperation{}}
 

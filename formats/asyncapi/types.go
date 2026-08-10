@@ -46,6 +46,7 @@ type channel struct {
 	Parameters  map[string]parameter `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 	Bindings    *channelBindings     `json:"bindings,omitempty" yaml:"bindings,omitempty"`
 	Ref         string               `json:"$ref,omitempty" yaml:"$ref,omitempty"`
+	SourceRef   string               `json:"x-ob-asyncapi-channel-ref,omitempty" yaml:"x-ob-asyncapi-channel-ref,omitempty"`
 }
 
 // channelBindings models the protocol entries of a channel's `bindings`
@@ -156,6 +157,7 @@ type parameter struct {
 }
 
 type tag struct {
+	Ref         string `json:"$ref,omitempty" yaml:"$ref,omitempty"`
 	Name        string `json:"name" yaml:"name"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
@@ -207,4 +209,5 @@ type components struct {
 	Operations      map[string]asyncOperation `json:"operations,omitempty" yaml:"operations,omitempty"`
 	Parameters      map[string]parameter      `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 	SecuritySchemes map[string]securityScheme `json:"securitySchemes,omitempty" yaml:"securitySchemes,omitempty"`
+	Tags            map[string]tag            `json:"tags,omitempty" yaml:"tags,omitempty"`
 }

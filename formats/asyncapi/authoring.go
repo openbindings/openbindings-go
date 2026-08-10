@@ -18,10 +18,10 @@ type authoringExclusion struct {
 // cell. Required configuration (server URL, message selection, codec lane,
 // protocol fields) remains satisfiable and therefore does not exclude a
 // target; artifact contradictions and definition-level exclusions do.
-func bindableOperationIDs(doc *document) []string {
+func bindableOperationIDs(doc *document, bindingSpec string) []string {
 	ids := make([]string, 0, len(doc.Operations))
 	for id, op := range doc.Operations {
-		if operationBindable(doc, &op) {
+		if operationBindable(doc, &op, bindingSpec) {
 			ids = append(ids, id)
 		}
 	}
@@ -29,11 +29,11 @@ func bindableOperationIDs(doc *document) []string {
 	return ids
 }
 
-func operationBindable(doc *document, op *asyncOperation) bool {
-	return operationExclusion(doc, op) == nil
+func operationBindable(doc *document, op *asyncOperation, bindingSpec string) bool {
+	return operationExclusion(doc, op, bindingSpec) == nil
 }
 
-func operationExclusion(doc *document, op *asyncOperation) *authoringExclusion {
+func operationExclusion(doc *document, op *asyncOperation, bindingSpec string) *authoringExclusion {
 	if op == nil {
 		return &authoringExclusion{"invalid", "asyncapi.invalid_operation", "ASYNC-D-03", "the operations-map entry is not an operation object"}
 	}
@@ -97,6 +97,9 @@ func operationExclusion(doc *document, op *asyncOperation) *authoringExclusion {
 	// only the WebSocket cell can make it bindable.
 	if !hasWS {
 		return &authoringExclusion{"excluded", "asyncapi.no_faithful_protocol_cell", "ASYNC-P-02", "the operation's effective server set provides no WebSocket subscription cell"}
+	}
+	if op.Reply != nil && preservesSendReplies(bindingSpec) {
+		return &authoringExclusion{"excluded", "asyncapi.websocket_reply", "ASYNC-P-02", "reply-bearing WebSocket send operations require request/reply session semantics revision 2 does not define"}
 	}
 	if !wsFieldsMayBeStrings(&ch) {
 		return &authoringExclusion{"excluded", "asyncapi.protocol_fields_unrepresentable", "ASYNC-P-04", "required WebSocket protocol fields do not admit string values"}

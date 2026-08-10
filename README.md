@@ -277,7 +277,7 @@ directly on OpenBindings concepts. See the binding-specification guide's
 ```go
 opInv := openbindings.NewOperationInvoker(
     openapi.NewInvoker(),   // openbindings.openapi@7 (plus @6/@5/@4/@3/@2/@1 compatibility)
-    asyncapi.NewInvoker(),  // openbindings.asyncapi@1
+    asyncapi.NewInvoker(),  // openbindings.asyncapi@2
     grpc.NewInvoker(),      // openbindings.grpc@1
 )
 ```
@@ -285,7 +285,7 @@ opInv := openbindings.NewOperationInvoker(
 | Module | Binding specification | Synthesizes OBIs? |
 |--------|-----------------|-------------------|
 | `formats/openapi` | `openbindings.openapi@7` (latest), `@6`/`@5`/`@4`/`@3`/`@2`/`@1` compatibility | yes |
-| `formats/asyncapi` | `openbindings.asyncapi@1` | yes |
+| `formats/asyncapi` | `openbindings.asyncapi@2` | yes |
 | `formats/graphql` | `openbindings.graphql@2` (latest), `openbindings.graphql@1` (compatibility) | yes |
 | `formats/grpc` | `openbindings.grpc@1` | yes |
 | `formats/connect` | `openbindings.connect@1` | yes |

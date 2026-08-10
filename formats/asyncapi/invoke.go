@@ -134,7 +134,7 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		h.FireError(configOrSourceError(err, ""))
 		return
 	}
-	if err := validateCell(doc, ch, &asyncOp, target.Protocol, args.Context); err != nil {
+	if err := validateCell(doc, ch, &asyncOp, target.Protocol, args.Source.BindingSpec, args.Context); err != nil {
 		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
 		return
 	}
@@ -229,14 +229,14 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		// resolveTarget only yields bound protocols; defensive.
 		h.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: fmt.Sprintf("protocol %q is not bound by openbindings.asyncapi@1 (supported: http, https, ws, wss)", target.Protocol),
+			Message: fmt.Sprintf("protocol %q is not bound by the supported openbindings.asyncapi revisions (supported: http, https, ws, wss)", target.Protocol),
 		})
 	}
 }
 
 type preparedInput struct{ Value any }
 
-func validateCell(doc *document, ch *channel, op *asyncOperation, protocol string, bindCtx map[string]any) error {
+func validateCell(doc *document, ch *channel, op *asyncOperation, protocol, bindingSpec string, bindCtx map[string]any) error {
 	var httpBinding *httpOperationBinding
 	if op.Bindings != nil {
 		httpBinding = op.Bindings.HTTP
@@ -304,6 +304,9 @@ func validateCell(doc *document, ch *channel, op *asyncOperation, protocol strin
 				return fmt.Errorf("WebSocket subscription address uses a runtime expression that requires an outgoing payload")
 			}
 		}
+	}
+	if op.Reply != nil && preservesSendReplies(bindingSpec) {
+		return fmt.Errorf("reply-bearing WebSocket send operations are excluded from revision 2")
 	}
 	_, err := resolveSubscriptionContentType(doc, governingMessages(doc, op, ch), bindCtx)
 	return err
@@ -882,7 +885,7 @@ func runSSESubscribe(ctx context.Context, client *http.Client, target resolvedTa
 	if ct := resp.Header.Get("Content-Type"); normalizeMediaType(ct) != "text/event-stream" {
 		h.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeProtocol,
-			Message: fmt.Sprintf("SSE subscription establishment requires a text/event-stream response, got content type %q (openbindings.asyncapi@1 §8)", ct),
+			Message: fmt.Sprintf("SSE subscription establishment requires a text/event-stream response, got content type %q (openbindings.asyncapi §8)", ct),
 		})
 		return
 	}

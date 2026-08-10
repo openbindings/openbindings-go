@@ -11,7 +11,7 @@ import (
 )
 
 // This file honors declared protocol `bindings` objects, which are
-// authoritative where they speak (openbindings.asyncapi@1 §8, ASYNC-P-02):
+// authoritative where they speak (openbindings.asyncapi@2 §8, ASYNC-P-02):
 // an http operation binding's `method` selects the request method; a
 // websockets channel binding's `method`, `query`, and `headers` govern the
 // upgrade request, with declared query and header values supplied like

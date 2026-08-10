@@ -12,7 +12,7 @@ import (
 )
 
 // This file resolves the governing content-type declarations of
-// openbindings.asyncapi@1 §9.1 (ASYNC-P-03, input encoding) and §9.3
+// openbindings.asyncapi@2 §9.1 (ASYNC-P-03, input encoding) and §9.3
 // (ASYNC-P-05, decode). Effective content type resolves PER MESSAGE first —
 // the message's own `contentType`, else the document's
 // `defaultContentType`, the AsyncAPI rule — and the governing set's
@@ -94,7 +94,7 @@ func selectedInputMessages(doc *document, op *asyncOperation, ch *channel, bindC
 		}
 	}
 	if selected.message.Headers != nil {
-		return nil, fmt.Errorf("selected message declares headers, which openbindings.asyncapi@1 revision 1 cannot carry")
+		return nil, fmt.Errorf("selected message declares headers, which this AsyncAPI binding revision cannot carry")
 	}
 	return []message{selected.message}, nil
 }
