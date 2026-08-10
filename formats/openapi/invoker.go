@@ -109,8 +109,24 @@ func newDefaultHTTPClient() *http.Client {
 // *http.Client and the engine's per-instance document cache are safe for
 // concurrent use.
 type Runtime struct {
-	client *http.Client
-	engine *openapiclient.Engine
+	client           *http.Client
+	engine           *openapiclient.Engine
+	securityHandlers map[string]SecurityHandler
+}
+
+// SecurityHandlerContext describes the authored OpenAPI security scheme an
+// extension handler is applying.
+type SecurityHandlerContext = openapiclient.SecurityHandlerContext
+
+// SecurityHandler applies an artifact-authored security mechanism that the
+// built-in OpenAPI credential adapter does not implement.
+type SecurityHandler = openapiclient.SecurityHandler
+
+// RuntimeOptions configures the OpenBindings bridge without changing Core
+// invocation context or the synthesized OBI contract.
+type RuntimeOptions struct {
+	HTTPClient       *http.Client
+	SecurityHandlers map[string]SecurityHandler
 }
 
 // RuntimeSource identifies an OpenAPI artifact without requiring an OBI.
@@ -148,18 +164,37 @@ var (
 // NewRuntime creates the compatibility runtime with the binding's default
 // HTTP client and redirect policy.
 func NewRuntime() *Runtime {
-	return NewRuntimeWithClient(nil)
+	return NewRuntimeWithOptions(RuntimeOptions{})
 }
 
 // NewRuntimeWithClient creates a standalone OpenAPI runtime using client.
 func NewRuntimeWithClient(client *http.Client) *Runtime {
+	return NewRuntimeWithOptions(RuntimeOptions{HTTPClient: client})
+}
+
+// NewRuntimeWithOptions creates the compatibility runtime with explicit
+// artifact-level extension handlers and transport configuration.
+func NewRuntimeWithOptions(options RuntimeOptions) *Runtime {
+	client := options.HTTPClient
 	if client == nil {
 		client = newDefaultHTTPClient()
 	}
 	return &Runtime{
-		client: client,
-		engine: openapiclient.NewEngine(client),
+		client:           client,
+		engine:           openapiclient.NewEngine(client),
+		securityHandlers: cloneSecurityHandlers(options.SecurityHandlers),
 	}
+}
+
+func cloneSecurityHandlers(handlers map[string]SecurityHandler) map[string]SecurityHandler {
+	if len(handlers) == 0 {
+		return nil
+	}
+	result := make(map[string]SecurityHandler, len(handlers))
+	for name, handler := range handlers {
+		result[name] = handler
+	}
+	return result
 }
 
 // NewInvoker creates a new OpenAPI binding invoker with a default HTTP
@@ -176,6 +211,12 @@ func NewInvoker() *Invoker {
 // the caller controls cancellation via context.
 func NewInvokerWithClient(client *http.Client) *Invoker {
 	return &Invoker{Runtime: NewRuntimeWithClient(client)}
+}
+
+// NewInvokerWithOptions creates an OpenBindings adapter with explicit
+// artifact-level security handlers and transport configuration.
+func NewInvokerWithOptions(options RuntimeOptions) *Invoker {
+	return &Invoker{Runtime: NewRuntimeWithOptions(options)}
 }
 
 // BindingSpecs returns the binding-spec identifiers this invoker supports.
@@ -225,7 +266,7 @@ func runtimeBindingArgs(args *RuntimeInvocationArgs) *openbindings.BindingInvoca
 	}
 }
 
-func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http.Client) (openapiclient.PrepareOptions, error) {
+func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http.Client, securityHandlers map[string]SecurityHandler) (openapiclient.PrepareOptions, error) {
 	if args == nil {
 		return openapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "OpenAPI invocation arguments are required"}
 	}
@@ -250,6 +291,7 @@ func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http
 		Source: openapiclient.Source{Location: args.Source.Location, Content: content},
 		Ref:    args.Ref, Profile: profile, Context: args.Context, HTTPClient: client,
 		Hooks: bridgeHooks(args, bindingSpec), MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes,
+		SecurityHandlers: securityHandlers,
 	}, nil
 }
 
@@ -375,7 +417,7 @@ func (e *Runtime) invokeBinding(ctx context.Context, args *openbindings.BindingI
 }
 
 func (e *Runtime) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) error {
-	options, err := enginePrepareOptions(args, e.client)
+	options, err := enginePrepareOptions(args, e.client, e.securityHandlers)
 	if err != nil {
 		return err
 	}
@@ -453,7 +495,7 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.Binding
 // schemes, it reports no requirement and lets the invocation raise the
 // challenge instead.
 func (e *Runtime) prepareBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
-	options, err := enginePrepareOptions(args, e.client)
+	options, err := enginePrepareOptions(args, e.client, e.securityHandlers)
 	if err != nil {
 		return nil, nil
 	}

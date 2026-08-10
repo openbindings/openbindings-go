@@ -107,3 +107,54 @@ func TestRuntimeAppliesResolvedBearerContext(t *testing.T) {
 		t.Fatalf("output terminal = %v, want EOF", err)
 	}
 }
+
+func TestRuntimeAppliesInstalledArtifactSecurityHandler(t *testing.T) {
+	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if got, want := req.Header.Get("Authorization"), "Digest adapter-proof"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Status:     "204 No Content",
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    req,
+		}, nil
+	})}
+	runtime := NewRuntimeWithOptions(RuntimeOptions{
+		HTTPClient: client,
+		SecurityHandlers: map[string]SecurityHandler{
+			"digestAuth": func(request *http.Request, context SecurityHandlerContext) error {
+				if context.SchemeName != "digestAuth" {
+					t.Fatalf("scheme name = %q", context.SchemeName)
+				}
+				request.Header.Set("Authorization", "Digest adapter-proof")
+				return nil
+			},
+		},
+	})
+	args := &RuntimeInvocationArgs{
+		Source: RuntimeSource{Content: openbindings.TextContent(`{
+			"openapi":"3.1.0",
+			"info":{"title":"Secured runtime","version":"1"},
+			"servers":[{"url":"https://api.example.test"}],
+			"paths":{"/users":{"get":{"security":[{"digestAuth":[]}],"responses":{"204":{"description":"done"}}}}},
+			"components":{"securitySchemes":{"digestAuth":{"type":"http","scheme":"digest"}}}
+		}`)},
+		Ref: "#/paths/~1users/get",
+	}
+	details, err := runtime.Prepare(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details != nil {
+		t.Fatalf("installed handler left prerequisites: %#v", details)
+	}
+	call := runtime.Invoke(context.Background(), args)
+	if err := call.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call.Outputs().Read(context.Background()); err != io.EOF {
+		t.Fatalf("output terminal = %v, want EOF", err)
+	}
+}

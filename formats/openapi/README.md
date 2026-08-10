@@ -202,6 +202,30 @@ The legacy `metadata.baseURL` override still works, below the configuration poin
 
 `NewInvokerWithClient(*http.Client)` supplies the client used for every request (corporate proxy, mTLS client certificate, custom CA pool, tracing transport). Do not set an overall `Timeout` on it; cancellation is driven by the invocation context. `NewInvoker()` uses a default client that returns artifact-observed redirect responses without following them, because following can rewrite the declared method or body.
 
+For an artifact-authored security mechanism outside the built-ins, install a
+handler by the scheme's authored name. This is adapter/runtime configuration;
+it does not add protocol fields to the OBI or change the built-in schemes'
+Core context resolution:
+
+```go
+invoker := openapi.NewInvokerWithOptions(openapi.RuntimeOptions{
+    HTTPClient: client,
+    SecurityHandlers: map[string]openapi.SecurityHandler{
+        "digestAuth": func(req *http.Request, scheme openapi.SecurityHandlerContext) error {
+            return applyDigest(req, credentialsFor(scheme.SchemeName))
+        },
+    },
+})
+```
+
+Handlers run after the built-in request is finalized and may support Digest,
+request signatures, mTLS-associated request policy, or future authored
+mechanisms. Without a handler, the existing artifact-derived
+`CONTEXT_REQUIRED` prerequisite remains authoritative and dispatch stays
+fail-closed. Installing one declares that the handler is the complete,
+configured implementation for that scheme; the handler therefore owns any
+scheme-specific credential or transport resolution it requires.
+
 ### Credential application
 
 Credentials are applied based on the OpenAPI spec's `securitySchemes`:
