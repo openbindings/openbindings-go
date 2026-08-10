@@ -11,15 +11,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
-	"sync"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	openapiclient "github.com/openbindings/openapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -101,17 +101,43 @@ func newDefaultHTTPClient() *http.Client {
 	}
 }
 
-// Invoker handles binding invocation for OpenAPI 3.x sources.
+// Runtime is a Core-invocation-shaped compatibility facade over the
+// standalone OpenAPI client engine. New OpenAPI-only applications should use
+// github.com/openbindings/openapi-client/go directly.
 //
-// Each Invoker owns an HTTP client (*http.Client is safe for concurrent use
-// by multiple goroutines, so all calls on a single Invoker share one client)
-// and a per-instance document cache keyed by source location. The cache is
-// scoped to the Invoker instance to avoid cross-tenant contamination in
-// multi-tenant servers.
+// Each Runtime owns an HTTP client and the standalone artifact engine.
+// *http.Client and the engine's per-instance document cache are safe for
+// concurrent use.
+type Runtime struct {
+	client *http.Client
+	engine *openapiclient.Engine
+}
+
+// RuntimeSource identifies an OpenAPI artifact without requiring an OBI.
+type RuntimeSource struct {
+	// BindingSpec selects the exact OpenBindings OpenAPI semantic revision.
+	// Empty selects the current revision.
+	BindingSpec string
+	Location    string
+	Content     json.RawMessage
+}
+
+// RuntimeInvocationArgs invoke a directly selected OpenAPI operation. Input
+// values flow through the returned cardinality-agnostic Invocation handle.
+type RuntimeInvocationArgs struct {
+	Source               RuntimeSource
+	Ref                  string
+	Context              map[string]any
+	Hooks                *openbindings.InvokeHooks
+	Site                 *openbindings.InvokeSite
+	MaxDeliveryUnitBytes int64
+}
+
+// Invoker is the thin OpenBindings binding-invoker adapter over Runtime.
+// Embedding keeps the existing direct binding API source-compatible while the
+// artifact-centric Invoke and Prepare methods remain independently usable.
 type Invoker struct {
-	client   *http.Client
-	mu       sync.RWMutex
-	docCache map[string]*openapi3.T
+	*Runtime
 }
 
 var (
@@ -119,14 +145,28 @@ var (
 	_ openbindings.BindingPreparer = (*Invoker)(nil)
 )
 
+// NewRuntime creates the compatibility runtime with the binding's default
+// HTTP client and redirect policy.
+func NewRuntime() *Runtime {
+	return NewRuntimeWithClient(nil)
+}
+
+// NewRuntimeWithClient creates a standalone OpenAPI runtime using client.
+func NewRuntimeWithClient(client *http.Client) *Runtime {
+	if client == nil {
+		client = newDefaultHTTPClient()
+	}
+	return &Runtime{
+		client: client,
+		engine: openapiclient.NewEngine(client),
+	}
+}
+
 // NewInvoker creates a new OpenAPI binding invoker with a default HTTP
 // client. Use NewInvokerWithClient to inject a custom client (e.g., for
 // tests, or to add a transport layer for tracing or auth).
 func NewInvoker() *Invoker {
-	return &Invoker{
-		client:   newDefaultHTTPClient(),
-		docCache: make(map[string]*openapi3.T),
-	}
+	return &Invoker{Runtime: NewRuntime()}
 }
 
 // NewInvokerWithClient creates an Invoker that uses the supplied
@@ -135,42 +175,11 @@ func NewInvoker() *Invoker {
 // behavior. No overall request timeout should be set on the client because
 // the caller controls cancellation via context.
 func NewInvokerWithClient(client *http.Client) *Invoker {
-	if client == nil {
-		client = newDefaultHTTPClient()
-	}
-	return &Invoker{
-		client:   client,
-		docCache: make(map[string]*openapi3.T),
-	}
-}
-
-// cachedLoadDocument loads an OpenAPI doc, caching by location within a process.
-// When content is provided, the cache is bypassed and updated with the fresh parse.
-func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, content json.RawMessage) (*openapi3.T, error) {
-	if location != "" && content == nil {
-		e.mu.RLock()
-		if doc, ok := e.docCache[location]; ok {
-			e.mu.RUnlock()
-			return doc, nil
-		}
-		e.mu.RUnlock()
-	}
-
-	doc, err := loadDocumentWithResolver(ctx, e.client, location, content)
-	if err != nil {
-		return nil, err
-	}
-
-	if location != "" {
-		e.mu.Lock()
-		e.docCache[location] = doc
-		e.mu.Unlock()
-	}
-	return doc, nil
+	return &Invoker{Runtime: NewRuntimeWithClient(client)}
 }
 
 // BindingSpecs returns the binding-spec identifiers this invoker supports.
-func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+func (e *Runtime) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
 		{BindingSpec: BindingSpecV7, Description: "OpenAPI 3.x HTTP APIs (OAS 3.0 schema-omitted byte-carriage revision)"},
 		{BindingSpec: BindingSpecV6, Description: "OpenAPI 3.x HTTP APIs (whole-JSON carriage revision)"},
@@ -182,13 +191,180 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	}
 }
 
-// InvokeBinding invokes an HTTP request based on an OpenAPI binding. The
+// Invoke runs a directly selected OpenAPI operation without requiring an OBI
+// document or OpenBindings operation-selection machinery.
+func (e *Runtime) Invoke(ctx context.Context, args *RuntimeInvocationArgs) openbindings.Invocation[any, any] {
+	return e.invokeBinding(ctx, runtimeBindingArgs(args))
+}
+
+// Prepare inspects a directly selected operation's runtime prerequisites
+// without network I/O.
+func (e *Runtime) Prepare(ctx context.Context, args *RuntimeInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+	return e.prepareBinding(ctx, runtimeBindingArgs(args))
+}
+
+func runtimeBindingArgs(args *RuntimeInvocationArgs) *openbindings.BindingInvocationArgs {
+	if args == nil {
+		args = &RuntimeInvocationArgs{}
+	}
+	bindingSpec := args.Source.BindingSpec
+	if bindingSpec == "" {
+		bindingSpec = BindingSpec
+	}
+	return &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{
+			BindingSpec: bindingSpec,
+			Location:    args.Source.Location,
+			Content:     args.Source.Content,
+		},
+		Ref:                  args.Ref,
+		Context:              args.Context,
+		Hooks:                args.Hooks,
+		Site:                 args.Site,
+		MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes,
+	}
+}
+
+func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http.Client) (openapiclient.PrepareOptions, error) {
+	if args == nil {
+		return openapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "OpenAPI invocation arguments are required"}
+	}
+	bindingSpec := args.Source.BindingSpec
+	if bindingSpec == "" {
+		bindingSpec = BindingSpec
+	}
+	profile, ok := engineProfile(bindingSpec)
+	if !ok {
+		return openapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("unsupported OpenAPI binding specification %q", bindingSpec)}
+	}
+	profile = openapiclient.WithInputRouteEnvelope(profile, "$openbindings", bindingSpec)
+	var content []byte
+	var err error
+	if args.Source.Content != nil {
+		content, err = openbindings.ContentToBytes(args.Source.Content)
+		if err != nil {
+			return openapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: err.Error()}
+		}
+	}
+	return openapiclient.PrepareOptions{
+		Source: openapiclient.Source{Location: args.Source.Location, Content: content},
+		Ref:    args.Ref, Profile: profile, Context: args.Context, HTTPClient: client,
+		Hooks: bridgeHooks(args, bindingSpec), MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes,
+	}, nil
+}
+
+func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
+	switch bindingSpec {
+	case LegacyBindingSpec:
+		return openapiclient.BaseProfile(), true
+	case BindingSpecV2:
+		return openapiclient.RoutedProfile(), true
+	case BindingSpecV3:
+		return openapiclient.MediaProfile(), true
+	case BindingSpecV4:
+		return openapiclient.ResponseProfile(), true
+	case BindingSpecV5:
+		return openapiclient.DynamicObjectProfile(), true
+	case BindingSpecV6:
+		return openapiclient.WholeJSONProfile(), true
+	case BindingSpecV7:
+		return openapiclient.FullProfile(), true
+	default:
+		return openapiclient.Profile{}, false
+	}
+}
+
+func bridgeHooks(args *openbindings.BindingInvocationArgs, bindingSpec string) *openapiclient.Hooks {
+	if args.Hooks == nil {
+		return nil
+	}
+	return &openapiclient.Hooks{
+		Decode: func(site openapiclient.HookSite, raw openapiclient.RawResult) (any, bool, error) {
+			coreSite := coreHookSite(args, bindingSpec, site.Target)
+			coreRaw := openbindings.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
+			contentType := ""
+			if values := raw.Meta["Content-Type"]; len(values) > 0 {
+				contentType = values[0]
+			}
+			value, err := args.Hooks.DecodeOutput(coreSite, coreRaw, decodeByContentTypeFor(contentType, bindingSpec))
+			return value, true, err
+		},
+		Classify: func(site openapiclient.HookSite, raw openapiclient.RawResult) (bool, bool, error) {
+			coreSite := coreHookSite(args, bindingSpec, site.Target)
+			coreRaw := openbindings.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
+			value, err := args.Hooks.Classify(coreSite, coreRaw, BuiltinClassify)
+			return value, true, err
+		},
+	}
+}
+
+func coreHookSite(args *openbindings.BindingInvocationArgs, bindingSpec, target string) openbindings.InvokeSite {
+	var site openbindings.InvokeSite
+	if args.Site != nil {
+		site = *args.Site
+	} else {
+		site.BindingSpec = bindingSpec
+		site.Ref = args.Ref
+	}
+	if site.Target == "" {
+		site.Target = target
+	}
+	return site
+}
+
+func toCoreMetadata(metadata openapiclient.Metadata) openbindings.Metadata {
+	result := make(openbindings.Metadata, len(metadata))
+	for name, values := range metadata {
+		result[name] = append([]string(nil), values...)
+	}
+	return result
+}
+
+func bridgeExecutionError(err error) error {
+	var execution *openapiclient.ExecutionError
+	if !errors.As(err, &execution) || execution == nil {
+		return err
+	}
+	diagnostics := execution.Diagnostics
+	if diagnostics == nil {
+		diagnostics = execution.Evidence
+	}
+	details := execution.Details
+	if prerequisites, ok := details.(*openapiclient.Prerequisites); ok {
+		details = toCorePrerequisites(prerequisites)
+	}
+	return &openbindings.InvocationError{Code: execution.Code, Message: execution.Message, Details: details, Diagnostics: diagnostics}
+}
+
+func toCorePrerequisites(value *openapiclient.Prerequisites) *openbindings.ContextRequiredDetails {
+	if value == nil {
+		return nil
+	}
+	result := &openbindings.ContextRequiredDetails{Target: value.Target, Alternatives: make([]openbindings.ContextAlternative, len(value.Alternatives))}
+	for alternativeIndex, alternative := range value.Alternatives {
+		result.Alternatives[alternativeIndex].Requirements = make([]openbindings.ContextRequirement, len(alternative.Requirements))
+		for requirementIndex, requirement := range alternative.Requirements {
+			result.Alternatives[alternativeIndex].Requirements[requirementIndex] = openbindings.ContextRequirement{
+				Type: requirement.Type, Name: requirement.Name, Durable: requirement.Durable,
+				Description: requirement.Description, Extra: requirement.Extra,
+			}
+		}
+	}
+	return result
+}
+
+// InvokeBinding adapts the SDK binding invocation to the artifact runtime.
+func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+	return e.Runtime.invokeBinding(ctx, args)
+}
+
+// invokeBinding invokes an HTTP request based on an OpenAPI binding. The
 // Invocation handle is returned synchronously; creation is inert and the
 // HTTP work is scheduled on its own goroutine. Input messages flow through
 // the handle's Write channel. All pre-dispatch failures (bad ref, missing
 // server URL, unresolvable operation, missing context) terminate the handle
 // BEFORE any network side effect.
-func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+func (e *Runtime) invokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
 	go func() {
 		if err := e.run(ctx, args, inv); err != nil {
@@ -198,20 +374,75 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 	return inv
 }
 
-func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) error {
-	doc, err := e.cachedLoadDocument(ctx, args.Source.Location, args.Source.Content)
+func (e *Runtime) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) error {
+	options, err := enginePrepareOptions(args, e.client)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceLoadFailed,
-			Message: err.Error(),
-		})
-		return nil
+		return err
 	}
-	runBinding(ctx, e.client, args, inv, doc)
+	prepared, err := e.engine.Prepare(ctx, options)
+	if err != nil {
+		return bridgeExecutionError(err)
+	}
+	bridgeCtx, stop := openbindings.DoneContext(ctx, inv.Done())
+	defer stop()
+	execution, err := prepared.Start(bridgeCtx)
+	if err != nil {
+		return bridgeExecutionError(err)
+	}
+	if execution.InputRequested() {
+		value, readErr := inv.ReadInput(bridgeCtx)
+		switch {
+		case errors.Is(readErr, io.EOF):
+			if err := execution.FinishInput(); err != nil {
+				return bridgeExecutionError(err)
+			}
+		case readErr != nil:
+			execution.Cancel()
+			return readErr
+		default:
+			if err := execution.Send(bridgeCtx, value); err != nil {
+				return bridgeExecutionError(err)
+			}
+			if err := execution.FinishInput(); err != nil {
+				return bridgeExecutionError(err)
+			}
+		}
+		_ = inv.CloseInput()
+	} else {
+		_ = inv.CloseInput()
+	}
+
+	if _, responseErr := execution.Response(bridgeCtx); responseErr == nil {
+		if err := inv.SetHeader(toCoreMetadata(execution.Diagnostics().Leading)); err != nil {
+			execution.Cancel()
+			return nil
+		}
+	}
+	for event := range execution.Events() {
+		if err := inv.EmitOutput(event.Value); err != nil {
+			execution.Cancel()
+			return nil
+		}
+	}
+	if trailing := execution.Diagnostics().Trailing; len(trailing) > 0 {
+		inv.SetTrailer(toCoreMetadata(trailing))
+	}
+	if err := execution.Wait(); err != nil {
+		if bridgeCtx.Err() != nil {
+			return nil
+		}
+		return bridgeExecutionError(err)
+	}
+	inv.CloseOutput()
 	return nil
 }
 
-// PrepareBinding is the side-effect-free preflight (the prepareBinding
+// PrepareBinding adapts the SDK binding preflight to the artifact runtime.
+func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+	return e.Runtime.prepareBinding(ctx, args)
+}
+
+// prepareBinding is the side-effect-free preflight (the prepareBinding
 // operation of the openbindings.binding-invoker interface): it derives the
 // operation's auth requirements from the document's securitySchemes and
 // reports the context the invocation would require, or nil when it can
@@ -221,51 +452,37 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 // fetches. When the document would have to be fetched to learn its security
 // schemes, it reports no requirement and lets the invocation raise the
 // challenge instead.
-func (e *Invoker) PrepareBinding(_ context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
-	doc := e.prepareDoc(args.Source.Location, args.Source.Content)
-	if doc == nil || doc.Paths == nil {
-		return nil, nil
-	}
-
-	pathTemplate, method, err := parseRef(args.Ref)
+func (e *Runtime) prepareBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+	options, err := enginePrepareOptions(args, e.client)
 	if err != nil {
 		return nil, nil
 	}
-	pathItem := doc.Paths.Find(pathTemplate)
-	if pathItem == nil {
-		return nil, nil
+	var prepared *openapiclient.PreparedOperation
+	if args.Source.Content != nil {
+		allowExternal := false
+		options.AllowExternalRefs = &allowExternal
+		prepared, err = e.engine.Prepare(ctx, options)
+	} else {
+		prepared, err = e.engine.PrepareCached(ctx, options)
 	}
-	op := pathItem.GetOperation(strings.ToUpper(method))
-	if op == nil {
-		return nil, nil
-	}
-
-	baseURL, err := resolveServer(doc, pathItem, op, args.Context, args.Source.Location)
 	if err != nil {
-		// No server URL: the invocation fails with ErrCodeSourceConfigError
-		// before auth matters, so there is no context to report.
+		var execution *openapiclient.ExecutionError
+		if errors.As(err, &execution) && execution.Code == openapiclient.CodeSourceConfigError {
+			return nil, bridgeExecutionError(err)
+		}
 		return nil, nil
 	}
-	params := effectiveParameters(pathItem, op)
-	if err := checkEffectiveParameterOwnership(params); err != nil {
+	if prepared == nil {
 		return nil, nil
 	}
-	if err := securityConfigurationError(doc, op); err != nil {
-		return nil, nil
-	}
-	details := requiredContext(doc, op, args.Context, baseURL, params)
-	mediaDetails, err := requiredRequestMediaContext(doc, op, args.Source.BindingSpec, args.Context)
-	if err != nil {
-		return nil, err
-	}
-	return mergeContextRequirements(details, mediaDetails), nil
+	return toCorePrerequisites(prepared.Prerequisites()), nil
 }
 
 // prepareDoc returns the OpenAPI document without performing network I/O:
 // inline source content is parsed locally (external refs disabled so the
 // parse cannot fetch), and a location-only source is served from the warm
 // document cache. Returns nil when the document is not knowable without I/O.
-func (e *Invoker) prepareDoc(location string, content json.RawMessage) *openapi3.T {
+func (e *Runtime) prepareDoc(location string, content json.RawMessage) *openapi3.T {
 	if content != nil {
 		data, err := openbindings.ContentToBytes(content)
 		if err != nil {
@@ -296,9 +513,7 @@ func (e *Invoker) prepareDoc(location string, content json.RawMessage) *openapi3
 	if location == "" {
 		return nil
 	}
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.docCache[location]
+	return nil
 }
 
 // Synthesizer handles interface synthesis from OpenAPI documents.
@@ -489,7 +704,7 @@ func readAuthoringArtifact(ctx context.Context, client *http.Client, location st
 // decoder follows the delivery unit's declared Content-Type header (read
 // from raw.Meta — wire framing, never payload sniffing); the classifier
 // is the 2xx convention floor.
-func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.ResultClassifier) {
+func (e *Runtime) BuiltinHooks() (openbindings.OutputDecoder, openbindings.ResultClassifier) {
 	decode := func(site openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
 		ct := ""
 		if vs := raw.Meta["Content-Type"]; len(vs) > 0 {

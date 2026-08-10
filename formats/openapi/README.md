@@ -1,6 +1,9 @@
 # formats/openapi
 
-OpenAPI 3.x binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
+Thin OpenAPI binding-invoker and interface-synthesizer adapters for the
+[OpenBindings](https://openbindings.com) Go SDK. Artifact execution is owned by
+the standalone [`openapi-client/go`](https://github.com/openbindings/openapi-client)
+module; this package maps OpenBindings contracts onto it.
 
 This package enables OpenBindings to invoke operations against OpenAPI specs and synthesize OBI documents from them. It reads OpenAPI 3.x documents, constructs HTTP requests, applies credentials via security schemes, and yields results through the SDK's cardinality-agnostic `Invocation` handle.
 
@@ -15,6 +18,32 @@ go get github.com/openbindings/openbindings-go/formats/openapi
 Requires [openbindings-go](https://github.com/openbindings/openbindings-go) (the core SDK).
 
 ## Usage
+
+### Invoke an artifact without an OBI
+
+Use the standalone client when an application needs OpenAPI without an OBI or
+OpenBindings SDK dependency:
+
+```go
+client, err := openapiclient.Load(ctx, openapiclient.Source{
+    Location: "https://api.example.com/openapi.json",
+}, openapiclient.ClientOptions{
+    Auth: map[string]any{"session": "tok_123"},
+})
+if err != nil {
+    log.Fatal(err)
+}
+result, err := client.Call(ctx, openapiclient.OperationRef(
+    "#/paths/~1users/get",
+), openapiclient.Input{
+    Parameters: openapiclient.Parameters{Query: map[string]any{"limit": 10}},
+})
+```
+
+`Runtime` remains as a Core-invocation-shaped compatibility façade, but it now
+delegates to that same engine. New standalone applications should use
+`openapiclient.Client`; `Invoker` is the OpenBindings bridge and `Synthesizer`
+constructs OBI documents.
 
 ### Register with OperationInvoker
 
@@ -171,7 +200,7 @@ The legacy `metadata.baseURL` override still works, below the configuration poin
 
 ### Custom HTTP client
 
-`NewInvokerWithClient(*http.Client)` supplies the client used for every request (corporate proxy, mTLS client certificate, custom CA pool, tracing transport). Do not set an overall `Timeout` on it; cancellation is driven by the invocation context. `NewInvoker()` uses a default client with a 10-redirect cap.
+`NewInvokerWithClient(*http.Client)` supplies the client used for every request (corporate proxy, mTLS client certificate, custom CA pool, tracing transport). Do not set an overall `Timeout` on it; cancellation is driven by the invocation context. `NewInvoker()` uses a default client that returns artifact-observed redirect responses without following them, because following can rewrite the declared method or body.
 
 ### Credential application
 

@@ -231,7 +231,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				}
 			}
 
-			outputSchema := buildOutputSchema(op, schemaOverlays, bindingSpec, doc.OpenAPI)
+			outputSchema := buildOutputSchemaWithCyclicRefs(op, schemaOverlays, bindingSpec, cyclic, doc.OpenAPI)
 			if outputSchema != nil {
 				inlined := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output")
 				projected := projectOpenAPISchema(inlined, openAPIResponseSchema, nil)
@@ -1024,6 +1024,10 @@ func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec stri
 }
 
 func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayCollector, bindingSpec string, openapiVersions ...string) map[string]any {
+	return buildOutputSchemaWithCyclicRefs(op, schemaOverlays, bindingSpec, nil, openapiVersions...)
+}
+
+func buildOutputSchemaWithCyclicRefs(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayCollector, bindingSpec string, cyclic map[string]bool, openapiVersions ...string) map[string]any {
 	openapiVersion := "3.0"
 	if len(openapiVersions) > 0 {
 		openapiVersion = openapiVersions[0]
@@ -1048,9 +1052,13 @@ func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayC
 	sort.Strings(keys)
 	var schemas []map[string]any
 	seen := map[string]bool{}
-	appendSchema := func(schema map[string]any) {
+	cyclicRootRefs := map[string]string{}
+	appendSchema := func(schema map[string]any, cyclicRootRef string) {
 		encoded, _ := json.Marshal(schema)
 		identity := string(encoded)
+		if cyclicRootRef != "" {
+			cyclicRootRefs[identity] = cyclicRootRef
+		}
 		if !seen[identity] {
 			seen[identity] = true
 			schemas = append(schemas, schema)
@@ -1087,7 +1095,11 @@ func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayC
 				if media == nil || media.Schema == nil {
 					return nil // an unconstrained JSON success can emit any JSON value
 				}
-				appendSchema(schemaRefToMap(media.Schema, schemaOverlays))
+				cyclicRootRef := ""
+				if media.Schema.Ref != "" && cyclic[media.Schema.Ref] {
+					cyclicRootRef = media.Schema.Ref
+				}
+				appendSchema(schemaRefToMap(media.Schema, schemaOverlays), cyclicRootRef)
 			}
 			admitsNonJSON := !isJSONMediaType(parsed.base) || parsed.rangeSpecificity < 2
 			if admitsNonJSON {
@@ -1099,9 +1111,9 @@ func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayC
 				// one text value per SSE event. Revision 4's artifact-authorized
 				// byte lane uses canonical Base64 at the operation boundary.
 				if rawBoundary {
-					appendSchema(map[string]any{"type": "string", "contentEncoding": "base64"})
+					appendSchema(map[string]any{"type": "string", "contentEncoding": "base64"}, "")
 				} else {
-					appendSchema(map[string]any{"type": "string"})
+					appendSchema(map[string]any{"type": "string"}, "")
 				}
 			}
 		}
@@ -1114,7 +1126,17 @@ func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayC
 	}
 	anyOf := make([]any, len(schemas))
 	for i, schema := range schemas {
-		anyOf[i] = schema
+		encoded, _ := json.Marshal(schema)
+		if ref := cyclicRootRefs[string(encoded)]; ref != "" {
+			// The TypeScript processor retains dereferenced object identity:
+			// a cyclic component below an anyOf root is hoisted as a unit. Go's
+			// typed marshal would otherwise inline that first occurrence and
+			// hoist only its nested back-edge. Keep the artifact ref long enough
+			// for inlineRefsInOperationSchema to make the same $defs projection.
+			anyOf[i] = map[string]any{"$ref": ref}
+		} else {
+			anyOf[i] = schema
+		}
 	}
 	return map[string]any{"anyOf": anyOf}
 }

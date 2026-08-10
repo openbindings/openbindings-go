@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Standalone OpenAPI artifact engine integration.** `Invoker` now adapts
+  Core invocations to `github.com/openbindings/openapi-client/go`; the former
+  local HTTP/SSE execution loop has been retired. `Runtime`, `RuntimeSource`,
+  and `RuntimeInvocationArgs` remain as compatibility façades, while new
+  OpenAPI-only applications can use the standalone native client without an
+  OpenBindings dependency.
+
 - **Current `openbindings.openapi@7` preserves exact schema-omitted OAS 3.0
   non-JSON bytes without changing Core.** Request and response octets cross the
   protocol-independent boundary as canonical Base64. Media ranges and

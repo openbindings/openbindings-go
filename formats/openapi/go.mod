@@ -5,6 +5,7 @@ go 1.25.12
 require (
 	github.com/getkin/kin-openapi v0.146.0
 	github.com/oasdiff/yaml v0.1.1
+	github.com/openbindings/openapi-client/go v0.1.0
 	github.com/openbindings/openbindings-go v0.2.0
 	golang.org/x/text v0.38.0
 )

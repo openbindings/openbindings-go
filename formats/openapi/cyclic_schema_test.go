@@ -80,6 +80,37 @@ func TestRecursiveComponentSynthesizesAsDefs(t *testing.T) {
 	}
 }
 
+func TestRecursiveComponentBelowOutputUnionHoistsAtBranchRoot(t *testing.T) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(recursiveDoc), &raw); err != nil {
+		t.Fatal(err)
+	}
+	operation := raw["paths"].(map[string]any)["/trees"].(map[string]any)["post"].(map[string]any)
+	responses := operation["responses"].(map[string]any)
+	responses["201"] = map[string]any{
+		"description": "text alternative",
+		"content": map[string]any{
+			"text/plain": map[string]any{"schema": map[string]any{"type": "string"}},
+		},
+	}
+	content, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	})
+	if err != nil {
+		t.Fatalf("synthesis failed: %v", err)
+	}
+	output := result.Interface.Operations["createTree"].Output.(map[string]any)
+	branches := output["anyOf"].([]any)
+	first := branches[0].(map[string]any)
+	if got, want := first["$ref"], "#/operations/createTree/output/$defs/Tree"; got != want {
+		t.Fatalf("recursive union branch ref = %#v, want %q; output = %#v", got, want, output)
+	}
+}
+
 func TestSynthesisTreatsRefShapedSchemaDataAsOpaque(t *testing.T) {
 	doc := `{
   "openapi": "3.1.0",
