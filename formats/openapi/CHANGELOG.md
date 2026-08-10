@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Current `openbindings.openapi@7` preserves exact schema-omitted OAS 3.0
+  non-JSON bytes without changing Core.** Request and response octets cross the
+  protocol-independent boundary as canonical Base64. Media ranges and
+  artifact-defined codecs remain unchanged, and revision 6 is an exact
+  compatibility path.
+
 - **Current `openbindings.openapi@6` preserves declaration-complex exact JSON
   bodies without changing Core.** Top-level combinators, conditionals,
   dependent schemas, and explicit `unevaluatedProperties` stay under one

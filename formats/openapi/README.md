@@ -27,7 +27,7 @@ import (
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 ```
 
-The invoker declares current `openbindings.openapi@6` plus exact `openbindings.openapi@5`, `openbindings.openapi@4`, `openbindings.openapi@3`, `openbindings.openapi@2`, and immutable `openbindings.openapi@1` compatibility. All six handle exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents. Revision 2 added collision-preserving routed inputs; revision 3 added generic raw-octet request carriage plus configured request-media ranges; revision 4 added response ranges and exact raw-response byte carriage; revision 5 added dynamic-object carriage; revision 6 adds declaration-complex exact JSON carriage.
+The invoker declares current `openbindings.openapi@7` plus exact `openbindings.openapi@6`, `openbindings.openapi@5`, `openbindings.openapi@4`, `openbindings.openapi@3`, `openbindings.openapi@2`, and immutable `openbindings.openapi@1` compatibility. All seven handle exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents. Revision 2 added collision-preserving routed inputs; revision 3 added generic raw-octet request carriage plus configured request-media ranges; revision 4 added response ranges and exact raw-response byte carriage; revision 5 added dynamic-object carriage; revision 6 added declaration-complex exact JSON carriage; revision 7 adds exact schema-omitted OAS 3.0 byte carriage.
 
 ### Invoke a binding
 
@@ -38,7 +38,7 @@ invoker := openapi.NewInvoker()
 
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@6"
+        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@7"
         Location:    "https://api.example.com/openapi.json",
     },
     Ref:     "#/paths/~1users/get",
@@ -83,11 +83,11 @@ iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 
 ## Behavior
 
-This package implements current [`openbindings.openapi@6`](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md) and retains exact revision-5, revision-4, revision-3, revision-2, and revision-1 compatibility. The current document is normative for routed input mapping, OAS serialization, request and response media selection, server resolution, interaction shape, and channel assembly.
+This package implements current [`openbindings.openapi@7`](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md) and retains exact revision-6, revision-5, revision-4, revision-3, revision-2, and revision-1 compatibility. The current document is normative for routed input mapping, OAS serialization, request and response media selection, server resolution, interaction shape, and channel assembly.
 
 ### Binding specification identifier
 
-`openbindings.openapi@6` (exact, opaque; current), `openbindings.openapi@5`, `openbindings.openapi@4`, `openbindings.openapi@3`, `openbindings.openapi@2`, and `openbindings.openapi@1` (exact compatibility identifiers). They accept exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own `openapi` field.
+`openbindings.openapi@7` (exact, opaque; current), `openbindings.openapi@6`, `openbindings.openapi@5`, `openbindings.openapi@4`, `openbindings.openapi@3`, `openbindings.openapi@2`, and `openbindings.openapi@1` (exact compatibility identifiers). They accept exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own `openapi` field.
 
 ### Ref format
 
@@ -226,7 +226,7 @@ Connect, GraphQL, MCP) do not consult the seam.
 
 ### Interface synthesis
 
-Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@6` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
+Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@7` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
 
 - **Operation keys** come from `operationId` when present, sanitized to the OBI key grammar (non-key characters become `_`, leading/trailing `_` trimmed, a leading non-letter gets an `_` prefix). An `operationId` whose sanitized key is already taken falls through to path+method derivation: template segments (`{id}`) dropped, remaining segments joined with `.`, the lowercased method appended (`/users/{id}` + `GET` → `users.get`), then deduplicated deterministically with `_2`, `_3`, … suffixes.
 - **Iteration order is fixed**: paths alphabetically, methods in the order get, put, post, delete, options, head, patch, trace.

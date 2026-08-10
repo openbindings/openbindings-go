@@ -96,8 +96,8 @@ func TestBindingSpecCorpus(t *testing.T) {
 		if err := json.Unmarshal(raw, &fix); err != nil {
 			t.Fatalf("parse %s: %v", e.Name(), err)
 		}
-		if fix.BindingSpec != BindingSpecV6 {
-			t.Fatalf("%s: fixture bindingSpec %q is not current %q", e.Name(), fix.BindingSpec, BindingSpecV6)
+		if fix.BindingSpec != BindingSpecV7 {
+			t.Fatalf("%s: fixture bindingSpec %q is not current %q", e.Name(), fix.BindingSpec, BindingSpecV7)
 		}
 		ran = true
 		for _, tt := range fix.Tests {
@@ -128,7 +128,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 		t.Fatalf("fixture document does not parse: %v", err)
 	}
 	for name, src := range obiDoc.Sources {
-		if src.BindingSpec != BindingSpecV6 && src.BindingSpec != BindingSpecV5 && src.BindingSpec != BindingSpecV4 && src.BindingSpec != BindingSpecV3 && src.BindingSpec != BindingSpecV2 && src.BindingSpec != LegacyBindingSpec {
+		if src.BindingSpec != BindingSpecV7 && src.BindingSpec != BindingSpecV6 && src.BindingSpec != BindingSpecV5 && src.BindingSpec != BindingSpecV4 && src.BindingSpec != BindingSpecV3 && src.BindingSpec != BindingSpecV2 && src.BindingSpec != LegacyBindingSpec {
 			continue
 		}
 

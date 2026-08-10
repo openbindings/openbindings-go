@@ -625,7 +625,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	}
 
 	decoder := decodeByContentTypeFor(actualContentType, args.Source.BindingSpec)
-	if hasResponseFidelity(args.Source.BindingSpec) && responseUsesRawBoundary(doc, matched.media, actualContentType) {
+	if hasResponseFidelity(args.Source.BindingSpec) && responseUsesRawBoundary(doc, matched.media, actualContentType, args.Source.BindingSpec, matched.declared.rangeSpecificity == 2) {
 		decoder = func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
 			return base64.StdEncoding.EncodeToString(raw.Body), nil
 		}

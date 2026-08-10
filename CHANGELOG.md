@@ -6,6 +6,12 @@
 
 ### Changed
 
+- **The OpenAPI module now defaults to `openbindings.openapi@7`.** Exact
+  schema-omitted OAS 3.0 non-JSON request and response representations cross
+  the protocol-independent boundary as canonical Base64. Media ranges and
+  artifact-defined codecs remain unchanged; exact revision 6 and earlier
+  revisions remain available. Core is unchanged.
+
 - **The OpenAPI module now defaults to `openbindings.openapi@6`.** Exact
   JSON-family request schemas whose top-level declarations require
   combinators, conditionals, dependent schemas, or explicit

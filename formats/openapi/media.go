@@ -665,7 +665,7 @@ func exactRequestFamily(doc *openapi3.T, parsed parsedMediaType, media *openapi3
 	if !hasMediaFidelity(bindingSpec) || doc == nil {
 		return "", false, nil
 	}
-	eligible, rawBoundary, err := octetRequestCarriage(doc, media)
+	eligible, rawBoundary, err := octetRequestCarriage(doc, media, bindingSpec)
 	if err != nil {
 		return "", false, err
 	}
@@ -1001,12 +1001,15 @@ func encodeTextString(value string, parsed parsedMediaType) ([]byte, error) {
 	}
 }
 
-func octetRequestCarriage(doc *openapi3.T, media *openapi3.MediaType) (bool, bool, error) {
+func octetRequestCarriage(doc *openapi3.T, media *openapi3.MediaType, bindingSpec string) (bool, bool, error) {
 	if doc == nil {
 		return false, false, nil
 	}
 	schema := mediaSchema(media)
 	if isOpenAPI30(majorMinor(doc.OpenAPI)) {
+		if schema == nil && hasSchemaOmittedOAS30ByteCarriage(bindingSpec) {
+			return true, true, nil
+		}
 		if schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) && binarySignaled(schema, true) {
 			return true, true, nil
 		}
@@ -1051,13 +1054,14 @@ func mediaSchema(media *openapi3.MediaType) *openapi3.Schema {
 // responseUsesRawBoundary reports whether revision 4 carries the exact
 // response octets as canonical Base64 at the protocol-independent operation
 // boundary. JSON, text, and SSE retain their application-value lanes.
-func responseUsesRawBoundary(doc *openapi3.T, media *openapi3.MediaType, actualContentType string) bool {
+func responseUsesRawBoundary(doc *openapi3.T, media *openapi3.MediaType, actualContentType string, bindingSpec string, exactDeclaration bool) bool {
 	actual, err := parseRevision3MediaType(actualContentType)
 	if err != nil || isJSONMediaType(actual.base) || strings.HasPrefix(actual.base, "text/") {
 		return false
 	}
 	if doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI)) {
-		return binarySignaled(mediaSchema(media), true)
+		return (hasSchemaOmittedOAS30ByteCarriage(bindingSpec) && exactDeclaration && mediaSchema(media) == nil) ||
+			binarySignaled(mediaSchema(media), true)
 	}
 	return media != nil && media.Schema == nil
 }

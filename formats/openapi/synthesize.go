@@ -1092,7 +1092,8 @@ func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayC
 			admitsNonJSON := !isJSONMediaType(parsed.base) || parsed.rangeSpecificity < 2
 			if admitsNonJSON {
 				rawBoundary := hasResponseFidelity(bindingSpec) && !strings.HasPrefix(parsed.base, "text/") &&
-					((isOpenAPI30(majorMinor(openapiVersion)) && binarySignaled(mediaSchema(media), true)) ||
+					((isOpenAPI30(majorMinor(openapiVersion)) &&
+						((hasSchemaOmittedOAS30ByteCarriage(bindingSpec) && parsed.rangeSpecificity == 2 && mediaSchema(media) == nil) || binarySignaled(mediaSchema(media), true))) ||
 						(!isOpenAPI30(majorMinor(openapiVersion)) && media != nil && media.Schema == nil))
 				// The revision-1 builtin non-JSON lane emits text, including
 				// one text value per SSE event. Revision 4's artifact-authorized
