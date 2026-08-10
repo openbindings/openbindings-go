@@ -123,7 +123,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				return iface, unrealizableOperation(opKey, reason)
 			}
 
-			if parameter := unsupportedParameterContent(params); parameter != "" {
+			if parameter := unsupportedParameterContentFor(params, bindingSpec); parameter != "" {
 				reason := fmt.Sprintf("parameter %q declares content with no faithful revision-2 carriage", parameter)
 				if onUnrealizable != nil {
 					onUnrealizable(unrealizableTarget{
@@ -140,11 +140,11 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 
 			var requestPlans []*bodyPlan
 			if op.RequestBody != nil && op.RequestBody.Value != nil {
-				plans, planErr := planRequestBodies(op)
+				plans, planErr := planRequestBodiesFor(doc, op, bindingSpec)
 				plannedCount := len(plans)
 				if planErr == nil {
 					for _, plan := range plans {
-						if bindingSpec == BindingSpecV2 || !candidateCollides(params, plan) {
+						if usesRoutedInput(bindingSpec) || !candidateCollides(params, plan) {
 							requestPlans = append(requestPlans, plan)
 						}
 					}
@@ -223,14 +223,24 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			if inputSchema != nil {
 				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry, cyclic, opPointer+"/input")
 				projected := projectOpenAPISchema(inlined, openAPIRequestSchema, requestSchemaProjectionExemptions(routes))
-				obiOp.Input = normalizeOperationSchema(projected, formatVersion, schemaSalvageWarner(warn, opKey, "input"))
+				restored := restoreBooleanSchemas(projected)
+				if object, ok := restored.(map[string]any); ok {
+					obiOp.Input = normalizeOperationSchema(object, formatVersion, schemaSalvageWarner(warn, opKey, "input"))
+				} else {
+					obiOp.Input = restored
+				}
 			}
 
-			outputSchema := buildOutputSchema(op, schemaOverlays)
+			outputSchema := buildOutputSchema(op, schemaOverlays, bindingSpec)
 			if outputSchema != nil {
 				inlined := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output")
 				projected := projectOpenAPISchema(inlined, openAPIResponseSchema, nil)
-				obiOp.Output = normalizeOperationSchema(projected, formatVersion, schemaSalvageWarner(warn, opKey, "output"))
+				restored := restoreBooleanSchemas(projected)
+				if object, ok := restored.(map[string]any); ok {
+					obiOp.Output = normalizeOperationSchema(object, formatVersion, schemaSalvageWarner(warn, opKey, "output"))
+				} else {
+					obiOp.Output = restored
+				}
 			}
 
 			iface.Operations[opKey] = obiOp
@@ -242,14 +252,34 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				Source:    DefaultSourceName,
 				Ref:       ref,
 			}
-			if bindingSpec == BindingSpecV2 && routes.needsTransform {
-				binding.InputTransform = &openbindings.TransformOrRef{Inline: routes.transformExpression()}
+			if usesRoutedInput(bindingSpec) && routes.needsTransform {
+				binding.InputTransform = &openbindings.TransformOrRef{Inline: routes.transformExpressionFor(bindingSpec)}
 			}
 			iface.Bindings[bindingKey] = binding
 		}
 	}
 
 	return iface, nil
+}
+
+func restoreBooleanSchemas(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		if literal, ok := structuralBooleanSchemaLiteral(typed); ok {
+			return literal
+		}
+		for key, child := range typed {
+			typed[key] = restoreBooleanSchemas(child)
+		}
+		return typed
+	case []any:
+		for index, child := range typed {
+			typed[index] = restoreBooleanSchemas(child)
+		}
+		return typed
+	default:
+		return value
+	}
 }
 
 // schemaSalvageWarner adapts the schema walker's salvage reports to
@@ -649,7 +679,7 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 	var required []string
 	// Only JSON-family object candidates can carry undeclared fields. The
 	// parameter-only, multipart/form, and scalar-body surfaces stay closed.
-	hasOpenBody := requestPlan != nil && requestPlan.family == familyJSON && !requestPlan.synthetic
+	hasOpenBody := planAllowsObjectPassthrough(requestPlan)
 
 	for _, paramRef := range allParams {
 		if paramRef == nil || paramRef.Value == nil {
@@ -673,6 +703,13 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 		var bodySchema map[string]any
 		if requestPlan.media != nil && requestPlan.media.Schema != nil {
 			bodySchema = schemaRefToMap(requestPlan.media.Schema, schemaOverlays)
+		} else if requestPlan.rawBoundary {
+			bodySchema = map[string]any{"type": "string", "contentEncoding": "base64"}
+		} else if requestPlan.bindingSpec == BindingSpecV3 && requestPlan.synthetic {
+			// A schema-omitted revision-3 JSON/range declaration allows any
+			// application JSON value. Preserve that unconstrained whole-body
+			// value under the protocol-neutral body field.
+			bodySchema = map[string]any{}
 		}
 		if bodySchema != nil {
 			// Resolve a $ref body BEFORE the flatten decision: bodies
@@ -687,8 +724,29 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 					bodySchema = resolved
 				}
 			}
-			bodyObject, bodyProps, bodyRequired := resolvedSynthesisBodyShape(requestPlan.media.Schema.Value, map[*openapi3.Schema]bool{}, schemaOverlays)
+			if requestPlan.rawBoundary {
+				// This is a caller-boundary annotation, not an application-schema
+				// replacement: retain every authored keyword and add only the
+				// Base64 spelling required to carry raw bytes through JSON values.
+				bodySchema["contentEncoding"] = "base64"
+			}
+			var bodyObject bool
+			var bodyProps map[string]any
+			var bodyRequired map[string]bool
+			if requestPlan.media != nil && requestPlan.media.Schema != nil {
+				bodyObject, bodyProps, bodyRequired = resolvedSynthesisBodyShape(requestPlan.media.Schema.Value, map[*openapi3.Schema]bool{}, schemaOverlays)
+			} else {
+				bodyProps = map[string]any{}
+				bodyRequired = map[string]bool{}
+			}
 			hasProps := len(bodyProps) > 0
+			if requestPlan.bindingSpec == BindingSpecV3 && requestPlan.oas30 && requestPlan.family == familyMultipart {
+				for _, property := range bodyProps {
+					if propertySchema, ok := property.(map[string]any); ok {
+						decorateMultipartPartBinaryBoundary(propertySchema)
+					}
+				}
+			}
 			switch {
 			case !bodyObject:
 				// A non-object body schema — array, scalar, binary, or
@@ -750,6 +808,60 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 		schema["required"] = requiredValues
 	}
 	return schema
+}
+
+func decorateMultipartPartBinaryBoundary(schema map[string]any) {
+	if schema == nil {
+		return
+	}
+	if projectedSchemaTypeIs(schema, "string") && projectedSchemaFormatIs(schema, "binary") {
+		schema["contentEncoding"] = "base64"
+		return
+	}
+	if !projectedSchemaTypeIs(schema, "array") {
+		return
+	}
+	for _, candidate := range append([]map[string]any{schema}, projectedSchemaList(schema["allOf"])...) {
+		items, _ := candidate["items"].(map[string]any)
+		if items != nil && projectedSchemaTypeIs(items, "string") && projectedSchemaFormatIs(items, "binary") {
+			items["contentEncoding"] = "base64"
+		}
+	}
+}
+
+func projectedSchemaTypeIs(schema map[string]any, want string) bool {
+	if value, ok := schema["type"].(string); ok && value == want {
+		return true
+	}
+	for _, child := range projectedSchemaList(schema["allOf"]) {
+		if projectedSchemaTypeIs(child, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func projectedSchemaFormatIs(schema map[string]any, want string) bool {
+	if value, ok := schema["format"].(string); ok && value == want {
+		return true
+	}
+	for _, child := range projectedSchemaList(schema["allOf"]) {
+		if projectedSchemaFormatIs(child, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func projectedSchemaList(value any) []map[string]any {
+	values, _ := value.([]any)
+	out := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		if schema, ok := value.(map[string]any); ok {
+			out = append(out, schema)
+		}
+	}
+	return out
 }
 
 // resolvedSynthesisBodyShape resolves the declaration-only object surface
@@ -827,7 +939,7 @@ func paramToSchema(param *openapi3.Parameter, schemaOverlays *rawSchemaOverlayCo
 			if schema == nil {
 				schema = map[string]any{}
 			}
-			schema["description"] = param.Description
+			schema = schemaWithParameterDescription(schema, param.Description)
 		}
 		return schema
 	}
@@ -840,7 +952,7 @@ func paramToSchema(param *openapi3.Parameter, schemaOverlays *rawSchemaOverlayCo
 		if media := param.Content[keys[0]]; media != nil && media.Schema != nil {
 			schema := schemaRefToMap(media.Schema, schemaOverlays)
 			if param.Description != "" {
-				schema["description"] = param.Description
+				schema = schemaWithParameterDescription(schema, param.Description)
 			}
 			return schema
 		}
@@ -853,22 +965,54 @@ func paramToSchema(param *openapi3.Parameter, schemaOverlays *rawSchemaOverlayCo
 	return prop
 }
 
+func schemaWithParameterDescription(schema map[string]any, description string) map[string]any {
+	if _, boolean := structuralBooleanSchemaLiteral(schema); boolean {
+		// A JSON Schema boolean cannot carry siblings. Preserve both authorial
+		// facts by wrapping the literal in allOf, matching the TypeScript SDK's
+		// reversible projection.
+		return map[string]any{"allOf": []any{schema}, "description": description}
+	}
+	schema["description"] = description
+	return schema
+}
+
 // unsupportedParameterContent returns the first content-form parameter whose
 // single media declaration revision 2 cannot serialize. Creation-time
 // soundness requires excluding the target rather than emitting an operation
 // that is statically guaranteed to refuse when that parameter is populated.
 func unsupportedParameterContent(params openapi3.Parameters) string {
+	return unsupportedParameterContentFor(params, BindingSpecV2)
+}
+
+func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec string) string {
 	for _, ref := range params {
-		if ref == nil || ref.Value == nil || len(ref.Value.Content) == 0 {
+		if ref == nil || ref.Value == nil {
 			continue
 		}
 		param := ref.Value
+		if bindingSpec == BindingSpecV3 {
+			if err := validateRevision3ParameterSerialization(param); err != nil {
+				return param.Name
+			}
+		}
+		if len(param.Content) == 0 {
+			continue
+		}
 		if len(param.Content) != 1 {
 			return param.Name
 		}
 		for mediaKey := range param.Content {
-			parsed, err := parseMediaType(mediaKey)
+			var parsed parsedMediaType
+			var err error
+			if bindingSpec == BindingSpecV3 {
+				parsed, err = parseRevision3MediaType(mediaKey)
+			} else {
+				parsed, err = parseMediaType(mediaKey)
+			}
 			if err != nil || (!isJSONMediaType(parsed.base) && parsed.base != "text/plain") {
+				return param.Name
+			}
+			if bindingSpec == BindingSpecV3 && parsed.base == "text/plain" && supportedTextCharset(parsed) != nil {
 				return param.Name
 			}
 		}
@@ -876,7 +1020,7 @@ func unsupportedParameterContent(params openapi3.Parameters) string {
 	return ""
 }
 
-func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayCollector) map[string]any {
+func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayCollector, bindingSpec string) map[string]any {
 	if op.Responses == nil {
 		return nil
 	}
@@ -912,8 +1056,14 @@ func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayC
 		}
 		sort.Strings(mediaKeys)
 		for _, mediaKey := range mediaKeys {
-			parsed, err := parseMediaType(mediaKey)
-			if err != nil {
+			var parsed parsedMediaType
+			var err error
+			if bindingSpec == BindingSpecV3 {
+				parsed, err = parseMediaDeclaration(mediaKey)
+			} else {
+				parsed, err = parseMediaType(mediaKey)
+			}
+			if err != nil || parsed.rangeSpecificity < 2 {
 				continue
 			}
 			var schema map[string]any

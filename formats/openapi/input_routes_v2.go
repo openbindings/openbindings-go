@@ -157,6 +157,10 @@ func flatInputHasAmbiguousParameter(params openapi3.Parameters, input map[string
 // application input. Its binding-private descriptor carries concrete OpenAPI
 // identity; the operation-facing value under "value" remains protocol-neutral.
 func (r abstractInputRoutes) transformExpression() string {
+	return r.transformExpressionFor(BindingSpecV2)
+}
+
+func (r abstractInputRoutes) transformExpressionFor(bindingSpec string) string {
 	params, _ := json.Marshal(r.parameters)
 	body := map[string]any{}
 	if len(r.bodyFields) > 0 {
@@ -167,7 +171,7 @@ func (r abstractInputRoutes) transformExpression() string {
 	}
 	bodyJSON, _ := json.Marshal(body)
 	return fmt.Sprintf(`[{"$openbindings":"%s","value":$,"parameters":%s,"body":%s}]`,
-		BindingSpecV2, params, bodyJSON)
+		bindingSpec, params, bodyJSON)
 }
 
 // routedEnvelope is the binding-private source value defined by revision 2.
@@ -182,6 +186,10 @@ type routedEnvelope struct {
 }
 
 func parseRoutedEnvelope(input any) (*routedEnvelope, error) {
+	return parseRoutedEnvelopeFor(input, BindingSpecV2)
+}
+
+func parseRoutedEnvelopeFor(input any, bindingSpec string) (*routedEnvelope, error) {
 	tuple, routed := toAnySlice(input)
 	if !routed {
 		return nil, nil
@@ -200,7 +208,7 @@ func parseRoutedEnvelope(input any) (*routedEnvelope, error) {
 	if len(envelope) != 4 || envelope["value"] == nil || envelope["parameters"] == nil || envelope["body"] == nil {
 		return nil, fmt.Errorf("revision-2 routed input array item must contain exactly $openbindings, value, parameters, and body")
 	}
-	if marker != BindingSpecV2 {
+	if marker != bindingSpec {
 		return nil, fmt.Errorf("revision-2 routed input has invalid $openbindings marker %v", marker)
 	}
 	value, ok := envelope["value"].(map[string]any)
@@ -283,6 +291,10 @@ func parseRoutedEnvelope(input any) (*routedEnvelope, error) {
 		}
 	}
 	return r, nil
+}
+
+func usesRoutedInput(bindingSpec string) bool {
+	return bindingSpec == BindingSpecV2 || bindingSpec == BindingSpecV3
 }
 
 // validateEnvelopeRoutes proves that every concrete identity named by a
@@ -377,6 +389,10 @@ func (r *routedEnvelope) parameterField(in, name string) (string, bool) {
 // routeEnvelope maps the revision-2 source representation to the existing
 // wire accumulator, preserving the OpenAPI artifact's serialization rules.
 func routeEnvelope(params openapi3.Parameters, envelope *routedEnvelope, pathTemplate string, plan *bodyPlan) (*routedInput, error) {
+	return routeEnvelopeFor(params, envelope, pathTemplate, plan, BindingSpecV2)
+}
+
+func routeEnvelopeFor(params openapi3.Parameters, envelope *routedEnvelope, pathTemplate string, plan *bodyPlan, bindingSpec string) (*routedInput, error) {
 	r := &routedInput{
 		resolvedPath: pathTemplate,
 		bodyFields:   map[string]any{},
@@ -407,7 +423,7 @@ func routeEnvelope(params openapi3.Parameters, envelope *routedEnvelope, pathTem
 			continue
 		}
 		consumed[field] = true
-		if err := routeParameter(r, p, value); err != nil {
+		if err := routeParameterFor(r, p, value, bindingSpec); err != nil {
 			return nil, err
 		}
 	}
@@ -436,7 +452,7 @@ func routeEnvelope(params openapi3.Parameters, envelope *routedEnvelope, pathTem
 				if !present {
 					continue
 				}
-				if !plan.props[bodyName] {
+				if !plan.props[bodyName] && !planAllowsObjectPassthrough(plan) {
 					continue
 				}
 				r.bodyFields[bodyName] = value
@@ -462,7 +478,7 @@ func routeEnvelope(params openapi3.Parameters, envelope *routedEnvelope, pathTem
 		if consumed[name] {
 			continue
 		}
-		if plan != nil && plan.declared && !plan.synthetic && plan.family == familyJSON && !routedBodyFields[name] {
+		if planAllowsObjectPassthrough(plan) && !routedBodyFields[name] {
 			r.bodyFields[name] = envelope.value[name]
 			continue
 		}
@@ -472,6 +488,10 @@ func routeEnvelope(params openapi3.Parameters, envelope *routedEnvelope, pathTem
 		return nil, fmt.Errorf("field(s) %s have no destination in the selected OpenAPI request representation", strings.Join(unmatched, ", "))
 	}
 	return r, nil
+}
+
+func planAllowsObjectPassthrough(plan *bodyPlan) bool {
+	return plan != nil && plan.declared && !plan.synthetic && plan.family == familyJSON
 }
 
 func envelopeWillEmitBody(envelope *routedEnvelope, op *openapi3.Operation) bool {

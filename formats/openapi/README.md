@@ -27,7 +27,7 @@ import (
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 ```
 
-The invoker declares current `openbindings.openapi@2` and immutable `openbindings.openapi@1` compatibility. Both handle exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents; revision 2 additionally preserves independent same-named inputs.
+The invoker declares current `openbindings.openapi@3` plus exact `openbindings.openapi@2` and immutable `openbindings.openapi@1` compatibility. All three handle exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents. Revision 2 added collision-preserving routed inputs; revision 3 inherits them and adds generic raw-octet request carriage plus configured request-media ranges.
 
 ### Invoke a binding
 
@@ -38,7 +38,7 @@ invoker := openapi.NewInvoker()
 
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@2"
+        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@3"
         Location:    "https://api.example.com/openapi.json",
     },
     Ref:     "#/paths/~1users/get",
@@ -83,11 +83,11 @@ iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 
 ## Behavior
 
-This package implements current [`openbindings.openapi@2`](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md) and retains immutable `openbindings.openapi@1` compatibility. The current document is normative for routed input mapping, OAS serialization, request media selection, server resolution, interaction shape, and channel assembly.
+This package implements current [`openbindings.openapi@3`](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md) and retains exact revision-2 and revision-1 compatibility. The current document is normative for routed input mapping, OAS serialization, request media selection, server resolution, interaction shape, and channel assembly.
 
 ### Binding specification identifier
 
-`openbindings.openapi@2` (exact, opaque; current) and `openbindings.openapi@1` (exact, opaque; compatibility). Both accept exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own `openapi` field.
+`openbindings.openapi@3` (exact, opaque; current), `openbindings.openapi@2`, and `openbindings.openapi@1` (exact compatibility identifiers). They accept exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own `openapi` field.
 
 ### Ref format
 
@@ -102,6 +102,20 @@ Path separators are escaped per RFC 6901: `/` becomes `~1`, `~` becomes `~0`. Th
 
 - **`location`**: absolute URI addressing the OpenAPI JSON/YAML document (it also serves as the artifact's base URI for relative `$ref`s and relative server URLs).
 - **`content`**: the inline OpenAPI document (content primacy; a co-present `location` is its base URI). Content with no location must be self-contained.
+
+### Revision-3 request media
+
+Revision 3 adds two declaration-led lanes without adding HTTP fields to the
+operation contract. An OAS 3.0 non-JSON governing selection whose resolved
+schema is `type: string, format: binary`, or an OAS 3.1 non-JSON governing
+selection with no schema, exposes a canonical Base64 string at the JSON
+operation boundary and emits the exact decoded octets. OAS 3.1 `type: string`
+with `contentEncoding` instead sends the encoded application string unchanged.
+Media ranges require a concrete `context.configuration.requestMedia`; exact,
+`type/*`, and `*/*` declarations are matched in that order and a range is never
+emitted as `Content-Type`. A required range-only body surfaces this as
+preflight `CONTEXT_REQUIRED`, while coverage records
+`configuration.requestMedia` without changing the application schema.
 
 ### Server selection
 
@@ -182,7 +196,7 @@ Connect, GraphQL, MCP) do not consult the seam.
 
 ### Interface synthesis
 
-Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@2` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
+Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@3` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
 
 - **Operation keys** come from `operationId` when present, sanitized to the OBI key grammar (non-key characters become `_`, leading/trailing `_` trimmed, a leading non-letter gets an `_` prefix). An `operationId` whose sanitized key is already taken falls through to path+method derivation: template segments (`{id}`) dropped, remaining segments joined with `.`, the lowercased method appended (`/users/{id}` + `GET` → `users.get`), then deduplicated deterministically with `_2`, `_3`, … suffixes.
 - **Iteration order is fixed**: paths alphabetically, methods in the order get, put, post, delete, options, head, patch, trace.
@@ -199,7 +213,7 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
 1. Loads and caches the OpenAPI document (JSON or YAML, local or remote), discriminating the exact accepted 3.0.0–3.0.4 and 3.1.0–3.1.2 editions
 2. Parses the ref as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)
 3. Resolves the server (effective list + variables + the `server` configuration point)
-4. Routes application fields to their artifact declarations — using the binding-private revision-2 route when names collide — serializes parameters per OAS style/explode rules, and selects an artifact-declared request media candidate
+4. Routes application fields to their artifact declarations — using the binding-private routed representation when names collide — serializes parameters per OAS style/explode rules, and selects an artifact-declared request media candidate
 5. Selects one complete, satisfiable Security Requirement alternative and applies only that alternative's credentials with the artifact-declared placement, refusing channel collisions pre-dispatch
 6. Makes the HTTP request; the declared success media bound the interaction shape (unary, or server-streaming for a declared `text/event-stream` response), successful results emit through the invocation handle, and unsuccessful completion preserves the native response through `FailureEvidenceFrom`
 

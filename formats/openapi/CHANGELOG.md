@@ -4,7 +4,28 @@
 
 ### Added
 
-- **Current `openbindings.openapi@2` preserves same-named application inputs.**
+- **Current `openbindings.openapi@3` adds declaration-led raw-octet and range
+  request carriage without changing Core.** OAS 3.0 concrete binary schemas
+  and OAS 3.1 schema-omitted concrete media use a canonical Base64 JSON
+  boundary and emit exact bytes; OAS 3.1 `contentEncoding` strings ride
+  unchanged. Configured concrete request media selects exact, type-range, or
+  universal-range declarations by specificity and declared parameters, never
+  emits a wildcard `Content-Type`, and refuses unsupported lane/schema pairs.
+  Required range-only bodies challenge before input consumption, and synthesis
+  coverage records `configuration.requestMedia` at alternative and applicable
+  target scope. Form and multipart carriage follows each accepted OAS
+  edition's own immutable rules, including the older 3.0.0–3.0.3 urlencoded
+  defaults; OAS 3.0 binary parts retain author-declared non-default media
+  types; and underdefined nested or declaration-free form lanes fail closed.
+  `BindingSpecV2` remains exact `openbindings.openapi@2`.
+
+- **Revision-3 response completion retains exact native failure evidence.**
+  Empty non-2xx bodies remain distinguishable from uncaptured bodies, and SSE
+  invalid UTF-8 follows WHATWG maximal-subpart replacement rather than a
+  library-specific replacement grouping. Both remain diagnostic binding facts,
+  never operation output fields.
+
+- **`openbindings.openapi@2` preserves same-named application inputs.**
   Synthesis retains unique author names, assigns deterministic neutral suffixes
   only where declarations collide, and carries their exact OpenAPI
   name/location correspondence in a binding-private core `inputTransform`.

@@ -44,6 +44,8 @@ func (r *scenarioRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	}
 	if req.Body != nil {
 		body, _ := io.ReadAll(req.Body)
+		dispatch["bodyBase64"] = base64.StdEncoding.EncodeToString(body)
+		dispatch["byteLength"] = len(body)
 		if len(body) > 0 {
 			var parsed any
 			if json.Unmarshal(body, &parsed) == nil {
@@ -177,6 +179,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		call = openbindings.Invoke(
 			context.Background(), op, iface,
 			openbindings.NewOperationSignature[any, any](openAPIFidelityOperationID(scenario.ID)),
+			openbindings.WithContext(scenarioContext(scenario)),
 		)
 	} else {
 		call = NewInvokerWithClient(client).InvokeBinding(context.Background(), args)
@@ -220,13 +223,15 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	}
 
 	disposition := "refusal"
+	normalizedError := normalizedInvocationError(t, terminal)
 	if terminal.Code == openbindings.ErrCodeContextRequired {
 		disposition = "context-required"
+		data["context"] = normalizedError["details"]
 	} else if len(roundTripper.dispatches) > 0 {
 		disposition = "error"
 	}
 	phase := openAPIErrorPhase(terminal, len(roundTripper.dispatches) > 0)
-	data["error"] = normalizedInvocationError(t, terminal)
+	data["error"] = normalizedError
 	return processorscenarios.Observation{Disposition: disposition, Phase: phase, Data: data}
 }
 
@@ -237,6 +242,9 @@ func openAPIFidelityOperationID(scenarioID string) string {
 		"OAPI-FI-03": "fidelityBinary",
 		"OAPI-FI-04": "fidelitySlow",
 		"OAPI-FI-05": "fidelitySSEFailure",
+		"OAPI-FI-06": "fidelityUploadImage",
+		"OAPI-FI-07": "fidelityCreateItem",
+		"OAPI-FI-08": "fidelityCreateItemWithContext",
 	}[scenarioID]
 }
 

@@ -44,11 +44,11 @@
   references. Resolver configuration remains binding-private and does not
   alter the protocol-blind OBI document model.
 
-- **The OpenAPI module now defaults to `openbindings.openapi@2`.** Its
-  synthesizer preserves independent same-named parameter and request-body
-  values through a binding-private transform while keeping the operation
-  contract protocol-blind. Immutable revision 1 remains available through
-  `openapi.LegacyBindingSpec`.
+- **The OpenAPI module now defaults to `openbindings.openapi@3`.** It adds
+  declaration-led raw-octet requests and configured media-range selection
+  while keeping HTTP identities out of operation contracts. Exact revision 2
+  retains collision-preserving routed inputs and immutable revision 1 remains
+  available through `openapi.LegacyBindingSpec`.
 
 - **Per-operation dependencies compose compatibility, invocability, and
   caller policy without introducing a registry.** The core SDK now exposes

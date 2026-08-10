@@ -110,7 +110,7 @@ func unflattenableParam(params openapi3.Parameters) string {
 // revisions because HTTP field names themselves are case-insensitive: no
 // routing envelope can create two semantically distinct wire destinations.
 func unflattenableParamForRevision(params openapi3.Parameters, bindingSpec string) string {
-	if bindingSpec != BindingSpecV2 {
+	if !usesRoutedInput(bindingSpec) {
 		return unflattenableParam(params)
 	}
 	headerNames := map[string]string{}
@@ -165,6 +165,10 @@ type routedInput struct {
 //     URL cannot be built); every other missing member is the server's
 //     declared validation's business.
 func routeInput(params openapi3.Parameters, input map[string]any, pathTemplate string, plan *bodyPlan) (*routedInput, error) {
+	return routeInputFor(params, input, pathTemplate, plan, BindingSpecV2)
+}
+
+func routeInputFor(params openapi3.Parameters, input map[string]any, pathTemplate string, plan *bodyPlan, bindingSpec string) (*routedInput, error) {
 	r := &routedInput{
 		resolvedPath: pathTemplate,
 		bodyFields:   map[string]any{},
@@ -190,7 +194,7 @@ func routeInput(params openapi3.Parameters, input map[string]any, pathTemplate s
 		}
 		consumed[p.Name] = true
 
-		if err := routeParameter(r, p, value); err != nil {
+		if err := routeParameterFor(r, p, value, bindingSpec); err != nil {
 			return nil, err
 		}
 
@@ -254,19 +258,36 @@ var errMissingPathParam = errors.New("missing path parameter")
 
 // routeParameter serializes one populated parameter onto its wire location.
 func routeParameter(r *routedInput, p *openapi3.Parameter, value any) error {
+	return routeParameterFor(r, p, value, BindingSpecV2)
+}
+
+func routeParameterFor(r *routedInput, p *openapi3.Parameter, value any, bindingSpec string) error {
+	if bindingSpec == BindingSpecV3 {
+		if err := validateRevision3ParameterSerialization(p); err != nil {
+			return fmt.Errorf("parameter %q: %w", p.Name, err)
+		}
+	}
 	// A `content`-form parameter (schema-less, a single-entry content map)
 	// serializes its value per its declared media type and rides its
 	// location as that serialized string (OAPI-P-02).
 	if len(p.Content) > 0 {
-		serialized, err := serializeParamContent(p, value)
+		serialized, err := serializeParamContentFor(p, value, bindingSpec)
 		if err != nil {
 			return err
 		}
 		switch p.In {
 		case openapi3.ParameterInPath:
-			r.resolvedPath = strings.ReplaceAll(r.resolvedPath, "{"+p.Name+"}", encodePathValue(serialized))
+			escaped := encodePathValue(serialized)
+			if bindingSpec == BindingSpecV3 {
+				escaped = revision3URIEscape(serialized, false, false)
+			}
+			r.resolvedPath = strings.ReplaceAll(r.resolvedPath, "{"+p.Name+"}", escaped)
 		case openapi3.ParameterInQuery:
-			r.queryUnits = append(r.queryUnits, queryEscape(p.Name, false)+"="+queryEscape(serialized, p.AllowReserved))
+			if bindingSpec == BindingSpecV3 {
+				r.queryUnits = append(r.queryUnits, revision3URIEscape(p.Name, false, false)+"="+revision3URIEscape(serialized, p.AllowReserved, false))
+			} else {
+				r.queryUnits = append(r.queryUnits, queryEscape(p.Name, false)+"="+queryEscape(serialized, p.AllowReserved))
+			}
 			r.populated["query"][p.Name] = true
 		case openapi3.ParameterInHeader:
 			r.headers = append(r.headers, [2]string{p.Name, serialized})
@@ -278,20 +299,23 @@ func routeParameter(r *routedInput, p *openapi3.Parameter, value any) error {
 		return nil
 	}
 
-	sm, err := p.SerializationMethod() // per-location OAS defaults applied
+	sm, err := p.SerializationMethod() // compatibility defaults
+	if bindingSpec == BindingSpecV3 {
+		sm, err = revision3ParameterSerializationMethod(p)
+	}
 	if err != nil {
 		return fmt.Errorf("parameter %q: %w", p.Name, err)
 	}
 
 	switch p.In {
 	case openapi3.ParameterInPath:
-		expanded, err := serializePathValue(p.Name, value, sm.Style, sm.Explode)
+		expanded, err := serializePathValueForRevision(p.Name, value, sm.Style, sm.Explode, bindingSpec)
 		if err != nil {
 			return fmt.Errorf("path parameter %q: %w", p.Name, err)
 		}
 		r.resolvedPath = strings.ReplaceAll(r.resolvedPath, "{"+p.Name+"}", expanded)
 	case openapi3.ParameterInQuery:
-		units, err := serializeQueryValue(p.Name, value, sm.Style, sm.Explode, p.AllowReserved)
+		units, err := serializeQueryValueForRevision(p.Name, value, sm.Style, sm.Explode, p.AllowReserved, bindingSpec, false)
 		if err != nil {
 			return fmt.Errorf("query parameter %q: %w", p.Name, err)
 		}
@@ -317,17 +341,101 @@ func routeParameter(r *routedInput, p *openapi3.Parameter, value any) error {
 	return nil
 }
 
+func validateRevision3ParameterSerialization(p *openapi3.Parameter) error {
+	if p == nil || len(p.Content) > 0 {
+		return nil
+	}
+	method, err := revision3ParameterSerializationMethod(p)
+	if err != nil {
+		return err
+	}
+	var schema *openapi3.Schema
+	if p.Schema != nil {
+		schema = p.Schema.Value
+	}
+	switch p.In {
+	case openapi3.ParameterInPath:
+		if method.Style != openapi3.SerializationSimple && method.Style != openapi3.SerializationLabel && method.Style != openapi3.SerializationMatrix {
+			return fmt.Errorf("style %q is not defined for path parameters", method.Style)
+		}
+	case openapi3.ParameterInHeader:
+		if method.Style != openapi3.SerializationSimple {
+			return fmt.Errorf("style %q is not defined for header parameters", method.Style)
+		}
+	case openapi3.ParameterInCookie:
+		if method.Style != openapi3.SerializationForm {
+			return fmt.Errorf("style %q is not defined for cookie parameters", method.Style)
+		}
+	case openapi3.ParameterInQuery:
+		switch method.Style {
+		case openapi3.SerializationForm:
+			return nil
+		case openapi3.SerializationSpaceDelimited, openapi3.SerializationPipeDelimited:
+			if method.Explode || !schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{}) {
+				return fmt.Errorf("query style %q is defined only for arrays with explode=false", method.Style)
+			}
+		case openapi3.SerializationDeepObject:
+			if !method.Explode || !schemaTypeIs(schema, "object", map[*openapi3.Schema]bool{}) {
+				return fmt.Errorf("query style deepObject is defined only for objects with explode=true")
+			}
+		default:
+			return fmt.Errorf("style %q is not defined for query parameters", method.Style)
+		}
+	}
+	return nil
+}
+
+func revision3ParameterSerializationMethod(p *openapi3.Parameter) (*openapi3.SerializationMethod, error) {
+	if p == nil {
+		return nil, fmt.Errorf("nil parameter")
+	}
+	style := p.Style
+	switch p.In {
+	case openapi3.ParameterInPath, openapi3.ParameterInHeader:
+		if style == "" {
+			style = openapi3.SerializationSimple
+		}
+	case openapi3.ParameterInQuery, openapi3.ParameterInCookie:
+		if style == "" {
+			style = openapi3.SerializationForm
+		}
+	default:
+		return nil, fmt.Errorf("unexpected parameter 'in': %q", p.In)
+	}
+	explode := style == openapi3.SerializationForm
+	if p.Explode != nil {
+		explode = *p.Explode
+	}
+	return &openapi3.SerializationMethod{Style: style, Explode: explode}, nil
+}
+
 // serializeParamContent serializes a content-form parameter's value per its
 // declared media type: JSON family values JSON-serialize; text/plain carries
 // a string value verbatim. Any other declared media type has no defined
 // parameter carriage in revision 1 and refuses loudly.
 func serializeParamContent(p *openapi3.Parameter, value any) (string, error) {
+	return serializeParamContentFor(p, value, BindingSpecV2)
+}
+
+func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec string) (string, error) {
+	if len(p.Content) != 1 {
+		return "", fmt.Errorf("parameter %q content must contain exactly one media type", p.Name)
+	}
 	var mediaKey string
 	for k := range p.Content {
 		mediaKey = k
 		break // the OAS requires exactly one entry
 	}
 	mt := normalizeMediaType(mediaKey)
+	var parsed parsedMediaType
+	if bindingSpec == BindingSpecV3 {
+		var err error
+		parsed, err = parseRevision3MediaType(mediaKey)
+		if err != nil {
+			return "", fmt.Errorf("parameter %q declares invalid content %q: %w", p.Name, mediaKey, err)
+		}
+		mt = parsed.base
+	}
 	switch {
 	case isJSONMediaType(mt):
 		b, err := json.Marshal(value)
@@ -339,6 +447,13 @@ func serializeParamContent(p *openapi3.Parameter, value any) (string, error) {
 		s, ok := value.(string)
 		if !ok {
 			return "", fmt.Errorf("parameter %q declares content %q: the value must be a string, got %T", p.Name, mediaKey, value)
+		}
+		if bindingSpec == BindingSpecV3 {
+			encoded, err := encodeTextString(s, parsed)
+			if err != nil {
+				return "", fmt.Errorf("parameter %q declares content %q: %w", p.Name, mediaKey, err)
+			}
+			return string(encoded), nil
 		}
 		return s, nil
 	default:
@@ -355,7 +470,14 @@ func serializeParamContent(p *openapi3.Parameter, value any) (string, error) {
 // (cross-SDK URL parity); the style's structural characters (";", "=", ".",
 // ",") stay literal.
 func serializePathValue(name string, value any, style string, explode bool) (string, error) {
+	return serializePathValueForRevision(name, value, style, explode, BindingSpecV2)
+}
+
+func serializePathValueForRevision(name string, value any, style string, explode bool, bindingSpec string) (string, error) {
 	esc := encodePathValue
+	if bindingSpec == BindingSpecV3 {
+		esc = func(value string) string { return revision3URIEscape(value, false, false) }
+	}
 	switch style {
 	case openapi3.SerializationSimple:
 		return expandSimple(value, explode, esc)
@@ -381,8 +503,18 @@ func serializeHeaderValue(value any, style string, explode bool) (string, error)
 // name=value units, per the OAS query styles. allowReserved lets RFC 3986
 // reserved characters in VALUES pass unescaped.
 func serializeQueryValue(name string, value any, style string, explode bool, allowReserved bool) ([]string, error) {
+	return serializeQueryValueForRevision(name, value, style, explode, allowReserved, BindingSpecV2, false)
+}
+
+func serializeQueryValueForRevision(name string, value any, style string, explode bool, allowReserved bool, bindingSpec string, formSafe bool) ([]string, error) {
 	n := queryEscape(name, false)
 	esc := func(s string) string { return queryEscape(s, allowReserved) }
+	keyEsc := func(s string) string { return queryEscape(s, false) }
+	if bindingSpec == BindingSpecV3 {
+		n = revision3URIEscape(name, false, formSafe)
+		esc = func(value string) string { return revision3URIEscape(value, allowReserved, formSafe) }
+		keyEsc = func(value string) string { return revision3URIEscape(value, false, formSafe) }
+	}
 	switch style {
 	case openapi3.SerializationForm:
 		return expandFormPairs(n, value, explode, esc)
@@ -401,12 +533,33 @@ func serializeQueryValue(name string, value any, style string, explode bool, all
 		}
 		units := make([]string, 0, len(pairs))
 		for _, kv := range pairs {
-			units = append(units, n+"["+queryEscape(kv[0], false)+"]="+esc(kv[1]))
+			units = append(units, n+"["+keyEsc(kv[0])+"]="+esc(kv[1]))
 		}
 		return units, nil
 	default:
 		return nil, fmt.Errorf("style %q is not defined for query parameters", style)
 	}
+}
+
+func revision3URIEscape(value string, allowReserved, formSafe bool) string {
+	const hex = "0123456789ABCDEF"
+	var out strings.Builder
+	for index := 0; index < len(value); index++ {
+		char := value[index]
+		unreserved := char >= 'A' && char <= 'Z' || char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || strings.ContainsRune("-._~", rune(char))
+		reserved := strings.ContainsRune(":/?#[]@!$&'()*+,;=", rune(char))
+		if formSafe && strings.ContainsRune("&+=#[]", rune(char)) {
+			reserved = false
+		}
+		if unreserved || allowReserved && reserved {
+			out.WriteByte(char)
+			continue
+		}
+		out.WriteByte('%')
+		out.WriteByte(hex[char>>4])
+		out.WriteByte(hex[char&0x0f])
+	}
+	return out.String()
 }
 
 // serializeCookieValue expands one cookie parameter (form style only) into

@@ -24,7 +24,7 @@ import (
 )
 
 // BindingSpec identifies the current OpenAPI binding revision.
-const BindingSpec = "openbindings.openapi@2"
+const BindingSpec = "openbindings.openapi@3"
 
 // LegacyBindingSpec identifies the immutable revision-1 OpenAPI binding.
 const LegacyBindingSpec = "openbindings.openapi@1"
@@ -33,7 +33,12 @@ const LegacyBindingSpec = "openbindings.openapi@1"
 // 2 retains revision 1's wire behavior while admitting independently declared
 // same-named parameter and body values through a binding-private routed input
 // representation.
-const BindingSpecV2 = BindingSpec
+const BindingSpecV2 = "openbindings.openapi@2"
+
+// BindingSpecV3 identifies the media-fidelity OpenAPI binding. Revision 3
+// inherits revision 2's routed input representation and adds declaration-led
+// raw-octet request carriage plus configured media-range selection.
+const BindingSpecV3 = BindingSpec
 
 // DefaultSourceName is the default source key used when registering an OpenAPI source in an OBI.
 const DefaultSourceName = "openapi"
@@ -125,7 +130,8 @@ func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, conte
 // BindingSpecs returns the binding-spec identifiers this invoker supports.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs (collision-preserving revision)"},
+		{BindingSpec: BindingSpecV3, Description: "OpenAPI 3.x HTTP APIs (media-fidelity revision)"},
+		{BindingSpec: BindingSpecV2, Description: "OpenAPI 3.x HTTP APIs (collision-preserving revision)"},
 		{BindingSpec: LegacyBindingSpec, Description: "OpenAPI 3.x HTTP APIs (revision-1 compatibility)"},
 	}
 }
@@ -201,7 +207,12 @@ func (e *Invoker) PrepareBinding(_ context.Context, args *openbindings.BindingIn
 	if err := securityConfigurationError(doc, op); err != nil {
 		return nil, nil
 	}
-	return requiredContext(doc, op, args.Context, baseURL, params), nil
+	details := requiredContext(doc, op, args.Context, baseURL, params)
+	mediaDetails, err := requiredRequestMediaContext(doc, op, args.Source.BindingSpec, args.Context)
+	if err != nil {
+		return nil, err
+	}
+	return mergeContextRequirements(details, mediaDetails), nil
 }
 
 // prepareDoc returns the OpenAPI document without performing network I/O:
@@ -281,7 +292,8 @@ func (c *Synthesizer) resolverClient() *http.Client {
 // BindingSpecs returns the binding-spec identifiers this synthesizer supports.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs (collision-preserving revision)"},
+		{BindingSpec: BindingSpecV3, Description: "OpenAPI 3.x HTTP APIs (media-fidelity revision)"},
+		{BindingSpec: BindingSpecV2, Description: "OpenAPI 3.x HTTP APIs (collision-preserving revision)"},
 		{BindingSpec: LegacyBindingSpec, Description: "OpenAPI 3.x HTTP APIs (revision-1 compatibility)"},
 	}
 }
@@ -323,8 +335,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpec && src.BindingSpec != LegacyBindingSpec {
-		return nil, nil, fmt.Errorf("synthesizer supports exact binding specifications %q and %q, got %q", BindingSpec, LegacyBindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpecV3 && src.BindingSpec != BindingSpecV2 && src.BindingSpec != LegacyBindingSpec {
+		return nil, nil, fmt.Errorf("synthesizer supports exact binding specifications %q, %q, and %q, got %q", BindingSpecV3, BindingSpecV2, LegacyBindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {
@@ -433,7 +445,7 @@ func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.Resul
 		if vs := raw.Meta["Content-Type"]; len(vs) > 0 {
 			ct = vs[0]
 		}
-		return decodeByContentType(ct)(site, raw)
+		return decodeByContentTypeFor(ct, site.BindingSpec)(site, raw)
 	}
 	return decode, BuiltinClassify
 }

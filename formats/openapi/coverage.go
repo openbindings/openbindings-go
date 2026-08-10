@@ -35,7 +35,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 	sourceLocation := ""
 	bindingSpec := BindingSpec
 	for _, source := range iface.Sources {
-		if source.BindingSpec == BindingSpec || source.BindingSpec == LegacyBindingSpec {
+		if source.BindingSpec == BindingSpecV3 || source.BindingSpec == BindingSpecV2 || source.BindingSpec == LegacyBindingSpec {
 			sourceLocation = source.Location
 			bindingSpec = source.BindingSpec
 			break
@@ -89,6 +89,8 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					})
 					continue
 				}
+				targetRequirements := openAPIServerRequirements(doc, pathItem, op, sourceLocation)
+				targetRequirements = append(targetRequirements, openAPIRequestMediaRequirements(doc, pathItem, op, bindingSpec)...)
 				entries = append(entries, openbindings.SynthesisCoverageEntry{
 					SourceIndex:  0,
 					SourceRef:    ref,
@@ -96,15 +98,41 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					Status:       openbindings.SynthesisRepresented,
 					OperationKey: identity.operationKey,
 					BindingRef:   identity.ref,
-					Requirements: openAPIServerRequirements(doc, pathItem, op, sourceLocation),
+					Requirements: targetRequirements,
 				})
-				entries = append(entries, openAPIRequestMediaCoverage(op, pathItem, identity, bindingSpec)...)
+				entries = append(entries, openAPIRequestMediaCoverage(doc, op, pathItem, identity, bindingSpec)...)
 				entries = append(entries, openAPICallbackCoverage(op, ref)...)
 			}
 		}
 	}
 	entries = append(entries, openAPIWebhookCoverage(doc)...)
 	return entries
+}
+
+func openAPIRequestMediaRequirements(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Operation, bindingSpec string) []string {
+	if bindingSpec != BindingSpecV3 || op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
+		return nil
+	}
+	plans, err := planRequestBodiesFor(doc, op, bindingSpec)
+	if err != nil {
+		return nil
+	}
+	params := effectiveParameters(pathItem, op)
+	hasRange := false
+	for _, plan := range plans {
+		if !usesRoutedInput(bindingSpec) && candidateCollides(params, plan) {
+			continue
+		}
+		if plan.mediaRange {
+			hasRange = true
+			continue
+		}
+		return nil
+	}
+	if hasRange {
+		return []string{"configuration.requestMedia"}
+	}
+	return nil
 }
 
 func openAPIServerRequirements(
@@ -119,7 +147,7 @@ func openAPIServerRequirements(
 	return nil
 }
 
-func openAPIRequestMediaCoverage(op *openapi3.Operation, pathItem *openapi3.PathItem, identity struct {
+func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathItem *openapi3.PathItem, identity struct {
 	operationKey string
 	ref          string
 }, bindingSpec string) []openbindings.SynthesisCoverageEntry {
@@ -127,13 +155,15 @@ func openAPIRequestMediaCoverage(op *openapi3.Operation, pathItem *openapi3.Path
 		return nil
 	}
 	params := effectiveParameters(pathItem, op)
-	plans, planErr := planRequestBodies(op)
+	plans, planErr := planRequestBodiesFor(doc, op, bindingSpec)
 	planned := make(map[string]bool, len(plans))
 	represented := make(map[string]bool, len(plans))
+	requiresRequestMedia := make(map[string]bool, len(plans))
 	for _, plan := range plans {
 		planned[plan.mediaKey] = true
-		if bindingSpec == BindingSpecV2 || !candidateCollides(params, plan) {
+		if usesRoutedInput(bindingSpec) || !candidateCollides(params, plan) {
 			represented[plan.mediaKey] = true
+			requiresRequestMedia[plan.mediaKey] = plan.mediaRange
 		}
 	}
 	mediaKeys := make([]string, 0, len(op.RequestBody.Value.Content))
@@ -145,6 +175,10 @@ func openAPIRequestMediaCoverage(op *openapi3.Operation, pathItem *openapi3.Path
 	for _, mediaKey := range mediaKeys {
 		sourceRef := identity.ref + "/requestBody/content/" + escapeJSONPointerToken(mediaKey)
 		if represented[mediaKey] {
+			var requirements []string
+			if requiresRequestMedia[mediaKey] {
+				requirements = []string{"configuration.requestMedia"}
+			}
 			entries = append(entries, openbindings.SynthesisCoverageEntry{
 				SourceIndex:  0,
 				SourceRef:    sourceRef,
@@ -152,6 +186,7 @@ func openAPIRequestMediaCoverage(op *openapi3.Operation, pathItem *openapi3.Path
 				Status:       openbindings.SynthesisRepresented,
 				OperationKey: identity.operationKey,
 				BindingRef:   identity.ref,
+				Requirements: requirements,
 			})
 			continue
 		}

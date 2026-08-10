@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 )
 
 // sseMaxLineBytes bounds individual SSE line length to prevent runaway memory
@@ -25,6 +27,14 @@ const sseMaxLineBytes = 16 * 1024 * 1024
 // indicates a Server-Sent Events stream (`text/event-stream`). Charset and
 // other parameters may follow.
 func isSSEContentType(contentType string) bool {
+	return isSSEContentTypeFor(contentType, BindingSpecV2)
+}
+
+func isSSEContentTypeFor(contentType, bindingSpec string) bool {
+	if bindingSpec == BindingSpecV3 {
+		parsed, err := parseRevision3MediaType(contentType)
+		return err == nil && parsed.base == "text/event-stream"
+	}
 	return normalizeMediaType(contentType) == "text/event-stream"
 }
 
@@ -145,7 +155,9 @@ func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.Bind
 			Body:   []byte(rawData),
 			Meta:   meta,
 		}
-		data, derr := args.Hooks.DecodeOutput(site, raw, decodeByContentType(resp.Header.Get("Content-Type")))
+		// WHATWG event data is already a formed UTF-8 text value. The HTTP
+		// response's charset parameter cannot reinterpret individual events.
+		data, derr := args.Hooks.DecodeOutput(site, raw, decodeByContentTypeFor("text/plain; charset=utf-8", args.Source.BindingSpec))
 		if derr != nil {
 			// A decode error mid-stream is terminal; already-emitted
 			// outputs stand (drain-before-terminal).
@@ -160,7 +172,17 @@ func streamSSE(ctx context.Context, resp *http.Response, args *openbindings.Bind
 		if ctx.Err() != nil {
 			return // cancelled; the handle is already terminal
 		}
-		line := scanner.Text()
+		// WHATWG decodes the byte stream as UTF-8 with replacement before
+		// interpreting field names and values. The HTTP charset parameter is
+		// ignored for event-stream parsing.
+		line, _, decodeErr := transform.String(unicode.UTF8.NewDecoder(), scanner.Text())
+		if decodeErr != nil {
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeResponseError,
+				Message: fmt.Sprintf("decode SSE line as UTF-8: %v", decodeErr),
+			})
+			return
+		}
 		if firstLine {
 			// One leading U+FEFF BOM is ignored per the WHATWG stream grammar.
 			line = strings.TrimPrefix(line, "\uFEFF")

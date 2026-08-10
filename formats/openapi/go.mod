@@ -6,6 +6,7 @@ require (
 	github.com/getkin/kin-openapi v0.146.0
 	github.com/oasdiff/yaml v0.1.1
 	github.com/openbindings/openbindings-go v0.2.0
+	golang.org/x/text v0.38.0
 )
 
 require (
@@ -20,5 +21,4 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
 )

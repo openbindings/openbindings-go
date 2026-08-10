@@ -59,14 +59,17 @@ func TestValidateEnvelopeRoutesRejectsUnknownIdentity(t *testing.T) {
 	}
 }
 
-func TestRouteEnvelopeDoesNotLeakAlternateCandidateMapping(t *testing.T) {
+func TestRouteEnvelopeReroutesAlternateCandidateFieldIntoSelectedOpenJSONBody(t *testing.T) {
 	envelope := &routedEnvelope{
 		value:      map[string]any{"renamed": "x"},
 		bodyFields: map[string]string{"id": "renamed"},
 	}
 	plan := &bodyPlan{declared: true, family: familyJSON, props: map[string]bool{"name": true}}
-	_, err := routeEnvelope(nil, envelope, "/items", plan)
-	if err == nil || !strings.Contains(err.Error(), "no destination") {
-		t.Fatalf("expected selected-candidate refusal, got %v", err)
+	routed, err := routeEnvelope(nil, envelope, "/items", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := routed.bodyFields["id"]; got != "x" {
+		t.Fatalf("alternate candidate field was not routed through the selected JSON object's passthrough: %#v", routed.bodyFields)
 	}
 }

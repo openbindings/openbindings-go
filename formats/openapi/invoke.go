@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -18,6 +19,11 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	openbindings "github.com/openbindings/openbindings-go"
 )
+
+type bufferedResponseBody struct {
+	*bufio.Reader
+	io.Closer
+}
 
 // configOrSourceError maps a server-resolution error to the right terminal: a
 // resolvable-missing configuration value (a configRequired signal) becomes a
@@ -116,7 +122,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 
-	revision2 := args.Source.BindingSpec == BindingSpecV2
+	routedRevision := usesRoutedInput(args.Source.BindingSpec)
 	// The input model's structural refusals (§9.1) are declaration-only and
 	// precede input consumption. Revision 2 lifts cross-location name
 	// collisions through its routed source value; it cannot lift two
@@ -153,9 +159,20 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
 		return
 	}
-	if details := requiredContext(doc, op, args.Context, baseURL, params); details != nil {
+	details := requiredContext(doc, op, args.Context, baseURL, params)
+	mediaDetails, mediaRequirementErr := requiredRequestMediaContext(doc, op, args.Source.BindingSpec, args.Context)
+	if mediaRequirementErr != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: mediaRequirementErr.Error()})
+		return
+	}
+	details = mergeContextRequirements(details, mediaDetails)
+	if details != nil {
+		message := "OpenAPI operation requires authentication context"
+		if mediaDetails != nil {
+			message = "OpenAPI operation requires invocation context"
+		}
 		inv.FireError(openbindings.NewContextRequiredError(
-			"OpenAPI operation requires authentication context", details))
+			message, details))
 		return
 	}
 
@@ -191,8 +208,8 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 			return
 		default:
 			inputSupplied = true
-			if revision2 {
-				envelope, err = parseRoutedEnvelope(v)
+			if routedRevision {
+				envelope, err = parseRoutedEnvelopeFor(v, args.Source.BindingSpec)
 				if err != nil {
 					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
 					return
@@ -212,7 +229,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 
 	// ----- Routing (§9.1) and body construction (§9.2): still pre-dispatch. -----
 
-	if revision2 && inputSupplied && envelope == nil && flatInputHasAmbiguousParameter(params, inputMap) {
+	if routedRevision && inputSupplied && envelope == nil && flatInputHasAmbiguousParameter(params, inputMap) {
 		inv.FireError(&openbindings.InvocationError{
 			Code:    openbindings.ErrCodeValidationFailed,
 			Message: "this revision-2 input supplies one flat field for independently declared same-named parameters and requires a routed source input (normally produced by the binding's inputTransform)",
@@ -226,7 +243,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		willEmitBody = envelopeWillEmitBody(envelope, op)
 	}
 	if willEmitBody || envelope != nil {
-		plans, err = planRequestBodies(op)
+		plans, err = planRequestBodiesFor(doc, op, args.Source.BindingSpec)
 		if err != nil {
 			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
 			return
@@ -247,13 +264,22 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	var contentType string
 	if len(plans) == 0 {
 		if envelope != nil {
-			routed, err = routeEnvelope(params, envelope, pathTemplate, &bodyPlan{})
+			routed, err = routeEnvelopeFor(params, envelope, pathTemplate, &bodyPlan{}, args.Source.BindingSpec)
 		} else {
-			routed, err = routeInput(params, inputMap, pathTemplate, &bodyPlan{})
+			routed, err = routeInputFor(params, inputMap, pathTemplate, &bodyPlan{}, args.Source.BindingSpec)
 		}
 	} else {
 		var reasons []string
-		for _, candidate := range configuredRequestPlans(plans, args.Context) {
+		selectedPlans, selectErr := configuredRequestPlansFor(doc, op, plans, args.Context, args.Source.BindingSpec)
+		if selectErr != nil {
+			var cr *configRequired
+			if errors.As(selectErr, &cr) {
+				inv.FireError(configOrSourceError(selectErr))
+				return
+			}
+			err = selectErr
+		}
+		for _, candidate := range selectedPlans {
 			if envelope == nil && candidateCollides(params, candidate) {
 				reasons = append(reasons, fmt.Sprintf("request media candidate %s collides with an independently declared parameter", candidate.mediaType))
 				continue
@@ -261,9 +287,9 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 			var candidateRouted *routedInput
 			var routeErr error
 			if envelope != nil {
-				candidateRouted, routeErr = routeEnvelope(params, envelope, pathTemplate, candidate)
+				candidateRouted, routeErr = routeEnvelopeFor(params, envelope, pathTemplate, candidate, args.Source.BindingSpec)
 			} else {
-				candidateRouted, routeErr = routeInput(params, inputMap, pathTemplate, candidate)
+				candidateRouted, routeErr = routeInputFor(params, inputMap, pathTemplate, candidate, args.Source.BindingSpec)
 			}
 			if routeErr != nil {
 				if errors.Is(routeErr, errMissingPathParam) {
@@ -349,7 +375,7 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	}
 	// The Accept header advertises only artifact-declared concrete success
 	// media. An empty membership set omits the header.
-	if accept := acceptHeader(op); accept != "" {
+	if accept := acceptHeaderFor(op, args.Source.BindingSpec); accept != "" {
 		req.Header.Set("Accept", accept)
 	}
 
@@ -390,6 +416,64 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		responseDecl = responseMatch.response
 	}
 	actualContentType := resp.Header.Get("Content-Type")
+	revision3ClassifiedSuccess := false
+	var revision3ContentTypeErr error
+	if args.Source.BindingSpec == BindingSpecV3 {
+		buffered := bufio.NewReader(resp.Body)
+		_, peekErr := buffered.Peek(1)
+		if errors.Is(peekErr, io.EOF) {
+			_ = resp.Body.Close()
+			status := resp.StatusCode
+			raw := openbindings.RawResult{Status: &status, Meta: headerMetadata(resp.Header)}
+			ok, classifyErr := args.Hooks.Classify(site, raw, BuiltinClassify)
+			if classifyErr != nil {
+				inv.FireError(openbindings.AsInvocationError(classifyErr))
+				return
+			}
+			if !ok {
+				inv.FireError(openAPIFailureError(resp, []byte{}, responseMatch, args.Source.BindingSpec))
+				return
+			}
+			inv.SetTrailer(decodeClassifyTrailer(args.Hooks, "not-consulted/empty"))
+			inv.CloseOutput()
+			return
+		}
+		if peekErr != nil {
+			_ = resp.Body.Close()
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: peekErr.Error()})
+			return
+		}
+		resp.Body = bufferedResponseBody{Reader: buffered, Closer: resp.Body}
+		actualContentType, revision3ContentTypeErr = singletonResponseHeader(resp.Header, "Content-Type")
+		if revision3ContentTypeErr == nil && isSSEContentTypeFor(actualContentType, BindingSpecV3) {
+			// A stream cannot be buffered without destroying its lifecycle. Its
+			// classifier sees the real status/headers and no invented body, as in
+			// prior revisions; unary lanes retain the complete-body seam below.
+			status := resp.StatusCode
+			ok, classifyErr := args.Hooks.Classify(site, openbindings.RawResult{Status: &status, Meta: headerMetadata(resp.Header)}, BuiltinClassify)
+			if classifyErr != nil {
+				_ = resp.Body.Close()
+				inv.FireError(openbindings.AsInvocationError(classifyErr))
+				return
+			}
+			if !ok {
+				maxUnit := args.DeliveryUnitLimit()
+				failureBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxUnit+1))
+				_ = resp.Body.Close()
+				if readErr != nil {
+					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: readErr.Error()})
+					return
+				}
+				if int64(len(failureBody)) > maxUnit {
+					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: fmt.Sprintf("response exceeds %d byte limit", maxUnit)})
+					return
+				}
+				inv.FireError(openAPIFailureError(resp, failureBody, responseMatch, args.Source.BindingSpec))
+				return
+			}
+			revision3ClassifiedSuccess = true
+		}
+	}
 
 	// Interaction-shape dispatch (§8, OAPI-P-06): the shape is bounded by
 	// declaration and selected by framing. An operation is streaming-capable
@@ -399,19 +483,20 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 	// text/event-stream response on an operation that is NOT
 	// streaming-capable contradicts the declaration: a protocol error, never
 	// a silent reclassification.
-	if isSSEContentType(actualContentType) {
+	if isSSEContentTypeFor(actualContentType, args.Source.BindingSpec) {
 		// Classification is independent of declaration lookup. A non-success
 		// final status remains the native HTTP failure even when its body uses
 		// event-stream framing.
-		status := resp.StatusCode
-		ok, cerr := args.Hooks.Classify(site, openbindings.RawResult{
-			Status: &status,
-			Meta:   headerMetadata(resp.Header),
-		}, BuiltinClassify)
-		if cerr != nil {
-			_ = resp.Body.Close()
-			inv.FireError(openbindings.AsInvocationError(cerr))
-			return
+		ok := revision3ClassifiedSuccess
+		if args.Source.BindingSpec != BindingSpecV3 {
+			status := resp.StatusCode
+			var cerr error
+			ok, cerr = args.Hooks.Classify(site, openbindings.RawResult{Status: &status, Meta: headerMetadata(resp.Header)}, BuiltinClassify)
+			if cerr != nil {
+				_ = resp.Body.Close()
+				inv.FireError(openbindings.AsInvocationError(cerr))
+				return
+			}
 		}
 		if !ok {
 			// A non-2xx event-stream response is one unsuccessful HTTP
@@ -436,10 +521,18 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 				})
 				return
 			}
-			inv.FireError(openAPIFailureError(resp, failureBody, responseMatch))
+			inv.FireError(openAPIFailureError(resp, failureBody, responseMatch, args.Source.BindingSpec))
 			return
 		}
-		matched, mediaErr := governingResponseMedia(responseDecl, actualContentType)
+		if !isStreamingCapableFor(op, args.Source.BindingSpec) {
+			_ = resp.Body.Close()
+			inv.FireError(&openbindings.InvocationError{
+				Code:    openbindings.ErrCodeProtocol,
+				Message: "response arrived as text/event-stream, but the operation declares no concrete successful event-stream media",
+			})
+			return
+		}
+		matched, mediaErr := governingResponseMediaFor(responseDecl, actualContentType, args.Source.BindingSpec)
 		if mediaErr != nil || matched.base != "text/event-stream" {
 			_ = resp.Body.Close()
 			message := "response arrived as text/event-stream, but the governing response does not declare that media type"
@@ -495,10 +588,14 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		Meta:   headerMetadata(resp.Header),
 	}
 
-	ok, cerr := args.Hooks.Classify(site, raw, BuiltinClassify)
-	if cerr != nil {
-		inv.FireError(openbindings.AsInvocationError(cerr))
-		return
+	ok := revision3ClassifiedSuccess
+	if !revision3ClassifiedSuccess {
+		var cerr error
+		ok, cerr = args.Hooks.Classify(site, raw, BuiltinClassify)
+		if cerr != nil {
+			inv.FireError(openbindings.AsInvocationError(cerr))
+			return
+		}
 	}
 	if !ok {
 		// The format's NATIVE failure: hooks change the verdict, never the
@@ -506,7 +603,11 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		// native response and the OpenAPI declaration match remain available
 		// on the failure completion. The legacy status/body members remain for
 		// callers using HTTPStatus/HTTPResponseBody.
-		inv.FireError(openAPIFailureError(resp, respBody, responseMatch))
+		inv.FireError(openAPIFailureError(resp, respBody, responseMatch, args.Source.BindingSpec))
+		return
+	}
+	if args.Source.BindingSpec == BindingSpecV3 && revision3ContentTypeErr != nil {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeProtocol, Message: revision3ContentTypeErr.Error()})
 		return
 	}
 	// An empty successful response carries absence, not an invented JSON
@@ -517,13 +618,13 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 
-	matched, mediaErr := governingResponseMedia(responseDecl, actualContentType)
+	matched, mediaErr := governingResponseMediaFor(responseDecl, actualContentType, args.Source.BindingSpec)
 	if mediaErr != nil {
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeProtocol, Message: mediaErr.Error()})
 		return
 	}
 
-	output, derr := args.Hooks.DecodeOutput(site, raw, decodeByContentType(actualContentType))
+	output, derr := args.Hooks.DecodeOutput(site, raw, decodeByContentTypeFor(actualContentType, args.Source.BindingSpec))
 	if derr != nil {
 		inv.FireError(openbindings.AsInvocationError(derr))
 		return
@@ -540,6 +641,56 @@ func runBinding(ctx context.Context, client *http.Client, args *openbindings.Bin
 		return
 	}
 	inv.CloseOutput()
+}
+
+func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindingSpec string, bindCtx map[string]any) (*openbindings.ContextRequiredDetails, error) {
+	if bindingSpec != BindingSpecV3 || op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
+		return nil, nil
+	}
+	plans, err := planRequestBodiesFor(doc, op, bindingSpec)
+	if err != nil {
+		return nil, err
+	}
+	if !requestMediaUnconfigured(bindCtx) {
+		_, err := configuredRequestPlansFor(doc, op, plans, bindCtx, bindingSpec)
+		return nil, err
+	}
+	if !onlyRangePlans(plans) {
+		return nil, nil
+	}
+	requirement := openbindings.NewConfigValueRequirement(
+		"requestMedia", "value",
+		"select a concrete request media type admitted by the OpenAPI declaration",
+		nil, nil,
+	)
+	return &openbindings.ContextRequiredDetails{
+		Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{requirement}}},
+	}, nil
+}
+
+// mergeContextRequirements combines two independent context needs. Each
+// details value is an OR of alternatives; satisfying the operation requires
+// one alternative from each, so the merged value is their Cartesian product.
+func mergeContextRequirements(left, right *openbindings.ContextRequiredDetails) *openbindings.ContextRequiredDetails {
+	if left == nil {
+		return right
+	}
+	if right == nil {
+		return left
+	}
+	target := left.Target
+	if target == "" {
+		target = right.Target
+	}
+	merged := &openbindings.ContextRequiredDetails{Target: target}
+	for _, a := range left.Alternatives {
+		for _, b := range right.Alternatives {
+			requirements := append([]openbindings.ContextRequirement(nil), a.Requirements...)
+			requirements = append(requirements, b.Requirements...)
+			merged.Alternatives = append(merged.Alternatives, openbindings.ContextAlternative{Requirements: requirements})
+		}
+	}
+	return merged
 }
 
 // decodeClassifyTrailer builds the x-ob-decode/x-ob-classify success
@@ -575,7 +726,11 @@ func BuiltinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (boo
 // UTF-8, with invalid sequences a loud decode error. An empty body (204
 // included) yields null.
 func decodeByContentType(contentType string) openbindings.OutputDecoder {
-	isJSON := isJSONContentType(contentType)
+	return decodeByContentTypeFor(contentType, BindingSpecV2)
+}
+
+func decodeByContentTypeFor(contentType, bindingSpec string) openbindings.OutputDecoder {
+	isJSON := isJSONContentTypeFor(contentType, bindingSpec)
 	return func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
 		if len(raw.Body) == 0 {
 			return nil, nil
@@ -590,7 +745,7 @@ func decodeByContentType(contentType string) openbindings.OutputDecoder {
 			}
 			return parsed, nil
 		}
-		return decodeTextLane(contentType, raw.Body)
+		return decodeTextLaneFor(contentType, raw.Body, bindingSpec)
 	}
 }
 
@@ -600,9 +755,19 @@ func decodeByContentType(contentType string) openbindings.OutputDecoder {
 // decode errors — a consumer needing another charset overrides at the
 // decode configuration point.
 func decodeTextLane(contentType string, body []byte) (any, error) {
+	return decodeTextLaneFor(contentType, body, BindingSpecV2)
+}
+
+func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any, error) {
 	charset := "utf-8"
 	if contentType != "" {
-		if _, params, err := mime.ParseMediaType(contentType); err == nil {
+		if bindingSpec == BindingSpecV3 {
+			if parsed, err := parseRevision3MediaType(contentType); err == nil {
+				if cs, present := parsed.params["charset"]; present {
+					charset = cs
+				}
+			}
+		} else if _, params, err := mime.ParseMediaType(contentType); err == nil {
 			if cs := params["charset"]; cs != "" {
 				charset = cs
 			}
@@ -645,6 +810,14 @@ func decodeTextLane(contentType string, body []byte) (any, error) {
 // body: application/json or any +json structured-suffix type. Absent or
 // unparseable headers are NOT JSON (the text lane) — never sniffed.
 func isJSONContentType(contentType string) bool {
+	return isJSONContentTypeFor(contentType, BindingSpecV2)
+}
+
+func isJSONContentTypeFor(contentType, bindingSpec string) bool {
+	if bindingSpec == BindingSpecV3 {
+		parsed, err := parseRevision3MediaType(contentType)
+		return err == nil && isJSONMediaType(parsed.base)
+	}
 	return isJSONMediaType(normalizeMediaType(contentType))
 }
 
@@ -679,7 +852,7 @@ func headerMetadata(h http.Header) openbindings.Metadata {
 // OpenAPI HTTP exchange. The operation output stays empty and ordinary callers
 // need none of these HTTP-shaped facts. httpResponse.body is base64 so the
 // optional diagnostic survives JSON invoker frames.
-func openAPIFailureError(resp *http.Response, body []byte, match *governingResponseMatch) *openbindings.InvocationError {
+func openAPIFailureError(resp *http.Response, body []byte, match *governingResponseMatch, bindingSpec string) *openbindings.InvocationError {
 	ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
 	details, _ := ierr.Diagnostics.(map[string]any)
 	if details == nil {
@@ -715,12 +888,27 @@ func openAPIFailureError(resp *http.Response, body []byte, match *governingRespo
 	artifact := map[string]any{"declared": match != nil}
 	if match != nil {
 		artifact["responseKey"] = match.key
-		if media, err := governingResponseMedia(match.response, resp.Header.Get("Content-Type")); err == nil {
+		contentType := resp.Header.Get("Content-Type")
+		if bindingSpec == BindingSpecV3 {
+			contentType, _ = singletonResponseHeader(resp.Header, "Content-Type")
+		}
+		if media, err := governingResponseMediaFor(match.response, contentType, bindingSpec); err == nil {
 			artifact["governingMedia"] = media.canonical
 		}
 	}
 	details["openapi"] = artifact
 	return ierr
+}
+
+func singletonResponseHeader(header http.Header, name string) (string, error) {
+	values := header.Values(name)
+	if len(values) > 1 {
+		return "", fmt.Errorf("response contains %d %s field instances; revision 3 requires a singleton", len(values), name)
+	}
+	if len(values) == 0 {
+		return "", nil
+	}
+	return values[0], nil
 }
 
 // requiredContext derives the operation's authentication requirements from

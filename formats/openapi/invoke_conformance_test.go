@@ -447,7 +447,7 @@ func TestInvoke_PassthroughRidesMultipartEncoding(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1upload/post", map[string]any{
+	_, ierr := invokeWithBindingSpec(t, BindingSpecV2, spec, "#/paths/~1upload/post", map[string]any{
 		"description": "d", "note": "urgent", "meta": map[string]any{"k": "v"},
 	})
 	if ierr != nil {
@@ -489,7 +489,7 @@ func TestInvoke_PassthroughRidesURLEncodedEncoding(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1form/post", map[string]any{"name": "a b", "extra": "y"})
+	_, ierr := invokeWithBindingSpec(t, BindingSpecV2, spec, "#/paths/~1form/post", map[string]any{"name": "a b", "extra": "y"})
 	if ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
 	}
@@ -661,7 +661,7 @@ func TestInvoke_BinaryOnlyBodyRefused(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1blob/post", map[string]any{"body": "x"})
+	_, ierr := invokeWithBindingSpec(t, BindingSpecV2, spec, "#/paths/~1blob/post", map[string]any{"body": "x"})
 	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("expected the out-of-family refusal, got %v", ierr)
 	}

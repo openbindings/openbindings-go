@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/oasdiff/yaml"
 )
 
@@ -106,20 +107,30 @@ func (n *rawRefSiblingNormalizer) normalizeResourceAt(data []byte, requested, re
 		}
 	}
 	changed := false
+	if semantics == rawRefSemanticsCompose {
+		var lifted bool
+		var err error
+		root, lifted, err = n.liftBooleanSchemas(root, requested, retrieval)
+		if err != nil {
+			return nil, err
+		}
+		changed = changed || lifted
+		object, _ = root.(map[string]any)
+	}
 
 	if object != nil {
 		if declared, ok := object["openapi"].(string); ok && declared != "" {
-			var err error
-			changed, err = n.normalizeOpenAPIDocument(object, semantics, retrieval)
+			normalized, err := n.normalizeOpenAPIDocument(object, semantics, retrieval)
 			if err != nil {
 				return nil, err
 			}
+			changed = changed || normalized
 		} else if dialect, ok := object["$schema"].(string); ok && supportedComposingDialect(dialect) {
-			var err error
-			changed, err = n.normalizeSchema(object, rawRefSemanticsCompose, retrieval)
+			normalized, err := n.normalizeSchema(object, rawRefSemanticsCompose, retrieval)
 			if err != nil {
 				return nil, err
 			}
+			changed = changed || normalized
 		}
 	}
 
@@ -217,6 +228,168 @@ func (n *rawRefSiblingNormalizer) normalizeResourceAt(data []byte, requested, re
 		return nil, fmt.Errorf("marshal normalized OpenAPI resource: %w", err)
 	}
 	return encoded, nil
+}
+
+type rawBooleanLiftState struct{}
+
+// liftBooleanSchemas bridges a kin-openapi representation gap. OAS 3.1 uses
+// full JSON Schema, including literal true/false schemas, while kin-openapi's
+// SchemaRef accepts only objects. We replace only values reached through known
+// Schema Object positions with an internal object sentinel. The typed engine
+// can then resolve and route the artifact normally; synthesis restores the
+// literal boolean before the schema crosses the OpenBindings boundary.
+func (n *rawRefSiblingNormalizer) liftBooleanSchemas(root any, requested, retrieval *url.URL) (any, bool, error) {
+	state := &rawBooleanLiftState{}
+	changed := false
+	apply := func(schema any, pointer string) error {
+		lifted, didChange, err := state.schema(schema)
+		if err != nil {
+			return err
+		}
+		if !didChange {
+			return nil
+		}
+		changed = true
+		if _, directBoolean := schema.(bool); directBoolean {
+			if err := replaceRawJSONPointer(&root, pointer, lifted); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	object, _ := root.(map[string]any)
+	if object != nil {
+		if declared, _ := object["openapi"].(string); declared != "" {
+			var visitErr error
+			rawForEachSchemaRoot(root, func(schema any, pointer string) {
+				if visitErr == nil {
+					visitErr = apply(schema, pointer)
+				}
+			})
+			return root, changed, visitErr
+		}
+		if dialect, _ := object["$schema"].(string); supportedComposingDialect(dialect) {
+			if err := apply(root, ""); err != nil {
+				return nil, false, err
+			}
+		}
+	}
+
+	for _, target := range n.targetsForResources(requested, retrieval) {
+		node, ok := rawFragmentTarget(root, target.fragment, target.kind)
+		if !ok {
+			continue
+		}
+		pointer := target.fragment
+		if pointer != "" && !strings.HasPrefix(pointer, "/") {
+			// An anchor necessarily names an object schema. Nested boolean
+			// positions mutate through that object; no root replacement is needed.
+			pointer = ""
+		}
+		var visitErr error
+		rawForEachSchemaInTarget(node, target.kind, pointer, func(schema any, schemaPointer string) {
+			if visitErr == nil {
+				visitErr = apply(schema, schemaPointer)
+			}
+		})
+		if visitErr != nil {
+			return nil, false, visitErr
+		}
+	}
+	return root, changed, nil
+}
+
+func (s *rawBooleanLiftState) schema(value any) (any, bool, error) {
+	if literal, ok := value.(bool); ok {
+		// Use ordinary, semantics-equivalent JSON Schema rather than a private
+		// extension sentinel: anyOf[true,false] is true; allOf[true,false] is
+		// false. An author who writes the same structure gets the same meaning,
+		// so there is no reserved-name collision or observable mutation.
+		keyword := "anyOf"
+		if !literal {
+			keyword = "allOf"
+		}
+		lifted := map[string]any{keyword: []any{map[string]any{}, map[string]any{"not": map[string]any{}}}}
+		return lifted, true, nil
+	}
+	object, _ := value.(map[string]any)
+	if object == nil {
+		return value, false, nil
+	}
+	changed := false
+	for key, child := range object {
+		switch {
+		case rawSchemaMapKeywords[key]:
+			children, _ := child.(map[string]any)
+			for name, nested := range children {
+				lifted, didChange, err := s.schema(nested)
+				if err != nil {
+					return nil, false, err
+				}
+				if didChange {
+					children[name] = lifted
+					changed = true
+				}
+			}
+		case rawSchemaArrayKeywords[key]:
+			children, _ := child.([]any)
+			for index, nested := range children {
+				lifted, didChange, err := s.schema(nested)
+				if err != nil {
+					return nil, false, err
+				}
+				if didChange {
+					children[index] = lifted
+					changed = true
+				}
+			}
+		case rawSchemaSingleKeywords[key]:
+			lifted, didChange, err := s.schema(child)
+			if err != nil {
+				return nil, false, err
+			}
+			if didChange {
+				object[key] = lifted
+				changed = true
+			}
+		}
+	}
+	return object, changed, nil
+}
+
+func replaceRawJSONPointer(root *any, pointer string, replacement any) error {
+	if pointer == "" {
+		*root = replacement
+		return nil
+	}
+	segments := strings.Split(strings.TrimPrefix(pointer, "/"), "/")
+	current := *root
+	for index, encoded := range segments {
+		name := unescapeJSONPointerSegment(encoded)
+		last := index == len(segments)-1
+		switch node := current.(type) {
+		case map[string]any:
+			if last {
+				node[name] = replacement
+				return nil
+			}
+			current = node[name]
+		case []any:
+			position, err := strconv.Atoi(name)
+			if err != nil || position < 0 || position >= len(node) {
+				return fmt.Errorf("replace normalized boolean schema at %q: invalid array index", pointer)
+			}
+			if last {
+				node[position] = replacement
+				return nil
+			}
+			current = node[position]
+		default:
+			return fmt.Errorf("replace normalized boolean schema at %q: parent is not a container", pointer)
+		}
+	}
+	return fmt.Errorf("replace normalized boolean schema at %q: target not found", pointer)
 }
 
 func rawDocumentSchemaSemantics(root map[string]any, version string) rawRefSemantics {
@@ -480,6 +653,18 @@ func (n *rawRefSiblingNormalizer) normalizeContent(value any, semantics rawRefSe
 			encoding, _ := encodingValue.(map[string]any)
 			if encoding == nil {
 				continue
+			}
+			if _, present := encoding["allowReserved"]; present {
+				if _, hasStyle := encoding["style"]; !hasStyle {
+					if _, hasExplode := encoding["explode"]; !hasExplode {
+						// Explicit allowReserved=false is otherwise erased by the typed
+						// model. Materialize its implicit form style, which is
+						// semantically identical and preserves branch presence without
+						// any private artifact extension.
+						encoding["style"] = openapi3.SerializationForm
+					}
+				}
+				changed = true
 			}
 			for _, header := range rawMapValues(encoding["headers"]) {
 				c, err := n.normalizeTarget(header, rawHeaderTarget, semantics, base)
