@@ -6,11 +6,14 @@
 
 ### Changed
 
-- **The OpenAPI module now defaults to `openbindings.openapi@5`.** Explicit
-  `additionalProperties` and `patternProperties` request bodies remain one
-  protocol-neutral application object while binding-private routing preserves
-  every runtime member through JSON, form, and multipart carriage. Exact
-  revisions 4, 3, 2, and 1 remain compatible; Core is unchanged.
+- **The OpenAPI module now defaults to `openbindings.openapi@6`.** Exact
+  JSON-family request schemas whose top-level declarations require
+  combinators, conditionals, dependent schemas, or explicit
+  `unevaluatedProperties` remain one protocol-neutral application value.
+  Binding-private routing preserves the complete value without choosing a
+  schema branch or exposing HTTP concepts. Revision 6 retains revision 5's
+  dynamic-object carriage; exact revisions 5, 4, 3, 2, and 1 remain
+  compatible. Core is unchanged.
 
 - **OpenAPI security and request-channel handling now preserves artifact
   alternatives without leaking HTTP concepts into OBI contracts.** Invocation

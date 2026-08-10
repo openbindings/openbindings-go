@@ -16,9 +16,12 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestBindingSpecV5IsLatestWithoutAliasingCompatibilityRevisions(t *testing.T) {
-	if BindingSpec != "openbindings.openapi@5" || BindingSpecV5 != BindingSpec {
-		t.Fatalf("latest binding constants = (%q, %q), want exact @5", BindingSpec, BindingSpecV5)
+func TestBindingSpecV6IsLatestWithoutAliasingCompatibilityRevisions(t *testing.T) {
+	if BindingSpec != "openbindings.openapi@6" || BindingSpecV6 != BindingSpec {
+		t.Fatalf("latest binding constants = (%q, %q), want exact @6", BindingSpec, BindingSpecV6)
+	}
+	if BindingSpecV5 != "openbindings.openapi@5" {
+		t.Fatalf("BindingSpecV5 = %q, want immutable exact @5", BindingSpecV5)
 	}
 	if BindingSpecV4 != "openbindings.openapi@4" {
 		t.Fatalf("BindingSpecV4 = %q, want immutable exact @4", BindingSpecV4)
@@ -30,7 +33,7 @@ func TestBindingSpecV5IsLatestWithoutAliasingCompatibilityRevisions(t *testing.T
 		t.Fatalf("BindingSpecV2 = %q, want immutable exact @2", BindingSpecV2)
 	}
 	got := NewInvoker().BindingSpecs()
-	want := []string{BindingSpecV5, BindingSpecV4, BindingSpecV3, BindingSpecV2, LegacyBindingSpec}
+	want := []string{BindingSpecV6, BindingSpecV5, BindingSpecV4, BindingSpecV3, BindingSpecV2, LegacyBindingSpec}
 	var ids []string
 	for _, info := range got {
 		ids = append(ids, info.BindingSpec)

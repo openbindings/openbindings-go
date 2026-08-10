@@ -24,7 +24,7 @@ import (
 )
 
 // BindingSpec identifies the current OpenAPI binding revision.
-const BindingSpec = "openbindings.openapi@5"
+const BindingSpec = "openbindings.openapi@6"
 
 // LegacyBindingSpec identifies the immutable revision-1 OpenAPI binding.
 const LegacyBindingSpec = "openbindings.openapi@1"
@@ -45,25 +45,33 @@ const BindingSpecV3 = "openbindings.openapi@3"
 // exact raw-byte output boundary.
 const BindingSpecV4 = "openbindings.openapi@4"
 
-// BindingSpecV5 identifies the dynamic-object-carriage OpenAPI binding.
+// BindingSpecV5 identifies the immutable dynamic-object-carriage OpenAPI binding.
 // It inherits revision 4 and preserves explicitly dynamic object bodies as
 // one application value before artifact-native form serialization.
-const BindingSpecV5 = BindingSpec
+const BindingSpecV5 = "openbindings.openapi@5"
+
+// BindingSpecV6 identifies the whole-JSON-carriage OpenAPI binding. It
+// preserves declaration-complex JSON request values without flattening.
+const BindingSpecV6 = BindingSpec
 
 func hasRoutedInputs(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV2 || bindingSpec == BindingSpecV3 || bindingSpec == BindingSpecV4 || bindingSpec == BindingSpecV5
+	return bindingSpec == BindingSpecV2 || bindingSpec == BindingSpecV3 || bindingSpec == BindingSpecV4 || bindingSpec == BindingSpecV5 || bindingSpec == BindingSpecV6
 }
 
 func hasMediaFidelity(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV3 || bindingSpec == BindingSpecV4 || bindingSpec == BindingSpecV5
+	return bindingSpec == BindingSpecV3 || bindingSpec == BindingSpecV4 || bindingSpec == BindingSpecV5 || bindingSpec == BindingSpecV6
 }
 
 func hasResponseFidelity(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV4 || bindingSpec == BindingSpecV5
+	return bindingSpec == BindingSpecV4 || bindingSpec == BindingSpecV5 || bindingSpec == BindingSpecV6
 }
 
 func hasDynamicObjectCarriage(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV5
+	return bindingSpec == BindingSpecV5 || bindingSpec == BindingSpecV6
+}
+
+func hasWholeJSONCarriage(bindingSpec string) bool {
+	return bindingSpec == BindingSpecV6
 }
 
 // DefaultSourceName is the default source key used when registering an OpenAPI source in an OBI.
@@ -156,6 +164,7 @@ func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, conte
 // BindingSpecs returns the binding-spec identifiers this invoker supports.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpecV6, Description: "OpenAPI 3.x HTTP APIs (whole-JSON carriage revision)"},
 		{BindingSpec: BindingSpecV5, Description: "OpenAPI 3.x HTTP APIs (dynamic-object carriage revision)"},
 		{BindingSpec: BindingSpecV4, Description: "OpenAPI 3.x HTTP APIs (response-carriage fidelity revision)"},
 		{BindingSpec: BindingSpecV3, Description: "OpenAPI 3.x HTTP APIs (request-carriage fidelity revision)"},
@@ -320,6 +329,7 @@ func (c *Synthesizer) resolverClient() *http.Client {
 // BindingSpecs returns the binding-spec identifiers this synthesizer supports.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpecV6, Description: "OpenAPI 3.x HTTP APIs (whole-JSON carriage revision)"},
 		{BindingSpec: BindingSpecV5, Description: "OpenAPI 3.x HTTP APIs (dynamic-object carriage revision)"},
 		{BindingSpec: BindingSpecV4, Description: "OpenAPI 3.x HTTP APIs (response-carriage fidelity revision)"},
 		{BindingSpec: BindingSpecV3, Description: "OpenAPI 3.x HTTP APIs (request-carriage fidelity revision)"},
@@ -365,8 +375,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpecV5 && src.BindingSpec != BindingSpecV4 && src.BindingSpec != BindingSpecV3 && src.BindingSpec != BindingSpecV2 && src.BindingSpec != LegacyBindingSpec {
-		return nil, nil, fmt.Errorf("synthesizer supports exact binding specifications %q, %q, %q, %q, and %q, got %q", BindingSpecV5, BindingSpecV4, BindingSpecV3, BindingSpecV2, LegacyBindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpecV6 && src.BindingSpec != BindingSpecV5 && src.BindingSpec != BindingSpecV4 && src.BindingSpec != BindingSpecV3 && src.BindingSpec != BindingSpecV2 && src.BindingSpec != LegacyBindingSpec {
+		return nil, nil, fmt.Errorf("synthesizer supports exact binding specifications %q, %q, %q, %q, %q, and %q, got %q", BindingSpecV6, BindingSpecV5, BindingSpecV4, BindingSpecV3, BindingSpecV2, LegacyBindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {

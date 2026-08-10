@@ -49,14 +49,14 @@ func planAbstractInputRoutes(params openapi3.Parameters, plans []*bodyPlan) abst
 
 	bodyNames := map[string]bool{}
 	wholeBody := false
-	dynamicObjectBody := false
+	protocolNeutralWholeBody := false
 	for _, plan := range plans {
 		if plan == nil {
 			continue
 		}
 		if plan.synthetic || plan.wholeObject {
 			wholeBody = true
-			dynamicObjectBody = dynamicObjectBody || plan.wholeObject
+			protocolNeutralWholeBody = protocolNeutralWholeBody || plan.wholeObject
 			continue
 		}
 		for name := range plan.props {
@@ -73,7 +73,7 @@ func planAbstractInputRoutes(params openapi3.Parameters, plans []*bodyPlan) abst
 	}
 	if wholeBody {
 		base := syntheticBodyProperty
-		if dynamicObjectBody {
+		if protocolNeutralWholeBody {
 			base = "payload"
 		}
 		slots = append(slots, inputSlot{kind: "wholeBody", base: base})
@@ -101,7 +101,7 @@ func planAbstractInputRoutes(params openapi3.Parameters, plans []*bodyPlan) abst
 		assigned[i] = field
 		needsTransform = needsTransform || field != slot.base
 	}
-	needsTransform = needsTransform || dynamicObjectBody
+	needsTransform = needsTransform || protocolNeutralWholeBody
 
 	routes := abstractInputRoutes{
 		bodyFields:     map[string]string{},

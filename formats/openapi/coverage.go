@@ -35,7 +35,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 	sourceLocation := ""
 	bindingSpec := BindingSpec
 	for _, source := range iface.Sources {
-		if source.BindingSpec == BindingSpecV5 || source.BindingSpec == BindingSpecV4 || source.BindingSpec == BindingSpecV3 || source.BindingSpec == BindingSpecV2 || source.BindingSpec == LegacyBindingSpec {
+		if source.BindingSpec == BindingSpecV6 || source.BindingSpec == BindingSpecV5 || source.BindingSpec == BindingSpecV4 || source.BindingSpec == BindingSpecV3 || source.BindingSpec == BindingSpecV2 || source.BindingSpec == LegacyBindingSpec {
 			sourceLocation = source.Location
 			bindingSpec = source.BindingSpec
 			break

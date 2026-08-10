@@ -72,7 +72,7 @@ type bodyPlan struct {
 	media       *openapi3.MediaType
 	family      string
 	synthetic   bool
-	wholeObject bool            // explicitly dynamic object rides as one application value
+	wholeObject bool            // complete body rides under one protocol-neutral application field
 	props       map[string]bool // declared top-level body property names (object mode)
 	mediaRange  bool            // mediaKey is a revision-3 media-range declaration
 	rawBoundary bool            // caller string is Base64 boundary carriage for raw bytes
@@ -484,7 +484,24 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].parsed.identity < candidates[j].parsed.identity })
 	plans := make([]*bodyPlan, 0, len(candidates))
 	for _, candidate := range candidates {
-		plan, err := buildBodyPlanFromMedia(rb, candidate.key, candidate.parsed, candidate.family, rb.Content[candidate.key])
+		media := rb.Content[candidate.key]
+		wholeJSON := hasWholeJSONCarriage(bindingSpec) && !candidate.mediaRange && candidate.family == familyJSON &&
+			requiresWholeJSONCarriage(mediaSchema(media), map[*openapi3.Schema]bool{})
+		var plan *bodyPlan
+		var err error
+		if wholeJSON {
+			plan = &bodyPlan{
+				declared:    true,
+				required:    rb.Required,
+				mediaKey:    candidate.key,
+				mediaType:   candidate.parsed.canonical,
+				media:       media,
+				family:      familyJSON,
+				wholeObject: true,
+			}
+		} else {
+			plan, err = buildBodyPlanFromMedia(rb, candidate.key, candidate.parsed, candidate.family, media)
+		}
 		if err != nil {
 			rejected = append(rejected, err.Error())
 			continue
@@ -508,6 +525,29 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 		return nil, &degenerateMediaError{msg: strings.Join(rejected, "; ")}
 	}
 	return plans, nil
+}
+
+// requiresWholeJSONCarriage identifies top-level JSON Schema applicators
+// whose complete validation or possible object surface cannot survive a
+// projection to finitely named body properties. Only allOf is traversed:
+// applicators inside a named property do not change the top-level route.
+func requiresWholeJSONCarriage(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) bool {
+	if schema == nil || seen[schema] {
+		return false
+	}
+	seen[schema] = true
+	defer delete(seen, schema)
+	if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 || schema.Not != nil ||
+		schema.If != nil || schema.Then != nil || schema.Else != nil || len(schema.DependentSchemas) > 0 ||
+		explicitDynamicAdditionalProperties(schema.UnevaluatedProperties) {
+		return true
+	}
+	for _, member := range schema.AllOf {
+		if member != nil && requiresWholeJSONCarriage(member.Value, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 func applyDynamicObjectShape(plan *bodyPlan) {

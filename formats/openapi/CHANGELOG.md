@@ -4,7 +4,14 @@
 
 ### Added
 
-- **Current `openbindings.openapi@5` preserves explicitly dynamic object
+- **Current `openbindings.openapi@6` preserves declaration-complex exact JSON
+  bodies without changing Core.** Top-level combinators, conditionals,
+  dependent schemas, and explicit `unevaluatedProperties` stay under one
+  protocol-neutral application property and a binding-private whole-body
+  route. The binding does not choose a schema branch. Revision 5 remains an
+  exact compatibility path.
+
+- **`openbindings.openapi@5` preserves explicitly dynamic object
   bodies without changing Core.** Explicit `additionalProperties` and
   `patternProperties` schemas stay under one protocol-neutral application
   property and a binding-private whole-body route. Runtime form and multipart
