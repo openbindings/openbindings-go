@@ -453,7 +453,7 @@ func requirementType(s securityScheme) string {
 		return ""
 	case "httpBearer":
 		return "auth.bearer"
-	case "userPassword":
+	case "userPassword", "scramSha256", "scramSha512":
 		return "auth.basic"
 	case "apiKey", "httpApiKey":
 		return "auth.apiKey"
@@ -467,7 +467,7 @@ func requirementType(s securityScheme) string {
 // scheme family requirementType doesn't map: "auth.http.<scheme>" for an
 // HTTP auth scheme other than bearer/basic (e.g. "auth.http.digest"), or
 // "auth." + the artifact's own type verbatim otherwise (e.g.
-// "auth.scramSha256", "auth.X509"). The alternative stays discoverable to a
+// "auth.futureSasl", "auth.X509"). The alternative stays discoverable to a
 // runtime with a resolver for that family, rather than silently dropped.
 func unmappedRequirementType(s securityScheme) string {
 	if s.Type == "http" {

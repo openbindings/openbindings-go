@@ -599,14 +599,14 @@ func TestRequiredContext_NoDeclaredSecurity(t *testing.T) {
 
 // TestRequiredContext_UnknownSchemeSurfaced verifies the R2.c ruling
 // (flipped from TestRequiredContext_UnknownSchemeNotEnforced, which pinned
-// the old drop behavior): an unmapped scheme family (e.g. "scramSha256") is
+// the old drop behavior): an unmapped scheme family (e.g. "futureSasl") is
 // now SURFACED as "auth."+type with its components.securitySchemes key as
 // Name (R2.a), instead of silently dropped — a document whose every
 // alternative is unmapped now produces a challenge rather than dispatching
 // unauthenticated.
 func TestRequiredContext_UnknownSchemeSurfaced(t *testing.T) {
 	doc := secureDoc(map[string]securityScheme{
-		"custom": {Type: "scramSha256"},
+		"custom": {Type: "futureSasl"},
 	}, "custom")
 	op := doc.Operations["op"]
 	got := requiredContext(doc, &op, prodServer(doc), "https://api.example.com", nil)
@@ -617,8 +617,8 @@ func TestRequiredContext_UnknownSchemeSurfaced(t *testing.T) {
 		t.Fatalf("unexpected challenge shape: %+v", got)
 	}
 	req := got.Alternatives[0].Requirements[0]
-	if req.Type != "auth.scramSha256" {
-		t.Errorf("Type = %q, want auth.scramSha256", req.Type)
+	if req.Type != "auth.futureSasl" {
+		t.Errorf("Type = %q, want auth.futureSasl", req.Type)
 	}
 	if req.Name != "custom" {
 		t.Errorf("Name = %q, want the securitySchemes key %q", req.Name, "custom")
@@ -700,7 +700,8 @@ func TestRequirementType_Families(t *testing.T) {
 		{securityScheme{Type: "apiKey"}, "auth.apiKey"},
 		{securityScheme{Type: "httpApiKey"}, "auth.apiKey"},
 		{securityScheme{Type: "oauth2"}, "auth.oauth2"},
-		{securityScheme{Type: "scramSha256"}, ""},
+		{securityScheme{Type: "scramSha256"}, "auth.basic"},
+		{securityScheme{Type: "scramSha512"}, "auth.basic"},
 	}
 	for _, tc := range cases {
 		if got := requirementType(tc.scheme); got != tc.want {
@@ -719,7 +720,7 @@ func TestUnmappedRequirementType(t *testing.T) {
 	}{
 		{securityScheme{Type: "http", Scheme: "digest"}, "auth.http.digest"},
 		{securityScheme{Type: "http", Scheme: "negotiate"}, "auth.http.negotiate"},
-		{securityScheme{Type: "scramSha256"}, "auth.scramSha256"},
+		{securityScheme{Type: "futureSasl"}, "auth.futureSasl"},
 		{securityScheme{Type: "X509"}, "auth.X509"},
 	}
 	for _, tc := range cases {
