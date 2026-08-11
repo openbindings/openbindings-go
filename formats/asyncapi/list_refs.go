@@ -22,7 +22,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	var targets []openbindings.BindableTarget
 
 	bindingSpec := source.BindingSpec
-	if bindingSpec != LegacyBindingSpec {
+	if bindingSpec != BindingSpec {
 		bindingSpec = BindingSpec
 	}
 	opIDs := bindableOperationIDs(doc, bindingSpec)

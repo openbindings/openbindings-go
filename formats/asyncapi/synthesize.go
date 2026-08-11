@@ -13,16 +13,10 @@ import (
 
 	asyncapiclient "github.com/openbindings/asyncapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
-	"gopkg.in/yaml.v3"
 )
 
-// BindingSpec identifies the current reply-preserving AsyncAPI revision.
-const BindingSpec = "openbindings.asyncapi@2"
-
-// LegacyBindingSpec identifies the immutable revision-1 AsyncAPI binding.
-const LegacyBindingSpec = "openbindings.asyncapi@1"
-
-func preservesSendReplies(bindingSpec string) bool { return bindingSpec == BindingSpec }
+// BindingSpec identifies the unreleased first AsyncAPI binding candidate.
+const BindingSpec = "openbindings.asyncapi@1"
 
 // DefaultSourceName is the key used in the interface's Sources map for the AsyncAPI source.
 const DefaultSourceName = "asyncapi"
@@ -91,6 +85,12 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 			payload := operationPayloadSchema(doc, &asyncOp, false)
 			if payload != nil {
 				obiOp.Output = payload
+			}
+			if asyncOp.Reply != nil {
+				replyPayload := replyPayloadSchema(doc, asyncOp.Reply)
+				if replyPayload != nil {
+					obiOp.Input = replyPayload
+				}
 			}
 		case "receive":
 			// The application receives; invoking publishes — the operation's
@@ -187,8 +187,17 @@ func parseDocument(data []byte) (*document, error) {
 // closure this binding will never interpret.
 func discriminateDocument(data []byte) error {
 	var envelope map[string]any
-	if err := yaml.Unmarshal(data, &envelope); err != nil {
-		return fmt.Errorf("parse AsyncAPI document: %w", err)
+	data = trimUTF8BOM(data)
+	if isJSON(data) {
+		if err := json.Unmarshal(data, &envelope); err != nil {
+			return fmt.Errorf("parse AsyncAPI document: %w", err)
+		}
+	} else {
+		var err error
+		envelope, err = decodeYAMLObject(data)
+		if err != nil {
+			return fmt.Errorf("parse AsyncAPI document: %w", err)
+		}
 	}
 	return discriminateEnvelope(envelope)
 }
@@ -199,11 +208,13 @@ func discriminateEnvelope(envelope map[string]any) error {
 		return fmt.Errorf("not a valid AsyncAPI document (missing 'asyncapi' field)")
 	}
 	version, ok := value.(string)
-	if !ok {
-		return fmt.Errorf("unsupported AsyncAPI version %v: the supported openbindings.asyncapi revisions accept exactly 3.0.0 (ASYNC-P-01)", value)
+	accepted := map[string]bool{
+		"2.0.0": true, "2.1.0": true, "2.2.0": true, "2.3.0": true,
+		"2.4.0": true, "2.5.0": true, "2.6.0": true,
+		"3.0.0": true, "3.1.0": true,
 	}
-	if version != "3.0.0" {
-		return fmt.Errorf("unsupported AsyncAPI version %q: the supported openbindings.asyncapi revisions accept exactly 3.0.0 (ASYNC-P-01)", version)
+	if !ok || !accepted[version] {
+		return fmt.Errorf("unsupported AsyncAPI version %v: openbindings.asyncapi@1 accepts exactly 2.0.0–2.6.0, 3.0.0, and 3.1.0 (ASYNC-P-01)", value)
 	}
 	return nil
 }
@@ -279,6 +290,7 @@ func sourceToBytes(ctx context.Context, client *http.Client, location string, co
 }
 
 func isJSON(data []byte) bool {
+	data = trimUTF8BOM(data)
 	for _, b := range data {
 		switch b {
 		case ' ', '\t', '\n', '\r':
@@ -292,6 +304,13 @@ func isJSON(data []byte) bool {
 	return false
 }
 
+func trimUTF8BOM(data []byte) []byte {
+	if len(data) >= 3 && data[0] == 0xef && data[1] == 0xbb && data[2] == 0xbf {
+		return data[3:]
+	}
+	return data
+}
+
 func operationDescription(op asyncOperation) string {
 	if op.Description != "" {
 		return op.Description
@@ -300,27 +319,53 @@ func operationDescription(op asyncOperation) string {
 }
 
 func resolveMessageRef(doc *document, ref messageRef) *message {
+	return resolveMessageRefSeen(doc, ref, map[string]bool{})
+}
+
+// messageRefIdentity retains the artifact's deepest declared message address
+// for coverage. A 2.x normalization cell points first at a synthetic channel
+// message, which can itself be the author's dangling components/messages ref.
+func messageRefIdentity(doc *document, ref messageRef) string {
+	if message := lookupMessageRef(doc, ref); message != nil && message.Ref != "" {
+		return message.Ref
+	}
+	return ref.Ref
+}
+
+func lookupMessageRef(doc *document, ref messageRef) *message {
 	if ref.Ref == "" {
 		return nil
 	}
-
-	path := strings.TrimPrefix(ref.Ref, "#/")
-	parts := strings.Split(path, "/")
-
-	if len(parts) == 3 && parts[0] == "components" && parts[1] == "messages" {
-		if doc.Components != nil {
-			if msg, ok := doc.Components.Messages[unescapeRefToken(parts[2])]; ok {
-				return &msg
+	parts := strings.Split(strings.TrimPrefix(ref.Ref, "#/"), "/")
+	if len(parts) == 3 && parts[0] == "components" && parts[1] == "messages" && doc.Components != nil {
+		if value, ok := doc.Components.Messages[unescapeRefToken(parts[2])]; ok {
+			return &value
+		}
+	}
+	if len(parts) == 4 && parts[0] == "channels" && parts[2] == "messages" {
+		if channel, ok := doc.Channels[unescapeRefToken(parts[1])]; ok {
+			if value, ok := channel.Messages[unescapeRefToken(parts[3])]; ok {
+				return &value
 			}
 		}
 	}
+	return nil
+}
 
-	if len(parts) == 4 && parts[0] == "channels" && parts[2] == "messages" {
-		if ch, ok := doc.Channels[unescapeRefToken(parts[1])]; ok {
-			if msg, ok := ch.Messages[unescapeRefToken(parts[3])]; ok {
-				return &msg
-			}
+func resolveMessageRefSeen(doc *document, ref messageRef, seen map[string]bool) *message {
+	if ref.Ref == "" {
+		return nil
+	}
+	if seen[ref.Ref] {
+		return nil
+	}
+	seen[ref.Ref] = true
+
+	if msg := lookupMessageRef(doc, ref); msg != nil {
+		if msg.Ref != "" {
+			return resolveMessageRefSeen(doc, messageRef{Ref: msg.Ref}, seen)
 		}
+		return msg
 	}
 
 	return nil

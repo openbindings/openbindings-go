@@ -7,15 +7,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/coder/websocket"
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/processorscenarios"
 )
@@ -77,28 +74,6 @@ type graphqlScenarioTransport struct {
 	peer     map[string]any
 	mu       sync.Mutex
 	dispatch map[string]any
-}
-
-type graphqlScenarioObservation struct {
-	mu   sync.Mutex
-	data map[string]any
-	done chan struct{}
-	once sync.Once
-}
-
-func (o *graphqlScenarioObservation) set(name string, value any) {
-	o.mu.Lock()
-	o.data[name] = value
-	o.mu.Unlock()
-	if name == "body" {
-		o.once.Do(func() { close(o.done) })
-	}
-}
-
-func (o *graphqlScenarioObservation) snapshot() map[string]any {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return cloneMap(o.data)
 }
 
 func (t *graphqlScenarioTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -176,15 +151,6 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	peer := scenario.Given.Peer
 	transport := &graphqlScenarioTransport{peer: peer}
 	invoker := NewInvokerWithClient(&http.Client{Transport: transport})
-	var wsObservation *graphqlScenarioObservation
-	var wsServer *httptest.Server
-	if strings.HasPrefix(ref, "subscription/") && source.BindingSpec == LegacyBindingSpec {
-		originalTarget, _ := configuration["subscriptionTarget"].(string)
-		wsServer, wsObservation = graphqlScenarioServer(t, peer, originalTarget)
-		configuration["subscriptionTarget"] = "ws" + strings.TrimPrefix(wsServer.URL, "http")
-		invoker = NewInvoker()
-		defer wsServer.Close()
-	}
 
 	args := &openbindings.BindingInvocationArgs{
 		Source:  source,
@@ -236,10 +202,6 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		data["outputs"] = []any{}
 	}
 	dispatch := transport.observed()
-	if wsObservation != nil {
-		waitForScenarioObservation(t, wsObservation)
-		dispatch = wsObservation.snapshot()
-	}
 	if dispatch != nil {
 		data["dispatch"] = dispatch
 	}
@@ -298,56 +260,6 @@ func normalizeScenarioValue(value any) any {
 	var normalized any
 	_ = json.Unmarshal(raw, &normalized)
 	return normalized
-}
-
-func graphqlScenarioServer(t *testing.T, peer map[string]any, originalTarget string) (*httptest.Server, *graphqlScenarioObservation) {
-	t.Helper()
-	observation := &graphqlScenarioObservation{
-		data: map[string]any{"target": originalTarget},
-		done: make(chan struct{}),
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		conn, err := websocket.Accept(w, request, &websocket.AcceptOptions{Subprotocols: []string{"graphql-transport-ws"}})
-		if err != nil {
-			return
-		}
-		defer conn.Close(websocket.StatusNormalClosure, "")
-		_, raw, err := conn.Read(request.Context())
-		if err != nil {
-			return
-		}
-		var init map[string]any
-		_ = json.Unmarshal(raw, &init)
-		observation.set("connectionInit", init)
-
-		messages, _ := peer["messages"].([]any)
-		if len(messages) == 0 {
-			return
-		}
-		_ = writeJSON(request.Context(), conn, messages[0])
-		_, raw, err = conn.Read(request.Context())
-		if err != nil {
-			return
-		}
-		var subscribe map[string]any
-		_ = json.Unmarshal(raw, &subscribe)
-		observation.set("body", subscribe["payload"])
-		for _, message := range messages[1:] {
-			if err := writeJSON(request.Context(), conn, message); err != nil {
-				return
-			}
-		}
-	}))
-	return server, observation
-}
-
-func waitForScenarioObservation(t *testing.T, observation *graphqlScenarioObservation) {
-	t.Helper()
-	select {
-	case <-observation.done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("subscription scenario did not observe subscribe payload")
-	}
 }
 
 func cloneMap(value map[string]any) map[string]any {

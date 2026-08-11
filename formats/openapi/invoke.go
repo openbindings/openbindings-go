@@ -80,7 +80,7 @@ func BuiltinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (boo
 // UTF-8, with invalid sequences a loud decode error. An empty body (204
 // included) yields null.
 func decodeByContentType(contentType string) openbindings.OutputDecoder {
-	return decodeByContentTypeFor(contentType, BindingSpecV2)
+	return decodeByContentTypeFor(contentType, BindingSpec)
 }
 
 func decodeByContentTypeFor(contentType, bindingSpec string) openbindings.OutputDecoder {
@@ -109,7 +109,7 @@ func decodeByContentTypeFor(contentType, bindingSpec string) openbindings.Output
 // decode errors — a consumer needing another charset overrides at the
 // decode configuration point.
 func decodeTextLane(contentType string, body []byte) (any, error) {
-	return decodeTextLaneFor(contentType, body, BindingSpecV2)
+	return decodeTextLaneFor(contentType, body, BindingSpec)
 }
 
 func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any, error) {
@@ -164,7 +164,7 @@ func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any
 // body: application/json or any +json structured-suffix type. Absent or
 // unparseable headers are NOT JSON (the text lane) — never sniffed.
 func isJSONContentType(contentType string) bool {
-	return isJSONContentTypeFor(contentType, BindingSpecV2)
+	return isJSONContentTypeFor(contentType, BindingSpec)
 }
 
 func isJSONContentTypeFor(contentType, bindingSpec string) bool {

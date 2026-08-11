@@ -164,6 +164,9 @@ func resolveSchemaRefs(schema map[string]any, rawDoc map[string]any, visited map
 
 	// Recursively walk all values.
 	for key, val := range schema {
+		if isLiteralSchemaValueKey(key) || strings.HasPrefix(strings.ToLower(key), "x-") {
+			continue
+		}
 		switch v := val.(type) {
 		case map[string]any:
 			schema[key] = resolveSchemaRefs(v, rawDoc, copyVisited(visited))
@@ -173,6 +176,15 @@ func resolveSchemaRefs(schema map[string]any, rawDoc map[string]any, visited map
 	}
 
 	return schema
+}
+
+func isLiteralSchemaValueKey(key string) bool {
+	switch key {
+	case "const", "default", "enum", "example", "examples":
+		return true
+	default:
+		return false
+	}
 }
 
 // resolveSchemaRefsInSlice handles arrays within schemas (e.g., allOf, oneOf, anyOf, items).

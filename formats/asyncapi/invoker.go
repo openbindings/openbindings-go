@@ -71,6 +71,21 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 	}
 }
 
+// NewInvokerWithDrivers creates an invoker backed by the standalone
+// AsyncAPI runtime and registers protocol drivers by their declared protocol
+// names. Driver registration is runtime capability; it does not alter the
+// binding specification or synthesized OBI surface.
+func NewInvokerWithDrivers(client *http.Client, drivers ...asyncapiclient.ProtocolDriver) (*Invoker, error) {
+	if client == nil {
+		client = newDefaultHTTPClient()
+	}
+	engine, err := asyncapiclient.NewEngineWithDrivers(client, drivers...)
+	if err != nil {
+		return nil, err
+	}
+	return &Invoker{httpClient: client, engine: engine}, nil
+}
+
 // Close shuts down all pooled WebSocket connections (io.Closer). After Close
 // returns, the Invoker should not be used for new invocations.
 func (e *Invoker) Close() error {
@@ -80,8 +95,7 @@ func (e *Invoker) Close() error {
 // BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpec, Description: "AsyncAPI 3.0 event-driven APIs (reply-preserving revision)"},
-		{BindingSpec: LegacyBindingSpec, Description: "AsyncAPI 3.0 event-driven APIs (revision-1 compatibility)"},
+		{BindingSpec: BindingSpec, Description: "AsyncAPI event-driven APIs"},
 	}
 }
 
@@ -242,14 +256,10 @@ func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http
 }
 
 func engineProfile(bindingSpec string) (asyncapiclient.Profile, bool) {
-	switch bindingSpec {
-	case BindingSpec:
+	if bindingSpec == BindingSpec {
 		return asyncapiclient.ProfileFull, true
-	case LegacyBindingSpec:
-		return asyncapiclient.ProfileCompatibility, true
-	default:
-		return "", false
 	}
+	return "", false
 }
 
 func bridgeHooks(args *openbindings.BindingInvocationArgs) *asyncapiclient.Hooks {
@@ -346,8 +356,7 @@ func NewSynthesizer() *Synthesizer {
 // BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpec, Description: "AsyncAPI 3.0 event-driven APIs (reply-preserving revision)"},
-		{BindingSpec: LegacyBindingSpec, Description: "AsyncAPI 3.0 event-driven APIs (revision-1 compatibility)"},
+		{BindingSpec: BindingSpec, Description: "AsyncAPI event-driven APIs"},
 	}
 }
 
@@ -386,8 +395,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpec && src.BindingSpec != LegacyBindingSpec {
-		return nil, fmt.Errorf("synthesizer supports exact binding specifications %q and %q, got %q", BindingSpec, LegacyBindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpec {
+		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {

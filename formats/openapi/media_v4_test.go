@@ -42,12 +42,12 @@ func invokeRevision4Response(t *testing.T, spec, bindingSpec, contentType string
 
 func TestRevision4RawResponseAndSynthesisBoundary(t *testing.T) {
 	spec := revision4ResponseSpec("3.0.4", `{"image/png":{"schema":{"type":"string","format":"binary"}}}`)
-	outputs, invocationErr := invokeRevision4Response(t, spec, BindingSpecV4, "image/png", []byte{0, 1, 254, 255})
+	outputs, invocationErr := invokeRevision4Response(t, spec, BindingSpec, "image/png", []byte{0, 1, 254, 255})
 	if invocationErr != nil || !reflect.DeepEqual(outputs, []any{"AAH+/w=="}) {
 		t.Fatalf("binary outputs = %#v, %v", outputs, invocationErr)
 	}
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV4, Content: openbindings.TextContent(spec)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,23 +60,15 @@ func TestRevision4RawResponseAndSynthesisBoundary(t *testing.T) {
 
 func TestRevision4ResponseRangeSelectsConcreteRawAndJSONLanes(t *testing.T) {
 	rawSpec := revision4ResponseSpec("3.1.2", `{"image/*":{}}`)
-	outputs, invocationErr := invokeRevision4Response(t, rawSpec, BindingSpecV4, "image/png", []byte{222, 173, 190, 239})
+	outputs, invocationErr := invokeRevision4Response(t, rawSpec, BindingSpec, "image/png", []byte{222, 173, 190, 239})
 	if invocationErr != nil || !reflect.DeepEqual(outputs, []any{"3q2+7w=="}) {
 		t.Fatalf("range raw outputs = %#v, %v", outputs, invocationErr)
 	}
 
 	jsonSpec := revision4ResponseSpec("3.1.2", `{"application/*":{"schema":{"type":"object","properties":{"ok":{"type":"boolean"}}}}}`)
-	outputs, invocationErr = invokeRevision4Response(t, jsonSpec, BindingSpecV4, "application/json", []byte(`{"ok":true}`))
+	outputs, invocationErr = invokeRevision4Response(t, jsonSpec, BindingSpec, "application/json", []byte(`{"ok":true}`))
 	if invocationErr != nil || !reflect.DeepEqual(outputs, []any{map[string]any{"ok": true}}) {
 		t.Fatalf("range JSON outputs = %#v, %v", outputs, invocationErr)
-	}
-}
-
-func TestRevision4KeepsRevision3ResponseRangeExclusionImmutable(t *testing.T) {
-	spec := revision4ResponseSpec("3.1.2", `{"image/*":{}}`)
-	outputs, invocationErr := invokeRevision4Response(t, spec, BindingSpecV3, "image/png", []byte{1})
-	if len(outputs) != 0 || invocationErr == nil || invocationErr.Code != openbindings.ErrCodeProtocol {
-		t.Fatalf("revision-3 range result = %#v, %v", outputs, invocationErr)
 	}
 }
 
@@ -86,7 +78,7 @@ func TestRevision4ResponseRangeSpecificity(t *testing.T) {
 		"image/*; profile=v1": emptyMedia(),
 		"image/png":           emptyMedia(),
 	}}
-	match, err := governingResponseMediaMatchFor(response, "image/png; profile=v1", BindingSpecV4)
+	match, err := governingResponseMediaMatchFor(response, "image/png; profile=v1", BindingSpec)
 	if err != nil || match.key != "image/png" {
 		t.Fatalf("range selection = %#v, %v", match, err)
 	}
@@ -98,10 +90,7 @@ func TestRevision4ParameterizedRangeConfersPossibleStreamingCapability(t *testin
 		t.Fatal(err)
 	}
 	op := doc.Paths.Find("/payload").Get
-	if isStreamingCapableFor(op, BindingSpecV3) {
-		t.Fatal("revision 3 must keep response-range exclusion immutable")
-	}
-	if !isStreamingCapableFor(op, BindingSpecV4) {
-		t.Fatal("revision 4 should recognize a parameterized text range as possibly event-stream")
+	if !isStreamingCapableFor(op, BindingSpec) {
+		t.Fatal("the candidate should recognize a parameterized text range as possibly event-stream")
 	}
 }

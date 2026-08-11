@@ -16,27 +16,12 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestBindingSpecV7IsLatestWithoutAliasingCompatibilityRevisions(t *testing.T) {
-	if BindingSpec != "openbindings.openapi@7" || BindingSpecV7 != BindingSpec {
-		t.Fatalf("latest binding constants = (%q, %q), want exact @7", BindingSpec, BindingSpecV7)
-	}
-	if BindingSpecV6 != "openbindings.openapi@6" {
-		t.Fatalf("BindingSpecV6 = %q, want immutable exact @6", BindingSpecV6)
-	}
-	if BindingSpecV5 != "openbindings.openapi@5" {
-		t.Fatalf("BindingSpecV5 = %q, want immutable exact @5", BindingSpecV5)
-	}
-	if BindingSpecV4 != "openbindings.openapi@4" {
-		t.Fatalf("BindingSpecV4 = %q, want immutable exact @4", BindingSpecV4)
-	}
-	if BindingSpecV3 != "openbindings.openapi@3" {
-		t.Fatalf("BindingSpecV3 = %q, want immutable exact @3", BindingSpecV3)
-	}
-	if BindingSpecV2 != "openbindings.openapi@2" {
-		t.Fatalf("BindingSpecV2 = %q, want immutable exact @2", BindingSpecV2)
+func TestBindingSpecIsFirstUnreleasedCandidate(t *testing.T) {
+	if BindingSpec != "openbindings.openapi@1" {
+		t.Fatalf("BindingSpec = %q, want first candidate @1", BindingSpec)
 	}
 	got := NewInvoker().BindingSpecs()
-	want := []string{BindingSpecV7, BindingSpecV6, BindingSpecV5, BindingSpecV4, BindingSpecV3, BindingSpecV2, LegacyBindingSpec}
+	want := []string{BindingSpec}
 	var ids []string
 	for _, info := range got {
 		ids = append(ids, info.BindingSpec)
@@ -46,26 +31,23 @@ func TestBindingSpecV7IsLatestWithoutAliasingCompatibilityRevisions(t *testing.T
 	}
 }
 
-func TestRevision3RoutedEnvelopeUsesItsOwnExactMarker(t *testing.T) {
+func TestRoutedEnvelopeUsesCandidateMarker(t *testing.T) {
 	routes := abstractInputRoutes{
 		parameters:     []abstractParameterRoute{{In: "query", Name: "id", Field: "id"}},
 		wholeBodyField: "body",
 		needsTransform: true,
 	}
-	if expression := routes.transformExpressionFor(BindingSpecV3); !strings.Contains(expression, `"$openbindings":"openbindings.openapi@3"`) {
-		t.Fatalf("revision-3 transform = %s", expression)
+	if expression := routes.transformExpressionFor(BindingSpec); !strings.Contains(expression, `"$openbindings":"openbindings.openapi@1"`) {
+		t.Fatalf("candidate transform = %s", expression)
 	}
 	value := []any{map[string]any{
-		"$openbindings": BindingSpecV3,
+		"$openbindings": BindingSpec,
 		"value":         map[string]any{"id": "a", "body": "YQ=="},
 		"parameters":    []any{map[string]any{"in": "query", "name": "id", "field": "id"}},
 		"body":          map[string]any{"whole": "body"},
 	}}
-	if _, err := parseRoutedEnvelopeFor(value, BindingSpecV3); err != nil {
-		t.Fatalf("revision-3 envelope refused: %v", err)
-	}
-	if _, err := parseRoutedEnvelopeFor(value, BindingSpecV2); err == nil {
-		t.Fatal("revision-2 parser accepted a revision-3 private marker")
+	if _, err := parseRoutedEnvelopeFor(value, BindingSpec); err != nil {
+		t.Fatalf("candidate envelope refused: %v", err)
 	}
 }
 
@@ -105,7 +87,7 @@ func TestRevision3RawOctetPlanningAndBytes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			op := opWithRequestBody(openapi3.Content{"image/png": tt.media}, true)
-			plans, err := planRequestBodiesFor(tt.doc, op, BindingSpecV3)
+			plans, err := planRequestBodiesFor(tt.doc, op, BindingSpec)
 			if err != nil || len(plans) != 1 {
 				t.Fatalf("planRequestBodiesFor = %#v, %v", plans, err)
 			}
@@ -133,7 +115,7 @@ func TestRevision3RawBoundaryRejectsInvalidBase64(t *testing.T) {
 	op := opWithRequestBody(openapi3.Content{"image/png": {Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
 		Type: &openapi3.Types{"string"}, Format: "binary",
 	}}}}, true)
-	plans, err := planRequestBodiesFor(doc, op, BindingSpecV3)
+	plans, err := planRequestBodiesFor(doc, op, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,12 +153,8 @@ func TestRevision3MediaParameterSemantics(t *testing.T) {
 		"application/json; charset=UTF-8": media(),
 		"Application/JSON;charset=utf-8":  media(),
 	}, true)
-	if _, err := planRequestBodiesFor(&openapi3.T{OpenAPI: "3.1.0"}, op, BindingSpecV3); err == nil || !strings.Contains(err.Error(), "normalized collision") {
+	if _, err := planRequestBodiesFor(&openapi3.T{OpenAPI: "3.1.0"}, op, BindingSpec); err == nil || !strings.Contains(err.Error(), "normalized collision") {
 		t.Fatalf("charset-semantic collision error = %v", err)
-	}
-	// Revision 2 keeps its literal parameter-value identity behavior.
-	if _, err := planRequestBodiesFor(&openapi3.T{OpenAPI: "3.1.0"}, op, BindingSpecV2); err != nil {
-		t.Fatalf("revision-2 behavior changed: %v", err)
 	}
 }
 
@@ -193,7 +171,7 @@ func TestRevision3MediaRangeDetectionIsStructural(t *testing.T) {
 	}
 
 	op := opWithRequestBody(openapi3.Content{"application/vnd.foo*bar": emptyMedia()}, true)
-	plans, err := planRequestBodiesFor(&openapi3.T{OpenAPI: "3.1.0"}, op, BindingSpecV3)
+	plans, err := planRequestBodiesFor(&openapi3.T{OpenAPI: "3.1.0"}, op, BindingSpec)
 	if err != nil || len(plans) != 1 || plans[0].mediaRange || plans[0].family != familyOctets {
 		t.Fatalf("exact starred subtype plan = %#v, %v", plans, err)
 	}
@@ -202,13 +180,9 @@ func TestRevision3MediaRangeDetectionIsStructural(t *testing.T) {
 func TestRevision3SchemaOmittedJSONUsesConservativeWholeBody(t *testing.T) {
 	doc := &openapi3.T{OpenAPI: "3.1.2"}
 	op := opWithRequestBody(openapi3.Content{"application/json": emptyMedia()}, true)
-	plans, err := planRequestBodiesFor(doc, op, BindingSpecV3)
+	plans, err := planRequestBodiesFor(doc, op, BindingSpec)
 	if err != nil || len(plans) != 1 || !plans[0].synthetic {
 		t.Fatalf("revision-3 schema-omitted JSON plan = %#v, %v", plans, err)
-	}
-	legacy, err := planRequestBodiesFor(doc, op, BindingSpecV2)
-	if err != nil || len(legacy) != 1 || legacy[0].synthetic {
-		t.Fatalf("revision-2 schema-omitted JSON behavior changed = %#v, %v", legacy, err)
 	}
 	for _, value := range []any{"scalar", []any{"array"}, map[string]any{"object": true}} {
 		body, contentType, err := buildRequestBody(doc, plans[0], &routedInput{bodySet: true, bodyValue: value})
@@ -227,7 +201,7 @@ func TestRevision3SchemaOmittedJSONUsesConservativeWholeBody(t *testing.T) {
 
 	spec := `{"openapi":"3.1.2","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/value":{"post":{"operationId":"putValue","requestBody":{"required":true,"content":{"application/json":{}}},"responses":{"204":{"description":"ok"}}}}}}`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +224,7 @@ func TestRevision3RangeSelectionIsConfiguredAndMostSpecific(t *testing.T) {
 		"application/json":             media(),
 	}, true)
 	doc := &openapi3.T{OpenAPI: "3.1.0"}
-	plans, err := planRequestBodiesFor(doc, op, BindingSpecV3)
+	plans, err := planRequestBodiesFor(doc, op, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +233,7 @@ func TestRevision3RangeSelectionIsConfiguredAndMostSpecific(t *testing.T) {
 		t.Helper()
 		selected, err := configuredRequestPlansFor(doc, op, plans, map[string]any{
 			"configuration": map[string]any{"requestMedia": requestMedia},
-		}, BindingSpecV3)
+		}, BindingSpec)
 		if err != nil || len(selected) != 1 {
 			t.Fatalf("select %q = %#v, %v", requestMedia, selected, err)
 		}
@@ -272,13 +246,13 @@ func TestRevision3RangeSelectionIsConfiguredAndMostSpecific(t *testing.T) {
 		t.Fatalf("parameter-specific type range selection = %#v", got)
 	}
 	textOp := opWithRequestBody(openapi3.Content{"*/*": emptyMedia()}, true)
-	textPlans, err := planRequestBodiesFor(doc, textOp, BindingSpecV3)
+	textPlans, err := planRequestBodiesFor(doc, textOp, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	selected, err := configuredRequestPlansFor(doc, textOp, textPlans, map[string]any{
 		"configuration": map[string]any{"requestMedia": "text/plain"},
-	}, BindingSpecV3)
+	}, BindingSpec)
 	if err != nil || len(selected) != 1 || selected[0].mediaKey != "*/*" || selected[0].mediaType != "text/plain" {
 		t.Fatalf("universal range selection = %#v, %v", selected, err)
 	}
@@ -290,26 +264,26 @@ func TestRevision3RangeSelectionRefusesTiesAndUnsupportedConcreteLane(t *testing
 		"application/*; a=1": emptyMedia(),
 		"application/*; b=2": emptyMedia(),
 	}, true)
-	plans, err := planRequestBodiesFor(doc, op, BindingSpecV3)
+	plans, err := planRequestBodiesFor(doc, op, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = configuredRequestPlansFor(doc, op, plans, map[string]any{
 		"configuration": map[string]any{"requestMedia": "application/json; a=1; b=2"},
-	}, BindingSpecV3)
+	}, BindingSpec)
 	if err == nil || !strings.Contains(err.Error(), "ambiguously") {
 		t.Fatalf("equal-specificity tie error = %v", err)
 	}
 
 	object := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}}}
 	op = opWithRequestBody(openapi3.Content{"*/*": object}, true)
-	plans, err = planRequestBodiesFor(doc, op, BindingSpecV3)
+	plans, err = planRequestBodiesFor(doc, op, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = configuredRequestPlansFor(doc, op, plans, map[string]any{
 		"configuration": map[string]any{"requestMedia": "image/png"},
-	}, BindingSpecV3)
+	}, BindingSpec)
 	if err == nil || !strings.Contains(err.Error(), "no existing request carriage family") {
 		t.Fatalf("object shape must not auto-select JSON for image/png, got %v", err)
 	}
@@ -336,13 +310,13 @@ func TestRevision3ConfiguredRawRangeUsesGoverningSchema(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plans, err := planRequestBodiesFor(tt.doc, tt.op, BindingSpecV3)
+			plans, err := planRequestBodiesFor(tt.doc, tt.op, BindingSpec)
 			if err != nil {
 				t.Fatal(err)
 			}
 			selected, err := configuredRequestPlansFor(tt.doc, tt.op, plans, map[string]any{
 				"configuration": map[string]any{"requestMedia": "image/png"},
-			}, BindingSpecV3)
+			}, BindingSpec)
 			if err != nil || len(selected) != 1 || selected[0].family != familyOctets || !selected[0].rawBoundary {
 				t.Fatalf("selected raw range = %#v, %v", selected, err)
 			}
@@ -366,13 +340,13 @@ func TestRevision3RangeCanSelectJSONSuffixForAnyType(t *testing.T) {
 	op := opWithRequestBody(openapi3.Content{"image/*": {Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
 		Type: &openapi3.Types{"object"}, Properties: openapi3.Schemas{"name": {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}},
 	}}}}, true)
-	plans, err := planRequestBodiesFor(doc, op, BindingSpecV3)
+	plans, err := planRequestBodiesFor(doc, op, BindingSpec)
 	if err != nil || len(plans) != 1 || plans[0].family != familyJSON || plans[0].synthetic {
 		t.Fatalf("image wildcard skeleton = %#v, %v", plans, err)
 	}
 	selected, err := configuredRequestPlansFor(doc, op, plans, map[string]any{
 		"configuration": map[string]any{"requestMedia": "image/problem+json"},
-	}, BindingSpecV3)
+	}, BindingSpec)
 	if err != nil || len(selected) != 1 || selected[0].family != familyJSON {
 		t.Fatalf("+json selection = %#v, %v", selected, err)
 	}
@@ -402,7 +376,7 @@ func TestRevision3RawSynthesisProjectsBase64WithoutReplacingSchema(t *testing.T)
 			}
 			spec := `{"openapi":"` + tc.version + `","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/asset":{"post":{"operationId":"putAsset","requestBody":{"required":true,"content":{"` + tc.media + `":` + mediaObject + `}},"responses":{"200":{"description":"ok"}}}}}}`
 			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)}},
+				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -459,7 +433,7 @@ func TestRevision3RangeSynthesisIsConservativeAcrossConcreteLanes(t *testing.T) 
 				mediaObject = "{" + tc.schema + "}"
 			}
 			spec := `{"openapi":"` + tc.version + `","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"post":{"operationId":"put","requestBody":{"required":true,"content":{"` + tc.media + `":` + mediaObject + `}},"responses":{"204":{"description":"ok"}}}}}}`
-			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)}}})
+			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -476,7 +450,7 @@ func TestRevision3RangeCoverageRequiresRequestMediaAtCorrectScopes(t *testing.T)
 		t.Helper()
 		spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/items":{"post":{"operationId":"putItems","requestBody":{"required":true,"content":` + content + `},"responses":{"200":{"description":"ok"}}}}}}`
 		result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-			Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)}},
+			Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -509,7 +483,7 @@ func TestRevision3RangeCoverageRequiresRequestMediaAtCorrectScopes(t *testing.T)
 func TestRevision3PrepareBindingChallengesForRequiredRange(t *testing.T) {
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://api.example.test"}],"paths":{"/x":{"post":{"operationId":"put","requestBody":{"required":true,"content":{"application/*":{"schema":{"type":"object"}}}},"responses":{"204":{"description":"ok"}}}}}}`
 	args := &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1x/post",
 	}
 	details, err := NewInvoker().PrepareBinding(context.Background(), args)
@@ -550,7 +524,7 @@ func TestRevision3MultipartPreservesOAS31ApplicationStrings(t *testing.T) {
 	r, ct, err := buildMultipartBodyForRevision(&openapi3.T{OpenAPI: "3.1.0"}, media, map[string]any{
 		"encoded":  "eyJ4IjoxfQ==",
 		"identity": "raw-text",
-	}, BindingSpecV3)
+	}, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,32 +545,25 @@ func TestRevision3MultipartOAS30UsesCanonicalBoundaryBase64(t *testing.T) {
 	}}}
 	doc := &openapi3.T{OpenAPI: "3.0.3"}
 	for _, value := range []string{"YQ", "AB==", "YQ==\n"} {
-		if _, _, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": value}, BindingSpecV3); err == nil || !strings.Contains(err.Error(), "invalid base64") {
+		if _, _, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": value}, BindingSpec); err == nil || !strings.Contains(err.Error(), "invalid base64") {
 			t.Errorf("non-canonical multipart Base64 %q error = %v", value, err)
 		}
 	}
-	r, ct, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": "YQ=="}, BindingSpecV3)
+	r, ct, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": "YQ=="}, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := parseMultipart(t, r, ct)["file"][0][1]; got != "a" {
 		t.Fatalf("canonical multipart bytes = %q", got)
 	}
-	if _, _, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": []byte("a")}, BindingSpecV3); err == nil {
+	if _, _, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": []byte("a")}, BindingSpec); err == nil {
 		t.Fatal("revision 3 accepted the legacy in-process []byte bypass")
-	}
-	legacy, legacyCT, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": []byte("a")}, BindingSpecV2)
-	if err != nil {
-		t.Fatalf("revision-2 []byte compatibility changed: %v", err)
-	}
-	if got := parseMultipart(t, legacy, legacyCT)["file"][0][1]; got != "a" {
-		t.Fatalf("revision-2 []byte compatibility = %q", got)
 	}
 }
 
 func TestRevision3MultipartSynthesisDecoratesNestedBinaryValues(t *testing.T) {
 	spec := `{"openapi":"3.0.3","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/assets":{"post":{"operationId":"putAssets","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","properties":{"files":{"type":"array","items":{"type":"string","format":"binary"}},"profile":{"type":"object","properties":{"avatar":{"type":"string","format":"binary"}}}}}}}},"responses":{"204":{"description":"ok"}}}}}}`
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)}}})
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,16 +578,6 @@ func TestRevision3MultipartSynthesisDecoratesNestedBinaryValues(t *testing.T) {
 		t.Fatalf("nested multipart boundary schemas: items=%#v avatar=%#v", items, avatar)
 	}
 
-	legacy, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV2, Content: openbindings.TextContent(spec)}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyInput, _ := legacy.Operations["putAssets"].Input.(map[string]any)
-	legacyProps, _ := legacyInput["properties"].(map[string]any)
-	legacyItems, _ := legacyProps["files"].(map[string]any)["items"].(map[string]any)
-	if legacyItems["contentEncoding"] != nil {
-		t.Fatalf("revision-2 synthesis changed: %#v", legacyItems)
-	}
 }
 
 func TestRevision3MultipartDecorationIsCandidateLocal(t *testing.T) {
@@ -633,7 +590,7 @@ func TestRevision3MultipartDecorationIsCandidateLocal(t *testing.T) {
 		"application/json":    {Schema: shared},
 		"multipart/form-data": {Schema: shared},
 	}, true)
-	plans, err := planRequestBodiesFor(&openapi3.T{OpenAPI: "3.0.3"}, op, BindingSpecV3)
+	plans, err := planRequestBodiesFor(&openapi3.T{OpenAPI: "3.0.3"}, op, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,14 +618,14 @@ func TestRevision3ConflictingContentEncodingRefuses(t *testing.T) {
 	}}
 	doc := &openapi3.T{OpenAPI: "3.1.0"}
 	op := opWithRequestBody(openapi3.Content{"image/png": {Schema: &openapi3.SchemaRef{Value: conflict}}}, true)
-	if _, err := planRequestBodiesFor(doc, op, BindingSpecV3); err == nil || !strings.Contains(err.Error(), "conflicting contentEncoding") {
+	if _, err := planRequestBodiesFor(doc, op, BindingSpec); err == nil || !strings.Contains(err.Error(), "conflicting contentEncoding") {
 		t.Fatalf("whole-body conflict error = %v", err)
 	}
 
 	multipartMedia := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
 		Type: &openapi3.Types{"object"}, Properties: openapi3.Schemas{"file": {Value: conflict}},
 	}}}
-	if _, _, err := buildMultipartBodyForRevision(doc, multipartMedia, map[string]any{"file": "value"}, BindingSpecV3); err == nil || !strings.Contains(err.Error(), "conflicting contentEncoding") {
+	if _, _, err := buildMultipartBodyForRevision(doc, multipartMedia, map[string]any{"file": "value"}, BindingSpec); err == nil || !strings.Contains(err.Error(), "conflicting contentEncoding") {
 		t.Fatalf("multipart conflict error = %v", err)
 	}
 }
@@ -702,7 +659,7 @@ paths:
 		t.Fatal(err)
 	}
 	op := doc.Paths.Find("/asset").Post
-	plans, err := planRequestBodiesFor(doc, op, BindingSpecV3)
+	plans, err := planRequestBodiesFor(doc, op, BindingSpec)
 	if err != nil || len(plans) != 1 || plans[0].family != familyOctets || plans[0].rawBoundary {
 		t.Fatalf("external encoded-string plan = %#v, %v", plans, err)
 	}
@@ -715,7 +672,7 @@ func TestRevision3BooleanSchemaIsNotAnOmittedRawShape(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load boolean schema %s: %v", schema, err)
 		}
-		plans, planErr := planRequestBodiesFor(doc, doc.Paths.Find("/x").Post, BindingSpecV3)
+		plans, planErr := planRequestBodiesFor(doc, doc.Paths.Find("/x").Post, BindingSpec)
 		if planErr == nil || len(plans) != 0 {
 			t.Fatalf("non-JSON boolean schema %s became an omitted raw lane: plans=%#v err=%v", schema, plans, planErr)
 		}
@@ -725,48 +682,44 @@ func TestRevision3BooleanSchemaIsNotAnOmittedRawShape(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, bindingSpec := range []string{BindingSpecV2, BindingSpecV3} {
-			jsonPlans, err := planRequestBodiesFor(jsonDoc, jsonDoc.Paths.Find("/x").Post, bindingSpec)
-			if err != nil || len(jsonPlans) != 1 || !jsonPlans[0].synthetic {
-				t.Fatalf("%s JSON boolean schema %s plan = %#v, %v", bindingSpec, schema, jsonPlans, err)
-			}
-			body, contentType, err := buildRequestBody(jsonDoc, jsonPlans[0], &routedInput{bodySet: true, bodyValue: []any{"value"}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			wire, _ := io.ReadAll(body)
-			if string(wire) != `["value"]` || contentType != "application/json" {
-				t.Fatalf("%s JSON boolean wire = (%s, %q)", bindingSpec, wire, contentType)
-			}
+		jsonPlans, err := planRequestBodiesFor(jsonDoc, jsonDoc.Paths.Find("/x").Post, BindingSpec)
+		if err != nil || len(jsonPlans) != 1 || !jsonPlans[0].synthetic {
+			t.Fatalf("JSON boolean schema %s plan = %#v, %v", schema, jsonPlans, err)
+		}
+		body, contentType, err := buildRequestBody(jsonDoc, jsonPlans[0], &routedInput{bodySet: true, bodyValue: []any{"value"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire, _ := io.ReadAll(body)
+		if string(wire) != `["value"]` || contentType != "application/json" {
+			t.Fatalf("JSON boolean wire = (%s, %q)", wire, contentType)
 		}
 	}
 }
 
 func TestRevision3BooleanSchemasSurviveRequestParameterAndOutputSynthesis(t *testing.T) {
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/json":{"post":{"operationId":"json","requestBody":{"required":true,"content":{"application/json":{"schema":true}}},"responses":{"200":{"description":"ok","content":{"application/json":{"schema":false}}}}}},"/parameter":{"get":{"operationId":"parameter","parameters":[{"name":"q","in":"query","description":"query false","schema":false},{"name":"c","in":"query","description":"content true","content":{"application/json":{"schema":true}}}],"responses":{"200":{"description":"ok","content":{"application/json":{"schema":true}}}}}}}}`
-	for _, bindingSpec := range []string{BindingSpecV2, BindingSpecV3} {
-		t.Run(bindingSpec, func(t *testing.T) {
-			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			jsonInput, _ := iface.Operations["json"].Input.(map[string]any)
-			jsonProperties, _ := jsonInput["properties"].(map[string]any)
-			if jsonProperties[syntheticBodyProperty] != true || iface.Operations["json"].Output != false {
-				t.Fatalf("JSON boolean schemas = input %#v output %#v", jsonProperties, iface.Operations["json"].Output)
-			}
-			parameterInput, _ := iface.Operations["parameter"].Input.(map[string]any)
-			parameterProperties, _ := parameterInput["properties"].(map[string]any)
-			q, _ := parameterProperties["q"].(map[string]any)
-			c, _ := parameterProperties["c"].(map[string]any)
-			qAllOf, _ := q["allOf"].([]any)
-			cAllOf, _ := c["allOf"].([]any)
-			if q["description"] != "query false" || len(qAllOf) != 1 || qAllOf[0] != false ||
-				c["description"] != "content true" || len(cAllOf) != 1 || cAllOf[0] != true || iface.Operations["parameter"].Output != true {
-				t.Fatalf("parameter/output boolean schemas = input %#v output %#v", parameterProperties, iface.Operations["parameter"].Output)
-			}
-		})
-	}
+	t.Run(BindingSpec, func(t *testing.T) {
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		jsonInput, _ := iface.Operations["json"].Input.(map[string]any)
+		jsonProperties, _ := jsonInput["properties"].(map[string]any)
+		if jsonProperties[syntheticBodyProperty] != true || iface.Operations["json"].Output != false {
+			t.Fatalf("JSON boolean schemas = input %#v output %#v", jsonProperties, iface.Operations["json"].Output)
+		}
+		parameterInput, _ := iface.Operations["parameter"].Input.(map[string]any)
+		parameterProperties, _ := parameterInput["properties"].(map[string]any)
+		q, _ := parameterProperties["q"].(map[string]any)
+		c, _ := parameterProperties["c"].(map[string]any)
+		qAllOf, _ := q["allOf"].([]any)
+		cAllOf, _ := c["allOf"].([]any)
+		if q["description"] != "query false" || len(qAllOf) != 1 || qAllOf[0] != false ||
+			c["description"] != "content true" || len(cAllOf) != 1 || cAllOf[0] != true || iface.Operations["parameter"].Output != true {
+			t.Fatalf("parameter/output boolean schemas = input %#v output %#v", parameterProperties, iface.Operations["parameter"].Output)
+		}
+	})
 }
 
 func TestRevision3ExternalBooleanSchemaSurvivesSynthesis(t *testing.T) {
@@ -775,7 +728,7 @@ func TestRevision3ExternalBooleanSchemaSurvivesSynthesis(t *testing.T) {
 	})}
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"post":{"operationId":"put","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"./schema.json"}}}},"responses":{"204":{"description":"ok"}}}}}}`
 	iface, err := NewSynthesizerWithClient(client).SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{
-		BindingSpec: BindingSpecV3, Location: "https://description.example/openapi.json", Content: openbindings.TextContent(spec),
+		BindingSpec: BindingSpec, Location: "https://description.example/openapi.json", Content: openbindings.TextContent(spec),
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -792,12 +745,12 @@ func TestRevision3ResponseRangesAndCollisions(t *testing.T) {
 		"application/*":    emptyMedia(),
 		"application/json": emptyMedia(),
 	}}
-	matched, err := governingResponseMediaFor(response, "application/json", BindingSpecV3)
+	matched, err := governingResponseMediaFor(response, "application/json", BindingSpec)
 	if err != nil || matched.base != "application/json" {
 		t.Fatalf("concrete response beside range = %#v, %v", matched, err)
 	}
-	if _, err := governingResponseMediaFor(&openapi3.Response{Content: openapi3.Content{"application/*": emptyMedia()}}, "application/json", BindingSpecV3); err == nil || !strings.Contains(err.Error(), "matches no media") {
-		t.Fatalf("range-only response error = %v", err)
+	if matched, err := governingResponseMediaFor(&openapi3.Response{Content: openapi3.Content{"application/*": emptyMedia()}}, "application/json", BindingSpec); err != nil || matched.base != "application/*" {
+		t.Fatalf("range-only response match = %#v, %v", matched, err)
 	}
 
 	// The collision does not match the actual image response, but the whole
@@ -808,7 +761,7 @@ func TestRevision3ResponseRangesAndCollisions(t *testing.T) {
 		"application/json; charset=UTF-8":    emptyMedia(),
 		"Application/JSON;charset=\"utf-8\"": emptyMedia(),
 	}}
-	if _, err := governingResponseMediaFor(colliding, "image/png", BindingSpecV3); err == nil || !strings.Contains(err.Error(), "denote the same parsed media type") {
+	if _, err := governingResponseMediaFor(colliding, "image/png", BindingSpec); err == nil || !strings.Contains(err.Error(), "denote the same parsed media type") {
 		t.Fatalf("nonmatching response collision error = %v", err)
 	}
 	rangeCollision := &openapi3.Response{Content: openapi3.Content{
@@ -816,11 +769,11 @@ func TestRevision3ResponseRangesAndCollisions(t *testing.T) {
 		"application/*; charset=UTF-8":    emptyMedia(),
 		"Application/*;charset=\"utf-8\"": emptyMedia(),
 	}}
-	if _, err := governingResponseMediaFor(rangeCollision, "image/png", BindingSpecV3); err == nil || !strings.Contains(err.Error(), "denote the same parsed media type") {
+	if _, err := governingResponseMediaFor(rangeCollision, "image/png", BindingSpec); err == nil || !strings.Contains(err.Error(), "denote the same parsed media type") {
 		t.Fatalf("excluded-range collision error = %v", err)
 	}
 	ordinary := &openapi3.Response{Content: openapi3.Content{"application/json; profile=UPPER": emptyMedia()}}
-	if _, err := governingResponseMediaFor(ordinary, "application/json; profile=upper", BindingSpecV3); err == nil {
+	if _, err := governingResponseMediaFor(ordinary, "application/json; profile=upper", BindingSpec); err == nil {
 		t.Fatal("ordinary response parameter values must remain case-sensitive")
 	}
 }
@@ -830,7 +783,7 @@ func TestRevision3ParameterizedSSEIsStreamingCapable(t *testing.T) {
 	op.Responses.Set("200", &openapi3.ResponseRef{Value: &openapi3.Response{Content: openapi3.Content{
 		"text/event-stream; charset=utf-8": emptyMedia(),
 	}}})
-	if !isStreamingCapableFor(op, BindingSpecV3) {
+	if !isStreamingCapableFor(op, BindingSpec) {
 		t.Fatal("parameterized concrete SSE declaration must confer revision-3 streaming capability")
 	}
 }
@@ -842,7 +795,7 @@ func TestRevision3AcceptUsesParsedParameterSemantics(t *testing.T) {
 		"application/json; charset=UTF-8":    emptyMedia(),
 		"Application/JSON;charset=\"utf-8\"": emptyMedia(),
 	}}})
-	types := successMediaTypesFor(op, BindingSpecV3)
+	types := successMediaTypesFor(op, BindingSpec)
 	if len(types) != 2 {
 		t.Fatalf("semantic Accept membership = %v", types)
 	}
@@ -862,7 +815,7 @@ func TestRevision3AcceptUsesParsedParameterSemantics(t *testing.T) {
 	if !foundQuotedPair || !foundCharset {
 		t.Fatalf("Accept lost governed parameters: %v", types)
 	}
-	if got := acceptHeaderFor(op, BindingSpecV3); strings.Count(got, "charset=") != 1 || strings.Contains(got, `\z`) {
+	if got := acceptHeaderFor(op, BindingSpec); strings.Count(got, "charset=") != 1 || strings.Contains(got, `\z`) {
 		t.Fatalf("Accept = %q, want one semantic charset identity and unescaped quoted-pair value", got)
 	}
 }
@@ -911,20 +864,20 @@ func TestRevision3MediaParameterPresenceAndMalformedResponses(t *testing.T) {
 		t.Fatal("a declared empty parameter matched a missing configured parameter")
 	}
 	response := &openapi3.Response{Content: openapi3.Content{`application/json; foo=""`: emptyMedia()}}
-	if _, err := governingResponseMediaFor(response, "application/json", BindingSpecV3); err == nil {
+	if _, err := governingResponseMediaFor(response, "application/json", BindingSpec); err == nil {
 		t.Fatal("a declared empty response parameter matched a missing actual parameter")
 	}
 	malformed := &openapi3.Response{Content: openapi3.Content{"application/json": emptyMedia(), "bad": emptyMedia()}}
-	if _, err := governingResponseMediaFor(malformed, "application/json", BindingSpecV3); err == nil || !strings.Contains(err.Error(), "invalid response media declaration") {
+	if _, err := governingResponseMediaFor(malformed, "application/json", BindingSpec); err == nil || !strings.Contains(err.Error(), "invalid response media declaration") {
 		t.Fatalf("malformed response declaration error = %v", err)
 	}
 	if _, err := parseRevision3MediaType(`text/plain; charset=""`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := decodeTextLaneFor(`text/plain; charset=""`, []byte("x"), BindingSpecV3); err == nil {
+	if _, err := decodeTextLaneFor(`text/plain; charset=""`, []byte("x"), BindingSpec); err == nil {
 		t.Fatal("present empty charset defaulted to UTF-8")
 	}
-	decoded, err := decodeTextLaneFor(`text/plain; charset*=utf-8''iso-8859-1`, []byte("é"), BindingSpecV3)
+	decoded, err := decodeTextLaneFor(`text/plain; charset*=utf-8''iso-8859-1`, []byte("é"), BindingSpec)
 	if err != nil || decoded != "é" {
 		t.Fatalf("charset* was reinterpreted as RFC2231 charset: (%v, %v)", decoded, err)
 	}
@@ -933,7 +886,7 @@ func TestRevision3MediaParameterPresenceAndMalformedResponses(t *testing.T) {
 func TestRevision3TextRequestCharsetEncoding(t *testing.T) {
 	doc := &openapi3.T{OpenAPI: "3.1.2"}
 	op := opWithRequestBody(openapi3.Content{`text/plain; charset=iso-8859-1`: {Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}}}, true)
-	plans, err := planRequestBodiesFor(doc, op, BindingSpecV3)
+	plans, err := planRequestBodiesFor(doc, op, BindingSpec)
 	if err != nil || len(plans) != 1 {
 		t.Fatalf("plan = %#v, %v", plans, err)
 	}
@@ -950,7 +903,7 @@ func TestRevision3TextRequestCharsetEncoding(t *testing.T) {
 	}
 	for _, contentType := range []string{`text/plain; charset=""`, `text/plain; charset=shift_jis`} {
 		bad := opWithRequestBody(openapi3.Content{contentType: {Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}}}, true)
-		if _, err := planRequestBodiesFor(doc, bad, BindingSpecV3); err == nil {
+		if _, err := planRequestBodiesFor(doc, bad, BindingSpec); err == nil {
 			t.Errorf("unsupported request charset %q was planned", contentType)
 		}
 	}
@@ -963,7 +916,7 @@ func TestRevision3MultipartParametersCharsetsAndEncodingRules(t *testing.T) {
 	}}
 	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: schema}}
 	media.Encoding = map[string]*openapi3.Encoding{"text": {ContentType: `text/plain; charset=iso-8859-1`}}
-	r, ct, err := buildMultipartBodyForMediaType(doc, media, map[string]any{"text": "café"}, BindingSpecV3, `multipart/form-data; profile="a\z"; boundary=OpenBindingsBoundary`)
+	r, ct, err := buildMultipartBodyForMediaType(doc, media, map[string]any{"text": "café"}, BindingSpec, `multipart/form-data; profile="a\z"; boundary=OpenBindingsBoundary`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -982,7 +935,7 @@ func TestRevision3MultipartParametersCharsetsAndEncodingRules(t *testing.T) {
 		t.Fatalf("multipart part = ct %q bytes %v", part.Header.Get("Content-Type"), partBytes)
 	}
 
-	generated, generatedCT, err := buildMultipartBodyForMediaType(doc, media, map[string]any{"text": "ok"}, BindingSpecV3, `multipart/form-data; profile=asset`)
+	generated, generatedCT, err := buildMultipartBodyForMediaType(doc, media, map[string]any{"text": "ok"}, BindingSpec, `multipart/form-data; profile=asset`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -996,7 +949,7 @@ func TestRevision3MultipartParametersCharsetsAndEncodingRules(t *testing.T) {
 		"payload": {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, ContentEncoding: "base64", ContentMediaType: "image/png"}},
 	}}
 	encodedMedia := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: encodedSchema}}
-	encodedBody, encodedCT, err := buildMultipartBodyForRevision(doc, encodedMedia, map[string]any{"payload": "é"}, BindingSpecV3)
+	encodedBody, encodedCT, err := buildMultipartBodyForRevision(doc, encodedMedia, map[string]any{"payload": "é"}, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1007,7 +960,7 @@ func TestRevision3MultipartParametersCharsetsAndEncodingRules(t *testing.T) {
 		t.Fatalf("encoded headers = %#v", encodedPart.Header)
 	}
 	encodedMedia.Encoding = map[string]*openapi3.Encoding{"payload": {ContentType: "application/json"}}
-	encodedBody, encodedCT, err = buildMultipartBodyForRevision(doc, encodedMedia, map[string]any{"payload": "YQ=="}, BindingSpecV3)
+	encodedBody, encodedCT, err = buildMultipartBodyForRevision(doc, encodedMedia, map[string]any{"payload": "YQ=="}, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1024,12 +977,12 @@ func TestRevision3FormCandidatesFailClosedAndHonorEncodingObjects(t *testing.T) 
 	doc := &openapi3.T{OpenAPI: "3.1.2"}
 	for _, mediaType := range []string{"multipart/form-data", "application/x-www-form-urlencoded"} {
 		op := opWithRequestBody(openapi3.Content{mediaType: emptyMedia()}, true)
-		if _, err := planRequestBodiesFor(doc, op, BindingSpecV3); err == nil || !strings.Contains(err.Error(), "schema-omitted") {
+		if _, err := planRequestBodiesFor(doc, op, BindingSpec); err == nil || !strings.Contains(err.Error(), "schema-omitted") {
 			t.Errorf("schema-omitted %s plan error = %v", mediaType, err)
 		}
 	}
 	rangeOp := opWithRequestBody(openapi3.Content{"application/*": emptyMedia()}, true)
-	plans, err := planRequestBodiesFor(doc, rangeOp, BindingSpecV3)
+	plans, err := planRequestBodiesFor(doc, rangeOp, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1042,13 +995,13 @@ func TestRevision3FormCandidatesFailClosedAndHonorEncodingObjects(t *testing.T) 
 		"address": {Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}},
 	}}
 	formMedia := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: object}}
-	body, err := buildURLEncodedBodyForRevision(doc, formMedia, map[string]any{"address": map[string]any{"line": "a b"}}, BindingSpecV3)
+	body, err := buildURLEncodedBodyForRevision(doc, formMedia, map[string]any{"address": map[string]any{"line": "a b"}}, BindingSpec)
 	if err != nil || body != `address=%7B%22line%22%3A%22a+b%22%7D` {
 		t.Fatalf("content-based urlencoded body = %q, %v", body, err)
 	}
 	explode := true
 	formMedia.Encoding = map[string]*openapi3.Encoding{"address": {Style: "form", Explode: &explode, ContentType: "application/json"}}
-	body, err = buildURLEncodedBodyForRevision(doc, formMedia, map[string]any{"address": map[string]any{"line": "a b"}}, BindingSpecV3)
+	body, err = buildURLEncodedBodyForRevision(doc, formMedia, map[string]any{"address": map[string]any{"line": "a b"}}, BindingSpec)
 	if err != nil || body != `line=a%20b` {
 		t.Fatalf("RFC6570 urlencoded body = %q, %v", body, err)
 	}
@@ -1058,7 +1011,7 @@ func TestRevision3FormCandidatesFailClosedAndHonorEncodingObjects(t *testing.T) 
 	reservedMedia := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: stringSchema}, Encoding: map[string]*openapi3.Encoding{
 		"value": {AllowReserved: true},
 	}}
-	body, err = buildURLEncodedBodyForRevision(doc, reservedMedia, map[string]any{"value": "a/b&c+d#e[f]"}, BindingSpecV3)
+	body, err = buildURLEncodedBodyForRevision(doc, reservedMedia, map[string]any{"value": "a/b&c+d#e[f]"}, BindingSpec)
 	if err != nil || body != `value=a/b%26c%2Bd%23e%5Bf%5D` {
 		t.Fatalf("safe allowReserved form body = %q, %v", body, err)
 	}
@@ -1098,7 +1051,7 @@ func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			op := opWithRequestBody(openapi3.Content{"multipart/form-data": test.media}, true)
-			if _, err := planRequestBodiesFor(doc, op, BindingSpecV3); err == nil || !strings.Contains(err.Error(), test.want) {
+			if _, err := planRequestBodiesFor(doc, op, BindingSpec); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("plan error = %v, want %q", err, test.want)
 			}
 		})
@@ -1111,7 +1064,7 @@ func TestRevision3MultipartDefaultArraysAndStructuredStyle(t *testing.T) {
 		"tags": {Value: &openapi3.Schema{Type: &openapi3.Types{"array"}, Items: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}}},
 	}}
 	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: arraySchema}}
-	r, ct, err := buildMultipartBodyForRevision(doc, media, map[string]any{"tags": []any{"a", "b"}}, BindingSpecV3)
+	r, ct, err := buildMultipartBodyForRevision(doc, media, map[string]any{"tags": []any{"a", "b"}}, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1127,7 +1080,7 @@ func TestRevision3MultipartDefaultArraysAndStructuredStyle(t *testing.T) {
 	styled := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: objectSchema}, Encoding: map[string]*openapi3.Encoding{
 		"meta": {Style: "form", Explode: &explode, ContentType: "application/json"},
 	}}
-	r, ct, err = buildMultipartBodyForRevision(doc, styled, map[string]any{"meta": map[string]any{"a=b": "x=y"}}, BindingSpecV3)
+	r, ct, err = buildMultipartBodyForRevision(doc, styled, map[string]any{"meta": map[string]any{"a=b": "x=y"}}, BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1159,7 +1112,7 @@ func TestRevision3EncodingStyleCellsRefuseUndefinedCombinations(t *testing.T) {
 			"value": {Style: test.style, Explode: test.explode},
 		}}
 		op := opWithRequestBody(openapi3.Content{"multipart/form-data": media}, true)
-		if _, err := planRequestBodiesFor(doc, op, BindingSpecV3); err == nil {
+		if _, err := planRequestBodiesFor(doc, op, BindingSpec); err == nil {
 			t.Errorf("accepted undefined style cell %s/%s explode=%v", test.style, test.typeName, test.explode)
 		}
 	}
@@ -1171,7 +1124,7 @@ func TestRevision3ParameterContentCharsetAndEscaping(t *testing.T) {
 			`text/plain; charset=iso-8859-1; note="a\z"`: {Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}},
 		}}
 		r := &routedInput{resolvedPath: "/{p}", populated: map[string]map[string]bool{"query": {}, "header": {}, "cookie": {}}}
-		if err := routeParameterFor(r, p, "é", BindingSpecV3); err != nil {
+		if err := routeParameterFor(r, p, "é", BindingSpec); err != nil {
 			t.Fatalf("%s content param: %v", location, err)
 		}
 		switch location {
@@ -1196,36 +1149,30 @@ func TestRevision3ParameterContentCharsetAndEscaping(t *testing.T) {
 
 	p := &openapi3.Parameter{Name: "q", In: openapi3.ParameterInQuery, Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}}
 	r := &routedInput{populated: map[string]map[string]bool{"query": {}, "header": {}, "cookie": {}}}
-	if err := routeParameterFor(r, p, `!*'()`, BindingSpecV3); err != nil {
+	if err := routeParameterFor(r, p, `!*'()`, BindingSpec); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.queryUnits[0]; got != `q=%21%2A%27%28%29` {
 		t.Fatalf("revision-3 unreserved escaping = %q", got)
 	}
-	legacy := &routedInput{populated: map[string]map[string]bool{"query": {}, "header": {}, "cookie": {}}}
-	if err := routeParameterFor(legacy, p, `!*'()`, BindingSpecV2); err != nil || legacy.queryUnits[0] != `q=!*'()` {
-		t.Fatalf("legacy escaping changed: %v, %v", legacy.queryUnits, err)
-	}
 }
 
 func TestRevision3PrivateLookingAuthorExtensionsDoNotCollide(t *testing.T) {
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"get":{"operationId":"x","parameters":[{"name":"q","in":"query","schema":{"type":"string","x-openbindings-internal-boolean-schema":true}}],"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"string","x-openbindings-internal-encoding-allow-reserved-present":true}}}}}}}}}`
-	for _, bindingSpec := range []string{BindingSpecV2, BindingSpecV3} {
-		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)}}})
-		if err != nil {
-			t.Fatalf("%s authored extension collision: %v", bindingSpec, err)
-		}
-		encoded, _ := json.Marshal(iface)
-		if !strings.Contains(string(encoded), "x-openbindings-internal-boolean-schema") {
-			t.Fatalf("%s authored extension was lost: %s", bindingSpec, encoded)
-		}
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
+	if err != nil {
+		t.Fatalf("authored extension collision: %v", err)
+	}
+	encoded, _ := json.Marshal(iface)
+	if !strings.Contains(string(encoded), "x-openbindings-internal-boolean-schema") {
+		t.Fatalf("authored extension was lost: %s", encoded)
 	}
 }
 
 func TestRevision3InvalidResponseMediaDoesNotInventTextOutput(t *testing.T) {
 	op := &openapi3.Operation{Responses: openapi3.NewResponses()}
 	op.Responses.Set("200", &openapi3.ResponseRef{Value: &openapi3.Response{Content: openapi3.Content{"*": emptyMedia()}}})
-	if output := buildOutputSchema(op, nil, BindingSpecV3); output != nil {
+	if output := buildOutputSchema(op, nil, BindingSpec); output != nil {
 		t.Fatalf("invalid response media invented output schema %#v", output)
 	}
 }
@@ -1242,7 +1189,7 @@ func TestRevision3SSEUsesWHATWGUTF8AndEmptySuccessSkipsMedia(t *testing.T) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"text/event-stream; charset=iso-8859-1"}}, Body: io.NopCloser(strings.NewReader(string(body))), Request: req}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1events/get",
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1events/get",
 	})
 	outputs, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr != nil || !reflect.DeepEqual(outputs, []any{"café", "�", "��", "�"}) {
@@ -1254,7 +1201,7 @@ func TestRevision3SSEUsesWHATWGUTF8AndEmptySuccessSkipsMedia(t *testing.T) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
 	call = NewInvokerWithClient(&http.Client{Transport: emptyTransport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(emptySpec)}, Ref: "#/paths/~1events/get",
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(emptySpec)}, Ref: "#/paths/~1events/get",
 	})
 	outputs, ierr = driveOutputs(context.Background(), call, nil)
 	if ierr != nil || len(outputs) != 0 {
@@ -1268,7 +1215,7 @@ func TestRevision3ResponseContentTypeMustBeSingleton(t *testing.T) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"application/json", "text/plain"}}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: req}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr == nil || ierr.Code != openbindings.ErrCodeProtocol || !strings.Contains(ierr.Message, "singleton") {
@@ -1278,7 +1225,7 @@ func TestRevision3ResponseContentTypeMustBeSingleton(t *testing.T) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"garbage", "also-garbage"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
 	call = NewInvokerWithClient(&http.Client{Transport: emptyTransport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	outputs, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr != nil || len(outputs) != 0 {
@@ -1288,7 +1235,7 @@ func TestRevision3ResponseContentTypeMustBeSingleton(t *testing.T) {
 		return &http.Response{StatusCode: 500, Status: "500 Broken", Header: http.Header{"Content-Type": {"garbage", "also-garbage"}}, Body: io.NopCloser(strings.NewReader("failure")), Request: req}, nil
 	})
 	call = NewInvokerWithClient(&http.Client{Transport: failureTransport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	_, ierr = driveOutputs(context.Background(), call, nil)
 	failureBody, _ := openbindings.HTTPResponseBody(ierr)
@@ -1299,7 +1246,7 @@ func TestRevision3ResponseContentTypeMustBeSingleton(t *testing.T) {
 		return &http.Response{StatusCode: 500, Status: "500 Empty", Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
 	call = NewInvokerWithClient(&http.Client{Transport: emptyFailureTransport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	_, ierr = driveOutputs(context.Background(), call, nil)
 	evidence, ok := FailureEvidenceFrom(ierr)
@@ -1331,7 +1278,7 @@ func TestRevision3InvokerCarriesRawBytesAndRequiresRangeConfiguration(t *testing
 	spec := `{"openapi":"3.0.3","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/asset":{"post":{"operationId":"putAsset","requestBody":{"required":true,"content":{"image/png":{"schema":{"type":"string","format":"binary"}}}},"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"object"}}}}}}}}}`
 	capture := &revision3CaptureTransport{}
 	call := NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1asset/post",
 	})
 	_, ierr := driveSingle(t, call, map[string]any{"body": "AP8BAg=="})
@@ -1345,7 +1292,7 @@ func TestRevision3InvokerCarriesRawBytesAndRequiresRangeConfiguration(t *testing
 	rangeSpec := strings.Replace(spec, `"image/png":{"schema":{"type":"string","format":"binary"}}`, `"application/*":{"schema":{"type":"object"}}`, 1)
 	capture = &revision3CaptureTransport{}
 	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(rangeSpec)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
 		Ref:    "#/paths/~1asset/post",
 	})
 	_, ierr = driveSingle(t, call, map[string]any{"name": "pixel"})
@@ -1359,7 +1306,7 @@ func TestRevision3InvokerCarriesRawBytesAndRequiresRangeConfiguration(t *testing
 
 	capture = &revision3CaptureTransport{}
 	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(rangeSpec)},
+		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
 		Ref:     "#/paths/~1asset/post",
 		Context: map[string]any{"configuration": map[string]any{"requestMedia": ""}},
 	})
@@ -1370,7 +1317,7 @@ func TestRevision3InvokerCarriesRawBytesAndRequiresRangeConfiguration(t *testing
 
 	capture = &revision3CaptureTransport{}
 	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(rangeSpec)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
 		Ref:    "#/paths/~1asset/post",
 		Context: map[string]any{"configuration": map[string]any{
 			"requestMedia": "application/problem+json; profile=asset",
@@ -1390,7 +1337,7 @@ func TestRevision3InvokerRejectsNoncanonicalRawBase64BeforeDispatch(t *testing.T
 	for _, value := range []string{"YQ", "AB=="} {
 		capture := &revision3CaptureTransport{}
 		call := NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpecV3, Content: openbindings.TextContent(spec)},
+			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 			Ref:    "#/paths/~1asset/post",
 		})
 		_, ierr := driveSingle(t, call, map[string]any{"body": value})

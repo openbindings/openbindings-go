@@ -243,8 +243,6 @@ func TestSynthesizeInterfaceWithCoverage_AccountsForMessagesAndProtocolCells(t *
 	}
 	for _, code := range []string{
 		"asyncapi.message_headers",
-		"asyncapi.websocket_reply",
-		"asyncapi.protocol_outside_revision",
 	} {
 		if statusByCode[code] != openbindings.SynthesisExcluded {
 			t.Errorf("%s status = %q, want excluded; entries=%#v", code, statusByCode[code], result.Coverage.Entries)
@@ -259,9 +257,23 @@ func TestSynthesizeInterfaceWithCoverage_AccountsForMessagesAndProtocolCells(t *
 	if !foundTarget {
 		t.Error("bindable publish target was not represented")
 	}
+	for _, sourceRef := range []string{
+		"#/operations/publish#server[0]=broker",
+		"#/operations/publish#server[2]=ws",
+	} {
+		found := false
+		for _, entry := range result.Coverage.Entries {
+			if entry.SourceRef == sourceRef && entry.Status == openbindings.SynthesisRepresented {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("protocol alternative %s was not represented", sourceRef)
+		}
+	}
 }
 
-func TestSynthesizeInterfaceWithCoverage_RefusesReplyBearingWSSendInRevision2(t *testing.T) {
+func TestSynthesizeInterfaceWithCoverage_RepresentsBothDirectionsOfReplyBearingSend(t *testing.T) {
 	content := json.RawMessage(`{
 	  "asyncapi": "3.0.0",
 	  "info": {"title": "Reply-bearing send", "version": "1"},
@@ -286,30 +298,46 @@ func TestSynthesizeInterfaceWithCoverage_RefusesReplyBearingWSSendInRevision2(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Interface.Operations) != 0 {
-		t.Fatalf("revision 2 synthesized reply-bearing send: %#v", result.Interface.Operations)
+	op, ok := result.Interface.Operations["subscribe"]
+	if !ok {
+		t.Fatalf("reply-bearing send was not synthesized: %#v", result.Interface.Operations)
 	}
-	found := false
-	for _, entry := range result.Coverage.Entries {
-		if entry.SourceRef == "#/operations/subscribe" && entry.Status == openbindings.SynthesisExcluded && entry.ReasonCode == "asyncapi.websocket_reply" {
-			found = true
-		}
+	input, inputOK := op.Input.(map[string]any)
+	output, outputOK := op.Output.(map[string]any)
+	if !inputOK || input["type"] != "string" || !outputOK || output["type"] != "object" {
+		t.Fatalf("operation directions = input %#v output %#v", op.Input, op.Output)
 	}
-	if !found {
-		t.Fatalf("missing reply-bearing send exclusion: %#v", result.Coverage.Entries)
+	if !result.Coverage.FullyRepresented {
+		t.Fatalf("driver-independent coverage should be complete: %#v", result.Coverage.Entries)
 	}
+}
 
-	legacy, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: LegacyBindingSpec, Content: content}},
+func TestSynthesizeInterface_PreservesAsyncAPIV2NativeRefAndPerspective(t *testing.T) {
+	content := json.RawMessage(`{
+	  "asyncapi":"2.6.0",
+	  "info":{"title":"Legacy events","version":"1"},
+	  "servers":{"broker":{"url":"mqtt://broker.example","protocol":"mqtt"}},
+	  "channels":{"events/{tenant}":{"publish":{"message":{"payload":{"type":"object","required":["id"]}}}}}
+	}`)
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := legacy.Operations["subscribe"]; !ok {
-		t.Fatalf("revision 1 compatibility lost its send operation: %#v", legacy.Operations)
+	if len(result.Interface.Bindings) != 1 {
+		t.Fatalf("bindings = %#v", result.Interface.Bindings)
 	}
-	if got := legacy.Sources[DefaultSourceName].BindingSpec; got != LegacyBindingSpec {
-		t.Fatalf("legacy source bindingSpec = %q, want %q", got, LegacyBindingSpec)
+	for _, binding := range result.Interface.Bindings {
+		if binding.Ref != "#/channels/events~1{tenant}/publish" {
+			t.Fatalf("binding ref = %q", binding.Ref)
+		}
+	}
+	for _, op := range result.Interface.Operations {
+		schema, ok := op.Input.(map[string]any)
+		if !ok || schema["type"] != "object" {
+			t.Fatalf("input = %#v", op.Input)
+		}
 	}
 }
 

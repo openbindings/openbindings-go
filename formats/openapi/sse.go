@@ -17,7 +17,7 @@ const sseMaxLineBytes = 16 * 1024 * 1024
 // indicates a Server-Sent Events stream (`text/event-stream`). Charset and
 // other parameters may follow.
 func isSSEContentType(contentType string) bool {
-	return isSSEContentTypeFor(contentType, BindingSpecV2)
+	return isSSEContentTypeFor(contentType, BindingSpec)
 }
 
 func isSSEContentTypeFor(contentType, bindingSpec string) bool {

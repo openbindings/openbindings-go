@@ -21,8 +21,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-const BindingSpec = "openbindings.graphql@2"
-const LegacyBindingSpec = "openbindings.graphql@1"
+const BindingSpec = "openbindings.graphql@1"
 const DefaultSourceName = "graphql"
 
 // maxRedirects bounds the redirect chain a single request may follow.
@@ -81,7 +80,6 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
 		{BindingSpec: BindingSpec, Description: "GraphQL query and mutation application values"},
-		{BindingSpec: LegacyBindingSpec, Description: "GraphQL response-envelope compatibility"},
 	}
 }
 
@@ -134,12 +132,12 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: err.Error()})
 		return
 	}
-	if args.Source.BindingSpec != BindingSpec && args.Source.BindingSpec != LegacyBindingSpec {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("GraphQL invoker supports exact binding specifications %q and %q, got %q", BindingSpec, LegacyBindingSpec, args.Source.BindingSpec)})
+	if args.Source.BindingSpec != BindingSpec {
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("GraphQL invoker supports exact binding specification %q, got %q", BindingSpec, args.Source.BindingSpec)})
 		return
 	}
 	if args.Source.BindingSpec == BindingSpec && rootType == "subscription" {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: fmt.Sprintf("GraphQL revision 2 does not bind subscription target %q (GQL-P-04)", args.Ref)})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: fmt.Sprintf("the GraphQL candidate does not bind subscription target %q (GQL-P-04)", args.Ref)})
 		return
 	}
 
@@ -251,13 +249,6 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 
 	_ = inv.SetHeader(toMetadata(result.Header))
-	if args.Source.BindingSpec == LegacyBindingSpec {
-		if err := inv.EmitOutput(result.Body); err != nil {
-			return
-		}
-		inv.CloseOutput()
-		return
-	}
 	emitProjectedGraphQLResult(inv, result, responseKey)
 }
 
@@ -337,7 +328,6 @@ var (
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
 		{BindingSpec: BindingSpec, Description: "GraphQL query and mutation application values"},
-		{BindingSpec: LegacyBindingSpec, Description: "GraphQL response-envelope compatibility"},
 	}
 }
 
@@ -373,8 +363,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpec && src.BindingSpec != LegacyBindingSpec {
-		return nil, nil, fmt.Errorf("synthesizer supports exact binding specifications %q and %q, got %q", BindingSpec, LegacyBindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpec {
+		return nil, nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
 	}
 	endpoint := src.Location
 	if err := validateHTTPLocation(endpoint); err != nil {
@@ -459,7 +449,7 @@ func graphQLSynthesisCoverage(schema *introspectionSchema, iface *openbindings.I
 					SourceIndex: 0, SourceRef: "subscription/" + field.Name,
 					Scope: openbindings.SynthesisCoverageTarget, Status: openbindings.SynthesisExcluded,
 					ReasonCode: "graphql.subscription_lifecycle_not_representable", Rule: "GQL-P-04",
-					Message: "subscription events may carry partial data and errors while the native stream continues; revision 2 does not approximate that lifecycle",
+					Message: "subscription events may carry partial data and errors while the native stream continues; the first-revision candidate does not approximate that lifecycle",
 				})
 			}
 		}

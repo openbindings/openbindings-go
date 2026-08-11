@@ -41,6 +41,13 @@ var nextProgressToken atomic.Int64
 // once resolution has decided the ref names a template.
 func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
 	// --- Pre-dispatch validation: no network I/O has happened yet. ---
+	if args.Source.BindingSpec != BindingSpec {
+		inv.FireError(&openbindings.InvocationError{
+			Code:    openbindings.ErrCodeSourceConfigError,
+			Message: fmt.Sprintf("MCP invoker supports exact binding specification %q, got %q", BindingSpec, args.Source.BindingSpec),
+		})
+		return
+	}
 	entityType, name, err := parseRef(args.Ref)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{

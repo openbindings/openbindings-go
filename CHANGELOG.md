@@ -9,24 +9,24 @@
 - **The OpenAPI module now exposes a standalone artifact runtime.** Direct
   callers can use `openapi.Runtime` without constructing an OBI, while
   `openapi.Invoker` remains the thin SDK adapter and `openapi.Synthesizer`
-  owns OBI construction. The extraction preserves current revision-7 behavior
-  and every immutable compatibility path; it changes neither Core nor the
-  OpenAPI binding specification.
+  owns OBI construction. The extraction preserves the complete unreleased
+  first `openbindings.openapi@1` candidate behavior; it changes neither Core
+  nor the candidate's meaning.
 
-- **The OpenAPI module now defaults to `openbindings.openapi@7`.** Exact
+- **The OpenAPI module now defaults to `openbindings.openapi@1`.** Exact
   schema-omitted OAS 3.0 non-JSON request and response representations cross
   the protocol-independent boundary as canonical Base64. Media ranges and
-  artifact-defined codecs remain unchanged; exact revision 6 and earlier
-  revisions remain available. Core is unchanged.
+  artifact-defined codecs remain unchanged. No OpenAPI binding specification
+  has been published; this is part of its first `@1` candidate. Core is
+  unchanged.
 
-- **The OpenAPI module now defaults to `openbindings.openapi@6`.** Exact
+- **The OpenAPI module now defaults to `openbindings.openapi@1`.** Exact
   JSON-family request schemas whose top-level declarations require
   combinators, conditionals, dependent schemas, or explicit
   `unevaluatedProperties` remain one protocol-neutral application value.
   Binding-private routing preserves the complete value without choosing a
-  schema branch or exposing HTTP concepts. Revision 6 retains revision 5's
-  dynamic-object carriage; exact revisions 5, 4, 3, 2, and 1 remain
-  compatible. Core is unchanged.
+  schema branch or exposing HTTP concepts. Dynamic-object carriage remains
+  part of the same first candidate. Core is unchanged.
 
 - **OpenAPI security and request-channel handling now preserves artifact
   alternatives without leaking HTTP concepts into OBI contracts.** Invocation
@@ -34,7 +34,7 @@
   alternatives, never volunteers ambient credentials when the operation
   declares no security, and refuses processor-owned `Host`, `Content-Length`,
   and conflicting raw/structured cookie declarations before dispatch.
-  Synthesis excludes parameter-content media that revision 2 cannot
+  Synthesis excludes parameter-content media that the candidate cannot
   faithfully carry instead of emitting an operation guaranteed to refuse.
   Undefined security-scheme names fail closed, including in mixed OR sets.
   These changes remain entirely in the OpenAPI binding adapter; the core OBI
@@ -66,16 +66,15 @@
   references. Resolver configuration remains binding-private and does not
   alter the protocol-blind OBI document model.
 
-- **`openbindings.openapi@4` added response-carriage fidelity.** It adds
+- **`openbindings.openapi@1` added response-carriage fidelity.** It adds
   response media-range selection and exact artifact-authorized raw response
   bytes as canonical Base64 application values, without exposing HTTP facts
-  in ordinary outputs. Exact revision 3 remains available for compatibility.
+  in ordinary outputs.
 
-- **`openbindings.openapi@3` added request-media fidelity.** It adds
+- **`openbindings.openapi@1` added request-media fidelity.** It adds
   declaration-led raw-octet requests and configured media-range selection
-  while keeping HTTP identities out of operation contracts. Exact revision 2
-  retains collision-preserving routed inputs and immutable revision 1 remains
-  available through `openapi.LegacyBindingSpec`.
+  while keeping HTTP identities out of operation contracts. The same first
+  candidate retains collision-preserving routed inputs.
 
 - **Per-operation dependencies compose compatibility, invocability, and
   caller policy without introducing a registry.** The core SDK now exposes
@@ -122,18 +121,16 @@
   published binding specification governed its legacy token. The Go SDK now
   exposes only binding modules with complete first-party implementations.
 
-- **GraphQL now implements the published `openbindings.graphql@1`
-  specification end to end.** The legacy versionless token, generated
-  selection sets, `_query` metadata, type projection, implicit WebSocket
-  target, generic credential placement, and response unwrapping are removed.
-  Invocation requires the exact executable document (and an explicit
-  subscription target), verifies its selected kind and one-root-field
-  correspondence, passes caller input wholesale as variables, and emits
-  complete GraphQL response envelopes with errors in-band. Synthesis
-  inventories every observed root field using deliberately broad boundary
-  schemas and exhaustive coverage evidence; strict introspection pins,
-  processor scenarios, synthesis scenarios, and integration tests cover the
-  same revision-1 semantics as the TypeScript SDK.
+- **GraphQL now implements the unreleased first `openbindings.graphql@1`
+  candidate end to end.** Invocation requires the exact executable document,
+  verifies its selected kind and one-root-field correspondence, passes caller
+  input wholesale as variables, and emits the selected root application value.
+  GraphQL response envelopes remain diagnostic; a selected partial value is
+  preserved before unsuccessful completion. Synthesis inventories query and
+  mutation root fields with root-value schemas and exhaustive coverage;
+  subscriptions are excluded rather than approximating their continuing
+  partial-data/error lifecycle. Go and TypeScript exercise the same candidate
+  semantics. No GraphQL binding specification has been published.
 
 - **Comparison-engine cross-SDK canon (three rulings, 2026-07-20).**
   (1) `CheckInterfaceCompatibility`'s issue ordering — sorted

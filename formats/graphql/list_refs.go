@@ -10,8 +10,8 @@ import (
 )
 
 // InspectSource introspects a GraphQL endpoint and returns all bindable
-// refs. Revision 2 lists query and mutation fields; revision 1 retains
-// subscription compatibility.
+// refs. The first candidate lists query and mutation fields and excludes
+// subscriptions rather than approximating their lifecycle.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
 	endpoint := source.Location
 	if err := validateHTTPLocation(endpoint); err != nil {
@@ -46,7 +46,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	}
 	bindingSpec := source.BindingSpec
 	if bindingSpec == "" {
-		bindingSpec = LegacyBindingSpec
+		bindingSpec = BindingSpec
 	}
 	if bindingSpec == BindingSpec {
 		rootTypes = rootTypes[:2]

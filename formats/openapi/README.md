@@ -56,7 +56,13 @@ import (
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 ```
 
-The invoker declares current `openbindings.openapi@7` plus exact `openbindings.openapi@6`, `openbindings.openapi@5`, `openbindings.openapi@4`, `openbindings.openapi@3`, `openbindings.openapi@2`, and immutable `openbindings.openapi@1` compatibility. All seven handle exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents. Revision 2 added collision-preserving routed inputs; revision 3 added generic raw-octet request carriage plus configured request-media ranges; revision 4 added response ranges and exact raw-response byte carriage; revision 5 added dynamic-object carriage; revision 6 added declaration-complex exact JSON carriage; revision 7 adds exact schema-omitted OAS 3.0 byte carriage.
+The invoker declares the unreleased first `openbindings.openapi@1` candidate.
+No OpenAPI binding specification has been published and there are no
+compatibility revisions. It handles exactly OpenAPI 3.0.0–3.0.4 and
+3.1.0–3.1.2 documents. The candidate includes collision-preserving routed
+inputs, raw-octet request and response carriage, configured media ranges,
+dynamic-object carriage, declaration-complex exact JSON carriage, and exact
+schema-omitted OAS 3.0 byte carriage.
 
 ### Invoke a binding
 
@@ -67,7 +73,7 @@ invoker := openapi.NewInvoker()
 
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@7"
+        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@1"
         Location:    "https://api.example.com/openapi.json",
     },
     Ref:     "#/paths/~1users/get",
@@ -112,11 +118,17 @@ iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 
 ## Behavior
 
-This package implements current [`openbindings.openapi@7`](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md) and retains exact revision-6, revision-5, revision-4, revision-3, revision-2, and revision-1 compatibility. The current document is normative for routed input mapping, OAS serialization, request and response media selection, server resolution, interaction shape, and channel assembly.
+This package implements the unreleased first
+[`openbindings.openapi@1` candidate](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md).
+That document defines routed input mapping, OAS serialization, request and
+response media selection, server resolution, interaction shape, and channel
+assembly for qualification before publication.
 
 ### Binding specification identifier
 
-`openbindings.openapi@7` (exact, opaque; current), `openbindings.openapi@6`, `openbindings.openapi@5`, `openbindings.openapi@4`, `openbindings.openapi@3`, `openbindings.openapi@2`, and `openbindings.openapi@1` (exact compatibility identifiers). They accept exactly OpenAPI 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own `openapi` field.
+`openbindings.openapi@1` (exact and opaque). It accepts exactly OpenAPI
+3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own
+`openapi` field.
 
 ### Ref format
 
@@ -132,9 +144,9 @@ Path separators are escaped per RFC 6901: `/` becomes `~1`, `~` becomes `~0`. Th
 - **`location`**: absolute URI addressing the OpenAPI JSON/YAML document (it also serves as the artifact's base URI for relative `$ref`s and relative server URLs).
 - **`content`**: the inline OpenAPI document (content primacy; a co-present `location` is its base URI). Content with no location must be self-contained.
 
-### Revision-3 request media
+### Request media and raw bytes
 
-Revision 3 adds two declaration-led lanes without adding HTTP fields to the
+The candidate defines declaration-led lanes without adding HTTP fields to the
 operation contract. An OAS 3.0 non-JSON governing selection whose resolved
 schema is `type: string, format: binary`, or an OAS 3.1 non-JSON governing
 selection with no schema, exposes a canonical Base64 string at the JSON
@@ -146,16 +158,16 @@ emitted as `Content-Type`. A required range-only body surfaces this as
 preflight `CONTEXT_REQUIRED`, while coverage records
 `configuration.requestMedia` without changing the application schema.
 
-### Revision-4 response media
+### Response media and raw bytes
 
-Revision 4 lets the actual concrete response `Content-Type` select the most
+The actual concrete response `Content-Type` selects the most
 specific exact, `type/*`, or `*/*` declaration in the governing Response
 Object. JSON remains strict application JSON, text and SSE remain application
 strings, and OAS 3.0 binary schemas plus OAS 3.1 schema-omitted non-text media
 emit canonical Base64 of the exact response bytes. Status, headers, and media
 identity remain binding-native diagnostics rather than operation values.
 
-### Revision-5 dynamic object carriage
+### Dynamic object carriage
 
 An object body that explicitly declares `additionalProperties` or
 `patternProperties` remains one application object under the synthesized
@@ -163,18 +175,17 @@ protocol-neutral `payload` property. A binding-private `inputTransform` routes
 that value whole, so arbitrary runtime member names never collide with path,
 query, header, cookie, or other operation fields. Form and multipart members
 resolve exact, pattern, additional-property, and `allOf` schemas before using
-the OAS carriage rules; revision 4's finite named-property surface remains
-immutable.
+the OAS carriage rules; finite named object bodies retain their flat
+application-property surface.
 
-### Revision-6 declaration-complex JSON carriage
+### Declaration-complex JSON carriage
 
 An exact JSON-family body whose top-level schema uses combinators,
 conditionals, dependent schemas, or explicit `unevaluatedProperties` remains
 one complete application value under the synthesized protocol-neutral
 `payload` property. The binding-private route carries that value whole: it
-does not choose a schema branch or expose a media or HTTP wrapper. Revision 5
-retains its exact prior behavior, and non-JSON candidates still require an
-independently defined faithful carriage lane.
+does not choose a schema branch or expose a media or HTTP wrapper. Non-JSON
+candidates still require an independently defined faithful carriage lane.
 
 ### Server selection
 
@@ -279,7 +290,7 @@ Connect, GraphQL, MCP) do not consult the seam.
 
 ### Interface synthesis
 
-Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@7` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
+Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@1` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
 
 - **Operation keys** come from `operationId` when present, sanitized to the OBI key grammar (non-key characters become `_`, leading/trailing `_` trimmed, a leading non-letter gets an `_` prefix). An `operationId` whose sanitized key is already taken falls through to path+method derivation: template segments (`{id}`) dropped, remaining segments joined with `.`, the lowercased method appended (`/users/{id}` + `GET` → `users.get`), then deduplicated deterministically with `_2`, `_3`, … suffixes.
 - **Iteration order is fixed**: paths alphabetically, methods in the order get, put, post, delete, options, head, patch, trace.

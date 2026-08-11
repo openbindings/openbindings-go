@@ -7,12 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/coder/websocket"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -32,7 +29,7 @@ func pinnedInvocationSource(t *testing.T, location string) openbindings.Invocati
 	if err != nil {
 		t.Fatal(err)
 	}
-	return openbindings.InvocationSource{BindingSpec: LegacyBindingSpec, Location: location, Content: content}
+	return openbindings.InvocationSource{BindingSpec: BindingSpec, Location: location, Content: content}
 }
 
 func collectInvocation(ctx context.Context, call openbindings.Invocation[any, any], input any, inputPresent bool) ([]any, *openbindings.InvocationError) {
@@ -60,7 +57,7 @@ func graphqlContext(document any) map[string]any {
 	return map[string]any{"configuration": map[string]any{"document": document}}
 }
 
-func TestHTTPInvocationPreservesDocumentVariablesAndEnvelope(t *testing.T) {
+func TestHTTPInvocationPreservesDocumentVariablesAndPartialApplicationValue(t *testing.T) {
 	requests := make(chan map[string]any, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -87,15 +84,8 @@ func TestHTTPInvocationPreservesDocumentVariablesAndEnvelope(t *testing.T) {
 	})
 	input := map[string]any{"id": "u-1", "unused": 7, "_query": "ordinary variable"}
 	outputs, invocationErr := collectInvocation(context.Background(), call, input, true)
-	if invocationErr != nil {
-		t.Fatal(invocationErr)
-	}
-	if len(outputs) != 1 {
-		t.Fatalf("outputs = %#v", outputs)
-	}
-	envelope := outputs[0].(map[string]any)
-	if _, ok := envelope["errors"]; !ok {
-		t.Fatalf("GraphQL errors were not preserved in-band: %#v", envelope)
+	if len(outputs) != 1 || outputs[0] != nil || invocationErr == nil || invocationErr.Code != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("outputs = %#v, err = %v", outputs, invocationErr)
 	}
 	request := <-requests
 	if request["query"] != document["source"] || request["operationName"] != "Viewer" {
@@ -130,6 +120,9 @@ func TestHTTPInvocationOmitsAbsentVariables(t *testing.T) {
 	if invocationErr != nil || len(outputs) != 1 {
 		t.Fatalf("outputs = %#v, err = %v", outputs, invocationErr)
 	}
+	if outputs[0] != "ok" {
+		t.Fatalf("output = %#v, want root application value", outputs[0])
+	}
 	if _, present := (<-requests)["variables"]; present {
 		t.Fatal("absent input manufactured variables")
 	}
@@ -138,10 +131,9 @@ func TestHTTPInvocationOmitsAbsentVariables(t *testing.T) {
 func TestHTTPMediaClassification(t *testing.T) {
 	for _, tc := range []struct {
 		name, media string
-		wantOutput  bool
 	}{
-		{"graphql response media", "application/graphql-response+json", true},
-		{"legacy json media", "application/json", false},
+		{"graphql response media", "application/graphql-response+json"},
+		{"legacy json media", "application/json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -156,12 +148,8 @@ func TestHTTPMediaClassification(t *testing.T) {
 				Context: graphqlContext("query { viewer }"),
 			})
 			outputs, invocationErr := collectInvocation(context.Background(), call, nil, false)
-			if tc.wantOutput {
-				if invocationErr != nil || len(outputs) != 1 {
-					t.Fatalf("outputs = %#v, err = %v", outputs, invocationErr)
-				}
-			} else if invocationErr == nil || len(outputs) != 0 {
-				t.Fatalf("legacy non-2xx should be terminal: outputs=%#v err=%v", outputs, invocationErr)
+			if invocationErr == nil || len(outputs) != 0 {
+				t.Fatalf("native error envelope must not become an operation output: outputs=%#v err=%v", outputs, invocationErr)
 			}
 		})
 	}
@@ -227,66 +215,5 @@ func TestPreDispatchChallengesAndRefusalsHaveNoIO(t *testing.T) {
 	}
 	if requests.Load() != 0 {
 		t.Fatalf("pre-dispatch failures made %d requests", requests.Load())
-	}
-}
-
-func TestSubscriptionPreservesNextEnvelopeAndExplicitConfiguration(t *testing.T) {
-	observed := make(chan map[string]any, 2)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"graphql-transport-ws"}})
-		if err != nil {
-			return
-		}
-		defer conn.Close(websocket.StatusNormalClosure, "")
-		_, raw, _ := conn.Read(r.Context())
-		var init map[string]any
-		_ = json.Unmarshal(raw, &init)
-		observed <- init
-		_ = writeJSON(r.Context(), conn, map[string]any{"type": "connection_ack"})
-		_, raw, _ = conn.Read(r.Context())
-		var subscribe map[string]any
-		_ = json.Unmarshal(raw, &subscribe)
-		observed <- subscribe
-		_ = writeJSON(r.Context(), conn, map[string]any{
-			"id": "1", "type": "next",
-			"payload": map[string]any{
-				"data":   map[string]any{"updates": nil},
-				"errors": []any{map[string]any{"message": "resolver warning"}},
-			},
-		})
-		_ = writeJSON(r.Context(), conn, map[string]any{"id": "1", "type": "complete"})
-	}))
-	defer srv.Close()
-
-	target := "ws" + strings.TrimPrefix(srv.URL, "http")
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: pinnedInvocationSource(t, srv.URL),
-		Ref:    "subscription/updates",
-		Context: map[string]any{"configuration": map[string]any{
-			"document":           map[string]any{"source": "subscription Watch { updates }", "operationName": "Watch"},
-			"subscriptionTarget": target,
-			"protocolFields": map[string]any{
-				"connectionInitPayload": map[string]any{"tenant": "demo"},
-			},
-		}},
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	outputs, invocationErr := collectInvocation(ctx, call, nil, false)
-	if invocationErr != nil || len(outputs) != 1 {
-		t.Fatalf("outputs = %#v, err = %v", outputs, invocationErr)
-	}
-	envelope := outputs[0].(map[string]any)
-	if _, ok := envelope["errors"]; !ok {
-		t.Fatalf("next errors were not preserved: %#v", envelope)
-	}
-	init := <-observed
-	if payload := init["payload"].(map[string]any); payload["tenant"] != "demo" {
-		t.Fatalf("connection init = %#v", init)
-	}
-	subscribe := <-observed
-	payload := subscribe["payload"].(map[string]any)
-	if payload["query"] != "subscription Watch { updates }" || payload["operationName"] != "Watch" {
-		t.Fatalf("subscribe = %#v", subscribe)
 	}
 }

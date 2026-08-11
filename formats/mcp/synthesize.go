@@ -15,7 +15,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 	if disc == nil {
 		return nil, fmt.Errorf("nil discovery result")
 	}
-	bindingSpec := LegacyBindingSpec
+	bindingSpec := BindingSpec
 	if len(bindingSpecs) > 0 {
 		bindingSpec = bindingSpecs[0]
 	}
@@ -72,15 +72,8 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 			}
 		}
 
-		if bindingSpec == BindingSpec {
-			// Revision 2 projects the artifact-declared application object; the
-			// tool is eligible only when bindableDiscovery found outputSchema.
-			if schemaMap, ok := tool.OutputSchema.(map[string]any); ok {
-				op.Output = schemaMap
-			}
-		} else {
-			// Revision 1 preserves the complete MCP result envelope.
-			op.Output = toolResultOutputSchema(tool.OutputSchema)
+		if schemaMap, ok := tool.OutputSchema.(map[string]any); ok {
+			op.Output = schemaMap
 		}
 
 		iface.Operations[opKey] = op
@@ -225,32 +218,10 @@ func bindableDiscovery(disc *discovery, bindingSpecs ...string) *discovery {
 	if disc == nil {
 		return &discovery{}
 	}
-	bindingSpec := LegacyBindingSpec
-	if len(bindingSpecs) > 0 {
-		bindingSpec = bindingSpecs[0]
-	}
 	toolCounts := map[string]int{}
-	resourceCounts := map[string]int{}
-	templateCounts := map[string]int{}
-	promptCounts := map[string]int{}
 	for _, v := range disc.Tools {
 		if v != nil {
 			toolCounts[v.Name]++
-		}
-	}
-	for _, v := range disc.Resources {
-		if v != nil {
-			resourceCounts[v.URI]++
-		}
-	}
-	for _, v := range disc.ResourceTemplates {
-		if v != nil {
-			templateCounts[v.URITemplate]++
-		}
-	}
-	for _, v := range disc.Prompts {
-		if v != nil {
-			promptCounts[v.Name]++
 		}
 	}
 	out := &discovery{ServerInfo: disc.ServerInfo, RequiredTaskTools: disc.RequiredTaskTools}
@@ -258,34 +229,13 @@ func bindableDiscovery(disc *discovery, bindingSpecs ...string) *discovery {
 		if v == nil {
 			continue
 		}
-		applicationContract := bindingSpec != BindingSpec || v.OutputSchema != nil
+		applicationContract := v.OutputSchema != nil
 		if v.Name != "" && toolCounts[v.Name] == 1 && !disc.RequiredTaskTools[v.Name] && applicationContract {
 			out.Tools = append(out.Tools, v)
 		}
 	}
-	if bindingSpec == BindingSpec {
-		// Revision 2 deliberately excludes entity families whose listings do
-		// not declare application output schemas.
-		return out
-	}
-	for _, v := range disc.Resources {
-		if v != nil && v.URI != "" && resourceCounts[v.URI] == 1 {
-			out.Resources = append(out.Resources, v)
-		}
-	}
-	for _, v := range disc.ResourceTemplates {
-		if v == nil || v.URITemplate == "" || templateCounts[v.URITemplate] != 1 {
-			continue
-		}
-		if _, err := uritemplate.New(v.URITemplate); err == nil {
-			out.ResourceTemplates = append(out.ResourceTemplates, v)
-		}
-	}
-	for _, v := range disc.Prompts {
-		if v != nil && v.Name != "" && promptCounts[v.Name] == 1 {
-			out.Prompts = append(out.Prompts, v)
-		}
-	}
+	// Entity families whose listings do not declare application output schemas
+	// remain outside the candidate's protocol-independent operation boundary.
 	return out
 }
 

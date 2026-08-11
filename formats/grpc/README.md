@@ -114,7 +114,11 @@ iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 
 ## Conventions
 
-This package implements the published [`openbindings.grpc@1`](https://github.com/openbindings/spec/blob/main/binding-specs/grpc/openbindings.grpc.md) binding specification; that document is normative for artifact forms, dial addresses, input construction, interaction shapes, and channel assembly. The conventions below are this package's own.
+This package implements the unreleased first
+[`openbindings.grpc@1` candidate](https://github.com/openbindings/spec/blob/main/binding-specs/grpc/openbindings.grpc.md).
+That document defines artifact forms, dial addresses, input construction,
+interaction shapes, and channel assembly for qualification before publication.
+The conventions below are this package's own.
 
 ### Binding specification identifier
 

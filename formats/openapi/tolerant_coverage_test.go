@@ -9,13 +9,10 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// A document with one clean operation and two operations unrepresentable
-// under revision 1's flattened boundary: a required conditional (oneOf)
-// request body, and a cross-location parameter name collision. The tolerant
-// coverage surface must return a sound partial OBI that binds the clean
-// operation and accounts for both exclusions; the strict surface must keep
-// refusing the whole document. Mirrors the TS SDK's tolerant-coverage.test.ts
-// (SDK parity is a loop invariant).
+// A document with one clean operation and two operations genuinely
+// unrepresentable by the complete first candidate: a required multipart
+// scalar body with no artifact-defined carriage, and header declarations
+// whose case-folded wire identities collide. Mirrors the TS adapter.
 const mixedDoc = `{
   "openapi": "3.0.3",
   "info": {"title": "mixed", "version": "1.0.0"},
@@ -25,13 +22,10 @@ const mixedDoc = `{
     },
     "/conditional": {
       "post": {
-        "operationId": "postConditional",
+		"operationId": "postUncarriable",
         "requestBody": {
           "required": true,
-          "content": {"application/json": {"schema": {"oneOf": [
-            {"type": "string"},
-            {"type": "object", "properties": {"a": {"type": "string"}}}
-          ]}}}
+		  "content": {"multipart/form-data": {"schema": {"type": "string"}}}
         },
         "responses": {"200": {"description": "ok"}}
       }
@@ -40,8 +34,8 @@ const mixedDoc = `{
       "get": {
         "operationId": "getCollide",
         "parameters": [
-          {"name": "id", "in": "query", "schema": {"type": "string"}},
-          {"name": "id", "in": "header", "schema": {"type": "string"}}
+		  {"name": "X-ID", "in": "header", "schema": {"type": "string"}},
+		  {"name": "x-id", "in": "header", "schema": {"type": "string"}}
         ],
         "responses": {"200": {"description": "ok"}}
       }
@@ -52,7 +46,7 @@ const mixedDoc = `{
 func mixedInput() *openbindings.SynthesizeInput {
 	return &openbindings.SynthesizeInput{
 		Sources: []openbindings.SynthesizeSource{{
-			BindingSpec: LegacyBindingSpec,
+			BindingSpec: BindingSpec,
 			Content:     json.RawMessage(mixedDoc),
 		}},
 	}
@@ -128,7 +122,7 @@ func TestCoverageSynthesisReturnsSoundPartialOBI(t *testing.T) {
 func TestInspectSourceFiltersUnrepresentableTargets(t *testing.T) {
 	synth := &Synthesizer{}
 	inspection, err := synth.InspectSource(context.Background(), &openbindings.Source{
-		BindingSpec: LegacyBindingSpec,
+		BindingSpec: BindingSpec,
 		Content:     json.RawMessage(mixedDoc),
 	})
 	if err != nil {
@@ -149,10 +143,10 @@ func TestAllUnrepresentableYieldsEmptySoundOBI(t *testing.T) {
 	  "paths": {
 	    "/conditional": {
 	      "post": {
-	        "operationId": "postConditional",
+	        "operationId": "postUncarriable",
 	        "requestBody": {
 	          "required": true,
-	          "content": {"application/json": {"schema": {"oneOf": [{"type": "string"}, {"type": "object"}]}}}
+	          "content": {"multipart/form-data": {"schema": {"type": "string"}}}
 	        },
 	        "responses": {"200": {"description": "ok"}}
 	      }
@@ -161,7 +155,7 @@ func TestAllUnrepresentableYieldsEmptySoundOBI(t *testing.T) {
 	}`
 	synth := &Synthesizer{}
 	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: LegacyBindingSpec, Content: json.RawMessage(doc)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("coverage synthesis failed: %v", err)

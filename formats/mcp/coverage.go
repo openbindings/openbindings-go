@@ -22,7 +22,7 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []openbin
 	for _, binding := range iface.Bindings {
 		represented[binding.Ref] = identity{operation: binding.Operation, ref: binding.Ref}
 	}
-	bindingSpec := LegacyBindingSpec
+	bindingSpec := BindingSpec
 	if source, ok := iface.Sources[DefaultSourceName]; ok && source.BindingSpec != "" {
 		bindingSpec = source.BindingSpec
 	}

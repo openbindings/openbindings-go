@@ -276,26 +276,27 @@ directly on OpenBindings concepts. See the binding-specification guide's
 
 ```go
 opInv := openbindings.NewOperationInvoker(
-    openapi.NewInvoker(),   // openbindings.openapi@7 (plus @6/@5/@4/@3/@2/@1 compatibility)
-    asyncapi.NewInvoker(),  // openbindings.asyncapi@2
+    openapi.NewInvoker(),   // unreleased openbindings.openapi@1 candidate
+    asyncapi.NewInvoker(),  // openbindings.asyncapi@1
     grpc.NewInvoker(),      // openbindings.grpc@1
 )
 ```
 
 | Module | Binding specification | Synthesizes OBIs? |
 |--------|-----------------|-------------------|
-| `formats/openapi` | `openbindings.openapi@7` (latest), `@6`/`@5`/`@4`/`@3`/`@2`/`@1` compatibility | yes |
-| `formats/asyncapi` | `openbindings.asyncapi@2` | yes |
-| `formats/graphql` | `openbindings.graphql@2` (latest), `openbindings.graphql@1` (compatibility) | yes |
+| `formats/openapi` | `openbindings.openapi@1` candidate | yes |
+| `formats/asyncapi` | `openbindings.asyncapi@1` | yes |
+| `formats/graphql` | `openbindings.graphql@1` candidate | yes |
 | `formats/grpc` | `openbindings.grpc@1` | yes |
 | `formats/connect` | `openbindings.connect@1` | yes |
-| `formats/mcp` | `openbindings.mcp@2` (latest), `openbindings.mcp@1` (compatibility) | yes |
+| `formats/mcp` | `openbindings.mcp@1` candidate | yes |
 | `formats/usage` | `openbindings.usage@1` | yes |
 | `formats/operationgraph` | `openbindings.operation-graph@1` | no (graphs are authored, then composed at invoke time) |
 
-OpenAPI, AsyncAPI, gRPC, Connect, usage, and Operation Graph retain their
-published revision-1 identifiers; MCP and GraphQL advertise protocol-blind
-revision-2 contracts alongside explicit revision-1 compatibility.
+Every listed binding specification is an unreleased first `@1` candidate.
+None has an older published meaning or compatibility revision. Exact opaque
+identifier routing is exercised during development so each candidate and its
+conformance evidence can be qualified before publication.
 
 Invokers implement `BindingInvoker`. Interface synthesizers implement
 `InterfaceSynthesizer`; synthesizers that can return durable, explicitly

@@ -10,7 +10,7 @@ import (
 )
 
 // This file implements the server and address configuration points of
-// openbindings.asyncapi@2 §9.2 (ASYNC-P-04): the effective server set and
+// openbindings.asyncapi@1 §9.2 (ASYNC-P-04): the effective server set and
 // its deterministic ordering, server-variable substitution, channel-address
 // parameter expansion, and the concatenation URL-assembly rule. Every
 // unresolvable input is a pre-dispatch refusal, never a guess — this

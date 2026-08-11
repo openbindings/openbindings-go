@@ -109,8 +109,8 @@ operations: {}
 func TestLoadDocumentDiscriminatesUnsupportedEditionBeforeExternalRefs(t *testing.T) {
 	transport := &countingRejectTransport{}
 	client := &http.Client{Transport: transport}
-	content := openbindings.TextContent(`asyncapi: 2.0.0
-info: {title: Legacy external schema, version: "1"}
+	content := openbindings.TextContent(`asyncapi: 3.2.0
+info: {title: Future external schema, version: "1"}
 channels: {}
 components:
   messages:

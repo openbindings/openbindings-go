@@ -3,7 +3,6 @@ package asyncapi
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -78,19 +77,6 @@ func synthesisCoverage(doc *document, iface *openbindings.Interface) []openbindi
 		}
 		for index, member := range effectiveServers(doc, &ch) {
 			sourceRef := fmt.Sprintf("%s#server[%d]=%s", ref, index, member.Name)
-			protocol := strings.ToLower(member.Server.Protocol)
-			if !isBoundProtocol(protocol) {
-				entries = append(entries, openbindings.SynthesisCoverageEntry{
-					SourceIndex: 0, SourceRef: sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-					Status: openbindings.SynthesisExcluded, ReasonCode: "asyncapi.protocol_outside_revision",
-					Rule: "ASYNC-P-02", Message: fmt.Sprintf("server protocol %q is outside revision 1", member.Server.Protocol),
-				})
-				continue
-			}
-			if cell := protocolCellExclusion(doc, &op, &ch, protocol, bindingSpec); cell != nil {
-				entries = append(entries, coverageExclusion(sourceRef, openbindings.SynthesisCoverageAlternative, cell))
-				continue
-			}
 			if emitted {
 				entries = append(entries, openbindings.SynthesisCoverageEntry{
 					SourceIndex: 0, SourceRef: sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
@@ -137,7 +123,7 @@ func governingMessageInventory(doc *document, op *asyncOperation, ch *channel, p
 		out := make([]observedMessage, 0, len(op.Messages))
 		for index, ref := range op.Messages {
 			out = append(out, observedMessage{
-				sourceRef: fmt.Sprintf("%s[%d]=%s", prefix, index, ref.Ref),
+				sourceRef: fmt.Sprintf("%s[%d]=%s", prefix, index, messageRefIdentity(doc, ref)),
 				message:   resolveMessageRef(doc, ref),
 			})
 		}
@@ -174,7 +160,7 @@ func replyMessageInventory(doc *document, op *asyncOperation, prefix string) []o
 		out := make([]observedMessage, 0, len(op.Reply.Messages))
 		for index, ref := range op.Reply.Messages {
 			out = append(out, observedMessage{
-				sourceRef: fmt.Sprintf("%s[%d]=%s", prefix, index, ref.Ref),
+				sourceRef: fmt.Sprintf("%s[%d]=%s", prefix, index, messageRefIdentity(doc, ref)),
 				message:   resolveMessageRef(doc, ref),
 			})
 		}
@@ -207,24 +193,14 @@ func messageCoverage(doc *document, candidate observedMessage, id struct {
 		return openbindings.SynthesisCoverageEntry{
 			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
 			Status: openbindings.SynthesisExcluded, ReasonCode: "asyncapi.message_headers",
-			Rule: "ASYNC-P-03", Message: "revision 1 cannot carry AsyncAPI message headers",
+			Rule: "ASYNC-P-03", Message: "the first candidate cannot carry AsyncAPI message headers at the ordinary value boundary",
 		}
 	}
-	if candidate.message.Bindings != nil && candidate.message.Bindings.HTTP != nil {
-		version := candidate.message.Bindings.HTTP.BindingVersion
-		if version != "" && version != "0.3.0" {
-			return openbindings.SynthesisCoverageEntry{
-				SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-				Status: openbindings.SynthesisExcluded, ReasonCode: "asyncapi.unsupported_message_binding_version",
-				Rule: "ASYNC-P-02", Message: "the HTTP message binding version is outside revision 1",
-			}
-		}
-	}
-	if err := supportedMessageContentType(messageEffectiveContentType(doc, *candidate.message)); err != nil {
+	if candidate.message.Ref != "" || candidate.message.UnresolvedTrait != "" {
 		return openbindings.SynthesisCoverageEntry{
 			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-			Status: openbindings.SynthesisExcluded, ReasonCode: "asyncapi.message_content_type_unrepresentable",
-			Rule: "ASYNC-P-03", Message: err.Error(),
+			Status: openbindings.SynthesisExcluded, ReasonCode: "asyncapi.message_unresolvable",
+			Rule: "ASYNC-P-03", Message: "the message declaration does not resolve faithfully",
 		}
 	}
 	if emitted {
@@ -244,50 +220,4 @@ func messageCoverage(doc *document, candidate observedMessage, id struct {
 		Status: openbindings.SynthesisExcluded, ReasonCode: "asyncapi.parent_target_excluded",
 		Rule: rule, Message: message,
 	}
-}
-
-func protocolCellExclusion(doc *document, op *asyncOperation, ch *channel, protocol, bindingSpec string) *authoringExclusion {
-	switch protocol {
-	case "http", "https":
-		if op.Action == "send" {
-			return &authoringExclusion{"excluded", "asyncapi.standalone_http_send", "ASYNC-P-02", "standalone HTTP send is outside revision 1"}
-		}
-		if op.Bindings == nil || op.Bindings.HTTP == nil || strings.TrimSpace(op.Bindings.HTTP.Method) == "" {
-			return &authoringExclusion{"excluded", "asyncapi.http_method_unresolved", "ASYNC-P-02", "the HTTP publish cell has no artifact-declared method"}
-		}
-		if !requiredPropertiesMayBeStrings(op.Bindings.HTTP.Query) {
-			return &authoringExclusion{"excluded", "asyncapi.protocol_fields_unrepresentable", "ASYNC-P-04", "required HTTP protocol fields do not admit string values"}
-		}
-		if !replyMessagesBindable(doc, op) {
-			return &authoringExclusion{"excluded", "asyncapi.reply_carriage_unrepresentable", "ASYNC-P-05", "an HTTP reply message uses carriage outside revision 1"}
-		}
-	case "ws", "wss":
-		if op.Reply != nil && (op.Action == "receive" || preservesSendReplies(bindingSpec)) {
-			return &authoringExclusion{"excluded", "asyncapi.websocket_reply", "ASYNC-P-02", "reply-bearing WebSocket operations require request/reply session semantics this revision does not define"}
-		}
-		if !wsFieldsMayBeStrings(ch) {
-			return &authoringExclusion{"excluded", "asyncapi.protocol_fields_unrepresentable", "ASYNC-P-04", "required WebSocket protocol fields do not admit string values"}
-		}
-		if op.Action == "send" {
-			for _, parameter := range ch.Parameters {
-				if parameter.Location != "" {
-					return &authoringExclusion{"excluded", "asyncapi.subscription_parameter_location", "ASYNC-P-04", "a subscription channel parameter declares a location revision 1 cannot preserve"}
-				}
-			}
-			messages := governingMessages(doc, op, ch)
-			if len(messages) == 0 {
-				return &authoringExclusion{"excluded", "asyncapi.no_resolved_messages", "ASYNC-P-03", "the subscription interaction has no resolved message declaration"}
-			}
-			for _, msg := range messages {
-				if !messageBindable(doc, msg) {
-					return &authoringExclusion{"excluded", "asyncapi.unbindable_subscription_message", "ASYNC-P-03", "a subscription message alternative uses carriage outside revision 1"}
-				}
-			}
-			ctx := map[string]any{"configuration": map[string]any{"decode": "json"}}
-			if _, err := resolveSubscriptionContentType(doc, messages, ctx); err != nil {
-				return &authoringExclusion{"excluded", "asyncapi.ambiguous_subscription_content_type", "ASYNC-P-05", err.Error()}
-			}
-		}
-	}
-	return nil
 }

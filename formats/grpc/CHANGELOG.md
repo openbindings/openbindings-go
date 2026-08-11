@@ -19,7 +19,7 @@
   reflection-time `Unavailable` (reflection dial/resolve failure) likewise now
   surfaces as `ERR_UNAVAILABLE`.
 
-- **Conformance to the published `openbindings.grpc@1` binding
+- **Alignment with the unreleased first `openbindings.grpc@1` binding
   specification.** The invoker now implements the spec's rules end to end;
   breaking changes from the pre-spec behavior:
   - **Input mapping (GRPC-P-03):** unknown input fields are refused loudly

@@ -38,7 +38,7 @@ func TestConvertToInterfaceInventoriesRootFields(t *testing.T) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	wantKeys := []string{"mutation_status", "status", "subscription_status", "viewer"}
+	wantKeys := []string{"mutation_status", "status", "viewer"}
 	if !reflect.DeepEqual(keys, wantKeys) {
 		t.Fatalf("operation keys = %#v, want %#v", keys, wantKeys)
 	}
@@ -47,17 +47,17 @@ func TestConvertToInterfaceInventoriesRootFields(t *testing.T) {
 		refs = append(refs, binding.Ref)
 	}
 	sort.Strings(refs)
-	wantRefs := []string{"mutation/status", "query/status", "query/viewer", "subscription/status"}
+	wantRefs := []string{"mutation/status", "query/status", "query/viewer"}
 	if !reflect.DeepEqual(refs, wantRefs) {
 		t.Fatalf("refs = %#v, want %#v", refs, wantRefs)
 	}
 	source := iface.Sources[DefaultSourceName]
-	if source.BindingSpec != LegacyBindingSpec {
+	if source.BindingSpec != BindingSpec {
 		t.Fatalf("bindingSpec = %q", source.BindingSpec)
 	}
 }
 
-func TestSynthesisUsesBroadBoundarySchemas(t *testing.T) {
+func TestSynthesisUsesApplicationRootValueSchemas(t *testing.T) {
 	iface, _ := convertToInterface(synthesisSchema(), "")
 	op := iface.Operations["viewer"]
 	if !reflect.DeepEqual(op.Input, map[string]any{"type": "object"}) {
@@ -67,9 +67,10 @@ func TestSynthesisUsesBroadBoundarySchemas(t *testing.T) {
 	if string(raw) == "" || containsJSONText(raw, "_query") || containsJSONText(raw, `"viewer"`) {
 		t.Fatalf("operation invents document projection: %s", raw)
 	}
-	output := op.Output.(map[string]any)
-	if output["type"] != "object" {
-		t.Fatalf("output = %#v", output)
+	if !reflect.DeepEqual(op.Output, map[string]any{
+		"anyOf": []any{map[string]any{"type": "object"}, map[string]any{"type": "null"}},
+	}) {
+		t.Fatalf("output = %#v", op.Output)
 	}
 }
 
@@ -110,13 +111,13 @@ func TestSynthesisCoverageIsExhaustive(t *testing.T) {
 	}
 }
 
-func TestRevisionTwoProjectsRootFieldSchemas(t *testing.T) {
+func TestFirstCandidateProjectsRootFieldSchemas(t *testing.T) {
 	iface, err := convertToInterface(synthesisSchema(), "", BindingSpec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := iface.Operations["subscription_status"]; ok {
-		t.Fatal("revision 2 synthesized a subscription operation")
+		t.Fatal("the first-revision candidate synthesized a subscription operation")
 	}
 	if got := iface.Operations["status"].Output; !reflect.DeepEqual(got, map[string]any{
 		"anyOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "null"}},

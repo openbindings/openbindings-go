@@ -12,7 +12,7 @@ import (
 )
 
 // This file resolves the governing content-type declarations of
-// openbindings.asyncapi@2 §9.1 (ASYNC-P-03, input encoding) and §9.3
+// openbindings.asyncapi@1 §9.1 (ASYNC-P-03, input encoding) and §9.3
 // (ASYNC-P-05, decode). Effective content type resolves PER MESSAGE first —
 // the message's own `contentType`, else the document's
 // `defaultContentType`, the AsyncAPI rule — and the governing set's
@@ -233,7 +233,7 @@ func resolveInputCodec(doc *document, msgs []message, contexts ...map[string]any
 		}
 		return inputCodec{JSON: false, ContentType: effective}, nil
 	default:
-		return inputCodec{}, fmt.Errorf("effective content type %q has no revision-1 value carriage", messageEffectiveContentType(doc, msgs[0]))
+		return inputCodec{}, fmt.Errorf("effective content type %q has no candidate application-value carriage", messageEffectiveContentType(doc, msgs[0]))
 	}
 }
 
@@ -258,7 +258,7 @@ func supportedMessageContentType(contentType string) error {
 	}
 	mediaType = strings.ToLower(mediaType)
 	if mediaType != "application/json" && !strings.HasSuffix(mediaType, "+json") && !strings.HasPrefix(mediaType, "text/") {
-		return fmt.Errorf("effective content type %q has no revision-1 value carriage", contentType)
+		return fmt.Errorf("effective content type %q has no candidate application-value carriage", contentType)
 	}
 	if charset := strings.ToLower(strings.TrimSpace(params["charset"])); charset != "" && charset != "utf-8" && charset != "utf8" {
 		return fmt.Errorf("effective content type %q declares unsupported non-UTF-8 charset %q", contentType, params["charset"])

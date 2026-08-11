@@ -245,7 +245,7 @@ func TestOpenAPIV2CollisionDifferential(t *testing.T) {
 	  }}}
 	}`, server.URL)
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV2, Content: openbindings.TextContent(spec)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatalf("revision-2 synthesis failed: %v", err)
@@ -345,7 +345,7 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 	  }}}
 	}`, server.URL)
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV2, Content: openbindings.TextContent(spec)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)

@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -89,11 +87,15 @@ func resolveArtifactReferences(ctx context.Context, client *http.Client, locatio
 func decodeReferenceDocument(data []byte) (map[string]any, error) {
 	var root map[string]any
 	if isJSON(data) {
-		if err := json.Unmarshal(data, &root); err != nil {
+		if err := json.Unmarshal(trimUTF8BOM(data), &root); err != nil {
 			return nil, fmt.Errorf("parse AsyncAPI JSON: %w", err)
 		}
-	} else if err := yaml.Unmarshal(data, &root); err != nil {
-		return nil, fmt.Errorf("parse AsyncAPI YAML: %w", err)
+	} else {
+		var err error
+		root, err = decodeYAMLObject(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse AsyncAPI YAML: %w", err)
+		}
 	}
 	if root == nil {
 		return nil, fmt.Errorf("parse AsyncAPI document: root is not an object")
@@ -150,6 +152,11 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 		}
 		return typed, nil
 	case map[string]any:
+		var err error
+		current, err = resolver.scopedDocument(current, typed)
+		if err != nil {
+			return nil, err
+		}
 		if ref, ok := typed["$ref"].(string); ok {
 			targetDocument, fragment, external, err := resolver.referenceTarget(current, ref)
 			if err != nil {
@@ -190,6 +197,9 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
+			if isLiteralSchemaValueKey(key) || strings.HasPrefix(strings.ToLower(key), "x-") {
+				continue
+			}
 			resolved, err := resolver.walk(typed[key], current, stack)
 			if err != nil {
 				return nil, err
@@ -200,6 +210,36 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 	default:
 		return value, nil
 	}
+}
+
+// scopedDocument applies embedded JSON Schema $id bases before walking their
+// descendant references.
+func (resolver *artifactReferenceResolver) scopedDocument(current *artifactReferenceDocument, object map[string]any) (*artifactReferenceDocument, error) {
+	id, ok := object["$id"].(string)
+	if !ok || id == "" {
+		return current, nil
+	}
+	parsed, err := url.Parse(id)
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON Schema $id %q: %w", id, err)
+	}
+	if !parsed.IsAbs() {
+		if current.location == "" {
+			return nil, fmt.Errorf("relative JSON Schema $id %q has no document base URI", id)
+		}
+		base, _ := url.Parse(current.location)
+		parsed = base.ResolveReference(parsed)
+	}
+	if parsed.Scheme == "" || parsed.Opaque != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("JSON Schema $id %q is not an absolute hierarchical URI without a fragment", id)
+	}
+	location := parsed.String()
+	if existing := resolver.documents[location]; existing != nil {
+		return existing, nil
+	}
+	scoped := &artifactReferenceDocument{location: location, root: object}
+	resolver.documents[location] = scoped
+	return scoped, nil
 }
 
 func (resolver *artifactReferenceResolver) referenceTarget(current *artifactReferenceDocument, ref string) (*artifactReferenceDocument, string, bool, error) {

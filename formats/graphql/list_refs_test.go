@@ -31,6 +31,6 @@ func TestInspectSourceUsesPinnedContentAndCanonicalRefs(t *testing.T) {
 		}
 	}
 	if refs["subscription/status"] {
-		t.Fatal("revision 2 inspection exposed subscription/status")
+		t.Fatal("the first-revision candidate inspection exposed subscription/status")
 	}
 }

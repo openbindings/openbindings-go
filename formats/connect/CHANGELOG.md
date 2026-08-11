@@ -31,7 +31,7 @@
   `ERR_CANCELLED`, mirroring the gRPC family. Previously `unavailable` →
   `ERR_CONNECT_FAILED` and `resource_exhausted`/`canceled` fell to
   `ERR_EXECUTION_FAILED`.
-- **Conformance to the published `openbindings.connect@1` binding
+- **Alignment with the unreleased first `openbindings.connect@1` binding
   specification.** The invoker now implements the spec's rules end to end
   (connect@1 incorporates `openbindings.grpc@1` as its schema layer by
   exact-identifier citation; the shared behaviors match `formats/grpc`).

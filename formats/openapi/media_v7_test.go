@@ -13,8 +13,6 @@ import (
 
 const revision7ByteSpec = `{"openapi":"3.0.4","info":{"title":"schema-omitted bytes","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/archive":{"post":{"operationId":"storeArchive","requestBody":{"required":true,"content":{"application/octet-stream":{}}},"responses":{"200":{"description":"stored","content":{"application/octet-stream":{}}}}}}}}`
 
-const revision7ResponseOnlySpec = `{"openapi":"3.0.4","info":{"title":"schema-omitted response","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/archive":{"get":{"operationId":"readArchive","responses":{"200":{"description":"archive","content":{"application/octet-stream":{}}}}}}}}`
-
 func TestRevision7SchemaOmittedOAS30BytesRoundTripAndSynthesis(t *testing.T) {
 	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(req.Body)
@@ -33,7 +31,7 @@ func TestRevision7SchemaOmittedOAS30BytesRoundTripAndSynthesis(t *testing.T) {
 		}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV7, Content: openbindings.TextContent(revision7ByteSpec)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(revision7ByteSpec)},
 		Ref:    "#/paths/~1archive/post",
 	})
 	outputs, invocationErr := driveOutputs(context.Background(), call, map[string]any{"body": "AAH+/w=="})
@@ -42,7 +40,7 @@ func TestRevision7SchemaOmittedOAS30BytesRoundTripAndSynthesis(t *testing.T) {
 	}
 
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV7, Content: openbindings.TextContent(revision7ByteSpec)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(revision7ByteSpec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -53,34 +51,5 @@ func TestRevision7SchemaOmittedOAS30BytesRoundTripAndSynthesis(t *testing.T) {
 	properties, _ := input["properties"].(map[string]any)
 	if !reflect.DeepEqual(properties[syntheticBodyProperty], wantBoundary) || !reflect.DeepEqual(operation.Output, wantBoundary) {
 		t.Fatalf("schemas = input %#v output %#v", operation.Input, operation.Output)
-	}
-}
-
-func TestRevision7KeepsRevision6SchemaOmittedOAS30RequestExclusionImmutable(t *testing.T) {
-	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV6, Content: openbindings.TextContent(revision7ByteSpec)}},
-	})
-	if err == nil || !strings.Contains(err.Error(), "outside the families") {
-		t.Fatalf("revision 6 synthesis error = %v", err)
-	}
-}
-
-func TestRevision7KeepsRevision6SchemaOmittedOAS30ResponseTextLaneImmutable(t *testing.T) {
-	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: 200,
-			Status:     "200 OK",
-			Header:     http.Header{"Content-Type": {"application/octet-stream"}},
-			Body:       io.NopCloser(strings.NewReader("raw")),
-			Request:    req,
-		}, nil
-	})
-	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV6, Content: openbindings.TextContent(revision7ResponseOnlySpec)},
-		Ref:    "#/paths/~1archive/get",
-	})
-	outputs, invocationErr := driveOutputs(context.Background(), call, nil)
-	if invocationErr != nil || !reflect.DeepEqual(outputs, []any{"raw"}) {
-		t.Fatalf("revision 6 outputs = %#v, %v", outputs, invocationErr)
 	}
 }

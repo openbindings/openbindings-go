@@ -11,34 +11,32 @@
   OpenAPI-only applications can use the standalone native client without an
   OpenBindings dependency.
 
-- **Current `openbindings.openapi@7` preserves exact schema-omitted OAS 3.0
+- **Current `openbindings.openapi@1` preserves exact schema-omitted OAS 3.0
   non-JSON bytes without changing Core.** Request and response octets cross the
   protocol-independent boundary as canonical Base64. Media ranges and
-  artifact-defined codecs remain unchanged, and revision 6 is an exact
-  compatibility path.
+  artifact-defined codecs remain unchanged. This is part of the unreleased
+  first `@1` candidate.
 
-- **Current `openbindings.openapi@6` preserves declaration-complex exact JSON
+- **Current `openbindings.openapi@1` preserves declaration-complex exact JSON
   bodies without changing Core.** Top-level combinators, conditionals,
   dependent schemas, and explicit `unevaluatedProperties` stay under one
   protocol-neutral application property and a binding-private whole-body
-  route. The binding does not choose a schema branch. Revision 5 remains an
-  exact compatibility path.
+  route. The binding does not choose a schema branch.
 
-- **`openbindings.openapi@5` preserves explicitly dynamic object
+- **`openbindings.openapi@1` preserves explicitly dynamic object
   bodies without changing Core.** Explicit `additionalProperties` and
   `patternProperties` schemas stay under one protocol-neutral application
   property and a binding-private whole-body route. Runtime form and multipart
   members resolve their effective exact, pattern, additional-property, and
-  `allOf` schemas. Revision 4 remains an exact compatibility path.
+  `allOf` schemas.
 
-- **`openbindings.openapi@4` added declaration-led response range and
+- **`openbindings.openapi@1` added declaration-led response range and
   raw-byte carriage without changing Core.** The actual concrete response
   media selects the most-specific exact or wildcard declaration. Strict JSON,
   text/SSE, and artifact-authorized raw-byte lanes produce protocol-independent
-  application values; exact bytes use canonical Base64. Revision 3 remains an
-  exact compatibility path.
+  application values; exact bytes use canonical Base64.
 
-- **Current `openbindings.openapi@3` adds declaration-led raw-octet and range
+- **Current `openbindings.openapi@1` adds declaration-led raw-octet and range
   request carriage without changing Core.** OAS 3.0 concrete binary schemas
   and OAS 3.1 schema-omitted concrete media use a canonical Base64 JSON
   boundary and emit exact bytes; OAS 3.1 `contentEncoding` strings ride
@@ -48,24 +46,22 @@
   Required range-only bodies challenge before input consumption, and synthesis
   coverage records `configuration.requestMedia` at alternative and applicable
   target scope. Form and multipart carriage follows each accepted OAS
-  edition's own immutable rules, including the older 3.0.0–3.0.3 urlencoded
+  edition's own rules, including the older 3.0.0–3.0.3 urlencoded
   defaults; OAS 3.0 binary parts retain author-declared non-default media
   types; and underdefined nested or declaration-free form lanes fail closed.
-  `BindingSpecV2` remains exact `openbindings.openapi@2`.
 
-- **Revision-3 response completion retains exact native failure evidence.**
+- **Response completion retains exact native failure evidence.**
   Empty non-2xx bodies remain distinguishable from uncaptured bodies, and SSE
   invalid UTF-8 follows WHATWG maximal-subpart replacement rather than a
   library-specific replacement grouping. Both remain diagnostic binding facts,
   never operation output fields.
 
-- **`openbindings.openapi@2` preserves same-named application inputs.**
+- **`openbindings.openapi@1` preserves same-named application inputs.**
   Synthesis retains unique author names, assigns deterministic neutral suffixes
   only where declarations collide, and carries their exact OpenAPI
   name/location correspondence in a binding-private core `inputTransform`.
   Invocation validates and consumes that routed value before dispatch; no HTTP
-  identity enters the operation schema. Immutable `openbindings.openapi@1`
-  remains available as `LegacyBindingSpec`. Native differential tests cover
+  identity enters the operation schema. Native differential tests cover
   path/query/body collisions, and the shared portable corpus covers the new
   processor and synthesis behavior.
 
@@ -103,13 +99,13 @@
 ### Fixed
 
 - **Security alternatives, credential ownership, and synthesis soundness now
-  follow OpenAPI revision 2 exactly.** Security Requirement Objects remain an
+  follow the first OpenAPI candidate exactly.** Security Requirement Objects remain an
   OR of complete AND sets; a selected request never combines credentials from
   separate alternatives or sends undeclared fallback credentials. Effective
   `Host` and `Content-Length` parameters and ambiguous raw/structured cookie
   ownership refuse before dispatch, while a later complete collision-free
   security alternative may still be used. Content-form parameters outside the
-  revision-2 JSON/text carriage are excluded during synthesis with explicit
+  candidate's JSON/text carriage are excluded during synthesis with explicit
   exhaustive coverage rather than becoming statically uninvocable operations.
 
 - **Schema projection is now direction- and edition-aware.** Request schemas
@@ -127,12 +123,12 @@
   artifact-native invocation or reference listing.
 
 - **A typeless request-body schema rides the synthetic `body` property on
-  the wire, matching the published contract** (`openbindings.openapi@1`
+  the wire, matching the candidate contract** (`openbindings.openapi@1`
   §9.1's declaration-only object determination: a body schema is object
   iff it declares `properties` or an explicit `object` type). The
   synthesizer wrapped a typeless body (a bare `{}` or a description-only
   schema) under the synthetic `body` property while the invoker treated it
-  as flattened, so a caller following the published contract got
+  as flattened, so a caller following the candidate contract got
   `{"body": X}` on the wire instead of `X` — and the §9.1 unmatched-field
   refusal for non-object bodies did not fire. Both sites now route through
   one shared predicate (`bodySchemaFlattens`), so the contract and the
@@ -141,7 +137,7 @@
   two-element `type: ["object", "null"]` body (not an *explicit* object
   type) synthetic at the invoker.
 
-**Conformance to the published `openbindings.openapi@1` binding specification.** The invoker now implements the normative rules end to end; behavior that predated the specification and diverged from it changed:
+**Alignment with the unreleased first `openbindings.openapi@1` candidate.** The invoker implements the candidate rules end to end; earlier package behavior that diverged from them changed:
 
 - **Input mapping (OAPI-P-02/P-03).** Parameter serialization follows the OAS `style`/`explode`/`allowReserved` rules wholesale (matrix/label/simple, form/spaceDelimited/pipeDelimited/deepObject, per-location defaults, `content`-form parameters). Cross-location same-name declarations refuse as unflattenable; unmatched input fields refuse loudly when no request body is declared (previously silently sent as a body); a missing declared path parameter refuses pre-dispatch; non-object body schemas ride the synthetic `body` property, unwrapped at the wire.
 - **Request/response media (OAPI-P-04).** Request media selection follows the declared preference order (exact JSON → least `+json` → multipart → urlencoded → `text/plain` for string bodies) with pre-dispatch refusal of out-of-family-only declarations. Multipart parts are binary-signaled per edition (3.0 `format: binary`; 3.1 `contentMediaType`/`contentEncoding`), with caller strings decoded per declared `contentEncoding` or Base64 (previously required Go `[]byte`, which still passes through raw as an in-process convenience). urlencoded bodies serialize per the OAS `encoding` rules. The `Accept` header advertises the declared success-response media (previously a fixed `application/json, text/event-stream`).

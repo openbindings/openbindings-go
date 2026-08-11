@@ -305,8 +305,8 @@ func validateCell(doc *document, ch *channel, op *asyncOperation, protocol, bind
 			}
 		}
 	}
-	if op.Reply != nil && preservesSendReplies(bindingSpec) {
-		return fmt.Errorf("reply-bearing WebSocket send operations are excluded from revision 2")
+	if op.Reply != nil {
+		return fmt.Errorf("reply-bearing WebSocket send operations require request/reply session semantics the built-in WebSocket driver does not implement")
 	}
 	_, err := resolveSubscriptionContentType(doc, governingMessages(doc, op, ch), bindCtx)
 	return err
@@ -379,6 +379,9 @@ func parseRef(ref string) (string, error) {
 	if ref == "" {
 		return "", fmt.Errorf("ref is required and must be a JSON Pointer #/operations/<operation-key> (ASYNC-D-03)")
 	}
+	if operation, ok := parseV2OperationRef(ref); ok {
+		return operation, nil
+	}
 
 	const prefix = "#/operations/"
 	if !strings.HasPrefix(ref, prefix) {
@@ -400,9 +403,30 @@ func parseRef(ref string) (string, error) {
 // key: `#/operations/` + the RFC 6901-escaped key (~ → ~0 first, then
 // / → ~1 — escape order is the reverse of decode order).
 func operationRef(opID string) string {
+	if ref, ok := refForNormalizedOperationKey(opID); ok {
+		return ref
+	}
 	escaped := strings.ReplaceAll(opID, "~", "~0")
 	escaped = strings.ReplaceAll(escaped, "/", "~1")
 	return "#/operations/" + escaped
+}
+
+func parseV2OperationRef(ref string) (string, bool) {
+	parts := strings.Split(strings.TrimPrefix(ref, "#/"), "/")
+	if len(parts) != 3 || parts[0] != "channels" || (parts[2] != "publish" && parts[2] != "subscribe") {
+		return "", false
+	}
+	return "v2:" + parts[2] + ":" + unescapeRefToken(parts[1]), true
+}
+
+func refForNormalizedOperationKey(key string) (string, bool) {
+	parts := strings.SplitN(key, ":", 3)
+	if len(parts) != 3 || parts[0] != "v2" || (parts[1] != "publish" && parts[1] != "subscribe") {
+		return "", false
+	}
+	escaped := strings.ReplaceAll(parts[2], "~", "~0")
+	escaped = strings.ReplaceAll(escaped, "/", "~1")
+	return "#/channels/" + escaped + "/" + parts[1], true
 }
 
 // Server and address resolution (the §9.2 configuration points) live in

@@ -20,7 +20,7 @@ This release tracks the spec 0.2.0 alignment of `openbindings-go`, including the
 - **Pagination is bounded**: a repeated or endless `nextCursor` sequence
   refuses with `ERR_PROTOCOL` instead of looping.
 
-- **Breaking**: conformance to the published `openbindings.mcp@1` binding specification:
+- **Breaking package change**: alignment with the unreleased first `openbindings.mcp@1` candidate:
   - **Pinned listings** (MCP-D-01): a source may carry `content` — pagination-exhausted entity arrays under `tools`/`resources`/`resourceTemplates`/`prompts` in the 2025-11-25 result shapes. A pin makes ref resolution offline and displaces the list requests entirely; stray members (`nextCursor`, `_meta`, anything else) are refused loudly (`ERR_SOURCE_LOAD_FAILED`).
   - **Resolution before dispatch** (MCP-P-02, §7): every ref resolves byte-exactly against the pinned or live listing (each list request followed to pagination exhaustion, capability-gated) before the entity request is sent; unresolvable and ambiguous refs are refused (`ERR_REF_NOT_FOUND`). An unknown tool no longer surfaces as the server's JSON-RPC error.
   - **Progress solicitation is a named configuration point, default OFF** (§9.2/§9.3): `tools/call` carries no `progressToken` and the output stream is the result alone unless solicited via per-invocation `context.configuration.solicit` or the new `WithSolicitProgress` option (per-invocation wins). When solicited, progress values are the notification's params minus `progressToken`, presence-preserving — an explicit `total: 0` now survives (captured from the raw event stream; the previous typed-struct lane dropped it) — and late correlated notifications are discarded.

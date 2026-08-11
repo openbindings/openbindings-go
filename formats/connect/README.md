@@ -2,11 +2,11 @@
 
 Connect (Buf) binding invoker and interface synthesizer for the [OpenBindings](https://openbindings.com) Go SDK.
 
-This package implements the published, exact binding-specification identifier
-`openbindings.connect@1`. It uses the Connect JSON protocol and incorporates
-the protobuf schema carriage, ref grammar, and canonical ProtoJSON
-correspondence defined by `openbindings.grpc@1` where the Connect binding
-specification says to do so.
+This package implements the unreleased first `openbindings.connect@1`
+candidate. It uses the Connect JSON protocol and incorporates the protobuf
+schema carriage, ref grammar, and canonical ProtoJSON correspondence proposed
+by the sibling `openbindings.grpc@1` candidate where the Connect document says
+to do so. Neither identifier has been published.
 
 See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 

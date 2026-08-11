@@ -16,7 +16,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// Conformance tests for the openbindings.asyncapi@2 remainder: the server
+// Conformance tests for the openbindings.asyncapi@1 remainder: the server
 // and address configuration points (ASYNC-P-04), protocol-bindings honoring
 // (ASYNC-P-02), SSE establishment and WHATWG event framing (§8), and the
 // §9.1/§9.3 encode/decode lanes (ASYNC-P-03, ASYNC-P-05).
@@ -506,9 +506,8 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 	}
 }
 
-// TestOnlyUnboundProtocolServersIsRefused verifies "no resolvable server is
-// a pre-dispatch refusal": a document declaring only out-of-revision
-// protocols (kafka, mqtt, …) refuses rather than guessing.
+// TestOnlyUnboundProtocolServersIsRefused verifies that an artifact target
+// remains valid while a missing local protocol driver fails pre-dispatch.
 func TestOnlyUnboundProtocolServersIsRefused(t *testing.T) {
 	doc := &document{
 		AsyncAPI: "3.0.0",
@@ -526,11 +525,8 @@ func TestOnlyUnboundProtocolServersIsRefused(t *testing.T) {
 		Ref:    "#/operations/post",
 	})
 	_, err := drainOutputs(t, call)
-	// No bindable server means there is no artifact member to select or
-	// configure. A replacement URL may refine a selected member, but it
-	// cannot invent one, so refusal is terminal and precedes dispatch.
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected terminal refusal when no bindable server exists, got %v", err)
+	if codeOf(t, err) != "DRIVER_UNAVAILABLE" {
+		t.Fatalf("expected local driver capability refusal, got %v", err)
 	}
 }
 

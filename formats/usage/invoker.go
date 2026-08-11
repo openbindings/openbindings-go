@@ -17,11 +17,11 @@ import (
 
 const DefaultSourceName = "usage"
 
-// BindingSpec is the published binding-specification identifier this
-// invoker claims — exact and opaque (openbindings.usage@1 governs the
+// BindingSpec is the proposed exact identifier this unreleased candidate
+// claims—exact and opaque. openbindings.usage@1 governs the
 // supported jdx usage artifact line; the artifact IS the source:
 // specification + configuration = complete invocation; the artifact's
-// gaps are consumer hooks).
+// gaps are consumer hooks.
 const BindingSpec = "openbindings.usage@1"
 
 // Invoker handles binding invocation for bare jdx usage artifacts

@@ -21,7 +21,7 @@ func wholeJSONSpecForSchema(mediaType, schema string) string {
 func TestRevision6CarriesCombinatorialJSONAsOneApplicationValue(t *testing.T) {
 	spec := wholeJSONSpec("application/json")
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV6, Content: openbindings.TextContent(spec)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -51,11 +51,11 @@ func TestRevision6CarriesCombinatorialJSONAsOneApplicationValue(t *testing.T) {
 		return &http.Response{StatusCode: 204, Status: "204 No Content", Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV6, Content: openbindings.TextContent(spec)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1items/post",
 	})
 	inputValue := []any{map[string]any{
-		"$openbindings": BindingSpecV6,
+		"$openbindings": BindingSpec,
 		"value": map[string]any{
 			"id":      "query-value",
 			"payload": map[string]any{"kind": "named", "name": "Ada"},
@@ -69,18 +69,9 @@ func TestRevision6CarriesCombinatorialJSONAsOneApplicationValue(t *testing.T) {
 	}
 }
 
-func TestRevision6LeavesRevision5CombinatorialRefusalImmutable(t *testing.T) {
-	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV5, Content: openbindings.TextContent(wholeJSONSpec("application/json"))}},
-	})
-	if err == nil || !strings.Contains(err.Error(), "conditional/combinatorial request schema") {
-		t.Fatalf("revision 5 combinatorial result = %v", err)
-	}
-}
-
 func TestRevision6DoesNotInventCombinatorialFormSerialization(t *testing.T) {
 	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV6, Content: openbindings.TextContent(wholeJSONSpec("application/x-www-form-urlencoded"))}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(wholeJSONSpec("application/x-www-form-urlencoded"))}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "conditional/combinatorial request schema") {
 		t.Fatalf("revision 6 form result = %v", err)
@@ -101,7 +92,7 @@ func TestRevision6WholeJSONDeclarationTriggers(t *testing.T) {
 	for name, schema := range tests {
 		t.Run(name, func(t *testing.T) {
 			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV6, Content: openbindings.TextContent(wholeJSONSpecForSchema("application/json", schema))}},
+				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(wholeJSONSpecForSchema("application/json", schema))}},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -127,7 +118,7 @@ func TestRevision6DoesNotPromoteInertOrNestedDeclarations(t *testing.T) {
 	for name, schema := range tests {
 		t.Run(name, func(t *testing.T) {
 			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV6, Content: openbindings.TextContent(wholeJSONSpecForSchema("application/json", schema))}},
+				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(wholeJSONSpecForSchema("application/json", schema))}},
 			})
 			if err != nil {
 				t.Fatal(err)

@@ -35,7 +35,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 	sourceLocation := ""
 	bindingSpec := BindingSpec
 	for _, source := range iface.Sources {
-		if source.BindingSpec == BindingSpecV7 || source.BindingSpec == BindingSpecV6 || source.BindingSpec == BindingSpecV5 || source.BindingSpec == BindingSpecV4 || source.BindingSpec == BindingSpecV3 || source.BindingSpec == BindingSpecV2 || source.BindingSpec == LegacyBindingSpec {
+		if source.BindingSpec == BindingSpec {
 			sourceLocation = source.Location
 			bindingSpec = source.BindingSpec
 			break
@@ -191,11 +191,11 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 			continue
 		}
 		reasonCode := "openapi.request_media_excluded"
-		message := "request media alternative has no faithful revision-1 carriage"
+		message := "request media alternative has no faithful candidate carriage"
 		rule := "OAPI-P-04"
 		if planned[mediaKey] {
 			reasonCode = "openapi.flattening_collision"
-			message = "request media alternative collides with an independently declared parameter in revision 1's flattened boundary"
+			message = "request media alternative collides with an independently declared parameter in the candidate's application boundary"
 			rule = "OAPI-P-03"
 		} else if planErr != nil {
 			message = planErr.Error()

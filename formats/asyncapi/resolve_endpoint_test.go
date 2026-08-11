@@ -26,8 +26,8 @@ func configuration(points map[string]any) map[string]any {
 }
 
 func TestParseDocument_AcceptedLineOnly(t *testing.T) {
-	if _, err := ParseDocument([]byte("asyncapi: \"2.6.0\"\ninfo:\n  title: t\n  version: \"1\"\n")); err == nil {
-		t.Fatal("expected ASYNC-P-01 refusal for the 2.x line")
+	if _, err := ParseDocument([]byte("asyncapi: \"3.1.2\"\ninfo:\n  title: t\n  version: \"1\"\n")); err == nil {
+		t.Fatal("expected ASYNC-P-01 refusal for an unadopted 3.1 patch")
 	} else if !strings.Contains(err.Error(), "ASYNC-P-01") {
 		t.Errorf("refusal should cite ASYNC-P-01, got: %v", err)
 	}
@@ -36,6 +36,8 @@ func TestParseDocument_AcceptedLineOnly(t *testing.T) {
 	}
 	// JSON and YAML representations of the same artifact both parse.
 	mustParse(t, `{"asyncapi":"3.0.0","info":{"title":"t","version":"1"}}`)
+	mustParse(t, `{"asyncapi":"3.1.0","info":{"title":"t","version":"1"}}`)
+	mustParse(t, "asyncapi: \"2.6.0\"\ninfo:\n  title: t\n  version: \"1\"\n")
 	mustParse(t, "asyncapi: \"3.0.0\"\ninfo:\n  title: t\n  version: \"1\"\n")
 }
 

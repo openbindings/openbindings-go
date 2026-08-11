@@ -121,6 +121,7 @@ type message struct {
 	Summary         string           `json:"summary,omitempty" yaml:"summary,omitempty"`
 	Description     string           `json:"description,omitempty" yaml:"description,omitempty"`
 	ContentType     string           `json:"contentType,omitempty" yaml:"contentType,omitempty"`
+	SchemaFormat    string           `json:"schemaFormat,omitempty" yaml:"schemaFormat,omitempty"`
 	Payload         map[string]any   `json:"payload,omitempty" yaml:"payload,omitempty"`
 	Headers         map[string]any   `json:"headers,omitempty" yaml:"headers,omitempty"`
 	Bindings        *messageBindings `json:"bindings,omitempty" yaml:"bindings,omitempty"`

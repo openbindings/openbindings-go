@@ -982,7 +982,7 @@ func TestResolveInputCodec(t *testing.T) {
 	}
 
 	doc, msgs = mk("avro/binary")
-	if _, err = resolveInputCodec(doc, msgs); err == nil || !strings.Contains(err.Error(), "no revision-1 value carriage") {
+	if _, err = resolveInputCodec(doc, msgs); err == nil || !strings.Contains(err.Error(), "no candidate application-value carriage") {
 		t.Errorf("binary/codec-specific media must be refused, got %v", err)
 	}
 

@@ -22,7 +22,7 @@ func dynamicBodySpec(openapiVersion, mediaType, schema string) string {
 
 func dynamicRoutedInput(payload map[string]any) []any {
 	return []any{map[string]any{
-		"$openbindings": BindingSpecV5,
+		"$openbindings": BindingSpec,
 		"value": map[string]any{
 			"id":      "query-value",
 			"payload": payload,
@@ -45,7 +45,7 @@ func invokeRevision5Request(t *testing.T, spec string, input any, observe func(*
 		}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpecV5, Content: openbindings.TextContent(spec)},
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1items/post",
 	})
 	_, invocationErr := driveOutputs(context.Background(), call, input)
@@ -79,7 +79,7 @@ func TestRevision5AdditionalPropertiesFormPreservesIndependentNames(t *testing.T
 	}
 
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV5, Content: openbindings.TextContent(spec)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -133,28 +133,10 @@ func TestRevision5PatternPropertiesSelectsMultipartMemberSchema(t *testing.T) {
 	}
 }
 
-func TestRevision5KeepsRevision4NamedPropertySurfaceImmutable(t *testing.T) {
-	spec := dynamicBodySpec("3.0.4", "application/x-www-form-urlencoded", `{"type":"object","properties":{"fixed":{"type":"string"}},"additionalProperties":{"type":"string"}}`)
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV4, Content: openbindings.TextContent(spec)}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	input := iface.Operations["createItem"].Input.(map[string]any)
-	properties := input["properties"].(map[string]any)
-	if _, ok := properties["payload"]; ok {
-		t.Fatalf("revision 4 acquired revision 5 payload: %#v", properties)
-	}
-	if iface.Bindings["createItem.openapi"].InputTransform != nil {
-		t.Fatal("revision 4 acquired a revision 5 transform")
-	}
-}
-
 func TestRevision5DoesNotTreatExplicitAdditionalPropertiesFalseAsDynamic(t *testing.T) {
 	spec := dynamicBodySpec("3.1.2", "application/json", `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`)
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpecV5, Content: openbindings.TextContent(spec)}},
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)

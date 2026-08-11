@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -442,11 +441,9 @@ func TestSynthesizeInterface_RefusesMultipleSources(t *testing.T) {
 	}
 }
 
-// A required request body whose only candidate collides with an independent
-// parameter cannot round-trip through revision 1's flattened boundary. The
-// synthesizer refuses the whole result: its direct OBI return type has no
-// durable channel in which to disclose an omitted callable target.
-func TestSynthesize_ParamBodyCollisionRefusesPartialInterface(t *testing.T) {
+// The first candidate preserves a same-named parameter and body property by
+// assigning collision-free application fields and a binding-private route.
+func TestSynthesize_ParamBodyCollisionGetsNeutralRoute(t *testing.T) {
 	spec := `{
 	  "openapi": "3.0.0",
 	  "info": {"title": "t", "version": "1"},
@@ -467,15 +464,25 @@ func TestSynthesize_ParamBodyCollisionRefusesPartialInterface(t *testing.T) {
 	}`
 	var warnings []openbindings.SynthesizerWarning
 	synth := NewSynthesizer()
-	_, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources:   []openbindings.SynthesizeSource{{BindingSpec: LegacyBindingSpec, Content: openbindings.TextContent(spec)}},
+	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources:   []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 		OnWarning: func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
-	if err == nil || !strings.Contains(err.Error(), `"updateUser"`) || !strings.Contains(err.Error(), "statically unbindable partial interface") {
-		t.Fatalf("want creation-time soundness refusal for updateUser, got %v", err)
+	if err != nil {
+		t.Fatalf("collision-preserving synthesis failed: %v", err)
+	}
+	input, _ := iface.Operations["updateUser"].Input.(map[string]any)
+	properties, _ := input["properties"].(map[string]any)
+	for _, name := range []string{"id", "id_2", "name"} {
+		if _, ok := properties[name]; !ok {
+			t.Fatalf("missing neutral field %q in %#v", name, properties)
+		}
+	}
+	if iface.Bindings["updateUser.openapi"].InputTransform == nil {
+		t.Fatal("collision-preserving synthesis omitted the routed input transform")
 	}
 	if len(warnings) != 0 {
-		t.Fatalf("a fatal target omission must not be downgraded to warnings, got %v", warnings)
+		t.Fatalf("faithful collision routing must not warn, got %v", warnings)
 	}
 }
 

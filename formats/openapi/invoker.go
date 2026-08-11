@@ -23,63 +23,31 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// BindingSpec identifies the current OpenAPI binding revision.
-const BindingSpec = "openbindings.openapi@7"
-
-// LegacyBindingSpec identifies the immutable revision-1 OpenAPI binding.
-const LegacyBindingSpec = "openbindings.openapi@1"
-
-// BindingSpecV2 identifies the collision-preserving OpenAPI binding. Revision
-// 2 retains revision 1's wire behavior while admitting independently declared
-// same-named parameter and body values through a binding-private routed input
-// representation.
-const BindingSpecV2 = "openbindings.openapi@2"
-
-// BindingSpecV3 identifies the immutable media-fidelity OpenAPI binding. Revision 3
-// inherits revision 2's routed input representation and adds declaration-led
-// raw-octet request carriage plus configured media-range selection.
-const BindingSpecV3 = "openbindings.openapi@3"
-
-// BindingSpecV4 identifies the immutable response-carriage-fidelity OpenAPI binding.
-// It inherits revision 3 and adds response media-range selection plus an
-// exact raw-byte output boundary.
-const BindingSpecV4 = "openbindings.openapi@4"
-
-// BindingSpecV5 identifies the immutable dynamic-object-carriage OpenAPI binding.
-// It inherits revision 4 and preserves explicitly dynamic object bodies as
-// one application value before artifact-native form serialization.
-const BindingSpecV5 = "openbindings.openapi@5"
-
-// BindingSpecV6 identifies the immutable whole-JSON-carriage OpenAPI binding. It
-// preserves declaration-complex JSON request values without flattening.
-const BindingSpecV6 = "openbindings.openapi@6"
-
-// BindingSpecV7 identifies the current OAS 3.0 schema-omitted byte-carriage
-// OpenAPI binding.
-const BindingSpecV7 = BindingSpec
+// BindingSpec identifies the unreleased first OpenAPI binding candidate.
+const BindingSpec = "openbindings.openapi@1"
 
 func hasRoutedInputs(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV2 || bindingSpec == BindingSpecV3 || bindingSpec == BindingSpecV4 || bindingSpec == BindingSpecV5 || bindingSpec == BindingSpecV6 || bindingSpec == BindingSpecV7
+	return bindingSpec == BindingSpec
 }
 
 func hasMediaFidelity(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV3 || bindingSpec == BindingSpecV4 || bindingSpec == BindingSpecV5 || bindingSpec == BindingSpecV6 || bindingSpec == BindingSpecV7
+	return bindingSpec == BindingSpec
 }
 
 func hasResponseFidelity(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV4 || bindingSpec == BindingSpecV5 || bindingSpec == BindingSpecV6 || bindingSpec == BindingSpecV7
+	return bindingSpec == BindingSpec
 }
 
 func hasDynamicObjectCarriage(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV5 || bindingSpec == BindingSpecV6 || bindingSpec == BindingSpecV7
+	return bindingSpec == BindingSpec
 }
 
 func hasWholeJSONCarriage(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV6 || bindingSpec == BindingSpecV7
+	return bindingSpec == BindingSpec
 }
 
 func hasSchemaOmittedOAS30ByteCarriage(bindingSpec string) bool {
-	return bindingSpec == BindingSpecV7
+	return bindingSpec == BindingSpec
 }
 
 // DefaultSourceName is the default source key used when registering an OpenAPI source in an OBI.
@@ -222,13 +190,7 @@ func NewInvokerWithOptions(options RuntimeOptions) *Invoker {
 // BindingSpecs returns the binding-spec identifiers this invoker supports.
 func (e *Runtime) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpecV7, Description: "OpenAPI 3.x HTTP APIs (OAS 3.0 schema-omitted byte-carriage revision)"},
-		{BindingSpec: BindingSpecV6, Description: "OpenAPI 3.x HTTP APIs (whole-JSON carriage revision)"},
-		{BindingSpec: BindingSpecV5, Description: "OpenAPI 3.x HTTP APIs (dynamic-object carriage revision)"},
-		{BindingSpec: BindingSpecV4, Description: "OpenAPI 3.x HTTP APIs (response-carriage fidelity revision)"},
-		{BindingSpec: BindingSpecV3, Description: "OpenAPI 3.x HTTP APIs (request-carriage fidelity revision)"},
-		{BindingSpec: BindingSpecV2, Description: "OpenAPI 3.x HTTP APIs (collision-preserving revision)"},
-		{BindingSpec: LegacyBindingSpec, Description: "OpenAPI 3.x HTTP APIs (revision-1 compatibility)"},
+		{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"},
 	}
 }
 
@@ -296,24 +258,10 @@ func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http
 }
 
 func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
-	switch bindingSpec {
-	case LegacyBindingSpec:
-		return openapiclient.BaseProfile(), true
-	case BindingSpecV2:
-		return openapiclient.RoutedProfile(), true
-	case BindingSpecV3:
-		return openapiclient.MediaProfile(), true
-	case BindingSpecV4:
-		return openapiclient.ResponseProfile(), true
-	case BindingSpecV5:
-		return openapiclient.DynamicObjectProfile(), true
-	case BindingSpecV6:
-		return openapiclient.WholeJSONProfile(), true
-	case BindingSpecV7:
+	if bindingSpec == BindingSpec {
 		return openapiclient.FullProfile(), true
-	default:
-		return openapiclient.Profile{}, false
 	}
+	return openapiclient.Profile{}, false
 }
 
 func bridgeHooks(args *openbindings.BindingInvocationArgs, bindingSpec string) *openapiclient.Hooks {
@@ -595,13 +543,7 @@ func (c *Synthesizer) resolverClient() *http.Client {
 // BindingSpecs returns the binding-spec identifiers this synthesizer supports.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpecV7, Description: "OpenAPI 3.x HTTP APIs (OAS 3.0 schema-omitted byte-carriage revision)"},
-		{BindingSpec: BindingSpecV6, Description: "OpenAPI 3.x HTTP APIs (whole-JSON carriage revision)"},
-		{BindingSpec: BindingSpecV5, Description: "OpenAPI 3.x HTTP APIs (dynamic-object carriage revision)"},
-		{BindingSpec: BindingSpecV4, Description: "OpenAPI 3.x HTTP APIs (response-carriage fidelity revision)"},
-		{BindingSpec: BindingSpecV3, Description: "OpenAPI 3.x HTTP APIs (request-carriage fidelity revision)"},
-		{BindingSpec: BindingSpecV2, Description: "OpenAPI 3.x HTTP APIs (collision-preserving revision)"},
-		{BindingSpec: LegacyBindingSpec, Description: "OpenAPI 3.x HTTP APIs (revision-1 compatibility)"},
+		{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"},
 	}
 }
 
@@ -615,7 +557,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 // accounts for every path operation, request-media alternative, callback, and
 // webhook observed by the same load.
 //
-// This surface is per-operation tolerant: an operation whose revision-1
+// This surface is per-operation tolerant: an operation whose candidate
 // flattened boundary cannot be represented is omitted from the OBI and
 // accounted for as an excluded target in coverage — a sound partial OBI with
 // every omission evidenced, never a whole-document refusal
@@ -642,8 +584,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpecV7 && src.BindingSpec != BindingSpecV6 && src.BindingSpec != BindingSpecV5 && src.BindingSpec != BindingSpecV4 && src.BindingSpec != BindingSpecV3 && src.BindingSpec != BindingSpecV2 && src.BindingSpec != LegacyBindingSpec {
-		return nil, nil, fmt.Errorf("synthesizer supports exact binding specifications %q, %q, %q, %q, %q, %q, and %q, got %q", BindingSpecV7, BindingSpecV6, BindingSpecV5, BindingSpecV4, BindingSpecV3, BindingSpecV2, LegacyBindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpec {
+		return nil, nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {

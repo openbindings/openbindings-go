@@ -175,21 +175,21 @@ func TestLoadDocument_NoLocationRelativeRefReadableError(t *testing.T) {
 // OAPI-P-03 — flattened-model refusals at the invoke boundary
 // ---------------------------------------------------------------------------
 
-func TestInvoke_UnflattenableOperationRefused(t *testing.T) {
+func TestInvoke_CaseFoldingHeaderCollisionRefused(t *testing.T) {
 	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	spec := fmt.Sprintf(`{
 	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
 	  "servers": [{"url": %q}],
-	  "paths": {"/items/{id}": {"get": {
+	  "paths": {"/items": {"get": {
 	    "operationId": "get",
 	    "parameters": [
-	      {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
-	      {"name": "id", "in": "query", "schema": {"type": "string"}}
+	      {"name": "X-ID", "in": "header", "schema": {"type": "string"}},
+	      {"name": "x-id", "in": "header", "schema": {"type": "string"}}
 	    ],
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWithBindingSpec(t, LegacyBindingSpec, spec, "#/paths/~1items~1{id}/get", map[string]any{"id": "1"})
+	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1items/get", map[string]any{})
 	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("expected the unflattenable refusal, got %v", ierr)
 	}
@@ -372,7 +372,7 @@ func TestInvoke_EnvelopeShapedApplicationBodyRemainsApplicationData(t *testing.T
 	  }}}
 	}`, srv.URL)
 	input := map[string]any{
-		"$openbindings": BindingSpecV2,
+		"$openbindings": BindingSpec,
 		"value":         map[string]any{"application": true},
 		"parameters":    []any{},
 		"body":          map[string]any{"application": true},
@@ -422,20 +422,10 @@ func TestInvoke_PassthroughRidesJSONBodyEncoding(t *testing.T) {
 	}
 }
 
-// §9.1 (OAPI-P-03): passthrough rides the body's encoding — multipart here.
-// A primitive passthrough field rides as a text part; an object passthrough
-// field rides as an application/json part, per the same §9.2 part rules as
-// declared fields.
-func TestInvoke_PassthroughRidesMultipartEncoding(t *testing.T) {
-	var gotCT, gotDescription, gotNote, gotMeta string
-	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
-		gotCT = r.Header.Get("Content-Type")
-		gotDescription = r.FormValue("description")
-		gotNote = r.FormValue("note")
-		gotMeta = r.FormValue("meta")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
-	})
+// Multipart members need declaration-defined part carriage. Unknown members
+// fail closed instead of inheriting an invented codec.
+func TestInvoke_UndeclaredMultipartMembersRefused(t *testing.T) {
+	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	spec := fmt.Sprintf(`{
 	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
 	  "servers": [{"url": %q}],
@@ -447,37 +437,20 @@ func TestInvoke_PassthroughRidesMultipartEncoding(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWithBindingSpec(t, BindingSpecV2, spec, "#/paths/~1upload/post", map[string]any{
+	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1upload/post", map[string]any{
 		"description": "d", "note": "urgent", "meta": map[string]any{"k": "v"},
 	})
-	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "no declaration-defined carriage") {
+		t.Fatalf("expected declaration-defined multipart refusal, got %v", ierr)
 	}
-	if !strings.Contains(gotCT, "multipart/form-data") {
-		t.Errorf("Content-Type = %q, want multipart/form-data", gotCT)
-	}
-	if gotDescription != "d" {
-		t.Errorf("declared part description = %q, want %q", gotDescription, "d")
-	}
-	if gotNote != "urgent" {
-		t.Errorf("passthrough part note = %q, want %q", gotNote, "urgent")
-	}
-	if gotMeta != `{"k":"v"}` {
-		t.Errorf("passthrough object part meta = %q, want %q", gotMeta, `{"k":"v"}`)
+	if requests.Load() != 0 {
+		t.Fatal("multipart refusal must precede dispatch")
 	}
 }
 
-// §9.1 (OAPI-P-03): passthrough rides the body's encoding —
-// application/x-www-form-urlencoded here, serialized like declared fields.
-func TestInvoke_PassthroughRidesURLEncodedEncoding(t *testing.T) {
-	var gotCT string
-	var gotBody []byte
-	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
-		gotCT = r.Header.Get("Content-Type")
-		gotBody, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
-	})
+// Form-urlencoded members likewise need declared serialization.
+func TestInvoke_UndeclaredURLEncodedMembersRefused(t *testing.T) {
+	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	spec := fmt.Sprintf(`{
 	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
 	  "servers": [{"url": %q}],
@@ -489,15 +462,12 @@ func TestInvoke_PassthroughRidesURLEncodedEncoding(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWithBindingSpec(t, BindingSpecV2, spec, "#/paths/~1form/post", map[string]any{"name": "a b", "extra": "y"})
-	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1form/post", map[string]any{"name": "a b", "extra": "y"})
+	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "no declaration-defined carriage") {
+		t.Fatalf("expected declaration-defined urlencoded refusal, got %v", ierr)
 	}
-	if gotCT != "application/x-www-form-urlencoded" {
-		t.Errorf("Content-Type = %q", gotCT)
-	}
-	if string(gotBody) != "extra=y&name=a%20b" {
-		t.Errorf("body = %q, want the passthrough field serialized like declared form fields", gotBody)
+	if requests.Load() != 0 {
+		t.Fatal("urlencoded refusal must precede dispatch")
 	}
 }
 
@@ -648,10 +618,13 @@ func TestInvoke_PlusJSONSelected(t *testing.T) {
 	}
 }
 
-// An operation declaring only out-of-family request media refuses
-// pre-dispatch with zero I/O.
-func TestInvoke_BinaryOnlyBodyRefused(t *testing.T) {
-	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+func TestInvoke_BinaryOnlyBodyCarriesExactOctets(t *testing.T) {
+	var gotBody []byte
+	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
 	spec := fmt.Sprintf(`{
 	  "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
 	  "servers": [{"url": %q}],
@@ -661,12 +634,12 @@ func TestInvoke_BinaryOnlyBodyRefused(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWithBindingSpec(t, BindingSpecV2, spec, "#/paths/~1blob/post", map[string]any{"body": "x"})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected the out-of-family refusal, got %v", ierr)
+	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1blob/post", map[string]any{"body": "AAEC"})
+	if ierr != nil {
+		t.Fatalf("binary invocation failed: %v", ierr)
 	}
-	if requests.Load() != 0 {
-		t.Error("refusal must precede dispatch and input consumption where knowable")
+	if requests.Load() != 1 || !reflect.DeepEqual(gotBody, []byte{0, 1, 2}) {
+		t.Fatalf("binary dispatch count/body = %d/%v", requests.Load(), gotBody)
 	}
 }
 

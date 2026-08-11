@@ -274,7 +274,7 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 // are separate namespaces, so a resource URI and a byte-identical template
 // string never collide — each is reached by its own entity token.
 func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string) (targetKind, *openbindings.InvocationError) {
-	bindingSpec := LegacyBindingSpec
+	bindingSpec := BindingSpec
 	if len(bindingSpecs) > 0 {
 		bindingSpec = bindingSpecs[0]
 	}
@@ -328,7 +328,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("tool")
 	case "prompts":
 		if bindingSpec == BindingSpec {
-			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP prompts have no application output schema and are excluded by openbindings.mcp@2 (MCP-P-04)"}
+			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP prompts have no application output schema and are excluded by openbindings.mcp@1 (MCP-P-04)"}
 		}
 		switch n := count(l.prompts); {
 		case n == 1:
@@ -339,7 +339,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("prompt")
 	case "resources":
 		if bindingSpec == BindingSpec {
-			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP resources have no application output schema and are excluded by openbindings.mcp@2 (MCP-P-04)"}
+			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP resources have no application output schema and are excluded by openbindings.mcp@1 (MCP-P-04)"}
 		}
 		switch n := count(l.resources); {
 		case n == 1:
@@ -350,7 +350,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("resource")
 	case "resourceTemplates":
 		if bindingSpec == BindingSpec {
-			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP resource templates have no application output schema and are excluded by openbindings.mcp@2 (MCP-P-04)"}
+			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP resource templates have no application output schema and are excluded by openbindings.mcp@1 (MCP-P-04)"}
 		}
 		switch n := count(l.templates); {
 		case n == 1:

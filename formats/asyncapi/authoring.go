@@ -13,11 +13,8 @@ type authoringExclusion struct {
 	message string
 }
 
-// bindableOperationIDs is the shared authoring eligibility gate. It admits
-// exactly operations for which revision 1 has at least one faithful protocol
-// cell. Required configuration (server URL, message selection, codec lane,
-// protocol fields) remains satisfiable and therefore does not exclude a
-// target; artifact contradictions and definition-level exclusions do.
+// bindableOperationIDs is the protocol-independent authoring gate. Driver
+// installation and built-in driver coverage never determine synthesis.
 func bindableOperationIDs(doc *document, bindingSpec string) []string {
 	ids := make([]string, 0, len(doc.Operations))
 	for id, op := range doc.Operations {
@@ -34,6 +31,7 @@ func operationBindable(doc *document, op *asyncOperation, bindingSpec string) bo
 }
 
 func operationExclusion(doc *document, op *asyncOperation, bindingSpec string) *authoringExclusion {
+	_ = bindingSpec
 	if op == nil {
 		return &authoringExclusion{"invalid", "asyncapi.invalid_operation", "ASYNC-D-03", "the operations-map entry is not an operation object"}
 	}
@@ -48,80 +46,37 @@ func operationExclusion(doc *document, op *asyncOperation, bindingSpec string) *
 	if !ok {
 		return &authoringExclusion{"invalid", "asyncapi.dangling_channel_ref", "ASYNC-D-03", "the operation channel reference does not resolve"}
 	}
-	if op.Bindings != nil && op.Bindings.HTTP != nil {
-		v := op.Bindings.HTTP.BindingVersion
-		if v != "" && v != "0.3.0" {
-			return &authoringExclusion{"excluded", "asyncapi.unsupported_http_binding_version", "ASYNC-P-02", "the HTTP operation binding version is outside revision 1"}
-		}
+	if len(effectiveServers(doc, &ch)) == 0 {
+		return &authoringExclusion{"excluded", "asyncapi.no_effective_server", "ASYNC-P-04", "the operation has no effective artifact-declared server or protocol"}
 	}
-	if ch.Bindings != nil && ch.Bindings.WS != nil {
-		v := ch.Bindings.WS.BindingVersion
-		if v != "" && v != "0.1.0" {
-			return &authoringExclusion{"excluded", "asyncapi.unsupported_websocket_binding_version", "ASYNC-P-02", "the WebSocket channel binding version is outside revision 1"}
-		}
+	operationMessages := governingMessages(doc, op, &ch)
+	if len(operationMessages) == 0 {
+		return &authoringExclusion{"excluded", "asyncapi.no_resolved_messages", "ASYNC-P-03", "the operation has no resolved message declaration"}
 	}
-	hasHTTP, hasWS := false, false
-	for _, member := range effectiveServers(doc, &ch) {
-		switch strings.ToLower(member.Server.Protocol) {
-		case "http", "https":
-			hasHTTP = true
-		case "ws", "wss":
-			hasWS = true
-		}
+	replyMessages := replyGoverningMessages(doc, op)
+	if op.Reply != nil && len(replyMessages) == 0 {
+		return &authoringExclusion{"excluded", "asyncapi.no_resolved_reply_messages", "ASYNC-P-03", "the operation declares a reply but no reply message resolves"}
 	}
-
-	// A receive action can use HTTP when the artifact declares its method.
-	// It can use WebSocket only without reply augmentation. Either protocol
-	// remains selectable through the server configuration point.
-	if op.Action == "receive" {
-		messages := authoringInputMessages(doc, op, &ch)
-		usable := false
-		for _, m := range messages {
-			if messageBindable(doc, m) {
-				usable = true
+	inputMessages, outputMessages := operationMessages, replyMessages
+	if op.Action == "send" {
+		inputMessages, outputMessages = replyMessages, operationMessages
+	}
+	if len(inputMessages) > 0 {
+		allHaveHeaders := true
+		for _, message := range inputMessages {
+			if message.Headers == nil {
+				allHaveHeaders = false
 				break
 			}
 		}
-		if !usable {
-			return &authoringExclusion{"excluded", "asyncapi.no_bindable_message", "ASYNC-P-03", "the publish interaction has no message alternative revision 1 can carry"}
-		}
-		httpOK := hasHTTP && op.Bindings != nil && op.Bindings.HTTP != nil && strings.TrimSpace(op.Bindings.HTTP.Method) != "" && requiredPropertiesMayBeStrings(op.Bindings.HTTP.Query) && replyMessagesBindable(doc, op)
-		wsOK := hasWS && op.Reply == nil && wsFieldsMayBeStrings(&ch)
-		if !httpOK && !wsOK {
-			return &authoringExclusion{"excluded", "asyncapi.no_faithful_protocol_cell", "ASYNC-P-02", "neither the HTTP publish nor WebSocket publish cell is faithfully representable"}
-		}
-		return nil
-	}
-
-	// A send action is a subscription. Standalone HTTP send is excluded, so
-	// only the WebSocket cell can make it bindable.
-	if !hasWS {
-		return &authoringExclusion{"excluded", "asyncapi.no_faithful_protocol_cell", "ASYNC-P-02", "the operation's effective server set provides no WebSocket subscription cell"}
-	}
-	if op.Reply != nil && preservesSendReplies(bindingSpec) {
-		return &authoringExclusion{"excluded", "asyncapi.websocket_reply", "ASYNC-P-02", "reply-bearing WebSocket send operations require request/reply session semantics revision 2 does not define"}
-	}
-	if !wsFieldsMayBeStrings(&ch) {
-		return &authoringExclusion{"excluded", "asyncapi.protocol_fields_unrepresentable", "ASYNC-P-04", "required WebSocket protocol fields do not admit string values"}
-	}
-	for _, parameter := range ch.Parameters {
-		if parameter.Location != "" {
-			return &authoringExclusion{"excluded", "asyncapi.subscription_parameter_location", "ASYNC-P-04", "a subscription channel parameter declares a location revision 1 cannot preserve"}
+		if allHaveHeaders {
+			return &authoringExclusion{"excluded", "asyncapi.message_headers", "ASYNC-P-03", "every caller-input message declares application headers the first candidate cannot carry at the ordinary value boundary"}
 		}
 	}
-	messages := governingMessages(doc, op, &ch)
-	if len(messages) == 0 {
-		return &authoringExclusion{"excluded", "asyncapi.no_resolved_messages", "ASYNC-P-03", "the subscription interaction has no resolved message declaration"}
-	}
-	for _, m := range messages {
-		if !messageBindable(doc, m) {
-			return &authoringExclusion{"excluded", "asyncapi.unbindable_subscription_message", "ASYNC-P-03", "a subscription message alternative uses carriage outside revision 1"}
+	for _, message := range outputMessages {
+		if message.Headers != nil {
+			return &authoringExclusion{"excluded", "asyncapi.message_headers", "ASYNC-P-03", "a possible caller-output message declares application headers the first candidate cannot carry at the ordinary value boundary"}
 		}
-	}
-	ctx := map[string]any{"configuration": map[string]any{"decode": "json"}}
-	_, err := resolveSubscriptionContentType(doc, messages, ctx)
-	if err != nil {
-		return &authoringExclusion{"excluded", "asyncapi.ambiguous_subscription_content_type", "ASYNC-P-05", err.Error()}
 	}
 	return nil
 }
@@ -209,22 +164,17 @@ func authoringStringSlice(value any) []string {
 }
 
 func operationPayloadSchema(doc *document, op *asyncOperation, input bool) map[string]any {
-	var messages []message
+	channelName := extractRefName(op.Channel.Ref)
+	ch := doc.Channels[channelName]
+	messages := governingMessages(doc, op, &ch)
 	if input {
-		channelName := extractRefName(op.Channel.Ref)
-		ch := doc.Channels[channelName]
-		messages = authoringInputMessages(doc, op, &ch)
-		usable := messages[:0]
+		usable := make([]message, 0, len(messages))
 		for _, m := range messages {
-			if messageBindable(doc, m) {
+			if m.Headers == nil {
 				usable = append(usable, m)
 			}
 		}
 		messages = usable
-	} else {
-		channelName := extractRefName(op.Channel.Ref)
-		ch := doc.Channels[channelName]
-		messages = governingMessages(doc, op, &ch)
 	}
 	return unionPayloadSchemas(messages)
 }
@@ -235,14 +185,14 @@ func replyPayloadSchema(doc *document, reply *operationReply) map[string]any {
 	}
 	var messages []message
 	for _, ref := range reply.Messages {
-		if m := resolveMessageRef(doc, ref); m != nil && messageBindable(doc, *m) {
+		if m := resolveMessageRef(doc, ref); m != nil && m.Headers == nil {
 			messages = append(messages, *m)
 		}
 	}
 	if len(messages) == 0 && reply.Channel != nil {
 		if ch, ok := doc.Channels[extractRefName(reply.Channel.Ref)]; ok {
 			for _, m := range channelMessages(&ch) {
-				if messageBindable(doc, m) {
+				if m.Headers == nil {
 					messages = append(messages, m)
 				}
 			}
@@ -257,8 +207,8 @@ func unionPayloadSchemas(messages []message) map[string]any {
 	}
 	unique := map[string]map[string]any{}
 	for _, message := range messages {
-		if message.Payload == nil {
-			return nil // one artifact alternative is unconstrained
+		if message.Payload == nil || foreignSchemaFormat(message.SchemaFormat) {
+			return map[string]any{}
 		}
 		encoded, _ := json.Marshal(message.Payload)
 		unique[string(encoded)] = message.Payload
@@ -278,4 +228,9 @@ func unionPayloadSchemas(messages []message) map[string]any {
 		choices = append(choices, unique[key])
 	}
 	return map[string]any{"anyOf": choices}
+}
+
+func foreignSchemaFormat(format string) bool {
+	format = strings.ToLower(format)
+	return format != "" && !strings.Contains(format, "asyncapi") && !strings.Contains(format, "json-schema")
 }

@@ -8,11 +8,10 @@ import (
 )
 
 // convertToInterface inventories every declared root field. The operation
-// schemas intentionally describe only the stable OpenBindings boundary.
-// Revision 2 projects the selected root-field application value; revision 1
-// retains its published complete-response-envelope compatibility shape.
+// schemas intentionally describe only the stable OpenBindings boundary and
+// project the selected root-field application value.
 func convertToInterface(schema *introspectionSchema, sourceLocation string, bindingSpecs ...string) (openbindings.Interface, error) {
-	bindingSpec := LegacyBindingSpec
+	bindingSpec := BindingSpec
 	if len(bindingSpecs) > 0 {
 		bindingSpec = bindingSpecs[0]
 	}
@@ -82,11 +81,7 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string, bind
 			}
 
 			op.Input = map[string]any{"type": "object"}
-			if bindingSpec == BindingSpec {
-				op.Output = graphQLValueSchema(f.Type, tm)
-			} else {
-				op.Output = graphQLResponseSchema()
-			}
+			op.Output = graphQLValueSchema(f.Type, tm)
 
 			iface.Operations[opKey] = op
 

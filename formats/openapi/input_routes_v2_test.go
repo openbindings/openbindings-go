@@ -9,7 +9,7 @@ import (
 
 func TestParseRoutedEnvelopeRejectsSharedDestinationField(t *testing.T) {
 	_, err := parseRoutedEnvelope([]any{map[string]any{
-		"$openbindings": BindingSpecV2,
+		"$openbindings": BindingSpec,
 		"value":         map[string]any{"shared": "x"},
 		"parameters": []any{
 			map[string]any{"in": "path", "name": "id", "field": "shared"},
@@ -24,7 +24,7 @@ func TestParseRoutedEnvelopeRejectsSharedDestinationField(t *testing.T) {
 
 func TestParseRoutedEnvelopeRequiresExactDescriptorShape(t *testing.T) {
 	_, err := parseRoutedEnvelope([]any{map[string]any{
-		"$openbindings": BindingSpecV2,
+		"$openbindings": BindingSpec,
 		"value":         map[string]any{},
 		"parameters":    []any{},
 		"body":          map[string]any{},
@@ -37,7 +37,7 @@ func TestParseRoutedEnvelopeRequiresExactDescriptorShape(t *testing.T) {
 
 func TestParseRoutedEnvelopeLeavesMarkerShapedObjectFlat(t *testing.T) {
 	envelope, err := parseRoutedEnvelope(map[string]any{
-		"$openbindings": BindingSpecV2,
+		"$openbindings": BindingSpec,
 		"value":         map[string]any{"application": true},
 	})
 	if err != nil || envelope != nil {
@@ -50,7 +50,7 @@ func TestTransformExpressionUsesArrayForEmptyParameterRoutes(t *testing.T) {
 		wholeBodyField: "payload",
 		needsTransform: true,
 	}
-	expression := routes.transformExpressionFor(BindingSpecV5)
+	expression := routes.transformExpressionFor(BindingSpec)
 	if !strings.Contains(expression, `"parameters":[]`) {
 		t.Fatalf("empty parameter routes must remain an array: %s", expression)
 	}

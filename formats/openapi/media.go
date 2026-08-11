@@ -409,7 +409,7 @@ func planRequestBody(op *openapi3.Operation) (*bodyPlan, error) {
 // set. Sorting is a nonnormative reference-SDK policy only; the binding
 // specification gives the declarations no preference order.
 func planRequestBodies(op *openapi3.Operation) ([]*bodyPlan, error) {
-	return planRequestBodiesFor(nil, op, BindingSpecV2)
+	return planRequestBodiesFor(nil, op, BindingSpec)
 }
 
 // planRequestBodiesFor preserves the immutable revision-1/2 candidate set and
@@ -535,6 +535,9 @@ func requiresWholeJSONCarriage(schema *openapi3.Schema, seen map[*openapi3.Schem
 	if schema == nil || seen[schema] {
 		return false
 	}
+	if _, boolean := booleanSchemaLiteral(schema); boolean {
+		return false
+	}
 	seen[schema] = true
 	defer delete(seen, schema)
 	if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 || schema.Not != nil ||
@@ -646,7 +649,7 @@ func exactRequestFamily(doc *openapi3.T, parsed parsedMediaType, media *openapi3
 		return familyMultipart, false, nil
 	case parsed.base == "application/x-www-form-urlencoded":
 		if hasMediaFidelity(bindingSpec) && mediaSchema(media) == nil {
-			return "", false, fmt.Errorf("schema-omitted form media has no revision-3 caller route")
+			return "", false, fmt.Errorf("schema-omitted form media has no application-value caller route")
 		}
 		if hasMediaFidelity(bindingSpec) {
 			if err := validateRevision3URLEncodedMedia(doc, media); err != nil {
@@ -678,7 +681,7 @@ func exactRequestFamily(doc *openapi3.T, parsed parsedMediaType, media *openapi3
 func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType) error {
 	schema := mediaSchema(media)
 	if schema == nil {
-		return fmt.Errorf("schema-omitted urlencoded media has no revision-3 caller route")
+		return fmt.Errorf("schema-omitted urlencoded media has no application-value caller route")
 	}
 	_, props, err := resolvedBodyShape(schema, map[*openapi3.Schema]bool{})
 	if err != nil {
@@ -691,7 +694,7 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 			if !literal {
 				continue
 			}
-			return fmt.Errorf("urlencoded property %q has an unconstrained boolean schema with no revision-3 octet boundary", name)
+			return fmt.Errorf("urlencoded property %q has an unconstrained boolean schema with no defined octet boundary", name)
 		}
 		var enc *openapi3.Encoding
 		if media != nil {
@@ -721,7 +724,7 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType) error {
 	schema := mediaSchema(media)
 	if schema == nil {
-		return fmt.Errorf("schema-omitted multipart media has no revision-3 caller route")
+		return fmt.Errorf("schema-omitted multipart media has no application-value caller route")
 	}
 	_, props, err := resolvedBodyShape(schema, map[*openapi3.Schema]bool{})
 	if err != nil {
@@ -734,7 +737,7 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 			if !literal {
 				continue // an unsatisfiable property has no admissible runtime value
 			}
-			return fmt.Errorf("multipart part %q has an unconstrained boolean schema with no revision-3 octet boundary", name)
+			return fmt.Errorf("multipart part %q has an unconstrained boolean schema with no defined octet boundary", name)
 		}
 		var enc *openapi3.Encoding
 		if media != nil {
@@ -753,7 +756,7 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 		if schemaTypeIs(partSchema, "array", map[*openapi3.Schema]bool{}) {
 			contentSchema = resolvedMultipartItems(partSchema, map[*openapi3.Schema]bool{})
 			if schemaTypeIs(contentSchema, "array", map[*openapi3.Schema]bool{}) {
-				return fmt.Errorf("multipart part %q has nested array items with no revision-3 repeated-part mapping", name)
+				return fmt.Errorf("multipart part %q has nested array items with no defined repeated-part mapping", name)
 			}
 		}
 		contentType, err := revision3PartContentType(contentSchema, enc, is30)
@@ -826,7 +829,7 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 		return parsedMediaType{}, fmt.Errorf("an absent part schema defaults to application/octet-stream, but this binding revision defines no JSON-to-octet boundary")
 	}
 	if _, boolean := booleanSchemaLiteral(schema); boolean {
-		return parsedMediaType{}, fmt.Errorf("an unconstrained boolean part schema has no revision-3 octet boundary")
+		return parsedMediaType{}, fmt.Errorf("an unconstrained boolean part schema has no defined octet boundary")
 	}
 	contentEncoding, encodingConflict := resolvedSchemaKeywordString(schema, "contentEncoding")
 	if encodingConflict {
@@ -908,7 +911,7 @@ func revision3PropertyCarriage(schema *openapi3.Schema, contentType parsedMediaT
 		if allowRaw30 {
 			return revision3PropertyRaw30, nil
 		}
-		return 0, fmt.Errorf("OAS 3.0 binary has no revision-3 urlencoded octet boundary")
+		return 0, fmt.Errorf("OAS 3.0 binary has no defined urlencoded octet boundary")
 	}
 	if contentType.base == "text/plain" {
 		if schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) ||
@@ -918,7 +921,7 @@ func revision3PropertyCarriage(schema *openapi3.Schema, contentType parsedMediaT
 			return revision3PropertyText, nil
 		}
 	}
-	return 0, fmt.Errorf("Content-Type %q has no revision-3 native property serializer", contentType.canonical)
+	return 0, fmt.Errorf("Content-Type %q has no defined native property serializer", contentType.canonical)
 }
 
 func schemaHasContentEncoding(schema *openapi3.Schema) bool {
@@ -1160,7 +1163,7 @@ func candidateCollides(params openapi3.Parameters, plan *bodyPlan) bool {
 }
 
 func configuredRequestPlans(plans []*bodyPlan, bindCtx map[string]any) []*bodyPlan {
-	selected, _ := configuredRequestPlansFor(nil, nil, plans, bindCtx, BindingSpecV2)
+	selected, _ := configuredRequestPlansFor(nil, nil, plans, bindCtx, BindingSpec)
 	return selected
 }
 
@@ -1219,7 +1222,7 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 }
 
 func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans []*bodyPlan, wanted parsedMediaType, bindingSpecs ...string) ([]*bodyPlan, error) {
-	bindingSpec := BindingSpecV3
+	bindingSpec := BindingSpec
 	if len(bindingSpecs) > 0 {
 		bindingSpec = bindingSpecs[0]
 	}
@@ -1270,7 +1273,7 @@ func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans [
 		}
 	}
 	if skeleton == nil {
-		return nil, fmt.Errorf("configured requestMedia %q selects declaration %q, which has no revision-3 carriage", wanted.canonical, selected.key)
+		return nil, fmt.Errorf("configured requestMedia %q selects declaration %q, which has no application-value carriage", wanted.canonical, selected.key)
 	}
 	if !skeleton.mediaRange {
 		copy := *skeleton
@@ -1298,7 +1301,7 @@ func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans [
 		applyDynamicObjectShape(plan)
 	}
 	if plan.synthetic != skeleton.synthetic || plan.wholeObject != skeleton.wholeObject {
-		return nil, fmt.Errorf("configured requestMedia %q selects range %q with no single revision-3 routed body shape", wanted.canonical, selected.key)
+		return nil, fmt.Errorf("configured requestMedia %q selects range %q with no single application-value body shape", wanted.canonical, selected.key)
 	}
 	return []*bodyPlan{plan}, nil
 }
@@ -1464,7 +1467,7 @@ func buildRequestBody(doc *openapi3.T, plan *bodyPlan, routed *routedInput) (io.
 // Other parts follow the artifact's encoding object or OAS per-type defaults.
 // Fields are written in sorted order for a deterministic body.
 func buildMultipartBody(doc *openapi3.T, media *openapi3.MediaType, fields map[string]any) (io.Reader, string, error) {
-	return buildMultipartBodyForRevision(doc, media, fields, BindingSpecV2)
+	return buildMultipartBodyForRevision(doc, media, fields, BindingSpec)
 }
 
 func buildMultipartBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, fields map[string]any, bindingSpec string) (io.Reader, string, error) {
@@ -2181,7 +2184,7 @@ func canonicalBase64BoundaryBytes(name, value string) ([]byte, error) {
 // serialized with the same expansions as query parameters and joined in
 // sorted-name order for a deterministic body.
 func buildURLEncodedBody(media *openapi3.MediaType, fields map[string]any) (string, error) {
-	return buildURLEncodedBodyForRevision(nil, media, fields, BindingSpecV2)
+	return buildURLEncodedBodyForRevision(nil, media, fields, BindingSpec)
 }
 
 func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, fields map[string]any, bindingSpec string) (string, error) {
@@ -2269,7 +2272,7 @@ func revision3PropertyBytes(name string, value any, schema *openapi3.Schema, con
 		}
 		return encodeTextString(text, contentType)
 	}
-	return nil, fmt.Errorf("unknown revision-3 property carriage")
+	return nil, fmt.Errorf("unknown property carriage")
 }
 
 // ---------------------------------------------------------------------------
@@ -2314,7 +2317,7 @@ func governingResponse(op *openapi3.Operation, status int) *governingResponseMat
 // a subset of the actual Content-Type. Greatest parameter specificity wins;
 // a tie is ambiguous and loud.
 func governingResponseMedia(response *openapi3.Response, actual string) (parsedMediaType, error) {
-	return governingResponseMediaFor(response, actual, BindingSpecV2)
+	return governingResponseMediaFor(response, actual, BindingSpec)
 }
 
 func governingResponseMediaFor(response *openapi3.Response, actual, bindingSpec string) (parsedMediaType, error) {
@@ -2421,7 +2424,7 @@ func governingResponseMediaMatchFor(response *openapi3.Response, actual, binding
 // a successful response: literal 2xx, 2XX, and default declarations. Members
 // retain declaration parameters; ordering is an implementation convention.
 func successMediaTypes(op *openapi3.Operation) []string {
-	return successMediaTypesFor(op, BindingSpecV2)
+	return successMediaTypesFor(op, BindingSpec)
 }
 
 func successMediaTypesFor(op *openapi3.Operation, bindingSpec string) []string {

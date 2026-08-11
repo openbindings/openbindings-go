@@ -109,7 +109,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 
 			params := effectiveParameters(pathItem, op)
 			if field := unflattenableParamForRevision(params, bindingSpec); field != "" {
-				reason := fmt.Sprintf("parameter %q has no unique revision-1 flattened identity", field)
+				reason := fmt.Sprintf("parameter %q has no unique flattened identity", field)
 				if onUnrealizable != nil {
 					onUnrealizable(unrealizableTarget{
 						ref:          buildJSONPointerRef(path, method),
@@ -124,7 +124,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			}
 
 			if parameter := unsupportedParameterContentFor(params, bindingSpec); parameter != "" {
-				reason := fmt.Sprintf("parameter %q declares content with no faithful revision-2 carriage", parameter)
+				reason := fmt.Sprintf("parameter %q declares content with no faithful candidate carriage", parameter)
 				if onUnrealizable != nil {
 					onUnrealizable(unrealizableTarget{
 						ref:          buildJSONPointerRef(path, method),
@@ -178,7 +178,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 							operationKey: opKey,
 							reasonCode:   code,
 							rule:         rule,
-							message:      reason + "; the required request body has no faithful revision-1 carriage",
+							message:      reason + "; the required request body has no faithful candidate carriage",
 						})
 						continue
 					}
@@ -980,11 +980,11 @@ func schemaWithParameterDescription(schema map[string]any, description string) m
 }
 
 // unsupportedParameterContent returns the first content-form parameter whose
-// single media declaration revision 2 cannot serialize. Creation-time
+// single media declaration the candidate cannot serialize. Creation-time
 // soundness requires excluding the target rather than emitting an operation
 // that is statically guaranteed to refuse when that parameter is populated.
 func unsupportedParameterContent(params openapi3.Parameters) string {
-	return unsupportedParameterContentFor(params, BindingSpecV2)
+	return unsupportedParameterContentFor(params, BindingSpec)
 }
 
 func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec string) string {
@@ -1108,7 +1108,7 @@ func buildOutputSchemaWithCyclicRefs(op *openapi3.Operation, schemaOverlays *raw
 						((hasSchemaOmittedOAS30ByteCarriage(bindingSpec) && parsed.rangeSpecificity == 2 && mediaSchema(media) == nil) || binarySignaled(mediaSchema(media), true))) ||
 						(!isOpenAPI30(majorMinor(openapiVersion)) && media != nil && media.Schema == nil))
 				// The revision-1 builtin non-JSON lane emits text, including
-				// one text value per SSE event. Revision 4's artifact-authorized
+				// one text value per SSE event. The artifact-authorized
 				// byte lane uses canonical Base64 at the operation boundary.
 				if rawBoundary {
 					appendSchema(map[string]any{"type": "string", "contentEncoding": "base64"}, "")

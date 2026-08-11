@@ -21,12 +21,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// BindingSpec is the latest MCP binding-specification identifier. Revision 2
-// exposes only artifact-declared application values: tools with outputSchema
-// produce their structuredContent value. LegacyBindingSpec remains supported
-// exactly for existing revision-1 OBIs, whose result boundary is MCP-shaped.
-const BindingSpec = "openbindings.mcp@2"
-const LegacyBindingSpec = "openbindings.mcp@1"
+// BindingSpec identifies the unreleased first MCP binding candidate. It
+// exposes artifact-declared application values for tools with outputSchema.
+const BindingSpec = "openbindings.mcp@1"
 
 // Invoker handles binding invocation for MCP sources.
 //
@@ -129,7 +126,6 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 func mcpBindingSpecInfos() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
 		{BindingSpec: BindingSpec, Description: "Model Context Protocol application-contract tools"},
-		{BindingSpec: LegacyBindingSpec, Description: "Model Context Protocol revision-1 compatibility"},
 	}
 }
 
@@ -249,8 +245,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpec && src.BindingSpec != LegacyBindingSpec {
-		return nil, fmt.Errorf("synthesizer supports exact binding specifications %q and %q, got %q", BindingSpec, LegacyBindingSpec, src.BindingSpec)
+	if src.BindingSpec != BindingSpec {
+		return nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateEndpoint(src.OutputLocation); err != nil {

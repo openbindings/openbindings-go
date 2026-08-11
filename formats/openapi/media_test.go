@@ -53,22 +53,6 @@ func TestPlanRequestBody_SelectionOrder(t *testing.T) {
 			"application/vnd.a+json", familyJSON,
 		},
 		{
-			"lexical fallback does not invent family preference",
-			openapi3.Content{
-				"application/x-www-form-urlencoded": emptyMedia(),
-				"multipart/form-data":               emptyMedia(),
-			},
-			"application/x-www-form-urlencoded", familyURLEncoded,
-		},
-		{
-			"urlencoded over text/plain",
-			openapi3.Content{
-				"text/plain":                        emptyMedia(),
-				"application/x-www-form-urlencoded": emptyMedia(),
-			},
-			"application/x-www-form-urlencoded", familyURLEncoded,
-		},
-		{
 			"text/plain last",
 			openapi3.Content{"text/plain": emptyMedia()},
 			"text/plain", familyText,
@@ -92,14 +76,11 @@ func TestPlanRequestBody_SelectionOrder(t *testing.T) {
 	}
 }
 
-// Out-of-family declarations (a raw binary body, ranges only) refuse loudly
-// pre-dispatch (OAPI-P-04).
-func TestPlanRequestBody_OutOfFamilyRefuses(t *testing.T) {
+// Declarations with no definition-complete form carriage refuse loudly.
+func TestPlanRequestBody_UnderdefinedFormCarriageRefuses(t *testing.T) {
 	cases := []openapi3.Content{
-		{"application/octet-stream": emptyMedia()},
-		{"image/png": emptyMedia()},
-		{"*/*": emptyMedia()},           // a range is not a concrete declaration
-		{"application/*": emptyMedia()}, // ditto
+		{"application/x-www-form-urlencoded": emptyMedia()},
+		{"multipart/form-data": emptyMedia()},
 	}
 	for _, content := range cases {
 		if _, err := planRequestBody(opWithRequestBody(content, false)); err == nil {
@@ -292,131 +273,6 @@ func TestBuildMultipartBody_30BinaryBase64(t *testing.T) {
 	// An invalid base64 string is a loud error, never silent bytes.
 	if _, _, err := buildMultipartBody(doc, media, map[string]any{"file": "!!not-base64!!"}); err == nil {
 		t.Error("invalid base64 for a binary-signaled part must refuse")
-	}
-}
-
-// 3.1.x: a string schema carrying contentMediaType/contentEncoding signals
-// binary; a declared contentEncoding decides the decode, and the declared
-// contentMediaType rides as the part's content type.
-func TestBuildMultipartBody_31ContentKeywords(t *testing.T) {
-	doc := &openapi3.T{OpenAPI: "3.1.0"}
-	media := &openapi3.MediaType{
-		Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
-			Type: &openapi3.Types{"object"},
-			Properties: openapi3.Schemas{
-				"img": {Value: &openapi3.Schema{
-					Type: &openapi3.Types{"string"},
-					Extensions: map[string]any{
-						"contentMediaType": "image/png",
-						"contentEncoding":  "base64url",
-					},
-				}},
-			},
-		}},
-	}
-	payload := base64.URLEncoding.EncodeToString([]byte{0xff, 0xfe})
-	r, ct, err := buildMultipartBody(doc, media, map[string]any{"img": payload})
-	if err != nil {
-		t.Fatal(err)
-	}
-	parts := parseMultipart(t, r, ct)
-	got := parts["img"][0]
-	if got[0] != "image/png" {
-		t.Errorf("img part content type = %q, want image/png", got[0])
-	}
-	if got[1] != string([]byte{0xff, 0xfe}) {
-		t.Errorf("img part bytes not decoded per contentEncoding base64url")
-	}
-}
-
-// Parts that are not binary-signaled follow the per-type defaults: objects
-// as application/json parts, primitives as plain fields; the encoding
-// object's contentType overrides; declared arrays expand into repeated parts.
-func TestBuildMultipartBody_PartDefaultsAndEncoding(t *testing.T) {
-	doc := &openapi3.T{OpenAPI: "3.0.3"}
-	media := &openapi3.MediaType{
-		Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
-			Type: &openapi3.Types{"object"},
-			Properties: openapi3.Schemas{
-				"meta":  {Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}},
-				"count": {Value: &openapi3.Schema{Type: &openapi3.Types{"integer"}}},
-				"tags":  {Value: &openapi3.Schema{Type: &openapi3.Types{"array"}, Items: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}}},
-				"note":  {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
-			},
-		}},
-		Encoding: map[string]*openapi3.Encoding{
-			"note": {ContentType: "text/markdown"},
-		},
-	}
-	fields := map[string]any{
-		"meta":  map[string]any{"k": "v"},
-		"count": float64(42),
-		"tags":  []any{"a", "b"},
-		"note":  "# hi",
-	}
-	r, ct, err := buildMultipartBody(doc, media, fields)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parts := parseMultipart(t, r, ct)
-	if got := parts["meta"][0]; got[0] != "application/json" || got[1] != `{"k":"v"}` {
-		t.Errorf("meta part = %v, want application/json object", got)
-	}
-	if got := parts["count"][0][1]; got != "42" {
-		t.Errorf("count part = %q, want 42", got)
-	}
-	if len(parts["tags"]) != 2 || parts["tags"][0][1] != "a" || parts["tags"][1][1] != "b" {
-		t.Errorf("tags must expand into repeated parts, got %v", parts["tags"])
-	}
-	if got := parts["note"][0]; got[0] != "text/markdown" || got[1] != "# hi" {
-		t.Errorf("note part = %v, want text/markdown verbatim", got)
-	}
-}
-
-// A Go []byte value passes through raw (in-process convenience; it cannot
-// have arrived as JSON).
-func TestBuildMultipartBody_ByteSlicePassthrough(t *testing.T) {
-	doc := &openapi3.T{OpenAPI: "3.0.3"}
-	media := &openapi3.MediaType{
-		Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
-			Type: &openapi3.Types{"object"},
-			Properties: openapi3.Schemas{
-				"file": {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, Format: "binary"}},
-			},
-		}},
-	}
-	r, ct, err := buildMultipartBody(doc, media, map[string]any{"file": []byte{0x01, 0x02}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	parts := parseMultipart(t, r, ct)
-	if got := parts["file"][0][1]; got != string([]byte{0x01, 0x02}) {
-		t.Errorf("byte-slice part = %x, want raw passthrough", got)
-	}
-}
-
-// urlencoded bodies serialize per the OAS encoding rules: form/explode=true
-// default, overridable per field.
-func TestBuildURLEncodedBody(t *testing.T) {
-	media := &openapi3.MediaType{
-		Encoding: map[string]*openapi3.Encoding{
-			"tags": {Style: "pipeDelimited", Explode: openapi3.Ptr(false)},
-		},
-	}
-	fields := map[string]any{
-		"name": "a b",
-		"ids":  []any{float64(1), float64(2)},
-		"tags": []any{"x", "y"},
-	}
-	got, err := buildURLEncodedBody(media, fields)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Sorted field order: ids (form explode default → repeated), name, tags
-	// (pipeDelimited non-explode via the encoding object).
-	want := "ids=1&ids=2&name=a%20b&tags=x|y"
-	if got != want {
-		t.Errorf("urlencoded body = %q, want %q", got, want)
 	}
 }
 

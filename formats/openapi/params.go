@@ -105,7 +105,7 @@ func unflattenableParam(params openapi3.Parameters) string {
 }
 
 // unflattenableParamForRevision keeps revision 1's complete flattened-model
-// refusal while letting revision 2 disambiguate names across protocol
+// refusal while letting the binding-private route disambiguate names across protocol
 // locations. Case-distinct header declarations remain unresolvable in both
 // revisions because HTTP field names themselves are case-insensitive: no
 // routing envelope can create two semantically distinct wire destinations.
@@ -165,7 +165,7 @@ type routedInput struct {
 //     URL cannot be built); every other missing member is the server's
 //     declared validation's business.
 func routeInput(params openapi3.Parameters, input map[string]any, pathTemplate string, plan *bodyPlan) (*routedInput, error) {
-	return routeInputFor(params, input, pathTemplate, plan, BindingSpecV2)
+	return routeInputFor(params, input, pathTemplate, plan, BindingSpec)
 }
 
 func routeInputFor(params openapi3.Parameters, input map[string]any, pathTemplate string, plan *bodyPlan, bindingSpec string) (*routedInput, error) {
@@ -229,16 +229,21 @@ func routeInputFor(params openapi3.Parameters, input map[string]any, pathTemplat
 				// object body to pass through into.
 				unmatched = append(unmatched, name)
 			}
-		default:
+		case plan.family == familyJSON || plan.props[name]:
 			// Evaluation-free body passthrough: no schema evaluation
-			// participates in routing; enforcing the body schema is the
-			// server's business.
+			// participates in JSON routing, while form and multipart members
+			// require an artifact declaration that defines their wire carriage.
 			r.bodyFields[name] = value
+		default:
+			unmatched = append(unmatched, name)
 		}
 	}
 	if len(unmatched) > 0 {
 		if plan != nil && plan.declared && (plan.synthetic || plan.wholeObject) {
 			return nil, fmt.Errorf("field(s) %s match no declared parameter, and the declared request body uses whole-value carriage (its flattened contract carries only the synthetic %q property)", strings.Join(unmatched, ", "), syntheticBodyProperty)
+		}
+		if plan != nil && plan.declared {
+			return nil, fmt.Errorf("field(s) %s have no declaration-defined carriage for the %s request body", strings.Join(unmatched, ", "), plan.mediaType)
 		}
 		return nil, fmt.Errorf("field(s) %s match no declared parameter, and the operation declares no request body to pass them through to", strings.Join(unmatched, ", "))
 	}
@@ -258,7 +263,7 @@ var errMissingPathParam = errors.New("missing path parameter")
 
 // routeParameter serializes one populated parameter onto its wire location.
 func routeParameter(r *routedInput, p *openapi3.Parameter, value any) error {
-	return routeParameterFor(r, p, value, BindingSpecV2)
+	return routeParameterFor(r, p, value, BindingSpec)
 }
 
 func routeParameterFor(r *routedInput, p *openapi3.Parameter, value any, bindingSpec string) error {
@@ -414,7 +419,7 @@ func revision3ParameterSerializationMethod(p *openapi3.Parameter) (*openapi3.Ser
 // a string value verbatim. Any other declared media type has no defined
 // parameter carriage in revision 1 and refuses loudly.
 func serializeParamContent(p *openapi3.Parameter, value any) (string, error) {
-	return serializeParamContentFor(p, value, BindingSpecV2)
+	return serializeParamContentFor(p, value, BindingSpec)
 }
 
 func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec string) (string, error) {
@@ -470,7 +475,7 @@ func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec stri
 // (cross-SDK URL parity); the style's structural characters (";", "=", ".",
 // ",") stay literal.
 func serializePathValue(name string, value any, style string, explode bool) (string, error) {
-	return serializePathValueForRevision(name, value, style, explode, BindingSpecV2)
+	return serializePathValueForRevision(name, value, style, explode, BindingSpec)
 }
 
 func serializePathValueForRevision(name string, value any, style string, explode bool, bindingSpec string) (string, error) {
@@ -503,7 +508,7 @@ func serializeHeaderValue(value any, style string, explode bool) (string, error)
 // name=value units, per the OAS query styles. allowReserved lets RFC 3986
 // reserved characters in VALUES pass unescaped.
 func serializeQueryValue(name string, value any, style string, explode bool, allowReserved bool) ([]string, error) {
-	return serializeQueryValueForRevision(name, value, style, explode, allowReserved, BindingSpecV2, false)
+	return serializeQueryValueForRevision(name, value, style, explode, allowReserved, BindingSpec, false)
 }
 
 func serializeQueryValueForRevision(name string, value any, style string, explode bool, allowReserved bool, bindingSpec string, formSafe bool) ([]string, error) {
