@@ -26,6 +26,9 @@ import (
 // BindingSpec identifies the unreleased first OpenAPI binding candidate.
 const BindingSpec = "openbindings.openapi@1"
 
+// Numbered "revision" labels retained in some internal helper/test filenames
+// are development-history markers, not published binding-spec revisions.
+
 func hasRoutedInputs(bindingSpec string) bool {
 	return bindingSpec == BindingSpec
 }
@@ -61,8 +64,8 @@ const DefaultSourceName = "openapi"
 func newDefaultHTTPClient() *http.Client {
 	return &http.Client{
 		// Redirects may rewrite an artifact-declared method or discard its
-		// encoded body. Revision 1 defines no semantics-preserving follow
-		// profile, so the conforming default observes the redirect response.
+		// encoded body. The candidate defines no semantics-preserving follow
+		// rule, so the conforming default observes the redirect response.
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -99,8 +102,8 @@ type RuntimeOptions struct {
 
 // RuntimeSource identifies an OpenAPI artifact without requiring an OBI.
 type RuntimeSource struct {
-	// BindingSpec selects the exact OpenBindings OpenAPI semantic revision.
-	// Empty selects the current revision.
+	// BindingSpec selects the exact OpenBindings OpenAPI binding candidate.
+	// Empty selects the current unreleased candidate.
 	BindingSpec string
 	Location    string
 	Content     json.RawMessage
@@ -311,9 +314,25 @@ func toCoreMetadata(metadata openapiclient.Metadata) openbindings.Metadata {
 }
 
 func bridgeExecutionError(err error) error {
+	var invocation *openbindings.InvocationError
+	if errors.As(err, &invocation) && invocation != nil {
+		return &openbindings.InvocationError{
+			Code:        invocation.Code,
+			Message:     abstractAdapterErrorMessage(invocation.Code),
+			Details:     invocation.Details,
+			Diagnostics: adapterDiagnostics(invocation.Diagnostics, invocation.Code, invocation.Message),
+		}
+	}
 	var execution *openapiclient.ExecutionError
 	if !errors.As(err, &execution) || execution == nil {
-		return err
+		if err == nil {
+			return nil
+		}
+		return &openbindings.InvocationError{
+			Code:        openbindings.ErrCodeRuntime,
+			Message:     abstractAdapterErrorMessage(openbindings.ErrCodeRuntime),
+			Diagnostics: adapterDiagnostics(nil, "RUNTIME_ERROR", err.Error()),
+		}
 	}
 	diagnostics := execution.Diagnostics
 	if diagnostics == nil {
@@ -323,7 +342,98 @@ func bridgeExecutionError(err error) error {
 	if prerequisites, ok := details.(*openapiclient.Prerequisites); ok {
 		details = toCorePrerequisites(prerequisites)
 	}
-	return &openbindings.InvocationError{Code: execution.Code, Message: execution.Message, Details: details, Diagnostics: diagnostics}
+	code := normalizedAdapterErrorCode(execution.Code)
+	return &openbindings.InvocationError{
+		Code:        code,
+		Message:     abstractAdapterErrorMessage(code),
+		Details:     details,
+		Diagnostics: adapterDiagnostics(diagnostics, execution.Code, execution.Message),
+	}
+}
+
+func normalizedAdapterErrorCode(code string) string {
+	switch code {
+	case "SOURCE_LOAD_FAILED":
+		return openbindings.ErrCodeSourceLoadFailed
+	case "INVALID_OPERATION_REF":
+		return openbindings.ErrCodeInvalidRef
+	case "OPERATION_NOT_FOUND":
+		return openbindings.ErrCodeRefNotFound
+	case "INVALID_DOCUMENT":
+		return openbindings.ErrCodeSourceConfigError
+	case "RUNTIME_ERROR", "EXECUTION_COMPLETED_BEFORE_READY":
+		return openbindings.ErrCodeRuntime
+	default:
+		return code
+	}
+}
+
+func abstractAdapterErrorMessage(code string) string {
+	switch code {
+	case openbindings.ErrCodeContextRequired:
+		return "Additional invocation context is required"
+	case openbindings.ErrCodeCancelled:
+		return "Invocation cancelled"
+	case openbindings.ErrCodeAlreadyConsumed:
+		return "Invocation output is already being consumed"
+	case openbindings.ErrCodeExpectedSingle:
+		return "Invocation did not produce exactly one output"
+	case openbindings.ErrCodeInputClosed:
+		return "Invocation input is closed"
+	case openbindings.ErrCodeInvocationClosed:
+		return "Invocation is closed"
+	case openbindings.ErrCodeMissingInput:
+		return "Invocation input is required"
+	case openbindings.ErrCodeTooManyInputs:
+		return "Invocation received too many inputs"
+	case openbindings.ErrCodeTransportClosed:
+		return "Invocation transport closed before completion"
+	case openbindings.ErrCodeAuthRequired:
+		return "Invocation requires valid authentication"
+	case openbindings.ErrCodePermissionDenied:
+		return "Invocation is not permitted"
+	case openbindings.ErrCodeInvalidRef:
+		return "Invocation target reference is invalid"
+	case openbindings.ErrCodeRefNotFound:
+		return "Invocation target was not found"
+	case openbindings.ErrCodeSourceLoadFailed:
+		return "Invocation source could not be loaded"
+	case openbindings.ErrCodeSourceConfigError:
+		return "Invocation target is not actionable"
+	case openbindings.ErrCodeConnectFailed:
+		return "Invocation could not reach its target"
+	case openbindings.ErrCodeExecutionFailed:
+		return "Invocation completed unsuccessfully"
+	case openbindings.ErrCodeResponseError:
+		return "Invocation result could not be processed"
+	case openbindings.ErrCodeStreamError:
+		return "Invocation stream completed unsuccessfully"
+	case openbindings.ErrCodeTimeout:
+		return "Invocation timed out"
+	case openbindings.ErrCodeUnavailable:
+		return "Invocation target is unavailable"
+	case openbindings.ErrCodeValidationFailed:
+		return "Invocation value is invalid"
+	case openbindings.ErrCodeProtocol:
+		return "Invocation produced an invalid interaction"
+	case openbindings.ErrCodeRuntime:
+		return "Binding implementation failed"
+	default:
+		return "Binding implementation failed"
+	}
+}
+
+func adapterDiagnostics(evidence any, code, message string) map[string]any {
+	result := map[string]any{}
+	if existing, ok := evidence.(map[string]any); ok {
+		for key, value := range existing {
+			result[key] = value
+		}
+	} else if evidence != nil {
+		result["nativeEvidence"] = evidence
+	}
+	result["openapiClient"] = map[string]any{"code": code, "message": message}
+	return result
 }
 
 func toCorePrerequisites(value *openapiclient.Prerequisites) *openbindings.ContextRequiredDetails {
@@ -367,7 +477,7 @@ func (e *Runtime) invokeBinding(ctx context.Context, args *openbindings.BindingI
 func (e *Runtime) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) error {
 	options, err := enginePrepareOptions(args, e.client, e.securityHandlers)
 	if err != nil {
-		return err
+		return bridgeExecutionError(err)
 	}
 	prepared, err := e.engine.Prepare(ctx, options)
 	if err != nil {

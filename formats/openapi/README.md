@@ -94,8 +94,10 @@ fmt.Println(out)
 ```
 
 An HTTP response classified as unsuccessful completes with a terminal
-`*openbindings.InvocationError`; it does not become an operation output. Use
-`openapi.FailureEvidenceFrom(err)` to recover the native HTTP status, headers,
+`*openbindings.InvocationError`; it does not become an operation output. Its
+ordinary code and message are protocol-independent. Use
+`openapi.FailureEvidenceFrom(err)` as the explicit diagnostic escape hatch to
+recover the native HTTP status, headers,
 final URL/status text where available, exact response bytes, and the OpenAPI
 Response Object key/media that governed the response. `BodyCaptured` separates
 an exact empty body from an uncaptured body. Non-2xx SSE responses use the same

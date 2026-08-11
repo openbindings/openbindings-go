@@ -14,8 +14,9 @@ standalone runtime owns AsyncAPI loading, normalization, target and message
 resolution, security interpretation, and execution. Protocol drivers own the
 concrete transport and nested AsyncAPI protocol-binding behavior.
 
-AsyncAPI Core and the artifact's nested protocol binding remain upstream
-authority. Synthesis is not restricted to an allowlist of installed drivers.
+Under `openbindings.asyncapi@1`, AsyncAPI Core and the artifact's nested
+protocol binding are deliberately incorporated as authorities. Synthesis is
+not restricted to an allowlist of installed drivers.
 
 ## Install and register
 

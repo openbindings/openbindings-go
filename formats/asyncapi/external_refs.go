@@ -172,7 +172,11 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 				}
 				target, err := resolveReferenceFragment(targetDocument.root, fragment)
 				if err != nil {
-					return nil, fmt.Errorf("reference %q: %w", ref, err)
+					// Preserve an unresolved reference for operation eligibility and
+					// coverage. A missing fragment can invalidate one target or schema
+					// graph without making unrelated operations unreadable. Retrieval and
+					// parse failures remain document-level failures above.
+					return typed, nil
 				}
 				stack[key] = true
 				resolved, err := resolver.walk(cloneReferenceValue(target), targetDocument, stack)
@@ -223,6 +227,15 @@ func (resolver *artifactReferenceResolver) scopedDocument(current *artifactRefer
 	if err != nil {
 		return nil, fmt.Errorf("invalid JSON Schema $id %q: %w", id, err)
 	}
+	if strings.HasPrefix(id, "#") {
+		if id == "#" || isDraft07PlainNameID(id) {
+			return current, nil
+		}
+		return nil, fmt.Errorf("JSON Schema $id %q has an invalid fragment-only identifier", id)
+	}
+	if parsed.Fragment != "" {
+		return nil, fmt.Errorf("JSON Schema $id %q has a fragment plus non-fragment URI components", id)
+	}
 	if !parsed.IsAbs() {
 		if current.location == "" {
 			return nil, fmt.Errorf("relative JSON Schema $id %q has no document base URI", id)
@@ -230,8 +243,8 @@ func (resolver *artifactReferenceResolver) scopedDocument(current *artifactRefer
 		base, _ := url.Parse(current.location)
 		parsed = base.ResolveReference(parsed)
 	}
-	if parsed.Scheme == "" || parsed.Opaque != "" || parsed.Fragment != "" {
-		return nil, fmt.Errorf("JSON Schema $id %q is not an absolute hierarchical URI without a fragment", id)
+	if parsed.Scheme == "" || parsed.Opaque != "" {
+		return nil, fmt.Errorf("JSON Schema $id %q does not resolve to an absolute hierarchical URI", id)
 	}
 	location := parsed.String()
 	if existing := resolver.documents[location]; existing != nil {
@@ -240,6 +253,24 @@ func (resolver *artifactReferenceResolver) scopedDocument(current *artifactRefer
 	scoped := &artifactReferenceDocument{location: location, root: object}
 	resolver.documents[location] = scoped
 	return scoped, nil
+}
+
+func isDraft07PlainNameID(id string) bool {
+	if len(id) < 2 || id[0] != '#' || !isASCIILetter(id[1]) {
+		return false
+	}
+	for index := 2; index < len(id); index++ {
+		character := id[index]
+		if !isASCIILetter(character) && (character < '0' || character > '9') &&
+			character != '-' && character != '_' && character != ':' && character != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIILetter(character byte) bool {
+	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
 }
 
 func (resolver *artifactReferenceResolver) referenceTarget(current *artifactReferenceDocument, ref string) (*artifactReferenceDocument, string, bool, error) {

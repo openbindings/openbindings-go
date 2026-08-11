@@ -284,9 +284,13 @@ func openAPIErrorPhase(err *openbindings.InvocationError, dispatched bool) strin
 	if err.Code == openbindings.ErrCodeSourceLoadFailed {
 		return "load"
 	}
+	nativeMessage := openAPIClientDiagnosticMessage(err)
+	if nativeMessage == "" {
+		nativeMessage = err.Message
+	}
 	if err.Code == openbindings.ErrCodeInvalidRef || err.Code == openbindings.ErrCodeRefNotFound ||
-		strings.Contains(err.Message, "unflattenable") || strings.Contains(err.Message, "normalized collision") ||
-		strings.Contains(err.Message, "different locations") {
+		strings.Contains(nativeMessage, "unflattenable") || strings.Contains(nativeMessage, "normalized collision") ||
+		strings.Contains(nativeMessage, "different locations") {
 		return "resolution"
 	}
 	return "pre-dispatch"

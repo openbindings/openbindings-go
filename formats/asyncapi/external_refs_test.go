@@ -93,6 +93,47 @@ operations:
 	}
 }
 
+func TestLoadDocumentRetainsDraft07PlainNameIDsAndDanglingSchemaFragments(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/channel.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`channels:
+  commands:
+    address: /commands
+    messages:
+      Command:
+        contentType: application/json
+        payload:
+          $schema: http://json-schema.org/draft-07/schema#
+          $id: '#Command'
+          type: object
+          properties:
+            optional: {$ref: '#/missing'}
+`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	content := openbindings.TextContent(`asyncapi: 3.0.0
+info: {title: External schema, version: "1"}
+servers:
+  api: {host: api.example.test, protocol: https}
+channels:
+  commands: {$ref: "./channel.yaml#/channels/commands"}
+operations:
+  submit:
+    action: receive
+    channel: {$ref: "#/channels/commands"}
+    bindings: {http: {method: POST}}
+`)
+	doc, err := loadDocument(context.Background(), server.Client(), server.URL+"/root.yaml", content)
+	if err != nil {
+		t.Fatalf("loadDocument: %v", err)
+	}
+	if !operationBindable(doc, addressableOperation(t, doc, "submit"), BindingSpec) {
+		t.Fatal("operation with a retained dangling payload-schema fragment should remain bindable")
+	}
+}
+
 func TestLoadDocumentRejectsRelativeExternalRefWithoutBase(t *testing.T) {
 	content := openbindings.TextContent(`asyncapi: 3.0.0
 info: {title: External, version: "1"}

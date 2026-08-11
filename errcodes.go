@@ -2,13 +2,14 @@ package openbindings
 
 // Canonical invocation error codes. Wire values are SCREAMING_SNAKE with an
 // ERR_ prefix, plus the un-prefixed negotiation signal CONTEXT_REQUIRED,
-// matching the openbindings.binding-invoker interface. The TypeScript SDK uses
-// the same values for the same failure classes, so consumers switching on
-// Code are portable for every code an invocation handle can carry. (One
-// idiom split: the local wiring failures — unknown operation/binding/source
-// — surface as pre-errored handles carrying these codes in Go but THROW
-// typed errors in TypeScript; the values exist in both SDKs for
-// documentation.)
+// matching the openbindings.binding-invoker interface where that interface
+// defines them. Only interface-owned lifecycle and negotiation codes have
+// cross-implementation portability by definition. The remaining codes are
+// open SDK conventions, not an exhaustive cross-protocol failure vocabulary;
+// binding specifications and third-party implementations may define others.
+// (One idiom split: local wiring failures — unknown operation/binding/source
+// — surface as pre-errored handles in Go but throw typed errors in TypeScript;
+// the values exist in both SDKs for documentation.)
 //
 // The lifecycle codes are produced by the SDK's invocation machinery; the
 // operational codes are SDK conventions for format invokers. Third-party

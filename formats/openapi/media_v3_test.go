@@ -1209,7 +1209,7 @@ func TestRevision3SSEUsesWHATWGUTF8AndEmptySuccessSkipsMedia(t *testing.T) {
 	}
 }
 
-func TestRevision3ResponseContentTypeMustBeSingleton(t *testing.T) {
+func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"object"}}}}}}}}}`
 	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"application/json", "text/plain"}}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: req}, nil
@@ -1218,7 +1218,7 @@ func TestRevision3ResponseContentTypeMustBeSingleton(t *testing.T) {
 		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
-	if ierr == nil || ierr.Code != openbindings.ErrCodeProtocol || !strings.Contains(ierr.Message, "singleton") {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeProtocol || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "singleton") {
 		t.Fatalf("duplicate Content-Type error = %v", ierr)
 	}
 	emptyTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {

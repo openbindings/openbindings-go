@@ -15,7 +15,8 @@ import (
 )
 
 // Integration tests driving the current invoker against local httptest
-// servers. Revision-specific compatibility cases name the legacy identifier.
+// servers. Historical development-profile cases are not published binding
+// specification revisions.
 
 func invokeWith(t *testing.T, spec, ref string, input any) (any, *openbindings.InvocationError) {
 	return invokeWithBindingSpec(t, BindingSpec, spec, ref, input)
@@ -193,8 +194,8 @@ func TestInvoke_CaseFoldingHeaderCollisionRefused(t *testing.T) {
 	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("expected the unflattenable refusal, got %v", ierr)
 	}
-	if !strings.Contains(ierr.Message, "unflattenable") {
-		t.Errorf("message should name the unflattenable rule, got %q", ierr.Message)
+	if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, "unflattenable") {
+		t.Errorf("native diagnostic should name the unflattenable rule, got %q", got)
 	}
 	if requests.Load() != 0 {
 		t.Error("refusal must precede dispatch")
@@ -211,8 +212,8 @@ func TestInvoke_UnmatchedFieldsRefusedWithoutBody(t *testing.T) {
 	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 	}
-	if !strings.Contains(ierr.Message, "bogus") {
-		t.Errorf("refusal must list the offending fields, got %q", ierr.Message)
+	if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, "bogus") {
+		t.Errorf("native diagnostic must list the offending fields, got %q", got)
 	}
 	if requests.Load() != 0 {
 		t.Error("refusal must precede dispatch")
@@ -257,8 +258,8 @@ func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
 			if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 				t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 			}
-			if !strings.Contains(ierr.Message, wantMsg) {
-				t.Errorf("refusal message = %q, want %q", ierr.Message, wantMsg)
+			if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, wantMsg) {
+				t.Errorf("native diagnostic = %q, want %q", got, wantMsg)
 			}
 			if requests.Load() != 0 {
 				t.Error("refusal must precede dispatch")
@@ -440,7 +441,7 @@ func TestInvoke_UndeclaredMultipartMembersRefused(t *testing.T) {
 	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1upload/post", map[string]any{
 		"description": "d", "note": "urgent", "meta": map[string]any{"k": "v"},
 	})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "no declaration-defined carriage") {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "no declaration-defined carriage") {
 		t.Fatalf("expected declaration-defined multipart refusal, got %v", ierr)
 	}
 	if requests.Load() != 0 {
@@ -463,7 +464,7 @@ func TestInvoke_UndeclaredURLEncodedMembersRefused(t *testing.T) {
 	  }}}
 	}`, srv.URL)
 	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1form/post", map[string]any{"name": "a b", "extra": "y"})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "no declaration-defined carriage") {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "no declaration-defined carriage") {
 		t.Fatalf("expected declaration-defined urlencoded refusal, got %v", ierr)
 	}
 	if requests.Load() != 0 {
@@ -703,8 +704,8 @@ func TestInvoke_DegenerateMediaSchemaCombinationRefused(t *testing.T) {
 			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 				t.Fatalf("expected the degenerate-combination refusal, got %v", ierr)
 			}
-			if !strings.Contains(ierr.Message, tc.wantMsg) {
-				t.Errorf("refusal message = %q, want %q", ierr.Message, tc.wantMsg)
+			if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, tc.wantMsg) {
+				t.Errorf("native diagnostic = %q, want %q", got, tc.wantMsg)
 			}
 			if requests.Load() != 0 {
 				t.Error("refusal must precede dispatch")
@@ -1137,8 +1138,8 @@ func TestInvoke_CredentialCollisionRefused(t *testing.T) {
 			if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 				t.Fatalf("expected the OAPI-P-10 collision refusal, got %v", ierr)
 			}
-			if !strings.Contains(ierr.Message, "OAPI-P-10") {
-				t.Errorf("message should cite the rule, got %q", ierr.Message)
+			if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, "OAPI-P-10") {
+				t.Errorf("native diagnostic should cite the rule, got %q", got)
 			}
 			if requests.Load() != 0 {
 				t.Error("refusal must precede dispatch")
@@ -1294,7 +1295,7 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 			Ref:    "#/paths/~1x/get",
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
-		if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(ierr.Message, "OAPI-P-10") {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "OAPI-P-10") {
 			t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
 		}
 		if requests.Load() != 0 {
@@ -1323,7 +1324,7 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 			Context: map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
-		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "OAPI-P-10") {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "OAPI-P-10") {
 			t.Fatalf("expected validation OAPI-P-10 refusal, got %v", ierr)
 		}
 		if requests.Load() != 0 {
@@ -1384,7 +1385,8 @@ func TestInvoke_AllMissingSecurityAlternativesRefuseBeforeDispatch(t *testing.T)
 		Ref:    "#/paths/~1x/get",
 	})
 	_, ierr := driveSingle(t, call, nil)
-	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(ierr.Message, "missingA") || !strings.Contains(ierr.Message, "missingB") {
+	nativeMessage := openAPIClientDiagnosticMessage(ierr)
+	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(nativeMessage, "missingA") || !strings.Contains(nativeMessage, "missingB") {
 		t.Fatalf("expected closed security-configuration refusal, got %v", ierr)
 	}
 	if requests.Load() != 0 {
@@ -1445,7 +1447,7 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 			},
 		})
 		_, ierr := driveSingle(t, call, nil)
-		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "OAPI-P-10") {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "OAPI-P-10") {
 			t.Fatalf("expected Cookie context collision, got %v", ierr)
 		}
 		if requests.Load() != 0 {
@@ -1473,7 +1475,7 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 			},
 		})
 		_, ierr := driveSingle(t, call, nil)
-		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "OAPI-P-10") {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "OAPI-P-10") {
 			t.Fatalf("expected Cookie credential/context collision, got %v", ierr)
 		}
 		if requests.Load() != 0 {
@@ -1526,7 +1528,7 @@ func TestInvoke_ProcessorOwnedHeaderParametersRefused(t *testing.T) {
 				Ref:    "#/paths/~1x/get",
 			})
 			_, ierr := driveSingle(t, call, map[string]any{})
-			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(ierr.Message, "OAPI-P-10") {
+			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "OAPI-P-10") {
 				t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
 			}
 			if requests.Load() != 0 {
