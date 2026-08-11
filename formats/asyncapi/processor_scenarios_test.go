@@ -104,15 +104,16 @@ func TestInvocationFidelityScenarios(t *testing.T) {
 func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenario) processorscenarios.Observation {
 	t.Helper()
 	rt := &asyncScenarioRoundTripper{peer: scenario.Given.Peer}
-	invoker := NewInvoker()
-	defer invoker.Close()
-	invoker.httpClient = &http.Client{Transport: rt, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	scenarioClient := &http.Client{Transport: rt, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	sourceContent, sourceHasContent := scenario.Given.Source["content"]
 	ctx := map[string]any{}
 	if scenario.Given.Configuration != nil {
 		ctx["configuration"] = scenario.Given.Configuration
 	}
 	if frames, ok := scenario.Given.Peer["webSocketMessages"].([]any); ok {
+		// WebSocket upgrade traffic must reach the real loopback fixture rather
+		// than the HTTP-only scripted RoundTripper.
+		scenarioClient = newDefaultHTTPClient()
 		// The corpus names an external ws/wss peer. The local scripted peer is
 		// intentionally plaintext, so clone only the test copy of the artifact
 		// and retain the same WebSocket interaction under the ws scheme.
@@ -156,6 +157,8 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 		}
 		configuration["server"] = map[string]any{"url": "ws" + strings.TrimPrefix(srv.URL, "http")}
 	}
+	invoker := NewInvokerWithClient(scenarioClient)
+	defer invoker.Close()
 	if credentials, ok := scenario.Given.Runtime["credentials"].(map[string]any); ok {
 		ctx["apiKeys"] = credentials
 		for _, value := range credentials {

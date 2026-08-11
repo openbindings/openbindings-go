@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	asyncapiclient "github.com/openbindings/asyncapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
 	"gopkg.in/yaml.v3"
 )
@@ -146,9 +147,19 @@ func loadDocument(ctx context.Context, client *http.Client, location string, con
 // I/O. The shared parse tail behind loadDocument and the exported
 // ParseDocument.
 func parseDocument(data []byte) (*document, error) {
+	// Preserve the binding specification's rule-coded refusal at the adapter
+	// boundary; the standalone normalizer intentionally speaks artifact-native
+	// language and has no dependency on OpenBindings rule identifiers.
+	if err := discriminateDocument(data); err != nil {
+		return nil, err
+	}
+	normalized, err := asyncapiclient.NormalizeDocument(data)
+	if err != nil {
+		return nil, err
+	}
 	var doc document
 	var envelope map[string]any
-	if err := yaml.Unmarshal(data, &envelope); err != nil {
+	if err := json.Unmarshal(normalized, &envelope); err != nil {
 		return nil, fmt.Errorf("parse AsyncAPI document: %w", err)
 	}
 	if err := discriminateEnvelope(envelope); err != nil {
@@ -162,14 +173,8 @@ func parseDocument(data []byte) (*document, error) {
 		return nil, fmt.Errorf("not a valid AsyncAPI document (info.title and info.version are required strings)")
 	}
 
-	if isJSON(data) {
-		if err := json.Unmarshal(data, &doc); err != nil {
-			return nil, fmt.Errorf("parse AsyncAPI JSON: %w", err)
-		}
-	} else {
-		if err := yaml.Unmarshal(data, &doc); err != nil {
-			return nil, fmt.Errorf("parse AsyncAPI YAML: %w", err)
-		}
+	if err := json.Unmarshal(normalized, &doc); err != nil {
+		return nil, fmt.Errorf("parse normalized AsyncAPI document: %w", err)
 	}
 
 	resolveRefs(&doc)

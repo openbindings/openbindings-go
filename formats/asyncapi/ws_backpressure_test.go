@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	asyncapiclient "github.com/openbindings/asyncapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -28,11 +29,7 @@ import (
 // without pushing the full frame count / byte volume through a real socket.
 func setWSBackpressureBoundsForTest(t *testing.T, frames, bytes int) {
 	t.Helper()
-	prevFrames, prevBytes := maxWSBufferedFrames, maxWSBufferedBytes
-	maxWSBufferedFrames, maxWSBufferedBytes = frames, bytes
-	t.Cleanup(func() {
-		maxWSBufferedFrames, maxWSBufferedBytes = prevFrames, prevBytes
-	})
+	t.Cleanup(asyncapiclient.SetWebSocketBackpressureBoundsForTesting(frames, bytes))
 }
 
 // waitForSoleConnListenerCount polls (never a blind sleep) until the pool's
@@ -40,30 +37,19 @@ func setWSBackpressureBoundsForTest(t *testing.T, frames, bytes int) {
 // test after a timeout. Every test in this file dials exactly one
 // server/credential combination, so there is always at most one pooled
 // connection to find.
-func waitForSoleConnListenerCount(t *testing.T, pool *wsPool, n int) {
+func waitForSoleConnListenerCount(t *testing.T, engine *asyncapiclient.Engine, n int) {
 	t.Helper()
 	deadline := time.After(3 * time.Second)
 	for {
-		pool.mu.Lock()
-		var pw *pooledWS
-		for _, v := range pool.conns {
-			pw = v
-			break
-		}
-		connCount := len(pool.conns)
-		pool.mu.Unlock()
-
-		if pw != nil {
-			pw.lmu.Lock()
-			count := len(pw.listeners)
-			pw.lmu.Unlock()
+		snapshot := engine.WebSocketPoolSnapshot()
+		for _, count := range snapshot.ListenerCounts {
 			if count >= n {
 				return
 			}
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("listener count never reached %d (pool has %d connections)", n, connCount)
+			t.Fatalf("listener count never reached %d (pool has %d connections)", n, snapshot.Connections)
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
@@ -114,7 +100,7 @@ func TestWSReceiveBackpressure_FrameCountOverflowFailsSubscription(t *testing.T)
 	if codeOf(t, err) != openbindings.ErrCodeStreamError {
 		t.Fatalf("expected ERR_STREAM_ERROR, got %v", err)
 	}
-	wantMsg := fmt.Sprintf("backpressure overflow: more than %d undelivered frames", maxWSBufferedFrames)
+	wantMsg := fmt.Sprintf("backpressure overflow: more than %d undelivered frames", 64)
 	if err.Error() != wantMsg {
 		t.Fatalf("error message = %q, want %q", err.Error(), wantMsg)
 	}
@@ -224,7 +210,7 @@ func TestWSReceiveBackpressure_OverflowIsolatesToOneSubscription(t *testing.T) {
 	// pooled connection before the flood begins — a subscriber only sees
 	// frames from its registration point on, so a late join could miss
 	// the whole flood and this test would prove nothing.
-	waitForSoleConnListenerCount(t, binv.wsPool, 2)
+	waitForSoleConnListenerCount(t, binv.engine, 2)
 
 	readCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -256,7 +242,7 @@ func TestWSReceiveBackpressure_OverflowIsolatesToOneSubscription(t *testing.T) {
 	if codeOf(t, errA) != openbindings.ErrCodeStreamError {
 		t.Fatalf("subscriber A: expected ERR_STREAM_ERROR, got %v", errA)
 	}
-	wantMsg := fmt.Sprintf("backpressure overflow: more than %d undelivered frames", maxWSBufferedFrames)
+	wantMsg := fmt.Sprintf("backpressure overflow: more than %d undelivered frames", 64)
 	if errA.Error() != wantMsg {
 		t.Fatalf("subscriber A error = %q, want %q", errA.Error(), wantMsg)
 	}

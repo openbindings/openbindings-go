@@ -301,7 +301,7 @@ func TestWSPool_IdleTimeoutEviction(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	binv.wsPool.idleTimeout = 50 * time.Millisecond
+	binv.engine.SetWebSocketIdleTimeoutForTesting(50 * time.Millisecond)
 	source := wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"})
 
 	sendOnce(t, binv, source, map[string]any{"bearerToken": "tok"}, map[string]any{"msg": "first"})
@@ -312,9 +312,7 @@ func TestWSPool_IdleTimeoutEviction(t *testing.T) {
 	// Wait for the idle timeout to fire and evict the connection.
 	deadline := time.After(3 * time.Second)
 	for {
-		binv.wsPool.mu.Lock()
-		size := len(binv.wsPool.conns)
-		binv.wsPool.mu.Unlock()
+		size := binv.engine.WebSocketPoolSnapshot().Connections
 		if size == 0 {
 			break
 		}
@@ -343,18 +341,14 @@ func TestWSPool_CloseClosesAllConnections(t *testing.T) {
 
 	sendOnce(t, binv, source, map[string]any{"bearerToken": "tok"}, map[string]any{"msg": "hi"})
 
-	binv.wsPool.mu.Lock()
-	size := len(binv.wsPool.conns)
-	binv.wsPool.mu.Unlock()
+	size := binv.engine.WebSocketPoolSnapshot().Connections
 	if size != 1 {
 		t.Fatalf("expected 1 pooled connection, got %d", size)
 	}
 
 	binv.Close()
 
-	binv.wsPool.mu.Lock()
-	size = len(binv.wsPool.conns)
-	binv.wsPool.mu.Unlock()
+	size = binv.engine.WebSocketPoolSnapshot().Connections
 	if size != 0 {
 		t.Errorf("expected 0 pooled connections after Close(), got %d", size)
 	}

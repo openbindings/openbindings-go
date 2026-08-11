@@ -29,6 +29,12 @@ jobs:
           repository: openbindings/openapi-client
           ref: main
           path: openapi-client
+      - uses: actions/checkout@v7
+        if: matrix.module == 'formats/asyncapi'
+        with:
+          repository: openbindings/asyncapi-client
+          ref: main
+          path: asyncapi-client
       # The conformance corpora are normative and live in the sibling spec and
       # interfaces repos; without these checkouts the corpus gates skip
       # silently (which is how the family + interface corpora went unverified
@@ -61,6 +67,8 @@ jobs:
         run: |
           if [ "${{ matrix.module }}" = "formats/openapi" ]; then
             go work init . ${{ matrix.module }} openapi-client/go
+          elif [ "${{ matrix.module }}" = "formats/asyncapi" ]; then
+            go work init . ${{ matrix.module }} asyncapi-client/go
           else
             go work init . ${{ matrix.module }}
           fi
@@ -68,6 +76,8 @@ jobs:
           go work edit -replace "github.com/openbindings/openbindings-go@${ver}=."
           if [ "${{ matrix.module }}" = "formats/openapi" ]; then
             go work edit -replace "github.com/openbindings/openapi-client/go@v0.1.0=./openapi-client/go"
+          elif [ "${{ matrix.module }}" = "formats/asyncapi" ]; then
+            go work edit -replace "github.com/openbindings/asyncapi-client/go@v0.1.0=./asyncapi-client/go"
           fi
       - name: vet ${{ matrix.module }}
         working-directory: ${{ matrix.module }}

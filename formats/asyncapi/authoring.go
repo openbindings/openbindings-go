@@ -37,7 +37,7 @@ func operationExclusion(doc *document, op *asyncOperation, bindingSpec string) *
 	if op == nil {
 		return &authoringExclusion{"invalid", "asyncapi.invalid_operation", "ASYNC-D-03", "the operations-map entry is not an operation object"}
 	}
-	if op.Ref != "" {
+	if op.Ref != "" || op.UnresolvedTrait != "" {
 		return &authoringExclusion{"invalid", "asyncapi.dangling_operation_ref", "ASYNC-D-03", "the operations-map reference does not resolve to an operation object"}
 	}
 	if op.Action != "send" && op.Action != "receive" {
@@ -131,6 +131,9 @@ func authoringInputMessages(doc *document, op *asyncOperation, ch *channel) []me
 }
 
 func messageBindable(doc *document, m message) bool {
+	if m.UnresolvedTrait != "" {
+		return false
+	}
 	if m.Headers != nil {
 		return false
 	}

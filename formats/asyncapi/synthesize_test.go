@@ -24,6 +24,45 @@ func TestSynthesizeInterface_PreservesObjectFormContent(t *testing.T) {
 	}
 }
 
+func TestSynthesizeInterface_AppliesStandaloneTraitNormalization(t *testing.T) {
+	content := json.RawMessage(`{
+  "asyncapi":"3.0.0",
+  "info":{"title":"Trait API","version":"1"},
+  "servers":{"api":{"host":"api.example.test","protocol":"https"}},
+  "channels":{"commands":{"address":"/commands","messages":{"Command":{
+    "payload":{"type":"object","properties":{"id":{"type":"integer"}}},
+    "traits":[{"$ref":"#/components/messageTraits/json"}]
+  }}}},
+  "operations":{"submit":{
+    "action":"receive",
+    "channel":{"$ref":"#/channels/commands"},
+    "messages":[{"$ref":"#/channels/commands/messages/Command"}],
+    "traits":[{"$ref":"#/components/operationTraits/httpPost"}]
+  }},
+  "components":{
+    "operationTraits":{"httpPost":{"summary":"Submit a command","bindings":{"http":{"method":"POST"}}}},
+    "messageTraits":{"json":{"contentType":"application/json"}}
+  }
+}`)
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, ok := iface.Operations["submit"]
+	if !ok || operation.Description != "Submit a command" {
+		t.Fatalf("operation = %#v", operation)
+	}
+	input, ok := operation.Input.(map[string]any)
+	if !ok || input["type"] != "object" {
+		t.Fatalf("input = %#v", operation.Input)
+	}
+	if _, ok := iface.Bindings["submit.asyncapi"]; !ok {
+		t.Fatalf("bindings = %#v", iface.Bindings)
+	}
+}
+
 func TestSynthesizeInterface_FilePathEmitsInvocableFileURI(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "api.json")
 	content := `{"asyncapi":"3.0.0","info":{"title":"T","version":"1"},"operations":{}}`

@@ -12,10 +12,12 @@ package asyncapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
-	"sync"
 
+	asyncapiclient "github.com/openbindings/asyncapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -38,9 +40,7 @@ func newDefaultHTTPClient() *http.Client {
 // cross-tenant contamination in multi-tenant servers.
 type Invoker struct {
 	httpClient *http.Client
-	mu         sync.RWMutex
-	docCache   map[string]*document
-	wsPool     *wsPool
+	engine     *asyncapiclient.Engine
 }
 
 var (
@@ -67,41 +67,14 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 	}
 	return &Invoker{
 		httpClient: client,
-		docCache:   make(map[string]*document),
-		wsPool:     newWSPool(client),
+		engine:     asyncapiclient.NewEngine(client),
 	}
 }
 
 // Close shuts down all pooled WebSocket connections (io.Closer). After Close
 // returns, the Invoker should not be used for new invocations.
 func (e *Invoker) Close() error {
-	e.wsPool.closeAll()
-	return nil
-}
-
-// cachedLoadDocument loads an AsyncAPI doc, caching by location within a process.
-// When content is provided, the cache is bypassed and updated with the fresh parse.
-func (e *Invoker) cachedLoadDocument(ctx context.Context, location string, content json.RawMessage) (*document, error) {
-	if location != "" && content == nil {
-		e.mu.RLock()
-		if doc, ok := e.docCache[location]; ok {
-			e.mu.RUnlock()
-			return doc, nil
-		}
-		e.mu.RUnlock()
-	}
-
-	doc, err := loadDocument(ctx, e.httpClient, location, content)
-	if err != nil {
-		return nil, err
-	}
-
-	if location != "" {
-		e.mu.Lock()
-		e.docCache[location] = doc
-		e.mu.Unlock()
-	}
-	return doc, nil
+	return e.engine.Close()
 }
 
 // BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI invoker.
@@ -128,21 +101,97 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
 	go func() {
-		// Bound all underlying I/O to the invocation's lifetime.
-		bctx, stop := openbindings.DoneContext(ctx, inv.Done())
-		defer stop()
-
-		doc, err := e.cachedLoadDocument(bctx, args.Source.Location, args.Source.Content)
-		if err != nil {
-			if bctx.Err() != nil {
-				return // cancellation is already terminal
-			}
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: err.Error()})
-			return
+		if err := e.run(ctx, args, inv); err != nil {
+			inv.FireError(openbindings.AsInvocationError(err))
 		}
-		runBinding(bctx, e.httpClient, e.wsPool, args, inv, doc)
 	}()
 	return inv
+}
+
+func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) error {
+	options, err := enginePrepareOptions(args, e.httpClient)
+	if err != nil {
+		return err
+	}
+	prepared, err := e.engine.Prepare(ctx, options)
+	if err != nil {
+		return bridgeExecutionError(err)
+	}
+	bridgeCtx, stop := openbindings.DoneContext(ctx, inv.Done())
+	defer stop()
+	execution, err := prepared.Start(bridgeCtx)
+	if err != nil {
+		return bridgeExecutionError(err)
+	}
+
+	inputDone := make(chan error, 1)
+	if execution.InputRequested() {
+		go func() {
+			for {
+				value, readErr := inv.ReadInput(bridgeCtx)
+				switch {
+				case errors.Is(readErr, io.EOF):
+					inputDone <- bridgeExecutionError(execution.FinishInput())
+					return
+				case readErr != nil:
+					execution.Cancel()
+					inputDone <- readErr
+					return
+				default:
+					if sendErr := execution.Send(bridgeCtx, value); sendErr != nil {
+						inputDone <- bridgeExecutionError(sendErr)
+						return
+					}
+				}
+			}
+		}()
+	} else {
+		_ = inv.CloseInput()
+		close(inputDone)
+	}
+
+	headerSet := false
+	for event := range execution.Events() {
+		if !headerSet {
+			if leading := execution.Diagnostics().Leading; len(leading) > 0 {
+				if err := inv.SetHeader(toCoreMetadata(leading)); err != nil {
+					execution.Cancel()
+					return nil
+				}
+			}
+			headerSet = true
+		}
+		if err := inv.EmitOutput(event.Value); err != nil {
+			execution.Cancel()
+			return nil
+		}
+	}
+	if !headerSet {
+		if leading := execution.Diagnostics().Leading; len(leading) > 0 {
+			_ = inv.SetHeader(toCoreMetadata(leading))
+		}
+	}
+	if trailing := execution.Diagnostics().Trailing; len(trailing) > 0 {
+		inv.SetTrailer(toCoreMetadata(trailing))
+	}
+	if err := execution.Wait(); err != nil {
+		if bridgeCtx.Err() != nil {
+			return nil
+		}
+		return bridgeExecutionError(err)
+	}
+	if execution.InputRequested() {
+		select {
+		case inputErr := <-inputDone:
+			if inputErr != nil && bridgeCtx.Err() == nil {
+				return inputErr
+			}
+		default:
+		}
+		_ = inv.CloseInput()
+	}
+	inv.CloseOutput()
+	return nil
 }
 
 // PrepareBinding is the side-effect-free preflight: it reports the context
@@ -150,40 +199,130 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 // answer is not knowable without network I/O). Only inline source content
 // and the warm doc cache are consulted; nothing is fetched.
 func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
-	var doc *document
-	if args.Source.Content != nil {
-		// loadDocument performs no I/O when content is inline.
-		d, err := loadDocument(ctx, e.httpClient, args.Source.Location, args.Source.Content)
-		if err != nil {
-			return nil, nil
-		}
-		doc = d
-	} else if args.Source.Location != "" {
-		e.mu.RLock()
-		doc = e.docCache[args.Source.Location]
-		e.mu.RUnlock()
-	}
-	if doc == nil {
+	options, err := enginePrepareOptions(args, e.httpClient)
+	if err != nil {
 		return nil, nil
 	}
+	prepared, err := e.engine.PrepareCached(ctx, options)
+	if err != nil {
+		return nil, nil
+	}
+	if prepared == nil {
+		return nil, nil
+	}
+	return toCorePrerequisites(prepared.Prerequisites()), nil
+}
 
-	opID, err := parseRef(args.Ref)
-	if err != nil {
-		return nil, nil
+func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http.Client) (asyncapiclient.PrepareOptions, error) {
+	if args == nil {
+		return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "AsyncAPI invocation arguments are required"}
 	}
-	asyncOp, ok := doc.Operations[opID]
+	profile, ok := engineProfile(args.Source.BindingSpec)
 	if !ok {
-		return nil, nil
+		return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("unsupported AsyncAPI binding specification %q", args.Source.BindingSpec)}
 	}
-	var ch *channel
-	if c, ok := doc.Channels[extractRefName(asyncOp.Channel.Ref)]; ok {
-		ch = &c
+	var content []byte
+	var err error
+	if args.Source.Content != nil {
+		content, err = openbindings.ContentToBytes(args.Source.Content)
+		if err != nil {
+			return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: err.Error()}
+		}
 	}
-	target, err := resolveTarget(doc, ch, args.Context)
-	if err != nil {
-		return nil, nil
+	var acceptsInput *bool
+	if args.Binding != nil {
+		value := args.InputSchema != nil
+		acceptsInput = &value
 	}
-	return requiredContext(doc, &asyncOp, target.SecurityServer, target.ServerURL, args.Context), nil
+	return asyncapiclient.PrepareOptions{
+		Source: asyncapiclient.Source{Location: args.Source.Location, Content: content}, Ref: args.Ref,
+		Profile: profile, Context: args.Context, HTTPClient: client, Hooks: bridgeHooks(args),
+		MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes, AcceptsInput: acceptsInput,
+	}, nil
+}
+
+func engineProfile(bindingSpec string) (asyncapiclient.Profile, bool) {
+	switch bindingSpec {
+	case BindingSpec:
+		return asyncapiclient.ProfileFull, true
+	case LegacyBindingSpec:
+		return asyncapiclient.ProfileCompatibility, true
+	default:
+		return "", false
+	}
+}
+
+func bridgeHooks(args *openbindings.BindingInvocationArgs) *asyncapiclient.Hooks {
+	if args == nil || args.Hooks == nil {
+		return nil
+	}
+	return &asyncapiclient.Hooks{Decode: func(site asyncapiclient.HookSite, raw asyncapiclient.RawResult) (any, bool, error) {
+		coreSite := coreHookSite(args, site.Target)
+		coreRaw := openbindings.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
+		contentType := ""
+		if values := raw.Meta["Content-Type"]; len(values) > 0 {
+			contentType = values[0]
+		}
+		value, err := args.Hooks.DecodeOutput(coreSite, coreRaw, builtinDecodeFor(contentType))
+		if err != nil {
+			return nil, true, &asyncapiclient.ExecutionError{Code: openbindings.AsInvocationError(err).Code, Message: err.Error()}
+		}
+		return value, true, nil
+	}}
+}
+
+func coreHookSite(args *openbindings.BindingInvocationArgs, target string) openbindings.InvokeSite {
+	var site openbindings.InvokeSite
+	if args.Site != nil {
+		site = *args.Site
+	} else {
+		site.BindingSpec = args.Source.BindingSpec
+		site.Ref = args.Ref
+	}
+	if site.Target == "" {
+		site.Target = target
+	}
+	return site
+}
+
+func toCoreMetadata(metadata asyncapiclient.Metadata) openbindings.Metadata {
+	result := make(openbindings.Metadata, len(metadata))
+	for name, values := range metadata {
+		result[name] = append([]string(nil), values...)
+	}
+	return result
+}
+
+func bridgeExecutionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var execution *asyncapiclient.ExecutionError
+	if !errors.As(err, &execution) || execution == nil {
+		return err
+	}
+	details := execution.Details
+	if prerequisites, ok := details.(*asyncapiclient.Prerequisites); ok {
+		details = toCorePrerequisites(prerequisites)
+	}
+	return &openbindings.InvocationError{Code: execution.Code, Message: execution.Message, Details: details, Diagnostics: execution.Diagnostics}
+}
+
+func toCorePrerequisites(value *asyncapiclient.Prerequisites) *openbindings.ContextRequiredDetails {
+	if value == nil {
+		return nil
+	}
+	result := &openbindings.ContextRequiredDetails{Target: value.Target, Alternatives: make([]openbindings.ContextAlternative, len(value.Alternatives))}
+	for alternativeIndex, alternative := range value.Alternatives {
+		result.Alternatives[alternativeIndex].Requirements = make([]openbindings.ContextRequirement, len(alternative.Requirements))
+		for requirementIndex, requirement := range alternative.Requirements {
+			result.Alternatives[alternativeIndex].Requirements[requirementIndex] = openbindings.ContextRequirement{
+				Type: requirement.Type, Name: requirement.Name, Durable: requirement.Durable,
+				Description: requirement.Description, Extra: requirement.Extra,
+			}
+		}
+	}
+	return result
 }
 
 // Synthesizer handles interface synthesis from AsyncAPI documents.

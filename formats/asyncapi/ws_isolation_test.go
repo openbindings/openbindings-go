@@ -70,16 +70,13 @@ func TestWSPool_WriteCancelDoesNotTearDownSiblings(t *testing.T) {
 		t.Fatalf("expected the announce frame, got %v", hello)
 	}
 
-	// Grab the shared pooled connection the subscription dialed.
-	pw := onlyPooledConn(t, binv)
-
 	// A large frame blocks the write (server is gated, buffers fill), so the
 	// write is genuinely in-flight when we cancel.
 	big, _ := json.Marshal(map[string]any{"pad": strings.Repeat("x", 8<<20), "marker": "publish"})
 
 	writeDone := make(chan error, 1)
 	pubCtx, cancelPub := context.WithCancel(context.Background())
-	go func() { writeDone <- pw.send(pubCtx, big) }()
+	go func() { writeDone <- binv.engine.SendOnSoleWebSocketForTesting(pubCtx, big) }()
 
 	// Let the write reach the socket and register with nhooyr's timeout loop,
 	// then cancel the publishing invocation mid-write. Before the fix, this
@@ -100,7 +97,7 @@ func TestWSPool_WriteCancelDoesNotTearDownSiblings(t *testing.T) {
 	// The sibling MUST still be alive: a fresh publish on the shared socket is
 	// echoed back to it. If the cancel had torn down the connection, this read
 	// returns ERR_STREAM_ERROR instead.
-	if err := pw.send(context.Background(), mustJSON(map[string]any{"n": float64(7)})); err != nil {
+	if err := binv.engine.SendOnSoleWebSocketForTesting(context.Background(), mustJSON(map[string]any{"n": float64(7)})); err != nil {
 		t.Fatalf("post-cancel publish on the shared socket failed: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -112,17 +109,6 @@ func TestWSPool_WriteCancelDoesNotTearDownSiblings(t *testing.T) {
 	if got.(map[string]any)["n"] != float64(7) {
 		t.Fatalf("sibling received %v, want the post-cancel echo {n:7}", got)
 	}
-}
-
-func onlyPooledConn(t *testing.T, binv *Invoker) *pooledWS {
-	t.Helper()
-	binv.wsPool.mu.Lock()
-	defer binv.wsPool.mu.Unlock()
-	for _, pw := range binv.wsPool.conns {
-		return pw
-	}
-	t.Fatal("no pooled connection was dialed")
-	return nil
 }
 
 func mustJSON(v any) []byte {

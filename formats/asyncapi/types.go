@@ -82,15 +82,16 @@ type asyncOperation struct {
 	// channel, `receive` = it expects to receive from it. An invocation is
 	// the counterparty (ASYNC-P-02): invoking `send` subscribes, invoking
 	// `receive` publishes.
-	Action      string                `json:"action" yaml:"action"`
-	Channel     channelRef            `json:"channel" yaml:"channel"`
-	Summary     string                `json:"summary,omitempty" yaml:"summary,omitempty"`
-	Description string                `json:"description,omitempty" yaml:"description,omitempty"`
-	Messages    []messageRef          `json:"messages,omitempty" yaml:"messages,omitempty"`
-	Tags        []tag                 `json:"tags,omitempty" yaml:"tags,omitempty"`
-	Reply       *operationReply       `json:"reply,omitempty" yaml:"reply,omitempty"`
-	Bindings    *operationBindings    `json:"bindings,omitempty" yaml:"bindings,omitempty"`
-	Security    []securityRequirement `json:"security,omitempty" yaml:"security,omitempty"`
+	Action          string                `json:"action" yaml:"action"`
+	Channel         channelRef            `json:"channel" yaml:"channel"`
+	Summary         string                `json:"summary,omitempty" yaml:"summary,omitempty"`
+	Description     string                `json:"description,omitempty" yaml:"description,omitempty"`
+	Messages        []messageRef          `json:"messages,omitempty" yaml:"messages,omitempty"`
+	Tags            []tag                 `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Reply           *operationReply       `json:"reply,omitempty" yaml:"reply,omitempty"`
+	Bindings        *operationBindings    `json:"bindings,omitempty" yaml:"bindings,omitempty"`
+	Security        []securityRequirement `json:"security,omitempty" yaml:"security,omitempty"`
+	UnresolvedTrait string                `json:"x-ob-asyncapi-unresolved-trait,omitempty" yaml:"x-ob-asyncapi-unresolved-trait,omitempty"`
 }
 
 // operationBindings models the protocol entries of an operation's `bindings`
@@ -115,15 +116,16 @@ type operationReply struct {
 }
 
 type message struct {
-	Name        string           `json:"name,omitempty" yaml:"name,omitempty"`
-	Title       string           `json:"title,omitempty" yaml:"title,omitempty"`
-	Summary     string           `json:"summary,omitempty" yaml:"summary,omitempty"`
-	Description string           `json:"description,omitempty" yaml:"description,omitempty"`
-	ContentType string           `json:"contentType,omitempty" yaml:"contentType,omitempty"`
-	Payload     map[string]any   `json:"payload,omitempty" yaml:"payload,omitempty"`
-	Headers     map[string]any   `json:"headers,omitempty" yaml:"headers,omitempty"`
-	Bindings    *messageBindings `json:"bindings,omitempty" yaml:"bindings,omitempty"`
-	Ref         string           `json:"$ref,omitempty" yaml:"$ref,omitempty"`
+	Name            string           `json:"name,omitempty" yaml:"name,omitempty"`
+	Title           string           `json:"title,omitempty" yaml:"title,omitempty"`
+	Summary         string           `json:"summary,omitempty" yaml:"summary,omitempty"`
+	Description     string           `json:"description,omitempty" yaml:"description,omitempty"`
+	ContentType     string           `json:"contentType,omitempty" yaml:"contentType,omitempty"`
+	Payload         map[string]any   `json:"payload,omitempty" yaml:"payload,omitempty"`
+	Headers         map[string]any   `json:"headers,omitempty" yaml:"headers,omitempty"`
+	Bindings        *messageBindings `json:"bindings,omitempty" yaml:"bindings,omitempty"`
+	Ref             string           `json:"$ref,omitempty" yaml:"$ref,omitempty"`
+	UnresolvedTrait string           `json:"x-ob-asyncapi-unresolved-trait,omitempty" yaml:"x-ob-asyncapi-unresolved-trait,omitempty"`
 }
 
 type messageBindings struct {

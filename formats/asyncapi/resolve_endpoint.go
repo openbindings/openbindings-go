@@ -104,7 +104,7 @@ func (d *Document) ResolveEndpoint(ref string, bindingContext map[string]any) (E
 	if !ok {
 		return Endpoint{}, fmt.Errorf("operation %q not in AsyncAPI doc", opID)
 	}
-	if asyncOp.Ref != "" {
+	if asyncOp.Ref != "" || asyncOp.UnresolvedTrait != "" {
 		// resolveRefs leaves Ref set only when the reference dangles
 		// (ASYNC-D-03: resolution precedes the operation-object test).
 		return Endpoint{}, fmt.Errorf("operation %q is a Reference Object whose target %q does not resolve in the AsyncAPI doc", opID, asyncOp.Ref)
