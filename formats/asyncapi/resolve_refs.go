@@ -178,8 +178,35 @@ func resolveSchemaRefs(schema map[string]any, rawDoc map[string]any, visited map
 		return schema
 	}
 
-	// Recursively walk all values.
+	// Recursively walk all values. Keyword recognition is position-aware:
+	// inside a map-of-schemas container every key is a property or member
+	// NAME, not a keyword, so a property literally named `enum` or `const`
+	// still has its schema resolved (a corpus artifact carried exactly
+	// `properties.enum.$ref`, which the positionless skip left dangling).
 	for key, val := range schema {
+		if schemaMapContainerKeys[key] {
+			if members, ok := val.(map[string]any); ok {
+				// The container itself may be a Reference Object
+				// (`properties: {"$ref": ...}`): resolve it to the referenced
+				// member map before iterating, exactly as the generic walk
+				// resolves a $ref-bearing schema object.
+				if ref, isRef := members["$ref"].(string); isRef && strings.HasPrefix(ref, "#/") && !visited[ref] {
+					childVisited := copyVisited(visited)
+					childVisited[ref] = true
+					if resolved, ok := resolveJSONPointer(rawDoc, ref).(map[string]any); ok {
+						members = deepCopyMap(resolved)
+						schema[key] = members
+						visited = childVisited
+					}
+				}
+				for name, member := range members {
+					if memberSchema, ok := member.(map[string]any); ok {
+						members[name] = resolveSchemaRefs(memberSchema, rawDoc, copyVisited(visited))
+					}
+				}
+				continue
+			}
+		}
 		if isLiteralSchemaValueKey(key) || strings.HasPrefix(strings.ToLower(key), "x-") {
 			continue
 		}
@@ -192,6 +219,16 @@ func resolveSchemaRefs(schema map[string]any, rawDoc map[string]any, visited map
 	}
 
 	return schema
+}
+
+// schemaMapContainerKeys are the keywords whose map values hold schemas under
+// arbitrary member names.
+var schemaMapContainerKeys = map[string]bool{
+	"properties":        true,
+	"patternProperties": true,
+	"definitions":       true,
+	"$defs":             true,
+	"dependentSchemas":  true,
 }
 
 func isLiteralSchemaValueKey(key string) bool {

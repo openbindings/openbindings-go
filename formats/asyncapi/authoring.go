@@ -176,7 +176,7 @@ func operationPayloadSchema(doc *document, op *asyncOperation, input bool) map[s
 		}
 		messages = usable
 	}
-	return unionPayloadSchemas(messages)
+	return unionPayloadSchemas(doc, messages)
 }
 
 func replyPayloadSchema(doc *document, reply *operationReply) map[string]any {
@@ -198,20 +198,28 @@ func replyPayloadSchema(doc *document, reply *operationReply) map[string]any {
 			}
 		}
 	}
-	return unionPayloadSchemas(messages)
+	return unionPayloadSchemas(doc, messages)
 }
 
-func unionPayloadSchemas(messages []message) map[string]any {
+// unionPayloadSchemas derives the operation-boundary schema for a direction.
+// Each governed payload enters an OBI position only under dialect translation
+// (translate.go); a message whose declared schemaFormat or effective content
+// type identifies a non-JSON-Schema representation cannot contribute a
+// faithful schema, so the direction is represented by the unconstrained
+// schema per the binding specification's §9.2 floor. Coverage accounts the
+// degraded direction; the operation remains invocable.
+func unionPayloadSchemas(doc *document, messages []message) map[string]any {
 	if len(messages) == 0 {
 		return nil
 	}
 	unique := map[string]map[string]any{}
 	for _, message := range messages {
-		if message.Payload == nil || foreignSchemaFormat(message.SchemaFormat) {
+		if messagePayloadNotConvertible(doc, message) {
 			return map[string]any{}
 		}
-		encoded, _ := json.Marshal(message.Payload)
-		unique[string(encoded)] = message.Payload
+		translated := translateSchemaDialect(message.Payload)
+		encoded, _ := json.Marshal(translated)
+		unique[string(encoded)] = translated
 	}
 	if len(unique) == 1 {
 		for _, schema := range unique {
@@ -233,4 +241,17 @@ func unionPayloadSchemas(messages []message) map[string]any {
 func foreignSchemaFormat(format string) bool {
 	format = strings.ToLower(format)
 	return format != "" && !strings.Contains(format, "asyncapi") && !strings.Contains(format, "json-schema")
+}
+
+// messagePayloadNotConvertible reports whether a governed message's payload
+// cannot enter an OBI schema position faithfully: no payload at all, a
+// declared foreign schemaFormat (an Avro or Protobuf schema is not a JSON
+// Schema), or an effective content type with no JSON application-value
+// carriage (an application/avro payload's schema describes bytes the JSON
+// boundary never sees). Declaration-driven only — never payload sniffing.
+func messagePayloadNotConvertible(doc *document, m message) bool {
+	if m.Payload == nil || foreignSchemaFormat(m.SchemaFormat) {
+		return true
+	}
+	return supportedMessageContentType(messageEffectiveContentType(doc, m)) != nil
 }
