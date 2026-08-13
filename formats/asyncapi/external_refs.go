@@ -184,12 +184,24 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 				if err != nil {
 					return nil, err
 				}
-				// AsyncAPI 3.0 Reference Object siblings are ignored; only the
-				// referenced target contributes artifact semantics.
 				if object, ok := resolved.(map[string]any); ok {
-					// AsyncAPI 3.0 Reference Objects cannot be extended; their
-					// siblings are ignored. Retain only private source identity.
+					// Retain private source identity for coverage addressing.
 					object["x-ob-asyncapi-channel-ref"] = ref
+					// Sibling policy, consistent with the dialect translator's
+					// $ref rule (translate.go): assertion keywords beside a
+					// reference were inert in the source dialect and stay
+					// dropped; annotation siblings (description, example, ...)
+					// are authorial intent and carry, target-wins on conflict.
+					// AsyncAPI-level Reference Objects rarely carry siblings;
+					// where they do, annotations are equally harmless.
+					for key, value := range typed {
+						if key == "$ref" || draft07AssertionKeys[key] {
+							continue
+						}
+						if _, exists := object[key]; !exists {
+							object[key] = value
+						}
+					}
 				}
 				return resolved, nil
 			}
@@ -201,6 +213,27 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
+			// Position-aware, exactly as in resolve_refs.go: inside a
+			// map-of-schemas container every key is a member NAME, so a
+			// property literally named `enum` still has its references
+			// composed.
+			if schemaMapContainerKeys[key] {
+				if members, ok := typed[key].(map[string]any); ok {
+					memberNames := make([]string, 0, len(members))
+					for name := range members {
+						memberNames = append(memberNames, name)
+					}
+					sort.Strings(memberNames)
+					for _, name := range memberNames {
+						resolved, err := resolver.walk(members[name], current, stack)
+						if err != nil {
+							return nil, err
+						}
+						members[name] = resolved
+					}
+					continue
+				}
+			}
 			if isLiteralSchemaValueKey(key) || strings.HasPrefix(strings.ToLower(key), "x-") {
 				continue
 			}
