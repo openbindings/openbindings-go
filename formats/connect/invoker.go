@@ -132,7 +132,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	svcName, methodName, err := parseRef(args.Ref)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef})
 		return
 	}
 
@@ -148,26 +148,20 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		s, isStr := raw.(string)
 		if !isStr || strings.TrimSpace(s) == "" {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeSourceConfigError,
-				Message: fmt.Sprintf("configuration.target must be a base URL string in the openbindings.connect@1 §4 form, got %T", raw),
+				Code: openbindings.ErrCodeSourceConfigError,
 			})
 			return
 		}
 		target = strings.TrimSpace(s)
 	}
 	if target == "" {
-		msg := "Connect source requires a base URL: set the source's location to an absolute http/https base URL (openbindings.connect@1 CONN-D-02)"
-		if args.Source.Content != nil {
-			msg = "Connect source carries its schema as embedded content but no base URL (a content-only source is not conformant, openbindings.connect@1 CONN-D-02): set the source's location to the service base URL, or supply the target configuration point (context configuration.target)"
-		}
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: msg,
+			Code: openbindings.ErrCodeSourceConfigError,
 		})
 		return
 	}
 	if err := validateBaseURL(target); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 
@@ -185,7 +179,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	if args.Source.Content != nil {
 		disc, parseErr := discoverFromContent(bctx, args.Source.Content)
 		if parseErr != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: parseErr.Error()})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed})
 			return
 		}
 		m, ie := resolveMethod(disc, svcName, methodName)
@@ -207,7 +201,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	headers, hdrErr := buildHTTPHeaders(args.Context)
 	if hdrErr != nil {
 		if _, ok := hdrErr.(*unplacedCredentialError); ok {
-			inv.FireError(openbindings.NewContextRequiredError(hdrErr.Error(), &openbindings.ContextRequiredDetails{
+			inv.FireError(openbindings.NewContextRequiredError(&openbindings.ContextRequiredDetails{
 				Target: target,
 				Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{{
 					Type: "auth.apiKey", Description: "supply the credential through an explicitly named Connect metadata field",
@@ -216,8 +210,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			return
 		}
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: hdrErr.Error(),
+			Code: openbindings.ErrCodeSourceConfigError,
 		})
 		return
 	}
@@ -241,8 +234,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	} else {
 		if !gotInput {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeValidationFailed,
-				Message: "descriptorless Connect mode requires one present JSON input value; no request shape is available to invent an empty object",
+				Code: openbindings.ErrCodeValidationFailed,
 			})
 			return
 		}
@@ -303,18 +295,12 @@ func readRequestValue(ctx context.Context, inv openbindings.BindingHandle[any, a
 func preflightMethod(methodDesc protoreflect.MethodDescriptor, fullDuplex bool) *openbindings.InvocationError {
 	if err := validateBoundClosure(methodDesc); err != nil {
 		return &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceLoadFailed,
-			Message: err.Error(),
+			Code: openbindings.ErrCodeSourceLoadFailed,
 		}
 	}
 	if methodDesc.IsStreamingClient() && !fullDuplex {
-		kind := "client-streaming"
-		if methodDesc.IsStreamingServer() {
-			kind = "bidirectional-streaming"
-		}
 		return &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: fmt.Sprintf("Connect method %s/%s is %s, but the selected transport cannot provide HTTP/2 full duplex; this is the implementation's declared transport limitation (openbindings.connect@1 §8 / CONN-P-04)", methodDesc.Parent().FullName(), methodDesc.Name(), kind),
+			Code: openbindings.ErrCodeExecutionFailed,
 		}
 	}
 	return nil

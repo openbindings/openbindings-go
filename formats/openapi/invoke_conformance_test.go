@@ -111,7 +111,7 @@ func TestInvoke_RefResolvesPathItemRef(t *testing.T) {
 
 	out, ierr := invokeWith(t, spec, "#/paths/~1shared/get", nil)
 	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if m, _ := out.(map[string]any); m["ok"] != true {
 		t.Errorf("out = %v", out)
@@ -194,8 +194,8 @@ func TestInvoke_CaseFoldingHeaderCollisionRefused(t *testing.T) {
 	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("expected the unflattenable refusal, got %v", ierr)
 	}
-	if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, "unflattenable") {
-		t.Errorf("native diagnostic should name the unflattenable rule, got %q", got)
+	if ierr.HasData() {
+		t.Errorf("flattening diagnostics crossed as abstract data: %#v", ierr.Data)
 	}
 	if requests.Load() != 0 {
 		t.Error("refusal must precede dispatch")
@@ -212,8 +212,8 @@ func TestInvoke_UnmatchedFieldsRefusedWithoutBody(t *testing.T) {
 	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 	}
-	if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, "bogus") {
-		t.Errorf("native diagnostic must list the offending fields, got %q", got)
+	if ierr.HasData() {
+		t.Errorf("validation diagnostics crossed as abstract data: %#v", ierr.Data)
 	}
 	if requests.Load() != 0 {
 		t.Error("refusal must precede dispatch")
@@ -226,7 +226,6 @@ func TestInvoke_UnmatchedFieldsRefusedWithoutBody(t *testing.T) {
 // loudly, naming the unroutable field (same species of refusal as the
 // no-body unmatched case above).
 func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
-	const wantMsg = `field(s) stray match no declared parameter, and the declared request body uses whole-value carriage (its flattened contract carries only the synthetic "body" property)`
 	cases := []struct {
 		name    string
 		content string
@@ -258,8 +257,8 @@ func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
 			if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 				t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 			}
-			if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, wantMsg) {
-				t.Errorf("native diagnostic = %q, want %q", got, wantMsg)
+			if ierr.HasData() {
+				t.Errorf("routing diagnostics crossed as abstract data: %#v", ierr.Data)
 			}
 			if requests.Load() != 0 {
 				t.Error("refusal must precede dispatch")
@@ -305,7 +304,7 @@ func TestInvoke_TypelessBodyRidesSyntheticBodyUnwrapped(t *testing.T) {
 			}`, srv.URL, tc.schema)
 			_, ierr := invokeWith(t, spec, "#/paths/~1echo/post", map[string]any{"body": map[string]any{"k": "v"}})
 			if ierr != nil {
-				t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+				t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 			}
 			if string(gotBody) != `{"k":"v"}` {
 				t.Errorf("wire body = %s, want the synthetic body property's value unwrapped: {\"k\":\"v\"}", gotBody)
@@ -339,7 +338,7 @@ func TestInvoke_PropertiesWithoutTypeStillFlattens(t *testing.T) {
 	}`, srv.URL)
 	_, ierr := invokeWith(t, spec, "#/paths/~1w/post", map[string]any{"name": "x"})
 	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if string(gotBody) != `{"name":"x"}` {
 		t.Errorf("wire body = %s, want the flattened property carried by name: {\"name\":\"x\"}", gotBody)
@@ -380,7 +379,7 @@ func TestInvoke_EnvelopeShapedApplicationBodyRemainsApplicationData(t *testing.T
 	}
 
 	if _, ierr := invokeWith(t, spec, "#/paths/~1objects/post", input); ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if !reflect.DeepEqual(got, input) {
 		t.Fatalf("request body = %#v, want application input %#v", got, input)
@@ -413,7 +412,7 @@ func TestInvoke_PassthroughRidesJSONBodyEncoding(t *testing.T) {
 	}`, srv.URL)
 	_, ierr := invokeWith(t, spec, "#/paths/~1w/post", map[string]any{"name": "x", "extra": "y"})
 	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotCT != "application/json" {
 		t.Errorf("Content-Type = %q", gotCT)
@@ -441,8 +440,11 @@ func TestInvoke_UndeclaredMultipartMembersRefused(t *testing.T) {
 	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1upload/post", map[string]any{
 		"description": "d", "note": "urgent", "meta": map[string]any{"k": "v"},
 	})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "no declaration-defined carriage") {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 		t.Fatalf("expected declaration-defined multipart refusal, got %v", ierr)
+	}
+	if ierr.HasData() {
+		t.Fatalf("multipart routing evidence crossed as abstract data: %#v", ierr.Data)
 	}
 	if requests.Load() != 0 {
 		t.Fatal("multipart refusal must precede dispatch")
@@ -464,8 +466,11 @@ func TestInvoke_UndeclaredURLEncodedMembersRefused(t *testing.T) {
 	  }}}
 	}`, srv.URL)
 	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1form/post", map[string]any{"name": "a b", "extra": "y"})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "no declaration-defined carriage") {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 		t.Fatalf("expected declaration-defined urlencoded refusal, got %v", ierr)
+	}
+	if ierr.HasData() {
+		t.Fatalf("urlencoded routing evidence crossed as abstract data: %#v", ierr.Data)
 	}
 	if requests.Load() != 0 {
 		t.Fatal("urlencoded refusal must precede dispatch")
@@ -539,7 +544,7 @@ func TestInvoke_QueryStyleSerializationOnTheWire(t *testing.T) {
 		"filter": map[string]any{"kind": "big", "size": float64(2)},
 	})
 	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	// Declaration order: tags (form explode default), flat, filter.
 	want := "tags=a&tags=b&flat=x,y&filter[kind]=big&filter[size]=2"
@@ -572,7 +577,7 @@ func TestInvoke_PathStyleSerializationOnTheWire(t *testing.T) {
 		"coords": []any{float64(50.4), float64(4.32)},
 	})
 	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotURI != "/map/;coords=50.4,4.32" {
 		t.Errorf("URI = %q, want /map/;coords=50.4,4.32", gotURI)
@@ -609,7 +614,7 @@ func TestInvoke_PlusJSONSelected(t *testing.T) {
 	}`, srv.URL)
 	_, ierr := invokeWith(t, spec, "#/paths/~1things/post", map[string]any{"k": "v"})
 	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotCT != "application/vnd.a+json" {
 		t.Errorf("Content-Type = %q, want the lexicographically least +json type", gotCT)
@@ -651,20 +656,15 @@ func TestInvoke_BinaryOnlyBodyCarriesExactOctets(t *testing.T) {
 // text/plain while it does — has no OAS-defined wire form and refuses
 // pre-dispatch rather than inventing carriage.
 func TestInvoke_DegenerateMediaSchemaCombinationRefused(t *testing.T) {
-	const multipartMsg = `request media candidate multipart/form-data has a non-object body schema and is inadmissible`
-	const urlencodedMsg = `request media candidate application/x-www-form-urlencoded has a non-object body schema and is inadmissible`
-	const textMsg = `request media candidate text/plain has an object body schema and is inadmissible`
 	cases := []struct {
 		name    string
 		content string
 		input   map[string]any
-		wantMsg string
 	}{
 		{
 			"multipart-only with a scalar schema",
 			`{"multipart/form-data": {"schema": {"type": "string"}}}`,
 			map[string]any{"body": "x"},
-			multipartMsg,
 		},
 		{
 			// §9.1's determination is declaration-only: a TYPELESS schema
@@ -673,19 +673,16 @@ func TestInvoke_DegenerateMediaSchemaCombinationRefused(t *testing.T) {
 			"multipart-only with a typeless schema",
 			`{"multipart/form-data": {"schema": {"description": "opaque"}}}`,
 			map[string]any{"body": "x"},
-			multipartMsg,
 		},
 		{
 			"urlencoded-only with a scalar schema",
 			`{"application/x-www-form-urlencoded": {"schema": {"type": "integer"}}}`,
 			map[string]any{"body": float64(1)},
-			urlencodedMsg,
 		},
 		{
 			"text-only with an object schema",
 			`{"text/plain": {"schema": {"type": "object", "properties": {"a": {"type": "string"}}}}}`,
 			map[string]any{"a": "x"},
-			textMsg,
 		},
 	}
 	for _, tc := range cases {
@@ -704,8 +701,8 @@ func TestInvoke_DegenerateMediaSchemaCombinationRefused(t *testing.T) {
 			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 				t.Fatalf("expected the degenerate-combination refusal, got %v", ierr)
 			}
-			if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, tc.wantMsg) {
-				t.Errorf("native diagnostic = %q, want %q", got, tc.wantMsg)
+			if ierr.HasData() {
+				t.Errorf("media-planning diagnostics crossed as abstract data: %#v", ierr.Data)
 			}
 			if requests.Load() != 0 {
 				t.Error("refusal must precede dispatch")
@@ -741,7 +738,7 @@ func TestInvoke_DegenerateCombinationUnreachableWithJSONCoDeclared(t *testing.T)
 	}`, srv.URL)
 	_, ierr := invokeWith(t, spec, "#/paths/~1op/post", map[string]any{"body": "x"})
 	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotCT != "application/json" || string(gotBody) != `"x"` {
 		t.Errorf("request = (%q, %q), want application/json with the synthetic body %q", gotCT, gotBody, `"x"`)
@@ -777,7 +774,7 @@ func TestInvoke_URLEncodedBodyOnTheWire(t *testing.T) {
 		"name": "a b", "ids": []any{float64(1), float64(2)},
 	})
 	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotCT != "application/x-www-form-urlencoded" {
 		t.Errorf("Content-Type = %q", gotCT)
@@ -807,7 +804,7 @@ func TestInvoke_SyntheticBodyUnwrapOnTheWire(t *testing.T) {
 	}`, srv.URL)
 	_, ierr := invokeWith(t, spec, "#/paths/~1batch/post", map[string]any{"body": []any{float64(1), float64(2)}})
 	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if string(gotBody) != "[1,2]" {
 		t.Errorf("wire body = %q, want the unwrapped array [1,2]", gotBody)
@@ -836,7 +833,7 @@ func TestInvoke_TextPlainBody(t *testing.T) {
 	}`, srv.URL)
 	out, ierr := invokeWith(t, spec, "#/paths/~1echo/post", map[string]any{"body": "ping"})
 	if ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotCT != "text/plain" || string(gotBody) != "ping" {
 		t.Errorf("request = (%q, %q), want text/plain ping", gotCT, gotBody)
@@ -1091,7 +1088,7 @@ func TestInvoke_CookieChannelAssembly(t *testing.T) {
 		Context: map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 	})
 	if _, ierr := driveSingle(t, call, map[string]any{"zeta": "z", "alpha": "a"}); ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	// ONE header: declared params in declaration order (zeta before alpha),
 	// the credential appended after.
@@ -1138,8 +1135,8 @@ func TestInvoke_CredentialCollisionRefused(t *testing.T) {
 			if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 				t.Fatalf("expected the OAPI-P-10 collision refusal, got %v", ierr)
 			}
-			if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, "OAPI-P-10") {
-				t.Errorf("native diagnostic should cite the rule, got %q", got)
+			if ierr.HasData() {
+				t.Errorf("credential-collision evidence crossed as abstract data: %#v", ierr.Data)
 			}
 			if requests.Load() != 0 {
 				t.Error("refusal must precede dispatch")
@@ -1183,7 +1180,7 @@ func TestInvoke_SecurityORSelectsOneCompleteAlternative(t *testing.T) {
 		}},
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotHeader != "header-secret" {
 		t.Errorf("selected alternative header = %q, want header-secret", gotHeader)
@@ -1230,7 +1227,7 @@ func TestInvoke_SecurityORDoesNotCombineIncompleteAlternativeFragments(t *testin
 		}},
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotFirstHeader != "" || gotSecondHeader != "" {
 		t.Errorf("incomplete alternative leaked headers: first=%q second=%q", gotFirstHeader, gotSecondHeader)
@@ -1268,7 +1265,7 @@ func TestInvoke_NoDeclaredSecurityDoesNotSendContextCredentials(t *testing.T) {
 		},
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotAuthorization != "" {
 		t.Errorf("undeclared credential leaked into Authorization: %q", gotAuthorization)
@@ -1295,8 +1292,11 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 			Ref:    "#/paths/~1x/get",
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
-		if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "OAPI-P-10") {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 			t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
+		}
+		if ierr.HasData() {
+			t.Fatalf("cookie-collision evidence crossed as abstract data: %#v", ierr.Data)
 		}
 		if requests.Load() != 0 {
 			t.Error("refusal must precede dispatch")
@@ -1324,8 +1324,11 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 			Context: map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
-		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "OAPI-P-10") {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 			t.Fatalf("expected validation OAPI-P-10 refusal, got %v", ierr)
+		}
+		if ierr.HasData() {
+			t.Fatalf("cookie-credential evidence crossed as abstract data: %#v", ierr.Data)
 		}
 		if requests.Load() != 0 {
 			t.Error("refusal must precede dispatch")
@@ -1385,9 +1388,11 @@ func TestInvoke_AllMissingSecurityAlternativesRefuseBeforeDispatch(t *testing.T)
 		Ref:    "#/paths/~1x/get",
 	})
 	_, ierr := driveSingle(t, call, nil)
-	nativeMessage := openAPIClientDiagnosticMessage(ierr)
-	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(nativeMessage, "missingA") || !strings.Contains(nativeMessage, "missingB") {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("expected closed security-configuration refusal, got %v", ierr)
+	}
+	if ierr.HasData() {
+		t.Fatalf("invalid security-declaration evidence crossed as abstract data: %#v", ierr.Data)
 	}
 	if requests.Load() != 0 {
 		t.Error("invalid security declaration must refuse before dispatch")
@@ -1414,7 +1419,7 @@ func TestSchemaFreeCustomDocumentDialectRemainsInvocableAndSynthesizable(t *test
 		Ref:    "#/paths/~1x/get",
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
-		t.Fatalf("schema-free artifact-native invocation failed: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("schema-free artifact-native invocation failed: %s: %s", ierr.Code, ierr.Error())
 	}
 	if requests.Load() != 1 {
 		t.Fatalf("invocation requests = %d, want 1", requests.Load())
@@ -1447,8 +1452,11 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 			},
 		})
 		_, ierr := driveSingle(t, call, nil)
-		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "OAPI-P-10") {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 			t.Fatalf("expected Cookie context collision, got %v", ierr)
+		}
+		if ierr.HasData() {
+			t.Fatalf("cookie-context evidence crossed as abstract data: %#v", ierr.Data)
 		}
 		if requests.Load() != 0 {
 			t.Error("Cookie collision must refuse before dispatch")
@@ -1475,8 +1483,11 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 			},
 		})
 		_, ierr := driveSingle(t, call, nil)
-		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "OAPI-P-10") {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 			t.Fatalf("expected Cookie credential/context collision, got %v", ierr)
+		}
+		if ierr.HasData() {
+			t.Fatalf("cookie-credential evidence crossed as abstract data: %#v", ierr.Data)
 		}
 		if requests.Load() != 0 {
 			t.Error("Cookie collision must refuse before dispatch")
@@ -1528,8 +1539,11 @@ func TestInvoke_ProcessorOwnedHeaderParametersRefused(t *testing.T) {
 				Ref:    "#/paths/~1x/get",
 			})
 			_, ierr := driveSingle(t, call, map[string]any{})
-			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "OAPI-P-10") {
+			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
 				t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
+			}
+			if ierr.HasData() {
+				t.Fatalf("processor-owned header evidence crossed as abstract data: %#v", ierr.Data)
 			}
 			if requests.Load() != 0 {
 				t.Error("refusal must precede dispatch")
@@ -1567,7 +1581,7 @@ func TestInvoke_ServerConfigurationPoint(t *testing.T) {
 		Context: map[string]any{"configuration": map[string]any{"server": map[string]any{"baseUrl": srv.URL}}},
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if hits != 1 {
 		t.Errorf("configured server hits = %d, want 1", hits)

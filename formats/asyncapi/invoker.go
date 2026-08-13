@@ -112,6 +112,9 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 //   - send + http/https: excluded before dispatch
 //   - send + ws/wss: server-streaming subscription (frames -> outputs; input
 //     is closed at establishment)
+//   - receive/send + ws/wss reply: full-duplex standalone-runtime session;
+//     the adapter forwards application values and lifecycle without adding
+//     WebSocket-shaped fields to Core frames
 func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
 	go func() {
@@ -164,29 +167,11 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		close(inputDone)
 	}
 
-	headerSet := false
 	for event := range execution.Events() {
-		if !headerSet {
-			if leading := execution.Diagnostics().Leading; len(leading) > 0 {
-				if err := inv.SetHeader(toCoreMetadata(leading)); err != nil {
-					execution.Cancel()
-					return nil
-				}
-			}
-			headerSet = true
-		}
 		if err := inv.EmitOutput(event.Value); err != nil {
 			execution.Cancel()
 			return nil
 		}
-	}
-	if !headerSet {
-		if leading := execution.Diagnostics().Leading; len(leading) > 0 {
-			_ = inv.SetHeader(toCoreMetadata(leading))
-		}
-	}
-	if trailing := execution.Diagnostics().Trailing; len(trailing) > 0 {
-		inv.SetTrailer(toCoreMetadata(trailing))
 	}
 	if err := execution.Wait(); err != nil {
 		if bridgeCtx.Err() != nil {
@@ -229,18 +214,18 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.Binding
 
 func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http.Client) (asyncapiclient.PrepareOptions, error) {
 	if args == nil {
-		return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "AsyncAPI invocation arguments are required"}
+		return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
 	}
 	profile, ok := engineProfile(args.Source.BindingSpec)
 	if !ok {
-		return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("unsupported AsyncAPI binding specification %q", args.Source.BindingSpec)}
+		return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
 	}
 	var content []byte
 	var err error
 	if args.Source.Content != nil {
 		content, err = openbindings.ContentToBytes(args.Source.Content)
 		if err != nil {
-			return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: err.Error()}
+			return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed}
 		}
 	}
 	var acceptsInput *bool
@@ -275,7 +260,13 @@ func bridgeHooks(args *openbindings.BindingInvocationArgs) *asyncapiclient.Hooks
 		}
 		value, err := args.Hooks.DecodeOutput(coreSite, coreRaw, builtinDecodeFor(contentType))
 		if err != nil {
-			return nil, true, &asyncapiclient.ExecutionError{Code: openbindings.AsInvocationError(err).Code, Message: err.Error()}
+			invocation := openbindings.AsInvocationError(err)
+			execution := &asyncapiclient.ExecutionError{Code: invocation.Code, Message: err.Error(), Cause: err}
+			if invocation.HasData() {
+				execution.Details = invocation.Data
+				execution.DetailsPresent = true
+			}
+			return nil, true, execution
 		}
 		return value, true, nil
 	}}
@@ -315,7 +306,10 @@ func bridgeExecutionError(err error) error {
 	if prerequisites, ok := details.(*asyncapiclient.Prerequisites); ok {
 		details = toCorePrerequisites(prerequisites)
 	}
-	return &openbindings.InvocationError{Code: execution.Code, Message: execution.Message, Details: details, Diagnostics: execution.Diagnostics}
+	if execution.DetailsPresent {
+		return openbindings.NewInvocationErrorWithData(execution.Code, details)
+	}
+	return openbindings.NewInvocationError(execution.Code)
 }
 
 func toCorePrerequisites(value *asyncapiclient.Prerequisites) *openbindings.ContextRequiredDetails {

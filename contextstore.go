@@ -27,11 +27,10 @@ var requirementFields = map[string]string{
 // whether an arbitrary header, cookie, environment value, metadata entry, or
 // configuration point is sensitive.
 //
-// "auth.apiKey" names only "apiKey" here (the unnamed, single-key
-// convenience): a NAMED auth.apiKey requirement is satisfied and scoped
-// through the separate 'apiKeys' map (see requirementSatisfied /
-// admitRequirement), never wholesale — admitting the whole map here would
-// leak every other alternative's key alongside the one actually needed.
+// These fields are the unnamed, single-scheme conveniences. A named auth.*
+// requirement is satisfied and scoped through credentials[name] first;
+// auth.apiKey also accepts historical apiKeys[name]. Named maps are never
+// admitted wholesale, which would leak another scheme's credential.
 var requirementFamilyFields = map[string][]string{
 	"auth.bearer": {"bearerToken"},
 	"auth.apiKey": {"apiKey"},
@@ -54,6 +53,7 @@ var credentialFieldNames = map[string]bool{
 	"accessToken":  true,
 	"refreshToken": true,
 	"clientSecret": true,
+	"credentials":  true,
 }
 
 // isCredentialField reports whether a context key names one of the standard
@@ -62,13 +62,12 @@ func isCredentialField(key string) bool {
 	return credentialFieldNames[key]
 }
 
-// requirementSatisfied reports whether ctx resolves one requirement. A NAMED
-// auth.apiKey requirement (req.Name set) checks the scheme-scoped
-// context.apiKeys[req.Name] first, falling back to the single context.apiKey
-// convenience — the same priority ContextAPIKeyFor applies at
-// credential-application time. A mapped family (auth.bearer/apiKey/basic/
-// oauth2, or an unnamed auth.apiKey) checks the single well-known field it
-// resolves into.
+// requirementSatisfied reports whether ctx resolves one requirement. A named
+// auth.* requirement checks context.credentials[req.Name] first. Named
+// auth.apiKey additionally accepts historical context.apiKeys[req.Name]. A
+// flat convenience may satisfy a named requirement only when that use is
+// unambiguous within the selected alternative. This is the same priority the
+// credential-application helpers use.
 //
 // Every other "auth.*" type is UNMAPPED: a scheme an invoker surfaced from
 // the artifact but has no resolver for (e.g. "auth.http.digest",
@@ -82,15 +81,54 @@ func isCredentialField(key string) bool {
 // config.value is satisfied by the named point in context.configuration.
 // Other non-"auth." extension families fall back to a context field named
 // after their type; the extension family owns that convention.
-func requirementSatisfied(ctx map[string]any, req ContextRequirement) bool {
-	if req.Type == "auth.apiKey" && req.Name != "" {
-		return ContextAPIKeyFor(ctx, req.Name) != ""
+func requirementSatisfied(ctx map[string]any, req ContextRequirement, allowFlatNamedCredential bool) bool {
+	named := ContextNamedCredential(ctx, req.Name)
+	switch req.Type {
+	case "auth.bearer":
+		if value, ok := named.(string); ok && value != "" {
+			return true
+		}
+		return allowFlatNamedCredential && ContextBearerToken(ctx) != ""
+	case "auth.apiKey":
+		if value, ok := named.(string); ok && value != "" {
+			return true
+		}
+		if req.Name != "" {
+			if keys, ok := ctx["apiKeys"].(map[string]any); ok {
+				if value, ok := keys[req.Name].(string); ok && value != "" {
+					return true
+				}
+			}
+		}
+		return allowFlatNamedCredential && ContextAPIKey(ctx) != ""
+	case "auth.basic":
+		if value, ok := named.(map[string]any); ok {
+			username, hasUsername := value["username"].(string)
+			password, hasPassword := value["password"].(string)
+			if hasUsername && hasPassword && (username != "" || password != "") {
+				return true
+			}
+		}
+		_, _, ok := ContextBasicAuth(ctx)
+		return allowFlatNamedCredential && ok
+	case "auth.oauth2":
+		if value, ok := named.(map[string]any); ok {
+			if token, ok := value["accessToken"].(string); ok && token != "" {
+				return true
+			}
+		}
+		return allowFlatNamedCredential && ContextString(ctx, "accessToken") != ""
 	}
 	if req.Type == "config.value" {
 		point, _ := req.Extra["point"].(string)
+		path, pathPresent := req.Extra["path"].(string)
 		configuration, _ := ctx["configuration"].(map[string]any)
 		v, present := configuration[point]
-		return point != "" && present && v != nil && v != ""
+		if point == "" || !pathPresent || !present {
+			return false
+		}
+		selected, selectedPresent := configurationValueAt(v, path)
+		return selectedPresent && selected != nil && selected != ""
 	}
 	field, mapped := requirementFields[req.Type]
 	if !mapped {
@@ -112,7 +150,7 @@ func ContextSatisfies(ctx map[string]any, details *ContextRequiredDetails) bool 
 	for _, alt := range details.Alternatives {
 		ok := len(alt.Requirements) > 0
 		for _, req := range alt.Requirements {
-			if !requirementSatisfied(ctx, req) {
+			if !requirementSatisfied(ctx, req, flatCredentialIsUnambiguous(details, req)) {
 				ok = false
 				break
 			}
@@ -122,6 +160,24 @@ func ContextSatisfies(ctx map[string]any, details *ContextRequiredDetails) bool 
 		}
 	}
 	return false
+}
+
+func flatCredentialIsUnambiguous(details *ContextRequiredDetails, requirement ContextRequirement) bool {
+	identities := map[string]struct{}{}
+	unnamed := 0
+	for _, alternative := range details.Alternatives {
+		for _, candidate := range alternative.Requirements {
+			if candidate.Type != requirement.Type {
+				continue
+			}
+			if candidate.Name == "" {
+				unnamed++
+			} else {
+				identities[candidate.Name] = struct{}{}
+			}
+		}
+	}
+	return len(identities)+unnamed == 1
 }
 
 // ScopeContext returns the least-privilege subset of a stored context for a
@@ -153,7 +209,7 @@ func ScopeContext(stored map[string]any, details *ContextRequiredDetails) map[st
 		}
 		satisfied := true
 		for _, req := range alt.Requirements {
-			if !requirementSatisfied(stored, req) {
+			if !requirementSatisfied(stored, req, flatCredentialIsUnambiguous(details, req)) {
 				satisfied = false
 				break
 			}
@@ -170,18 +226,29 @@ func ScopeContext(stored map[string]any, details *ContextRequiredDetails) map[st
 }
 
 // admitRequirement copies into out the stored credential field(s) that
-// satisfy one already-satisfied requirement. A NAMED auth.apiKey requirement
-// admits only its single 'apiKeys[name]' entry (never the whole 'apiKeys'
-// map, and never another alternative's key) — scoped provisioning per the
+// satisfy one already-satisfied requirement. A named auth.* requirement
+// admits only its single credentials[name] entry; named auth.apiKey may use
+// its historical apiKeys[name] entry. Neither named map is admitted wholesale,
+// so another alternative's credential cannot cross the scope — per the
 // binding-invoker contract's least-privilege rule (§ ContextRequiredDetails:
 // "provisions only the context that satisfies the one selected
 // alternative"). Falls back to the plain 'apiKey' field when the named entry
 // is what actually satisfied the requirement (requirementSatisfied's own
-// fallback). Every other requirement admits its whole family
-// (requirementFamilyFields), or a single field named after req.Type when the
-// family is unmapped.
+// fallback). An unnamed standard requirement admits its flat family fields;
+// an unmapped extension admits the single field named by req.Type.
 func admitRequirement(out, stored map[string]any, req ContextRequirement) {
 	if req.Type == "auth.apiKey" && req.Name != "" {
+		if credentials, ok := stored["credentials"].(map[string]any); ok {
+			if value, ok := credentials[req.Name].(string); ok && value != "" {
+				scoped, _ := out["credentials"].(map[string]any)
+				if scoped == nil {
+					scoped = map[string]any{}
+					out["credentials"] = scoped
+				}
+				scoped[req.Name] = value
+				return
+			}
+		}
 		if keys, ok := stored["apiKeys"].(map[string]any); ok {
 			if v, ok := keys[req.Name].(string); ok && v != "" {
 				scoped, _ := out["apiKeys"].(map[string]any)
@@ -200,8 +267,9 @@ func admitRequirement(out, stored map[string]any, req ContextRequirement) {
 	}
 	if req.Type == "config.value" {
 		point, _ := req.Extra["point"].(string)
+		path, pathPresent := req.Extra["path"].(string)
 		configuration, _ := stored["configuration"].(map[string]any)
-		if point == "" {
+		if point == "" || !pathPresent {
 			return
 		}
 		value, present := configuration[point]
@@ -213,8 +281,34 @@ func admitRequirement(out, stored map[string]any, req ContextRequirement) {
 			scoped = map[string]any{}
 			out["configuration"] = scoped
 		}
-		scoped[point] = value
+		selected, selectedPresent := configurationValueAt(value, path)
+		if !selectedPresent {
+			return
+		}
+		if path == "" {
+			scoped[point] = value
+			return
+		}
+		pointOut, _ := scoped[point].(map[string]any)
+		if pointOut == nil {
+			pointOut = map[string]any{}
+			scoped[point] = pointOut
+		}
+		mergeConfigurationFragment(pointOut, configurationFragment(path, selected))
 		return
+	}
+	if req.Name != "" && strings.HasPrefix(req.Type, "auth.") {
+		if credentials, ok := stored["credentials"].(map[string]any); ok {
+			if value, present := credentials[req.Name]; present {
+				scoped, _ := out["credentials"].(map[string]any)
+				if scoped == nil {
+					scoped = map[string]any{}
+					out["credentials"] = scoped
+				}
+				scoped[req.Name] = value
+				return
+			}
+		}
 	}
 	fields, ok := requirementFamilyFields[req.Type]
 	if !ok {
@@ -224,6 +318,64 @@ func admitRequirement(out, stored map[string]any, req ContextRequirement) {
 		if v, present := stored[f]; present {
 			out[f] = v
 		}
+	}
+}
+
+func configurationPointerTokens(path string) ([]string, bool) {
+	if !validConfigurationPointer(path) {
+		return nil, false
+	}
+	if path == "" {
+		return []string{}, true
+	}
+	parts := strings.Split(path[1:], "/")
+	for index, token := range parts {
+		parts[index] = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+	}
+	return parts, true
+}
+
+func configurationValueAt(root any, path string) (any, bool) {
+	tokens, ok := configurationPointerTokens(path)
+	if !ok {
+		return nil, false
+	}
+	current := root
+	if len(tokens) == 0 {
+		return current, true
+	}
+	for _, token := range tokens {
+		record, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = record[token]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func configurationFragment(path string, value any) map[string]any {
+	tokens, _ := configurationPointerTokens(path)
+	var fragment any = value
+	for index := len(tokens) - 1; index >= 0; index-- {
+		fragment = map[string]any{tokens[index]: fragment}
+	}
+	result, _ := fragment.(map[string]any)
+	return result
+}
+
+func mergeConfigurationFragment(left, right map[string]any) {
+	for key, value := range right {
+		prior, priorOK := left[key].(map[string]any)
+		incoming, incomingOK := value.(map[string]any)
+		if priorOK && incomingOK {
+			mergeConfigurationFragment(prior, incoming)
+			continue
+		}
+		left[key] = value
 	}
 }
 
@@ -240,9 +392,13 @@ func admitRequirement(out, stored map[string]any, req ContextRequirement) {
 // not classify or forward arbitrary stored fields.
 //
 // A stored entry that does NOT satisfy the challenge (wrong field name,
-// empty value) is a decline like any other: the challenge surfaces, and its
-// error text names the requirement family and the context field that would
-// satisfy it — check the stored entry's keys against that field name.
+// empty value) is a decline like any other: the challenge surfaces with its
+// structured requirement data intact.
+//
+// This generic helper treats the co-located invoker that produced Target as
+// inside the application's trust boundary. An untrusted remote or delegate
+// assertion must be independently validated before this resolver can release
+// reusable stored secrets.
 //
 // Apps that resolve interactively (prompt, browser redirect, keychain)
 // supply their own resolver and MAY persist what they obtain for durable
@@ -251,6 +407,25 @@ func admitRequirement(out, stored map[string]any, req ContextRequirement) {
 func StoreContextResolver(store ContextStore) ContextResolver {
 	return func(ctx context.Context, details *ContextRequiredDetails) (map[string]any, error) {
 		if details == nil {
+			return nil, nil
+		}
+		// Stored context may satisfy only a complete alternative whose every
+		// requirement explicitly opts into reuse. Durability defaults to false;
+		// filtering individual members of an AND-set would weaken the challenge.
+		reusable := &ContextRequiredDetails{Target: details.Target}
+		for _, alt := range details.Alternatives {
+			whollyDurable := len(alt.Requirements) > 0
+			for _, req := range alt.Requirements {
+				if req.Durable == nil || !*req.Durable {
+					whollyDurable = false
+					break
+				}
+			}
+			if whollyDurable {
+				reusable.Alternatives = append(reusable.Alternatives, alt)
+			}
+		}
+		if len(reusable.Alternatives) == 0 {
 			return nil, nil
 		}
 		key := NormalizeEndpoint(details.Target)
@@ -264,9 +439,9 @@ func StoreContextResolver(store ContextStore) ContextResolver {
 		if err != nil || stored == nil {
 			return nil, err
 		}
-		if !ContextSatisfies(stored, details) {
+		if !ContextSatisfies(stored, reusable) {
 			return nil, nil
 		}
-		return ScopeContext(stored, details), nil
+		return ScopeContext(stored, reusable), nil
 	}
 }

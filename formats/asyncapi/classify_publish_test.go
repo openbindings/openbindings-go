@@ -42,9 +42,9 @@ func TestUnaryPublish3xxIsFailure(t *testing.T) {
 		t.Fatalf("a 3xx-final unary publish must FAIL (ASYNC-P-06 §9.4), got success (%v)", err)
 	}
 	if ie.Code != openbindings.ErrCodeExecutionFailed {
-		t.Fatalf("3xx classifies via the SSE path's status table to ERR_EXECUTION_FAILED, got %s: %s", ie.Code, ie.Message)
+		t.Fatalf("3xx classifies via the SSE path's status table to ERR_EXECUTION_FAILED, got %s: %s", ie.Code, ie.Error())
 	}
-	if details, _ := ie.Diagnostics.(map[string]any); details["status"] != 302 {
-		t.Errorf("details.status = %v, want 302", details["status"])
+	if ie.HasData() {
+		t.Errorf("HTTP status leaked as abstract data: %#v", ie.Data)
 	}
 }

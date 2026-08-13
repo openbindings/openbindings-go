@@ -80,8 +80,8 @@ func TestConformance_D02_NonConformantLocationRefusedPreDispatch(t *testing.T) {
 	for _, location := range []string{"https://api.example.com/", "https://api.example.com?x=1", "grpcs://api.example.com"} {
 		inv := NewInvoker().InvokeBinding(ctx, unaryArgs(location, testProto, "testpkg.TestService/GetItem"))
 		ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
-		if !strings.Contains(ierr.Message, "CONN-D-02") {
-			t.Errorf("location %q: refusal must cite CONN-D-02, got: %s", location, ierr.Message)
+		if ierr.HasData() {
+			t.Errorf("location %q: implementation evidence crossed as abstract data: %#v", location, ierr.Data)
 		}
 	}
 }
@@ -368,8 +368,8 @@ func TestConformance_P02_UnknownInputFieldRefusedPreDispatch(t *testing.T) {
 	if terr.Code != openbindings.ErrCodeValidationFailed {
 		t.Errorf("code = %q, want ERR_VALIDATION_FAILED", terr.Code)
 	}
-	if !strings.Contains(terr.Message, "bogus") {
-		t.Errorf("refusal must name the unknown field, got: %s", terr.Message)
+	if terr.HasData() {
+		t.Errorf("validator diagnostics crossed as abstract data: %#v", terr.Data)
 	}
 }
 
@@ -425,8 +425,8 @@ func TestConformance_P02_UndecodableResponseIsLoudFailure(t *testing.T) {
 			inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 				map[string]any{"id": "x"})
 			ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
-			if !strings.Contains(ierr.Message, "canonical JSON form") {
-				t.Errorf("failure must name the decode contract, got: %s", ierr.Message)
+			if ierr.HasData() {
+				t.Errorf("native decode evidence crossed as abstract data: %#v", ierr.Data)
 			}
 		})
 	}
@@ -442,8 +442,8 @@ func TestConformance_P02_UnknownResponseMemberRefused(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "a"})
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
-	if !strings.Contains(ierr.Message, "driftedField") && !strings.Contains(ierr.Message, "unknown") {
-		t.Errorf("unknown response refusal should identify the mismatch, got %q", ierr.Message)
+	if ierr.HasData() {
+		t.Errorf("native response mismatch crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -597,8 +597,8 @@ service S { rpc Do(Req) returns (Resp); }
 
 	inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, proto, "p2.S/Do"))
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceLoadFailed)
-	if !strings.Contains(ierr.Message, "required presence") {
-		t.Errorf("refusal must name the construct, got: %s", ierr.Message)
+	if ierr.HasData() {
+		t.Errorf("schema-loader diagnostics crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -668,8 +668,8 @@ func TestConformance_P03_DescriptorlessVerbatimValues(t *testing.T) {
 	respBody = `{"ok":true}`
 	inv = invokeWith(t, ctx, NewInvoker(), args())
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeValidationFailed)
-	if !strings.Contains(ierr.Message, "one present JSON input value") {
-		t.Errorf("absent-input refusal = %q", ierr.Message)
+	if ierr.HasData() {
+		t.Errorf("validation diagnostics crossed as abstract data: %#v", ierr.Data)
 	}
 
 	// An explicit JSON null is a VALUE, not absence, and rides as `null`.
@@ -699,8 +699,8 @@ func TestConformance_P03_ParseFailureIsLoudNeverAString(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, nil, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "x"})
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
-	if !strings.Contains(ierr.Message, "JSON") {
-		t.Errorf("protocol error must name the JSON contract, got: %s", ierr.Message)
+	if ierr.HasData() {
+		t.Errorf("native parse evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -718,8 +718,8 @@ func TestConformance_P03_NonJSONContentTypeIsLoud(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, nil, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "x"})
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
-	if !strings.Contains(ierr.Message, "application/json") {
-		t.Errorf("protocol error must name the expected content type, got: %s", ierr.Message)
+	if ierr.HasData() {
+		t.Errorf("native media evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -744,10 +744,8 @@ service ChatService { rpc Chat(stream ChatMsg) returns (stream ChatMsg); }
 	if len(outputs) != 0 || terr == nil {
 		t.Fatal("bidi must refuse pre-dispatch (CONN-P-04)")
 	}
-	for _, want := range []string{"bidirectional", "limitation", "CONN-P-04"} {
-		if !strings.Contains(terr.Message, want) {
-			t.Errorf("refusal must mention %q, got: %s", want, terr.Message)
-		}
+	if terr.Code != openbindings.ErrCodeExecutionFailed || terr.HasData() {
+		t.Errorf("bidi refusal = %#v, want code-only ERR_EXECUTION_FAILED", terr)
 	}
 }
 
@@ -861,8 +859,8 @@ func TestConformance_P05_MissingEndStreamIsLoudFailure(t *testing.T) {
 	if terr == nil || terr.Code != openbindings.ErrCodeStreamError {
 		t.Fatalf("a stream ending without END_STREAM must fail loudly (CONN-P-05/CONN-P-06), got %v", terr)
 	}
-	if !strings.Contains(terr.Message, "END_STREAM") {
-		t.Errorf("failure must name the missing END_STREAM, got: %s", terr.Message)
+	if terr.HasData() {
+		t.Errorf("native framing evidence crossed as abstract data: %#v", terr.Data)
 	}
 }
 
@@ -926,8 +924,11 @@ func TestConformance_P06_EmittedValuesStandOnEndStreamError(t *testing.T) {
 	if outputs[0].(map[string]any)["message"] != "kept" {
 		t.Errorf("emitted value = %v", outputs[0])
 	}
-	if terr == nil || !strings.Contains(terr.Message, "late failure") {
+	if terr == nil || terr.Code != openbindings.ErrCodeExecutionFailed {
 		t.Fatalf("the END_STREAM error must classify the invocation as a failure, got %v", terr)
+	}
+	if terr.HasData() {
+		t.Fatalf("native END_STREAM error evidence crossed as abstract data: %#v", terr.Data)
 	}
 }
 
@@ -1025,11 +1026,13 @@ func TestConformance_P07_BareAPIKeyFieldSurfacedLoudly(t *testing.T) {
 	if hit {
 		t.Error("server was contacted; an inexpressible apiKey must be surfaced BEFORE dispatch (§9.6)")
 	}
-	if !strings.Contains(ierr.Message, "context.headers") {
-		t.Errorf("error message %q should tell the consumer to name the header via context.headers", ierr.Message)
+	details := openbindings.ContextRequiredFrom(ierr)
+	if details == nil || len(details.Alternatives) == 0 {
+		t.Fatalf("inexpressible credential must produce a structural context challenge: %#v", ierr.Data)
 	}
-	if strings.Contains(ierr.Message, "k-secret") {
-		t.Errorf("error message %q leaked the apiKey value", ierr.Message)
+	encoded, _ := json.Marshal(ierr)
+	if strings.Contains(string(encoded), "k-secret") {
+		t.Errorf("abstract error leaked the apiKey value: %s", encoded)
 	}
 }
 
@@ -1083,9 +1086,8 @@ func TestConformance_P06_StreamingErrorBodyReadWholeAtCapBoundary(t *testing.T) 
 	args := streamingArgs(srv.URL)
 	inv := invokeWith(t, ctx, NewInvoker(), args, map[string]any{"source": "s"})
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
-	evidence, ok := FailureEvidenceFrom(ierr)
-	if !ok || evidence.Error["code"] != "unauthenticated" {
-		t.Fatalf("Connect error evidence was not retained: %+v", evidence)
+	if ierr.HasData() {
+		t.Fatalf("Connect-native error evidence leaked as abstract data: %+v", ierr.Data)
 	}
 }
 

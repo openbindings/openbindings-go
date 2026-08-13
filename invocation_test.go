@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -62,7 +61,7 @@ func TestDrainBeforeTerminal(t *testing.T) { // SS
 	if err := inv.EmitOutput(2); err != nil {
 		t.Fatal(err)
 	}
-	inv.FireError(&InvocationError{Code: ErrCodeStreamError, Message: "boom"})
+	inv.FireError(&InvocationError{Code: ErrCodeStreamError})
 
 	vals, err := collectStream(t, inv.Outputs())
 	if len(vals) != 2 || vals[0] != 1 || vals[1] != 2 {
@@ -89,25 +88,25 @@ func TestQueuedBeforeAcquire(t *testing.T) { // U, NI
 func TestTerminalStickyAndSingle(t *testing.T) {
 	inv := NewInvocationImpl[any, any](bg())
 	inv.CloseOutput()
-	inv.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "late"}) // no-op
-	inv.Cancel()                                                           // no-op
+	inv.FireError(&InvocationError{Code: ErrCodeRuntime}) // no-op
+	inv.Cancel()                                          // no-op
 	if _, err := collectStream(t, inv.Outputs()); err != nil {
 		t.Fatalf("normal close must win: %v", err)
 	}
 
 	inv2 := NewInvocationImpl[any, any](bg())
-	inv2.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "first"})
-	inv2.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "second"}) // no-op
-	inv2.CloseOutput()                                                        // no-op
+	inv2.FireError(&InvocationError{Code: ErrCodeRuntime})
+	inv2.FireError(&InvocationError{Code: ErrCodeRuntime}) // no-op
+	inv2.CloseOutput()                                     // no-op
 	_, err := collectStream(t, inv2.Outputs())
-	if err == nil || err.Error() != "first" {
+	if codeOf(t, err) != ErrCodeRuntime {
 		t.Fatalf("first terminal must stick, got %v", err)
 	}
 }
 
 func TestCancelDoesNotOverwriteRealTerminal(t *testing.T) {
 	inv := NewInvocationImpl[any, any](bg())
-	real := &InvocationError{Code: ErrCodeExecutionFailed, Message: "real failure"}
+	real := &InvocationError{Code: ErrCodeExecutionFailed}
 	inv.FireError(real)
 	inv.Cancel()
 	_, err := collectStream(t, inv.Outputs())
@@ -195,7 +194,7 @@ func TestSingleShortCircuitsOnSecond(t *testing.T) { // SS — the critical misu
 func TestSingleSurfacesTerminalAfterFirst(t *testing.T) { // SS
 	inv := NewInvocationImpl[any, int](bg())
 	_ = inv.EmitOutput(1)
-	inv.FireError(&InvocationError{Code: ErrCodeStreamError, Message: "mid-stream death"})
+	inv.FireError(&InvocationError{Code: ErrCodeStreamError})
 	_, err := Single(shortCtx(t), inv.Outputs())
 	if codeOf(t, err) != ErrCodeStreamError {
 		t.Fatalf("expected the real terminal, got %v", err)
@@ -263,7 +262,7 @@ func TestParkedEmitRejectsOnTerminal(t *testing.T) { // SS, BD
 	parked := make(chan error, 1)
 	go func() { parked <- inv.EmitOutput(99) }()
 	time.Sleep(20 * time.Millisecond)
-	inv.FireError(&InvocationError{Code: ErrCodeStreamError, Message: "died while parked"})
+	inv.FireError(&InvocationError{Code: ErrCodeStreamError})
 	select {
 	case err := <-parked:
 		if codeOf(t, err) != ErrCodeStreamError {
@@ -309,7 +308,7 @@ func TestParkedWriteRejectsOnTerminal(t *testing.T) { // CS
 	parked := make(chan error, 1)
 	go func() { parked <- inv.Write(bg(), 99) }()
 	time.Sleep(20 * time.Millisecond)
-	inv.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "terminal while write parked"})
+	inv.FireError(&InvocationError{Code: ErrCodeRuntime})
 	select {
 	case err := <-parked:
 		if codeOf(t, err) != ErrCodeRuntime {
@@ -391,7 +390,7 @@ func TestFireErrorMakesParkedReadThrow(t *testing.T) {
 		done <- err
 	}()
 	time.Sleep(20 * time.Millisecond)
-	inv.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "terminal"})
+	inv.FireError(&InvocationError{Code: ErrCodeRuntime})
 	if err := <-done; codeOf(t, err) != ErrCodeRuntime {
 		t.Fatalf("parked read must surface the terminal, got %v", err)
 	}
@@ -430,7 +429,7 @@ func TestBindingCloseInputFreesCaller(t *testing.T) { // NI, U
 
 func TestWriteAfterTerminalReturnsTerminal(t *testing.T) {
 	inv := NewInvocationImpl[string, any](bg())
-	term := &InvocationError{Code: ErrCodeRuntime, Message: "done for"}
+	term := &InvocationError{Code: ErrCodeRuntime}
 	inv.FireError(term)
 	err := inv.Write(bg(), "x")
 	var ie *InvocationError
@@ -458,7 +457,7 @@ func TestInputDrainsBufferedValueOnClose(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestValidateHookDualSignal(t *testing.T) {
-	t07 := &InvocationError{Code: ErrCodeValidationFailed, Message: "input validation failed"}
+	t07 := &InvocationError{Code: ErrCodeValidationFailed}
 	inv := NewInvocationImpl[int, any](bg())
 	inv.validateInput = func(v int) *InvocationError {
 		if v < 0 {
@@ -550,9 +549,9 @@ func invErrOf(t *testing.T, err error) *InvocationError {
 	return ie
 }
 
-// A mid-stream lifetime deadline: already-emitted outputs STAND, then exactly
-// one terminal ERR_TIMEOUT. Previously emitted outputs still stand.
-func TestMidStreamDeadlineIsTimeout(t *testing.T) { // SS
+// A mid-stream lifetime deadline is a caller-owned cancellation at this
+// boundary: already-emitted outputs stand, then one ERR_CANCELLED terminal.
+func TestMidStreamDeadlineIsCancelled(t *testing.T) { // SS
 	ctx, cancel := context.WithTimeout(bg(), 60*time.Millisecond)
 	t.Cleanup(cancel)
 	inv := NewInvocationImpl[any, int](ctx)
@@ -572,8 +571,8 @@ func TestMidStreamDeadlineIsTimeout(t *testing.T) { // SS
 		t.Fatalf("previously-emitted outputs must stand, got %v", vals)
 	}
 	ie := invErrOf(t, err)
-	if ie.Code != ErrCodeTimeout {
-		t.Fatalf("code = %q, want ERR_TIMEOUT", ie.Code)
+	if ie.Code != ErrCodeCancelled {
+		t.Fatalf("code = %q, want ERR_CANCELLED", ie.Code)
 	}
 }
 
@@ -596,115 +595,37 @@ func TestMidStreamCancelStaysCancelled(t *testing.T) { // SS
 	}
 }
 
-// A caller-supplied deadline that fires via the AfterFunc classifies as a
-// TIMEOUT even with no output in flight (parity: the code, not the presence
-// of outputs, decides).
-func TestDeadlineWithoutOutputIsTimeout(t *testing.T) {
+// A caller-supplied deadline uses the same abstract cancellation code even
+// with no output in flight.
+func TestDeadlineWithoutOutputIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(bg(), 20*time.Millisecond)
 	t.Cleanup(cancel)
 	inv := NewInvocationImpl[any, int](ctx)
 	_, err := collectStream(t, inv.Outputs())
 	ie := invErrOf(t, err)
-	if ie.Code != ErrCodeTimeout {
-		t.Fatalf("deadline terminal code = %s, want ERR_TIMEOUT", ie.Code)
+	if ie.Code != ErrCodeCancelled {
+		t.Fatalf("deadline terminal code = %s, want ERR_CANCELLED", ie.Code)
 	}
 }
 
-// An already-expired lifetime is classified the same way a mid-flight one is:
-// a deadline is a TIMEOUT, an explicit cancel is CANCELLED.
-func TestPreExpiredDeadlineIsTimeout(t *testing.T) {
+// An already-expired lifetime is classified like a mid-flight cancellation.
+func TestPreExpiredDeadlineIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithDeadline(bg(), time.Now().Add(-time.Second))
 	t.Cleanup(cancel)
 	inv := NewInvocationImpl[any, int](ctx)
 	_, err := collectStream(t, inv.Outputs())
-	if ie := invErrOf(t, err); ie.Code != ErrCodeTimeout {
-		t.Fatalf("pre-expired deadline code = %q, want ERR_TIMEOUT", ie.Code)
+	if ie := invErrOf(t, err); ie.Code != ErrCodeCancelled {
+		t.Fatalf("pre-expired deadline code = %q, want ERR_CANCELLED", ie.Code)
 	}
 }
 
-// AsInvocationError distinguishes a deadline (TIMEOUT) from a cancel (CANCELLED).
-func TestAsInvocationErrorDeadlineIsTimeout(t *testing.T) {
-	if ie := AsInvocationError(context.DeadlineExceeded); ie.Code != ErrCodeTimeout {
-		t.Errorf("DeadlineExceeded → %s, want ERR_TIMEOUT", ie.Code)
+// AsInvocationError maps both caller-owned cancellation forms consistently.
+func TestAsInvocationErrorDeadlineIsCancelled(t *testing.T) {
+	if ie := AsInvocationError(context.DeadlineExceeded); ie.Code != ErrCodeCancelled {
+		t.Errorf("DeadlineExceeded → %s, want ERR_CANCELLED", ie.Code)
 	}
 	if ie := AsInvocationError(context.Canceled); ie.Code != ErrCodeCancelled {
 		t.Errorf("Canceled → %s, want ERR_CANCELLED", ie.Code)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Metadata
-// ---------------------------------------------------------------------------
-
-func TestHeaderResolvesWithBindingMetadata(t *testing.T) { // SS, U
-	inv := NewInvocationImpl[any, string](bg())
-	if err := inv.SetHeader(Metadata{"content-type": {"application/json"}}); err != nil {
-		t.Fatal(err)
-	}
-	_ = inv.EmitOutput("x")
-	md, err := inv.Header(shortCtx(t))
-	if err != nil || len(md["content-type"]) != 1 {
-		t.Fatalf("got %v err=%v", md, err)
-	}
-}
-
-func TestHeaderSettlesEmptyOnFirstOutput(t *testing.T) {
-	inv := NewInvocationImpl[any, string](bg())
-	_ = inv.EmitOutput("x")
-	md, err := inv.Header(shortCtx(t))
-	if err != nil || len(md) != 0 {
-		t.Fatalf("expected empty header, got %v err=%v", md, err)
-	}
-}
-
-func TestHeaderSettlesOnTerminal(t *testing.T) {
-	inv := NewInvocationImpl[any, any](bg())
-	inv.FireError(&InvocationError{Code: ErrCodeRuntime, Message: "early death"})
-	md, err := inv.Header(shortCtx(t))
-	if err != nil || len(md) != 0 {
-		t.Fatalf("header must settle on terminal, got %v err=%v", md, err)
-	}
-}
-
-func TestTrailerValidOnlyAfterTermination(t *testing.T) {
-	inv := NewInvocationImpl[any, string](bg())
-	inv.SetTrailer(Metadata{"grpc-status": {"0"}})
-	func() {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Fatal("Trailer before termination must panic")
-			}
-		}()
-		_ = inv.Trailer()
-	}()
-	inv.CloseOutput()
-	if md := inv.Trailer(); len(md["grpc-status"]) != 1 {
-		t.Fatalf("expected trailer after close, got %v", md)
-	}
-}
-
-func TestSetHeaderAfterFirstEmitErrors(t *testing.T) {
-	inv := NewInvocationImpl[any, string](bg())
-	_ = inv.EmitOutput("x")
-	if err := inv.SetHeader(Metadata{"late": {"true"}}); err == nil {
-		t.Fatal("late SetHeader must error")
-	}
-}
-
-func TestTrailerAfterSingleShortCircuit(t *testing.T) {
-	inv := NewInvocationImpl[any, int](bg())
-	_ = inv.SetHeader(Metadata{"x-stream": {"yes"}})
-	_ = inv.EmitOutput(1)
-	_ = inv.EmitOutput(2)
-	if _, err := Single(shortCtx(t), inv.Outputs()); codeOf(t, err) != ErrCodeExpectedSingle {
-		t.Fatalf("expected short-circuit, got %v", err)
-	}
-	md, _ := inv.Header(shortCtx(t))
-	if len(md["x-stream"]) != 1 {
-		t.Fatalf("header set before output must remain valid, got %v", md)
-	}
-	if tr := inv.Trailer(); len(tr) != 0 {
-		t.Fatalf("trailer of a cancelled call should be empty, got %v", tr)
 	}
 }
 
@@ -771,7 +692,7 @@ func TestContextRequiredIsJustATerminalCode(t *testing.T) {
 		Target:       "api.example.com",
 		Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.bearer"}}}},
 	}
-	inv.FireError(NewContextRequiredError("bearer token required", details))
+	inv.FireError(NewContextRequiredError(details))
 	_, err := collectStream(t, inv.Outputs())
 	var ie *InvocationError
 	if !errors.As(err, &ie) || ContextRequiredFrom(ie) == nil {
@@ -835,48 +756,6 @@ func TestConcurrentOutputReadersPanic(t *testing.T) { // SS, BD
 	_, _ = out.Read(bg())
 }
 
-func TestSetTrailerAfterTerminalIsDropped(t *testing.T) {
-	// Terminal state is reachable via a benign cancellation race, so a late
-	// SetTrailer must be silently dropped (per the documented contract),
-	// not panic — panicking would crash the process.
-	inv := NewInvocationImpl[any, any](bg())
-	inv.SetTrailer(Metadata{"early": {"true"}})
-	inv.CloseOutput()
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("late SetTrailer must be dropped, not panic, got %v", r)
-		}
-	}()
-	inv.SetTrailer(Metadata{"late": {"true"}})
-	md := inv.Trailer()
-	if len(md["late"]) != 0 {
-		t.Fatalf("late SetTrailer must be dropped, got %v", md)
-	}
-	if len(md["early"]) != 1 {
-		t.Fatalf("pre-terminal trailer must be retained, got %v", md)
-	}
-}
-
-func TestMetadataReturnsAreIsolated(t *testing.T) {
-	inv := NewInvocationImpl[any, string](bg())
-	md := Metadata{"k": {"v"}}
-	_ = inv.SetHeader(md)
-	md["k"][0] = "mutated-by-binding" // binding mutates its map after set
-
-	got, err := inv.Header(shortCtx(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got["k"][0] != "v" {
-		t.Fatalf("header aliased the binding's map: %v", got)
-	}
-	got["k"] = []string{"mutated-by-caller"}
-	again, _ := inv.Header(shortCtx(t))
-	if again["k"][0] != "v" {
-		t.Fatalf("header aliased a previous return: %v", again)
-	}
-}
-
 func TestContextRequirementJSONRoundTripsExtra(t *testing.T) {
 	durable := false
 	req := ContextRequirement{
@@ -902,36 +781,32 @@ func TestContextRequirementJSONRoundTripsExtra(t *testing.T) {
 }
 
 func TestContextRequiredFromDecodesMapDetails(t *testing.T) {
-	// Details that crossed a JSON boundary arrive as a generic map; the
+	// Data that crossed a JSON boundary arrives as a generic map; the
 	// operation layer must still recognize the challenge as retryable.
-	err := &InvocationError{
-		Code:    ErrCodeContextRequired,
-		Message: "bearer required",
-		Details: map[string]any{
+	err := NewInvocationErrorWithData(
+		ErrCodeContextRequired,
+		map[string]any{
 			"target":       "api.example.com",
 			"alternatives": []any{map[string]any{"requirements": []any{map[string]any{"type": "auth.bearer"}}}},
 		},
-	}
+	)
 	d := ContextRequiredFrom(err)
 	if d == nil || d.Target != "api.example.com" || len(d.Alternatives) != 1 ||
 		d.Alternatives[0].Requirements[0].Type != "auth.bearer" {
-		t.Fatalf("map-shaped details not decoded: %+v", d)
+		t.Fatalf("map-shaped context data not decoded: %+v", d)
 	}
 }
 
-// A cancellation that lands while the input side was never written nor
-// closed is almost always the forgot-to-Write hang; the terminal message
-// diagnoses it instead of reporting a bare cancellation.
-func TestCancelDiagnosesNeverWrittenInput(t *testing.T) {
+func TestCancellationErrorIsProtocolIndependentCodeOnly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	inv := NewInvocationImpl[string, string](ctx)
 	cancel()
 	_, err := inv.Outputs().Read(bg())
-	if err == nil || !strings.Contains(err.Error(), "never written or closed") {
-		t.Errorf("want the forgot-to-Write diagnosis, got: %v", err)
+	if err == nil || err.Error() != ErrCodeCancelled {
+		t.Errorf("want code-only cancellation, got: %v", err)
 	}
 
-	// A written invocation keeps the plain message.
+	// Input history does not change the abstract failure shape.
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	inv2 := NewInvocationImpl[string, string](ctx2)
 	if err := inv2.Write(bg(), "x"); err != nil {
@@ -939,7 +814,7 @@ func TestCancelDiagnosesNeverWrittenInput(t *testing.T) {
 	}
 	cancel2()
 	_, err = inv2.Outputs().Read(bg())
-	if err == nil || strings.Contains(err.Error(), "never written") {
-		t.Errorf("written invocation should get the plain cancellation, got: %v", err)
+	if err == nil || err.Error() != ErrCodeCancelled {
+		t.Errorf("written invocation should get the same cancellation code, got: %v", err)
 	}
 }

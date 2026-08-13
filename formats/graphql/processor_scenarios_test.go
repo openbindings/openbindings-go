@@ -193,11 +193,6 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	if joined {
 		data["joinedSynthesis"] = true
 	}
-	trailer := map[string]any{}
-	for name, values := range call.Diagnostics().Trailer() {
-		trailer[name] = values
-	}
-	data["trailer"] = trailer
 	if outputs == nil {
 		data["outputs"] = []any{}
 	}
@@ -206,7 +201,7 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		data["dispatch"] = dispatch
 	}
 	if terminal != nil && terminal.Code == openbindings.ErrCodeContextRequired {
-		data["context"] = normalizeScenarioValue(terminal.Details)
+		data["context"] = normalizeScenarioValue(terminal.Data)
 		return processorscenarios.Observation{Disposition: "context-required", Phase: "pre-dispatch", Data: data}
 	}
 	if terminal == nil {
@@ -217,7 +212,7 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "pre-dispatch", Data: data}
 	}
 	phase := "completion"
-	if scenario.ID == "GQL-PS-07" || len(outputs) == 0 && hasGraphQLHTTPResponseEvidence(terminal) {
+	if scenario.ID == "GQL-PS-07" || len(outputs) == 0 {
 		phase = "response"
 	}
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
@@ -232,22 +227,6 @@ func graphQLOperationForRef(t *testing.T, iface *openbindings.Interface, ref str
 	}
 	t.Fatalf("synthesized GraphQL interface has no binding for %q", ref)
 	return ""
-}
-
-func hasGraphQLHTTPResponseEvidence(err *openbindings.InvocationError) bool {
-	details, ok := err.Diagnostics.(map[string]any)
-	if !ok {
-		return false
-	}
-	if _, ok = details["httpResponse"]; ok {
-		return true
-	}
-	graphqlDetails, ok := details["graphql"].(map[string]any)
-	if !ok {
-		return false
-	}
-	_, ok = graphqlDetails["response"]
-	return ok
 }
 
 func stringValue(value any) string {

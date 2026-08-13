@@ -190,7 +190,7 @@ func TestIntegration_MultipartFormData(t *testing.T) {
 		"description": "my upload",
 	})
 	if ierr != nil {
-		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
 	}
 
 	if !strings.Contains(receivedContentType, "multipart/form-data") {
@@ -394,7 +394,7 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 	call := openbindings.Invoke(ctx, invoker, iface, openbindings.NewOperationSignature[any, any]("listItems"))
 	out, ierr := driveSingle(t, call, nil)
 	if ierr != nil {
-		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
 	}
 	data, _ := json.Marshal(out)
 	var got []map[string]any
@@ -416,7 +416,7 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 		openbindings.NewOperationSignature[any, any]("getItem"))
 	item3, ierr := driveSingle(t, call3, map[string]any{"id": 1})
 	if ierr != nil {
-		t.Fatalf("getItem unexpected error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("getItem unexpected error: %s: %s", ierr.Code, ierr.Error())
 	}
 	itemData, _ := json.Marshal(item3)
 	var item map[string]any
@@ -635,7 +635,7 @@ func TestIntegration_OAuth2CredentialsApplied(t *testing.T) {
 		Context: map[string]any{"accessToken": "at-123"},
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
-		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotAuth != "Bearer at-123" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer at-123")
@@ -692,9 +692,9 @@ func TestIntegration_TwoANDedAPIKeysDistinguishedByName(t *testing.T) {
 	if ierr == nil || ierr.Code != openbindings.ErrCodeContextRequired {
 		t.Fatalf("expected CONTEXT_REQUIRED, got %v", ierr)
 	}
-	details, _ := ierr.Details.(*openbindings.ContextRequiredDetails)
+	details := openbindings.ContextRequiredFrom(ierr)
 	if details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 2 {
-		t.Fatalf("unexpected challenge shape: %+v", ierr.Details)
+		t.Fatalf("unexpected challenge shape: %+v", ierr.Data)
 	}
 	names := map[string]bool{}
 	for _, req := range details.Alternatives[0].Requirements {
@@ -714,7 +714,7 @@ func TestIntegration_TwoANDedAPIKeysDistinguishedByName(t *testing.T) {
 		},
 	})
 	if _, ierr := driveSingle(t, call2, nil); ierr != nil {
-		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotHeader != "hdr-secret" {
 		t.Errorf("header key = %q, want %q", gotHeader, "hdr-secret")
@@ -892,11 +892,11 @@ func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
 }
 
 // A mid-stream lifetime DEADLINE on an SSE (server-streaming) response:
-// already-emitted events stand, then exactly one terminal ERR_TIMEOUT
-// (transient / possible). This must agree with the gRPC server-stream deadline
-// terminal (cross-format consistency, audit finding 2.3): both formats classify
-// a mid-stream deadline as ERR_TIMEOUT, never ERR_CANCELLED.
-func TestIntegration_SSEResponse_MidStreamDeadlineIsTimeout(t *testing.T) {
+// already-emitted events stand, then exactly one terminal ERR_CANCELLED. A
+// caller-supplied lifetime deadline cancels the abstract invocation; the
+// native timeout distinction remains below the bridge. This must agree with
+// the gRPC server-stream deadline terminal.
+func TestIntegration_SSEResponse_MidStreamDeadlineIsCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -937,8 +937,8 @@ func TestIntegration_SSEResponse_MidStreamDeadlineIsTimeout(t *testing.T) {
 	if !errors.As(err, &terr) {
 		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
 	}
-	if terr.Code != openbindings.ErrCodeTimeout {
-		t.Fatalf("code = %q, want ERR_TIMEOUT", terr.Code)
+	if terr.Code != openbindings.ErrCodeCancelled {
+		t.Fatalf("code = %q, want ERR_CANCELLED", terr.Code)
 	}
 }
 
@@ -1201,7 +1201,7 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 		Context: nil,
 	})
 	if _, ierr := driveSingle(t, call, map[string]any{"name": "rex"}); ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	var wire map[string]any
 	if err := json.Unmarshal(receivedBody, &wire); err != nil {
@@ -1260,7 +1260,7 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 		Ref:    "#/paths/~1users~1{id}/get",
 	})
 	if _, ierr := driveSingle(t, call, map[string]any{"id": "u1", "verbose": true}); ierr != nil {
-		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotPath != "/users/u1" {
 		t.Errorf("path = %q, want /users/u1 ($ref'd path param must route to the path)", gotPath)

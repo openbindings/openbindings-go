@@ -193,11 +193,6 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 		outputs = []any{}
 	}
 	data := map[string]any{"outputs": normalizeMCPScenarioValue(outputs), "joinedSynthesis": true}
-	trailer := map[string]any{}
-	for name, values := range call.Diagnostics().Trailer() {
-		trailer[name] = values
-	}
-	data["trailer"] = trailer
 	if terminalErr == nil {
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
@@ -207,11 +202,12 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 	}
 	data["error"] = normalizeMCPScenarioValue(terminal)
 	phase := "response"
-	if details, ok := terminal.Diagnostics.(map[string]any); ok {
-		if native, ok := details["mcp"].(map[string]any); ok {
-			if _, ok := native["result"]; ok {
-				phase = "completion"
-			}
+	// A tools/call result marked isError is an unsuccessful completion of the
+	// tool operation, whereas HTTP and JSON-RPC failures occur while handling
+	// the response. Derive the lifecycle phase from the peer shape.
+	if result, ok := scenario.Given.Peer["toolResult"].(map[string]any); ok {
+		if isError, _ := result["isError"].(bool); isError {
+			phase = "completion"
 		}
 	}
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}

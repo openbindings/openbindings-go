@@ -9,15 +9,10 @@
 - **Synthesizer: a type reused in sibling positions synthesizes in full**
   (delete-on-unwind visited tracking); true cycles keep their placeholder.
 
-- **gRPC status→code mapping realigned to the binding-invoker contract's
-  pinned table.** `Unavailable` and `ResourceExhausted` now map to the new
-  transient `ERR_UNAVAILABLE` (`effects: none` — the server answered, refusing
-  the request before executing) instead of `ERR_CONNECT_FAILED` (which is a
-  transport failure that never reached a server); `Canceled` now maps to
-  `ERR_CANCELLED`. `Unauthenticated`/`PermissionDenied`/`DeadlineExceeded` and
-  the unmapped-status fallback (`ERR_EXECUTION_FAILED`) are unchanged. A
-  reflection-time `Unavailable` (reflection dial/resolve failure) likewise now
-  surfaces as `ERR_UNAVAILABLE`.
+- **gRPC statuses are interpreted by the gRPC binding implementation.** The
+  abstract error exposes the binding-owned code only; native status,
+  description, details, headers, and trailers remain below the bridge and do
+  not imply a universal retry taxonomy.
 
 - **Alignment with the unreleased first `openbindings.grpc@1` binding
   specification.** The invoker now implements the spec's rules end to end;
@@ -80,12 +75,9 @@
   (`Write` one request message; methods whose request message has no fields
   dispatch without one), outputs flow through `Outputs()` (one output for
   unary, per-message for server-streaming, with `EmitOutput` backpressure
-  flow-controlling the gRPC stream), and gRPC leading/trailing metadata maps
-  natively onto `Header(ctx)`/`Trailer()`. Error codes use the new SCREAMING
-  wire values; gRPC statuses map to `ERR_AUTH_REQUIRED` (`Unauthenticated`),
-  `ERR_PERMISSION_DENIED`, `ERR_CONNECT_FAILED` (`Unavailable`), and
-  `ERR_TIMEOUT` (`DeadlineExceeded`), with the gRPC code and any status
-  details carried in the error's `Details`. A close-without-write on a method
+  flow-controlling the gRPC stream). Error codes use the new SCREAMING wire
+  values; native gRPC status and metadata remain below the abstract boundary.
+  A close-without-write on a method
   that requires input is `ERR_MISSING_INPUT`; a missing server address is
   `ERR_SOURCE_CONFIG_ERROR`. Cancelling the handle (or the invocation
   context) tears down the underlying RPC stream.

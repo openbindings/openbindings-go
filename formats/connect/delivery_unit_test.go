@@ -11,8 +11,7 @@ import (
 // TestDeliveryUnitBound_UnaryOverflowRefused verifies the consumer
 // delivery-unit bound: a tiny bound set via
 // BindingInvocationArgs.MaxDeliveryUnitBytes refuses a ~2KB unary body with
-// the lane's unchanged error identity (ERR_RESPONSE_ERROR, same message
-// template with the dynamic value).
+// the lane's unchanged abstract error identity (ERR_RESPONSE_ERROR).
 func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	ctx := testContext(t)
 	srv := fakeConnectServer(t, http.StatusOK,
@@ -23,7 +22,7 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), args, map[string]any{"id": "abc"})
 
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
-	if ierr.Message != "response exceeds 1024 byte limit" {
-		t.Errorf("error message = %q, want %q", ierr.Message, "response exceeds 1024 byte limit")
+	if ierr.HasData() {
+		t.Errorf("native size-limit evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }

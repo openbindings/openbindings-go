@@ -15,8 +15,7 @@ import (
 // TestDeliveryUnitBound_UnaryOverflowRefused verifies the consumer
 // delivery-unit bound on the unary publish reply: a tiny bound set via
 // BindingInvocationArgs.MaxDeliveryUnitBytes refuses a ~2KB body with the
-// lane's unchanged error identity (ERR_RESPONSE_ERROR, same message
-// template with the dynamic value).
+// lane's unchanged abstract error identity (ERR_RESPONSE_ERROR).
 func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/messages" || r.Method != "POST" {
@@ -47,8 +46,8 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	if ie.Code != openbindings.ErrCodeResponseError {
 		t.Errorf("error code = %q, want %q", ie.Code, openbindings.ErrCodeResponseError)
 	}
-	if ie.Message != "response exceeds 1024 byte limit" {
-		t.Errorf("error message = %q, want %q", ie.Message, "response exceeds 1024 byte limit")
+	if ie.HasData() {
+		t.Errorf("implementation-local bound evidence crossed as abstract data: %#v", ie.Data)
 	}
 }
 
@@ -117,7 +116,7 @@ func TestDeliveryUnitBound_WSTinyBoundRefusesLoudly(t *testing.T) {
 	if ie.Code != openbindings.ErrCodeStreamError {
 		t.Errorf("error code = %q, want %q", ie.Code, openbindings.ErrCodeStreamError)
 	}
-	if !strings.Contains(ie.Message, "read limited") {
-		t.Errorf("error message = %q, want the read-limit refusal to surface", ie.Message)
+	if ie.HasData() {
+		t.Errorf("native read-limit evidence crossed as abstract data: %#v", ie.Data)
 	}
 }

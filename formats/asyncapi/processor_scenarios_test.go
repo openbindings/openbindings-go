@@ -217,7 +217,6 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	if joined {
 		data["joinedSynthesis"] = true
 	}
-	data["trailer"] = metadataAny(call.Diagnostics().Trailer())
 	if len(rt.dispatches) > 0 {
 		data["dispatch"] = rt.dispatches[0]
 		dispatches := make([]any, len(rt.dispatches))
@@ -229,12 +228,9 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	if terminal == nil {
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
-	errorData := map[string]any{"code": terminal.Code, "message": terminal.Message}
-	if terminal.Details != nil {
-		errorData["details"] = terminal.Details
-	}
-	if terminal.Diagnostics != nil {
-		errorData["diagnostics"] = terminal.Diagnostics
+	errorData := map[string]any{"code": terminal.Code}
+	if terminal.HasData() {
+		errorData["data"] = terminal.Data
 	}
 	data["error"] = errorData
 	phase := "pre-dispatch"

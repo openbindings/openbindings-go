@@ -247,11 +247,16 @@ func (eng *engine) rootValue(root int) (any, bool) {
 }
 
 // errValue is the in-graph `error` value for a failure originating in an
-// inner invocation: the inner terminal error surfaced verbatim. The
-// InvocationError's code is its routable identity.
+// inner invocation: the inner abstract terminal record surfaced verbatim as
+// a JSON-domain value. This preserves optional data, including explicit null,
+// without carrying the local error object into the graph.
 func errValue(err error) any {
 	if ie := openbindings.AsInvocationError(err); ie != nil {
-		return ie.Code
+		value := map[string]any{"code": ie.Code}
+		if ie.HasData() {
+			value["data"] = ie.Data
+		}
+		return value
 	}
 	return fmt.Sprintf("%v", err)
 }
@@ -387,11 +392,10 @@ func (eng *engine) run(ctx context.Context) {
 		errorEvent := map[string]any{"error": errVal, "event": ev.data}
 		if node.OnError == "" || ev.errorDepth >= maxErrorDepth {
 			eng.exitFlag.Store(true)
-			eng.handle.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeOperationGraphExit,
-				Message: fmt.Sprintf("unhandled per-event failure at node %q", nodeKey),
-				Details: errorEvent,
-			})
+			eng.handle.FireError(openbindings.NewInvocationErrorWithData(
+				openbindings.ErrCodeOperationGraphExit,
+				errorEvent,
+			))
 			cancel()
 			return
 		}
@@ -488,7 +492,7 @@ func (eng *engine) run(ctx context.Context) {
 					backClosure()
 					ie := openbindings.AsInvocationError(err)
 					if c.timeout && opCtx.Err() == context.DeadlineExceeded {
-						ie = &openbindings.InvocationError{Code: TimeoutExceeded, Message: fmt.Sprintf("operation %q exceeded its %dms budget", node.Operation, *node.Timeout)}
+						ie = &openbindings.InvocationError{Code: TimeoutExceeded}
 						call.Cancel()
 					}
 					if ie.Code == openbindings.ErrCodeCancelled && ctx.Err() != nil {
@@ -729,8 +733,7 @@ func (eng *engine) processNode(
 	if eng.eventCount.Add(1) > maxEvents {
 		eng.exitFlag.Store(true)
 		eng.handle.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeEventLimitExceeded,
-			Message: fmt.Sprintf("exceeded maximum event count (%d)", maxEvents),
+			Code: openbindings.ErrCodeEventLimitExceeded,
 		})
 		cancel()
 		return
@@ -749,11 +752,10 @@ func (eng *engine) processNode(
 	case "exit":
 		eng.exitFlag.Store(true)
 		if node.Error != nil && *node.Error {
-			eng.handle.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeOperationGraphExit,
-				Message: "operation graph exit",
-				Details: ev.data,
-			})
+			eng.handle.FireError(openbindings.NewInvocationErrorWithData(
+				openbindings.ErrCodeOperationGraphExit,
+				ev.data,
+			))
 		} else if err := eng.handle.EmitOutput(ev.data); err != nil {
 			_ = err // the cancel below tears the engine down either way
 		}
@@ -852,7 +854,7 @@ func (eng *engine) processEach(
 		if err != nil {
 			ie := openbindings.AsInvocationError(err)
 			if hasTimeout && opCtx.Err() == context.DeadlineExceeded {
-				ie = &openbindings.InvocationError{Code: TimeoutExceeded, Message: fmt.Sprintf("operation %q exceeded its %dms budget", node.Operation, *node.Timeout)}
+				ie = &openbindings.InvocationError{Code: TimeoutExceeded}
 				call.Cancel()
 			}
 			if ie.Code == openbindings.ErrCodeCancelled && ctx.Err() != nil {

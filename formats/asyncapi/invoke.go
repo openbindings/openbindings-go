@@ -38,13 +38,13 @@ func configOrSourceError(err error, serverURL string) *openbindings.InvocationEr
 		if target == "" {
 			target = cr.hostHint
 		}
-		req := openbindings.NewConfigValueRequirement(cr.point, cr.key, cr.description, cr.choices, cr.durable)
-		return openbindings.NewContextRequiredError(cr.description, &openbindings.ContextRequiredDetails{
+		req := openbindings.NewConfigValueRequirement(cr.point, cr.path, cr.description, cr.choices, cr.durable)
+		return openbindings.NewContextRequiredError(&openbindings.ContextRequiredDetails{
 			Target:       target,
 			Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{req}}},
 		})
 	}
-	return &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()}
+	return &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
 }
 
 // AsyncAPI binding execution over the cardinality-agnostic invocation handle.
@@ -73,9 +73,10 @@ func configOrSourceError(err error, serverURL string) *openbindings.InvocationEr
 // input) are raised via FireError BEFORE any network I/O, per the
 // binding-author contract and ASYNC-P-02/-03/-04's pre-dispatch refusals.
 
-// maxResponseBytes bounds the HTTP ERROR body captured into failure details
-// (httpStatusError). Deliberately fixed: a diagnostics capture on the error
-// path, not a delivery unit — BindingInvocationArgs.MaxDeliveryUnitBytes
+// maxResponseBytes bounds how much of an HTTP error body is drained by
+// httpStatusError. Deliberately fixed: this is an implementation resource
+// guard on the error path, not a delivery unit, and no body evidence crosses
+// the abstract invocation boundary. BindingInvocationArgs.MaxDeliveryUnitBytes
 // does not apply here.
 const maxResponseBytes = 10 * 1024 * 1024 // 10 MB
 
@@ -92,21 +93,21 @@ type handle = openbindings.BindingHandle[any, any]
 // Entry point
 // ---------------------------------------------------------------------------
 
-// runBinding resolves the operation, checks runtime context, and dispatches
-// to the protocol-specific runner. Terminates the handle exactly once. ctx is
-// expected to be bound to the invocation's lifetime (DoneContext).
-func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *openbindings.BindingInvocationArgs, h handle, doc *document) {
+// legacyRunBinding is the pre-extraction executor retained temporarily because
+// this file still owns utility functions used by synthesis and endpoint tests.
+// Invoker never calls it: every production invocation is delegated to the
+// standalone asyncapi-client engine in invoker.go.
+func legacyRunBinding(ctx context.Context, client *http.Client, pool *wsPool, args *openbindings.BindingInvocationArgs, h handle, doc *document) {
 	opID, err := parseRef(args.Ref)
 	if err != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: err.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef})
 		return
 	}
 
 	asyncOp, ok := doc.Operations[opID]
 	if !ok {
 		h.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("operation %q not in AsyncAPI doc", opID),
+			Code: openbindings.ErrCodeRefNotFound,
 		})
 		return
 	}
@@ -115,8 +116,7 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		// through it before the operation-object test (ASYNC-D-03);
 		// resolveRefs leaves Ref set only when the reference dangles.
 		h.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("operation %q is a Reference Object whose target %q does not resolve in the AsyncAPI doc", opID, asyncOp.Ref),
+			Code: openbindings.ErrCodeRefNotFound,
 		})
 		return
 	}
@@ -134,19 +134,19 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		h.FireError(configOrSourceError(err, ""))
 		return
 	}
-	if err := validateCell(doc, ch, &asyncOp, target.Protocol, args.Source.BindingSpec, args.Context); err != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+	if err := validateLegacyCell(doc, ch, &asyncOp, target.Protocol, args.Source.BindingSpec, args.Context); err != nil {
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	if err := validateCredentialDestinations(doc, &asyncOp, target.SecurityServer, target.Protocol, args.Context); err != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
 		return
 	}
 
 	// Context negotiation: challenge BEFORE any connection is opened.
 	if details := requiredContext(doc, &asyncOp, target.SecurityServer, target.ServerURL, args.Context); details != nil {
 		h.FireError(openbindings.NewContextRequiredError(
-			fmt.Sprintf("operation %q requires credentials the context does not provide", opID), details))
+			details))
 		return
 	}
 
@@ -155,18 +155,18 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 	// unresolved expression is a pre-dispatch refusal, never a guess.
 	addrCfg, err := addressConfiguration(args.Context)
 	if err != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	var prepared *preparedInput
 	if asyncOp.Action == "receive" {
 		if args.Binding != nil && args.InputSchema == nil {
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeMissingInput, Message: "publish invocation requires an input message"})
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeMissingInput})
 			return
 		}
 		value, readErr := h.ReadInput(ctx)
 		if readErr == io.EOF {
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeMissingInput, Message: "publish invocation requires an input message"})
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeMissingInput})
 			return
 		}
 		if readErr != nil {
@@ -191,8 +191,7 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 	case "receive", "send":
 	default:
 		h.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: fmt.Sprintf("unknown action %q", asyncOp.Action),
+			Code: openbindings.ErrCodeSourceConfigError,
 		})
 		return
 	}
@@ -205,12 +204,12 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 		// pre-dispatch refusal.
 		fields, ferr := protocolFieldValues(args.Context)
 		if ferr != nil {
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: ferr.Error()})
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 			return
 		}
 		up, uerr := resolveWSUpgrade(ch, channelName, fields.WebSocketQuery, fields.WebSocketHeaders)
 		if uerr != nil {
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: uerr.Error()})
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 			return
 		}
 		dialAddress := mergeQuery(address, up.Query)
@@ -228,15 +227,14 @@ func runBinding(ctx context.Context, client *http.Client, pool *wsPool, args *op
 	default:
 		// resolveTarget only yields bound protocols; defensive.
 		h.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: fmt.Sprintf("protocol %q is not bound by the supported openbindings.asyncapi revisions (supported: http, https, ws, wss)", target.Protocol),
+			Code: openbindings.ErrCodeSourceConfigError,
 		})
 	}
 }
 
 type preparedInput struct{ Value any }
 
-func validateCell(doc *document, ch *channel, op *asyncOperation, protocol, bindingSpec string, bindCtx map[string]any) error {
+func validateLegacyCell(doc *document, ch *channel, op *asyncOperation, protocol, bindingSpec string, bindCtx map[string]any) error {
 	var httpBinding *httpOperationBinding
 	if op.Bindings != nil {
 		httpBinding = op.Bindings.HTTP
@@ -280,7 +278,7 @@ func validateCell(doc *document, ch *channel, op *asyncOperation, protocol, bind
 	}
 	if op.Action == "receive" {
 		if op.Reply != nil {
-			return fmt.Errorf("reply-bearing WebSocket receive operations are excluded from revision 1")
+			return fmt.Errorf("the disabled legacy adapter executor does not implement reply-bearing WebSocket receive operations")
 		}
 		selected, err := selectedInputMessages(doc, op, ch, bindCtx)
 		if err != nil {
@@ -306,7 +304,7 @@ func validateCell(doc *document, ch *channel, op *asyncOperation, protocol, bind
 		}
 	}
 	if op.Reply != nil {
-		return fmt.Errorf("reply-bearing WebSocket send operations require request/reply session semantics the built-in WebSocket driver does not implement")
+		return fmt.Errorf("the disabled legacy adapter executor does not implement reply-bearing WebSocket send operations")
 	}
 	_, err := resolveSubscriptionContentType(doc, governingMessages(doc, op, ch), bindCtx)
 	return err
@@ -656,6 +654,8 @@ func resolveRequirementList(doc *document, requirements []securityRequirement, s
 		if scheme.Description != "" {
 			req.Description = scheme.Description
 		}
+		durable := true
+		req.Durable = &durable
 		req.Name = securityRequirementName(entry)
 		out = append(out, req)
 	}
@@ -707,8 +707,7 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	// callers of no-input operations never write, so reading would park.
 	if args.Binding != nil && args.InputSchema == nil {
 		h.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeMissingInput,
-			Message: "publish invocation requires an input message (the input is the message; the operation declares no input)",
+			Code: openbindings.ErrCodeMissingInput,
 		})
 		return
 	}
@@ -717,12 +716,12 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	// (ASYNC-P-03); an excluded declared family refuses BEFORE dispatch.
 	selected, cerr := selectedInputMessages(doc, asyncOp, ch, args.Context)
 	if cerr != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: cerr.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	codec, cerr := resolveInputCodec(doc, selected, args.Context)
 	if cerr != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: cerr.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 
@@ -735,8 +734,7 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	}
 	if rerr == io.EOF {
 		h.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeMissingInput,
-			Message: "publish invocation requires an input message",
+			Code: openbindings.ErrCodeMissingInput,
 		})
 		return
 	}
@@ -747,7 +745,7 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 
 	body, err := encodeInput(codec, first)
 	if err != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
 		return
 	}
 
@@ -756,12 +754,12 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	requestURL := joinURL(target.ServerURL, address)
 	fields, ferr := protocolFieldValues(args.Context)
 	if ferr != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: ferr.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	query, qerr := resolveHTTPQuery(asyncOp, fields.HTTPQuery)
 	if qerr != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: qerr.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	if len(query) > 0 {
@@ -791,7 +789,7 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 		if ctx.Err() != nil {
 			return // cancellation is already terminal
 		}
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -806,8 +804,6 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 		return
 	}
 
-	_ = h.SetHeader(headerMetadata(resp.Header))
-
 	// The unary reply body is one delivery unit: consumer-bounded via
 	// BindingInvocationArgs.MaxDeliveryUnitBytes (default 10 MiB). The +1
 	// sentinel distinguishes an at-limit response from an over-limit one.
@@ -817,13 +813,12 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 		if ctx.Err() != nil {
 			return
 		}
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
 		return
 	}
 	if int64(len(respBody)) > maxUnit {
 		h.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("response exceeds %d byte limit", maxUnit),
+			Code: openbindings.ErrCodeResponseError,
 		})
 		return
 	}
@@ -840,7 +835,7 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	}
 	replyDecode, rderr := resolveReplyContentType(doc, asyncOp, resp.StatusCode, resp.Header.Get("Content-Type"), args.Context)
 	if rderr != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeProtocol, Message: rderr.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeProtocol})
 		return
 	}
 
@@ -858,7 +853,7 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	// declared contentType decides the lane), hook when overridden;
 	// classify is not-consulted (asyncapi runs no result classifier — the
 	// HTTP 4xx guard above is transport, not a format verdict).
-	h.SetTrailer(decodeTrailer(args.Hooks, "spec/content-type"))
+
 	if h.EmitOutput(output) != nil {
 		return // invocation terminated while the emit was parked
 	}
@@ -891,7 +886,7 @@ func runSSESubscribe(ctx context.Context, client *http.Client, target resolvedTa
 		if ctx.Err() != nil {
 			return
 		}
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -908,13 +903,10 @@ func runSSESubscribe(ctx context.Context, client *http.Client, target resolvedTa
 	}
 	if ct := resp.Header.Get("Content-Type"); normalizeMediaType(ct) != "text/event-stream" {
 		h.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeProtocol,
-			Message: fmt.Sprintf("SSE subscription establishment requires a text/event-stream response, got content type %q (openbindings.asyncapi §8)", ct),
+			Code: openbindings.ErrCodeProtocol,
 		})
 		return
 	}
-
-	_ = h.SetHeader(headerMetadata(resp.Header))
 
 	// One transport, one invocation: transport close COMPLETES the
 	// subscription — reconnection (`retry`, `Last-Event-ID`) is excluded
@@ -1020,8 +1012,7 @@ func streamSSE(ctx context.Context, resp *http.Response, decodeCT string, args *
 		eventBytes += int64(len(line)) + 1 // +1 for newline
 		if eventBytes > maxUnit {
 			h.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeResponseError,
-				Message: fmt.Sprintf("SSE event exceeds %d byte limit", maxUnit),
+				Code: openbindings.ErrCodeResponseError,
 			})
 			return
 		}
@@ -1079,7 +1070,7 @@ func streamSSE(ctx context.Context, resp *http.Response, decodeCT string, args *
 
 	if serr := scanner.Err(); serr != nil {
 		if ctx.Err() == nil {
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: serr.Error()})
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
 		}
 		return
 	}
@@ -1140,7 +1131,7 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, target resolvedTarget, ad
 	_ = h.CloseInput()
 	decodeCT, decodeErr := resolveSubscriptionContentType(doc, governingMessages(doc, asyncOp, ch), args.Context)
 	if decodeErr != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: decodeErr.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 
@@ -1153,7 +1144,7 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, target resolvedTarget, ad
 		if ctx.Err() != nil {
 			return
 		}
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		return
 	}
 	defer pw.release()
@@ -1169,12 +1160,12 @@ func runWSSubscribe(ctx context.Context, pool *wsPool, target resolvedTarget, ad
 			return // invocation terminated (cancelled) while waiting
 		}
 		if res.Overflowed {
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: res.OverflowMsg})
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
 			return
 		}
 		if res.Closed {
 			if res.CloseErr != nil {
-				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: res.CloseErr.Error()})
+				h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
 			} else {
 				h.CloseOutput()
 			}
@@ -1326,8 +1317,7 @@ func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, addr
 	// (callers of no-input operations never write, so reading would park).
 	if args.Binding != nil && args.InputSchema == nil {
 		h.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeMissingInput,
-			Message: "publish invocation requires an input message (the input is the message; the operation declares no input)",
+			Code: openbindings.ErrCodeMissingInput,
 		})
 		return
 	}
@@ -1337,12 +1327,12 @@ func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, addr
 	// before any socket is dialed.
 	selected, cerr := selectedInputMessages(doc, asyncOp, ch, args.Context)
 	if cerr != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: cerr.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	codec, cerr := resolveInputCodec(doc, selected, args.Context)
 	if cerr != nil {
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: cerr.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 
@@ -1351,7 +1341,7 @@ func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, addr
 		if ctx.Err() != nil {
 			return
 		}
-		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		return
 	}
 	defer pw.release()
@@ -1375,8 +1365,7 @@ func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, addr
 		if rerr == io.EOF {
 			if sent == 0 {
 				h.FireError(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeMissingInput,
-					Message: "publish invocation requires an input message (input closed with no messages sent)",
+					Code: openbindings.ErrCodeMissingInput,
 				})
 				return
 			}
@@ -1388,12 +1377,12 @@ func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, addr
 		}
 		frame, merr := encodeInput(codec, msg)
 		if merr != nil {
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: merr.Error()})
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
 			return
 		}
 		messageType, _ := openbindings.ContextConfiguration(args.Context)["websocketMessageType"].(string)
 		if messageType == "text" && !utf8.Valid(frame) {
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: "WebSocket text message payload is not valid UTF-8"})
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
 			return
 		}
 		if werr := pw.sendType(ctx, frame, messageType); werr != nil {
@@ -1402,7 +1391,7 @@ func runWSPublish(ctx context.Context, pool *wsPool, target resolvedTarget, addr
 			if ctx.Err() != nil {
 				return
 			}
-			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
+			h.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
 			return
 		}
 		sent++
@@ -1424,24 +1413,10 @@ func headerMetadata(hdr http.Header) openbindings.Metadata {
 	return md
 }
 
-// httpStatusError builds the terminal error for an HTTP error response,
-// attaching the bounded body to the explicit diagnostic lane.
+// httpStatusError builds the abstract terminal for an HTTP error response.
 func httpStatusError(resp *http.Response) *openbindings.InvocationError {
 	ie := openbindings.HTTPError(resp.StatusCode, resp.Status)
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
-	if err != nil || len(body) == 0 {
-		return ie
-	}
-	details := map[string]any{"status": resp.StatusCode}
-	if len(body) > maxResponseBytes {
-		details["body"] = fmt.Sprintf("response exceeds %d byte limit", maxResponseBytes)
-	} else {
-		// The raw capture, verbatim: diagnostics carry bytes-as-text,
-		// never a sniffed parse (payload-independence, per the conventions
-		// record's recommended built-in defaults).
-		details["body"] = string(body)
-	}
-	ie.Diagnostics = details
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes+1))
 	return ie
 }
 
@@ -1554,27 +1529,27 @@ func applyCredentialsViaSecuritySchemes(req *http.Request, doc *document, secSrv
 		case "http":
 			switch strings.ToLower(s.Scheme) {
 			case "bearer":
-				if token := openbindings.ContextBearerToken(bindCtx); token != "" {
+				if token := openbindings.ContextBearerTokenFor(bindCtx, named.Name); token != "" {
 					req.Header.Set("Authorization", "Bearer "+token)
 					applied = true
 				}
 			case "basic":
-				if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
+				if u, p, ok := openbindings.ContextBasicAuthFor(bindCtx, named.Name); ok {
 					req.SetBasicAuth(u, p)
 					applied = true
 				}
 			}
 
 		case "httpBearer":
-			if token := openbindings.ContextBearerToken(bindCtx); token != "" {
+			if token := openbindings.ContextBearerTokenFor(bindCtx, named.Name); token != "" {
 				req.Header.Set("Authorization", "Bearer "+token)
 				applied = true
 			}
 
 		case "oauth2":
-			token := openbindings.ContextBearerToken(bindCtx)
+			token := openbindings.ContextAccessTokenFor(bindCtx, named.Name)
 			if token == "" {
-				token = openbindings.ContextString(bindCtx, "accessToken")
+				token = openbindings.ContextBearerTokenFor(bindCtx, named.Name)
 			}
 			if token != "" {
 				req.Header.Set("Authorization", "Bearer "+token)
@@ -1582,7 +1557,7 @@ func applyCredentialsViaSecuritySchemes(req *http.Request, doc *document, secSrv
 			}
 
 		case "userPassword":
-			if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
+			if u, p, ok := openbindings.ContextBasicAuthFor(bindCtx, named.Name); ok {
 				req.SetBasicAuth(u, p)
 				applied = true
 			}
@@ -1610,16 +1585,14 @@ func builtinDecodeFor(contentType string) openbindings.OutputDecoder {
 			var parsed any
 			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
 				return nil, &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeResponseError,
-					Message: fmt.Sprintf("message declares %q but the payload is not valid JSON: %v", contentType, err),
+					Code: openbindings.ErrCodeResponseError,
 				}
 			}
 			return parsed, nil
 		}
 		if !utf8.Valid(raw.Body) {
 			return nil, &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeResponseError,
-				Message: fmt.Sprintf("message declares %q but the payload is not valid UTF-8", contentType),
+				Code: openbindings.ErrCodeResponseError,
 			}
 		}
 		return string(raw.Body), nil

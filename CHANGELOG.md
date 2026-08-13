@@ -6,6 +6,21 @@
 
 ### Changed
 
+- **Invocation failures now use the minimal abstract record `{code,data?}`.**
+  Portable message, details, and diagnostics members were removed; data is
+  normalized to the JSON domain and preserves absent versus explicit null.
+  `CONTEXT_REQUIRED` retains its closed OR-of-AND challenge in data and is
+  validated before resolution. Frame and operation-schema mechanics now use
+  the collision-resistant owned codes `ERR_FRAME_PROTOCOL` and
+  `ERR_OPERATION_VALIDATION_FAILED`; binding-specific `ERR_PROTOCOL` and
+  `ERR_VALIDATION_FAILED` remain open identifiers. Caller cancellation and
+  caller-supplied lifetime deadlines uniformly produce `ERR_CANCELLED`;
+  native timeout evidence remains below the bridge. `config.value` now uses a
+  relative JSON Pointer path, stored context is reused only when every
+  requirement of the selected alternative explicitly permits durability, and
+  named credentials remain scheme-scoped. The Core OBI document model is
+  unchanged.
+
 - **The OpenAPI module now exposes a standalone artifact runtime.** Direct
   callers can use `openapi.Runtime` without constructing an OBI, while
   `openapi.Invoker` remains the thin SDK adapter and `openapi.Synthesizer`
@@ -175,21 +190,6 @@
   delegates to it. Derived context-store keys change for URLs with mixed-case
   hosts or userinfo; they now match the TS SDK byte-for-byte.
 
-- **A mid-stream deadline is now classified `ERR_TIMEOUT` (transient / effects:
-  possible), deterministically and uniformly across formats, rather than
-  `ERR_CANCELLED` — restoring the retry-safety signal.** An explicit caller
-  cancel remains `ERR_CANCELLED`. The invocation handle's lifetime watcher now
-  branches on `ctx.Err()`: `context.DeadlineExceeded` fires `ERR_TIMEOUT` (a
-  deadline may fire after outputs have flowed, so retry-safety is "may have
-  executed"), `context.Canceled` fires `ERR_CANCELLED`. `AsInvocationError`
-  makes the same distinction. The gRPC server-stream path now guards its
-  `RecvMsg`-error terminal with `ctx.Err()` (mirroring the OpenAPI SSE path), so
-  a deadline that races the handle's terminal settles deterministically as
-  `ERR_TIMEOUT` (previously ~284/300 `ERR_CANCELLED` / ~16/300 `ERR_TIMEOUT`).
-  The `usage` and `mcp` invokers, which fired their own cancel terminal on a
-  context error, now defer to (usage) or agree with (mcp) the handle's
-  classification so they cannot race a deadline to `ERR_CANCELLED`.
-
 - **`IsSupportedVersion` now answers OBI-T-04 acceptance (patch-lenient within a
   supported minor line), matching `Validate`/`ParseDocument`; previously it was
   the strict tested-range check.** A 0.2.0 SDK now reports `true` for `0.2.1`,
@@ -201,19 +201,10 @@
   remain the maintainer-*tested* range — a distinct, narrower notion (a version
   can be accepted without being inside the tested range).
 
-- **New transient error code `ErrCodeUnavailable` (`ERR_UNAVAILABLE`) and the
-  transport status→code tables realigned to the binding-invoker contract.**
-  The service was reached but refused the request as retryable — distinct from
-  `ErrCodeConnectFailed`, which never reached a server. `HTTPErrorCode` now
-  implements the full contract table: `429`/`502`/`503` → `ERR_UNAVAILABLE`,
-  `408`/`504` → `ERR_TIMEOUT`, `401`/`403` → the auth codes, and every other
-  4xx/5xx → `ERR_EXECUTION_FAILED` (previously only 401/403 were mapped and
-  everything else defaulted to `ERR_EXECUTION_FAILED`, overclaiming vs. the
-  contract). `effects` is per-status: `429`/`503` are `none` (refused before
-  execution), `502` is left possible. The gRPC invoker maps
-  `UNAVAILABLE`/`RESOURCE_EXHAUSTED` → `ERR_UNAVAILABLE` (`effects: none`) and
-  `CANCELLED` → `ERR_CANCELLED`. A new status→category table test guards the
-  mapping against future drift.
+- **Added `ErrCodeUnavailable` (`ERR_UNAVAILABLE`) to the open code space.**
+  Binding implementations decide when their governing rules use it. The
+  abstract code carries no universal retry category, side-effect claim, or
+  native status mapping.
 
 - **The consumer hook seam (specification + configuration = complete
   invocation).** New core types `OutputDecoder`, `ResultClassifier`, and
@@ -227,9 +218,8 @@
   operation key, format, ref, target) and a `RawResult` (status, body, meta);
   failures carry tier provenance. `SnapshotHooks` exposes the both-tier
   snapshot to direct binding-layer callers; `WithRuntime` carries hook fields.
-  Diagnostics ride invocation metadata: `x-ob-decode`/`x-ob-classify`/
-  `x-ob-route` success stamps and the unvalidated-assumption warning
-  (`x-ob-warning`).
+  Decode/classify/route provenance and unvalidated-assumption warnings remain
+  below the abstract invocation boundary as binding-interpretation evidence.
 
 - **BREAKING: content-independent decode/classify in the openapi and asyncapi
   invokers (de-sniffed).** openapi now decodes by the response's Content-Type
@@ -238,8 +228,9 @@
   classifies success as 2xx; asyncapi decodes by the operation's declared
   message `contentType` and no longer unwraps `{error}`/`{data}` convention
   envelopes in the builtin (attach an `OutputDecoder` for convention lanes).
-  The `MaybeJSON` helper (payload sniffing) is REMOVED from the core surface;
-  error details carry the raw capture, never a parsed value.
+  The `MaybeJSON` helper (payload sniffing) is REMOVED from the core surface.
+  Raw captures remain below the abstract invocation boundary and never become
+  failure data.
 
 - **BREAKING: the usage invoker consumes bare jdx artifacts.** The
   `openbindings.usage` wrapper format is deleted; the artifact IS the source
@@ -270,11 +261,11 @@
   instead of `(<-chan InvocationOutput, error)`: the caller writes input
   messages (`Write`/`Close`), acquires the output sequence (`Outputs()
   OutputStream[O]`, read to `io.EOF` / terminal), and observes lifecycle via
-  `Cancel`, `Header`, and `Trailer`. One call shape serves unary,
+  `Cancel`. One call shape serves unary,
   server-streaming, client-streaming, and bidirectional bindings; cardinality
   lives in the binding, never in the signature. Bindings implement the
   push-side `BindingHandle[I, O]` (`ReadInput`, `CloseInput`, `EmitOutput`,
-  `CloseOutput`, `FireError`, `Done`, `SetHeader`/`SetTrailer`) over the
+  `CloseOutput`, `FireError`, `Done`) over the
   shared reference `InvocationImpl` (`NewInvocationImpl(ctx)`). The impl uses
   bounded buffered channels that are never closed on terminal — terminal state
   is a `done` channel plus `terminalErr`, every blocking op `select`s on it,
@@ -284,8 +275,9 @@
   terminal is the free function `Single(ctx, out)` — strict, short-circuiting
   "exactly one" (`ERR_EXPECTED_SINGLE`). `TypedInvocation[I, O]` adapts the
   untyped handle at the codegen boundary. The `InvocationOutput` envelope and
-  its `Status`/`DurationMs` fields are gone: outputs are bare values; transport
-  facts surface via `Header` metadata and error `Details`.
+  its `Status`/`DurationMs` fields are gone: outputs are bare values.
+  Unsuccessful completion is exactly `Code` plus optional `Data`; transport
+  facts remain below the abstract boundary.
   - `BindingInvocationInput`/`BindingInvocationSource` → `BindingInvocationArgs`/
     `InvocationSource` (`{Source, Ref, Binding, Context, Interface, InputSchema}`;
     no `Input`, no `Security`, no `Store`, no `Callbacks`);

@@ -80,8 +80,7 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		// run with the payload discarded: the typed-nil map slips past
 		// buildCLIArgs's object guard (input != nil, ToStringAnyMap ok).
 		return nil, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeValidationFailed,
-			Message: fmt.Sprintf("input must be a JSON object; got %s (openbindings.usage@1 §9.1)", jsonKindOf(input)),
+			Code: openbindings.ErrCodeValidationFailed,
 		}
 	}
 
@@ -117,8 +116,7 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		default:
 			// A typo'd token must never quietly put a value on argv.
 			return fail(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeValidationFailed,
-				Message: fmt.Sprintf("field %q: unrecognized channel token %q (want %q, %q, %q, or %q)", field, route, RouteArgv, RouteStdinDash, RouteStdin, RouteFile),
+				Code: openbindings.ErrCodeValidationFailed,
 			})
 		}
 
@@ -129,29 +127,25 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		case RouteStdinDash, RouteFile:
 			if kind == slotNone {
 				return fail(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeValidationFailed,
-					Message: fmt.Sprintf("field %q (%s) names no flag or arg of this command", field, route),
+					Code: openbindings.ErrCodeValidationFailed,
 				})
 			}
 			if kind == slotBoolFlag {
 				return fail(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeValidationFailed,
-					Message: fmt.Sprintf("field %q (%s) names a boolean/count flag, which cannot receive a token", field, route),
+					Code: openbindings.ErrCodeValidationFailed,
 				})
 			}
 			if route == RouteStdinDash {
 				if cs := slotChoices(slot); len(cs) > 0 && !containsString(cs, "-") {
 					return fail(&openbindings.InvocationError{
-						Code:    openbindings.ErrCodeValidationFailed,
-						Message: fmt.Sprintf("field %q (stdin-dash) names a slot whose choices do not include \"-\"", field),
+						Code: openbindings.ErrCodeValidationFailed,
 					})
 				}
 			}
 		case RouteStdin:
 			if kind != slotNone {
 				return fail(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeValidationFailed,
-					Message: fmt.Sprintf("field %q (stdin) names a flag or arg; the slotless pure channel requires a field that maps to none — did you mean %q?", field, RouteStdinDash),
+					Code: openbindings.ErrCodeValidationFailed,
 				})
 			}
 		}
@@ -165,8 +159,7 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		data, isString := routeBytes(value)
 		if len(data) > maxRouteBytes {
 			return fail(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeValidationFailed,
-				Message: fmt.Sprintf("field %q: %d bytes exceeds the %d-byte routing cap", field, len(data), maxRouteBytes),
+				Code: openbindings.ErrCodeValidationFailed,
 			})
 		}
 
@@ -174,8 +167,7 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		case RouteStdinDash, RouteStdin:
 			if stdinField != "" {
 				return fail(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeValidationFailed,
-					Message: fmt.Sprintf("fields %q and %q both route to stdin; at most one field may ride it", stdinField, field),
+					Code: openbindings.ErrCodeValidationFailed,
 				})
 			}
 			stdinField = field
@@ -190,8 +182,7 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 				dir, err := os.MkdirTemp("", "usage-route-*")
 				if err != nil {
 					return fail(&openbindings.InvocationError{
-						Code:    openbindings.ErrCodeExecutionFailed,
-						Message: fmt.Sprintf("materialize field %q: %v", field, err),
+						Code: openbindings.ErrCodeExecutionFailed,
 					})
 				}
 				tmpDir = dir
@@ -205,8 +196,7 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 			path := filepath.Join(tmpDir, name)
 			if err := os.WriteFile(path, data, 0o600); err != nil {
 				return fail(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeExecutionFailed,
-					Message: fmt.Sprintf("materialize field %q: %v", field, err),
+					Code: openbindings.ErrCodeExecutionFailed,
 				})
 			}
 			fields[field] = path

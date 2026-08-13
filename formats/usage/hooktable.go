@@ -2,7 +2,6 @@ package usage
 
 import (
 	"encoding/json"
-	"fmt"
 	"slices"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -58,12 +57,7 @@ func (t HookTable) Hooks() (openbindings.OutputDecoder, openbindings.ResultClass
 		var v any
 		if err := json.Unmarshal(raw.Body, &v); err != nil {
 			return nil, &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeResponseError,
-				Message: fmt.Sprintf("operation %q returned output that could not be decoded as its declared JSON value", site.Operation),
-				Diagnostics: map[string]any{"usage": map[string]any{"decode": map[string]any{
-					"cause":  err.Error(),
-					"stdout": capturedProcessBytes(raw.Body, false),
-				}}},
+				Code: openbindings.ErrCodeResponseError,
 			}
 		}
 		return v, nil

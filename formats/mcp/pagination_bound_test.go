@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -30,9 +29,9 @@ func TestLiveListing_PaginationBoundRefuses(t *testing.T) {
 		t.Fatalf("expected a pagination refusal, got %v", err)
 	}
 	if ie.Code != openbindings.ErrCodeProtocol {
-		t.Fatalf("want ERR_PROTOCOL, got %s: %s", ie.Code, ie.Message)
+		t.Fatalf("want ERR_PROTOCOL, got %s: %s", ie.Code, ie.Error())
 	}
-	if !strings.Contains(ie.Message, "terminate pagination") {
-		t.Errorf("message should name non-terminating pagination, got %q", ie.Message)
+	if ie.HasData() {
+		t.Errorf("native pagination evidence crossed as abstract data: %#v", ie.Data)
 	}
 }

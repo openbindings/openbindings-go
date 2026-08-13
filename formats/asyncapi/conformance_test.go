@@ -129,7 +129,7 @@ func TestAddressParameterExpansion(t *testing.T) {
 	// terminal ERR_SOURCE_CONFIG_ERROR.
 	before := requests.Load()
 	err := publish(nil)
-	assertConfigValue(t, err, "address", "roomId")
+	assertConfigValue(t, err, "address", "/parameters/roomId")
 	if got := requests.Load(); got != before {
 		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got-before)
 	}
@@ -303,7 +303,7 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	// R1a: an unsubstitutable server variable is a resolvable-missing config
 	// value, surfaced as a config.value CONTEXT_REQUIRED (retryable), not a
 	// terminal ERR_SOURCE_CONFIG_ERROR.
-	assertConfigValue(t, err, "server", "version")
+	assertConfigValue(t, err, "server", "/variables/version")
 	if got := requests.Load(); got != before {
 		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got-before)
 	}
@@ -466,25 +466,18 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 	}
 
 	refused := []struct {
-		name  string
-		cfg   any
-		teach string
+		name string
+		cfg  any
 	}{
-		{"bare string", "test", "must be an object"},
-		{"retired name member", map[string]any{"name": "test"}, `member "name" is not pinned`},
-		{"empty object", map[string]any{}, `carries none of "key", "variables", or "url"`},
+		{"bare string", "test"},
+		{"retired name member", map[string]any{"name": "test"}},
+		{"empty object", map[string]any{}},
 	}
 	for _, tc := range refused {
 		before := requests.Load()
 		err := publish(tc.cfg)
 		if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
 			t.Fatalf("%s: expected ERR_SOURCE_CONFIG_ERROR, got %v", tc.name, err)
-		}
-		if !strings.Contains(err.Error(), tc.teach) {
-			t.Errorf("%s: refusal must teach the pin (%q), got %v", tc.name, tc.teach, err)
-		}
-		if !strings.Contains(err.Error(), `{"key": "<server-name>"?`) || !strings.Contains(err.Error(), `"url": "<connection-url>"?`) {
-			t.Errorf("%s: refusal must name the composable shape, got %v", tc.name, err)
 		}
 		if got := requests.Load(); got != before {
 			t.Errorf("%s: the refusal is pre-dispatch, %d requests dispatched", tc.name, got-before)

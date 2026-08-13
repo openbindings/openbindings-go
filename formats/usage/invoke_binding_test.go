@@ -81,10 +81,10 @@ flag "-a" {
   alias "--anonymous"
 }
 `)
-	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"dir": "tmp", "anonymous": true}, nil, nil); ierr == nil || !strings.Contains(ierr.Message, "file is required because dir is present") {
+	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"dir": "tmp", "anonymous": true}, nil, nil); ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 		t.Fatalf("required_if refusal = %v", ierr)
 	}
-	if _, ierr := applyUsageConfiguration(cmd, nil, nil, nil, nil); ierr == nil || !strings.Contains(ierr.Message, "identity is required unless") {
+	if _, ierr := applyUsageConfiguration(cmd, nil, nil, nil, nil); ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 		t.Fatalf("required_unless refusal = %v", ierr)
 	}
 }
@@ -102,7 +102,7 @@ flag "--environment" {
 	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "prod"}, context, nil); ierr != nil {
 		t.Fatalf("dynamic choice must be accepted: %v", ierr)
 	}
-	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "qa"}, context, nil); ierr == nil || !strings.Contains(ierr.Message, "outside its artifact-declared choices") {
+	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "qa"}, context, nil); ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
 		t.Fatalf("out-of-set choice must refuse: %v", ierr)
 	}
 	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "dev"}, nil, nil); ierr != nil {

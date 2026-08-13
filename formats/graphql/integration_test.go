@@ -95,10 +95,6 @@ func TestHTTPInvocationPreservesDocumentVariablesAndPartialApplicationValue(t *t
 	if variables["_query"] != "ordinary variable" || variables["unused"] != float64(7) {
 		t.Fatalf("variables were filtered: %#v", variables)
 	}
-	header, err := call.Diagnostics().Header(context.Background())
-	if err != nil || len(header["X-Request-Id"]) != 1 || header["X-Request-Id"][0] != "req-1" {
-		t.Fatalf("header = %#v, %v", header, err)
-	}
 }
 
 func TestHTTPInvocationOmitsAbsentVariables(t *testing.T) {

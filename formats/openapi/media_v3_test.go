@@ -494,7 +494,7 @@ func TestRevision3PrepareBindingChallengesForRequiredRange(t *testing.T) {
 		t.Fatalf("prepare details = %#v", details)
 	}
 	requirement := details.Alternatives[0].Requirements[0]
-	if requirement.Type != "config.value" || requirement.Extra["point"] != "requestMedia" || requirement.Extra["key"] != "value" {
+	if requirement.Type != "config.value" || requirement.Extra["point"] != "requestMedia" || requirement.Extra["path"] != "" {
 		t.Fatalf("prepare requirement = %#v", requirement)
 	}
 	args.Context = map[string]any{"configuration": map[string]any{"requestMedia": "application/json"}}
@@ -1218,7 +1218,7 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
-	if ierr == nil || ierr.Code != openbindings.ErrCodeProtocol || !strings.Contains(openAPIClientDiagnosticMessage(ierr), "singleton") {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeProtocol {
 		t.Fatalf("duplicate Content-Type error = %v", ierr)
 	}
 	emptyTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
@@ -1238,8 +1238,7 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	_, ierr = driveOutputs(context.Background(), call, nil)
-	failureBody, _ := openbindings.HTTPResponseBody(ierr)
-	if ierr == nil || ierr.Code == openbindings.ErrCodeProtocol || failureBody != "failure" {
+	if ierr == nil || ierr.Code == openbindings.ErrCodeProtocol || ierr.HasData() {
 		t.Fatalf("non-2xx native failure was preempted by Content-Type: %v", ierr)
 	}
 	emptyFailureTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
@@ -1249,9 +1248,8 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	_, ierr = driveOutputs(context.Background(), call, nil)
-	evidence, ok := FailureEvidenceFrom(ierr)
-	if ierr == nil || !ok || !evidence.HTTPResponse.BodyCaptured || evidence.HTTPResponse.Body == nil || len(evidence.HTTPResponse.Body) != 0 {
-		t.Fatalf("captured-empty failure evidence = %+v, %v, %v", evidence, ok, ierr)
+	if ierr == nil || ierr.HasData() {
+		t.Fatalf("empty native failure leaked abstract data: %v", ierr)
 	}
 }
 

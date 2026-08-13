@@ -8,8 +8,8 @@
   streaming envelope payload honor
   `BindingInvocationArgs.MaxDeliveryUnitBytes` (default
   `openbindings.DefaultMaxDeliveryUnitBytes`, 10 MiB — the previous fixed
-  cap). Overflow error identity is unchanged. The streaming dispatch path's
-  HTTP error-body capture stays fixed (diagnostics, not a delivery unit).
+  cap). Overflow error code is unchanged. The streaming dispatch path's
+  below-bridge HTTP error-body read stays fixed and is not a delivery unit.
 
 > A 0.1.1 patch release was prepared 2026-04 but never tagged or published; its entries are folded into this section.
 
@@ -24,13 +24,10 @@
 - **Synthesizer: a type reused in sibling positions synthesizes in full**
   (delete-on-unwind visited tracking); true cycles keep their placeholder.
 
-- **Error-code mapping aligned to the binding-invoker contract.** Connect
-  protocol error codes now map `unavailable`/`resource_exhausted` →
-  `ERR_UNAVAILABLE` (transient; the server answered but refused as retryable,
-  distinct from the transport-failure `ERR_CONNECT_FAILED`) and `canceled` →
-  `ERR_CANCELLED`, mirroring the gRPC family. Previously `unavailable` →
-  `ERR_CONNECT_FAILED` and `resource_exhausted`/`canceled` fell to
-  `ERR_EXECUTION_FAILED`.
+- **Connect failures now follow the binding specification's structural
+  unsuccessful-completion rule.** Native Connect codes and transport evidence
+  remain below the abstract invocation rather than defining a universal retry
+  taxonomy.
 - **Alignment with the unreleased first `openbindings.connect@1` binding
   specification.** The invoker now implements the spec's rules end to end
   (connect@1 incorporates `openbindings.grpc@1` as its schema layer by

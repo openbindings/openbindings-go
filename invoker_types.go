@@ -1,10 +1,13 @@
 package openbindings
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
+	"reflect"
 	"strings"
 )
 
@@ -23,7 +26,7 @@ import (
 //
 //	auth.bearer          →  "bearerToken"
 //	auth.apiKey          →  "apiKey"
-//	auth.apiKey (named)  →  "apiKeys"[name] (falls back to "apiKey")
+//	named auth.*         →  "credentials"[name] (with historical apiKeys support)
 //	auth.basic           →  "basic" (a {"username","password"} object)
 //	auth.oauth2          →  "accessToken" (plus "refreshToken", "clientSecret")
 //
@@ -427,58 +430,239 @@ type BindableTarget struct {
 	Operation *Operation `json:"operation,omitempty"`
 }
 
-// InvocationError is the minimal unsuccessful-completion record used by the
-// invocation interfaces. Code and Message describe the terminal condition.
-// Details carries portable data defined by an interface-owned code (currently
-// CONTEXT_REQUIRED and validation failures), or an opaque JSON failure value
-// identified as application-authored by the governing binding rules.
-// Diagnostics is an optional expert escape hatch for selected-binding or
-// implementation evidence; ordinary operation behavior must not depend on it.
+// InvocationError is the complete unsuccessful-completion record used by the
+// abstract invocation interfaces. Code identifies the failure according to
+// the authority that owns it. Data is optional JSON-domain data owned by that
+// code or an opaque application value selected by the governing binding
+// rules. Protocol observations and implementation evidence do not cross this
+// boundary.
 type InvocationError struct {
-	Code        string `json:"code"`
-	Message     string `json:"message"`
-	Details     any    `json:"details,omitempty"`
-	Diagnostics any    `json:"diagnostics,omitempty"`
+	Code string `json:"code"`
+	Data any    `json:"-"`
+
+	dataPresent bool
 }
 
-// ValidationFailure is a single schema-validation failure (OBI-T-16 claim semantics)
-// in a stable, validator-agnostic shape. When validation produces multiple
-// failures (e.g., several fields violating the schema), each one appears
-// as a separate ValidationFailure in InvocationError.Details.Failures.
-type ValidationFailure struct {
-	// Path is a JSON Pointer into the instance, e.g. "/results/0/name".
-	// Empty string means the root.
-	Path string `json:"path"`
-	// Message is a human-readable diagnostic.
-	Message string `json:"message"`
-	// SchemaPath is an optional JSON Pointer into the schema.
-	SchemaPath string `json:"schemaPath,omitempty"`
+// NewInvocationError constructs a code-only unsuccessful completion.
+func NewInvocationError(code string) *InvocationError {
+	if code == "" || code == ErrCodeContextRequired {
+		return &InvocationError{Code: ErrCodeRuntime}
+	}
+	return &InvocationError{Code: code}
 }
 
-// ValidationFailureDetails is the typed shape of InvocationError.Details
-// for input/output validation failures (OBI-T-16).
-type ValidationFailureDetails struct {
-	Failures []ValidationFailure `json:"failures"`
+// NewInvocationErrorWithData constructs an unsuccessful completion with a
+// present data member. Passing nil represents explicit JSON null; it is
+// distinct from constructing a code-only error.
+func NewInvocationErrorWithData(code string, data any) *InvocationError {
+	normalized, ok := normalizeInvocationData(data)
+	if code == "" || !ok {
+		return &InvocationError{Code: ErrCodeRuntime}
+	}
+	if code == ErrCodeContextRequired {
+		details, ok := contextRequiredData(normalized)
+		if !ok || !ValidContextRequiredDetails(details) {
+			return &InvocationError{Code: ErrCodeRuntime}
+		}
+	}
+	return &InvocationError{Code: code, Data: normalized, dataPresent: true}
+}
+
+// ValidInvocationData reports whether data can be normalized to the portable
+// JSON domain. It rejects ambiguous native carriers (notably byte slices and
+// maps with non-string keys); accepted Go objects are canonicalized before
+// becoming observable on an invocation.
+func ValidInvocationData(data any) bool {
+	_, ok := normalizeInvocationData(data)
+	return ok
+}
+
+func normalizeInvocationData(data any) (any, bool) {
+	if !validInvocationValue(reflect.ValueOf(data), map[visit]bool{}) {
+		return nil, false
+	}
+	raw, err := json.Marshal(data)
+	if err != nil || !json.Valid(raw) {
+		return nil, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var normalized any
+	if err := decoder.Decode(&normalized); err != nil {
+		return nil, false
+	}
+	return normalized, true
+}
+
+type visit struct {
+	typ reflect.Type
+	ptr uintptr
+}
+
+func validInvocationValue(value reflect.Value, ancestors map[visit]bool) bool {
+	if !value.IsValid() {
+		return true
+	}
+	if value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return true
+		}
+		return validInvocationValue(value.Elem(), ancestors)
+	}
+	switch value.Kind() {
+	case reflect.Bool, reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	case reflect.Float32, reflect.Float64:
+		return !math.IsNaN(value.Float()) && !math.IsInf(value.Float(), 0)
+	case reflect.Pointer:
+		if value.IsNil() {
+			return true
+		}
+		key := visit{typ: value.Type(), ptr: value.Pointer()}
+		if ancestors[key] {
+			return false
+		}
+		ancestors[key] = true
+		defer delete(ancestors, key)
+		return validInvocationValue(value.Elem(), ancestors)
+	case reflect.Slice:
+		if value.IsNil() {
+			return true
+		}
+		if value.Type().Elem().Kind() == reflect.Uint8 && value.Type() != reflect.TypeOf(json.RawMessage{}) {
+			return false
+		}
+		key := visit{typ: value.Type(), ptr: value.Pointer()}
+		if key.ptr != 0 {
+			if ancestors[key] {
+				return false
+			}
+			ancestors[key] = true
+			defer delete(ancestors, key)
+		}
+		for index := 0; index < value.Len(); index++ {
+			if !validInvocationValue(value.Index(index), ancestors) {
+				return false
+			}
+		}
+		return true
+	case reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			if !validInvocationValue(value.Index(index), ancestors) {
+				return false
+			}
+		}
+		return true
+	case reflect.Map:
+		if value.IsNil() {
+			return true
+		}
+		if value.Type().Key().Kind() != reflect.String {
+			return false
+		}
+		key := visit{typ: value.Type(), ptr: value.Pointer()}
+		if ancestors[key] {
+			return false
+		}
+		ancestors[key] = true
+		defer delete(ancestors, key)
+		iterator := value.MapRange()
+		for iterator.Next() {
+			if !validInvocationValue(iterator.Value(), ancestors) {
+				return false
+			}
+		}
+		return true
+	case reflect.Struct:
+		// Structs are the idiomatic Go spelling of JSON objects. The final
+		// encoding/json check below adjudicates tags and custom marshalers.
+		return true
+	default:
+		return false
+	}
+}
+
+func contextRequiredData(data any) (*ContextRequiredDetails, bool) {
+	if details, ok := data.(*ContextRequiredDetails); ok {
+		return details, true
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return nil, false
+	}
+	var details ContextRequiredDetails
+	if err := json.Unmarshal(raw, &details); err != nil {
+		return nil, false
+	}
+	return &details, true
+}
+
+// HasData reports whether the abstract data member is present. It remains
+// true for explicit JSON null.
+func (e *InvocationError) HasData() bool {
+	return e != nil && (e.dataPresent || e.Data != nil)
+}
+
+func (e InvocationError) MarshalJSON() ([]byte, error) {
+	if e.Code == "" || (e.HasData() && !ValidInvocationData(e.Data)) {
+		return nil, fmt.Errorf("invalid invocation error")
+	}
+	if e.Code == ErrCodeContextRequired {
+		details, ok := contextRequiredData(e.Data)
+		if !e.HasData() || !ok || !ValidContextRequiredDetails(details) {
+			return nil, fmt.Errorf("invalid CONTEXT_REQUIRED data")
+		}
+	}
+	out := map[string]any{"code": e.Code}
+	if e.dataPresent || e.Data != nil {
+		out["data"] = e.Data
+	}
+	return json.Marshal(out)
+}
+
+func (e *InvocationError) UnmarshalJSON(raw []byte) error {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return err
+	}
+	for key := range envelope {
+		if key != "code" && key != "data" {
+			return fmt.Errorf("invalid invocation error member %q", key)
+		}
+	}
+	codeRaw, present := envelope["code"]
+	if !present || json.Unmarshal(codeRaw, &e.Code) != nil {
+		return fmt.Errorf("invocation error code must be a string")
+	}
+	e.Data = nil
+	dataRaw, dataPresent := envelope["data"]
+	e.dataPresent = dataPresent
+	if dataPresent && string(dataRaw) != "null" {
+		decoder := json.NewDecoder(bytes.NewReader(dataRaw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&e.Data); err != nil {
+			return err
+		}
+	}
+	if e.Code == "" || (e.HasData() && !ValidInvocationData(e.Data)) {
+		return fmt.Errorf("invalid invocation error")
+	}
+	if e.Code == ErrCodeContextRequired {
+		details, ok := contextRequiredData(e.Data)
+		if !e.HasData() || !ok || !ValidContextRequiredDetails(details) {
+			return fmt.Errorf("invalid CONTEXT_REQUIRED data")
+		}
+	}
+	return nil
 }
 
 func (e *InvocationError) Error() string {
 	if e == nil {
 		return ""
 	}
-	msg := e.Message
-	if msg == "" {
-		msg = e.Code
-	}
-	// A CONTEXT_REQUIRED challenge is actionable only through its details;
-	// an error string that hides the target and the requirement families
-	// strands whoever sees it in a log. Formats write the prose, the
-	// challenge writes the facts.
-	if d := ContextRequiredFrom(e); d != nil {
-		if summary := contextRequirementSummary(d); summary != "" {
-			return msg + " (" + summary + ")"
-		}
-	}
-	return msg
+	return e.Code
 }
 
 // contextRequirementSummary renders "target: <t>; satisfied by: auth.bearer
@@ -525,7 +709,7 @@ func contextRequirementSummary(d *ContextRequiredDetails) string {
 // itself comes from the binding-invoker interface's context table and
 // confidentiality clause. Flat credential fields redact to "[REDACTED]";
 // nested credential fields retain their identifiers (basic keeps its username,
-// apiKeys keeps its scheme names) and redact the known secret values. (Store
+// credentials/apiKeys keep their scheme names) and redact the known secret values. (Store
 // KEYS are the one surface this cannot reach — see NormalizeContextKey, which
 // strips userinfo so no secret rides into a key.)
 func RedactContext(ctx map[string]any) map[string]any {
@@ -556,7 +740,7 @@ func RedactContext(ctx map[string]any) map[string]any {
 			} else {
 				redacted[k] = v
 			}
-		case "apiKeys":
+		case "apiKeys", "credentials":
 			// Scheme-scoped API keys (R2.d ruling): every named entry is
 			// credential material, same as the single 'apiKey' field. Scheme
 			// names stay; values are redacted.
@@ -567,7 +751,7 @@ func RedactContext(ctx map[string]any) map[string]any {
 				}
 				redacted[k] = rc
 			} else {
-				redacted[k] = v
+				redacted[k] = "[REDACTED]"
 			}
 		default:
 			// Flat credential fields: bearerToken, apiKey, accessToken,
@@ -592,6 +776,25 @@ func ContextBearerToken(ctx map[string]any) string {
 	return v
 }
 
+// ContextNamedCredential returns context.credentials[name], or nil when the
+// context carries no credential under that artifact-declared scheme name.
+func ContextNamedCredential(ctx map[string]any, name string) any {
+	if ctx == nil || name == "" {
+		return nil
+	}
+	credentials, _ := ctx["credentials"].(map[string]any)
+	return credentials[name]
+}
+
+// ContextBearerTokenFor returns a named bearer credential, falling back to
+// the flat convenience used by an unnamed or unambiguous single scheme.
+func ContextBearerTokenFor(ctx map[string]any, name string) string {
+	if value, ok := ContextNamedCredential(ctx, name).(string); ok && value != "" {
+		return value
+	}
+	return ContextBearerToken(ctx)
+}
+
 // ContextAPIKey returns the well-known apiKey field from context.
 func ContextAPIKey(ctx map[string]any) string {
 	if ctx == nil {
@@ -601,12 +804,10 @@ func ContextAPIKey(ctx map[string]any) string {
 	return v
 }
 
-// ContextAPIKeyFor returns the API key for a NAMED scheme: the scheme-scoped
-// context.apiKeys[name] entry first (the form BindingContext defines for an
-// alternative that ANDs several API keys at once — two ANDed apiKey schemes
-// are otherwise indistinguishable), falling back to the single well-known
-// apiKey convenience field. name == "" behaves exactly like ContextAPIKey
-// (an unnamed requirement has no named entry to prefer). Every format
+// ContextAPIKeyFor returns the API key for a named scheme: the general
+// context.credentials[name] entry first, then historical apiKeys[name], then
+// the single well-known apiKey convenience. name == "" behaves exactly like
+// ContextAPIKey (an unnamed requirement has no named entry to prefer). Every format
 // invoker's credential application (openapi, asyncapi) and the core
 // satisfaction/scoping logic (requirementSatisfied, admitRequirement) share
 // this one lookup rather than duplicating the priority per call site.
@@ -615,6 +816,9 @@ func ContextAPIKeyFor(ctx map[string]any, name string) string {
 		return ""
 	}
 	if name != "" {
+		if v, ok := ContextNamedCredential(ctx, name).(string); ok && v != "" {
+			return v
+		}
 		if keys, ok := ctx["apiKeys"].(map[string]any); ok {
 			if v, ok := keys[name].(string); ok && v != "" {
 				return v
@@ -639,6 +843,30 @@ func ContextBasicAuth(ctx map[string]any) (username, password string, ok bool) {
 		return "", "", false
 	}
 	return u, p, true
+}
+
+// ContextBasicAuthFor returns a named basic credential, falling back to the
+// flat convenience used by an unnamed or unambiguous single scheme.
+func ContextBasicAuthFor(ctx map[string]any, name string) (username, password string, ok bool) {
+	if basic, exists := ContextNamedCredential(ctx, name).(map[string]any); exists {
+		u, _ := basic["username"].(string)
+		p, _ := basic["password"].(string)
+		if u != "" || p != "" {
+			return u, p, true
+		}
+	}
+	return ContextBasicAuth(ctx)
+}
+
+// ContextAccessTokenFor returns a named OAuth access token, falling back to
+// the flat OAuth convenience fields.
+func ContextAccessTokenFor(ctx map[string]any, name string) string {
+	if oauth, ok := ContextNamedCredential(ctx, name).(map[string]any); ok {
+		if token, ok := oauth["accessToken"].(string); ok && token != "" {
+			return token
+		}
+	}
+	return ContextString(ctx, "accessToken")
 }
 
 // ContextString returns a string value from context by key.

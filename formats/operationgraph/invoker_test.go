@@ -137,8 +137,8 @@ func TestInvokeBinding_CrossGraphRecursionBounded(t *testing.T) {
 			if ie == nil {
 				t.Fatalf("expected InvocationError terminal, got %v", err)
 			}
-			if !strings.Contains(ie.Message, "recursion budget") {
-				t.Fatalf("expected recursion-budget refusal, got %v", ie)
+			if ie.Code != openbindings.ErrCodeExecutionFailed {
+				t.Fatalf("expected execution refusal, got %v", ie)
 			}
 			return
 		}

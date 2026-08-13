@@ -247,11 +247,6 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	if joined {
 		data["joinedSynthesis"] = true
 	}
-	trailer := map[string]any{}
-	for name, values := range call.Diagnostics().Trailer() {
-		trailer[name] = values
-	}
-	data["trailer"] = trailer
 	if len(transport.dispatches) > 0 {
 		data["dispatch"] = transport.dispatches[0]
 	}
@@ -266,7 +261,10 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "pre-dispatch", Data: data}
 	}
 	phase := "completion"
-	if scenario.ID == "CONN-PS-02" || scenario.ID == "CONN-PS-09" || scenario.ID == "CONN-PS-13" || scenario.ID == "CONN-PS-15" || hasHTTPResponseEvidence(terminal) {
+	// Before any value has crossed, a dispatched invocation's failure belongs
+	// to response processing. Once a value has crossed, a later terminal is a
+	// completion failure. Derive this from observation instead of scenario IDs.
+	if len(outputs) == 0 {
 		phase = "response"
 	}
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
@@ -294,15 +292,6 @@ func normalizedConnectInvocationError(t *testing.T, err *openbindings.Invocation
 		t.Fatal(unmarshalErr)
 	}
 	return result
-}
-
-func hasHTTPResponseEvidence(err *openbindings.InvocationError) bool {
-	details, ok := err.Diagnostics.(map[string]any)
-	if !ok {
-		return false
-	}
-	_, ok = details["httpResponse"]
-	return ok
 }
 
 func normalizedConnectHeaders(headers http.Header) map[string]any {

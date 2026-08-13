@@ -43,15 +43,14 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// --- Pre-dispatch validation: no network I/O has happened yet. ---
 	if args.Source.BindingSpec != BindingSpec {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: fmt.Sprintf("MCP invoker supports exact binding specification %q, got %q", BindingSpec, args.Source.BindingSpec),
+			Code: openbindings.ErrCodeSourceConfigError,
 		})
 		return
 	}
 	entityType, name, err := parseRef(args.Ref)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeInvalidRef, Message: err.Error(),
+			Code: openbindings.ErrCodeInvalidRef,
 		})
 		return
 	}
@@ -59,31 +58,27 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	location := strings.TrimSpace(args.Source.Location)
 	if err := validateEndpoint(location); err != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: err.Error(),
+			Code: openbindings.ErrCodeSourceConfigError,
 		})
 		return
 	}
 	_, _, hasBasic := openbindings.ContextBasicAuth(args.Context)
 	if openbindings.ContextAPIKey(args.Context) != "" || hasBasic {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeContextRequired,
-			Message: "MCP does not declare a carrier for a generic credential; provide a named HTTP header credential",
+			Code: openbindings.ErrCodeContextRequired,
 		})
 		return
 	}
 	for name := range openbindings.ContextHeaders(args.Context) {
 		if openbindings.ContextBearerToken(args.Context) != "" && strings.EqualFold(name, "Authorization") {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeValidationFailed,
-				Message: "bearerToken and an explicit Authorization header target the same MCP credential destination",
+				Code: openbindings.ErrCodeValidationFailed,
 			})
 			return
 		}
 		if strings.EqualFold(name, "MCP-Session-Id") || strings.EqualFold(name, "MCP-Protocol-Version") {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeValidationFailed,
-				Message: fmt.Sprintf("credential header %q collides with an MCP processor-owned session field", name),
+				Code: openbindings.ErrCodeValidationFailed,
 			})
 			return
 		}
@@ -97,7 +92,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		p, perr := parsePinnedListing(args.Source.Content)
 		if perr != nil {
 			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeSourceLoadFailed, Message: perr.Error(),
+				Code: openbindings.ErrCodeSourceLoadFailed,
 			})
 			return
 		}
@@ -167,8 +162,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 					// MCP-P-03); null included — absent means "never
 					// written", not "written as null".
 					inv.FireError(&openbindings.InvocationError{
-						Code:    openbindings.ErrCodeValidationFailed,
-						Message: fmt.Sprintf("MCP tool input must be an object when supplied, got %T", first),
+						Code: openbindings.ErrCodeValidationFailed,
 					})
 					return
 				}
@@ -205,13 +199,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 	defer session.release()
 	if init := session.session.InitializeResult(); init == nil || init.ProtocolVersion != "2025-11-25" {
-		negotiated := ""
-		if init != nil {
-			negotiated = init.ProtocolVersion
-		}
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceLoadFailed,
-			Message: fmt.Sprintf("MCP negotiated protocol revision %q; %s accepts only 2025-11-25", negotiated, args.Source.BindingSpec),
+			Code: openbindings.ErrCodeSourceLoadFailed,
 		})
 		return
 	}
@@ -264,14 +253,6 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		}
 	}
 
-	// SetHeader must precede the first emit and may only happen once. The
-	// snapshot at first-emit time is the entity call's POST response (the
-	// capture overwrites the handshake's and the list calls').
-	var headerOnce sync.Once
-	setHeader := func() {
-		headerOnce.Do(func() { _ = inv.SetHeader(hc.snapshot()) })
-	}
-
 	// --- Dispatch. ---
 	site := siteFor(args, location)
 	rawResult := &rawResultCapture{}
@@ -284,11 +265,11 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		if args.Source.BindingSpec == BindingSpec {
 			solicit = false
 		}
-		derr, suspect = runTool(operationCtx, session, name, toolArgs, solicit, args.Source.BindingSpec, applicationOutputSchema, inv, hc, setHeader, site, args.Hooks, rawResult)
+		derr, suspect = runTool(operationCtx, session, name, toolArgs, solicit, args.Source.BindingSpec, applicationOutputSchema, inv, hc, site, args.Hooks, rawResult)
 	case targetPrompt:
-		derr, suspect = runPrompt(operationCtx, session, name, promptArgs, inv, hc, setHeader, rawResult)
+		derr, suspect = runPrompt(operationCtx, session, name, promptArgs, inv, hc, rawResult)
 	default: // static resource, or a template expanded to targetURI
-		derr, suspect = runResource(operationCtx, session, targetURI, inv, hc, setHeader, site, args.Hooks, rawResult)
+		derr, suspect = runResource(operationCtx, session, targetURI, inv, hc, site, args.Hooks, rawResult)
 	}
 	if derr != nil {
 		// A transport- or HTTP-level failure may have poisoned the pooled
@@ -376,7 +357,6 @@ func runTool(
 	applicationOutputSchema any,
 	inv *openbindings.InvocationImpl[any, any],
 	hc *headerCapture,
-	setHeader func(),
 	site openbindings.InvokeSite,
 	hooks *openbindings.InvokeHooks,
 	rawResult *rawResultCapture,
@@ -400,7 +380,7 @@ func runTool(
 		if callErr != nil {
 			return mapMCPError(callErr, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(callErr)
 		}
-		return emitToolResult(result, toolName, bindingSpec, applicationOutputSchema, inv, setHeader, site, hooks, rawResult)
+		return emitToolResult(result, toolName, bindingSpec, applicationOutputSchema, inv, site, hooks, rawResult)
 	}
 
 	// Each solicited call gets a fresh progress token so the server can
@@ -427,7 +407,6 @@ func runTool(
 			// (parking, the backpressure side effect, would otherwise resume).
 			return
 		}
-		setHeader()
 		// The progress value is the notification's params object with
 		// progressToken removed, PRESENCE-PRESERVING (§9.2, MCP-P-04): an
 		// explicit total:0 survives, an absent total stays absent. The raw
@@ -470,64 +449,51 @@ func runTool(
 	if callErr != nil {
 		return mapMCPError(callErr, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(callErr)
 	}
-	return emitToolResult(result, toolName, bindingSpec, applicationOutputSchema, inv, setHeader, site, hooks, rawResult)
+	return emitToolResult(result, toolName, bindingSpec, applicationOutputSchema, inv, site, hooks, rawResult)
 }
 
 // emitToolResult classifies and emits a completed tools/call result: an
-// isError result is a failure outcome whatever its content (§9.4, MCP-P-06);
-// every other completed result decodes per §9.3 and terminates the stream.
+// isError result is a failure outcome whatever its content (§9.3, MCP-P-06);
+// every other completed result decodes per §9.2 and terminates the stream.
 func emitToolResult(
 	result *gomcp.CallToolResult,
 	toolName string,
 	bindingSpec string,
 	applicationOutputSchema any,
 	inv *openbindings.InvocationImpl[any, any],
-	setHeader func(),
 	site openbindings.InvokeSite,
 	hooks *openbindings.InvokeHooks,
 	rawResult *rawResultCapture,
 ) (*openbindings.InvocationError, bool) {
 	if result.IsError {
 		// Application-level tool failure (CallToolResult.isError). The
-		// session is healthy: the server replied normally.
-		msg := contentText(result.Content)
-		if msg == "" {
-			msg = fmt.Sprintf("MCP tool %q reported an error", toolName)
+		// session is healthy: the server replied normally. A present
+		// structuredContent member is the application-authored failure value;
+		// use the raw capture so explicit null remains distinct from absence.
+		if raw, ok := completeMCPResult(rawResult, result).(map[string]any); ok {
+			if data, present := raw["structuredContent"]; present {
+				return openbindings.NewInvocationErrorWithData(openbindings.ErrCodeExecutionFailed, data), false
+			}
 		}
-		return &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: msg,
-			// Retain protocol-native evidence only for explicit diagnostics.
-			Diagnostics: map[string]any{
-				"mcpResult": completeMCPResult(rawResult, result),
-				"mcp":       map[string]any{"result": completeMCPResult(rawResult, result)},
-			},
-		}, false
+		return openbindings.NewInvocationError(openbindings.ErrCodeExecutionFailed), false
 	}
 
-	setHeader()
 	value := completeMCPResult(rawResult, result)
 	if bindingSpec == BindingSpec {
 		var ok bool
 		value, ok = structuredContentValue(result.StructuredContent)
 		if !ok {
 			return &openbindings.InvocationError{
-				Code:        openbindings.ErrCodeResponseError,
-				Message:     fmt.Sprintf("MCP tool %q declared outputSchema but returned no structuredContent application value", toolName),
-				Diagnostics: map[string]any{"mcp": map[string]any{"result": completeMCPResult(rawResult, result)}},
+				Code: openbindings.ErrCodeResponseError,
 			}, false
 		}
 		if err := openbindings.ValidateAgainstSchema(value, applicationOutputSchema, nil); err != nil {
 			return &openbindings.InvocationError{
-				Code:        openbindings.ErrCodeResponseError,
-				Message:     fmt.Sprintf("MCP tool %q returned structuredContent that does not satisfy its outputSchema: %v", toolName, err),
-				Diagnostics: map[string]any{"mcp": map[string]any{"result": completeMCPResult(rawResult, result)}},
+				Code: openbindings.ErrCodeResponseError,
 			}, false
 		}
 	}
-	inv.SetTrailer(openbindings.Metadata{
-		"x-ob-classify": {"protocol/isError"},
-	})
+
 	if err := inv.EmitOutput(value); err != nil {
 		return nil, false // invocation terminated while parked; already settled
 	}
@@ -558,7 +524,6 @@ func runResource(
 	uri string,
 	inv *openbindings.InvocationImpl[any, any],
 	hc *headerCapture,
-	setHeader func(),
 	site openbindings.InvokeSite,
 	hooks *openbindings.InvokeHooks,
 	rawResult *rawResultCapture,
@@ -568,7 +533,6 @@ func runResource(
 		return mapMCPError(err, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(err)
 	}
 
-	setHeader()
 	value := completeMCPResult(rawResult, result)
 	if err := inv.EmitOutput(value); err != nil {
 		return nil, false
@@ -585,7 +549,6 @@ func runPrompt(
 	promptArgs map[string]string,
 	inv *openbindings.InvocationImpl[any, any],
 	hc *headerCapture,
-	setHeader func(),
 	rawResult *rawResultCapture,
 ) (*openbindings.InvocationError, bool) {
 	result, err := session.session.GetPrompt(ctx, &gomcp.GetPromptParams{
@@ -596,7 +559,6 @@ func runPrompt(
 		return mapMCPError(err, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(err)
 	}
 
-	setHeader()
 	if err := inv.EmitOutput(completeMCPResult(rawResult, result)); err != nil {
 		return nil, false
 	}
@@ -621,8 +583,7 @@ func expandTemplateInput(
 	tmpl, terr := uritemplate.New(template)
 	if terr != nil {
 		return "", &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceLoadFailed,
-			Message: fmt.Sprintf("MCP listing declares resource template %q, which is not a valid RFC 6570 URI template: %v", template, terr),
+			Code: openbindings.ErrCodeSourceLoadFailed,
 		}, false
 	}
 
@@ -646,8 +607,7 @@ func expandTemplateInput(
 		m, ok := openbindings.ToStringAnyMap(first)
 		if !ok {
 			return "", &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeValidationFailed,
-				Message: fmt.Sprintf("MCP resource-template input must be an object of template variables when supplied, got %T", first),
+				Code: openbindings.ErrCodeValidationFailed,
 			}, false
 		}
 		declared := map[string]bool{}
@@ -657,8 +617,7 @@ func expandTemplateInput(
 		for k, v := range m {
 			if !declared[k] {
 				return "", &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeValidationFailed,
-					Message: fmt.Sprintf("MCP resource-template input names variable %q, which template %q does not declare", k, template),
+					Code: openbindings.ErrCodeValidationFailed,
 				}, false
 			}
 			switch value := v.(type) {
@@ -671,7 +630,7 @@ func expandTemplateInput(
 				for i, item := range value {
 					text, ok := item.(string)
 					if !ok {
-						return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("MCP resource-template list variable %q contains non-string item at index %d", k, i)}, false
+						return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}, false
 					}
 					items[i] = text
 				}
@@ -697,15 +656,14 @@ func expandTemplateInput(
 				for _, name := range keys {
 					text, ok := value[name].(string)
 					if !ok {
-						return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("MCP resource-template associative variable %q has non-string value at key %q", k, name)}, false
+						return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}, false
 					}
 					pairs = append(pairs, name, text)
 				}
 				values[k] = uritemplate.KV(pairs...)
 			default:
 				return "", &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeValidationFailed,
-					Message: fmt.Sprintf("MCP resource-template variable %q must be an RFC 6570 string, string list, or string map; got %T", k, v),
+					Code: openbindings.ErrCodeValidationFailed,
 				}, false
 			}
 		}
@@ -714,8 +672,7 @@ func expandTemplateInput(
 	expanded, xerr := tmpl.Expand(values)
 	if xerr != nil {
 		return "", &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeValidationFailed,
-			Message: fmt.Sprintf("RFC 6570 expansion of template %q failed: %v", template, xerr),
+			Code: openbindings.ErrCodeValidationFailed,
 		}, false
 	}
 	return expanded, nil, false
@@ -729,8 +686,7 @@ func promptArguments(v any) (map[string]string, *openbindings.InvocationError) {
 	m, ok := openbindings.ToStringAnyMap(v)
 	if !ok {
 		return nil, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeValidationFailed,
-			Message: fmt.Sprintf("MCP prompt input must be an object when supplied, got %T", v),
+			Code: openbindings.ErrCodeValidationFailed,
 		}
 	}
 	out := make(map[string]string, len(m))
@@ -738,8 +694,7 @@ func promptArguments(v any) (map[string]string, *openbindings.InvocationError) {
 		s, ok := val.(string)
 		if !ok {
 			return nil, &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeValidationFailed,
-				Message: fmt.Sprintf("MCP prompt argument %q must be a string, got %T (prompt arguments are string-typed and are never coerced)", k, val),
+				Code: openbindings.ErrCodeValidationFailed,
 			}
 		}
 		out[k] = s
@@ -805,9 +760,8 @@ func validateEndpoint(location string) error {
 // ---------------------------------------------------------------------------
 
 // mapMCPError converts an error from the go-mcp SDK into a terminal
-// *InvocationError. JSON-RPC errors carry the MCP error code/data in explicit
-// diagnostics (ERR_EXECUTION_FAILED); HTTP error responses retain their
-// captured status only in diagnostics;
+// *InvocationError. JSON-RPC errors may carry their authored data as abstract
+// failure data; HTTP-native observations remain below this boundary;
 // cancellation maps to ERR_CANCELLED; anything else falls back to the
 // phase's code (ERR_CONNECT_FAILED during the initialize handshake,
 // ERR_EXECUTION_FAILED during dispatch).
@@ -819,51 +773,37 @@ func mapMCPError(err error, hc *headerCapture, fallback string) *openbindings.In
 
 	// JSON-RPC error: the server replied with a structured error.
 	if werr := serverJSONRPCError(err); werr != nil {
-		native := map[string]any{"code": werr.Code, "message": werr.Message}
-		diagnostics := map[string]any{"code": werr.Code, "mcp": map[string]any{"jsonrpcError": native}}
 		if len(werr.Data) > 0 {
 			var data any
 			if json.Unmarshal(werr.Data, &data) == nil {
-				diagnostics["data"] = data
-				native["data"] = data
+				return openbindings.NewInvocationErrorWithData(openbindings.ErrCodeExecutionFailed, data)
 			}
 		}
-		hc.addHTTPFailureEvidence(diagnostics)
-		message := werr.Message
-		if message == "" {
-			message = "Invocation completed unsuccessfully"
-		}
 		return &openbindings.InvocationError{
-			Code:        openbindings.ErrCodeExecutionFailed,
-			Message:     message,
-			Diagnostics: diagnostics,
+			Code: openbindings.ErrCodeExecutionFailed,
 		}
 	}
 
 	// HTTP error response: the capture saw the failing POST's status.
 	if status, statusText := hc.lastStatus(); status >= 400 {
-		ierr := openbindings.HTTPError(status, statusText)
-		if diagnostics, ok := ierr.Diagnostics.(map[string]any); ok {
-			hc.addHTTPFailureEvidence(diagnostics)
-		}
-		return ierr
+		return openbindings.HTTPError(status, statusText)
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		// A local deadline stays distinct from explicit caller cancellation and
-		// agrees with the handle's race resolution. It carries no portable retry
-		// implication.
+		// A caller-supplied invocation lifetime deadline is a cancellation of
+		// that invocation at the abstract boundary. Keep the native deadline
+		// distinction below the bridge.
 		return &openbindings.InvocationError{
-			Code: openbindings.ErrCodeTimeout, Message: err.Error(),
+			Code: openbindings.ErrCodeCancelled,
 		}
 	}
 	if errors.Is(err, context.Canceled) {
 		return &openbindings.InvocationError{
-			Code: openbindings.ErrCodeCancelled, Message: err.Error(),
+			Code: openbindings.ErrCodeCancelled,
 		}
 	}
 
-	return &openbindings.InvocationError{Code: fallback, Message: err.Error()}
+	return &openbindings.InvocationError{Code: fallback}
 }
 
 // ---------------------------------------------------------------------------
@@ -1081,8 +1021,7 @@ func builtinMIMEDecode(mimeType string) openbindings.OutputDecoder {
 			var parsed any
 			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
 				return nil, &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeExecutionFailed,
-					Message: fmt.Sprintf("resource declares %s but its text is not valid JSON: %v", mimeType, err),
+					Code: openbindings.ErrCodeExecutionFailed,
 				}
 			}
 			return parsed, nil

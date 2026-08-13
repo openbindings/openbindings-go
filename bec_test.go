@@ -39,10 +39,12 @@ func (s testStore) Delete(_ context.Context, key string) error {
 var bearerOrAPIKey = &ContextRequiredDetails{
 	Target: "https://api.example.com/v1/users",
 	Alternatives: []ContextAlternative{
-		{Requirements: []ContextRequirement{{Type: "auth.bearer"}}},
-		{Requirements: []ContextRequirement{{Type: "auth.apiKey"}}},
+		{Requirements: []ContextRequirement{{Type: "auth.bearer", Durable: testBoolPointer(true)}}},
+		{Requirements: []ContextRequirement{{Type: "auth.apiKey", Durable: testBoolPointer(true)}}},
 	},
 }
+
+func testBoolPointer(value bool) *bool { return &value }
 
 func TestContextSatisfies(t *testing.T) {
 	t.Run("any one alternative suffices (disjunctive)", func(t *testing.T) {
@@ -54,13 +56,29 @@ func TestContextSatisfies(t *testing.T) {
 		}
 	})
 
+	t.Run("flat credential cannot satisfy ambiguous named OR alternatives", func(t *testing.T) {
+		details := &ContextRequiredDetails{
+			Target: "api.example.com",
+			Alternatives: []ContextAlternative{
+				{Requirements: []ContextRequirement{{Type: "auth.bearer", Name: "schemeA"}}},
+				{Requirements: []ContextRequirement{{Type: "auth.bearer", Name: "schemeB"}}},
+			},
+		}
+		if ContextSatisfies(map[string]any{"bearerToken": "ambiguous"}, details) {
+			t.Fatal("flat credential must not select one of multiple named schemes")
+		}
+		if !ContextSatisfies(map[string]any{"credentials": map[string]any{"schemeB": "specific"}}, details) {
+			t.Fatal("scheme-scoped credential should satisfy its alternative")
+		}
+	})
+
 	t.Run("all requirements within an alternative (conjunctive)", func(t *testing.T) {
 		details := &ContextRequiredDetails{
 			Target: "k",
 			Alternatives: []ContextAlternative{
 				{Requirements: []ContextRequirement{
 					{Type: "auth.basic"},
-					{Type: "config.value", Extra: map[string]any{"point": "server", "key": "url"}},
+					{Type: "config.value", Extra: map[string]any{"point": "server", "path": "/url"}},
 				}},
 			},
 		}
@@ -165,6 +183,67 @@ func TestStoreContextResolver(t *testing.T) {
 		}
 	})
 
+	for _, tc := range []struct {
+		name    string
+		durable *bool
+	}{
+		{name: "durability omitted"},
+		{name: "durability false", durable: testBoolPointer(false)},
+	} {
+		t.Run("does not reuse stored context when "+tc.name, func(t *testing.T) {
+			store := testStore{"api.example.com": {"bearerToken": "stored-tok"}}
+			resolve := StoreContextResolver(store)
+			details := &ContextRequiredDetails{
+				Target: "https://api.example.com/v1",
+				Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{
+					{Type: "auth.bearer", Durable: tc.durable},
+				}}},
+			}
+			got, err := resolve(ctx, details)
+			if err != nil || got != nil {
+				t.Fatalf("expected decline, got %v err=%v", got, err)
+			}
+		})
+	}
+
+	t.Run("selects only a wholly durable alternative", func(t *testing.T) {
+		store := testStore{"api.example.com": {
+			"bearerToken": "must-not-reuse",
+			"apiKey":      "reusable",
+		}}
+		resolve := StoreContextResolver(store)
+		details := &ContextRequiredDetails{
+			Target: "https://api.example.com/v1",
+			Alternatives: []ContextAlternative{
+				{Requirements: []ContextRequirement{{Type: "auth.bearer", Durable: testBoolPointer(false)}}},
+				{Requirements: []ContextRequirement{{Type: "auth.apiKey", Durable: testBoolPointer(true)}}},
+			},
+		}
+		got, err := resolve(ctx, details)
+		if err != nil || ContextAPIKey(got) != "reusable" || ContextBearerToken(got) != "" {
+			t.Fatalf("got %v err=%v", got, err)
+		}
+	})
+
+	t.Run("does not partially reuse a mixed durability AND-set", func(t *testing.T) {
+		store := testStore{"api.example.com": {
+			"bearerToken":   "stored",
+			"configuration": map[string]any{"approval": map[string]any{"value": "yes"}},
+		}}
+		resolve := StoreContextResolver(store)
+		details := &ContextRequiredDetails{
+			Target: "https://api.example.com/v1",
+			Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{
+				{Type: "auth.bearer", Durable: testBoolPointer(true)},
+				{Type: "config.value", Durable: testBoolPointer(false), Extra: map[string]any{"point": "approval", "path": ""}},
+			}}},
+		}
+		got, err := resolve(ctx, details)
+		if err != nil || got != nil {
+			t.Fatalf("expected decline, got %v err=%v", got, err)
+		}
+	})
+
 	// R2.e ruling, end to end through the store-backed resolver: a store
 	// carrying apiKeys entries for TWO names, challenged by an alternative
 	// naming only one, must resolve a scoped context carrying only that one
@@ -180,7 +259,7 @@ func TestStoreContextResolver(t *testing.T) {
 		details := &ContextRequiredDetails{
 			Target: "https://api.example.com/v1",
 			Alternatives: []ContextAlternative{
-				{Requirements: []ContextRequirement{{Type: "auth.apiKey", Name: "serviceA"}}},
+				{Requirements: []ContextRequirement{{Type: "auth.apiKey", Name: "serviceA", Durable: testBoolPointer(true)}}},
 			},
 		}
 		got, err := resolve(ctx, details)
@@ -472,7 +551,7 @@ func TestStoreContextResolver_DefaultPortMissFixed(t *testing.T) {
 		details := &ContextRequiredDetails{
 			Target: "https://api.example.com:443/v1/users",
 			Alternatives: []ContextAlternative{
-				{Requirements: []ContextRequirement{{Type: "auth.bearer"}}},
+				{Requirements: []ContextRequirement{{Type: "auth.bearer", Durable: testBoolPointer(true)}}},
 			},
 		}
 		got, err := resolve(ctx, details)
@@ -491,7 +570,7 @@ func TestStoreContextResolver_DefaultPortMissFixed(t *testing.T) {
 		details := &ContextRequiredDetails{
 			Target: "https://api.example.com/v1/users",
 			Alternatives: []ContextAlternative{
-				{Requirements: []ContextRequirement{{Type: "auth.bearer"}}},
+				{Requirements: []ContextRequirement{{Type: "auth.bearer", Durable: testBoolPointer(true)}}},
 			},
 		}
 		got, err := resolve(ctx, details)

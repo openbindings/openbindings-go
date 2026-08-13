@@ -120,7 +120,7 @@ func mustTerminalError(t *testing.T, ctx context.Context, inv openbindings.Invoc
 		t.Fatalf("expected terminal error %q, got clean close", wantCode)
 	}
 	if ierr.Code != wantCode {
-		t.Fatalf("error code = %q, want %q (message: %q)", ierr.Code, wantCode, ierr.Message)
+		t.Fatalf("error code = %q, want %q (message: %q)", ierr.Code, wantCode, ierr.Error())
 	}
 	return ierr
 }
@@ -180,17 +180,6 @@ func TestInvokeBinding_UnarySuccess(t *testing.T) {
 		t.Errorf("unexpected response data: %+v", data)
 	}
 
-	// Leading metadata is the HTTP response headers.
-	md, err := inv.Diagnostics().Header(ctx)
-	if err != nil {
-		t.Fatalf("Header: %v", err)
-	}
-	if got := md["Content-Type"]; len(got) != 1 || got[0] != "application/json" {
-		t.Errorf("header Content-Type = %v, want [application/json]", got)
-	}
-	if got := inv.Diagnostics().Trailer(); len(got) != 0 {
-		t.Errorf("Trailer = %v, want empty", got)
-	}
 }
 
 func TestInvokeBinding_UnaryTrailer(t *testing.T) {
@@ -211,17 +200,6 @@ func TestInvokeBinding_UnaryTrailer(t *testing.T) {
 		t.Fatalf("Single: %v", err)
 	}
 
-	md, err := inv.Diagnostics().Header(ctx)
-	if err != nil {
-		t.Fatalf("Header: %v", err)
-	}
-	if _, present := md["Trailer-X-After"]; present {
-		t.Error("Trailer-X-After must not appear in leading metadata")
-	}
-	trailer := inv.Diagnostics().Trailer()
-	if got := trailer["X-After"]; len(got) != 1 || got[0] != "done" {
-		t.Errorf("trailer X-After = %v, want [done]", got)
-	}
 }
 
 func TestInvokeBinding_HTTPError(t *testing.T) {
@@ -232,8 +210,8 @@ func TestInvokeBinding_HTTPError(t *testing.T) {
 		map[string]any{"id": "abc"})
 
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
-	if ierr.Message != "boom" {
-		t.Errorf("error message = %q, want %q", ierr.Message, "boom")
+	if ierr.HasData() {
+		t.Errorf("native Connect failure crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -261,12 +239,11 @@ func TestInvokeBinding_ConnectErrorsStayNativeDiagnostics(t *testing.T) {
 			inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 				map[string]any{"id": "abc"})
 			ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
-			if ierr.Details != nil {
-				t.Fatalf("native Connect evidence leaked into portable details: %#v", ierr.Details)
+			if ierr.Data != nil {
+				t.Fatalf("native Connect evidence leaked into portable details: %#v", ierr.Data)
 			}
-			evidence, ok := FailureEvidenceFrom(ierr)
-			if !ok || evidence.HTTPResponse == nil || evidence.HTTPResponse.Status != tc.status {
-				t.Fatalf("native failure evidence = %+v, ok = %v", evidence, ok)
+			if ierr.HasData() {
+				t.Fatalf("native failure evidence leaked as abstract data: %+v", ierr.Data)
 			}
 		})
 	}
@@ -280,8 +257,8 @@ func TestInvokeBinding_UnauthenticatedMessageAndEvidence(t *testing.T) {
 		map[string]any{"id": "abc"})
 
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
-	if ierr.Message != "need token" {
-		t.Errorf("error message = %q, want %q", ierr.Message, "need token")
+	if ierr.HasData() {
+		t.Errorf("native unauthenticated evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -346,10 +323,8 @@ message PingMsg { string msg = 1; }
 		Ref:    "tiny.Tiny/Ping",
 	})
 	ierr := mustTerminalError(t, ctx, h, openbindings.ErrCodeSourceConfigError)
-	for _, want := range []string{"embedded content", "location", "configuration.target"} {
-		if !strings.Contains(ierr.Message, want) {
-			t.Errorf("refusal must mention %q, got: %s", want, ierr.Message)
-		}
+	if ierr.HasData() {
+		t.Errorf("configuration diagnostics crossed as abstract data: %#v", ierr.Data)
 	}
 
 	// configuration.target supplies the base URL: the invocation proceeds
@@ -366,7 +341,7 @@ message PingMsg { string msg = 1; }
 		t.Fatal("dial of an unreachable base URL must fail")
 	}
 	if ierr2.Code == openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("configuration.target must satisfy the config gate; still got config error: %s", ierr2.Message)
+		t.Fatalf("configuration.target must satisfy the config gate; still got config error")
 	}
 }
 
@@ -377,13 +352,8 @@ func TestInvokeBinding_MissingBaseURL_NoContentMessage(t *testing.T) {
 	ctx := testContext(t)
 	inv := NewInvoker().InvokeBinding(ctx, unaryArgs("", nil, "testpkg.TestService/GetItem"))
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
-	if strings.Contains(ierr.Message, "embedded content") {
-		t.Errorf("no-content refusal should not claim embedded content, got: %s", ierr.Message)
-	}
-	for _, want := range []string{"location"} {
-		if !strings.Contains(ierr.Message, want) {
-			t.Errorf("refusal must mention %q, got: %s", want, ierr.Message)
-		}
+	if ierr.HasData() {
+		t.Errorf("configuration diagnostics crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -422,10 +392,8 @@ func TestInvokeBinding_ClientStreamingRefused(t *testing.T) {
 	inv := NewInvoker().WithFullDuplexTransport(false).InvokeBinding(ctx, unaryArgs(srv.URL, clientStreamingProto, "testpkg.UploadService/Upload"))
 
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
-	for _, want := range []string{"UploadService/Upload", "client-streaming"} {
-		if !strings.Contains(ierr.Message, want) {
-			t.Errorf("refusal must mention %q, got: %s", want, ierr.Message)
-		}
+	if ierr.HasData() {
+		t.Errorf("native cardinality evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -491,8 +459,8 @@ func TestInvokeBinding_NonCanonicalInput(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		"just a string")
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeValidationFailed)
-	if !strings.Contains(ierr.Message, "canonical JSON form") {
-		t.Errorf("error message = %q, want to mention the canonical JSON form", ierr.Message)
+	if ierr.HasData() {
+		t.Errorf("native validation evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -574,8 +542,8 @@ func TestInvokeBinding_RedirectLimit(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeConnectFailed)
-	if !strings.Contains(ierr.Message, "redirect") {
-		t.Errorf("error message = %q, expected to mention redirect", ierr.Message)
+	if ierr.HasData() {
+		t.Errorf("native redirect evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -684,16 +652,6 @@ func TestInvokeBinding_ServerStreaming_Success(t *testing.T) {
 		}
 	}
 
-	md, err := inv.Diagnostics().Header(ctx)
-	if err != nil {
-		t.Fatalf("Header: %v", err)
-	}
-	if got := md["Content-Type"]; len(got) != 1 || got[0] != "application/connect+json" {
-		t.Errorf("header Content-Type = %v, want [application/connect+json]", got)
-	}
-	if got := inv.Diagnostics().Trailer(); len(got) != 0 {
-		t.Errorf("Trailer = %v, want empty", got)
-	}
 }
 
 func TestInvokeBinding_ServerStreaming_EmptyStream(t *testing.T) {
@@ -732,8 +690,8 @@ func TestInvokeBinding_ServerStreaming_EndStreamError(t *testing.T) {
 	if ierr.Code != openbindings.ErrCodeExecutionFailed {
 		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeExecutionFailed)
 	}
-	if !strings.Contains(ierr.Message, "backend exploded") {
-		t.Errorf("error message = %q, want to contain 'backend exploded'", ierr.Message)
+	if ierr.Error() != openbindings.ErrCodeExecutionFailed {
+		t.Errorf("error text = %q", ierr.Error())
 	}
 }
 
@@ -744,9 +702,8 @@ func TestInvokeBinding_ServerStreaming_EndStreamErrorIsDiagnostic(t *testing.T) 
 
 	inv := invokeWith(t, ctx, NewInvoker(), streamingArgs(srv.URL), map[string]any{"source": "test"})
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
-	evidence, ok := FailureEvidenceFrom(ierr)
-	if !ok || evidence.EndStream == nil || evidence.EndStream.Error["code"] != "unauthenticated" {
-		t.Fatalf("END_STREAM failure evidence = %+v, ok = %v", evidence, ok)
+	if ierr.HasData() {
+		t.Fatalf("END_STREAM native evidence leaked as abstract data: %+v", ierr.Data)
 	}
 }
 
@@ -766,10 +723,6 @@ func TestInvokeBinding_ServerStreaming_EndStreamMetadata(t *testing.T) {
 	}
 	if len(outputs) != 1 {
 		t.Fatalf("expected 1 output, got %d", len(outputs))
-	}
-	trailer := inv.Diagnostics().Trailer()
-	if got := trailer["x-after"]; len(got) != 1 || got[0] != "done" {
-		t.Errorf("trailer x-after = %v, want [done]", got)
 	}
 }
 
@@ -911,8 +864,8 @@ func TestServerStreamingCompressedFrameRejected(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), streamingArgs(srv.URL), map[string]any{"source": "test"})
 
 	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeStreamError)
-	if !strings.Contains(ierr.Message, "compress") {
-		t.Errorf("error message = %q, want to mention compression", ierr.Message)
+	if ierr.HasData() {
+		t.Errorf("native compression evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }
 

@@ -73,8 +73,7 @@ func (c *combinedInvoker) InvokeBinding(ctx context.Context, args *BindingInvoca
 	invoker := c.findInvoker(args.Source.BindingSpec)
 	if invoker == nil {
 		return NewErroredInvocation[any, any](&InvocationError{
-			Code:    ErrCodeBindingNotFound,
-			Message: fmt.Sprintf("%v: %s", ErrNoInvoker, args.Source.BindingSpec),
+			Code: ErrCodeBindingNotFound,
 		})
 	}
 	return invoker.InvokeBinding(ctx, args)

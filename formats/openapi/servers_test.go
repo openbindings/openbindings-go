@@ -195,21 +195,21 @@ func TestResolveServer_ConfigRequired(t *testing.T) {
 	if !errorsAsConfigRequired(err, &cr) {
 		t.Fatalf("expected *configRequired for an undefaulted server variable, got %v", err)
 	}
-	if cr.point != "server" || cr.key != "env" {
-		t.Errorf("configRequired = {point:%q key:%q}, want {server env}", cr.point, cr.key)
+	if cr.point != "server" || cr.path != "/variables/env" {
+		t.Errorf("configRequired = {point:%q path:%q}, want {server /variables/env}", cr.point, cr.path)
 	}
 	if len(cr.choices) != 2 {
 		t.Errorf("choices = %v, want the declared enum", cr.choices)
 	}
 
-	// Relative server URL with no absolute base → config.value, key "url".
+	// Relative server URL with no absolute base → config.value at /url.
 	docRel := &openapi3.T{OpenAPI: "3.0.3", Servers: openapi3.Servers{{URL: "/"}}}
 	_, err = resolveServer(docRel, nil, nil, nil, "")
 	if !errorsAsConfigRequired(err, &cr) {
 		t.Fatalf("expected *configRequired for an unresolvable server URL, got %v", err)
 	}
-	if cr.point != "server" || cr.key != "url" {
-		t.Errorf("configRequired = {point:%q key:%q}, want {server url}", cr.point, cr.key)
+	if cr.point != "server" || cr.path != "/url" {
+		t.Errorf("configRequired = {point:%q path:%q}, want {server /url}", cr.point, cr.path)
 	}
 }
 

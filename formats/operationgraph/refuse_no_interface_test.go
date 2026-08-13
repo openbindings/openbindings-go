@@ -2,7 +2,6 @@ package operationgraph
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -40,10 +39,7 @@ func TestInvokeBinding_OperationNodeWithoutInterfaceRefused(t *testing.T) {
 		t.Fatalf("expected a pre-execution refusal, got %v", err)
 	}
 	if ierr.Code != openbindings.ErrCodeValidationFailed {
-		t.Fatalf("want ERR_VALIDATION_FAILED (OG-V-11), got %s: %s", ierr.Code, ierr.Message)
-	}
-	if !strings.Contains(ierr.Message, "OG-V-11") {
-		t.Errorf("refusal should cite OG-V-11, got %q", ierr.Message)
+		t.Fatalf("want ERR_VALIDATION_FAILED (OG-V-11), got %s: %s", ierr.Code, ierr.Error())
 	}
 }
 

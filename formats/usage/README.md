@@ -121,9 +121,12 @@ Input schemas derived from usage specs inherit the source format's thin value ty
 2. Resolves the binding ref — a space-separated command path — against the command tree (empty ref = the root command)
 3. Consults the `FieldRouter` chain per input field and applies the channel mechanics (stdin piping, `-` operands, temp-file materialization) with loud slot-compatibility refusals, then builds argv from the remaining fields (flags by name, positionals in declared order)
 4. Executes the binary via `os/exec` with the constructed argv and routed stdin
-5. Classifies the exit through the seam (assumption: exit 0), decodes stdout through the seam (assumption: text), and emits the application value. Exit/stderr and decode/classify/route provenance are available only through the explicit `Diagnostics()` view.
+5. Classifies the exit through the seam (assumption: exit 0), decodes stdout through the seam (assumption: text), and emits the application value. Exit/stderr and decode/classify/route provenance remain below the abstract invocation boundary.
 
-A rejected exit, signal termination, or post-process decode failure is terminal rather than an operation output. Its `usage.process` evidence preserves exit/signal identity, exact captured stdout/stderr bytes, and truncation markers; `FailureEvidenceFrom` validates and extracts that record after in-process use or an invoker-frame round trip. Successful stderr remains metadata, with a Base64 lane for arbitrary bytes.
+A rejected exit, signal termination, or post-process decode failure is
+terminal rather than an operation output. The abstract error carries only its
+binding-owned code; exit, signal, stdout, and stderr facts remain below the
+bridge for process-native tooling.
 
 ### Credential application
 
@@ -268,10 +271,10 @@ avoid propagating invalid or empty command names.
 The captured stdout of one spawned command is one **delivery unit** and is
 consumer-bounded: set `MaxDeliveryUnitBytes` on the `OperationInvoker` (or
 per invocation on `BindingInvocationArgs`); zero selects
-`openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). Deliberately fixed:
-the stderr tail capture (diagnostics, truncate-and-mark), the `x-stderr`
-trailer bound, the artifact-fetch guard on command-produced usage
-documents, and the input-side field-routing cap — none is a delivery unit.
+`openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). The artifact-fetch guard
+on command-produced usage documents and the input-side field-routing cap are
+fixed internal bounds, not abstract delivery units. Process stderr and exit
+facts remain below the invocation boundary.
 
 ## Status
 

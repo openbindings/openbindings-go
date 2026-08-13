@@ -36,10 +36,10 @@ func TestRouting_NonObjectInputRefused(t *testing.T) {
 			t.Fatalf("input %v (%T): expected a loud refusal (USAGE-P-04 §9.1), got success", in, in)
 		}
 		if ierr.Code != openbindings.ErrCodeValidationFailed {
-			t.Fatalf("input %v: expected ERR_VALIDATION_FAILED, got %s: %s", in, ierr.Code, ierr.Message)
+			t.Fatalf("input %v: expected ERR_VALIDATION_FAILED, got %s: %s", in, ierr.Code, ierr.Error())
 		}
-		if !strings.Contains(ierr.Message, "JSON object") {
-			t.Errorf("message should name the object contract, got %q", ierr.Message)
+		if ierr.HasData() {
+			t.Errorf("native routing evidence crossed as abstract data: %#v", ierr.Data)
 		}
 	}
 }
@@ -100,7 +100,7 @@ func TestRouting_StdinDash(t *testing.T) {
 		Ref:    "slurp",
 	}, map[string]any{"doc": "piped payload"})
 	if ierr != nil {
-		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
 	}
 	m, ok := out.(map[string]any)
 	if !ok {
@@ -122,7 +122,7 @@ func TestRouting_SlotlessStdin(t *testing.T) {
 		Ref:    "drink",
 	}, map[string]any{"payload": "slotless bytes"})
 	if ierr != nil {
-		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
 	}
 	m, ok := out.(map[string]any)
 	if !ok {
@@ -145,7 +145,7 @@ func TestRouting_FileMaterialization(t *testing.T) {
 		Ref:    "statfile",
 	}, map[string]any{"doc": "materialized contents"})
 	if ierr != nil {
-		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
 	}
 	m, ok := out.(map[string]any)
 	if !ok {
@@ -165,7 +165,7 @@ func TestRouting_JSONLaneAndTextLane(t *testing.T) {
 		Source: testSource(), Ref: "num",
 	}, nil)
 	if ierr != nil {
-		t.Fatalf("num: unexpected error: %s", ierr.Message)
+		t.Fatalf("num: unexpected error: %s", ierr.Error())
 	}
 	if n, _ := out.(float64); n != 42 {
 		t.Errorf("num JSON lane = %v, want 42", out)
@@ -175,7 +175,7 @@ func TestRouting_JSONLaneAndTextLane(t *testing.T) {
 		Source: testSource(), Ref: "prose",
 	}, nil)
 	if ierr != nil {
-		t.Fatalf("prose: unexpected error: %s", ierr.Message)
+		t.Fatalf("prose: unexpected error: %s", ierr.Error())
 	}
 	if out != "all good" {
 		t.Errorf("prose text lane = %#v, want %q", out, "all good")
@@ -199,8 +199,8 @@ func TestRouting_TwoFieldsToStdinRefused(t *testing.T) {
 	// Two slotless fields both route to stdin: at most one may ride it.
 	d := routerDriver(map[string]string{"a": RouteStdin, "b": RouteStdin}, false)
 	ierr := refusalCode(t, d, "drink", nil, map[string]any{"a": "x", "b": "y"})
-	if ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "stdin") {
-		t.Fatalf("want ERR_VALIDATION_FAILED about stdin, got %s: %s", ierr.Code, ierr.Message)
+	if ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
+		t.Fatalf("want code-only ERR_VALIDATION_FAILED, got %#v", ierr)
 	}
 }
 
@@ -209,16 +209,16 @@ func TestRouting_StdinOnSlottedFieldRefused(t *testing.T) {
 	// maps to --tag, so it is refused with the stdin-dash teaching hint.
 	d := routerDriver(map[string]string{"tag": RouteStdin}, false)
 	ierr := refusalCode(t, d, "slurp", nil, map[string]any{"tag": "x", "doc": "input"})
-	if ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "stdin-dash") {
-		t.Fatalf("want ERR_VALIDATION_FAILED hinting stdin-dash, got %s: %s", ierr.Code, ierr.Message)
+	if ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
+		t.Fatalf("want code-only ERR_VALIDATION_FAILED, got %#v", ierr)
 	}
 }
 
 func TestRouting_UnknownChannelTokenRefused(t *testing.T) {
 	d := routerDriver(map[string]string{"doc": "teleport"}, false)
 	ierr := refusalCode(t, d, "slurp", nil, map[string]any{"doc": "x"})
-	if ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "unrecognized channel token") {
-		t.Fatalf("want ERR_VALIDATION_FAILED for an unknown token, got %s: %s", ierr.Code, ierr.Message)
+	if ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
+		t.Fatalf("want code-only ERR_VALIDATION_FAILED, got %#v", ierr)
 	}
 }
 
@@ -226,8 +226,8 @@ func TestRouting_ByteCapRefused(t *testing.T) {
 	big := strings.Repeat("x", maxRouteBytes+1)
 	d := routerDriver(map[string]string{"payload": RouteStdin}, false)
 	ierr := refusalCode(t, d, "drink", nil, map[string]any{"payload": big})
-	if ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "routing cap") {
-		t.Fatalf("want ERR_VALIDATION_FAILED for the byte cap, got %s: %s", ierr.Code, ierr.Message)
+	if ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
+		t.Fatalf("want code-only ERR_VALIDATION_FAILED, got %#v", ierr)
 	}
 }
 
@@ -244,7 +244,7 @@ cmd "toggle" {
 `
 	d := routerDriver(map[string]string{"on": RouteStdinDash}, false)
 	_, ierr := invokeUsage(t, d, &openbindings.BindingInvocationArgs{Source: sourceKDL(kdl), Ref: "toggle"}, map[string]any{"on": true})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "boolean/count flag") {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
 		t.Fatalf("want ERR_VALIDATION_FAILED for a bool-flag slot, got %v", ierr)
 	}
 }
@@ -259,7 +259,7 @@ cmd "pick" {
 `
 	d := routerDriver(map[string]string{"mode": RouteStdinDash}, false)
 	_, ierr := invokeUsage(t, d, &openbindings.BindingInvocationArgs{Source: sourceKDL(kdl), Ref: "pick"}, map[string]any{"mode": "trace"})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || !strings.Contains(ierr.Message, "choices") {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
 		t.Fatalf("want ERR_VALIDATION_FAILED for choices excluding \"-\", got %v", ierr)
 	}
 }
@@ -362,12 +362,8 @@ func TestHookTable_Hooks(t *testing.T) {
 		if !errors.As(err, &invocationError) {
 			t.Fatalf("decoder: error = %T, want InvocationError", err)
 		}
-		if invocationError.Details != nil {
-			t.Fatalf("decoder: raw process evidence leaked into details: %#v", invocationError.Details)
-		}
-		diagnostics, ok := invocationError.Diagnostics.(map[string]any)
-		if !ok || diagnostics["usage"] == nil {
-			t.Fatalf("decoder: diagnostics = %#v, want explicit usage evidence", invocationError.Diagnostics)
+		if invocationError.HasData() {
+			t.Fatalf("decoder: process evidence leaked into data: %#v", invocationError.Data)
 		}
 	}
 	if v, err := decoder(usageSite("emit"), openbindings.RawResult{Body: nil}); err != nil || v != nil {

@@ -96,8 +96,7 @@ func (b *operationRequirementBinding) InvokeBinding(ctx context.Context, _ *Bind
 		object, ok := input.(map[string]any)
 		if !ok {
 			invocation.FireError(&InvocationError{
-				Code:    ErrCodeRuntime,
-				Message: "input is not an object",
+				Code: ErrCodeRuntime,
 			})
 			return
 		}

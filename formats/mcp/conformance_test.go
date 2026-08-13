@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -87,22 +86,24 @@ func TestPinResolutionRefusalsAreOffline(t *testing.T) {
 		name string
 		ref  string
 		pin  any
-		want string
 		code string
 	}{
-		{"missing", "tools/missing", map[string]any{"tools": []any{applicationTool("probe")}}, "matches no", openbindings.ErrCodeRefNotFound},
-		{"ambiguous", "tools/probe", map[string]any{"tools": []any{applicationTool("probe"), applicationTool("probe")}}, "ambiguous", openbindings.ErrCodeRefNotFound},
-		{"missing output schema", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe"}}}, "outputSchema", openbindings.ErrCodeInvalidRef},
-		{"required task", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe", "outputSchema": map[string]any{}, "execution": map[string]any{"taskSupport": "required"}}}}, "task", openbindings.ErrCodeInvalidRef},
-		{"resource", "resources/app://x", map[string]any{"resources": []any{map[string]any{"uri": "app://x"}}}, "excluded", openbindings.ErrCodeInvalidRef},
-		{"prompt", "prompts/review", map[string]any{"prompts": []any{map[string]any{"name": "review"}}}, "excluded", openbindings.ErrCodeInvalidRef},
+		{"missing", "tools/missing", map[string]any{"tools": []any{applicationTool("probe")}}, openbindings.ErrCodeRefNotFound},
+		{"ambiguous", "tools/probe", map[string]any{"tools": []any{applicationTool("probe"), applicationTool("probe")}}, openbindings.ErrCodeRefNotFound},
+		{"missing output schema", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe"}}}, openbindings.ErrCodeInvalidRef},
+		{"required task", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe", "outputSchema": map[string]any{}, "execution": map[string]any{"taskSupport": "required"}}}}, openbindings.ErrCodeInvalidRef},
+		{"resource", "resources/app://x", map[string]any{"resources": []any{map[string]any{"uri": "app://x"}}}, openbindings.ErrCodeInvalidRef},
+		{"prompt", "prompts/review", map[string]any{"prompts": []any{map[string]any{"name": "review"}}}, openbindings.ErrCodeInvalidRef},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server, requests := deadEndServer(t)
 			call := NewInvoker().InvokeBinding(bg(), pinArgs(server.URL, test.ref, test.pin, nil))
 			_, err := drainOutputs(t, call)
-			if codeOf(t, err) != test.code || !strings.Contains(err.Error(), test.want) {
+			if codeOf(t, err) != test.code {
 				t.Fatalf("error = %v", err)
+			}
+			if ie := openbindings.AsInvocationError(err); ie.HasData() {
+				t.Fatalf("offline resolution diagnostics crossed as abstract data: %#v", ie.Data)
 			}
 			if requests.Load() != 0 {
 				t.Fatalf("offline refusal made %d requests", requests.Load())

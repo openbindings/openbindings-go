@@ -54,8 +54,8 @@ On success, the output is `data[responseKey]`, including root aliases. The
 GraphQL envelope and HTTP facts do not become ordinary output fields. If a
 trusted response contains GraphQL `errors`, any selected partial application
 value is emitted first and the invocation then completes unsuccessfully
-without retracting it. Native response evidence is available only through the
-explicit diagnostics surface.
+without retracting it. Native response evidence remains below the abstract
+invocation boundary in artifact runtimes, clients, logs, and traces.
 
 The candidate's interpretation points live under `context.configuration`:
 

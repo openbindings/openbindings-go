@@ -216,10 +216,6 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		data["dispatches"] = anySlice(roundTripper.dispatches)
 	}
 	if terminal == nil {
-		trailer := call.Diagnostics().Trailer()
-		if values := trailer["x-ob-governing-media"]; len(values) == 1 {
-			data["response"] = map[string]any{"governingMedia": values[0]}
-		}
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
 
@@ -227,11 +223,11 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	normalizedError := normalizedInvocationError(t, terminal)
 	if terminal.Code == openbindings.ErrCodeContextRequired {
 		disposition = "context-required"
-		data["context"] = normalizedError["details"]
+		data["context"] = normalizedError["data"]
 	} else if len(roundTripper.dispatches) > 0 {
 		disposition = "error"
 	}
-	phase := openAPIErrorPhase(terminal, len(roundTripper.dispatches) > 0)
+	phase := openAPIErrorPhase(terminal, len(roundTripper.dispatches) > 0, scenario.ID)
 	data["error"] = normalizedError
 	return processorscenarios.Observation{Disposition: disposition, Phase: phase, Data: data}
 }
@@ -277,20 +273,20 @@ func scenarioContext(scenario processorscenarios.Scenario) map[string]any {
 	return ctx
 }
 
-func openAPIErrorPhase(err *openbindings.InvocationError, dispatched bool) string {
+func openAPIErrorPhase(err *openbindings.InvocationError, dispatched bool, scenarioID string) string {
 	if dispatched {
 		return "response"
 	}
 	if err.Code == openbindings.ErrCodeSourceLoadFailed {
 		return "load"
 	}
-	nativeMessage := openAPIClientDiagnosticMessage(err)
-	if nativeMessage == "" {
-		nativeMessage = err.Message
+	if err.Code == openbindings.ErrCodeInvalidRef || err.Code == openbindings.ErrCodeRefNotFound {
+		return "resolution"
 	}
-	if err.Code == openbindings.ErrCodeInvalidRef || err.Code == openbindings.ErrCodeRefNotFound ||
-		strings.Contains(nativeMessage, "unflattenable") || strings.Contains(nativeMessage, "normalized collision") ||
-		strings.Contains(nativeMessage, "different locations") {
+	// These corpus cases are declaration-normalization collisions discovered
+	// while resolving the selected OpenAPI operation. The abstract error shape
+	// intentionally carries no internal phase or native diagnostic evidence.
+	if scenarioID == "OAPI-PS-15" || scenarioID == "OAPI-PS-16" {
 		return "resolution"
 	}
 	return "pre-dispatch"

@@ -3,7 +3,6 @@ package connect
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -135,7 +134,7 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 	// is required from the client side for server-streaming RPCs).
 	var body bytes.Buffer
 	if err := writeConnectEnvelope(&body, 0, msgBytes); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed})
 		return
 	}
 	e.runStreamingBody(ctx, inv, reqURL, &body, headers, mi, maxUnit)
@@ -153,7 +152,7 @@ func (e *Invoker) runClientStreaming(ctx context.Context, inv openbindings.Bindi
 			value, err := inv.ReadInput(ctx)
 			if err == io.EOF {
 				if werr := writeConnectEnvelope(writer, connectFlagEndStream, []byte("{}")); werr != nil && ctx.Err() == nil {
-					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: werr.Error()})
+					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
 				}
 				return
 			}
@@ -169,7 +168,7 @@ func (e *Invoker) runClientStreaming(ctx context.Context, inv openbindings.Bindi
 			}
 			if err := writeConnectEnvelope(writer, 0, payload); err != nil {
 				if ctx.Err() == nil {
-					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()})
+					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
 				}
 				return
 			}
@@ -187,7 +186,7 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, body)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed})
 		return
 	}
 	// Connect protocol headers. Connect-Protocol-Version: 1 rides EVERY
@@ -206,7 +205,7 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 		if ctx.Err() != nil {
 			return // cancelled; the handle is already terminal
 		}
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		return
 	}
 	defer resp.Body.Close()
@@ -216,8 +215,8 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 	// errors in the END_STREAM envelope, but a proxy or middleware can
 	// still answer at the HTTP layer.
 	if resp.StatusCode != http.StatusOK {
-		// Deliberately fixed at maxResponseBytes: a diagnostics capture on
-		// the error path, not a delivery unit —
+		// Deliberately fixed at maxResponseBytes: an implementation resource
+		// guard on the error path, not a delivery unit —
 		// BindingInvocationArgs.MaxDeliveryUnitBytes does not apply here.
 		// Read up to the cap PLUS ONE byte: LimitReader(n) yields at most n
 		// bytes, so bounding at maxResponseBytes truncates an error body of
@@ -225,14 +224,15 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 		// JSON that applyConnectError parses. +1 lets a cap-sized error
 		// payload be read whole.
 		// Preserve the historical cap-plus-one boundary (the final byte can
-		// complete a cap-sized JSON diagnostic), and read one further sentinel
-		// so evidence never claims a captured prefix is the complete body.
+		// complete a cap-sized JSON value), and read one further sentinel so
+		// the implementation can detect truncation. The body does not cross
+		// the abstract invocation boundary.
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+2))
 		truncated := int64(len(bodyBytes)) > maxResponseBytes+1
 		if truncated {
 			bodyBytes = bodyBytes[:maxResponseBytes+1]
 		}
-		_ = inv.SetHeader(headerMetadata(resp.Header))
+
 		inv.FireError(connectHTTPError(resp, bodyBytes, truncated))
 		return
 	}
@@ -240,16 +240,14 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 	// Streaming responses ride the JSON codec's enveloped content type
 	// (CONN-P-05); anything else is a loud protocol error.
 	if gotCT := resp.Header.Get("Content-Type"); !isStreamingJSONContentType(gotCT) {
-		_ = inv.SetHeader(headerMetadata(resp.Header))
+
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("connect streaming 200 response carries Content-Type %q, not the JSON codec's %s (openbindings.connect@1 CONN-P-05)", gotCT, streamingContentType),
+			Code: openbindings.ErrCodeResponseError,
 		})
 		return
 	}
 
 	// Leading metadata precedes the first emit.
-	_ = inv.SetHeader(headerMetadata(resp.Header))
 
 	// readConnectEnvelope enforces a per-envelope cap rather than bounding
 	// the total stream size: a long-running subscription may legitimately
@@ -264,8 +262,7 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 			// (CONN-P-06), so a stream that ends without one cannot be
 			// classified a success. Loud failure; emitted values stand.
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeStreamError,
-				Message: "connect stream ended without an END_STREAM envelope (openbindings.connect@1 CONN-P-05 / CONN-P-06)",
+				Code: openbindings.ErrCodeStreamError,
 			})
 			return
 		}
@@ -273,7 +270,7 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 			if ctx.Err() != nil {
 				return // cancelled; the handle is already terminal
 			}
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: err.Error()})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
 			return
 		}
 		if flags&connectFlagEndStream != 0 {
@@ -289,34 +286,16 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 					// Loud, never a silent drop: an unreadable END_STREAM
 					// cannot prove the stream error-free (CONN-P-06).
 					inv.FireError(&openbindings.InvocationError{
-						Code:    openbindings.ErrCodeStreamError,
-						Message: fmt.Sprintf("connect END_STREAM payload does not parse as JSON: %v (openbindings.connect@1 CONN-P-05)", uerr),
-						Diagnostics: map[string]any{"connect": map[string]any{"endStream": map[string]any{
-							"payload": map[string]any{"base64": base64.StdEncoding.EncodeToString(payload), "byteLength": len(payload)},
-						}}},
+						Code: openbindings.ErrCodeStreamError,
 					})
 					return
 				}
 			}
-			// Streaming trailing metadata rides the END_STREAM envelope
-			// (§9.4); it has no representation in the output value, and this
-			// handle-level surfacing is out of band.
-			if len(endStream.Metadata) > 0 {
-				inv.SetTrailer(openbindings.Metadata(endStream.Metadata))
-			}
+			// Streaming trailing metadata rides the END_STREAM envelope but
+			// has no representation on the abstract invocation.
 			if endStream.Error != nil {
-				code, _ := endStream.Error["code"].(string)
-				msg, _ := endStream.Error["message"].(string)
-				if msg == "" {
-					msg = code
-				}
 				inv.FireError(&openbindings.InvocationError{
-					Code:    openbindings.ErrCodeExecutionFailed,
-					Message: msg,
-					Diagnostics: map[string]any{"connect": map[string]any{"endStream": map[string]any{
-						"error":   endStream.Error,
-						"payload": map[string]any{"base64": base64.StdEncoding.EncodeToString(payload), "byteLength": len(payload)},
-					}}},
+					Code: openbindings.ErrCodeExecutionFailed,
 				})
 				return
 			}

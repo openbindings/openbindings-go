@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -174,8 +173,7 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 					if err := dec(req); err != nil {
 						return nil, err
 					}
-					_ = grpc.SetHeader(ctx, metadata.Pairs("x-test-header", "from-server"))
-					grpc.SetTrailer(ctx, metadata.Pairs("x-test-trailer", "bye"))
+
 					id := req.Get(reqDesc.Fields().ByName("id")).String()
 					resp := dynamicpb.NewMessage(respDesc)
 					resp.Set(respDesc.Fields().ByName("id"), protoreflect.ValueOfString(id))
@@ -226,8 +224,7 @@ func setupTestServer(t *testing.T) (func(context.Context, string) (net.Conn, err
 				ServerStreams: true,
 				Handler: func(srv any, stream grpc.ServerStream) error {
 					ts.capture(stream.Context())
-					_ = stream.SetHeader(metadata.Pairs("x-stream-header", "sh"))
-					stream.SetTrailer(metadata.Pairs("x-stream-trailer", "st"))
+
 					for _, pair := range [][2]string{{"1", "first"}, {"2", "second"}} {
 						msg := dynamicpb.NewMessage(itemDesc)
 						msg.Set(itemDesc.Fields().ByName("id"), protoreflect.ValueOfString(pair[0]))
@@ -577,16 +574,6 @@ func TestIntegration_UnaryHeaderTrailer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	md, err := inv.Diagnostics().Header(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := md["x-test-header"]; len(got) != 1 || got[0] != "from-server" {
-		t.Errorf("header x-test-header = %v, want [from-server]", got)
-	}
-	if got := inv.Diagnostics().Trailer()["x-test-trailer"]; len(got) != 1 || got[0] != "bye" {
-		t.Errorf("trailer x-test-trailer = %v, want [bye]", got)
-	}
 }
 
 func TestIntegration_InvokeServerStreaming(t *testing.T) {
@@ -602,7 +589,7 @@ func TestIntegration_InvokeServerStreaming(t *testing.T) {
 
 	vals, terr := drainInvocation(t, inv)
 	if terr != nil {
-		t.Fatalf("unexpected terminal error: %s: %s", terr.Code, terr.Message)
+		t.Fatalf("unexpected terminal error: %s: %s", terr.Code, terr.Error())
 	}
 	if len(vals) != 2 {
 		t.Fatalf("expected 2 outputs, got %d", len(vals))
@@ -620,17 +607,6 @@ func TestIntegration_InvokeServerStreaming(t *testing.T) {
 		t.Errorf("first item = %v, want {id:1, name:first}", first)
 	}
 
-	// Stream metadata maps onto the handle.
-	md, err := inv.Diagnostics().Header(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := md["x-stream-header"]; len(got) != 1 || got[0] != "sh" {
-		t.Errorf("header x-stream-header = %v, want [sh]", got)
-	}
-	if got := inv.Diagnostics().Trailer()["x-stream-trailer"]; len(got) != 1 || got[0] != "st" {
-		t.Errorf("trailer x-stream-trailer = %v, want [st]", got)
-	}
 }
 
 func TestIntegration_ContextHeadersForwarded(t *testing.T) {
@@ -672,9 +648,8 @@ func TestIntegration_Unauthenticated(t *testing.T) {
 	if terr.Code != openbindings.ErrCodeExecutionFailed {
 		t.Errorf("code = %q, want protocol-independent unsuccessful completion", terr.Code)
 	}
-	details, ok := terr.Diagnostics.(map[string]any)
-	if !ok || details["grpcCode"] != "Unauthenticated" {
-		t.Errorf("diagnostics = %v, want grpcCode Unauthenticated", terr.Diagnostics)
+	if terr.HasData() {
+		t.Errorf("native gRPC status leaked as abstract data: %v", terr.Data)
 	}
 }
 
@@ -733,9 +708,9 @@ func TestIntegration_CancelMidStream(t *testing.T) {
 }
 
 // A mid-stream lifetime DEADLINE on a server-streaming RPC: already-emitted
-// outputs stand, then exactly one terminal ERR_TIMEOUT (transient / possible).
-// A deadline is not a caller cancel — outputs may have flowed, so retry-safety
-// is "may have executed". Contrast TestIntegration_CancelMidStream (cancelled).
+// outputs stand, then exactly one terminal ERR_CANCELLED. A caller-supplied
+// lifetime deadline cancels the abstract invocation; the native deadline
+// distinction remains below the bridge.
 func TestIntegration_DeadlineMidStream(t *testing.T) {
 	dialer, _ := setupTestServer(t)
 	invoker := newTestInvoker(t, dialer)
@@ -764,12 +739,12 @@ func TestIntegration_DeadlineMidStream(t *testing.T) {
 	}
 	// The local deadline and grpc-go's native DeadlineExceeded completion are
 	// two observations of the same wakeup. If the invocation context wins, the
-	// runtime reports ERR_TIMEOUT; if the peer status wins before ctx.Err is
+	// runtime reports ERR_CANCELLED; if the peer status wins before ctx.Err is
 	// observable, it remains a protocol-native unsuccessful completion and is
 	// abstracted as ERR_EXECUTION_FAILED. Neither result exposes gRPC status on
 	// the caller-facing code lane.
-	if terr.Code != openbindings.ErrCodeTimeout && terr.Code != openbindings.ErrCodeExecutionFailed {
-		t.Fatalf("code = %q, want ERR_TIMEOUT or ERR_EXECUTION_FAILED", terr.Code)
+	if terr.Code != openbindings.ErrCodeCancelled && terr.Code != openbindings.ErrCodeExecutionFailed {
+		t.Fatalf("code = %q, want ERR_CANCELLED or ERR_EXECUTION_FAILED", terr.Code)
 	}
 }
 
@@ -793,7 +768,7 @@ func readToTerminal(ctx context.Context, inv openbindings.Invocation[any, any]) 
 
 // Stress the server-stream deadline race (RecvMsg-error terminal vs. the
 // handle's AfterFunc terminal off the same deadline wakeup). Before the fix
-// A local deadline is ERR_TIMEOUT when the handle observes its context first.
+// A local deadline is ERR_CANCELLED when the handle observes its context first.
 // If the peer's native DeadlineExceeded status wins the race, it remains the
 // structural ERR_EXECUTION_FAILED rather than being compiled into that local
 // runtime code. Run under -race.
@@ -829,8 +804,8 @@ func TestIntegration_DeadlineMidStream_Deterministic(t *testing.T) {
 		}
 		counts[terr.Code]++
 	}
-	if counts[openbindings.ErrCodeTimeout]+counts[openbindings.ErrCodeExecutionFailed] != runs {
-		t.Fatalf("expected only local timeout or native unsuccessful completion across %d runs, got distribution %v", runs, counts)
+	if counts[openbindings.ErrCodeCancelled]+counts[openbindings.ErrCodeExecutionFailed] != runs {
+		t.Fatalf("expected only local cancellation or native unsuccessful completion across %d runs, got distribution %v", runs, counts)
 	}
 }
 
@@ -983,7 +958,12 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 	_ = inv2.Write(ctl, map[string]any{"id": "i1"})
-	if _, err := openbindings.Single(ctl, inv2.Outputs()); err == nil || !strings.Contains(err.Error(), "configuration.transport") {
-		t.Fatalf("bare target must require an explicit transport election, got %v", err)
+	_, err = openbindings.Single(ctl, inv2.Outputs())
+	if err == nil {
+		t.Fatal("bare target must require an explicit transport election")
+	}
+	ierr := openbindings.AsInvocationError(err)
+	if ierr.Code != openbindings.ErrCodeSourceConfigError || ierr.HasData() {
+		t.Fatalf("bare target refusal = %#v, want code-only ERR_SOURCE_CONFIG_ERROR", ierr)
 	}
 }

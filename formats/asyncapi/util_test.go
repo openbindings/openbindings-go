@@ -994,9 +994,9 @@ func TestResolveInputCodec(t *testing.T) {
 }
 
 // assertConfigValue narrows err to a config.value CONTEXT_REQUIRED challenge
-// (R1a) and checks its point and key. Returns the requirement for further
+// (R1a) and checks its point and relative path. Returns the requirement for further
 // assertions (choices, durable).
-func assertConfigValue(t *testing.T, err error, point, key string) openbindings.ContextRequirement {
+func assertConfigValue(t *testing.T, err error, point, path string) openbindings.ContextRequirement {
 	t.Helper()
 	var ie *openbindings.InvocationError
 	if !errors.As(err, &ie) {
@@ -1016,8 +1016,8 @@ func assertConfigValue(t *testing.T, err error, point, key string) openbindings.
 	if got, _ := req.Extra["point"].(string); got != point {
 		t.Errorf("config.value point = %q, want %q", got, point)
 	}
-	if got, _ := req.Extra["key"].(string); got != key {
-		t.Errorf("config.value key = %q, want %q", got, key)
+	if got, _ := req.Extra["path"].(string); got != path {
+		t.Errorf("config.value path = %q, want %q", got, path)
 	}
 	return req
 }

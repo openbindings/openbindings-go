@@ -138,8 +138,6 @@ func invokeUsage(t *testing.T, invoker driver, args *openbindings.BindingInvocat
 	return out, ierr
 }
 
-// invokeUsageWithTrailer is invokeUsage plus the invocation's trailing
-// metadata (x-exit-code, x-stderr), valid once the handle terminates.
 func invokeUsageWithTrailer(t *testing.T, invoker driver, args *openbindings.BindingInvocationArgs, input any) (any, openbindings.Metadata, *openbindings.InvocationError) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -156,19 +154,19 @@ func invokeUsageWithTrailer(t *testing.T, invoker driver, args *openbindings.Bin
 	out := call.Outputs()
 	v, err := out.Read(ctx)
 	if errors.Is(err, io.EOF) {
-		return nil, call.Diagnostics().Trailer(), nil // clean close with no output
+		return nil, nil, nil
 	}
 	if err != nil {
 		var ie *openbindings.InvocationError
 		if !errors.As(err, &ie) {
 			t.Fatalf("expected *InvocationError, got %T: %v", err, err)
 		}
-		return nil, call.Diagnostics().Trailer(), ie
+		return nil, nil, ie
 	}
 	if _, err2 := out.Read(ctx); !errors.Is(err2, io.EOF) {
 		t.Fatalf("expected a single output then io.EOF, got %v", err2)
 	}
-	return v, call.Diagnostics().Trailer(), nil
+	return v, nil, nil
 }
 
 func TestIntegration_JSONOutput(t *testing.T) {
@@ -177,7 +175,7 @@ func TestIntegration_JSONOutput(t *testing.T) {
 		Ref:    "json",
 	}, map[string]any{"pairs": []any{"name=alice", "role=admin"}})
 	if ierr != nil {
-		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
 	}
 
 	result, ok := out.(map[string]any)
@@ -199,27 +197,15 @@ func TestIntegration_NonZeroExitCode(t *testing.T) {
 		Ref:    "fail",
 	}, map[string]any{"message": []any{"something went wrong"}})
 
-	// A non-ok exit is a terminal error carrying the exit code and the
-	// captured output (including stderr) in Diagnostics.
+	// A non-ok exit is a protocol-independent unsuccessful completion.
 	if out != nil {
 		t.Fatalf("expected no output on non-ok exit, got %v", out)
 	}
 	if ierr == nil || ierr.Code != openbindings.ErrCodeExecutionFailed {
 		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", ierr)
 	}
-	details, ok := ierr.Diagnostics.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map diagnostics, got %T", ierr.Diagnostics)
-	}
-	if details["exitCode"] != 1 {
-		t.Errorf("exitCode = %v, want 1", details["exitCode"])
-	}
-	output, ok := details["output"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected map output in details, got %T", details["output"])
-	}
-	if stderr, _ := output["stderr"].(string); stderr == "" {
-		t.Error("expected non-empty stderr from failed command")
+	if ierr.HasData() {
+		t.Fatalf("process evidence leaked as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -228,18 +214,15 @@ func TestIntegration_MixedOutput(t *testing.T) {
 	// stdout with the trailing newline stripped; stderr is diagnostics and
 	// rides the x-stderr trailer, never the output value.
 	invoker := NewInvoker()
-	out, trailer, ierr := invokeUsageWithTrailer(t, invoker, &openbindings.BindingInvocationArgs{
+	out, _, ierr := invokeUsageWithTrailer(t, invoker, &openbindings.BindingInvocationArgs{
 		Source: testSource(),
 		Ref:    "mixed",
 	}, nil)
 	if ierr != nil {
-		t.Fatalf("unexpected error: %s", ierr.Message)
+		t.Fatalf("unexpected error: %s", ierr.Error())
 	}
 	if out != "stdout line" {
 		t.Errorf("output = %#v, want the text-mode string", out)
-	}
-	if got := trailer["x-stderr"]; len(got) != 1 || got[0] != "stderr line\n" {
-		t.Errorf("x-stderr trailer = %q, want [%q]", got, "stderr line\n")
 	}
 }
 
@@ -250,7 +233,7 @@ func TestIntegration_EchoCommand(t *testing.T) {
 		Ref:    "echo",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
-		t.Fatalf("error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("error: %s: %s", ierr.Code, ierr.Error())
 	}
 	if out != "hello world" {
 		t.Errorf("output = %#v, want %q", out, "hello world")
@@ -410,7 +393,7 @@ arg "<words>..." help="Words to echo"
 		Ref:    "",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
-		t.Fatalf("error: %s: %s", ierr.Code, ierr.Message)
+		t.Fatalf("error: %s: %s", ierr.Code, ierr.Error())
 	}
 	if out != "hello world" {
 		t.Errorf("output = %#v, want %q", out, "hello world")

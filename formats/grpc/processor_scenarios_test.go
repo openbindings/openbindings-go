@@ -157,17 +157,12 @@ func runGRPCFidelityScenario(t *testing.T, scenario processorscenarios.Scenario)
 			"cancelled": cancelled.Load(),
 		},
 	}
-	trailer := map[string]any{}
-	for name, values := range call.Diagnostics().Trailer() {
-		trailer[name] = values
-	}
-	data["trailer"] = trailer
 	if terminal == nil {
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
 	data["error"] = normalizedInvocationError(t, terminal)
 	phase := "completion"
-	if terminal.Code == openbindings.ErrCodeValidationFailed {
+	if terminal.Code == openbindings.ErrCodeOperationValidationFailed || terminal.Code == openbindings.ErrCodeValidationFailed {
 		phase = "dispatch"
 	}
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
@@ -200,7 +195,7 @@ func newGRPCFidelityInvoker(t *testing.T, scenario processorscenarios.Scenario) 
 				if err := decode(request); err != nil {
 					return nil, err
 				}
-				grpc.SetTrailer(ctx, grpcFidelityMetadata(t, peer["trailingMetadata"]))
+
 				if statusErr := nativeStatusError(t, peer); statusErr != nil {
 					return nil, statusErr
 				}
@@ -252,7 +247,7 @@ func newGRPCFidelityInvoker(t *testing.T, scenario processorscenarios.Scenario) 
 						}
 					}
 				}
-				stream.SetTrailer(grpcFidelityMetadata(t, peer["trailingMetadata"]))
+
 				return nativeStatusError(t, peer)
 			},
 		}}

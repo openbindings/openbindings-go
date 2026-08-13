@@ -2,7 +2,7 @@ package asyncapi
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -100,9 +100,9 @@ func TestWSReceiveBackpressure_FrameCountOverflowFailsSubscription(t *testing.T)
 	if codeOf(t, err) != openbindings.ErrCodeStreamError {
 		t.Fatalf("expected ERR_STREAM_ERROR, got %v", err)
 	}
-	wantMsg := fmt.Sprintf("backpressure overflow: more than %d undelivered frames", 64)
-	if err.Error() != wantMsg {
-		t.Fatalf("error message = %q, want %q", err.Error(), wantMsg)
+	var ie *openbindings.InvocationError
+	if !errors.As(err, &ie) || ie.HasData() {
+		t.Fatalf("backpressure evidence must stay below the abstract boundary: %#v", err)
 	}
 	// Drain-before-terminal: some already-buffered frames were delivered
 	// ahead of the terminal error (the exact count is timing-sensitive —
@@ -164,9 +164,9 @@ func TestWSReceiveBackpressure_ByteBudgetOverflowFailsSubscription(t *testing.T)
 	if codeOf(t, err) != openbindings.ErrCodeStreamError {
 		t.Fatalf("expected ERR_STREAM_ERROR, got %v", err)
 	}
-	wantMsg := fmt.Sprintf("backpressure overflow: more than %d undelivered bytes", byteBudget)
-	if err.Error() != wantMsg {
-		t.Fatalf("error message = %q, want %q", err.Error(), wantMsg)
+	var ie *openbindings.InvocationError
+	if !errors.As(err, &ie) || ie.HasData() {
+		t.Fatalf("backpressure evidence must stay below the abstract boundary: %#v", err)
 	}
 	if len(vals) == 0 {
 		t.Fatal("expected some frames to drain before the terminal error")
@@ -242,9 +242,9 @@ func TestWSReceiveBackpressure_OverflowIsolatesToOneSubscription(t *testing.T) {
 	if codeOf(t, errA) != openbindings.ErrCodeStreamError {
 		t.Fatalf("subscriber A: expected ERR_STREAM_ERROR, got %v", errA)
 	}
-	wantMsg := fmt.Sprintf("backpressure overflow: more than %d undelivered frames", 64)
-	if errA.Error() != wantMsg {
-		t.Fatalf("subscriber A error = %q, want %q", errA.Error(), wantMsg)
+	var ie *openbindings.InvocationError
+	if !errors.As(errA, &ie) || ie.HasData() {
+		t.Fatalf("subscriber A exposed native overflow evidence: %#v", errA)
 	}
 
 	// B must still be receiving off the SAME pooled connection: A's

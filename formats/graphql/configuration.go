@@ -273,10 +273,11 @@ func validateHTTPLocation(location string) error {
 }
 
 func configurationRequirement(target, point, description string) *openbindings.ContextRequiredDetails {
+	durable := true
 	return &openbindings.ContextRequiredDetails{
 		Target: target,
 		Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{
-			openbindings.NewConfigValueRequirement(point, "value", description, nil, nil),
+			openbindings.NewConfigValueRequirement(point, "", description, nil, &durable),
 		}}},
 	}
 }

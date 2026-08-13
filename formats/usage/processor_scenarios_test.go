@@ -180,11 +180,6 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	if dispatch != nil {
 		data["dispatch"] = dispatch
 	}
-	trailer := map[string]any{}
-	for name, values := range call.Diagnostics().Trailer() {
-		trailer[name] = values
-	}
-	data["trailer"] = trailer
 	if terminal == nil {
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}

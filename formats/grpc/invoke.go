@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/jhump/protoreflect/v2/grpcdynamic"
 	openbindings "github.com/openbindings/openbindings-go"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -54,8 +52,7 @@ func readRequest(ctx context.Context, inv openbindings.BindingHandle[any, any], 
 	reqMsg, buildErr := buildRequest(methodDesc, raw)
 	if buildErr != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeValidationFailed,
-			Message: buildErr.Error(),
+			Code: openbindings.ErrCodeValidationFailed,
 		})
 		return nil, false
 	}
@@ -64,14 +61,7 @@ func readRequest(ctx context.Context, inv openbindings.BindingHandle[any, any], 
 
 // runUnary dispatches a unary RPC and emits its single response.
 func runUnary(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, reqMsg proto.Message) {
-	var header, trailer metadata.MD
-	resp, err := stub.InvokeRpc(rpcCtx, methodDesc, reqMsg, grpc.Header(&header), grpc.Trailer(&trailer))
-
-	// gRPC metadata maps natively onto the handle's metadata surfaces.
-	_ = inv.SetHeader(toOBMetadata(header))
-	if md := toOBMetadata(trailer); md != nil {
-		inv.SetTrailer(md)
-	}
+	resp, err := stub.InvokeRpc(rpcCtx, methodDesc, reqMsg)
 
 	if err != nil {
 		inv.FireError(grpcError(err, openbindings.ErrCodeExecutionFailed))
@@ -81,8 +71,7 @@ func runUnary(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], 
 	output, jerr := responseToJSON(resp)
 	if jerr != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeResponseError,
-			Message: jerr.Error(),
+			Code: openbindings.ErrCodeResponseError,
 		})
 		return
 	}
@@ -103,29 +92,20 @@ func runServerStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 		return
 	}
 
-	// Leading metadata: Header blocks until the server's headers arrive (or
-	// the RPC fails, in which case the recv loop below surfaces the error).
-	if md, herr := stream.Header(); herr == nil {
-		_ = inv.SetHeader(toOBMetadata(md))
-	}
-
 	for {
 		resp, rerr := stream.RecvMsg()
 		if rerr != nil {
-			// Trailing metadata is valid once RecvMsg returns non-nil.
-			if md := toOBMetadata(stream.Trailer()); md != nil {
-				inv.SetTrailer(md)
-			}
 			if rerr == io.EOF {
 				inv.CloseOutput()
 				return
 			}
 			// When the invocation context is done (caller cancel or lifetime
 			// deadline), the handle owns the terminal classification via its
-			// AfterFunc — a deadline as ERR_TIMEOUT, a cancel as ERR_CANCELLED.
+			// AfterFunc — both an explicit cancel and a caller-supplied lifetime
+			// deadline are ERR_CANCELLED at the abstract boundary.
 			// Defer to it rather than racing a stream-error terminal off the
 			// same RecvMsg wakeup, mirroring the OpenAPI SSE path. Both racers
-			// already agree on ERR_TIMEOUT for a deadline once the handle
+			// already agree on ERR_CANCELLED once the handle
 			// classifies it; this guard makes the outcome deterministic.
 			if rpcCtx.Err() != nil {
 				return
@@ -137,8 +117,7 @@ func runServerStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 		output, jerr := responseToJSON(resp)
 		if jerr != nil {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeResponseError,
-				Message: jerr.Error(),
+				Code: openbindings.ErrCodeResponseError,
 			})
 			return
 		}
@@ -171,7 +150,7 @@ func runClientStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 			}
 			msg, buildErr := buildRequest(methodDesc, raw)
 			if buildErr != nil {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: buildErr.Error()})
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
 				return
 			}
 			if sendErr := stream.SendMsg(msg); sendErr != nil {
@@ -181,12 +160,6 @@ func runClientStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 		}
 	}
 	resp, recvErr := stream.CloseAndReceive()
-	if md, herr := stream.Header(); herr == nil {
-		_ = inv.SetHeader(toOBMetadata(md))
-	}
-	if md := toOBMetadata(stream.Trailer()); md != nil {
-		inv.SetTrailer(md)
-	}
 	if recvErr != nil {
 		if rpcCtx.Err() == nil {
 			inv.FireError(grpcError(recvErr, openbindings.ErrCodeStreamError))
@@ -228,7 +201,7 @@ func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, a
 			}
 			msg, buildErr := buildRequest(methodDesc, raw)
 			if buildErr != nil {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: buildErr.Error()})
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
 				return
 			}
 			if sendErr := stream.SendMsg(msg); sendErr != nil {
@@ -240,15 +213,9 @@ func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, a
 		}
 	}()
 
-	if md, herr := stream.Header(); herr == nil {
-		_ = inv.SetHeader(toOBMetadata(md))
-	}
 	for {
 		resp, recvErr := stream.RecvMsg()
 		if recvErr != nil {
-			if md := toOBMetadata(stream.Trailer()); md != nil {
-				inv.SetTrailer(md)
-			}
 			if recvErr == io.EOF {
 				inv.CloseOutput()
 				return
@@ -260,7 +227,7 @@ func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, a
 		}
 		output, jsonErr := responseToJSON(resp)
 		if jsonErr != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: jsonErr.Error()})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
 			return
 		}
 		if emitErr := inv.EmitOutput(output); emitErr != nil {
@@ -272,7 +239,7 @@ func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, a
 func emitUnaryResponse(inv openbindings.BindingHandle[any, any], resp proto.Message) {
 	output, err := responseToJSON(resp)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
 		return
 	}
 	if err := inv.EmitOutput(output); err != nil {
@@ -326,27 +293,6 @@ func checkMetadataKey(k string) error {
 	return nil
 }
 
-// toOBMetadata converts gRPC metadata to the handle's Metadata shape (both
-// are map[string][]string). Returns nil for empty metadata.
-func toOBMetadata(md metadata.MD) openbindings.Metadata {
-	if len(md) == 0 {
-		return nil
-	}
-	out := make(openbindings.Metadata, len(md))
-	for k, vs := range md {
-		if strings.HasSuffix(k, "-bin") {
-			encoded := make([]string, len(vs))
-			for i, value := range vs {
-				encoded[i] = base64.StdEncoding.EncodeToString([]byte(value))
-			}
-			out[k] = encoded
-			continue
-		}
-		out[k] = append([]string(nil), vs...)
-	}
-	return out
-}
-
 // parseRef splits a binding ref per GRPC-D-03 (§7):
 // <fully-qualified-service>/<method> — the service's package-qualified
 // name, or its bare name when its file declares no package
@@ -377,15 +323,13 @@ func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.Me
 	}
 	if svcDesc == nil {
 		return nil, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("service %q not found in embedded schema", svcName),
+			Code: openbindings.ErrCodeRefNotFound,
 		}
 	}
 	m := svcDesc.Methods().ByName(protoreflect.Name(methodName))
 	if m == nil {
 		return nil, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
+			Code: openbindings.ErrCodeRefNotFound,
 		}
 	}
 	return m, nil
@@ -434,58 +378,18 @@ func responseToJSON(resp proto.Message) (any, error) {
 // only on the explicit diagnostic lane. A non-status local error uses the
 // caller-supplied SDK code.
 func grpcError(err error, fallbackCode string) *openbindings.InvocationError {
-	s, ok := status.FromError(err)
+	_, ok := status.FromError(err)
 	if !ok {
-		return &openbindings.InvocationError{Code: fallbackCode, Message: err.Error()}
+		return &openbindings.InvocationError{Code: fallbackCode}
 	}
 
-	statusDetails := make([]any, 0, len(s.Proto().GetDetails()))
-	for _, detail := range s.Proto().GetDetails() {
-		statusDetails = append(statusDetails, map[string]any{
-			"typeUrl":     detail.GetTypeUrl(),
-			"valueBase64": base64.StdEncoding.EncodeToString(detail.GetValue()),
-		})
-	}
-	grpcStatus := map[string]any{
-		"code":    int32(s.Code()),
-		"message": s.Message(),
-	}
-	if len(statusDetails) > 0 {
-		grpcStatus["details"] = statusDetails
-	}
-	diagnostics := map[string]any{
-		"grpcCode":   s.Code().String(),
-		"grpcStatus": grpcStatus,
-	}
-	if msgs := s.Proto().GetDetails(); len(msgs) > 0 {
-		var ds []any
-		for _, m := range msgs {
-			b, merr := protojson.Marshal(m)
-			if merr != nil {
-				continue
-			}
-			var v any
-			if json.Unmarshal(b, &v) == nil {
-				ds = append(ds, v)
-			}
-		}
-		if len(ds) > 0 {
-			diagnostics["grpcDetails"] = ds
-		}
-	}
-
-	message := s.Message()
-	if message == "" {
-		message = "Invocation completed unsuccessfully"
-	}
-	return &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: message, Diagnostics: diagnostics}
+	return &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed}
 }
 
 // refResolveError maps a reflection-resolution failure. Transport-level
-// statuses surface as their mapped codes (an unavailable/unreachable server is
-// ERR_UNAVAILABLE, a deadline is ERR_TIMEOUT, an auth rejection its auth code —
-// all transient/auth rather than a missing ref); anything else means the symbol
-// didn't resolve.
+// statuses surface as structural unsuccessful completion rather than a
+// missing ref; anything else means the symbol didn't resolve. Native status
+// distinctions remain below the OpenBindings bridge.
 func refResolveError(svcName string, err error) *openbindings.InvocationError {
 	if s, ok := status.FromError(err); ok {
 		switch s.Code() {
@@ -494,7 +398,6 @@ func refResolveError(svcName string, err error) *openbindings.InvocationError {
 		}
 	}
 	return &openbindings.InvocationError{
-		Code:    openbindings.ErrCodeRefNotFound,
-		Message: fmt.Sprintf("resolve service %q: %v", svcName, err),
+		Code: openbindings.ErrCodeRefNotFound,
 	}
 }

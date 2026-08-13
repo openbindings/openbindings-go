@@ -186,8 +186,7 @@ var maxListItems = 1_000_000
 
 func paginationOverflow() error {
 	return &openbindings.InvocationError{
-		Code:    openbindings.ErrCodeProtocol,
-		Message: fmt.Sprintf("MCP server did not terminate pagination: exceeded %d items (MCP-P-02)", maxListItems),
+		Code: openbindings.ErrCodeProtocol,
 	}
 }
 
@@ -278,10 +277,6 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 	if len(bindingSpecs) > 0 {
 		bindingSpec = bindingSpecs[0]
 	}
-	where := "server listing"
-	if l.pinned {
-		where = "pinned listing"
-	}
 	count := func(ids []string) int {
 		n := 0
 		for _, id := range ids {
@@ -291,17 +286,14 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		}
 		return n
 	}
-	ref := entityType + "/" + remainder
-	notFound := func(what string) (targetKind, *openbindings.InvocationError) {
+	notFound := func(_ string) (targetKind, *openbindings.InvocationError) {
 		return 0, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("MCP ref %q matches no %s in the %s", ref, what, where),
+			Code: openbindings.ErrCodeRefNotFound,
 		}
 	}
-	ambiguous := func(what string, n int) (targetKind, *openbindings.InvocationError) {
+	ambiguous := func(_ string, _ int) (targetKind, *openbindings.InvocationError) {
 		return 0, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("MCP ref %q is ambiguous: %d %ss in the %s share that identity; an ambiguous ref is unresolvable", ref, n, what, where),
+			Code: openbindings.ErrCodeRefNotFound,
 		}
 	}
 
@@ -311,14 +303,12 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		case n == 1:
 			if l.requiredTaskTools[remainder] {
 				return 0, &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeInvalidRef,
-					Message: fmt.Sprintf("MCP tool %q requires task augmentation, which %s does not implement (MCP-P-08)", remainder, bindingSpec),
+					Code: openbindings.ErrCodeInvalidRef,
 				}
 			}
 			if bindingSpec == BindingSpec && !l.structuredTools[remainder] {
 				return 0, &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeInvalidRef,
-					Message: fmt.Sprintf("MCP tool %q has no outputSchema application contract and is not bindable through %s (MCP-P-04)", remainder, BindingSpec),
+					Code: openbindings.ErrCodeInvalidRef,
 				}
 			}
 			return targetTool, nil
@@ -328,7 +318,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("tool")
 	case "prompts":
 		if bindingSpec == BindingSpec {
-			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP prompts have no application output schema and are excluded by openbindings.mcp@1 (MCP-P-04)"}
+			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef}
 		}
 		switch n := count(l.prompts); {
 		case n == 1:
@@ -339,7 +329,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("prompt")
 	case "resources":
 		if bindingSpec == BindingSpec {
-			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP resources have no application output schema and are excluded by openbindings.mcp@1 (MCP-P-04)"}
+			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef}
 		}
 		switch n := count(l.resources); {
 		case n == 1:
@@ -350,7 +340,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("resource")
 	case "resourceTemplates":
 		if bindingSpec == BindingSpec {
-			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: "MCP resource templates have no application output schema and are excluded by openbindings.mcp@1 (MCP-P-04)"}
+			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef}
 		}
 		switch n := count(l.templates); {
 		case n == 1:
@@ -361,8 +351,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("resource template")
 	default:
 		return 0, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("MCP ref %q names an unknown entity %q (expected tools, resources, resourceTemplates, or prompts)", ref, entityType),
+			Code: openbindings.ErrCodeRefNotFound,
 		}
 	}
 }

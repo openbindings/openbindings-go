@@ -2,7 +2,6 @@ package openbindings
 
 import (
 	"context"
-	"fmt"
 )
 
 // OperationSignature is the typed identity of an operation: its key, plus its
@@ -137,8 +136,7 @@ func Invoke[I, O any](
 		defer func() {
 			if r := recover(); r != nil {
 				caller.FireError(&InvocationError{
-					Code:    ErrCodeRuntime,
-					Message: fmt.Sprintf("openbindings: invoker panic: %v", r),
+					Code: ErrCodeRuntime,
 				})
 			}
 		}()

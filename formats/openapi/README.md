@@ -95,15 +95,11 @@ fmt.Println(out)
 
 An HTTP response classified as unsuccessful completes with a terminal
 `*openbindings.InvocationError`; it does not become an operation output. Its
-ordinary code and message are protocol-independent. Use
-`openapi.FailureEvidenceFrom(err)` as the explicit diagnostic escape hatch to
-recover the native HTTP status, headers,
-final URL/status text where available, exact response bytes, and the OpenAPI
-Response Object key/media that governed the response. `BodyCaptured` separates
-an exact empty body from an uncaptured body. Non-2xx SSE responses use the same
-bounded exact-byte capture as unary failures. The legacy
-`openbindings.HTTPStatus` and `HTTPResponseBody` accessors remain available for
-status and a convenience text view.
+abstract record is exactly `Code` plus optional `Data`. A declared, selected,
+faithfully decoded JSON failure representation is preserved exactly as Data,
+including explicit JSON null. Native status, headers, response bytes, and
+declaration-match evidence remain available to standalone OpenAPI-client
+consumers below the adapter boundary.
 
 ### Synthesize an interface from an OpenAPI spec
 
@@ -167,7 +163,8 @@ specific exact, `type/*`, or `*/*` declaration in the governing Response
 Object. JSON remains strict application JSON, text and SSE remain application
 strings, and OAS 3.0 binary schemas plus OAS 3.1 schema-omitted non-text media
 emit canonical Base64 of the exact response bytes. Status, headers, and media
-identity remain binding-native diagnostics rather than operation values.
+identity remain binding-native evidence below the bridge rather than
+operation values.
 
 ### Dynamic object carriage
 
@@ -311,7 +308,7 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
 3. Resolves the server (effective list + variables + the `server` configuration point)
 4. Routes application fields to their artifact declarations — using the binding-private routed representation when names collide — serializes parameters per OAS style/explode rules, and selects an artifact-declared request media candidate
 5. Selects one complete, satisfiable Security Requirement alternative and applies only that alternative's credentials with the artifact-declared placement, refusing channel collisions pre-dispatch
-6. Makes the HTTP request; the declared success media bound the interaction shape (unary, or server-streaming for a declared `text/event-stream` response), successful results emit through the invocation handle, and unsuccessful completion preserves the native response through `FailureEvidenceFrom`
+6. Makes the HTTP request; the declared success media bound the interaction shape (unary, or server-streaming for a declared `text/event-stream` response), successful results emit through the invocation handle, and unsuccessful completion carries only the binding-owned abstract code plus an explicitly admitted application-authored JSON failure value, when present
 
 ### Interface synthesis
 

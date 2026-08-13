@@ -95,6 +95,7 @@ type mockResponse struct {
 	WhenInputs *[]any          `json:"whenInputs"`
 	Emit       *[]any          `json:"emit"`
 	Fail       *string         `json:"fail"`
+	FailData   json.RawMessage `json:"failData"`
 }
 
 type validationFile struct {
@@ -135,7 +136,7 @@ func (m *mockBindingInvoker) InvokeBinding(ctx context.Context, args *openbindin
 	op, ok := m.ops[opKey]
 	if !ok {
 		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
-			Code: "ERR_NO_MOCK", Message: fmt.Sprintf("fixture has no mock for operation %q", opKey),
+			Code: "ERR_NO_MOCK",
 		})
 	}
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
@@ -158,7 +159,16 @@ func (m *mockBindingInvoker) serve(ctx context.Context, handle openbindings.Bind
 			}
 		}
 		if op.OnOpen.Fail != nil {
-			handle.FireError(&openbindings.InvocationError{Code: *op.OnOpen.Fail, Message: *op.OnOpen.Fail})
+			if len(op.OnOpen.FailData) > 0 {
+				var value any
+				if err := json.Unmarshal(op.OnOpen.FailData, &value); err != nil {
+					handle.FireError(openbindings.NewInvocationError(openbindings.ErrCodeRuntime))
+					return
+				}
+				handle.FireError(openbindings.NewInvocationErrorWithData(*op.OnOpen.Fail, value))
+			} else {
+				handle.FireError(openbindings.NewInvocationError(*op.OnOpen.Fail))
+			}
 			return
 		}
 	}
@@ -188,7 +198,7 @@ func (m *mockBindingInvoker) serve(ctx context.Context, handle openbindings.Bind
 	resp := matchMockResponse(op, writes)
 	if resp == nil {
 		handle.FireError(&openbindings.InvocationError{
-			Code: "ERR_NO_MOCK", Message: fmt.Sprintf("no mocked response for %q writes %s", opKey, canon(writes)),
+			Code: "ERR_NO_MOCK",
 		})
 		return
 	}
@@ -204,7 +214,16 @@ func (m *mockBindingInvoker) serve(ctx context.Context, handle openbindings.Bind
 		}
 	}
 	if resp.Fail != nil {
-		handle.FireError(&openbindings.InvocationError{Code: *resp.Fail, Message: *resp.Fail})
+		if len(resp.FailData) > 0 {
+			var value any
+			if err := json.Unmarshal(resp.FailData, &value); err != nil {
+				handle.FireError(openbindings.NewInvocationError(openbindings.ErrCodeRuntime))
+				return
+			}
+			handle.FireError(openbindings.NewInvocationErrorWithData(*resp.Fail, value))
+		} else {
+			handle.FireError(openbindings.NewInvocationError(*resp.Fail))
+		}
 		return
 	}
 	handle.CloseOutput()
@@ -496,21 +515,24 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 		if terminal == nil {
 			t.Fatalf("expected terminal error %v, graph completed normally with outputs %s", fx.Expected.ErrorDetail, canon(outputs))
 		}
-		switch detail := fx.Expected.ErrorDetail.(type) {
-		case string:
-			// An unhandled conduit terminal error: the graph surfaces the
-			// inner terminal error itself; its code is its identity.
-			if terminal.Code != detail {
-				t.Fatalf("terminal error code = %q, want %q (err: %v)", terminal.Code, detail, terminal)
+		if detail, ok := abstractTerminalRecord(fx.Expected.ErrorDetail); ok {
+			if terminal.Code != detail.code {
+				t.Fatalf("terminal error code = %q, want %q (err: %v)", terminal.Code, detail.code, terminal)
 			}
-		default:
+			if terminal.HasData() != detail.dataPresent {
+				t.Fatalf("terminal data presence = %v, want %v", terminal.HasData(), detail.dataPresent)
+			}
+			if detail.dataPresent && canon(terminal.Data) != canon(detail.data) {
+				t.Fatalf("terminal data = %s, want %s", canon(terminal.Data), canon(detail.data))
+			}
+		} else {
 			// A graph-defined terminal (exit or unhandled per-event failure)
 			// carries the event as structured details.
 			if terminal.Code != openbindings.ErrCodeOperationGraphExit {
 				t.Fatalf("terminal error code = %q, want %q (err: %v)", terminal.Code, openbindings.ErrCodeOperationGraphExit, terminal)
 			}
-			if canon(terminal.Details) != canon(detail) {
-				t.Fatalf("exit error detail = %s, want %s", canon(terminal.Details), canon(detail))
+			if canon(terminal.Data) != canon(fx.Expected.ErrorDetail) {
+				t.Fatalf("exit error detail = %s, want %s", canon(terminal.Data), canon(fx.Expected.ErrorDetail))
 			}
 		}
 	} else if terminal != nil {
@@ -539,6 +561,30 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 			t.Fatalf("output mismatch\n  got:    %s\n  expect: %s", canon(outputs), canon(fx.Expected.Output))
 		}
 	}
+}
+
+type expectedAbstractTerminal struct {
+	code        string
+	data        any
+	dataPresent bool
+}
+
+func abstractTerminalRecord(value any) (expectedAbstractTerminal, bool) {
+	record, ok := value.(map[string]any)
+	if !ok || len(record) < 1 || len(record) > 2 {
+		return expectedAbstractTerminal{}, false
+	}
+	code, ok := record["code"].(string)
+	if !ok {
+		return expectedAbstractTerminal{}, false
+	}
+	data, dataPresent := record["data"]
+	for key := range record {
+		if key != "code" && key != "data" {
+			return expectedAbstractTerminal{}, false
+		}
+	}
+	return expectedAbstractTerminal{code: code, data: data, dataPresent: dataPresent}, true
 }
 
 // ---------------------------------------------------------------------------

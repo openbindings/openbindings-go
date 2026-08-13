@@ -116,7 +116,7 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 // synchronously. Creation is inert: descriptor resolution and the RPC run on
 // the binding goroutine. Unary methods read one input and emit one output;
 // server-streaming methods read one input and emit per received message.
-// gRPC metadata maps onto the handle's Header/Trailer surfaces.
+// Native gRPC metadata stays below the abstract invocation boundary.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
 	inv := openbindings.NewInvocationImpl[any, any](ctx)
 	go e.run(ctx, args, inv)
@@ -138,8 +138,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	svcName, methodName, err := parseRef(args.Ref)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeInvalidRef,
-			Message: err.Error(),
+			Code: openbindings.ErrCodeInvalidRef,
 		})
 		return
 	}
@@ -155,29 +154,22 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		s, isStr := raw.(string)
 		if !isStr || strings.TrimSpace(s) == "" {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeSourceConfigError,
-				Message: fmt.Sprintf("configuration.target must be a dial address string in the openbindings.grpc@1 §4 forms, got %T", raw),
+				Code: openbindings.ErrCodeSourceConfigError,
 			})
 			return
 		}
 		target = strings.TrimSpace(s)
 	}
 	if target == "" {
-		msg := "gRPC source requires a server dial address: set the source's location (host:port, grpc://host:port, or grpcs://host:port)"
-		if args.Source.Content != nil {
-			msg = "gRPC source carries its schema as embedded content but no server address (a content-only source is not conformant, GRPC-D-02): set the source's location to the service dial address, or supply the target configuration point (context configuration.target)"
-		}
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: msg,
+			Code: openbindings.ErrCodeSourceConfigError,
 		})
 		return
 	}
 	addr, err := parseDialAddress(target)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: err.Error(),
+			Code: openbindings.ErrCodeSourceConfigError,
 		})
 		return
 	}
@@ -187,8 +179,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	creds, transportTag, err := resolveTransport(cfg, e.dialCfg.creds, addr)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: err.Error(),
+			Code: openbindings.ErrCodeSourceConfigError,
 		})
 		return
 	}
@@ -198,16 +189,14 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	_, _, hasBasic := openbindings.ContextBasicAuth(args.Context)
 	if openbindings.ContextAPIKey(args.Context) != "" || openbindings.ContextBearerToken(args.Context) != "" || hasBasic {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeContextRequired,
-			Message: "gRPC declares no metadata key for a generic credential; supply an explicitly named metadata entry",
+			Code: openbindings.ErrCodeContextRequired,
 		})
 		return
 	}
 	rpcCtx, mdErr := applyGRPCContext(bctx, args.Context)
 	if mdErr != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceConfigError,
-			Message: mdErr.Error(),
+			Code: openbindings.ErrCodeSourceConfigError,
 		})
 		return
 	}
@@ -223,8 +212,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		disc, parseErr := discoverFromContent(bctx, args.Source.Content)
 		if parseErr != nil {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeSourceLoadFailed,
-				Message: parseErr.Error(),
+				Code: openbindings.ErrCodeSourceLoadFailed,
 			})
 			return
 		}
@@ -243,8 +231,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	conn, err := e.getConn(addr, creds, transportTag)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeConnectFailed,
-			Message: err.Error(),
+			Code: openbindings.ErrCodeConnectFailed,
 		})
 		return
 	}
@@ -260,8 +247,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		methodDesc = svcDesc.Methods().ByName(protoreflect.Name(methodName))
 		if methodDesc == nil {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeRefNotFound,
-				Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
+				Code: openbindings.ErrCodeRefNotFound,
 			})
 			return
 		}
@@ -300,8 +286,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 func preflightMethod(methodDesc protoreflect.MethodDescriptor) *openbindings.InvocationError {
 	if err := validateBoundClosure(methodDesc); err != nil {
 		return &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceLoadFailed,
-			Message: err.Error(),
+			Code: openbindings.ErrCodeSourceLoadFailed,
 		}
 	}
 	return nil

@@ -66,11 +66,8 @@ authority — gain transport members and a defined value grammar:
   with the member ignored. The package exports `ConventionsVersion`.
 - **Breaking — stderr leaves the output value.** The `{data, stderr}`
   envelope is gone, and the heuristic `{stdout}` wrap no longer carries a
-  `stderr` member: captured stderr rides trailing metadata (`x-stderr`,
-  bounded to 64 KiB with an `x-stderr-truncated` marker, alongside
-  `x-exit-code`). stderr capture overflow no longer fails a successful
-  invocation (truncate and mark; stdout overflow remains fatal).
-  Non-ok-exit error details are unchanged.
+  `stderr` member. Process stderr and exit facts remain below the abstract
+  invocation; non-zero exit completes with a code and no invented data.
 - **Breaking — canonical JSON argv encoding.** Non-string values render onto
   argv as compact JSON: objects/arrays no longer print as Go `map[k:v]`, and
   large floats no longer render in exponent form.

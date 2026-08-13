@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -400,7 +401,7 @@ func TestChannelWithoutAddressIsRefusedPreDispatch(t *testing.T) {
 	// R1a: AsyncAPI's absent (runtime-generated) address is resolvable by
 	// consumer supply — a config.value CONTEXT_REQUIRED (address point,
 	// non-durable), not a terminal ERR_SOURCE_CONFIG_ERROR.
-	req := assertConfigValue(t, err, "address", "address")
+	req := assertConfigValue(t, err, "address", "")
 	if req.Durable == nil || *req.Durable {
 		t.Errorf("a runtime-generated address must be non-durable, got durable=%v", req.Durable)
 	}
@@ -456,16 +457,9 @@ func TestUnarySendAppliesBearerAndYieldsResponse(t *testing.T) {
 		t.Fatalf("got %v", v)
 	}
 
-	md, err := call.Diagnostics().Header(shortCtx(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(md["content-type"]) != 1 || md["content-type"][0] != "application/json" {
-		t.Errorf("header content-type = %v", md["content-type"])
-	}
 }
 
-func TestServer401IsStructuralAndRetainsDiagnostics(t *testing.T) {
+func TestServer401IsStructuralAndProtocolBlind(t *testing.T) {
 	srv, _ := newHTTPFixture(t)
 	binv := NewInvoker()
 	defer binv.Close()
@@ -484,17 +478,8 @@ func TestServer401IsStructuralAndRetainsDiagnostics(t *testing.T) {
 	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeExecutionFailed {
 		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", err)
 	}
-	if ie.Details != nil {
-		t.Fatalf("HTTP evidence leaked into portable details: %#v", ie.Details)
-	}
-	details, _ := ie.Diagnostics.(map[string]any)
-	if details["status"] != 401 {
-		t.Errorf("diagnostics.status = %v, want 401", details["status"])
-	}
-	// Diagnostics carry the raw capture verbatim (bytes-as-text, never a
-	// sniffed parse — payload-independence).
-	if body, _ := details["body"].(string); !strings.Contains(body, "unauthorized") {
-		t.Errorf("diagnostics.body = %v", details["body"])
+	if ie.HasData() {
+		t.Fatalf("HTTP evidence leaked into abstract data: %#v", ie.Data)
 	}
 }
 
@@ -928,6 +913,59 @@ func wsSource(srv *httptest.Server, scheme *securityScheme) openbindings.Invocat
 	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeWSAsyncAPISpec(srv.URL, scheme))}
 }
 
+func TestOpenBindingsBridgePreservesWebSocketReplyValues(t *testing.T) {
+	srv := wsTestServer(t, func(ctx context.Context, conn *websocket.Conn, _ *http.Request) {
+		value, err := readWSJSON(ctx, conn)
+		if err != nil {
+			return
+		}
+		_ = writeWSJSON(ctx, conn, map[string]any{"accepted": value["id"]})
+		_ = conn.Close(websocket.StatusNormalClosure, "done")
+	})
+	host := strings.TrimPrefix(srv.URL, "http://")
+	document := map[string]any{
+		"asyncapi":           "3.1.0",
+		"info":               map[string]any{"title": "Reply bridge", "version": "1"},
+		"defaultContentType": "application/json",
+		"servers":            map[string]any{"test": map[string]any{"host": host, "protocol": "ws"}},
+		"channels": map[string]any{"commands": map[string]any{
+			"address": "/ws",
+			"messages": map[string]any{
+				"Command": map[string]any{"payload": map[string]any{"type": "object"}},
+				"Result":  map[string]any{"payload": map[string]any{"type": "object"}},
+			},
+		}},
+		"operations": map[string]any{"submit": map[string]any{
+			"action":   "receive",
+			"channel":  map[string]any{"$ref": "#/channels/commands"},
+			"messages": []any{map[string]any{"$ref": "#/channels/commands/messages/Command"}},
+			"reply": map[string]any{
+				"channel":  map[string]any{"$ref": "#/channels/commands"},
+				"messages": []any{map[string]any{"$ref": "#/channels/commands/messages/Result"}},
+			},
+		}},
+	}
+	invoker := NewInvoker()
+	defer invoker.Close()
+	call := invoker.InvokeBinding(shortCtx(t), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(document)},
+		Ref:    "#/operations/submit", Context: wsTextContext(nil),
+	})
+	if err := call.Write(shortCtx(t), map[string]any{"id": 91}); err != nil {
+		t.Fatal(err)
+	}
+	if err := call.Close(); err != nil {
+		t.Fatal(err)
+	}
+	values, err := drainOutputs(t, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 1 || values[0].(map[string]any)["accepted"] != float64(91) {
+		t.Fatalf("outputs = %#v", values)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket receive
 // ---------------------------------------------------------------------------
@@ -1162,17 +1200,10 @@ func TestWebSocketServerErrorFrame(t *testing.T) {
 			return nil, err
 		}
 		if errVal, has := parsed["error"]; has && errVal != nil {
-			msg := "server reported an error"
-			if em, ok := errVal.(map[string]any); ok {
-				if m, ok := em["message"].(string); ok && m != "" {
-					msg = m
-				}
-			}
-			return nil, &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeStreamError,
-				Message: msg,
-				Details: map[string]any{"error": errVal},
-			}
+			return nil, openbindings.NewInvocationErrorWithData(
+				openbindings.ErrCodeStreamError,
+				map[string]any{"error": errVal},
+			)
 		}
 		if dataVal, has := parsed["data"]; has {
 			return dataVal, nil
@@ -1200,8 +1231,8 @@ func TestWebSocketServerErrorFrame(t *testing.T) {
 	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeStreamError {
 		t.Fatalf("expected ERR_STREAM_ERROR, got %v", err)
 	}
-	if ie.Message != "boom" {
-		t.Errorf("Message = %q, want boom", ie.Message)
+	if !ie.HasData() || !reflect.DeepEqual(ie.Data, map[string]any{"error": map[string]any{"message": "boom"}}) {
+		t.Errorf("Data = %#v, want application-authored error value", ie.Data)
 	}
 }
 

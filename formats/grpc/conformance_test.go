@@ -491,8 +491,8 @@ func TestConformance_P03_UnknownInputFieldRefusedPreDispatch(t *testing.T) {
 	if terr.Code != openbindings.ErrCodeValidationFailed {
 		t.Errorf("code = %q, want ERR_VALIDATION_FAILED", terr.Code)
 	}
-	if !strings.Contains(terr.Message, "bogus") {
-		t.Errorf("refusal must name the unknown field, got: %s", terr.Message)
+	if terr.HasData() {
+		t.Errorf("validator diagnostics crossed as abstract data: %#v", terr.Data)
 	}
 	if got := ts.auth(); got != "" {
 		t.Error("the refusal must fire BEFORE dispatch; the server saw the call")
@@ -693,8 +693,8 @@ service S { rpc Do(Req) returns (Resp); }
 	if terr == nil || terr.Code != openbindings.ErrCodeSourceLoadFailed {
 		t.Fatalf("expected ERR_SOURCE_LOAD_FAILED, got %v", terr)
 	}
-	if !strings.Contains(terr.Message, "required presence") {
-		t.Errorf("refusal must name the construct, got: %s", terr.Message)
+	if terr.HasData() {
+		t.Errorf("schema-loader diagnostics crossed as abstract data: %#v", terr.Data)
 	}
 }
 
@@ -789,9 +789,8 @@ func TestConformance_P05_P06_EmittedValuesStandOnLateFailure(t *testing.T) {
 	if terr == nil {
 		t.Fatal("a non-OK final status must classify the invocation as a failure (GRPC-P-06)")
 	}
-	details, ok := terr.Diagnostics.(map[string]any)
-	if !ok || details["grpcCode"] != "ResourceExhausted" {
-		t.Errorf("the final status diagnostic is missing, got %v", terr.Diagnostics)
+	if terr.HasData() {
+		t.Errorf("native gRPC status leaked as abstract data: %v", terr.Data)
 	}
 	if vals[1].(map[string]any)["name"] != "second" {
 		t.Errorf("second emitted value = %v", vals[1])
@@ -811,12 +810,11 @@ func TestConformance_P07_UnplaceableMetadataKeysSurfaced(t *testing.T) {
 	defer invoker.Close()
 
 	cases := []struct {
-		key     string
-		mention string
+		key string
 	}{
-		{"X-Custom", "case-folded"},  // uppercase: would need folding into place
-		{"grpc-timeout", "reserved"}, // protocol-reserved prefix
-		{"bad key", "grammar"},       // space outside the grammar
+		{"X-Custom"},     // uppercase: would need folding into place
+		{"grpc-timeout"}, // protocol-reserved prefix
+		{"bad key"},      // space outside the grammar
 	}
 	for _, tc := range cases {
 		inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("testpkg.ItemService/GetItem",
@@ -825,8 +823,8 @@ func TestConformance_P07_UnplaceableMetadataKeysSurfaced(t *testing.T) {
 		if terr == nil || terr.Code != openbindings.ErrCodeSourceConfigError {
 			t.Fatalf("key %q: expected ERR_SOURCE_CONFIG_ERROR, got %v", tc.key, terr)
 		}
-		if !strings.Contains(terr.Message, tc.mention) {
-			t.Errorf("key %q: refusal must mention %q, got: %s", tc.key, tc.mention, terr.Message)
+		if terr.HasData() {
+			t.Errorf("key %q: native metadata evidence crossed as abstract data: %#v", tc.key, terr.Data)
 		}
 	}
 }

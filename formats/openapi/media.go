@@ -1189,7 +1189,7 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 			}
 			return nil, &configRequired{
 				point:       "requestMedia",
-				key:         "value",
+				path:        "",
 				description: "OpenAPI request media range requires a concrete requestMedia selection",
 			}
 		}

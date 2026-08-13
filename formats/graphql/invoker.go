@@ -129,57 +129,57 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	rootType, fieldName, err := parseRef(args.Ref)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef})
 		return
 	}
 	if args.Source.BindingSpec != BindingSpec {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("GraphQL invoker supports exact binding specification %q, got %q", BindingSpec, args.Source.BindingSpec)})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	if args.Source.BindingSpec == BindingSpec && rootType == "subscription" {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef, Message: fmt.Sprintf("the GraphQL candidate does not bind subscription target %q (GQL-P-04)", args.Ref)})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef})
 		return
 	}
 
 	if err := validateHTTPLocation(args.Source.Location); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 
 	cfg, err := readConfiguration(args.Context)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	if cfg.Document == nil {
 		inv.FireError(openbindings.NewContextRequiredError(
-			"GraphQL invocation requires an executable document",
+
 			configurationRequirement(args.Source.Location, "document", "supply the exact GraphQL executable document and optional operationName"),
 		))
 		return
 	}
 	if rootType == "subscription" && cfg.SubscriptionTarget == "" {
 		inv.FireError(openbindings.NewContextRequiredError(
-			"GraphQL subscription requires a WebSocket target",
+
 			configurationRequirement(args.Source.Location, "subscriptionTarget", "supply an absolute ws or wss GraphQL subscription target"),
 		))
 		return
 	}
 	document, err := parseExecutableDocument(cfg.Document.Source)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("parse configuration.document: %v", err)})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	httpHeaders, err := cfg.httpHeaders(args.Context)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	var websocketHeaders http.Header
 	if rootType == "subscription" {
 		websocketHeaders, err = cfg.websocketHeaders(args.Context)
 		if err != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: err.Error()})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 			return
 		}
 	}
@@ -190,7 +190,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 	if _, err := resolveField(schema, rootType, fieldName); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound})
 		return
 	}
 
@@ -207,7 +207,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		default:
 			object, ok := value.(map[string]any)
 			if !ok {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: "GraphQL caller input must be one JSON object used wholesale as variables"})
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
 				return
 			}
 			variables = object
@@ -217,12 +217,12 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	responseKey, err := document.responseKey(cfg.Document.OperationName, rootType, fieldName, variables, schema)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configured document does not denote binding ref %q: %v", args.Ref, err)})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 
 	if rootType == "subscription" {
-		_ = inv.SetHeader(openbindings.Metadata{})
+
 		streamSubscription(
 			bctx, e.client, cfg.SubscriptionTarget, cfg.Document, variables,
 			websocketHeaders, cfg.Protocol.ConnectionInit, cfg.Protocol.ConnectionInitSet,
@@ -240,15 +240,14 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			return
 		}
 		if he, ok := err.(*httpError); ok {
-			_ = inv.SetHeader(toMetadata(he.Header))
+
 			inv.FireError(he.invocationError())
 			return
 		}
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
 		return
 	}
 
-	_ = inv.SetHeader(toMetadata(result.Header))
 	emitProjectedGraphQLResult(inv, result, responseKey)
 }
 
@@ -282,8 +281,7 @@ func (e *Invoker) resolveSchema(ctx context.Context, args *openbindings.BindingI
 		s, err := parseIntrospectionContent(args.Source.Content)
 		if err != nil {
 			return nil, &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeSourceLoadFailed,
-				Message: fmt.Sprintf("parse inline GraphQL content: %v", err),
+				Code: openbindings.ErrCodeSourceLoadFailed,
 			}
 		}
 		return s, nil
@@ -298,18 +296,9 @@ func (e *Invoker) resolveSchema(ctx context.Context, args *openbindings.BindingI
 			}
 			return nil, ierr
 		}
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: err.Error()}
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed}
 	}
 	return s, nil
-}
-
-// toMetadata clones HTTP response headers into invocation Metadata.
-func toMetadata(h http.Header) openbindings.Metadata {
-	md := make(openbindings.Metadata, len(h))
-	for k, vs := range h {
-		md[k] = append([]string(nil), vs...)
-	}
-	return md
 }
 
 // Synthesizer handles interface synthesis from GraphQL endpoints.
@@ -469,20 +458,13 @@ func emitProjectedGraphQLResult(inv *openbindings.InvocationImpl[any, any], resu
 	}
 	if hasErrors {
 		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeExecutionFailed, Message: graphQLErrorMessage(result.Body),
-			Diagnostics: map[string]any{"graphql": map[string]any{
-				"response": result.Body, "mediaType": result.MediaType,
-			}},
+			Code: openbindings.ErrCodeExecutionFailed,
 		})
 		return
 	}
 	if !present {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("GraphQL response data does not contain selected response key %q", responseKey),
-			Diagnostics: map[string]any{"graphql": map[string]any{
-				"response": result.Body, "mediaType": result.MediaType,
-			}},
+			Code: openbindings.ErrCodeResponseError,
 		})
 		return
 	}

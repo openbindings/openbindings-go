@@ -83,21 +83,14 @@ for {
 }
 ```
 
-gRPC leading/trailing metadata is available only through the handle's explicit diagnostic view: `inv.Diagnostics().Header(ctx)` and `inv.Diagnostics().Trailer()`. Every value and its order are retained there; binary `-bin` metadata values use base64 strings. None of it is part of the ordinary operation value stream.
-
-If iteration terminates with a gRPC status, `FailureEvidenceFrom` recovers the
-native numeric code, message, and exact `google.protobuf.Any` payload bytes
-from the terminal error, including after an invoker-frame JSON round trip:
-
-```go
-if evidence, ok := grpcbinding.FailureEvidenceFrom(err); ok {
-    log.Printf("gRPC status %s: %s", evidence.Code, evidence.Message)
-}
-```
+gRPC leading/trailing metadata and native status evidence remain below the
+abstract invocation boundary. Artifact-native clients and protocol tooling
+may expose them; none is part of the ordinary operation value or failure
+record.
 
 Application result messages remain ordinary outputs even when their fields
-look error-shaped. A non-OK final gRPC status is a failure completion, and a
-local SDK or ProtoJSON validation error carries no invented gRPC evidence.
+look error-shaped. A non-OK final gRPC status is unsuccessful completion, and
+a local SDK or ProtoJSON validation error carries no invented gRPC evidence.
 
 ### Synthesize an interface from a gRPC server
 
@@ -214,7 +207,7 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
   | `google.protobuf.Any` | `object` with required `@type: string` plus `value` |
 
 - **Oneof groups**: a message with exactly one user-declared oneof group emits a top-level `oneOf`, one single-property required variant per member, preserving exactly-one-of semantics. Proto3 `optional` fields (synthetic single-field oneofs) are ordinary optional properties, never variants. A message with multiple oneof groups flattens every member to an independent optional property — the current schema profile cannot express multi-group exclusivity — and surfaces the `grpc.multi_group_oneof` warning so callers know the emitted OBI does not enforce it.
-- **No security metadata** exists in protobuf, so none is written to the OBI; a post-dispatch unauthenticated status completes unsuccessfully and remains identifiable only through optional diagnostics, while pre-dispatch credential resolution happens above the binding.
+- **No security metadata** exists in protobuf, so none is written to the OBI; a post-dispatch unauthenticated status completes unsuccessfully without exposing its native status at the abstract boundary, while pre-dispatch credential resolution happens above the binding.
 
 ### Consumer hooks
 
@@ -237,7 +230,7 @@ specifications with exposed wire choices (OpenAPI and AsyncAPI).
 5. Applies explicitly named context `headers` as gRPC metadata; generic credentials without an artifact-declared carriage are challenged before dispatch
 6. Invokes the RPC using its declared unary, server-streaming, client-streaming, or bidirectional interaction; message flow and half-close behavior emerge from that declaration, with handle backpressure flow-controlling streams
 
-Every non-OK gRPC final status terminates with structural `ERR_EXECUTION_FAILED`; the binding does not derive a portable failure taxonomy or retry policy from native status. Optional `Diagnostics.grpcStatus` preserves the numeric native code, message, and each rich-status detail as its type URL plus exact base64 payload; `FailureEvidenceFrom` is the typed expert accessor. Response messages emitted before a later non-OK final status remain outputs. Leading/trailing metadata is available through `Diagnostics()`. Cancelling the handle (or the invocation context) tears down the underlying stream.
+Every non-OK gRPC final status terminates with structural `ERR_EXECUTION_FAILED`; the binding does not derive a portable failure taxonomy or retry policy from native status. Native status and metadata remain below the abstract invocation boundary. Response messages emitted before a later non-OK final status remain outputs. Cancelling the handle (or the invocation context) tears down the underlying stream.
 
 ### Credential application
 

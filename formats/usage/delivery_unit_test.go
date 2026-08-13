@@ -10,8 +10,7 @@ import (
 // TestDeliveryUnitBound_StdoutOverflowRefused verifies the consumer
 // delivery-unit bound on the invocation lane's stdout capture: a tiny bound
 // set via BindingInvocationArgs.MaxDeliveryUnitBytes refuses a ~2.5KB stdout
-// with the lane's unchanged error identity (ERR_EXECUTION_FAILED, same
-// message template with the dynamic value).
+// with the lane's unchanged abstract error identity (ERR_EXECUTION_FAILED).
 func TestDeliveryUnitBound_StdoutOverflowRefused(t *testing.T) {
 	words := make([]any, 300)
 	for i := range words {
@@ -28,7 +27,7 @@ func TestDeliveryUnitBound_StdoutOverflowRefused(t *testing.T) {
 	if ierr.Code != openbindings.ErrCodeExecutionFailed {
 		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeExecutionFailed)
 	}
-	if !strings.Contains(ierr.Message, "output exceeded 1024 bytes") {
-		t.Errorf("error message = %q, want to contain %q", ierr.Message, "output exceeded 1024 bytes")
+	if ierr.HasData() {
+		t.Errorf("native process-size evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }

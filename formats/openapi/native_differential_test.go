@@ -158,21 +158,9 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 			if len(outputs) != 0 {
 				t.Fatalf("failure emitted operation outputs: %#v", outputs)
 			}
-			evidence, ok := FailureEvidenceFrom(terminal)
-			if !ok {
-				t.Fatalf("OpenBindings failure omitted typed OpenAPI evidence: %v", terminal)
-			}
-			if evidence.HTTPResponse.Status != nativeResp.StatusCode {
-				t.Errorf("status differential: got %d, native %d", evidence.HTTPResponse.Status, nativeResp.StatusCode)
-			}
-			if !evidence.HTTPResponse.BodyCaptured || !bytes.Equal(evidence.HTTPResponse.Body, nativeBody) {
-				t.Errorf("body differential: got captured=%v %v, native %v", evidence.HTTPResponse.BodyCaptured, evidence.HTTPResponse.Body, nativeBody)
-			}
-			for name := range differentialPeerHeaders(scenario.Given.Peer) {
-				lower := strings.ToLower(name)
-				if got, want := evidence.HTTPResponse.Headers[lower], nativeResp.Header.Values(name); !reflect.DeepEqual(got, want) {
-					t.Errorf("header %s differential: got %#v, native %#v", name, got, want)
-				}
+			terminalError := openbindings.AsInvocationError(terminal)
+			if terminalError.Code != openbindings.ErrCodeExecutionFailed {
+				t.Fatalf("native unsuccessful completion mapped to %q", terminalError.Code)
 			}
 		})
 	}

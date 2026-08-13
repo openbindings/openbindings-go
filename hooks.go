@@ -241,11 +241,9 @@ const (
 
 // hookPanicError converts a recovered hook panic into the contained
 // terminal (failure channel iii).
-func hookPanicError(tier string, r any) *InvocationError {
+func hookPanicError(_ string, _ any) *InvocationError {
 	return &InvocationError{
-		Code:        ErrCodeRuntime,
-		Message:     fmt.Sprintf("openbindings: %s panicked: %v", tier, r),
-		Diagnostics: map[string]any{"decidedBy": tier},
+		Code: ErrCodeRuntime,
 	}
 }
 
@@ -254,31 +252,14 @@ func hookPanicError(tier string, r any) *InvocationError {
 // (channel i); any other returned error is ALSO a deliberate terminal
 // (channel ii — data failures are not bugs), wrapped with the axis's
 // native code and tier provenance.
-func hookTerminal(tier, nativeCode string, err error) error {
+func hookTerminal(_ string, nativeCode string, err error) error {
 	var ie *InvocationError
 	if errors.As(err, &ie) {
-		ie.Diagnostics = withDiagnostic(ie.Diagnostics, "decidedBy", tier)
 		return ie
 	}
 	return &InvocationError{
-		Code:        nativeCode,
-		Message:     err.Error(),
-		Diagnostics: map[string]any{"decidedBy": tier},
+		Code: nativeCode,
 	}
-}
-
-func withDiagnostic(existing any, key string, value any) map[string]any {
-	if diagnostics, ok := existing.(map[string]any); ok {
-		if _, present := diagnostics[key]; !present {
-			diagnostics[key] = value
-		}
-		return diagnostics
-	}
-	diagnostics := map[string]any{key: value}
-	if existing != nil {
-		diagnostics["cause"] = existing
-	}
-	return diagnostics
 }
 
 // DecodeOutput runs the decode chain: per-invocation → invoker-level →
@@ -322,15 +303,13 @@ func (h *InvokeHooks) DecodeOutput(site InvokeSite, raw RawResult, builtin Outpu
 	}
 	if builtin == nil {
 		return nil, &InvocationError{
-			Code:    ErrCodeRuntime,
-			Message: fmt.Sprintf("openbindings: no decoder for format %q (axis not consulted per its matrix row) and every hook declined", site.BindingSpec),
+			Code: ErrCodeRuntime,
 		}
 	}
 	v, derr := runDecodeHook(tierBuiltin, builtin, site, raw)
 	if derr != nil && errors.Is(derr, ErrUseDefault) {
 		return nil, &InvocationError{
-			Code:    ErrCodeRuntime,
-			Message: "openbindings: format builtin decoder declined; builtins must never return ErrUseDefault (the chain ends there)",
+			Code: ErrCodeRuntime,
 		}
 	}
 	return v, derr
@@ -390,15 +369,13 @@ func (h *InvokeHooks) Classify(site InvokeSite, raw RawResult, builtin ResultCla
 	}
 	if builtin == nil {
 		return false, &InvocationError{
-			Code:    ErrCodeRuntime,
-			Message: fmt.Sprintf("openbindings: no classifier for format %q (axis not consulted per its matrix row) and every hook declined", site.BindingSpec),
+			Code: ErrCodeRuntime,
 		}
 	}
 	v, cerr := runClassifyHook(tierBuiltin, builtin, site, raw)
 	if cerr != nil && errors.Is(cerr, ErrUseDefault) {
 		return false, &InvocationError{
-			Code:    ErrCodeRuntime,
-			Message: "openbindings: format builtin classifier declined; builtins must never return ErrUseDefault",
+			Code: ErrCodeRuntime,
 		}
 	}
 	return v, cerr
@@ -485,13 +462,8 @@ func BuiltinClassify(site InvokeSite, raw RawResult) (bool, error) {
 }
 
 func builtinAbsentError(site InvokeSite, axis string) *InvocationError {
-	why := "the owning format does not consult this axis (see its consultation matrix row)"
-	if !site.seamStamped {
-		why = "this site never passed through the consultation seam"
-	}
 	return &InvocationError{
-		Code:    ErrCodeRuntime,
-		Message: fmt.Sprintf("openbindings: no builtin %s for format %q: %s", axis, site.BindingSpec, why),
+		Code: ErrCodeRuntime,
 	}
 }
 

@@ -12,7 +12,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestAdapterErrorBoundary_NetworkFailureIsAbstractWithNativeDiagnostic(t *testing.T) {
+func TestAdapterErrorBoundary_NetworkFailureIsCodeOnly(t *testing.T) {
 	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("dial tcp: connection refused")
 	})}
@@ -28,22 +28,15 @@ func TestAdapterErrorBoundary_NetworkFailureIsAbstractWithNativeDiagnostic(t *te
 	if ierr.Code != openbindings.ErrCodeConnectFailed {
 		t.Fatalf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeConnectFailed)
 	}
-	if ierr.Message != "Invocation could not reach its target" {
-		t.Fatalf("error message = %q, want protocol-independent presentation", ierr.Message)
-	}
-	if strings.Contains(strings.ToLower(ierr.Message), "dial") || strings.Contains(strings.ToLower(ierr.Message), "http") || strings.Contains(strings.ToLower(ierr.Message), "openapi") {
-		t.Fatalf("ordinary error message leaked native semantics: %q", ierr.Message)
-	}
-	if got := openAPIClientDiagnosticMessage(ierr); !strings.Contains(got, "dial tcp") {
-		t.Fatalf("native diagnostic = %q, want connection evidence", got)
+	if ierr.HasData() {
+		t.Fatalf("native network evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
 // TestDeliveryUnitBound_UnaryOverflowRefused verifies the consumer
 // delivery-unit bound: a tiny bound set via
 // BindingInvocationArgs.MaxDeliveryUnitBytes refuses a ~2KB unary body with
-// the lane's unchanged error identity. The ordinary message stays
-// protocol-independent; the concrete byte-bound explanation is diagnostic.
+// the lane's unchanged abstract error identity.
 func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -78,11 +71,8 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	if ierr.Code != openbindings.ErrCodeResponseError {
 		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeResponseError)
 	}
-	if ierr.Message != "Invocation result could not be processed" {
-		t.Errorf("error message = %q, want protocol-independent presentation", ierr.Message)
-	}
-	if got := openAPIClientDiagnosticMessage(ierr); got != "response exceeds 1024 byte limit" {
-		t.Errorf("native diagnostic message = %q, want %q", got, "response exceeds 1024 byte limit")
+	if ierr.HasData() {
+		t.Errorf("native size-limit evidence crossed as abstract data: %#v", ierr.Data)
 	}
 }
 
@@ -145,20 +135,7 @@ func TestDeliveryUnitBound_SSETinyBoundRefusesLoudly(t *testing.T) {
 	if ierr.Code != openbindings.ErrCodeResponseError {
 		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeResponseError)
 	}
-	if ierr.Message != "Invocation result could not be processed" {
-		t.Errorf("error message = %q, want protocol-independent presentation", ierr.Message)
+	if ierr.Error() != openbindings.ErrCodeResponseError {
+		t.Errorf("error text = %q, want the abstract code", ierr.Error())
 	}
-	if got := openAPIClientDiagnosticMessage(ierr); got != "SSE event exceeds 1024 byte limit" {
-		t.Errorf("native diagnostic message = %q, want %q", got, "SSE event exceeds 1024 byte limit")
-	}
-}
-
-func openAPIClientDiagnosticMessage(ierr *openbindings.InvocationError) string {
-	if ierr == nil {
-		return ""
-	}
-	diagnostics, _ := ierr.Diagnostics.(map[string]any)
-	client, _ := diagnostics["openapiClient"].(map[string]any)
-	message, _ := client["message"].(string)
-	return message
 }

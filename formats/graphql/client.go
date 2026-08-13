@@ -3,7 +3,6 @@ package graphql
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -320,32 +319,10 @@ func newGraphQLHTTPError(resp *http.Response, body []byte, mediaType string, pro
 }
 
 func (e *httpError) invocationError() *openbindings.InvocationError {
-	var ierr *openbindings.InvocationError
 	if e.Protocol {
-		ierr = &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: e.Error()}
-	} else {
-		ierr = openbindings.HTTPError(e.StatusCode, e.Status)
+		return &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError}
 	}
-	headers := map[string][]string{}
-	for name, values := range e.Header {
-		headers[strings.ToLower(name)] = append([]string(nil), values...)
-	}
-	body := map[string]any{
-		"base64": base64.StdEncoding.EncodeToString(e.Body), "byteLength": len(e.Body),
-	}
-	if e.Truncated {
-		body["truncated"] = true
-	}
-	ierr.Diagnostics = map[string]any{
-		"status": e.StatusCode,
-		"body":   string(e.Body),
-		"httpResponse": map[string]any{
-			"status": e.StatusCode, "statusText": e.Status, "url": e.URL,
-			"headers": headers, "body": body,
-		},
-		"graphql": map[string]any{"mediaType": e.MediaType},
-	}
-	return ierr
+	return openbindings.HTTPError(e.StatusCode, e.Status)
 }
 
 // streamSubscription opens a WebSocket connection using the graphql-ws
@@ -360,7 +337,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 		HTTPClient:   client,
 	})
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("websocket dial: %v", err)})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		return
 	}
 	subscribed := false
@@ -381,7 +358,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 		init["payload"] = initPayload
 	}
 	if err := writeJSON(ctx, conn, init); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("connection_init: %v", err)})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		return
 	}
 	if err := expectMessage(ctx, conn, "connection_ack"); err != nil {
@@ -390,9 +367,9 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			// stable, library-independent message beats leaking the
 			// transport's raw close-frame text (TS parity: "WebSocket
 			// closed during handshake").
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: "WebSocket closed during handshake", Diagnostics: graphQLWSCloseDetails(err)})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		} else {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("connection_ack: %v", err)})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		}
 		return
 	}
@@ -409,7 +386,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 		"type":    "subscribe",
 		"payload": payload,
 	}); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: fmt.Sprintf("subscribe: %v", err)})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		return
 	}
 	subscribed = true
@@ -427,7 +404,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			// A stable message beats leaking the transport's raw close-frame
 			// text (TS parity: "WebSocket closed before subscription
 			// complete").
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError, Message: "WebSocket closed before subscription complete", Diagnostics: graphQLWSCloseDetails(err)})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
 			return
 		}
 
@@ -437,7 +414,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			Payload json.RawMessage `json:"payload"`
 		}
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: fmt.Sprintf("parse ws message: %v", err)})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
 			return
 		}
 
@@ -445,12 +422,12 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 		case "next":
 			var payload any
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: fmt.Sprintf("parse next payload: %v", err)})
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
 				return
 			}
 			envelope, ok := payload.(map[string]any)
 			if !ok || !wellFormedGraphQLResponse(envelope) {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: "next payload is not a well-formed GraphQL response envelope"})
+				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
 				return
 			}
 			if err := inv.EmitOutput(envelope); err != nil {
@@ -458,23 +435,8 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 			}
 
 		case "error":
-			var payload any
-			_ = json.Unmarshal(msg.Payload, &payload)
-			message := string(msg.Payload)
-			if values, ok := payload.([]any); ok && len(values) > 0 {
-				if first, ok := values[0].(map[string]any); ok {
-					if nativeMessage, ok := first["message"].(string); ok && nativeMessage != "" {
-						message = nativeMessage
-					}
-				}
-			}
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeExecutionFailed,
-				Message: message,
-				Diagnostics: map[string]any{"graphqlTransportWs": map[string]any{
-					"type": "error", "payload": payload,
-					"payloadBase64": base64.StdEncoding.EncodeToString(msg.Payload),
-				}},
+				Code: openbindings.ErrCodeExecutionFailed,
 			})
 			return
 

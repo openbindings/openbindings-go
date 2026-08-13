@@ -19,9 +19,11 @@ import (
 // Mock binding invoker (the design doc's reference mock, ref-dispatched)
 // ---------------------------------------------------------------------------
 
+var testDurable = true
+
 var bearerDetails = &ContextRequiredDetails{
 	Target:       "api.example.com",
-	Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.bearer"}}}},
+	Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{Type: "auth.bearer", Durable: &testDurable}}}},
 }
 
 type mockOpts struct {
@@ -107,24 +109,15 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 	switch args.Ref {
 	case "ping":
 		_ = h.CloseInput()
-		_ = h.SetHeader(Metadata{"x-mock": {"ping"}})
 		if m.opts.nativeFailure {
 			h.FireError(&InvocationError{
-				Code:    ErrCodeExecutionFailed,
-				Message: "upstream invocation failed",
-				Diagnostics: map[string]any{
-					"status": 504,
-					"httpResponse": map[string]any{
-						"body": map[string]any{"base64": "Z2F0ZXdheSB0aW1lb3V0", "byteLength": 15},
-					},
-				},
+				Code: ErrCodeExecutionFailed,
 			})
 			return nil
 		}
 		if err := h.EmitOutput(map[string]any{"ok": true}); err != nil {
 			return nil
 		}
-		h.SetTrailer(Metadata{"x-mock-trailer": {"done"}})
 		h.CloseOutput()
 	case "getUser":
 		// Unary: read first input, then (deliberately AFTER the read — the
@@ -134,20 +127,20 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 			return nil
 		}
 		if !ok {
-			h.FireError(&InvocationError{Code: ErrCodeMissingInput, Message: "getUser requires input"})
+			h.FireError(&InvocationError{Code: ErrCodeMissingInput})
 			return nil
 		}
 		record(first)
 		if m.opts.challengeAlways || (m.opts.requireBearer && ContextBearerToken(args.Context) == "") {
-			h.FireError(NewContextRequiredError("bearer token required", bearerDetails))
+			h.FireError(NewContextRequiredError(bearerDetails))
 			return nil
 		}
 		if m.opts.requireServerConfig && !hasServerConfig(args.Context) {
-			h.FireError(NewContextRequiredError("server address required",
+			h.FireError(NewContextRequiredError(
 				&ContextRequiredDetails{
 					Target: "api.example.com",
 					Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{
-						NewConfigValueRequirement("server", "url", "supply a connection URL", nil, nil),
+						NewConfigValueRequirement("server", "/url", "supply a connection URL", nil, nil),
 					}}},
 				}))
 			return nil
@@ -189,7 +182,7 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 		if err := h.EmitOutput(map[string]any{"id": "ord_1", "status": "created"}); err != nil {
 			return nil
 		}
-		h.FireError(NewContextRequiredError("token expired mid-stream", bearerDetails))
+		h.FireError(NewContextRequiredError(bearerDetails))
 	case "streamBadSecond":
 		_ = h.CloseInput()
 		if err := h.EmitOutput(map[string]any{"n": float64(1)}); err != nil {
@@ -244,7 +237,7 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 		}
 		h.CloseOutput()
 	default:
-		h.FireError(&InvocationError{Code: ErrCodeRuntime, Message: fmt.Sprintf("unknown ref: %s", args.Ref)})
+		h.FireError(&InvocationError{Code: ErrCodeRuntime})
 	}
 	return nil
 }
@@ -253,6 +246,17 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 // mocks do NOT implement BindingPreparer.
 type preparerMock struct {
 	*mockBindingInvoker
+}
+
+type malformedPreparerMock struct {
+	*mockBindingInvoker
+}
+
+func (p *malformedPreparerMock) PrepareBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
+	return &ContextRequiredDetails{
+		Target:       "api.example.com",
+		Alternatives: []ContextAlternative{{Requirements: nil}},
+	}, nil
 }
 
 func (p *preparerMock) PrepareBinding(_ context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
@@ -419,7 +423,7 @@ func TestOpWiringErrorsAreErroredHandles(t *testing.T) {
 		bindingKey string
 		code       string
 	}{
-		{"nil interface", nil, "ping", "", ErrCodeValidationFailed},
+		{"nil interface", nil, "ping", "", ErrCodeOperationValidationFailed},
 		{"unknown operation", opTestInterface(), "nope", "", ErrCodeOperationNotFound},
 		{"unknown bindingKey", opTestInterface(), "ping", "nope", ErrCodeBindingNotFound},
 	}
@@ -540,11 +544,11 @@ func TestOpT07InvalidWriteRejectsAndTerminates(t *testing.T) {
 	op := newOpInvoker(mock, nil)
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	err := call.Write(bg(), map[string]any{"id": 42})
-	if codeOf(t, err) != ErrCodeValidationFailed {
+	if codeOf(t, err) != ErrCodeOperationValidationFailed {
 		t.Fatalf("expected write rejection, got %v", err)
 	}
 	_, derr := drainOutputs(t, call)
-	if codeOf(t, derr) != ErrCodeValidationFailed {
+	if codeOf(t, derr) != ErrCodeOperationValidationFailed {
 		t.Fatalf("expected terminal, got %v", derr)
 	}
 	if _, _, reads, _ := mock.snapshot(); len(reads) > 0 && len(reads[0]) > 0 {
@@ -606,8 +610,8 @@ func TestOpT08InvalidOutputNotEmitted(t *testing.T) {
 	if len(vals) != 0 {
 		t.Fatalf("invalid output must not be emitted, got %v", vals)
 	}
-	if codeOf(t, err) != ErrCodeValidationFailed {
-		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", err)
+	if codeOf(t, err) != ErrCodeOperationValidationFailed {
+		t.Fatalf("expected ERR_OPERATION_VALIDATION_FAILED, got %v", err)
 	}
 }
 
@@ -618,8 +622,8 @@ func TestOpT08PerItemForStreaming(t *testing.T) { // SS
 	if len(vals) != 1 || vals[0].(map[string]any)["n"] != float64(1) {
 		t.Fatalf("valid prefix must be delivered, got %v", vals)
 	}
-	if codeOf(t, err) != ErrCodeValidationFailed {
-		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", err)
+	if codeOf(t, err) != ErrCodeOperationValidationFailed {
+		t.Fatalf("expected ERR_OPERATION_VALIDATION_FAILED, got %v", err)
 	}
 }
 
@@ -634,8 +638,8 @@ func TestOpT08ValidatesAfterTransform(t *testing.T) {
 	if len(vals) != 0 {
 		t.Fatalf("transform broke the shape; nothing should emit, got %v", vals)
 	}
-	if codeOf(t, err) != ErrCodeValidationFailed {
-		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", err)
+	if codeOf(t, err) != ErrCodeOperationValidationFailed {
+		t.Fatalf("expected ERR_OPERATION_VALIDATION_FAILED, got %v", err)
 	}
 }
 
@@ -698,8 +702,8 @@ func TestOpT16ResolvesStreamingOutputRefFromOBIDocumentRoot(t *testing.T) {
 	if len(vals) != 1 {
 		t.Fatalf("expected valid prefix before mismatch, got %v", vals)
 	}
-	if codeOf(t, err) != ErrCodeValidationFailed {
-		t.Fatalf("expected ERR_VALIDATION_FAILED after valid prefix, got %v", err)
+	if codeOf(t, err) != ErrCodeOperationValidationFailed {
+		t.Fatalf("expected ERR_OPERATION_VALIDATION_FAILED after valid prefix, got %v", err)
 	}
 }
 
@@ -891,6 +895,90 @@ func TestOpResolverDeclineSurfaces(t *testing.T) {
 	}
 }
 
+func TestOpResolverFailureIsRuntimeFailure(t *testing.T) {
+	t.Run("reactive challenge", func(t *testing.T) {
+		mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
+		op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
+			return nil, errors.New("credential broker unavailable")
+		})
+		call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
+		if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := drainOutputs(t, call)
+		if codeOf(t, err) != ErrCodeRuntime {
+			t.Fatalf("expected ERR_RUNTIME, got %v", err)
+		}
+		if attempts, _, _, _ := mock.snapshot(); attempts != 1 {
+			t.Fatalf("resolver failure must not retry: %d attempts", attempts)
+		}
+	})
+
+	t.Run("preflight challenge", func(t *testing.T) {
+		mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
+		op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
+			return nil, errors.New("credential broker unavailable")
+		})
+		call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
+		_, err := drainOutputs(t, call)
+		if codeOf(t, err) != ErrCodeRuntime {
+			t.Fatalf("expected ERR_RUNTIME, got %v", err)
+		}
+		if attempts, _, _, _ := mock.snapshot(); attempts != 0 {
+			t.Fatalf("preflight resolver failure must prevent dispatch: %d attempts", attempts)
+		}
+	})
+}
+
+func TestMalformedPreflightDoesNotReachResolver(t *testing.T) {
+	mock := &malformedPreparerMock{&mockBindingInvoker{}}
+	resolverCalls := 0
+	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
+		resolverCalls++
+		return map[string]any{"bearerToken": "must-not-run"}, nil
+	})
+	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != ErrCodeRuntime {
+		t.Fatalf("expected ERR_RUNTIME, got %v", err)
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("malformed challenge reached resolver %d time(s)", resolverCalls)
+	}
+	if attempts, _, _, _ := mock.snapshot(); attempts != 0 {
+		t.Fatalf("malformed preflight must prevent dispatch: %d attempts", attempts)
+	}
+}
+
+func TestOpUnchangedResolutionDoesNotRetry(t *testing.T) {
+	mock := &mockBindingInvoker{opts: mockOpts{challengeAlways: true}}
+	var resolverCalls int
+	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
+		resolverCalls++
+		return map[string]any{"bearerToken": "unchanged"}, nil
+	})
+	call := Invoke(
+		bg(),
+		op,
+		opTestInterface(),
+		NewOperationSignature[any, any]("getUser"),
+		WithContext(map[string]any{"bearerToken": "unchanged"}),
+	)
+	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := drainOutputs(t, call)
+	if codeOf(t, err) != ErrCodeContextRequired {
+		t.Fatalf("expected unchanged challenge, got %v", err)
+	}
+	if attempts, _, _, _ := mock.snapshot(); attempts != 1 {
+		t.Fatalf("unchanged resolution must not retry: %d attempts", attempts)
+	}
+	if resolverCalls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolverCalls)
+	}
+}
+
 func TestOpRetryRoundsAreCapped(t *testing.T) {
 	mock := &mockBindingInvoker{opts: mockOpts{challengeAlways: true}}
 	op := newOpInvoker(mock, func(context.Context, *ContextRequiredDetails) (map[string]any, error) {
@@ -971,11 +1059,7 @@ func TestOpPreflightWithoutResolverSurfaces(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Metadata pass-through
-// ---------------------------------------------------------------------------
-
-func TestOperationInvokerPreservesOptionalBindingDiagnostics(t *testing.T) {
+func TestOperationInvokerDoesNotExposeBindingDiagnostics(t *testing.T) {
 	op := newOpInvoker(&mockBindingInvoker{opts: mockOpts{nativeFailure: true}}, nil)
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("ping"))
 	_, err := drainOutputs(t, call)
@@ -986,11 +1070,8 @@ func TestOperationInvokerPreservesOptionalBindingDiagnostics(t *testing.T) {
 	if ie.Code != ErrCodeExecutionFailed {
 		t.Fatalf("completion code changed: %+v", ie)
 	}
-	details, _ := ie.Diagnostics.(map[string]any)
-	response, _ := details["httpResponse"].(map[string]any)
-	body, _ := response["body"].(map[string]any)
-	if body["base64"] != "Z2F0ZXdheSB0aW1lb3V0" {
-		t.Fatalf("binding-native diagnostics changed: %+v", ie.Diagnostics)
+	if ie.HasData() {
+		t.Fatalf("binding-native evidence leaked as abstract data: %+v", ie.Data)
 	}
 }
 
@@ -1061,19 +1142,12 @@ func TestPrepareOperation(t *testing.T) {
 	})
 }
 
-func TestOpMetadataPassThrough(t *testing.T) {
+func TestOperationInvokerSuccessNeedsNoProtocolMetadata(t *testing.T) {
 	op := newOpInvoker(&mockBindingInvoker{}, nil)
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("ping"))
 	vals, err := drainOutputs(t, call)
 	if err != nil || len(vals) != 1 {
 		t.Fatalf("got %v err=%v", vals, err)
-	}
-	md, err := call.Diagnostics().Header(shortCtx(t))
-	if err != nil || len(md["x-mock"]) != 1 {
-		t.Fatalf("header: %v err=%v", md, err)
-	}
-	if tr := call.Diagnostics().Trailer(); len(tr["x-mock-trailer"]) != 1 {
-		t.Fatalf("trailer: %v", tr)
 	}
 }
 

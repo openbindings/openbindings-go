@@ -102,8 +102,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 	depth := nestingDepth(ctx)
 	if depth >= maxNestingDepth {
 		go inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeExecutionFailed,
-			Message: fmt.Sprintf("operation-graph nesting depth exceeds this implementation's recursion budget (%d); mutually recursive graph bindings have no spec-level bound (Security considerations)", maxNestingDepth),
+			Code: openbindings.ErrCodeExecutionFailed,
 		})
 		return inv
 	}
@@ -136,8 +135,7 @@ func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocatio
 	doc, err := e.loadDocument(ctx, args.Source.Location, args.Source.Content)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeSourceLoadFailed,
-			Message: err.Error(),
+			Code: openbindings.ErrCodeSourceLoadFailed,
 		})
 		return
 	}
@@ -152,16 +150,14 @@ func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocatio
 			code = openbindings.ErrCodeInvalidRef
 		}
 		inv.FireError(&openbindings.InvocationError{
-			Code:    code,
-			Message: err.Error(),
+			Code: code,
 		})
 		return
 	}
 	graph, err := graphFromValue(target)
 	if err != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeValidationFailed,
-			Message: fmt.Sprintf("ref %q: %v", args.Ref, err),
+			Code: openbindings.ErrCodeValidationFailed,
 		})
 		return
 	}
@@ -172,8 +168,7 @@ func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocatio
 	if graph.Version != "" && semverRe.MatchString(graph.Version) {
 		if err := checkVersion(graph.Version); err != nil {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeUnsupportedFormatVersion,
-				Message: err.Error(),
+				Code: openbindings.ErrCodeUnsupportedFormatVersion,
 			})
 			return
 		}
@@ -196,8 +191,7 @@ func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocatio
 	}
 	if err := Validate(graph, opKeys); err != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeValidationFailed,
-			Message: err.Error(),
+			Code: openbindings.ErrCodeValidationFailed,
 		})
 		return
 	}

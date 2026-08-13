@@ -30,10 +30,11 @@ func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindin
 	if !onlyRangePlans(plans) {
 		return nil, nil
 	}
+	durable := true
 	requirement := openbindings.NewConfigValueRequirement(
-		"requestMedia", "value",
+		"requestMedia", "",
 		"select a concrete request media type admitted by the OpenAPI declaration",
-		nil, nil,
+		nil, &durable,
 	)
 	return &openbindings.ContextRequiredDetails{
 		Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{requirement}}},
@@ -67,7 +68,7 @@ func mergeContextRequirements(left, right *openbindings.ContextRequiredDetails) 
 
 // BuiltinClassify is the openapi builtin result classifier (OAPI-P-08):
 // success iff the final HTTP status is 2xx (declared responses refine
-// failure DETAILS only, never classification).
+// application failure DATA only, never classification).
 func BuiltinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (bool, error) {
 	return raw.Status != nil && *raw.Status >= 200 && *raw.Status < 300, nil
 }
@@ -93,8 +94,7 @@ func decodeByContentTypeFor(contentType, bindingSpec string) openbindings.Output
 			var parsed any
 			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
 				return nil, &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeResponseError,
-					Message: fmt.Sprintf("response declares %q but the body is not valid JSON: %v", contentType, err),
+					Code: openbindings.ErrCodeResponseError,
 				}
 			}
 			return parsed, nil
@@ -131,8 +131,7 @@ func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any
 	case "utf-8", "utf8":
 		if !utf8.Valid(body) {
 			return nil, &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeResponseError,
-				Message: "response body is not valid UTF-8 (the declared/default charset)",
+				Code: openbindings.ErrCodeResponseError,
 			}
 		}
 		return string(body), nil
@@ -140,8 +139,7 @@ func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any
 		for i := 0; i < len(body); i++ {
 			if body[i] >= 0x80 {
 				return nil, &openbindings.InvocationError{
-					Code:    openbindings.ErrCodeResponseError,
-					Message: fmt.Sprintf("response body byte %d is not valid US-ASCII (the declared charset)", i),
+					Code: openbindings.ErrCodeResponseError,
 				}
 			}
 		}
@@ -154,8 +152,7 @@ func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any
 		return string(runes), nil
 	default:
 		return nil, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("response declares charset %q, which this implementation cannot decode; override at the decode configuration point", charset),
+			Code: openbindings.ErrCodeResponseError,
 		}
 	}
 }
@@ -310,7 +307,9 @@ func securityPlans(doc *openapi3.T, op *openapi3.Operation, baseURL string) []se
 			next := make([]securityPlan, 0, len(expanded)*len(options))
 			for _, plan := range expanded {
 				for _, option := range options {
+					durable := true
 					option.Name = schemeName
+					option.Durable = &durable
 					if ref.Value.Description != "" {
 						option.Description = ref.Value.Description
 					}
@@ -698,16 +697,16 @@ func credentialValues(plan securityPlan, bindCtx map[string]any) []credentialPla
 		case "http":
 			switch strings.ToLower(s.Scheme) {
 			case "bearer":
-				if token := openbindings.ContextBearerToken(bindCtx); token != "" {
+				if token := openbindings.ContextBearerTokenFor(bindCtx, named.name); token != "" {
 					placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Bearer " + token})
 				}
 			case "basic":
-				if u, p, ok := openbindings.ContextBasicAuth(bindCtx); ok {
+				if u, p, ok := openbindings.ContextBasicAuthFor(bindCtx, named.name); ok {
 					placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Basic " + base64.StdEncoding.EncodeToString([]byte(u+":"+p))})
 				}
 			}
 		case "oauth2", "openIdConnect":
-			token := openbindings.ContextString(bindCtx, "accessToken")
+			token := openbindings.ContextAccessTokenFor(bindCtx, named.name)
 			if token == "" {
 				token = openbindings.ContextBearerToken(bindCtx)
 			}

@@ -189,7 +189,7 @@ func substituteServerVariables(srv *openapi3.Server, supplied map[string]string)
 		if val == "" && v.Default == "" {
 			return "", &configRequired{
 				point:       "server",
-				key:         name,
+				path:        "/variables/" + escapeJSONPointerSegment(name),
 				description: fmt.Sprintf("server %q: variable %q has no supplied value and no declared default", srv.URL, name),
 				choices:     v.Enum,
 			}
@@ -238,7 +238,7 @@ func absolutizeServerURL(serverURL, sourceLocation string) (string, error) {
 	}
 	return "", &configRequired{
 		point:       "server",
-		key:         "url",
+		path:        "/url",
 		description: fmt.Sprintf("server URL %q cannot resolve to an absolute URL: the source has no absolute-URI location to serve as the artifact's base URI; supply a base URL at the server configuration point", serverURL),
 	}
 }
@@ -254,7 +254,7 @@ func absolutizeServerURL(serverURL, sourceLocation string) (string, error) {
 // for any stored-value release.
 type configRequired struct {
 	point       string
-	key         string
+	path        string
 	description string
 	choices     []string
 	durable     *bool

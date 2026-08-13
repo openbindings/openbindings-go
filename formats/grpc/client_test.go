@@ -60,10 +60,8 @@ message PingMsg { string msg = 1; }
 	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeSourceConfigError {
 		t.Fatalf("want ERR_SOURCE_CONFIG_ERROR, got %v", err)
 	}
-	for _, want := range []string{"embedded content", "location", "configuration.target"} {
-		if !strings.Contains(ie.Message, want) {
-			t.Errorf("refusal must mention %q, got: %s", want, ie.Message)
-		}
+	if ie.HasData() {
+		t.Errorf("configuration diagnostics crossed as abstract data: %#v", ie.Data)
 	}
 
 	// configuration.target supplies the dial address: the invocation
@@ -83,6 +81,6 @@ message PingMsg { string msg = 1; }
 	}
 	var ie2 *openbindings.InvocationError
 	if errors.As(err2, &ie2) && ie2.Code == openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("configuration.target must satisfy the address gate; still got config error: %s", ie2.Message)
+		t.Fatalf("configuration.target must satisfy the address gate; still got config error")
 	}
 }

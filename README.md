@@ -258,13 +258,13 @@ required for correctness, and `Close()` never fails.
 Two idioms worth knowing. For an operation with **no input**, call `Close()`
 (or nothing at all — bindings that need no input dispatch without one). For
 an operation that **requires input**, forgetting to `Write` parks the binding
-until your ctx cancels; the cancellation terminal diagnoses it ("the input
-side was never written or closed"). `Close()` without a `Write` fails fast
-with `ERR_MISSING_INPUT` naming the missing parameter.
+until your ctx cancels. `Close()` without a `Write` fails fast with the
+protocol-independent `ERR_MISSING_INPUT` code.
 
 Client-streaming and bidirectional callers own `Close()` (and drive input and
-output from separate goroutines); `Header`/`Trailer` carry leading/trailing
-metadata and `Cancel()` tears the invocation down. Missing runtime context
+output from separate goroutines); `Cancel()` tears the invocation down.
+Protocol metadata remains inside artifact runtimes and binding-specific
+interpretation. Missing runtime context
 surfaces as a `CONTEXT_REQUIRED` terminal error raised before any side effect,
 resolved by the operation invoker's `ContextResolver` when one is configured.
 
@@ -358,6 +358,10 @@ the fields the satisfied requirement-alternative names. It does not forward
 unrelated headers, cookies, environment values, metadata, configuration, or
 credentials from the stored record; any of those can be sensitive. Context the
 caller explicitly supplied for the invocation is preserved separately.
+Because this resolver is backed by reusable storage, it declines every
+alternative unless all of its requirements explicitly set durability to true;
+an omitted durability flag means one-shot and cannot authorize stored-context
+release or persistence.
 
 ```go
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker()).

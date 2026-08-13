@@ -3,7 +3,6 @@ package usage
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,7 +34,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	if usageGenericCredentialPresent(args.Context) {
 		inv.FireError(openbindings.NewContextRequiredError(
-			"generic credential has no artifact-declared environment-variable destination",
+
 			&openbindings.ContextRequiredDetails{
 				Target: args.Source.Location,
 				Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{{
@@ -80,7 +79,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// check kept.
 	spec, lerr := e.cachedLoadSpec(bctx, args.Source.Location, args.Source.Content)
 	if lerr != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed, Message: lerr.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed})
 		return
 	}
 
@@ -100,7 +99,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	} else {
 		found, ferr := findCommand(spec, args.Ref)
 		if ferr != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound, Message: ferr.Error()})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound})
 			return
 		}
 		cmd = found.cmd
@@ -111,13 +110,13 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	meta := spec.Meta()
 	binName := meta.Bin
 	if binName == "" {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "usage artifact does not define a binary name (bin or name)"})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 		return
 	}
 	if target, present := openbindings.ContextConfiguration(args.Context)["target"]; present {
 		text, ok := target.(string)
 		if !ok || strings.TrimSpace(text) == "" {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "configuration.target must be a non-empty executable path string"})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
 			return
 		}
 		binName = text
@@ -144,7 +143,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	defer routed.cleanup()
 	if configured.stdin != nil {
 		if routed.stdin != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: "more than one field routes to the single stdin channel"})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
 			return
 		}
 		routed.stdin = configured.stdin
@@ -156,7 +155,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 	cmdArgs, aerr := buildCLIArgs(cmdPath, cmd, inherited, argvInput)
 	if aerr != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: aerr.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
 		return
 	}
 
@@ -166,8 +165,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	routed.cleanup()
 	if bctx.Err() != nil {
 		// The invocation lifetime ended (caller cancel or deadline): defer to
-		// the handle, which classifies a deadline as ERR_TIMEOUT and a cancel as
-		// ERR_CANCELLED. Firing our own terminal here would race that one
+		// the handle, which classifies both a caller-supplied deadline and an
+		// explicit cancel as ERR_CANCELLED. Firing our own terminal here would race that one
 		// (mirrors the openapi/connect/asyncapi ctx.Err() defer).
 		return
 	}
@@ -179,11 +178,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		if errors.Is(runErr, exec.ErrNotFound) {
 			code = openbindings.ErrCodeSourceConfigError
 		}
-		var details any
-		if res != nil {
-			details = usageProcessDetails(res)
-		}
-		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error(), Diagnostics: details})
+		inv.FireError(&openbindings.InvocationError{Code: code})
 		return
 	}
 
@@ -210,26 +205,18 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		// error vocabulary. Provenance: the deciding layer is named on the
 		// error's decidedBy stamp.
 		inv.FireError(&openbindings.InvocationError{
-			Code:        openbindings.ErrCodeExecutionFailed,
-			Message:     "Invocation completed unsuccessfully",
-			Diagnostics: usageProcessDetails(res),
+			Code: openbindings.ErrCodeExecutionFailed,
 		})
 		return
 	}
 
 	output, derr := args.Hooks.DecodeOutput(site, raw, builtinDecodeText)
 	if derr != nil {
-		ierr := openbindings.AsInvocationError(derr)
-		details := usageProcessDetails(res)
-		if ierr.Diagnostics != nil {
-			details["cause"] = ierr.Diagnostics
-		}
-		ierr.Diagnostics = details
-		inv.FireError(ierr)
+		inv.FireError(openbindings.AsInvocationError(derr))
 		return
 	}
 
-	emitWithDiagnostics(inv, output, res, args.Hooks, routed.record)
+	emitOutput(inv, output)
 }
 
 // siteFor completes the core-stamped site with the format-known Target
@@ -267,11 +254,11 @@ func builtinDecodeText(_ openbindings.InvokeSite, raw openbindings.RawResult) (a
 	return strings.TrimRight(string(raw.Body), "\r\n"), nil
 }
 
-// resultMeta assembles the per-unit Meta: the exit code, the FULL stderr
-// capture, and the per-field routing record.
+// resultMeta assembles binding-interpretation evidence for the hook seam. It
+// stays below the abstract invocation handle.
 func resultMeta(res *cliResult, record map[string]string) openbindings.Metadata {
 	meta := openbindings.Metadata{
-		"x-exit-code": {strconv.Itoa(res.exitCode)},
+		"x-exit-code": {fmt.Sprintf("%d", res.exitCode)},
 	}
 	if res.stderr != "" {
 		meta["x-stderr"] = []string{res.stderr}
@@ -290,51 +277,10 @@ func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.Resul
 	return builtinDecodeText, builtinClassify
 }
 
-// emitWithDiagnostics stamps the diagnostics trailer and emits the output.
-// The trailer carries the success provenance stamps (the conventions
-// record, spec/binding-specs/README.md) — x-ob-decode
-// ("assumption/text" | "hook"), x-ob-classify ("assumption/exit-0" |
-// "hook"), and the provenance-qualified per-field x-ob-route — plus the
-// exec carrier facts (x-exit-code, tail-capped x-stderr). Tier-blind on
-// purpose: failure paths are tier-precise; success provenance is not.
-// Diagnostics ride trailing metadata, never the output value: the exit code
-// and captured stderr (a filter command's human summary). The trailer is
-// header-shaped, so stderr is bounded: the LAST maxStderrTrailerBytes (tails
-// carry the operative lines), with an explicit truncation marker that also
-// fires when the capture itself overflowed.
-func emitWithDiagnostics(inv *openbindings.InvocationImpl[any, any], output any, res *cliResult, hooks *openbindings.InvokeHooks, record map[string]string) {
-	trailer := openbindings.Metadata{"x-exit-code": {strconv.Itoa(res.exitCode)}}
-	stderrBytes := []byte(res.stderr)
-	trailer["x-stderr-base64"] = []string{base64.StdEncoding.EncodeToString(stderrBytes)}
-	trailer["x-stderr-byte-length"] = []string{strconv.Itoa(len(stderrBytes))}
-	if res.signal != "" {
-		trailer["x-signal"] = []string{res.signal}
-	}
-	decodeStamp, classifyStamp := "assumption/text", "assumption/exit-0"
-	if hooks.DecodeDecidedBy() == "hook" {
-		decodeStamp = "hook"
-	}
-	if hooks.ClassifyDecidedBy() == "hook" {
-		classifyStamp = "hook"
-	}
-	trailer["x-ob-decode"] = []string{decodeStamp}
-	trailer["x-ob-classify"] = []string{classifyStamp}
-	for field, route := range record {
-		trailer["x-ob-route"] = append(trailer["x-ob-route"], field+"="+route)
-	}
-	if res.stderr != "" {
-		stderrOut := res.stderr
-		truncated := res.stderrTruncated
-		if len(stderrOut) > maxStderrTrailerBytes {
-			stderrOut = stderrOut[len(stderrOut)-maxStderrTrailerBytes:]
-			truncated = true
-		}
-		trailer["x-stderr"] = []string{stderrOut}
-		if truncated {
-			trailer["x-stderr-truncated"] = []string{"true"}
-		}
-	}
-	inv.SetTrailer(trailer)
+// emitOutput closes a successful abstract invocation after its one value.
+// Native process evidence has already served the below-bridge hook seam and
+// is intentionally not copied onto the handle.
+func emitOutput(inv *openbindings.InvocationImpl[any, any], output any) {
 	if err := inv.EmitOutput(output); err != nil {
 		return
 	}
@@ -347,13 +293,13 @@ func emitWithDiagnostics(inv *openbindings.InvocationImpl[any, any], output any,
 func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any], binary string, input any) {
 	cmdArgs, err := buildDirectArgsFromRef(args.Ref, input)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
 		return
 	}
 	res, runErr := runCLI(ctx, binary, cmdArgs, args.Context, nil, args.DeliveryUnitLimit())
 	if ctx.Err() != nil {
-		// Defer to the handle for the lifetime terminal (deadline → ERR_TIMEOUT,
-		// cancel → ERR_CANCELLED); firing here would race it.
+		// Defer to the handle for the ERR_CANCELLED lifetime terminal; firing
+		// here would race it.
 		return
 	}
 	if runErr != nil {
@@ -361,31 +307,25 @@ func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvoc
 		if errors.Is(runErr, exec.ErrNotFound) {
 			code = openbindings.ErrCodeSourceConfigError
 		}
-		var details any
-		if res != nil {
-			details = usageProcessDetails(res)
-		}
-		inv.FireError(&openbindings.InvocationError{Code: code, Message: runErr.Error(), Diagnostics: details})
+		inv.FireError(&openbindings.InvocationError{Code: code})
 		return
 	}
 	if res.exitCode != 0 {
 		inv.FireError(&openbindings.InvocationError{
-			Code:        openbindings.ErrCodeExecutionFailed,
-			Message:     "Invocation completed unsuccessfully",
-			Diagnostics: usageProcessDetails(res),
+			Code: openbindings.ErrCodeExecutionFailed,
 		})
 		return
 	}
 	output, decodeErr := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte(res.stdout)})
 	if decodeErr != nil {
 		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeRuntime, Message: "Invocation result could not be decoded", Diagnostics: usageProcessDetails(res),
+			Code: openbindings.ErrCodeRuntime,
 		})
 		return
 	}
 	// Direct-binary dispatch consults no hooks (stated in run); a nil
 	// carrier stamps the assumptions, which is what actually decided.
-	emitWithDiagnostics(inv, output, res, nil, nil)
+	emitOutput(inv, output)
 }
 
 // metadataBinary extracts the "binary" hint from context metadata.
@@ -429,7 +369,7 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 		var ok bool
 		inputMap, ok = openbindings.ToStringAnyMap(input)
 		if !ok {
-			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: "usage input must be a JSON object"}
+			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 		}
 	}
 	fields := make(map[string]any, len(inputMap))
@@ -448,25 +388,25 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 		var ok bool
 		encodeConfig, ok = raw.(map[string]any)
 		if !ok {
-			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "configuration.encode must be an object of field-to-encoder names"}
+			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
 		}
 	}
 	if rawRoutes, present := configuration["route"]; present {
 		routes, ok := rawRoutes.(map[string]any)
 		if !ok {
-			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: "configuration.route must be an object"}
+			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
 		}
 		stdinField := ""
 		for field, raw := range routes {
 			entry, ok := raw.(map[string]any)
 			if !ok {
-				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configuration.route[%q] must be an object", field)}
+				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
 			}
 			kind, _ := entry["kind"].(string)
 			value, supplied := fields[field]
 			slot, slotKind := findSlot(cmd, inherited, field)
 			if slotKind == slotNone {
-				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configuration.route names undeclared field %q", field)}
+				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
 			}
 			if !supplied || value == nil {
 				continue
@@ -479,16 +419,16 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 				case Flag:
 					envName = definition.effectiveEnv()
 					if definition.Count || definition.Var || definition.valueVariadic() {
-						return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("field %q cannot preserve its occurrence structure in one environment value", field)}
+						return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 					}
 				case Arg:
 					envName = definition.Env
 					if definition.IsVariadic() {
-						return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("field %q cannot preserve its occurrence structure in one environment value", field)}
+						return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 					}
 				}
 				if envName == "" {
-					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("field %q has no artifact-declared environment variable", field)}
+					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
 				}
 				text, ok := value.(string)
 				if !ok {
@@ -507,13 +447,13 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 					}
 				}
 				if configured, present := openbindings.ContextEnvironment(bindCtx)[envName]; present && configured != text {
-					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("environment route for field %q conflicts with configured %s", field, envName)}
+					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 				}
 				out.environment[envName] = text
 				delete(fields, field)
 			case "stdin":
 				if stdinField != "" {
-					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("fields %q and %q both route to stdin", stdinField, field)}
+					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 				}
 				stdinField = field
 				out.stdin, _ = routeBytes(value)
@@ -524,7 +464,7 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 					delete(fields, field)
 				}
 			default:
-				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configuration.route[%q].kind %q is unsupported", field, kind)}
+				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
 			}
 		}
 	}
@@ -537,13 +477,13 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 		effectiveEnvironment[name] = value
 	}
 	if err := validateUsageOverrides(cmd, inherited, suppliedFields); err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 	}
 	if err := validateUsageRequirements(cmd, inherited, suppliedFields, effectiveEnvironment); err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 	}
 	if err := validateUsageChoices(cmd, inherited, suppliedFields, effectiveEnvironment); err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 	}
 
 	for field, value := range fields {
@@ -563,15 +503,15 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 func configuredUsageEncoding(field string, value any, encodeConfig map[string]any, encoders map[string]TokenEncoder) (string, *openbindings.InvocationError) {
 	encoderName, configured := encodeConfig[field].(string)
 	if !configured || encoderName == "" {
-		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("field %q has a non-string scalar value but the artifact declares no token encoding and configuration.encode selects none", field)}
+		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 	}
 	encoder := encoders[encoderName]
 	if encoder == nil {
-		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError, Message: fmt.Sprintf("configuration.encode[%q] selects unavailable encoder %q", field, encoderName)}
+		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
 	}
 	token, err := encoder(value)
 	if err != nil {
-		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: fmt.Sprintf("encode field %q: %v", field, err)}
+		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 	}
 	return token, nil
 }
@@ -1210,43 +1150,6 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 	return result, nil
 }
 
-func usageProcessDetails(res *cliResult) map[string]any {
-	process := map[string]any{
-		"exitCode": res.exitCode,
-		"stdout":   capturedProcessBytes([]byte(res.stdout), res.stdoutTruncated),
-		"stderr":   capturedProcessBytes([]byte(res.stderr), res.stderrTruncated),
-	}
-	if res.signal != "" {
-		process["signal"] = res.signal
-	}
-	return map[string]any{
-		// Legacy keys remain for compatibility; usage.process is the lossless
-		// canonical lane shared with the TypeScript implementation.
-		"exitCode": res.exitCode,
-		"output":   wrapText(res.stdout, res.stderr),
-		"usage":    map[string]any{"process": process},
-	}
-}
-
-func capturedProcessBytes(value []byte, truncated bool) map[string]any {
-	captured := map[string]any{
-		"base64": base64.StdEncoding.EncodeToString(value), "byteLength": len(value),
-	}
-	if truncated {
-		captured["truncated"] = true
-	}
-	return captured
-}
-
-// wrapText is the raw-capture record used in non-zero-exit error details.
-func wrapText(stdoutStr, stderrStr string) map[string]any {
-	output := map[string]any{"stdout": stdoutStr}
-	if stderrStr != "" {
-		output["stderr"] = stderrStr
-	}
-	return output
-}
-
 func resolveCommandArtifact(ctx context.Context, argv []string) (string, error) {
 	binName := argv[0]
 	args := argv[1:]
@@ -1276,11 +1179,6 @@ func resolveCommandArtifact(ctx context.Context, argv []string) (string, error) 
 // invocation lane's stdout capture IS a delivery unit and is
 // consumer-bounded (runCLI's maxStdoutBytes).
 const maxCLIOutputBytes = 10 << 20 // 10 MiB
-
-// maxStderrTrailerBytes bounds the x-stderr trailer value. Trailing metadata
-// is header-shaped and may cross header-framed transports; the full capture
-// (up to maxCLIOutputBytes) still travels in non-success error details.
-const maxStderrTrailerBytes = 64 << 10 // 64 KiB
 
 // cappedBuffer stops growing past limit and records the overflow, rather than
 // letting an unbounded child fill memory. It always reports a full write so the

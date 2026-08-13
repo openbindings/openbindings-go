@@ -1,6 +1,6 @@
 package openbindings
 
-// Canonical invocation error codes. Wire values are SCREAMING_SNAKE with an
+// Invocation error-code constants used by the SDK. Wire values are SCREAMING_SNAKE with an
 // ERR_ prefix, plus the un-prefixed negotiation signal CONTEXT_REQUIRED,
 // matching the openbindings.binding-invoker interface where that interface
 // defines them. Only interface-owned lifecycle and negotiation codes have
@@ -11,9 +11,10 @@ package openbindings
 // — surface as pre-errored handles in Go but throw typed errors in TypeScript;
 // the values exist in both SDKs for documentation.)
 //
-// The lifecycle codes are produced by the SDK's invocation machinery; the
-// operational codes are SDK conventions for format invokers. Third-party
-// invokers MAY use additional codes.
+// The lifecycle codes are produced by the SDK's invocation machinery. Other
+// constants document implementation outcomes used by this SDK; exporting them
+// does not give them cross-binding semantics or make them a portable failure
+// taxonomy. Third-party invokers MAY use additional codes.
 const (
 	// -----------------------------------------------------------------------
 	// Lifecycle and protocol codes (produced by the invocation machinery)
@@ -48,8 +49,11 @@ const (
 	// before the input side closed.
 	ErrCodeMissingInput = "ERR_MISSING_INPUT"
 
-	// ErrCodeProtocol indicates a frame-protocol violation (the
-	// binding-invoker contract's wire protocol).
+	// ErrCodeFrameProtocol indicates an OpenBindings invocation frame-protocol violation.
+	ErrCodeFrameProtocol = "ERR_FRAME_PROTOCOL"
+
+	// ErrCodeProtocol is available to binding specifications or implementations
+	// that choose this native-protocol identifier; it is not the frame code.
 	ErrCodeProtocol = "ERR_PROTOCOL"
 
 	// ErrCodeTransportClosed indicates the transport closed without a
@@ -68,8 +72,9 @@ const (
 	ErrCodeTypeMismatch = "ERR_TYPE_MISMATCH"
 
 	// -----------------------------------------------------------------------
-	// Local wiring codes (operation-layer resolution failures; never cross
-	// the wire from a binding)
+	// Operation-invoker-owned resolution codes. They are portable when
+	// produced by that interface and do not originate from a binding merely
+	// as protocol evidence.
 	// -----------------------------------------------------------------------
 
 	// ErrCodeOperationNotFound indicates the requested operation matches no
@@ -90,16 +95,8 @@ const (
 	ErrCodeUnknownSource = "ERR_UNKNOWN_SOURCE"
 
 	// -----------------------------------------------------------------------
-	// Operational codes (format-invoker conventions)
+	// SDK implementation codes (not a cross-binding taxonomy)
 	// -----------------------------------------------------------------------
-
-	// ErrCodeAuthRequired indicates the service rejected the provided
-	// credentials (e.g., HTTP 401, gRPC Unauthenticated).
-	ErrCodeAuthRequired = "ERR_AUTH_REQUIRED"
-
-	// ErrCodePermissionDenied indicates the caller is authenticated
-	// but not authorized (e.g., HTTP 403).
-	ErrCodePermissionDenied = "ERR_PERMISSION_DENIED"
 
 	// ErrCodeInvalidRef indicates the ref is malformed or can't be parsed.
 	ErrCodeInvalidRef = "ERR_INVALID_REF"
@@ -118,7 +115,10 @@ const (
 	// ErrCodeConnectFailed indicates a connection to the service couldn't be established.
 	ErrCodeConnectFailed = "ERR_CONNECT_FAILED"
 
-	// ErrCodeExecutionFailed indicates the call was made but the service returned an error.
+	// ErrCodeExecutionFailed indicates only that the governed interaction
+	// completed unsuccessfully. It carries no protocol category, blame,
+	// retryability, side-effect, authentication, authorization, or availability
+	// semantics.
 	ErrCodeExecutionFailed = "ERR_EXECUTION_FAILED"
 
 	// ErrCodeResponseError indicates a response was received but couldn't be processed
@@ -128,24 +128,24 @@ const (
 	// ErrCodeStreamError indicates an error during streaming after the initial connection.
 	ErrCodeStreamError = "ERR_STREAM_ERROR"
 
-	// ErrCodeTimeout indicates the operation timed out.
+	// ErrCodeTimeout is an open extension identifier retained for binding- or
+	// runtime-specific timeout rules. Caller-owned invocation deadlines use
+	// ErrCodeCancelled at the abstract interface boundary.
 	ErrCodeTimeout = "ERR_TIMEOUT"
 
-	// ErrCodeUnavailable indicates the service was reached but refused the
-	// request as retryable (HTTP 429/502/503, gRPC UNAVAILABLE/
-	// RESOURCE_EXHAUSTED). Transient. Distinct from ErrCodeConnectFailed,
-	// which is a transport failure that never reached a server: here the
-	// server answered, declining the request rather than failing to receive
-	// it. Retry with backoff.
-	ErrCodeUnavailable = "ERR_UNAVAILABLE"
+	// -----------------------------------------------------------------------
+	// Remaining operation-invoker-owned mechanics
+	// -----------------------------------------------------------------------
 
-	// ErrCodeTransformError indicates a transform evaluation failed.
+	// ErrCodeTransformError indicates an operation input or output transform failed.
 	ErrCodeTransformError = "ERR_TRANSFORM_ERROR"
 
-	// ErrCodeValidationFailed indicates a value failed validation against
-	// the operation's declared input or output schema — a validation claim
-	// evaluated per the core's claim semantics (OBI-T-16) and found FALSE.
-	// Also used for graph validation failing before execution.
+	// ErrCodeOperationValidationFailed indicates operation-layer validation
+	// failed, including a complete governing OBI schema claim.
+	ErrCodeOperationValidationFailed = "ERR_OPERATION_VALIDATION_FAILED"
+
+	// ErrCodeValidationFailed is an open extension identifier retained for
+	// binding-specific validation rules.
 	ErrCodeValidationFailed = "ERR_VALIDATION_FAILED"
 
 	// ErrCodeSchemaUnresolved indicates the governing schema graph could not
@@ -153,7 +153,7 @@ const (
 	// compile), so the validation claim could not be EVALUATED at all —
 	// reported distinctly from a value mismatch and never papered over with
 	// partial validation (OBI-T-16; the openbindings.operation-invoker
-	// contract names this convention code).
+	// contract owns this code).
 	ErrCodeSchemaUnresolved = "ERR_SCHEMA_UNRESOLVED"
 
 	// ErrCodeRuntime indicates a generic runtime failure inside a binding

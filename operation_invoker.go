@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -64,7 +65,7 @@ type ContextResolver func(ctx context.Context, details *ContextRequiredDetails) 
 // Between the caller and the binding it enforces the operation contract
 // (validation carries the core's claim semantics, OBI-T-16: complete
 // statically reachable schema graph, `format` as annotation, per value;
-// a mismatch is ERR_VALIDATION_FAILED, an unresolvable governing graph is
+// a mismatch is ERR_OPERATION_VALIDATION_FAILED, an unresolvable governing graph is
 // ERR_SCHEMA_UNRESOLVED, never partial validation):
 //   - every caller input validates against the operation's input schema
 //     BEFORE the input transform; a failure is terminal and rejects the
@@ -237,7 +238,7 @@ func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindi
 	op *Operation, bindingKey string, binding *BindingEntry, source *Source, ierr *InvocationError,
 ) {
 	if obi == nil {
-		return nil, "", nil, nil, &InvocationError{Code: ErrCodeValidationFailed, Message: ErrNilInterface.Error()}
+		return nil, "", nil, nil, &InvocationError{Code: ErrCodeOperationValidationFailed}
 	}
 
 	// OBI-T-12: resolve against the flat key+aliases namespace. Bindings are
@@ -246,8 +247,6 @@ func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindi
 	if !ok {
 		return nil, "", nil, nil, &InvocationError{
 			Code: ErrCodeOperationNotFound,
-			Message: fmt.Sprintf("%v: %s; searched operation identifiers (keys and aliases): [%s]",
-				ErrOperationNotFound, operation, strings.Join(AllOperationIdentifiers(obi), ", ")),
 		}
 	}
 	op = &opVal
@@ -262,8 +261,7 @@ func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindi
 		b, ok := obi.Bindings[pinnedBindingKey]
 		if !ok {
 			return nil, "", nil, nil, &InvocationError{
-				Code:    ErrCodeBindingNotFound,
-				Message: fmt.Sprintf("binding %q is not defined on this interface", pinnedBindingKey),
+				Code: ErrCodeBindingNotFound,
 			}
 		}
 		// The explicit binding must belong to the resolved operation. Without
@@ -273,8 +271,6 @@ func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindi
 		if b.Operation != opKey {
 			return nil, "", nil, nil, &InvocationError{
 				Code: ErrCodeBindingNotFound,
-				Message: fmt.Sprintf("binding %q targets operation %q, not the resolved operation %q",
-					pinnedBindingKey, b.Operation, opKey),
 			}
 		}
 		bindingKey = pinnedBindingKey
@@ -301,15 +297,14 @@ func (e *OperationInvoker) resolveBinding(obi *Interface, operation, pinnedBindi
 			if errors.Is(err, ErrBindingSelectionRequired) {
 				code = ErrCodeBindingSelectionRequired
 			}
-			return nil, "", nil, nil, &InvocationError{Code: code, Message: err.Error()}
+			return nil, "", nil, nil, &InvocationError{Code: code}
 		}
 	}
 
 	src, ok := obi.Sources[binding.Source]
 	if !ok {
 		return nil, "", nil, nil, &InvocationError{
-			Code:    ErrCodeUnknownSource,
-			Message: fmt.Sprintf("%v: binding %q references %q", ErrUnknownSource, bindingKey, binding.Source),
+			Code: ErrCodeUnknownSource,
 		}
 	}
 	return op, bindingKey, binding, &src, nil
@@ -367,9 +362,7 @@ func (e *OperationInvoker) run(
 ) {
 	if (binding.InputTransform != nil || binding.OutputTransform != nil) && e.TransformEvaluator == nil {
 		caller.FireError(&InvocationError{
-			Code:        ErrCodeTransformError,
-			Message:     ErrNoTransformEvaluator.Error(),
-			Diagnostics: operationInvokerDiagnostics(bindingKey, nil),
+			Code: ErrCodeTransformError,
 		})
 		return
 	}
@@ -384,9 +377,7 @@ func (e *OperationInvoker) run(
 		compiled, err := compileOperationSchema(iface, binding.Operation, "output")
 		if err != nil {
 			caller.FireError(&InvocationError{
-				Code:        ErrCodeSchemaUnresolved,
-				Message:     fmt.Sprintf("openbindings: output schema graph for operation %q could not be established: %v", binding.Operation, err),
-				Diagnostics: operationInvokerDiagnostics(bindingKey, nil),
+				Code: ErrCodeSchemaUnresolved,
 			})
 			return
 		}
@@ -424,7 +415,7 @@ func (e *OperationInvoker) run(
 		a.Site = site
 		return a
 	}
-	mergeResolved := func(resolved map[string]any) {
+	mergeResolved := func(resolved map[string]any) bool {
 		merged := make(map[string]any, len(contextData)+len(resolved))
 		for k, v := range contextData {
 			merged[k] = v
@@ -447,15 +438,45 @@ func (e *OperationInvoker) run(
 						points[pk] = pv
 					}
 					for pk, pv := range rc {
+						if currentPoint, ok := points[pk].(map[string]any); ok {
+							if resolvedPoint, ok := pv.(map[string]any); ok {
+								point := make(map[string]any, len(currentPoint)+len(resolvedPoint))
+								for key, value := range currentPoint {
+									point[key] = value
+								}
+								for key, value := range resolvedPoint {
+									point[key] = value
+								}
+								points[pk] = point
+								continue
+							}
+						}
 						points[pk] = pv
 					}
 					merged[k] = points
 					continue
 				}
 			}
+			if k == "credentials" || k == "apiKeys" {
+				rc, rok := v.(map[string]any)
+				ec, eok := merged[k].(map[string]any)
+				if rok && eok {
+					named := make(map[string]any, len(ec)+len(rc))
+					for name, value := range ec {
+						named[name] = value
+					}
+					for name, value := range rc {
+						named[name] = value
+					}
+					merged[k] = named
+					continue
+				}
+			}
 			merged[k] = v
 		}
+		changed := !reflect.DeepEqual(contextData, merged)
 		contextData = merged
+		return changed
 	}
 
 	// Preflight (the binding-invoker contract's prepareBinding): collapse
@@ -467,17 +488,24 @@ func (e *OperationInvoker) run(
 		return
 	}
 	if details != nil {
-		resolved, rerr := e.resolveContext(ctx, details)
+		if !ValidContextRequiredDetails(details) {
+			caller.FireError(NewInvocationError(ErrCodeRuntime))
+			return
+		}
+		resolved, resolveErr := e.resolveContext(ctx, details)
+		if resolveErr != nil {
+			caller.FireError(NewInvocationError(ErrCodeRuntime))
+			return
+		}
 		if resolved == nil {
-			challenge := NewContextRequiredError("openbindings: binding requires context", details)
-			if rerr != nil {
-				// Distinguish "no credentials" from a broken resolver.
-				challenge.Message = fmt.Sprintf("openbindings: binding requires context (resolver failed: %v)", rerr)
-			}
+			challenge := NewContextRequiredError(details)
 			caller.FireError(challenge)
 			return
 		}
-		mergeResolved(resolved)
+		if !mergeResolved(resolved) {
+			caller.FireError(NewContextRequiredError(details))
+			return
+		}
 	}
 
 	// Inputs already forwarded to the binding, post-transform, recorded for
@@ -511,47 +539,6 @@ func (e *OperationInvoker) run(
 		return out
 	}
 
-	headerForwarded := false
-	forwardHeader := func(inner Invocation[any, any]) {
-		if headerForwarded {
-			return
-		}
-		headerForwarded = true
-		// Bounded by the invocation ctx: our impl returns a settled header
-		// even under a cancelled ctx (non-blocking-first), and a foreign impl
-		// that never settles cannot hang the run loop.
-		if md, err := inner.Diagnostics().Header(ctx); err == nil {
-			_ = caller.SetHeader(md)
-		}
-	}
-	forwardTrailer := func(inner Invocation[any, any], success bool) {
-		// Every call site cancels (or has observed the terminal of) the
-		// inner first; the recover guards foreign Invocation impls whose
-		// Trailer panics on a not-yet-settled terminal race.
-		defer func() { _ = recover() }()
-		merged := Metadata{}
-		for k, v := range inner.Diagnostics().Trailer() {
-			merged[k] = v
-		}
-		// Per the conventions record (spec/binding-specs/README.md), the
-		// unvalidated-assumption warning rides the trailer on
-		// SUCCESS only (failures carry tier-precise provenance already),
-		// keyed on the format's own decode stamp — only an assumption
-		// lane can trigger it.
-		if success {
-			stamp := ""
-			if v := merged["x-ob-decode"]; len(v) > 0 {
-				stamp = v[0]
-			}
-			if w := AssumptionWarning(stamp, op.Output); w != "" {
-				merged["x-ob-warning"] = append(merged["x-ob-warning"], w)
-			}
-		}
-		if len(merged) > 0 {
-			caller.SetTrailer(merged)
-		}
-	}
-
 	rounds := 0
 	for {
 		// innerCtx bounds this attempt's binding: it cancels when the caller
@@ -577,8 +564,7 @@ func (e *OperationInvoker) run(
 				if r := recover(); r != nil {
 					inner.Cancel()
 					caller.FireError(&InvocationError{
-						Code:    ErrCodeRuntime,
-						Message: fmt.Sprintf("openbindings: invoker panic: %v", r),
+						Code: ErrCodeRuntime,
 					})
 				}
 			}()
@@ -587,10 +573,9 @@ func (e *OperationInvoker) run(
 		}()
 
 		surface, retryChallenge := e.runOutputs(
-			innerCtx, caller, inner, binding, bindingKey, iface,
-			compiledOutput, closeRetryWindow, forwardHeader,
+			innerCtx, caller, inner, binding, iface,
+			compiledOutput, closeRetryWindow,
 			func() bool { retryMu.Lock(); defer retryMu.Unlock(); return retryEligible },
-			hooks, op.Output,
 		)
 		var retryDetails *ContextRequiredDetails
 		if retryChallenge != nil {
@@ -603,9 +588,10 @@ func (e *OperationInvoker) run(
 		<-pumpDone
 
 		if retryDetails != nil && rounds < maxContextRounds {
-			resolved, _ := e.resolveContext(ctx, retryDetails)
-			if resolved != nil {
-				mergeResolved(resolved)
+			resolved, resolveErr := e.resolveContext(ctx, retryDetails)
+			if resolveErr != nil {
+				surface = NewInvocationError(ErrCodeRuntime)
+			} else if resolved != nil && mergeResolved(resolved) {
 				rounds++
 				innerCancel()
 				continue
@@ -613,15 +599,13 @@ func (e *OperationInvoker) run(
 		}
 		if retryDetails != nil && surface == nil {
 			// Decline or cap exhausted: surface the binding's ORIGINAL
-			// challenge (its message is the human-readable part).
+			// challenge unchanged.
 			surface = retryChallenge
 		}
 
-		// Ensure the inner is terminal before metadata reads (idempotent
-		// no-op on the clean-close and already-errored paths).
+		// Ensure the inner is terminal (idempotent on clean close and an
+		// already-errored attempt).
 		inner.Cancel()
-		forwardHeader(inner)
-		forwardTrailer(inner, surface == nil)
 		if surface != nil {
 			caller.FireError(surface)
 		} else {
@@ -685,9 +669,7 @@ func (e *OperationInvoker) pumpInputs(
 			if terr != nil {
 				inner.Cancel()
 				caller.FireError(&InvocationError{
-					Code:        ErrCodeTransformError,
-					Message:     fmt.Sprintf("openbindings: input transform failed: %v", terr),
-					Diagnostics: operationInvokerDiagnostics(bindingKey, nil),
+					Code: ErrCodeTransformError,
 				})
 				return
 			}
@@ -709,14 +691,10 @@ func (e *OperationInvoker) runOutputs(
 	caller *InvocationImpl[any, any],
 	inner Invocation[any, any],
 	binding *BindingEntry,
-	bindingKey string,
 	iface *Interface,
 	compiledOutput *jsonschema.Schema,
 	closeRetryWindow func(),
-	forwardHeader func(Invocation[any, any]),
 	retryEligible func() bool,
-	hooks *InvokeHooks,
-	outputSchema JSONSchema,
 ) (surface, retryChallenge *InvocationError) {
 	out := inner.Outputs()
 	for {
@@ -740,9 +718,7 @@ func (e *OperationInvoker) runOutputs(
 			if terr != nil {
 				inner.Cancel()
 				return &InvocationError{
-					Code:        ErrCodeTransformError,
-					Message:     fmt.Sprintf("openbindings: output transform failed: %v", terr),
-					Diagnostics: operationInvokerDiagnostics(bindingKey, nil),
+					Code: ErrCodeTransformError,
 				}, nil
 			}
 			data = transformed
@@ -753,26 +729,10 @@ func (e *OperationInvoker) runOutputs(
 		if compiledOutput != nil {
 			if verr := compiledOutput.Validate(data); verr != nil {
 				inner.Cancel()
-				lines := splitSchemaError(verr)
-				msg := fmt.Sprintf("openbindings: output validation failed for operation %q: %s", binding.Operation, strings.Join(lines, "; "))
-				// Contract-decided teaching: a hook-decoded value failing
-				// against a floor-stamped derived schema means the CONTRACT
-				// still declares the floor — the remedy is the schema
-				// election, not the hook.
-				if FloorStamped(outputSchema) && hooks.DecodeDecidedBy() == "hook" {
-					msg += " — the synthesized schema still declares the floor's string; elect the real output schema (a stored output-schema election on the operation)"
-				}
-				tier := hooks.DecodeDecidedBy()
-				return &InvocationError{
-					Code:        ErrCodeValidationFailed,
-					Message:     msg,
-					Details:     ValidationFailureDetails{Failures: collectValidationFailures(verr)},
-					Diagnostics: operationInvokerDiagnostics(bindingKey, map[string]any{"decodeDecidedBy": tier}),
-				}, nil
+				return NewInvocationError(ErrCodeOperationValidationFailed), nil
 			}
 		}
 
-		forwardHeader(inner)
 		if err := caller.EmitOutput(data); err != nil {
 			// Caller-side terminal (cancel / abandoned stream): tear down
 			// the binding and stop. Nothing to report — the caller handle
@@ -781,16 +741,6 @@ func (e *OperationInvoker) runOutputs(
 			return nil, nil
 		}
 	}
-}
-
-func operationInvokerDiagnostics(bindingKey string, extra map[string]any) map[string]any {
-	details := map[string]any{"bindingKey": bindingKey}
-	for key, value := range extra {
-		if value != nil && value != "" {
-			details[key] = value
-		}
-	}
-	return map[string]any{"operationInvoker": details}
 }
 
 func (e *OperationInvoker) resolveContext(ctx context.Context, details *ContextRequiredDetails) (map[string]any, error) {
@@ -808,7 +758,7 @@ func (e *OperationInvoker) resolveContext(ctx context.Context, details *ContextR
 // compiling lazily on the first write (concurrency-safe). Validation
 // carries the core's claim semantics (OBI-T-16): the complete statically
 // reachable schema graph, `format` as annotation, applied per value — a
-// mismatch is ERR_VALIDATION_FAILED; a graph that cannot be established is
+// mismatch is ERR_OPERATION_VALIDATION_FAILED; a graph that cannot be established is
 // ERR_SCHEMA_UNRESOLVED, never partial validation.
 func makeInputValidator(op *Operation, iface *Interface, operationName string) func(any) *InvocationError {
 	if op.Input == nil {
@@ -824,8 +774,7 @@ func makeInputValidator(op *Operation, iface *Interface, operationName string) f
 			c, err := compileOperationSchema(iface, operationName, "input")
 			if err != nil {
 				compileError = &InvocationError{
-					Code:    ErrCodeSchemaUnresolved,
-					Message: fmt.Sprintf("openbindings: input schema graph for %q could not be established: %v", operationName, err),
+					Code: ErrCodeSchemaUnresolved,
 				}
 				return
 			}
@@ -835,12 +784,7 @@ func makeInputValidator(op *Operation, iface *Interface, operationName string) f
 			return compileError
 		}
 		if verr := compiled.Validate(input); verr != nil {
-			lines := splitSchemaError(verr)
-			return &InvocationError{
-				Code:    ErrCodeValidationFailed,
-				Message: fmt.Sprintf("openbindings: input validation failed for %q: %s", operationName, strings.Join(lines, "; ")),
-				Details: ValidationFailureDetails{Failures: collectValidationFailures(verr)},
-			}
+			return NewInvocationError(ErrCodeOperationValidationFailed)
 		}
 		return nil
 	}
@@ -860,7 +804,7 @@ func wireError(err error) *InvocationError {
 		return ie
 	}
 	if errors.Is(err, ErrNoInvoker) || strings.Contains(err.Error(), ErrNoInvoker.Error()) {
-		return &InvocationError{Code: ErrCodeBindingNotFound, Message: err.Error()}
+		return &InvocationError{Code: ErrCodeBindingNotFound}
 	}
 	return AsInvocationError(err)
 }

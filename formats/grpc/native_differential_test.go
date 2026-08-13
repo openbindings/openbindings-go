@@ -128,9 +128,8 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 		if terminal == nil || terminal.Code != openbindings.ErrCodeExecutionFailed {
 			t.Fatalf("OpenBindings terminal = %v, want protocol-independent unsuccessful completion", terminal)
 		}
-		diagnostics, _ := terminal.Diagnostics.(map[string]any)
-		if diagnostics["grpcCode"] != "ResourceExhausted" {
-			t.Fatalf("diagnostic evidence = %#v, want native status retained diagnostically", terminal.Diagnostics)
+		if terminal.HasData() {
+			t.Fatalf("native status leaked as abstract data: %#v", terminal.Data)
 		}
 	})
 

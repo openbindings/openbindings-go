@@ -15,8 +15,8 @@ import (
 // kindPrinter renders jsonschema/v6 ErrorKind values. The kinds implement
 // LocalizedString(*message.Printer), not String(), so formatting them with
 // %v would print the raw struct (e.g. `&{[customer]}` for a missing
-// required property) — and that text flows into ValidationFailure.Message,
-// a wire-crossing details payload consumers render per-field.
+// required property). The formatted text remains local validation evidence;
+// abstract invocation failures carry only ERR_VALIDATION_FAILED.
 var kindPrinter = message.NewPrinter(language.English)
 
 func kindString(k jsonschema.ErrorKind) string {
@@ -437,41 +437,6 @@ func splitSchemaError(err error) []string {
 		return flattenValidationError(ve, "")
 	}
 	return []string{err.Error()}
-}
-
-// collectValidationFailures returns structured per-leaf failures. The
-// shape mirrors the TS SDK's ValidationFailure so consumers can render
-// per-field diagnostics from either runtime without parsing strings.
-func collectValidationFailures(err error) []ValidationFailure {
-	if err == nil {
-		return nil
-	}
-	ve, ok := err.(*jsonschema.ValidationError)
-	if !ok {
-		return []ValidationFailure{{Message: err.Error()}}
-	}
-	return flattenValidationFailures(ve)
-}
-
-func flattenValidationFailures(ve *jsonschema.ValidationError) []ValidationFailure {
-	if ve == nil {
-		return nil
-	}
-	if len(ve.Causes) == 0 {
-		path := ""
-		if len(ve.InstanceLocation) > 0 {
-			path = "/" + strings.Join(ve.InstanceLocation, "/")
-		}
-		return []ValidationFailure{{
-			Path:    path,
-			Message: kindString(ve.ErrorKind),
-		}}
-	}
-	var out []ValidationFailure
-	for _, c := range ve.Causes {
-		out = append(out, flattenValidationFailures(c)...)
-	}
-	return out
 }
 
 func flattenValidationError(ve *jsonschema.ValidationError, prefix string) []string {

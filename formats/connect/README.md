@@ -126,16 +126,13 @@ requests as enveloped `application/connect+json`. The Connect protocol permits
 `Connect-Protocol-Version: 1` to be sent or omitted; either artifact-permitted
 choice is valid.
 
-Responses are parsed as JSON. Connect error responses complete unsuccessfully with the structural `ERR_EXECUTION_FAILED` code. Their native Connect error object and any HTTP response capture are optional diagnostics; the ordinary operation boundary does not derive portable auth, retry, or side-effect policy from Connect codes.
+Responses are parsed as JSON. Connect error responses complete unsuccessfully with the structural `ERR_EXECUTION_FAILED` code. Their native Connect error object, status, headers, and bytes remain below the abstract invocation boundary; the ordinary operation surface does not derive portable auth, retry, or side-effect policy from Connect codes.
 
-Mapping does not replace native evidence. `FailureEvidenceFrom` recovers the
-complete parsed Connect error and either the exact non-200 HTTP response body
-or exact END_STREAM payload from the terminal error, including after an
-invoker-frame JSON round trip. A diagnostics-bound HTTP body is explicitly
-marked truncated rather than presented as complete. Data envelopes emitted
-before a later END_STREAM error remain outputs.
+Data envelopes emitted before a later END_STREAM error remain outputs. Native
+Connect failure evidence is intentionally not copied into the abstract error;
+use Connect-native runtime tooling when that evidence is needed.
 
-Leading and trailing Connect/HTTP metadata is available only through the handle's explicit `Diagnostics()` view. It is not an operation value and correct ordinary invocation behavior must not depend on it.
+Leading and trailing Connect/HTTP metadata remains below the abstract invocation boundary. It is not an operation value or failure datum.
 
 ### Streaming behavior
 
@@ -175,8 +172,8 @@ Delivery units — the unary response body and each streaming envelope
 payload — are consumer-bounded: set `MaxDeliveryUnitBytes` on the
 `OperationInvoker` (or per invocation on `BindingInvocationArgs`); zero
 selects `openbindings.DefaultMaxDeliveryUnitBytes` (10 MiB). The streaming
-dispatch path's HTTP error-body capture is deliberately fixed — a
-diagnostics capture, not a delivery unit. Size caps are consumer and
+dispatch path's below-bridge HTTP error-body read is deliberately fixed — it
+is not an abstract delivery unit. Size caps are consumer and
 implementation policy under openbindings.connect@1 §2, never spec rules.
 
 ## License

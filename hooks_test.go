@@ -60,9 +60,8 @@ func TestInvokeHooks_DeclineChain(t *testing.T) {
 	}
 }
 
-// A panicking hook is contained as ErrCodeRuntime with tier provenance —
-// never a process kill (hooks run in format-invoker goroutines outside
-// core's Invoke recover).
+// A panicking hook is contained as ErrCodeRuntime, never a process kill
+// (hooks run in format-invoker goroutines outside core's Invoke recover).
 func TestInvokeHooks_PanicContainment(t *testing.T) {
 	h := newInvokeHooks(hookSlots{
 		classify: func(InvokeSite, RawResult) (bool, error) { panic("nil map read") },
@@ -72,8 +71,8 @@ func TestInvokeHooks_PanicContainment(t *testing.T) {
 	if !errors.As(err, &ie) || ie.Code != ErrCodeRuntime {
 		t.Fatalf("panic must contain as ErrCodeRuntime, got %v", err)
 	}
-	if !strings.Contains(ie.Message, "per-invocation hook") {
-		t.Fatalf("containment must name the tier: %v", ie.Message)
+	if ie.Error() != ErrCodeRuntime {
+		t.Fatalf("abstract error text must be the code, got %q", ie.Error())
 	}
 
 	// Router panics are contained too (the seam's error channel exists for
@@ -108,11 +107,11 @@ func TestInvokeHooks_ReturnedPlainError(t *testing.T) {
 }
 
 // Failure channel (i): a returned *InvocationError passes through as the
-// deliberate terminal, code preserved, tier provenance added.
+// deliberate terminal, with its code and data preserved exactly.
 func TestInvokeHooks_InvocationErrorPassthrough(t *testing.T) {
 	h := newInvokeHooks(hookSlots{
 		decode: func(InvokeSite, RawResult) (any, error) {
-			return nil, &InvocationError{Code: ErrCodeStreamError, Message: "frame error"}
+			return nil, &InvocationError{Code: ErrCodeStreamError}
 		},
 	}, hookSlots{})
 	_, err := h.DecodeOutput(testSite(), RawResult{}, nil)
@@ -120,8 +119,8 @@ func TestInvokeHooks_InvocationErrorPassthrough(t *testing.T) {
 	if !errors.As(err, &ie) || ie.Code != ErrCodeStreamError {
 		t.Fatalf("InvocationError must pass through with its code, got %v", err)
 	}
-	if m, ok := ie.Diagnostics.(map[string]any); !ok || m["decidedBy"] != "per-invocation hook" {
-		t.Fatalf("passthrough must carry diagnostic tier provenance, got %#v", ie.Diagnostics)
+	if ie.HasData() {
+		t.Fatalf("passthrough invented abstract data: %#v", ie.Data)
 	}
 }
 

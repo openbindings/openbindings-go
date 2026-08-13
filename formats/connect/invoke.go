@@ -18,9 +18,9 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// maxResponseBytes caps the HTTP ERROR body captured into failure details on
-// the streaming dispatch path (streaming.go). Deliberately fixed: a
-// diagnostics capture on the error path, not a delivery unit —
+// maxResponseBytes caps the HTTP error body drained on the streaming dispatch
+// path (streaming.go). Deliberately fixed: this is an implementation resource
+// guard on the error path, not a delivery unit —
 // BindingInvocationArgs.MaxDeliveryUnitBytes does not apply here. The
 // delivery-unit bounds (unary body, per-envelope payload) are
 // consumer-configured via that field; resource policy stays with the
@@ -115,15 +115,13 @@ func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.Me
 	}
 	if svcDesc == nil {
 		return nil, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("service %q not found in embedded schema", svcName),
+			Code: openbindings.ErrCodeRefNotFound,
 		}
 	}
 	m := svcDesc.Methods().ByName(protoreflect.Name(methodName))
 	if m == nil {
 		return nil, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeRefNotFound,
-			Message: fmt.Sprintf("method %q not found in service %q", methodName, svcName),
+			Code: openbindings.ErrCodeRefNotFound,
 		}
 	}
 	return m, nil
@@ -146,20 +144,18 @@ func buildSchemaModeBody(mi *methodInfo, input any) ([]byte, *openbindings.Invoc
 		jsonBytes, err := json.Marshal(input)
 		if err != nil {
 			return nil, &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeValidationFailed,
-				Message: fmt.Sprintf("marshal input: %v", err),
+				Code: openbindings.ErrCodeValidationFailed,
 			}
 		}
 		if err := protojson.Unmarshal(jsonBytes, msg); err != nil {
 			return nil, &openbindings.InvocationError{
-				Code:    openbindings.ErrCodeValidationFailed,
-				Message: fmt.Sprintf("input is not the canonical JSON form of %s: %v", mi.method.Input().FullName(), err),
+				Code: openbindings.ErrCodeValidationFailed,
 			}
 		}
 	}
 	body, err := protojson.Marshal(msg)
 	if err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 	}
 	return body, nil
 }
@@ -176,7 +172,7 @@ func buildDescriptorlessBody(input any, gotInput bool) ([]byte, *openbindings.In
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed, Message: err.Error()}
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
 	}
 	return body, nil
 }
@@ -197,17 +193,16 @@ func decodeSchemaModeOutput(mi *methodInfo, payload []byte) (any, *openbindings.
 	msg := dynamicpb.NewMessage(mi.method.Output())
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(payload, msg); err != nil {
 		return nil, &openbindings.InvocationError{
-			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("response is not the canonical JSON form of %s: %v (openbindings.connect@1 CONN-P-02)", mi.method.Output().FullName(), err),
+			Code: openbindings.ErrCodeResponseError,
 		}
 	}
 	rendered, err := protojson.Marshal(msg)
 	if err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: fmt.Sprintf("marshal response: %v", err)}
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError}
 	}
 	var out any
 	if err := json.Unmarshal(rendered, &out); err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: fmt.Sprintf("parse response JSON: %v", err)}
+		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError}
 	}
 	return out, nil
 }
@@ -219,122 +214,8 @@ func isJSONContentType(ct string) bool {
 	return ct == "application/json" || strings.HasPrefix(ct, "application/json;")
 }
 
-// connectCodeToErrCode maps a Connect protocol error code to the standard
-// invocation error codes. Failure outcomes have no representation in the
-// specification (§9.5); this vocabulary is this consumer surface's own.
-func connectCodeToErrCode(code string) string {
-	switch code {
-	case "unauthenticated":
-		return openbindings.ErrCodeAuthRequired
-	case "permission_denied":
-		return openbindings.ErrCodePermissionDenied
-	case "unavailable", "resource_exhausted":
-		// The server answered but refused the request as retryable — not a
-		// transport failure that never reached a server (ErrCodeConnectFailed).
-		// Same family mapping as gRPC; the binding-invoker contract pins it.
-		return openbindings.ErrCodeUnavailable
-	case "deadline_exceeded":
-		return openbindings.ErrCodeTimeout
-	case "canceled":
-		return openbindings.ErrCodeCancelled
-	default:
-		return openbindings.ErrCodeExecutionFailed
-	}
-}
-
-// applyConnectError refines an HTTP-status-derived terminal error with the
-// Connect error payload (a JSON object with `code` and `message` fields)
-// when the body parses as one.
-func applyConnectError(ierr *openbindings.InvocationError, body []byte) {
-	if len(body) == 0 {
-		return
-	}
-	var connectErr map[string]any
-	if json.Unmarshal(body, &connectErr) != nil {
-		return
-	}
-	// The Connect code stays binding-native diagnostic evidence. It does not
-	// select a portable OpenBindings failure category or retry policy.
-	if message, _ := connectErr["message"].(string); message != "" {
-		ierr.Message = message
-	}
-	details, _ := ierr.Diagnostics.(map[string]any)
-	if details == nil {
-		details = map[string]any{}
-		ierr.Diagnostics = details
-	}
-	details["connect"] = map[string]any{"error": connectErr}
-}
-
-// connectHTTPError preserves the complete native HTTP failure response in
-// addition to the parsed Connect error object. Body bytes are base64 because
-// Connect failures may be emitted by proxies and need not be JSON or UTF-8.
-func connectHTTPError(resp *http.Response, body []byte, truncated bool) *openbindings.InvocationError {
-	ierr := openbindings.HTTPError(resp.StatusCode, resp.Status)
-	applyConnectError(ierr, body)
-	details, _ := ierr.Diagnostics.(map[string]any)
-	if details == nil {
-		details = map[string]any{}
-		ierr.Diagnostics = details
-	}
-	headers := map[string][]string{}
-	for name, values := range resp.Header {
-		headers[strings.ToLower(name)] = append([]string(nil), values...)
-	}
-	response := map[string]any{
-		"status":     resp.StatusCode,
-		"statusText": resp.Status,
-		"headers":    headers,
-		"body": map[string]any{
-			"base64":     base64.StdEncoding.EncodeToString(body),
-			"byteLength": len(body),
-		},
-	}
-	if resp.Request != nil && resp.Request.URL != nil {
-		response["url"] = resp.Request.URL.String()
-	}
-	if truncated {
-		response["body"].(map[string]any)["truncated"] = true
-	}
-	details["httpResponse"] = response
-	return ierr
-}
-
-// headerMetadata clones HTTP headers into invocation Metadata.
-func headerMetadata(h http.Header) openbindings.Metadata {
-	md := make(openbindings.Metadata, len(h))
-	for k, vs := range h {
-		md[k] = append([]string(nil), vs...)
-	}
-	return md
-}
-
-// unaryTrailerPrefix marks trailing metadata in a Connect unary response:
-// the protocol carries unary trailing metadata as "Trailer-"-prefixed
-// response headers — unary Connect uses no HTTP trailers (§9.4).
-const unaryTrailerPrefix = "Trailer-"
-
-// splitUnaryMetadata separates a unary response's leading headers from its
-// trailing metadata: "Trailer-"-prefixed headers (the Connect unary
-// trailer convention, prefix stripped) plus any HTTP/1.1 trailers a
-// protocol-violating server may have sent (resp.Trailer is populated once
-// the body has been fully read). Metadata has no representation in the
-// output VALUE (§9.4, a declared exclusion); this handle-level surfacing
-// is out of band, the implementation's own concern.
-func splitUnaryMetadata(resp *http.Response) (header, trailer openbindings.Metadata) {
-	header = make(openbindings.Metadata, len(resp.Header))
-	trailer = openbindings.Metadata{}
-	for k, vs := range resp.Header {
-		if strings.HasPrefix(k, unaryTrailerPrefix) && len(k) > len(unaryTrailerPrefix) {
-			trailer[k[len(unaryTrailerPrefix):]] = append([]string(nil), vs...)
-			continue
-		}
-		header[k] = append([]string(nil), vs...)
-	}
-	for k, vs := range resp.Trailer {
-		trailer[k] = append(trailer[k], vs...)
-	}
-	return header, trailer
+func connectHTTPError(resp *http.Response, _ []byte, _ bool) *openbindings.InvocationError {
+	return openbindings.HTTPError(resp.StatusCode, resp.Status)
 }
 
 // runUnary sends one unary dispatch — a POST with a plain JSON body
@@ -351,7 +232,7 @@ func splitUnaryMetadata(resp *http.Response) (header, trailer openbindings.Metad
 func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, body []byte, headers map[string]string, mi *methodInfo, maxUnit int64) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed})
 		return
 	}
 
@@ -372,7 +253,7 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 		if ctx.Err() != nil {
 			return // cancelled; the handle is already terminal
 		}
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
 		return
 	}
 	defer resp.Body.Close()
@@ -385,23 +266,14 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 		if ctx.Err() != nil {
 			return
 		}
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: err.Error()})
+		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
 		return
 	}
 	if int64(len(respBody)) > maxUnit {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("response exceeds %d byte limit", maxUnit),
+			Code: openbindings.ErrCodeResponseError,
 		})
 		return
-	}
-
-	// Leading metadata precedes the first emit; trailing metadata precedes
-	// CloseOutput/FireError.
-	header, trailer := splitUnaryMetadata(resp)
-	_ = inv.SetHeader(header)
-	if len(trailer) > 0 {
-		inv.SetTrailer(trailer)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -417,8 +289,7 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 	// framing is the codec's plain JSON body, CONN-P-05).
 	if ct := resp.Header.Get("Content-Type"); !isJSONContentType(ct) {
 		inv.FireError(&openbindings.InvocationError{
-			Code:    openbindings.ErrCodeResponseError,
-			Message: fmt.Sprintf("connect unary 200 response carries Content-Type %q, not the JSON codec's application/json (openbindings.connect@1 §9.3 / CONN-P-05)", ct),
+			Code: openbindings.ErrCodeResponseError,
 		})
 		return
 	}
@@ -441,13 +312,12 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 		// body that fails to parse as JSON is a loud protocol-error
 		// failure outcome, never a string.
 		if len(respBody) == 0 {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError, Message: "successful descriptorless Connect response is empty and carries no JSON value"})
+			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
 			return
 		}
 		if err := json.Unmarshal(respBody, &output); err != nil {
 			inv.FireError(&openbindings.InvocationError{
-				Code:    openbindings.ErrCodeResponseError,
-				Message: fmt.Sprintf("connect unary 200 response body does not parse as JSON: %v (openbindings.connect@1 §9.3)", err),
+				Code: openbindings.ErrCodeResponseError,
 			})
 			return
 		}

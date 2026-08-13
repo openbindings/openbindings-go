@@ -181,7 +181,7 @@ func TestScopeContext_AdmitsOnlyNamedConfigurationPoint(t *testing.T) {
 		Target: "https://api.example.com",
 		Alternatives: []ContextAlternative{{Requirements: []ContextRequirement{{
 			Type:  "config.value",
-			Extra: map[string]any{"point": "server", "key": "url"},
+			Extra: map[string]any{"point": "server", "path": "/url"},
 		}}}},
 	}
 	got := ScopeContext(stored, details)

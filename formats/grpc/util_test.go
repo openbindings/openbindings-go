@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"testing"
 
@@ -78,9 +77,8 @@ func TestGRPCError_StatusIsDiagnosticNotPortableClassification(t *testing.T) {
 			if ie.Code != openbindings.ErrCodeExecutionFailed {
 				t.Errorf("code = %q, want protocol-independent unsuccessful completion", ie.Code)
 			}
-			diagnostics, ok := ie.Diagnostics.(map[string]any)
-			if !ok || diagnostics["grpcCode"] != grpcCode.String() {
-				t.Errorf("diagnostics = %v, want grpcCode %q", ie.Diagnostics, grpcCode.String())
+			if ie.HasData() {
+				t.Errorf("native status leaked as abstract data: %v", ie.Data)
 			}
 		})
 	}
@@ -98,8 +96,8 @@ func TestGRPCError_NonStatusError(t *testing.T) {
 	if ie.Code != "ERR_EXECUTION_FAILED" {
 		t.Errorf("code = %q, want ERR_EXECUTION_FAILED", ie.Code)
 	}
-	if ie.Message != "plain failure" {
-		t.Errorf("message = %q", ie.Message)
+	if ie.Error() != openbindings.ErrCodeExecutionFailed {
+		t.Errorf("error text = %q", ie.Error())
 	}
 }
 
@@ -109,31 +107,8 @@ func TestGRPCError_StatusDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	ie := grpcError(st.Err(), openbindings.ErrCodeExecutionFailed)
-	details, ok := ie.Diagnostics.(map[string]any)
-	if !ok {
-		t.Fatalf("diagnostics = %T", ie.Diagnostics)
-	}
-	ds, ok := details["grpcDetails"].([]any)
-	if !ok || len(ds) != 1 {
-		t.Fatalf("grpcDetails = %v", details["grpcDetails"])
-	}
-	grpcStatus, ok := details["grpcStatus"].(map[string]any)
-	if !ok {
-		t.Fatalf("grpcStatus = %T", details["grpcStatus"])
-	}
-	if grpcStatus["code"] != int32(codes.PermissionDenied) || grpcStatus["message"] != "nope" {
-		t.Errorf("grpcStatus = %v", grpcStatus)
-	}
-	rawDetails, ok := grpcStatus["details"].([]any)
-	if !ok || len(rawDetails) != 1 {
-		t.Fatalf("grpcStatus.details = %v", grpcStatus["details"])
-	}
-	raw, ok := rawDetails[0].(map[string]any)
-	if !ok {
-		t.Fatalf("grpcStatus.details[0] = %T", rawDetails[0])
-	}
-	if raw["typeUrl"] != "type.googleapis.com/google.protobuf.StringValue" || raw["valueBase64"] != "CgVleHRyYQ==" {
-		t.Errorf("grpcStatus.details[0] = %v", raw)
+	if ie.HasData() {
+		t.Fatalf("native status details leaked as abstract data: %v", ie.Data)
 	}
 }
 
@@ -145,29 +120,6 @@ func TestRefResolveError_TransportVsNotFound(t *testing.T) {
 	}
 	if ie := refResolveError("pkg.Svc", errors.New("symbol not found")); ie.Code != "ERR_REF_NOT_FOUND" {
 		t.Errorf("not found: code = %q, want ERR_REF_NOT_FOUND", ie.Code)
-	}
-}
-
-func TestToOBMetadata(t *testing.T) {
-	if got := toOBMetadata(nil); got != nil {
-		t.Errorf("nil md: got %v, want nil", got)
-	}
-	if got := toOBMetadata(metadata.MD{}); got != nil {
-		t.Errorf("empty md: got %v, want nil", got)
-	}
-	rawBinary := string([]byte{0x00, 0xff, 0x41})
-	src := metadata.Pairs("x-a", "1", "x-a", "2", "x-b", "3", "trace-bin", rawBinary, "trace-bin", "second")
-	got := toOBMetadata(src)
-	if len(got["x-a"]) != 2 || got["x-a"][0] != "1" || got["x-a"][1] != "2" || got["x-b"][0] != "3" {
-		t.Errorf("got %v", got)
-	}
-	if want := []string{base64.StdEncoding.EncodeToString([]byte(rawBinary)), base64.StdEncoding.EncodeToString([]byte("second"))}; len(got["trace-bin"]) != 2 || got["trace-bin"][0] != want[0] || got["trace-bin"][1] != want[1] {
-		t.Errorf("trace-bin = %v, want %v", got["trace-bin"], want)
-	}
-	// Values are copied, not aliased.
-	got["x-a"][0] = "mutated"
-	if src.Get("x-a")[0] != "1" {
-		t.Error("toOBMetadata aliased the source slice")
 	}
 }
 
