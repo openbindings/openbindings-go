@@ -204,6 +204,23 @@ func messageCoverage(doc *document, candidate observedMessage, id struct {
 		}
 	}
 	if emitted {
+		// The §9.2 floor: a declared non-JSON-Schema representation keeps the
+		// operation invocable through an unconstrained direction, but the
+		// emitted OBI has lost a contract bespoke artifact code still knows.
+		// That is lossy, never fully represented — the coverage surface's
+		// honest-partiality promise is the reason this ledger exists.
+		if reason := messagePayloadLossReason(doc, *candidate.message); reason != "" {
+			message := "the declared schema format has no faithful JSON Schema conversion; the direction is represented by the unconstrained schema"
+			if reason == "asyncapi.payload_carriage_unsupported" {
+				message = "the effective content type has no JSON application-value carriage; the direction is represented by the unconstrained schema"
+			}
+			return openbindings.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
+				Status: openbindings.SynthesisLossy, OperationKey: id.operation, BindingRef: id.ref,
+				ReasonCode: reason, Rule: "ASYNC-P-05",
+				Message: message,
+			}
+		}
 		return openbindings.SynthesisCoverageEntry{
 			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
 			Status: openbindings.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,

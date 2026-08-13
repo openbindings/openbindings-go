@@ -240,18 +240,46 @@ func unionPayloadSchemas(doc *document, messages []message) map[string]any {
 
 func foreignSchemaFormat(format string) bool {
 	format = strings.ToLower(format)
-	return format != "" && !strings.Contains(format, "asyncapi") && !strings.Contains(format, "json-schema")
+	// application/schema+json (with any version parameter) is the official
+	// JSON Schema media type; a substring heuristic that only knew the
+	// hyphenated spelling misclassified it as foreign (corpus: qconn-io
+	// declares application/schema+json;version=draft-07 — real Draft-07,
+	// which the dialect translator handles).
+	return format != "" &&
+		!strings.Contains(format, "asyncapi") &&
+		!strings.Contains(format, "json-schema") &&
+		!strings.Contains(format, "schema+json")
 }
 
-// messagePayloadNotConvertible reports whether a governed message's payload
-// cannot enter an OBI schema position faithfully: no payload at all, a
-// declared foreign schemaFormat (an Avro or Protobuf schema is not a JSON
-// Schema), or an effective content type with no JSON application-value
-// carriage (an application/avro payload's schema describes bytes the JSON
-// boundary never sees). Declaration-driven only — never payload sniffing.
+// messagePayloadNotConvertible reports whether the emitted direction must be
+// the unconstrained schema: no payload at all, a declared foreign
+// schemaFormat, or an effective content type with no JSON application-value
+// carriage. Declaration-driven only — never payload sniffing. This is the
+// EMISSION predicate; whether anything was LOST is messagePayloadLossReason's
+// separate question — an absent payload declares no contract, so the
+// unconstrained schema loses nothing.
 func messagePayloadNotConvertible(doc *document, m message) bool {
-	if m.Payload == nil || foreignSchemaFormat(m.SchemaFormat) {
+	if m.Payload == nil {
 		return true
 	}
-	return supportedMessageContentType(messageEffectiveContentType(doc, m)) != nil
+	return messagePayloadLossReason(doc, m) != ""
+}
+
+// messagePayloadLossReason names the lossy-coverage reason when the floored
+// direction discards an author-declared contract, or empty when nothing is
+// lost. The two causes carry different authority and remediation, so they
+// account under distinct codes: a foreign schema format (an Avro or Protobuf
+// schema is not a JSON Schema) versus a content type whose bytes the JSON
+// value boundary cannot carry even when the schema itself might translate.
+func messagePayloadLossReason(doc *document, m message) string {
+	if m.Payload == nil {
+		return ""
+	}
+	if foreignSchemaFormat(m.SchemaFormat) {
+		return "asyncapi.schema_format_not_convertible"
+	}
+	if supportedMessageContentType(messageEffectiveContentType(doc, m)) != nil {
+		return "asyncapi.payload_carriage_unsupported"
+	}
+	return ""
 }
