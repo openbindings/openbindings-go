@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -309,6 +310,64 @@ func TestSynthesizeInterfaceWithCoverage_RepresentsBothDirectionsOfReplyBearingS
 	}
 	if !result.Coverage.FullyRepresented {
 		t.Fatalf("driver-independent coverage should be complete: %#v", result.Coverage.Entries)
+	}
+}
+
+func TestSynthesizeInterfaceWithCoverage_ResolvesReplyDeclaredByReference(t *testing.T) {
+	// A Reply Object may be a Reference Object into components.replies. Retaining
+	// only the reference leaves a reply with no channel and no messages, which is
+	// indistinguishable from an operation that declares no reply, so the reply
+	// direction silently disappears. The reference form must be equivalent to the
+	// inline form.
+	content := json.RawMessage(`{
+	  "asyncapi": "3.0.0",
+	  "info": {"title": "Referenced reply", "version": "1"},
+	  "servers": {"ws": {"host": "api.example", "protocol": "wss"}},
+	  "channels": {
+	    "events": {"address": "/events", "messages": {"event": {"payload": {"type": "object"}}}},
+	    "commands": {"address": "/commands", "messages": {"command": {"payload": {"type": "string"}}}}
+	  },
+	  "components": {
+	    "replies": {
+	      "commandReply": {"messages": [{"$ref": "#/channels/commands/messages/command"}]}
+	    }
+	  },
+	  "operations": {
+	    "subscribe": {
+	      "action": "send",
+	      "channel": {"$ref": "#/channels/events"},
+	      "messages": [{"$ref": "#/channels/events/messages/event"}],
+	      "reply": {"$ref": "#/components/replies/commandReply"}
+	    }
+	  }
+	}`)
+
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, ok := result.Interface.Operations["subscribe"]
+	if !ok {
+		t.Fatalf("reply-bearing send was not synthesized: %#v", result.Interface.Operations)
+	}
+	input, inputOK := op.Input.(map[string]any)
+	output, outputOK := op.Output.(map[string]any)
+	if !inputOK || input["type"] != "string" || !outputOK || output["type"] != "object" {
+		t.Fatalf("operation directions = input %#v output %#v", op.Input, op.Output)
+	}
+	if !result.Coverage.FullyRepresented {
+		t.Fatalf("driver-independent coverage should be complete: %#v", result.Coverage.Entries)
+	}
+	var replyEntries int
+	for _, entry := range result.Coverage.Entries {
+		if strings.Contains(entry.SourceRef, "#reply-message") {
+			replyEntries++
+		}
+	}
+	if replyEntries == 0 {
+		t.Fatalf("referenced reply contributed no reply-message coverage: %#v", result.Coverage.Entries)
 	}
 }
 

@@ -110,9 +110,14 @@ type httpOperationBinding struct {
 	BindingVersion string         `json:"bindingVersion,omitempty" yaml:"bindingVersion,omitempty"`
 }
 
+// operationReply is the AsyncAPI Reply Object. It may also appear as a
+// Reference Object pointing into components.replies, so Ref is retained: an
+// unresolved reply reference must stay visible rather than decoding into an
+// empty reply that reads as a one-way operation.
 type operationReply struct {
 	Channel  *channelRef  `json:"channel,omitempty" yaml:"channel,omitempty"`
 	Messages []messageRef `json:"messages,omitempty" yaml:"messages,omitempty"`
+	Ref      string       `json:"$ref,omitempty" yaml:"$ref,omitempty"`
 }
 
 type message struct {
@@ -213,4 +218,5 @@ type components struct {
 	Parameters      map[string]parameter      `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 	SecuritySchemes map[string]securityScheme `json:"securitySchemes,omitempty" yaml:"securitySchemes,omitempty"`
 	Tags            map[string]tag            `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Replies         map[string]operationReply `json:"replies,omitempty" yaml:"replies,omitempty"`
 }

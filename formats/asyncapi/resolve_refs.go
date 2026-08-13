@@ -50,6 +50,22 @@ func resolveRefs(doc *document) {
 		doc.Operations[opID] = op
 	}
 
+	// 0a. Resolve Reply Objects that are Reference Objects. An operation
+	// commonly declares `reply: {$ref: '#/components/replies/{name}'}`; keeping
+	// only the Reference Object would leave a reply with no channel and no
+	// messages, which is indistinguishable downstream from an operation that
+	// declares no reply at all. A reference that does not resolve keeps its Ref
+	// set and stays visible as a dangling declaration.
+	for opID, op := range doc.Operations {
+		if op.Reply == nil || op.Reply.Ref == "" {
+			continue
+		}
+		if resolved := resolveReplyRefByPointer(op.Reply.Ref, rawDoc); resolved != nil {
+			op.Reply = resolved
+			doc.Operations[opID] = op
+		}
+	}
+
 	// Resolve $refs in schema maps (map[string]any) throughout the document.
 	// Schemas live in: message payloads, component schemas, etc.
 
@@ -251,6 +267,33 @@ func resolveOperationRefByPointer(ref string, rawDoc map[string]any) *asyncOpera
 		return nil
 	}
 	return &op
+}
+
+// resolveReplyRefByPointer resolves a Reply Object Reference and returns the
+// referenced reply, or nil when the pointer does not resolve to an object. A
+// resolved entry that is itself a Reference Object is not chased further, which
+// mirrors the operation and message resolution posture.
+func resolveReplyRefByPointer(ref string, rawDoc map[string]any) *operationReply {
+	if !strings.HasPrefix(ref, "#/") {
+		return nil
+	}
+	resolved := resolveJSONPointer(rawDoc, ref)
+	resolvedMap, ok := resolved.(map[string]any)
+	if !ok {
+		return nil
+	}
+	data, err := json.Marshal(resolvedMap)
+	if err != nil {
+		return nil
+	}
+	var reply operationReply
+	if err := json.Unmarshal(data, &reply); err != nil {
+		return nil
+	}
+	if reply.Ref != "" {
+		return nil
+	}
+	return &reply
 }
 
 // resolveMessageRefByPointer resolves a message $ref pointer and returns a Message.
