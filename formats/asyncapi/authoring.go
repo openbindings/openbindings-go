@@ -2,6 +2,8 @@ package asyncapi
 
 import (
 	"encoding/json"
+	"errors"
+	"mime"
 	"sort"
 	"strings"
 )
@@ -62,6 +64,23 @@ func operationExclusion(doc *document, op *asyncOperation, bindingSpec string) *
 		inputMessages, outputMessages = replyMessages, operationMessages
 	}
 	if len(inputMessages) > 0 {
+		// A caller-input direction whose every alternative declares media the
+		// JSON value boundary cannot carry is statically guaranteed to refuse
+		// today: input encoding has no codec seam (the decode hook exists but
+		// is unreachable behind content-type validation). The synthesis
+		// contract forbids emitting an operation guaranteed to refuse as
+		// usable, so the target is implementation-unsupported until the codec
+		// extension path exists — visible MC2 debt, never laundered.
+		allCarriageUnsupported := true
+		for _, message := range inputMessages {
+			if messagePayloadLossReason(doc, message) != "asyncapi.payload_carriage_unsupported" {
+				allCarriageUnsupported = false
+				break
+			}
+		}
+		if allCarriageUnsupported {
+			return &authoringExclusion{"implementation-unsupported", "asyncapi.payload_carriage_unsupported", "ASYNC-P-05", "every caller-input message declares media without JSON application-value carriage; invocation would refuse before dispatch until a codec extension path exists"}
+		}
 		allHaveHeaders := true
 		for _, message := range inputMessages {
 			if message.Headers == nil {
@@ -217,8 +236,11 @@ func unionPayloadSchemas(doc *document, messages []message) map[string]any {
 		if messagePayloadNotConvertible(doc, message) {
 			return map[string]any{}
 		}
-		schema, _ := effectivePayload(message)
-		translated := translateSchemaDialect(schema)
+		schema, format := effectivePayload(message)
+		translated := schema
+		if classifySchemaFormat(format) == schemaFormatTranslate {
+			translated = translateSchemaDialect(schema)
+		}
 		encoded, _ := json.Marshal(translated)
 		unique[string(encoded)] = translated
 	}
@@ -239,17 +261,91 @@ func unionPayloadSchemas(doc *document, messages []message) map[string]any {
 	return map[string]any{"anyOf": choices}
 }
 
+// schemaFormatDisposition classifies a declared schemaFormat by EXACT parsed
+// identity, replacing the earlier substring heuristic (which both accepted
+// bogus formats and applied Draft-07 rules to other dialects). The pinned
+// set:
+//
+//   - absent → the edition's default AsyncAPI Schema Object (Draft-07
+//     superset in every accepted edition) → translate;
+//   - application/vnd.aai.asyncapi(+json|+yaml);version=2.x/3.x → the same
+//     AsyncAPI Schema Object → translate;
+//   - application/schema+json|+yaml;version=draft-07 → JSON Schema Draft 07
+//     → translate;
+//   - application/schema+json|+yaml;version=draft/2020-12 → already the OBI
+//     dialect → passthrough;
+//   - anything else (Avro, Protobuf, OpenAPI, RAML, unknown or malformed
+//     versions, unparseable media types) → foreign.
+type schemaFormatDisposition int
+
+const (
+	schemaFormatTranslate schemaFormatDisposition = iota
+	schemaFormatPassthrough
+	schemaFormatForeign
+)
+
+func classifySchemaFormat(format string) schemaFormatDisposition {
+	trimmed := strings.TrimSpace(format)
+	if trimmed == "" {
+		return schemaFormatTranslate
+	}
+	mediaType, params, err := mime.ParseMediaType(trimmed)
+	if err != nil {
+		// The JSON Schema version parameter is conventionally spelled
+		// unquoted (version=draft/2020-12) even though the slash is not a
+		// legal RFC 2045 token character. Fall back to a lenient split, as
+		// the TS twin parses.
+		mediaType, params, err = lenientParseMediaType(trimmed)
+		if err != nil {
+			return schemaFormatForeign
+		}
+	}
+	version := strings.ToLower(strings.TrimSpace(params["version"]))
+	switch strings.ToLower(mediaType) {
+	case "application/vnd.aai.asyncapi", "application/vnd.aai.asyncapi+json", "application/vnd.aai.asyncapi+yaml":
+		return schemaFormatTranslate
+	case "application/schema+json", "application/schema+yaml":
+		switch version {
+		case "draft-07":
+			return schemaFormatTranslate
+		case "draft/2020-12":
+			return schemaFormatPassthrough
+		default:
+			return schemaFormatForeign
+		}
+	default:
+		return schemaFormatForeign
+	}
+}
+
+// lenientParseMediaType splits "type/subtype;name=value;..." without
+// enforcing RFC 2045 token rules on parameter values, stripping optional
+// surrounding quotes. Mirrors the TS twin's parser exactly.
+func lenientParseMediaType(input string) (string, map[string]string, error) {
+	segments := strings.Split(input, ";")
+	mediaType := strings.ToLower(strings.TrimSpace(segments[0]))
+	if _, _, err := mime.ParseMediaType(mediaType); err != nil {
+		return "", nil, err
+	}
+	params := make(map[string]string, len(segments)-1)
+	for _, segment := range segments[1:] {
+		name, value, found := strings.Cut(segment, "=")
+		if !found {
+			return "", nil, errInvalidMediaTypeParameter
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 && strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
+			value = value[1 : len(value)-1]
+		}
+		params[strings.ToLower(strings.TrimSpace(name))] = value
+	}
+	return mediaType, params, nil
+}
+
+var errInvalidMediaTypeParameter = errors.New("asyncapi: media type parameter is not name=value")
+
 func foreignSchemaFormat(format string) bool {
-	format = strings.ToLower(format)
-	// application/schema+json (with any version parameter) is the official
-	// JSON Schema media type; a substring heuristic that only knew the
-	// hyphenated spelling misclassified it as foreign (corpus: qconn-io
-	// declares application/schema+json;version=draft-07 — real Draft-07,
-	// which the dialect translator handles).
-	return format != "" &&
-		!strings.Contains(format, "asyncapi") &&
-		!strings.Contains(format, "json-schema") &&
-		!strings.Contains(format, "schema+json")
+	return classifySchemaFormat(format) == schemaFormatForeign
 }
 
 // effectivePayload resolves the schema a message actually declares, across

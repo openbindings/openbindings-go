@@ -99,6 +99,9 @@ func coverageExclusion(sourceRef string, scope openbindings.SynthesisCoverageSco
 	if exclusion.status == "invalid" {
 		status = openbindings.SynthesisInvalid
 	}
+	if exclusion.status == "implementation-unsupported" {
+		status = openbindings.SynthesisImplementationUnsupported
+	}
 	return openbindings.SynthesisCoverageEntry{
 		SourceIndex: 0, SourceRef: sourceRef, Scope: scope, Status: status,
 		ReasonCode: exclusion.code, Rule: exclusion.rule, Message: exclusion.message,
@@ -209,16 +212,25 @@ func messageCoverage(doc *document, candidate observedMessage, id struct {
 		// emitted OBI has lost a contract bespoke artifact code still knows.
 		// That is lossy, never fully represented — the coverage surface's
 		// honest-partiality promise is the reason this ledger exists.
-		if reason := messagePayloadLossReason(doc, *candidate.message); reason != "" {
-			message := "the declared schema format has no faithful JSON Schema conversion; the direction is represented by the unconstrained schema"
-			if reason == "asyncapi.payload_carriage_unsupported" {
-				message = "the effective content type has no JSON application-value carriage; the direction is represented by the unconstrained schema"
-			}
+		switch messagePayloadLossReason(doc, *candidate.message) {
+		case "asyncapi.schema_format_not_convertible":
+			// Language loss: values still ride JSON, invocation works, the
+			// contract is degraded — lossy.
 			return openbindings.SynthesisCoverageEntry{
 				SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
 				Status: openbindings.SynthesisLossy, OperationKey: id.operation, BindingRef: id.ref,
-				ReasonCode: reason, Rule: "ASYNC-P-05",
-				Message: message,
+				ReasonCode: "asyncapi.schema_format_not_convertible", Rule: "ASYNC-P-05",
+				Message: "the declared schema format has no faithful JSON Schema conversion; the direction is represented by the unconstrained schema",
+			}
+		case "asyncapi.payload_carriage_unsupported":
+			// Carriage loss: the runtime refuses this alternative before
+			// dispatch today — implementation-unsupported until the codec
+			// extension path exists, never presented as usable.
+			return openbindings.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
+				Status: openbindings.SynthesisImplementationUnsupported, OperationKey: id.operation, BindingRef: id.ref,
+				ReasonCode: "asyncapi.payload_carriage_unsupported", Rule: "ASYNC-P-05",
+				Message: "the effective content type has no JSON application-value carriage; invocation refuses this alternative before dispatch",
 			}
 		}
 		return openbindings.SynthesisCoverageEntry{
