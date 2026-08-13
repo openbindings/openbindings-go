@@ -217,7 +217,8 @@ func unionPayloadSchemas(doc *document, messages []message) map[string]any {
 		if messagePayloadNotConvertible(doc, message) {
 			return map[string]any{}
 		}
-		translated := translateSchemaDialect(message.Payload)
+		schema, _ := effectivePayload(message)
+		translated := translateSchemaDialect(schema)
 		encoded, _ := json.Marshal(translated)
 		unique[string(encoded)] = translated
 	}
@@ -251,6 +252,24 @@ func foreignSchemaFormat(format string) bool {
 		!strings.Contains(format, "schema+json")
 }
 
+// effectivePayload resolves the schema a message actually declares, across
+// the editions' two spellings. AsyncAPI 2.x declares `schemaFormat` at the
+// MESSAGE level governing `payload` directly; AsyncAPI 3.x moved it into a
+// Multi Format Schema Object — `payload: {schemaFormat, schema}` — with a
+// bare payload meaning the edition's default Schema Object. The two shapes
+// are disjoint after edition normalization, so discrimination follows the
+// 3.x spec's own rule: a payload object carrying a string `schemaFormat`
+// member IS the wrapper, and the declared schema is its `schema` member.
+// Treating the wrapper itself as the schema silently buried the real
+// contract under an unknown keyword while reporting full representation.
+func effectivePayload(m message) (map[string]any, string) {
+	if format, ok := m.Payload["schemaFormat"].(string); ok {
+		schema, _ := m.Payload["schema"].(map[string]any)
+		return schema, format
+	}
+	return m.Payload, m.SchemaFormat
+}
+
 // messagePayloadNotConvertible reports whether the emitted direction must be
 // the unconstrained schema: no payload at all, a declared foreign
 // schemaFormat, or an effective content type with no JSON application-value
@@ -259,7 +278,8 @@ func foreignSchemaFormat(format string) bool {
 // separate question — an absent payload declares no contract, so the
 // unconstrained schema loses nothing.
 func messagePayloadNotConvertible(doc *document, m message) bool {
-	if m.Payload == nil {
+	schema, _ := effectivePayload(m)
+	if schema == nil {
 		return true
 	}
 	return messagePayloadLossReason(doc, m) != ""
@@ -272,11 +292,17 @@ func messagePayloadNotConvertible(doc *document, m message) bool {
 // schema is not a JSON Schema) versus a content type whose bytes the JSON
 // value boundary cannot carry even when the schema itself might translate.
 func messagePayloadLossReason(doc *document, m message) string {
-	if m.Payload == nil {
+	schema, format := effectivePayload(m)
+	if schema == nil && m.Payload == nil {
 		return ""
 	}
-	if foreignSchemaFormat(m.SchemaFormat) {
+	if foreignSchemaFormat(format) {
 		return "asyncapi.schema_format_not_convertible"
+	}
+	// A wrapper with a foreign-format schema handled above; a wrapper whose
+	// schema member is absent declares no contract in a recognized language.
+	if schema == nil {
+		return ""
 	}
 	if supportedMessageContentType(messageEffectiveContentType(doc, m)) != nil {
 		return "asyncapi.payload_carriage_unsupported"
