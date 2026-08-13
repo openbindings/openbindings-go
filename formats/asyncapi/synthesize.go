@@ -77,35 +77,16 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 
 		// Schema direction follows the complementary perspective
 		// (ASYNC-P-02): the artifact describes the application, the
-		// invocation is the counterparty.
-		switch asyncOp.Action {
-		case "send":
-			// The application sends; invoking subscribes — the operation's
-			// messages are the invoker's OUTPUT.
-			payload := operationPayloadSchema(doc, &asyncOp, false)
-			if payload != nil {
-				obiOp.Output = payload
-			}
-			if asyncOp.Reply != nil {
-				replyPayload := replyPayloadSchema(doc, asyncOp.Reply)
-				if replyPayload != nil {
-					obiOp.Input = replyPayload
-				}
-			}
-		case "receive":
-			// The application receives; invoking publishes — the operation's
-			// messages are the invoker's INPUT, and a declared reply is what
-			// the publish's response decodes to.
-			inputPayload := operationPayloadSchema(doc, &asyncOp, true)
-			if inputPayload != nil {
-				obiOp.Input = inputPayload
-			}
-			if asyncOp.Reply != nil {
-				outputPayload := replyPayloadSchema(doc, asyncOp.Reply)
-				if outputPayload != nil {
-					obiOp.Output = outputPayload
-				}
-			}
+		// invocation is the counterparty. Cyclic-reference hoisting runs on
+		// each direction so recursion the artifact declared survives the
+		// projection ($defs, decycle.go).
+		inputSchema, outputSchema := operationBoundarySchemas(doc, &asyncOp)
+		opPointer := "#/operations/" + escapeDefsPointerSegment(opKey)
+		if inputSchema != nil {
+			obiOp.Input = decycleOperationSchema(inputSchema, doc.raw, opPointer+"/input")
+		}
+		if outputSchema != nil {
+			obiOp.Output = decycleOperationSchema(outputSchema, doc.raw, opPointer+"/output")
 		}
 
 		iface.Operations[opKey] = obiOp

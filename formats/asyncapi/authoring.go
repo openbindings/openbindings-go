@@ -6,6 +6,8 @@ import (
 	"mime"
 	"sort"
 	"strings"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 type authoringExclusion struct {
@@ -97,11 +99,64 @@ func operationExclusion(doc *document, op *asyncOperation, bindingSpec string) *
 			return &authoringExclusion{"excluded", "asyncapi.message_headers", "ASYNC-P-03", "a possible caller-output message declares application headers the first candidate cannot carry at the ordinary value boundary"}
 		}
 	}
+	if defect := operationSchemaDefect(doc, op); defect != nil {
+		return defect
+	}
 	return nil
 }
 
 func authoringInputMessages(doc *document, op *asyncOperation, ch *channel) []message {
 	return governingMessages(doc, op, ch)
+}
+
+// operationBoundarySchemas derives both directions' operation-boundary
+// schemas under the complementary caller perspective (ASYNC-P-02): a send
+// operation's messages are the invoker's output, a receive operation's the
+// invoker's input, and a declared reply is the opposite direction.
+func operationBoundarySchemas(doc *document, op *asyncOperation) (input, output map[string]any) {
+	switch op.Action {
+	case "send":
+		output = operationPayloadSchema(doc, op, false)
+		if op.Reply != nil {
+			input = replyPayloadSchema(doc, op.Reply)
+		}
+	case "receive":
+		input = operationPayloadSchema(doc, op, true)
+		if op.Reply != nil {
+			output = replyPayloadSchema(doc, op.Reply)
+		}
+	}
+	return input, output
+}
+
+// operationSchemaDefect is the §9.2 confinement gate: a payload declaration
+// that projects to an ill-formed OBI schema (invalid under its own declared
+// dialect, or a reference the artifact leaves dangling) excludes exactly this
+// operation — never its siblings and never the artifact. The check validates
+// a single-operation probe interface with the core validator so the judgment
+// is the same one the emitted document would face (OBI-D-16/D-17).
+func operationSchemaDefect(doc *document, op *asyncOperation) *authoringExclusion {
+	input, output := operationBoundarySchemas(doc, op)
+	if input == nil && output == nil {
+		return nil
+	}
+	probeOp := openbindings.Operation{}
+	if input != nil {
+		probeOp.Input = decycleOperationSchema(input, doc.raw, "#/operations/probe/input")
+	}
+	if output != nil {
+		probeOp.Output = decycleOperationSchema(output, doc.raw, "#/operations/probe/output")
+	}
+	probe := openbindings.Interface{
+		OpenBindings: openbindings.MaxTestedVersion,
+		Name:         "probe",
+		Version:      "0.0.0",
+		Operations:   map[string]openbindings.Operation{"probe": probeOp},
+	}
+	if err := probe.Validate(); err != nil {
+		return &authoringExclusion{"invalid", "asyncapi.payload_schema_invalid", "ASYNC-P-05", "the payload declaration does not project to a well-formed OBI schema: " + err.Error()}
+	}
+	return nil
 }
 
 func messageBindable(doc *document, m message) bool {
@@ -237,9 +292,13 @@ func unionPayloadSchemas(doc *document, messages []message) map[string]any {
 			return map[string]any{}
 		}
 		schema, format := effectivePayload(message)
-		translated := schema
+		var translated map[string]any
 		if classifySchemaFormat(format) == schemaFormatTranslate {
 			translated = translateSchemaDialect(schema)
+		} else {
+			// Passthrough must not alias document memory: downstream passes
+			// (cyclic hoisting) rewrite the boundary schema in place.
+			translated = deepCopyMap(schema)
 		}
 		encoded, _ := json.Marshal(translated)
 		unique[string(encoded)] = translated

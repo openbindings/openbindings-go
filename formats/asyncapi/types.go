@@ -10,6 +10,11 @@ type document struct {
 	Channels           map[string]channel        `json:"channels,omitempty" yaml:"channels,omitempty"`
 	Operations         map[string]asyncOperation `json:"operations,omitempty" yaml:"operations,omitempty"`
 	Components         *components               `json:"components,omitempty" yaml:"components,omitempty"`
+
+	// raw is the pre-resolution pointer-lookup tree resolveRefs built; it
+	// outlives resolution so cyclic-reference hoisting can materialize
+	// surviving refs (decycle.go). Unexported: never (un)marshaled.
+	raw map[string]any
 }
 
 type info struct {

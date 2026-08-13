@@ -24,6 +24,7 @@ func resolveRefs(doc *document) {
 	if err := json.Unmarshal(rawBytes, &rawDoc); err != nil {
 		return
 	}
+	doc.raw = rawDoc
 
 	// 0. Resolve operations-map entries that are Reference Objects: per
 	// ASYNC-D-03 an entry resolves through the reference before the

@@ -129,8 +129,16 @@ operations:
 	if err != nil {
 		t.Fatalf("loadDocument: %v", err)
 	}
-	if !operationBindable(doc, addressableOperation(t, doc, "submit"), BindingSpec) {
-		t.Fatal("operation with a retained dangling payload-schema fragment should remain bindable")
+	// Composition retains the dangling fragment rather than crashing or
+	// silently repairing it; the schema-defect gate then confines the
+	// artifact's unresolvable ref to exactly this operation (§9.2): it is
+	// excluded as invalid, never emitted as an OBI that fails OBI-D-16.
+	exclusion := operationExclusion(doc, addressableOperation(t, doc, "submit"), BindingSpec)
+	if exclusion == nil {
+		t.Fatal("operation with a dangling payload-schema fragment should be confined, not emitted")
+	}
+	if exclusion.code != "asyncapi.payload_schema_invalid" || exclusion.status != "invalid" {
+		t.Fatalf("unexpected exclusion: %+v", exclusion)
 	}
 }
 

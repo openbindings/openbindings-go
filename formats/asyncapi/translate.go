@@ -145,7 +145,7 @@ func translateSchemaObject(in map[string]any) map[string]any {
 				for i, member := range tuple {
 					prefix[i] = translateSchemaNode(member)
 				}
-				if _, exists := in["prefixItems"]; !exists {
+				if authored, exists := in["prefixItems"].([]any); !exists || len(authored) == 0 {
 					out["prefixItems"] = prefix
 				}
 				// additionalItems handled below against the tuple form.
@@ -171,6 +171,22 @@ func translateSchemaObject(in map[string]any) map[string]any {
 			translated := make(map[string]any, len(members))
 			for name, member := range members {
 				translated[name] = translateSchemaNode(member)
+			}
+			out[key] = translated
+			continue
+		case key == "prefixItems":
+			// Draft 07 does not define prefixItems, so the author's dialect
+			// ignored it. Carrying an empty array into 2020-12 would turn an
+			// inert annotation into an ill-formed keyword (2020-12 requires a
+			// non-empty array); dropping preserves the declared semantics
+			// exactly. Non-empty arrays carry through with members translated.
+			members, ok := value.([]any)
+			if !ok || len(members) == 0 {
+				continue
+			}
+			translated := make([]any, len(members))
+			for i, member := range members {
+				translated[i] = translateSchemaNode(member)
 			}
 			out[key] = translated
 			continue
