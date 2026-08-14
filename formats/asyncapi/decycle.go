@@ -39,7 +39,7 @@ func decycleOperationSchema(schema map[string]any, rawDoc map[string]any, refBas
 			state.names["\x00taken:"+name] = name
 		}
 	}
-	result, _ := decycleNode(schema, state).(map[string]any)
+	result, _ := decycleNode(schema, state, "", state.refBase).(map[string]any)
 	if result == nil {
 		return schema
 	}
@@ -58,26 +58,36 @@ func decycleOperationSchema(schema map[string]any, rawDoc map[string]any, refBas
 	return result
 }
 
-func decycleNode(node any, state *decycleState) any {
+// decycleNode walks one node. path is the node's JSON Pointer below the
+// operation direction (refBase); anchor is the absolute pointer of the
+// nearest ancestor (or self) carrying a $defs map — the base a
+// derivation-emitted "#/$defs/<name>" ref is relative to. A derived schema
+// rides inside the routed envelope at properties.payload (or .headers), so
+// its self-relative refs must rebase onto ITS location, not the direction
+// root.
+func decycleNode(node any, state *decycleState, path string, anchor string) any {
 	schema, ok := node.(map[string]any)
 	if !ok {
 		if arr, ok := node.([]any); ok {
 			for i, member := range arr {
-				arr[i] = decycleNode(member, state)
+				arr[i] = decycleNode(member, state, path+"/"+itoaZ(i), anchor)
 			}
 		}
 		return node
 	}
+	if _, carries := schema["$defs"].(map[string]any); carries {
+		anchor = state.refBase + path
+	}
 	if ref, ok := schema["$ref"].(string); ok && strings.HasPrefix(ref, "#/") {
 		// A derivation-emitted local ref ("#/$defs/<name>", the Avro
-		// correspondence's named-type spelling) rebases onto the operation
-		// schema's own pointer; artifact refs materialize as before. The
+		// correspondence's named-type spelling) rebases onto its carrying
+		// schema's pointer; artifact refs materialize as before. The
 		// walk then continues into sibling members: 2020-12 evaluates
 		// keywords beside $ref, and the derived root is exactly
 		// {$ref, $defs} — returning here would leave every ref inside
 		// that $defs unrebased (dangling in the emitted document).
 		if strings.HasPrefix(ref, "#/$defs/") {
-			schema["$ref"] = state.refBase + strings.TrimPrefix(ref, "#")
+			schema["$ref"] = anchor + strings.TrimPrefix(ref, "#")
 		} else if name, materialized := state.materialize(ref); materialized {
 			schema["$ref"] = state.refBase + "/$defs/" + escapeDefsPointerSegment(name)
 		}
@@ -86,7 +96,7 @@ func decycleNode(node any, state *decycleState) any {
 		if schemaMapContainerKeys[key] {
 			if members, ok := value.(map[string]any); ok {
 				for name, member := range members {
-					members[name] = decycleNode(member, state)
+					members[name] = decycleNode(member, state, path+"/"+escapeDefsPointerSegment(key)+"/"+escapeDefsPointerSegment(name), anchor)
 				}
 				continue
 			}
@@ -94,9 +104,16 @@ func decycleNode(node any, state *decycleState) any {
 		if isLiteralSchemaValueKey(key) || strings.HasPrefix(strings.ToLower(key), "x-") {
 			continue
 		}
-		schema[key] = decycleNode(value, state)
+		schema[key] = decycleNode(value, state, path+"/"+escapeDefsPointerSegment(key), anchor)
 	}
 	return schema
+}
+
+func itoaZ(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	return itoa(n)
 }
 
 // materialize resolves ref from the raw document into $defs (once), applying
@@ -135,7 +152,7 @@ func (state *decycleState) materialize(ref string) (string, bool) {
 	default:
 		copied = resolveSchemaRefs(copied, state.rawDoc, map[string]bool{ref: true})
 	}
-	state.defs[name] = decycleNode(copied, state)
+	state.defs[name] = decycleNode(copied, state, "/$defs/"+escapeDefsPointerSegment(name), state.refBase)
 	return name, true
 }
 

@@ -45,8 +45,8 @@ func TestClassifySchemaFormat(t *testing.T) {
 
 func TestUnionPayloadSchemasPassthrough(t *testing.T) {
 	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{"card": map[string]any{"type": "string"}},
+		"type":         "object",
+		"properties":   map[string]any{"card": map[string]any{"type": "string"}},
 		"dependencies": map[string]any{"card": []any{"cvv"}},
 	}
 	wrap := func(format string) message {

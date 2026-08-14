@@ -94,7 +94,10 @@ func TestAddressParameterExpansion(t *testing.T) {
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
-		if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
+		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
+		// channel's input carries the payload under "payload"; the address
+		// parameters here keep riding the configuration pre-fill.
+		if err := call.Write(bg(), map[string]any{"payload": map[string]any{"m": 1}}); err != nil {
 			return err
 		}
 		if err := call.Close(); err != nil {
@@ -158,7 +161,7 @@ func TestAddressParameterEnumIsAuthoritative(t *testing.T) {
 			"address": map[string]any{"parameters": map[string]any{"roomId": "backstage"}},
 		}},
 	})
-	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
+	if err := call.Write(bg(), map[string]any{"payload": map[string]any{"m": 1}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := call.Close(); err != nil {
@@ -219,7 +222,10 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
-		if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
+		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
+		// channel's input carries the payload under "payload"; the address
+		// parameters here keep riding the configuration pre-fill.
+		if err := call.Write(bg(), map[string]any{"payload": map[string]any{"m": 1}}); err != nil {
 			return err
 		}
 		if err := call.Close(); err != nil {
@@ -383,7 +389,10 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
-		if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
+		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
+		// channel's input carries the payload under "payload"; the address
+		// parameters here keep riding the configuration pre-fill.
+		if err := call.Write(bg(), map[string]any{"payload": map[string]any{"m": 1}}); err != nil {
 			return err
 		}
 		if err := call.Close(); err != nil {
@@ -455,7 +464,10 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 			Ref:     "#/operations/post",
 			Context: map[string]any{"configuration": map[string]any{"server": serverCfg}},
 		})
-		if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
+		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
+		// channel's input carries the payload under "payload"; the address
+		// parameters here keep riding the configuration pre-fill.
+		if err := call.Write(bg(), map[string]any{"payload": map[string]any{"m": 1}}); err != nil {
 			return err
 		}
 		if err := call.Close(); err != nil {
@@ -557,7 +569,10 @@ func TestFullURLOverride(t *testing.T) {
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
-		if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
+		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
+		// channel's input carries the payload under "payload"; the address
+		// parameters here keep riding the configuration pre-fill.
+		if err := call.Write(bg(), map[string]any{"payload": map[string]any{"m": 1}}); err != nil {
 			return err
 		}
 		if err := call.Close(); err != nil {
@@ -741,7 +756,10 @@ func TestWSBindingQueryAndHeadersGovernUpgrade(t *testing.T) {
 			Ref:     "#/operations/publish",
 			Context: wsTextContext(bindCtx),
 		})
-		if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
+		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
+		// channel's input carries the payload under "payload"; the address
+		// parameters here keep riding the configuration pre-fill.
+		if err := call.Write(bg(), map[string]any{"payload": map[string]any{"m": 1}}); err != nil {
 			return err
 		}
 		if err := call.Close(); err != nil {

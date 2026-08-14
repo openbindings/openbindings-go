@@ -187,8 +187,10 @@ func TestSynthesizeInterface_UsesInvocationEligibilityAndPreservesMessageAlterna
 		},
 	}
 	iface := testSynthesizeInterface(t, doc, "")
-	if len(iface.Operations) != 1 {
-		t.Fatalf("operations = %v, want only the bindable operation", iface.Operations)
+	// The routed-envelope ruling (2026-08-14): a headers-declaring message
+	// no longer excludes its operation — the direction becomes the envelope.
+	if len(iface.Operations) != 2 {
+		t.Fatalf("operations = %v, want the bindable operation and the headers envelope operation", iface.Operations)
 	}
 	output, ok := iface.Operations["good"].Output.(map[string]any)
 	if !ok {
@@ -196,6 +198,20 @@ func TestSynthesizeInterface_UsesInvocationEligibilityAndPreservesMessageAlterna
 	}
 	if choices, ok := output["anyOf"].([]any); !ok || len(choices) != 2 {
 		t.Fatalf("good output anyOf = %v, want both artifact message schemas", output["anyOf"])
+	}
+	envelope, ok := iface.Operations["headers"].Output.(map[string]any)
+	if !ok {
+		t.Fatalf("headers output = %v, want the routed envelope", iface.Operations["headers"].Output)
+	}
+	properties, _ := envelope["properties"].(map[string]any)
+	if _, present := properties["payload"]; !present {
+		t.Fatalf("envelope lacks the payload field: %v", envelope)
+	}
+	if _, present := properties["headers"]; !present {
+		t.Fatalf("envelope lacks the headers field: %v", envelope)
+	}
+	if envelope["additionalProperties"] != false {
+		t.Fatalf("envelope must be closed: %v", envelope)
 	}
 }
 
@@ -235,18 +251,14 @@ func TestSynthesizeInterfaceWithCoverage_AccountsForMessagesAndProtocolCells(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Coverage.FullyRepresented {
-		t.Fatal("mixed message and server alternatives must disclose exclusions")
+	// The routed-envelope ruling (2026-08-14): the headers-declaring
+	// message alternative is represented, so nothing here is excluded.
+	if !result.Coverage.FullyRepresented {
+		t.Fatalf("headers alternatives ride the envelope and every cell is represented; entries=%#v", result.Coverage.Entries)
 	}
-	statusByCode := map[string]openbindings.SynthesisCoverageStatus{}
 	for _, entry := range result.Coverage.Entries {
-		statusByCode[entry.ReasonCode] = entry.Status
-	}
-	for _, code := range []string{
-		"asyncapi.message_headers",
-	} {
-		if statusByCode[code] != openbindings.SynthesisExcluded {
-			t.Errorf("%s status = %q, want excluded; entries=%#v", code, statusByCode[code], result.Coverage.Entries)
+		if entry.ReasonCode == "asyncapi.message_headers" {
+			t.Errorf("asyncapi.message_headers must no longer be emitted; entry=%#v", entry)
 		}
 	}
 	foundTarget := false

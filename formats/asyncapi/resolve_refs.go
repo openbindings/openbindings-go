@@ -78,10 +78,15 @@ func resolveRefs(doc *document) {
 			}
 		}
 
-		// 2. Resolve message payloads in components.
+		// 2. Resolve message payloads (and declared headers — they enter
+		// the routed envelope under the same schema pipeline) in components.
 		for name, msg := range doc.Components.Messages {
 			if msg.Payload != nil {
 				msg.Payload = resolveSchemaRefs(msg.Payload, rawDoc, nil)
+				doc.Components.Messages[name] = msg
+			}
+			if msg.Headers != nil {
+				msg.Headers = resolveSchemaRefs(msg.Headers, rawDoc, nil)
 				doc.Components.Messages[name] = msg
 			}
 			// If the message itself is a $ref, it was already deserialized into
@@ -122,6 +127,9 @@ func resolveRefs(doc *document) {
 			}
 			if msg.Payload != nil {
 				msg.Payload = resolveSchemaRefs(msg.Payload, rawDoc, nil)
+			}
+			if msg.Headers != nil {
+				msg.Headers = resolveSchemaRefs(msg.Headers, rawDoc, nil)
 			}
 			ch.Messages[msgName] = msg
 		}

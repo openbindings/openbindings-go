@@ -192,13 +192,6 @@ func messageCoverage(doc *document, candidate observedMessage, id struct {
 			Rule: "ASYNC-D-03", Message: "the message reference does not resolve",
 		}
 	}
-	if candidate.message.Headers != nil {
-		return openbindings.SynthesisCoverageEntry{
-			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-			Status: openbindings.SynthesisExcluded, ReasonCode: "asyncapi.message_headers",
-			Rule: "ASYNC-P-03", Message: "the first candidate cannot carry AsyncAPI message headers at the ordinary value boundary",
-		}
-	}
 	if candidate.message.Ref != "" || candidate.message.UnresolvedTrait != "" {
 		return openbindings.SynthesisCoverageEntry{
 			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,

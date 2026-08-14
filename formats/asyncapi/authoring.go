@@ -66,23 +66,8 @@ func operationExclusion(doc *document, op *asyncOperation, bindingSpec string) *
 	if op.Action == "send" {
 		inputMessages, outputMessages = replyMessages, operationMessages
 	}
-	if len(inputMessages) > 0 {
-		allHaveHeaders := true
-		for _, message := range inputMessages {
-			if message.Headers == nil {
-				allHaveHeaders = false
-				break
-			}
-		}
-		if allHaveHeaders {
-			return &authoringExclusion{"excluded", "asyncapi.message_headers", "ASYNC-P-03", "every caller-input message declares application headers the first candidate cannot carry at the ordinary value boundary"}
-		}
-	}
-	for _, message := range outputMessages {
-		if message.Headers != nil {
-			return &authoringExclusion{"excluded", "asyncapi.message_headers", "ASYNC-P-03", "a possible caller-output message declares application headers the first candidate cannot carry at the ordinary value boundary"}
-		}
-	}
+	_ = inputMessages
+	_ = outputMessages
 	if defect := operationSchemaDefect(doc, op); defect != nil {
 		return defect
 	}
@@ -98,11 +83,20 @@ func authoringInputMessages(doc *document, op *asyncOperation, ch *channel) []me
 // operation's messages are the invoker's output, a receive operation's the
 // invoker's input, and a declared reply is the opposite direction.
 func operationBoundarySchemas(doc *document, op *asyncOperation) (input, output map[string]any) {
+	channelName := extractRefName(op.Channel.Ref)
+	ch := doc.Channels[channelName]
+	params := channelEnvelopeParams(&ch)
 	switch op.Action {
 	case "send":
 		output = operationPayloadSchema(doc, op, false)
 		if op.Reply != nil {
 			input = replyPayloadSchema(doc, op.Reply)
+		}
+		// Addressing data is caller input even on the subscribe
+		// perspective: the operation channel's location-less parameters
+		// ride the input envelope (parameter-only when no reply input).
+		if len(params) > 0 {
+			input = unionDirectionSchemas(doc, replyInputMessages(doc, op), params, op.Reply != nil)
 		}
 	case "receive":
 		input = operationPayloadSchema(doc, op, true)
@@ -145,9 +139,6 @@ func operationSchemaDefect(doc *document, op *asyncOperation) *authoringExclusio
 
 func messageBindable(doc *document, m message) bool {
 	if m.UnresolvedTrait != "" {
-		return false
-	}
-	if m.Headers != nil {
 		return false
 	}
 	if m.Bindings != nil && m.Bindings.HTTP != nil {
@@ -227,38 +218,46 @@ func operationPayloadSchema(doc *document, op *asyncOperation, input bool) map[s
 	channelName := extractRefName(op.Channel.Ref)
 	ch := doc.Channels[channelName]
 	messages := governingMessages(doc, op, &ch)
+	var params []envelopeParam
 	if input {
-		usable := make([]message, 0, len(messages))
-		for _, m := range messages {
-			if m.Headers == nil {
-				usable = append(usable, m)
-			}
-		}
-		messages = usable
+		// Location-less channel parameters are caller input riding the
+		// routed envelope (§9.2); declared headers ride it per message.
+		params = channelEnvelopeParams(&ch)
 	}
-	return unionPayloadSchemas(doc, messages)
+	return unionDirectionSchemas(doc, messages, params, true)
 }
 
 func replyPayloadSchema(doc *document, reply *operationReply) map[string]any {
 	if reply == nil {
 		return nil
 	}
+	return unionDirectionSchemas(doc, replyMessagesOf(doc, reply), nil, true)
+}
+
+// replyMessagesOf collects a reply declaration's resolved governing
+// messages (the reply's own list, else its channel's messages).
+func replyMessagesOf(doc *document, reply *operationReply) []message {
 	var messages []message
 	for _, ref := range reply.Messages {
-		if m := resolveMessageRef(doc, ref); m != nil && m.Headers == nil {
+		if m := resolveMessageRef(doc, ref); m != nil {
 			messages = append(messages, *m)
 		}
 	}
 	if len(messages) == 0 && reply.Channel != nil {
 		if ch, ok := doc.Channels[extractRefName(reply.Channel.Ref)]; ok {
-			for _, m := range channelMessages(&ch) {
-				if m.Headers == nil {
-					messages = append(messages, m)
-				}
-			}
+			messages = append(messages, channelMessages(&ch)...)
 		}
 	}
-	return unionPayloadSchemas(doc, messages)
+	return messages
+}
+
+// replyInputMessages is the send-perspective input set: the reply's
+// governing messages, empty when the operation declares no reply.
+func replyInputMessages(doc *document, op *asyncOperation) []message {
+	if op.Reply == nil {
+		return nil
+	}
+	return replyMessagesOf(doc, op.Reply)
 }
 
 // unionPayloadSchemas derives the operation-boundary schema for a direction.
@@ -268,6 +267,46 @@ func replyPayloadSchema(doc *document, reply *operationReply) map[string]any {
 // faithful schema, so the direction is represented by the unconstrained
 // schema per the binding specification's §9.2 floor. Coverage accounts the
 // degraded direction; the operation remains invocable.
+// messagePayloadBoundarySchema derives ONE message's payload-boundary
+// schema (the loop body unionPayloadSchemas dedups over, and the routed
+// envelope's per-message "payload" field).
+func messagePayloadBoundarySchema(doc *document, message message) map[string]any {
+	if messagePayloadNotConvertible(doc, message) {
+		return map[string]any{}
+	}
+	schema, format := effectivePayload(message)
+	var translated map[string]any
+	if classifySchemaFormat(format) == schemaFormatAvro {
+		// The named Avro correspondence: logical values under Avro's own
+		// JSON Encoding. A declaration that does not parse as an Avro
+		// schema falls to the byte rule as an inexpressible contract.
+		if derived, ok := deriveAvroSchema(schema); ok {
+			translated = derived
+		} else if messageCarriage(doc, message) == carriageBytes {
+			translated = base64BoundarySchema()
+			translated["description"] = lossyBoundaryDescription(messageEffectiveContentType(doc, message))
+		} else {
+			translated = map[string]any{}
+		}
+	} else if messageCarriage(doc, message) == carriageBytes {
+		// The byte boundary: exact octets as the canonical Base64 string,
+		// regardless of any declared (inexpressible) payload contract.
+		translated = base64BoundarySchema()
+		if messagePayloadLossReason(doc, message) == "asyncapi.payload_byte_carriage" {
+			translated["description"] = lossyBoundaryDescription(messageEffectiveContentType(doc, message))
+		} else {
+			translated["description"] = boundaryDescription(messageEffectiveContentType(doc, message))
+		}
+	} else if classifySchemaFormat(format) == schemaFormatTranslate {
+		translated = translateSchemaDialect(schema)
+	} else {
+		// Passthrough must not alias document memory: downstream passes
+		// (cyclic hoisting) rewrite the boundary schema in place.
+		translated = deepCopyMap(schema)
+	}
+	return translated
+}
+
 func unionPayloadSchemas(doc *document, messages []message) map[string]any {
 	if len(messages) == 0 {
 		return nil
@@ -277,36 +316,7 @@ func unionPayloadSchemas(doc *document, messages []message) map[string]any {
 		if messagePayloadNotConvertible(doc, message) {
 			return map[string]any{}
 		}
-		schema, format := effectivePayload(message)
-		var translated map[string]any
-		if classifySchemaFormat(format) == schemaFormatAvro {
-			// The named Avro correspondence: logical values under Avro's own
-			// JSON Encoding. A declaration that does not parse as an Avro
-			// schema falls to the byte rule as an inexpressible contract.
-			if derived, ok := deriveAvroSchema(schema); ok {
-				translated = derived
-			} else if messageCarriage(doc, message) == carriageBytes {
-				translated = base64BoundarySchema()
-				translated["description"] = lossyBoundaryDescription(messageEffectiveContentType(doc, message))
-			} else {
-				translated = map[string]any{}
-			}
-		} else if messageCarriage(doc, message) == carriageBytes {
-			// The byte boundary: exact octets as the canonical Base64 string,
-			// regardless of any declared (inexpressible) payload contract.
-			translated = base64BoundarySchema()
-			if messagePayloadLossReason(doc, message) == "asyncapi.payload_byte_carriage" {
-				translated["description"] = lossyBoundaryDescription(messageEffectiveContentType(doc, message))
-			} else {
-				translated["description"] = boundaryDescription(messageEffectiveContentType(doc, message))
-			}
-		} else if classifySchemaFormat(format) == schemaFormatTranslate {
-			translated = translateSchemaDialect(schema)
-		} else {
-			// Passthrough must not alias document memory: downstream passes
-			// (cyclic hoisting) rewrite the boundary schema in place.
-			translated = deepCopyMap(schema)
-		}
+		translated := messagePayloadBoundarySchema(doc, message)
 		encoded, _ := json.Marshal(translated)
 		unique[string(encoded)] = translated
 	}
