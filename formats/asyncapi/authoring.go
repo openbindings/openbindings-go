@@ -496,6 +496,13 @@ func contentTypeCarriage(contentType string) payloadCarriage {
 		return carriageInvalid
 	}
 	mediaType = strings.ToLower(mediaType)
+	// A media type is type/subtype; a bare token ("json" — a wild-corpus
+	// spelling) is malformed, and guessing its intent would be payload-blind
+	// sniffing by another name. mime.ParseMediaType tolerates the bare form,
+	// so the slash requirement is checked here.
+	if !strings.Contains(mediaType, "/") {
+		return carriageInvalid
+	}
 	textual := mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") || strings.HasPrefix(mediaType, "text/")
 	if textual {
 		if charset := strings.ToLower(strings.TrimSpace(params["charset"])); charset != "" && charset != "utf-8" && charset != "utf8" {
