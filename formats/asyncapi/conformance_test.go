@@ -949,8 +949,9 @@ func TestInputTextLane(t *testing.T) {
 }
 
 // TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch verifies §9.1's
-// value boundary: binary/codec-specific media have no revision-1 bytes
-// carriage and are refused before dispatch, regardless of the caller value.
+// byte boundary (ruled 2026-08-13): declared binary media is invocable, the
+// caller's value being the canonical Base64 string of the exact octets — so
+// a non-string value refuses at validation, before dispatch.
 func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -972,11 +973,11 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for a media family outside revision 1, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeValidationFailed {
+		t.Fatalf("expected ERR_VALIDATION_FAILED for a non-string value on the byte boundary, got %v", err)
 	}
 	if got := requests.Load(); got != 0 {
-		t.Errorf("the exclusion refusal is pre-dispatch: %d requests sent", got)
+		t.Errorf("the byte-boundary value refusal is pre-dispatch: %d requests sent", got)
 	}
 
 	// WS cell: refused before any socket is dialed.

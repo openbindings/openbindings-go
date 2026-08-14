@@ -67,23 +67,6 @@ func operationExclusion(doc *document, op *asyncOperation, bindingSpec string) *
 		inputMessages, outputMessages = replyMessages, operationMessages
 	}
 	if len(inputMessages) > 0 {
-		// A caller-input direction whose every alternative declares media the
-		// JSON value boundary cannot carry is statically guaranteed to refuse
-		// today: input encoding has no codec seam (the decode hook exists but
-		// is unreachable behind content-type validation). The synthesis
-		// contract forbids emitting an operation guaranteed to refuse as
-		// usable, so the target is implementation-unsupported until the codec
-		// extension path exists — visible MC2 debt, never laundered.
-		allCarriageUnsupported := true
-		for _, message := range inputMessages {
-			if messagePayloadLossReason(doc, message) != "asyncapi.payload_carriage_unsupported" {
-				allCarriageUnsupported = false
-				break
-			}
-		}
-		if allCarriageUnsupported {
-			return &authoringExclusion{"implementation-unsupported", "asyncapi.payload_carriage_unsupported", "ASYNC-P-05", "every caller-input message declares media without JSON application-value carriage; invocation would refuse before dispatch until a codec extension path exists"}
-		}
 		allHaveHeaders := true
 		for _, message := range inputMessages {
 			if message.Headers == nil {
@@ -173,7 +156,9 @@ func messageBindable(doc *document, m message) bool {
 			return false
 		}
 	}
-	return supportedMessageContentType(messageEffectiveContentType(doc, m)) == nil
+	// Binary media is bindable through the byte boundary (§9.2's byte rule);
+	// only a malformed content-type declaration refuses.
+	return messageCarriage(doc, m) != carriageInvalid
 }
 
 func replyMessagesBindable(doc *document, op *asyncOperation) bool {
@@ -294,7 +279,11 @@ func unionPayloadSchemas(doc *document, messages []message) map[string]any {
 		}
 		schema, format := effectivePayload(message)
 		var translated map[string]any
-		if classifySchemaFormat(format) == schemaFormatTranslate {
+		if messageCarriage(doc, message) == carriageBytes {
+			// The byte boundary: exact octets as the canonical Base64 string,
+			// regardless of any declared (inexpressible) payload contract.
+			translated = base64BoundarySchema()
+		} else if classifySchemaFormat(format) == schemaFormatTranslate {
 			translated = translateSchemaDialect(schema)
 		} else {
 			// Passthrough must not alias document memory: downstream passes
@@ -434,6 +423,11 @@ func effectivePayload(m message) (map[string]any, string) {
 // separate question — an absent payload declares no contract, so the
 // unconstrained schema loses nothing.
 func messagePayloadNotConvertible(doc *document, m message) bool {
+	// Byte carriage is never unconstrained: the direction is represented by
+	// the canonical Base64 boundary schema (unionPayloadSchemas emits it).
+	if messageCarriage(doc, m) == carriageBytes {
+		return false
+	}
 	schema, _ := effectivePayload(m)
 	if schema == nil {
 		return true
@@ -452,16 +446,90 @@ func messagePayloadLossReason(doc *document, m message) string {
 	if schema == nil && m.Payload == nil {
 		return ""
 	}
+	if messageCarriage(doc, m) == carriageBytes {
+		// The byte boundary (§9.2, ruled 2026-08-13): declared binary media
+		// carries exact octets as the canonical Base64 boundary string. With
+		// no declared payload contract — or one that IS the boundary schema,
+		// as artifacts describing binary payloads sometimes author — nothing
+		// is lost. Any other declared contract (an Avro schema, a structural
+		// JSON schema) is not expressible at that boundary, so the direction
+		// is lossy; consumer codec hooks are the enrichment path.
+		if !foreignSchemaFormat(format) {
+			if schema == nil {
+				return ""
+			}
+			if schemaEqualsBoundary(schema, classifySchemaFormat(format)) {
+				return ""
+			}
+		}
+		return "asyncapi.payload_byte_carriage"
+	}
 	if foreignSchemaFormat(format) {
 		return "asyncapi.schema_format_not_convertible"
 	}
-	// A wrapper with a foreign-format schema handled above; a wrapper whose
-	// schema member is absent declares no contract in a recognized language.
-	if schema == nil {
-		return ""
-	}
-	if supportedMessageContentType(messageEffectiveContentType(doc, m)) != nil {
-		return "asyncapi.payload_carriage_unsupported"
-	}
 	return ""
+}
+
+// messageCarriage classifies the effective content type's application-value
+// carriage: JSON family and text ride the ordinary value boundary; any other
+// syntactically valid media type is the artifact-authorized byte rule
+// (canonical Base64 boundary); a malformed declaration is invalid.
+type payloadCarriage int
+
+const (
+	carriageJSON payloadCarriage = iota
+	carriageText
+	carriageBytes
+	carriageInvalid
+)
+
+func messageCarriage(doc *document, m message) payloadCarriage {
+	return contentTypeCarriage(messageEffectiveContentType(doc, m))
+}
+
+func contentTypeCarriage(contentType string) payloadCarriage {
+	if strings.TrimSpace(contentType) == "" {
+		return carriageJSON
+	}
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return carriageInvalid
+	}
+	mediaType = strings.ToLower(mediaType)
+	textual := mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") || strings.HasPrefix(mediaType, "text/")
+	if textual {
+		if charset := strings.ToLower(strings.TrimSpace(params["charset"])); charset != "" && charset != "utf-8" && charset != "utf8" {
+			return carriageInvalid
+		}
+		if strings.HasPrefix(mediaType, "text/") {
+			return carriageText
+		}
+		return carriageJSON
+	}
+	return carriageBytes
+}
+
+// base64BoundarySchema is the byte rule's boundary contract: the caller's
+// JSON string is canonical RFC 4648 §4 Base64 of the exact octets.
+func base64BoundarySchema() map[string]any {
+	return map[string]any{"type": "string", "contentEncoding": "base64"}
+}
+
+// schemaEqualsBoundary reports whether the declared schema, carried through
+// its dialect pipeline, is exactly the byte rule's boundary schema (Go's
+// json.Marshal sorts map keys, so the comparison is canonical).
+func schemaEqualsBoundary(schema map[string]any, disposition schemaFormatDisposition) bool {
+	carried := schema
+	if disposition == schemaFormatTranslate {
+		carried = translateSchemaDialect(schema)
+	}
+	declared, err := json.Marshal(carried)
+	if err != nil {
+		return false
+	}
+	boundary, err := json.Marshal(base64BoundarySchema())
+	if err != nil {
+		return false
+	}
+	return string(declared) == string(boundary)
 }

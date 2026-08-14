@@ -222,15 +222,16 @@ func messageCoverage(doc *document, candidate observedMessage, id struct {
 				ReasonCode: "asyncapi.schema_format_not_convertible", Rule: "ASYNC-P-05",
 				Message: "the declared schema format has no faithful JSON Schema conversion; the direction is represented by the unconstrained schema",
 			}
-		case "asyncapi.payload_carriage_unsupported":
-			// Carriage loss: the runtime refuses this alternative before
-			// dispatch today — implementation-unsupported until the codec
-			// extension path exists, never presented as usable.
+		case "asyncapi.payload_byte_carriage":
+			// Byte-boundary loss: the direction is invocable through the
+			// canonical Base64 boundary, but the author-declared payload
+			// contract is not expressible at that boundary — lossy, with
+			// consumer codec hooks as the enrichment path to logical values.
 			return openbindings.SynthesisCoverageEntry{
 				SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-				Status: openbindings.SynthesisImplementationUnsupported, OperationKey: id.operation, BindingRef: id.ref,
-				ReasonCode: "asyncapi.payload_carriage_unsupported", Rule: "ASYNC-P-05",
-				Message: "the effective content type has no JSON application-value carriage; invocation refuses this alternative before dispatch",
+				Status: openbindings.SynthesisLossy, OperationKey: id.operation, BindingRef: id.ref,
+				ReasonCode: "asyncapi.payload_byte_carriage", Rule: "ASYNC-P-05",
+				Message: "the declared media carries bytes; the direction is represented by the canonical Base64 boundary schema, and the declared payload contract is not expressible at that boundary",
 			}
 		}
 		return openbindings.SynthesisCoverageEntry{
