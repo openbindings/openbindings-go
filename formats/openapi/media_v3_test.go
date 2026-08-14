@@ -1339,7 +1339,7 @@ func TestRevision3InvokerRejectsNoncanonicalRawBase64BeforeDispatch(t *testing.T
 			Ref:    "#/paths/~1asset/post",
 		})
 		_, ierr := driveSingle(t, call, map[string]any{"body": value})
-		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || capture.requests != 0 {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeRefused || capture.requests != 0 {
 			t.Errorf("noncanonical %q = %v after %d requests", value, ierr, capture.requests)
 		}
 	}

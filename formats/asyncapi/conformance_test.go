@@ -661,7 +661,7 @@ func TestHTTPBindingMethodOverride(t *testing.T) {
 		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/sub",
 	})
-	if _, err := drainOutputs(t, sub); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	if _, err := drainOutputs(t, sub); codeOf(t, err) != openbindings.ErrCodeRefused {
 		t.Fatalf("standalone HTTP send must be refused, got %v", err)
 	}
 	if got := sseMethod.Load(); got != nil {
@@ -787,14 +787,14 @@ func TestWSBindingQueryAndHeadersGovernUpgrade(t *testing.T) {
 		"configuration": map[string]any{"protocolFields": map[string]any{
 			"webSocketHeaders": map[string]any{"X-Trace": "trace-2"},
 		}},
-	}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	}); codeOf(t, err) != openbindings.ErrCodeRefused {
 		t.Fatalf("expected refusal for the missing required query property, got %v", err)
 	}
 	if err := publish(map[string]any{
 		"configuration": map[string]any{"protocolFields": map[string]any{
 			"webSocketQuery": map[string]any{"token": "qtok"},
 		}},
-	}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	}); codeOf(t, err) != openbindings.ErrCodeRefused {
 		t.Fatalf("expected refusal for the missing required header, got %v", err)
 	}
 	if got := upgrades.Load(); got != before {
@@ -831,7 +831,7 @@ func TestWSBindingNonGETMethodRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
 		t.Fatalf("expected refusal of a POST upgrade method, got %v", err)
 	}
 	if c := upgrades.Load(); c != 0 {
@@ -858,7 +858,7 @@ func TestStandaloneHTTPSendIsExcluded(t *testing.T) {
 		Ref:    "#/operations/receiveCaps",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
 		t.Fatalf("expected revision-1 exclusion for standalone HTTP send, got %v", err)
 	}
 	if requests.Load() != 0 {
@@ -940,8 +940,8 @@ func TestInputTextLane(t *testing.T) {
 
 	before := requests.Load()
 	err := publish(map[string]any{"not": "a string"})
-	if codeOf(t, err) != openbindings.ErrCodeValidationFailed {
-		t.Fatalf("expected ERR_VALIDATION_FAILED for a non-string value on the text lane, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
+		t.Fatalf("expected ERR_REFUSED for a non-string value on the text lane (pre-dispatch), got %v", err)
 	}
 	if got := requests.Load(); got != before {
 		t.Errorf("the text-lane refusal precedes dispatch: %d requests sent", got-before)
@@ -973,8 +973,8 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeValidationFailed {
-		t.Fatalf("expected ERR_VALIDATION_FAILED for a non-string value on the byte boundary, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
+		t.Fatalf("expected ERR_REFUSED for a non-string value on the byte boundary (pre-dispatch), got %v", err)
 	}
 	if got := requests.Load(); got != 0 {
 		t.Errorf("the byte-boundary value refusal is pre-dispatch: %d requests sent", got)
@@ -1001,8 +1001,8 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = drainOutputs(t, wsCall)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
-		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR for an excluded family on the ws cell, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
+		t.Fatalf("expected ERR_REFUSED for an excluded family on the ws cell (pre-dial), got %v", err)
 	}
 	if c := upgrades.Load(); c != 0 {
 		t.Errorf("the exclusion refusal precedes the dial: %d upgrades", c)

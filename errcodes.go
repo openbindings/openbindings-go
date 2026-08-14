@@ -65,6 +65,10 @@ const (
 	// Details carries a ContextRequiredDetails. Un-prefixed: it is a
 	// negotiation signal, not a failure of the operation.
 	ErrCodeContextRequired = "CONTEXT_REQUIRED"
+	// ErrCodeRefused carries the binding-invoker contract's never-dispatched
+	// guarantee: the invocation was refused before dispatch and no
+	// observable interaction side effect occurred.
+	ErrCodeRefused = "ERR_REFUSED"
 
 	// ErrCodeTypeMismatch indicates a typed-invoker boundary failure: a value
 	// could not be decoded into (or encoded from) the generated concrete type.

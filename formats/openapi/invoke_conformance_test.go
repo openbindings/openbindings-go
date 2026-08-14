@@ -191,7 +191,7 @@ func TestInvoke_CaseFoldingHeaderCollisionRefused(t *testing.T) {
 	  }}}
 	}`, srv.URL)
 	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1items/get", map[string]any{})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 		t.Fatalf("expected the unflattenable refusal, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -209,7 +209,7 @@ func TestInvoke_UnmatchedFieldsRefusedWithoutBody(t *testing.T) {
 	_, ierr := invokeWith(t, widgetSpec(srv.URL), "#/paths/~1session/get", map[string]any{
 		"session_id": "s", "bogus": 1,
 	})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -254,7 +254,7 @@ func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
 			  }}}
 			}`, srv.URL, tc.content)
 			_, ierr := invokeWith(t, spec, "#/paths/~1echo/post", map[string]any{"body": "x", "stray": 1})
-			if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+			if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 				t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 			}
 			if ierr.HasData() {
@@ -440,7 +440,7 @@ func TestInvoke_UndeclaredMultipartMembersRefused(t *testing.T) {
 	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1upload/post", map[string]any{
 		"description": "d", "note": "urgent", "meta": map[string]any{"k": "v"},
 	})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 		t.Fatalf("expected declaration-defined multipart refusal, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -466,7 +466,7 @@ func TestInvoke_UndeclaredURLEncodedMembersRefused(t *testing.T) {
 	  }}}
 	}`, srv.URL)
 	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1form/post", map[string]any{"name": "a b", "extra": "y"})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 		t.Fatalf("expected declaration-defined urlencoded refusal, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -492,7 +492,7 @@ func TestInvoke_SuppliedInputMissingPathParamRefuses(t *testing.T) {
 	  }}}
 	}`, srv.URL)
 	_, ierr := invokeWith(t, spec, "#/paths/~1w~1{id}/post", map[string]any{"name": "x"})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeMissingInput {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 		t.Fatalf("expected ERR_MISSING_INPUT for the unfilled path template, got %v", ierr)
 	}
 	if requests.Load() != 0 {
@@ -844,7 +844,7 @@ func TestInvoke_TextPlainBody(t *testing.T) {
 
 	// The selection condition: a non-string body value refuses pre-dispatch.
 	_, ierr = invokeWith(t, spec, "#/paths/~1echo/post", map[string]any{"body": float64(1)})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 		t.Fatalf("expected the text/plain condition refusal, got %v", ierr)
 	}
 }
@@ -1132,7 +1132,7 @@ func TestInvoke_CredentialCollisionRefused(t *testing.T) {
 				Context: map[string]any{"apiKey": "cred"},
 			})
 			_, ierr := driveSingle(t, call, map[string]any{tc.param: "caller-value"})
-			if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+			if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 				t.Fatalf("expected the OAPI-P-10 collision refusal, got %v", ierr)
 			}
 			if ierr.HasData() {
@@ -1292,7 +1292,7 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 			Ref:    "#/paths/~1x/get",
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
-		if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 			t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
 		}
 		if ierr.HasData() {
@@ -1324,7 +1324,7 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 			Context: map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
-		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 			t.Fatalf("expected validation OAPI-P-10 refusal, got %v", ierr)
 		}
 		if ierr.HasData() {
@@ -1388,7 +1388,7 @@ func TestInvoke_AllMissingSecurityAlternativesRefuseBeforeDispatch(t *testing.T)
 		Ref:    "#/paths/~1x/get",
 	})
 	_, ierr := driveSingle(t, call, nil)
-	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
+	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 		t.Fatalf("expected closed security-configuration refusal, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -1452,7 +1452,7 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 			},
 		})
 		_, ierr := driveSingle(t, call, nil)
-		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 			t.Fatalf("expected Cookie context collision, got %v", ierr)
 		}
 		if ierr.HasData() {
@@ -1483,7 +1483,7 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 			},
 		})
 		_, ierr := driveSingle(t, call, nil)
-		if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+		if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 			t.Fatalf("expected Cookie credential/context collision, got %v", ierr)
 		}
 		if ierr.HasData() {
@@ -1539,7 +1539,7 @@ func TestInvoke_ProcessorOwnedHeaderParametersRefused(t *testing.T) {
 				Ref:    "#/paths/~1x/get",
 			})
 			_, ierr := driveSingle(t, call, map[string]any{})
-			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
+			if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 				t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
 			}
 			if ierr.HasData() {

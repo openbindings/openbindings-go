@@ -544,7 +544,7 @@ func TestIntegration_MissingRequiredInput_NoDispatch(t *testing.T) {
 			})
 			// Bare close: no input written.
 			_, ierr := driveOutputs(context.Background(), call, nil)
-			if ierr == nil || ierr.Code != openbindings.ErrCodeMissingInput {
+			if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
 				t.Fatalf("expected ERR_MISSING_INPUT, got %v", ierr)
 			}
 			if got := requests.Load(); got != before {

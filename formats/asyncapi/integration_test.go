@@ -274,7 +274,7 @@ func TestExcludedHTTPSubscriptionPrecedesCredentialNegotiation(t *testing.T) {
 		Ref:    "#/operations/receiveEvents",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
 		t.Fatalf("expected standalone HTTP send exclusion, got %v", err)
 	}
 	if got := requests.Load(); got != before {
@@ -496,8 +496,8 @@ func TestMissingInputOnSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeMissingInput {
-		t.Fatalf("expected ERR_MISSING_INPUT, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
+		t.Fatalf("expected ERR_REFUSED, got %v", err)
 	}
 }
 
@@ -519,8 +519,8 @@ func TestNoInputOperationRefused_HTTPPublish(t *testing.T) {
 		// InputSchema nil → no-input operation; publish has no empty message.
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeMissingInput {
-		t.Fatalf("expected ERR_MISSING_INPUT for a no-input publish, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
+		t.Fatalf("expected ERR_REFUSED for a no-input publish (pre-dispatch), got %v", err)
 	}
 	if got := requests.Load(); got != before {
 		t.Errorf("the refusal is pre-dispatch: %d requests dispatched", got-before)
@@ -546,8 +546,8 @@ func TestNoInputOperationRefused_WSPublish(t *testing.T) {
 		Context: wsTextContext(nil),
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeMissingInput {
-		t.Fatalf("expected ERR_MISSING_INPUT for a no-input ws publish, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
+		t.Fatalf("expected ERR_REFUSED for a no-input ws publish (pre-dial), got %v", err)
 	}
 	if c := upgrades.Load(); c != 0 {
 		t.Errorf("the refusal is pre-dispatch: %d upgrades dialed", c)
@@ -574,8 +574,8 @@ func TestWSPublishZeroMessagesRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeMissingInput {
-		t.Fatalf("expected ERR_MISSING_INPUT for a zero-message publish, got %v", err)
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
+		t.Fatalf("expected ERR_REFUSED for a zero-message publish (pre-send), got %v", err)
 	}
 }
 
@@ -631,7 +631,7 @@ func TestHTTPSubscriptionDoesNotInferSSE(t *testing.T) {
 		Ref:    "#/operations/receiveCaps",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	if codeOf(t, err) != openbindings.ErrCodeRefused {
 		t.Fatalf("expected standalone HTTP send exclusion, got %v", err)
 	}
 	if requests.Load() != 0 {
