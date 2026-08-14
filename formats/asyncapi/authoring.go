@@ -50,9 +50,10 @@ func operationExclusion(doc *document, op *asyncOperation, bindingSpec string) *
 	if !ok {
 		return &authoringExclusion{"invalid", "asyncapi.dangling_channel_ref", "ASYNC-D-03", "the operation channel reference does not resolve"}
 	}
-	if len(effectiveServers(doc, &ch)) == 0 {
-		return &authoringExclusion{"excluded", "asyncapi.no_effective_server", "ASYNC-P-04", "the operation has no effective artifact-declared server or protocol"}
-	}
+	// A missing server is reachability configuration, not target identity
+	// (ruled 2026-08-13, R1+R5): the operation is represented with a
+	// configuration.server requirement and invocation challenges
+	// CONTEXT_REQUIRED (config.value, point server) before dispatch.
 	operationMessages := governingMessages(doc, op, &ch)
 	if len(operationMessages) == 0 {
 		return &authoringExclusion{"excluded", "asyncapi.no_resolved_messages", "ASYNC-P-03", "the operation has no resolved message declaration"}

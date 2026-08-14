@@ -171,6 +171,9 @@ func resolveTarget(doc *document, ch *channel, bindCtx map[string]any) (resolved
 	if meta := openbindings.ContextMetadata(bindCtx); meta != nil {
 		if base, ok := meta["baseURL"].(string); ok && base != "" {
 			if def == nil {
+				if len(candidates) == 0 {
+					return directURLTarget(base)
+				}
 				names := boundServerNames(candidates)
 				if len(names) == 0 {
 					return resolvedTarget{}, fmt.Errorf("the effective server set declares no server with a protocol bound by the supported openbindings.asyncapi revisions")
@@ -186,6 +189,19 @@ func resolveTarget(doc *document, ch *channel, bindCtx map[string]any) (resolved
 	}
 
 	if def == nil {
+		// An artifact that declares no server at all still names a complete
+		// target (ruled 2026-08-13, R1+R5): reachability is consumer
+		// configuration, negotiated via the same config.value challenge the
+		// several-servers case uses — the caller supplies the whole
+		// connection URL instead of selecting a member.
+		if len(candidates) == 0 {
+			return resolvedTarget{}, &configRequired{
+				point:       "server",
+				path:        "/url",
+				description: "the artifact declares no server; configuration.server.url must supply the connection URL",
+				durable:     boolPointer(true),
+			}
+		}
 		names := boundServerNames(candidates)
 		if len(names) == 0 {
 			return resolvedTarget{}, fmt.Errorf("the effective server set declares no server with a protocol bound by the supported openbindings.asyncapi revisions")
@@ -201,13 +217,29 @@ func resolveTarget(doc *document, ch *channel, bindCtx map[string]any) (resolved
 	return assembleServer(def, nil)
 }
 
+// directURLTarget resolves a consumer-supplied connection URL as the whole
+// target for an artifact that declares no server: there is no member to
+// select or replace, so the URL's own scheme carries the protocol and no
+// artifact server declarations apply.
+func directURLTarget(full string) (resolvedTarget, error) {
+	u, err := url.Parse(full)
+	if err != nil || !u.IsAbs() {
+		return resolvedTarget{}, fmt.Errorf("connection URL %q is not an absolute URL", full)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if !isBoundProtocol(scheme) {
+		return resolvedTarget{}, fmt.Errorf("connection URL %q: scheme %q is not bound by the supported openbindings.asyncapi revisions (supported: http, https, ws, wss)", full, scheme)
+	}
+	return resolvedTarget{ServerURL: strings.TrimRight(full, "/"), Protocol: scheme}, nil
+}
+
 // serverConfigShapes is the teaching tail of every unrecognized-form refusal.
 // The shape is this SDK's own carriage (§9.2 pins the semantics, not the
 // value shape — R1); this SDK and the TS SDK keep the same shape by choice for
 // a consistent developer experience, not because the specification requires
 // it. Rejecting an unrecognized spelling is hygiene: a mistyped member should
 // fail loudly, not be silently tolerated.
-const serverConfigShapes = `this implementation accepts {"key": "<server-name>"?, "variables": {"<variable-name>": "<string-value>"}?, "url": "<connection-url>"?}; "key" selects an artifact member (required when several bindable members remain), "variables" completes that member, and "url" may replace only that selected member's target with the same scheme`
+const serverConfigShapes = `this implementation accepts {"key": "<server-name>"?, "variables": {"<variable-name>": "<string-value>"}?, "url": "<connection-url>"?}; "key" selects an artifact member (required when several bindable members remain), "variables" completes that member, "url" may replace only that selected member's target with the same scheme, and when the artifact declares no server "url" alone supplies the whole connection URL`
 
 // resolveServerConfig applies one configured `server` value against the
 // effective set using this SDK's composable object carriage. Every
@@ -269,6 +301,22 @@ func resolveServerConfig(raw any, candidates []namedServer, def *namedServer) (r
 		}
 	}
 	if member == nil {
+		if len(candidates) == 0 {
+			// No artifact server exists to select, complete, or replace: the
+			// url form alone carries the whole target (R1+R5).
+			if hasVars {
+				return resolvedTarget{}, fmt.Errorf("configuration.server.variables completes an artifact-declared server, and the artifact declares none: %s", serverConfigShapes)
+			}
+			if hasURL {
+				return directURLTarget(full)
+			}
+			return resolvedTarget{}, &configRequired{
+				point:       "server",
+				path:        "/url",
+				description: "the artifact declares no server; configuration.server.url must supply the connection URL",
+				durable:     boolPointer(true),
+			}
+		}
 		names := boundServerNames(candidates)
 		if len(names) == 0 {
 			return resolvedTarget{}, fmt.Errorf("the effective server set declares no server with a protocol bound by the supported openbindings.asyncapi revisions")

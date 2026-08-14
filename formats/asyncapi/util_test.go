@@ -108,11 +108,42 @@ func TestResolveTarget_MetadataOverride(t *testing.T) {
 	}
 }
 
+// An artifact declaring no server is a complete target whose reachability is
+// consumer configuration (ruled 2026-08-13, R1+R5): unconfigured invocation
+// challenges CONTEXT_REQUIRED (config.value, point server, path /url), and a
+// configured url alone supplies the whole connection URL, its scheme carrying
+// the protocol.
 func TestResolveTarget_NoServers(t *testing.T) {
 	doc := &document{}
 	_, err := resolveTarget(doc, nil, nil)
-	if err == nil {
-		t.Error("expected error for doc with no servers")
+	var cr *configRequired
+	if !errors.As(err, &cr) {
+		t.Fatalf("expected a config-required challenge, got %v", err)
+	}
+	if cr.point != "server" || cr.path != "/url" {
+		t.Fatalf("challenge = point %q path %q; want server /url", cr.point, cr.path)
+	}
+
+	cfg := func(value any) map[string]any {
+		return map[string]any{"configuration": map[string]any{"server": value}}
+	}
+	target, err := resolveTarget(doc, nil, cfg(map[string]any{"url": "wss://broker.example.com/v1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.ServerURL != "wss://broker.example.com/v1" || target.Protocol != "wss" {
+		t.Fatalf("direct url target = %+v", target)
+	}
+
+	// variables complete an artifact-declared server; with none declared the
+	// spelling is a loud refusal, never ignored.
+	if _, err := resolveTarget(doc, nil, cfg(map[string]any{"url": "wss://broker.example.com", "variables": map[string]any{"x": "y"}})); err == nil {
+		t.Fatal("variables without an artifact server must refuse")
+	}
+
+	// An unbound scheme refuses pre-dispatch, never dials.
+	if _, err := resolveTarget(doc, nil, cfg(map[string]any{"url": "kafka://broker.example.com:9092"})); err == nil {
+		t.Fatal("an unbound scheme must refuse")
 	}
 }
 
@@ -258,7 +289,7 @@ func TestResolveTarget_ServerVariablesCarriage(t *testing.T) {
 // TestResolveTarget_ShapeTeachingErrors pins the refusal text for malformed
 // values of this SDK's server-point carriage, byte-identical to the TS SDK.
 func TestResolveTarget_ShapeTeachingErrors(t *testing.T) {
-	const tail = `this implementation accepts {"key": "<server-name>"?, "variables": {"<variable-name>": "<string-value>"}?, "url": "<connection-url>"?}; "key" selects an artifact member (required when several bindable members remain), "variables" completes that member, and "url" may replace only that selected member's target with the same scheme`
+	const tail = `this implementation accepts {"key": "<server-name>"?, "variables": {"<variable-name>": "<string-value>"}?, "url": "<connection-url>"?}; "key" selects an artifact member (required when several bindable members remain), "variables" completes that member, "url" may replace only that selected member's target with the same scheme, and when the artifact declares no server "url" alone supplies the whole connection URL`
 	doc := &document{
 		Servers: map[string]server{
 			"prod": {Host: "api.example.com", Protocol: "https"},
