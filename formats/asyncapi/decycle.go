@@ -69,10 +69,18 @@ func decycleNode(node any, state *decycleState) any {
 		return node
 	}
 	if ref, ok := schema["$ref"].(string); ok && strings.HasPrefix(ref, "#/") {
-		if name, materialized := state.materialize(ref); materialized {
+		// A derivation-emitted local ref ("#/$defs/<name>", the Avro
+		// correspondence's named-type spelling) rebases onto the operation
+		// schema's own pointer; artifact refs materialize as before. The
+		// walk then continues into sibling members: 2020-12 evaluates
+		// keywords beside $ref, and the derived root is exactly
+		// {$ref, $defs} — returning here would leave every ref inside
+		// that $defs unrebased (dangling in the emitted document).
+		if strings.HasPrefix(ref, "#/$defs/") {
+			schema["$ref"] = state.refBase + strings.TrimPrefix(ref, "#")
+		} else if name, materialized := state.materialize(ref); materialized {
 			schema["$ref"] = state.refBase + "/$defs/" + escapeDefsPointerSegment(name)
 		}
-		return schema
 	}
 	for key, value := range schema {
 		if schemaMapContainerKeys[key] {

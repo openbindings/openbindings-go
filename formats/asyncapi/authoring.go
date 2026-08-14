@@ -279,10 +279,27 @@ func unionPayloadSchemas(doc *document, messages []message) map[string]any {
 		}
 		schema, format := effectivePayload(message)
 		var translated map[string]any
-		if messageCarriage(doc, message) == carriageBytes {
+		if classifySchemaFormat(format) == schemaFormatAvro {
+			// The named Avro correspondence: logical values under Avro's own
+			// JSON Encoding. A declaration that does not parse as an Avro
+			// schema falls to the byte rule as an inexpressible contract.
+			if derived, ok := deriveAvroSchema(schema); ok {
+				translated = derived
+			} else if messageCarriage(doc, message) == carriageBytes {
+				translated = base64BoundarySchema()
+				translated["description"] = lossyBoundaryDescription(messageEffectiveContentType(doc, message))
+			} else {
+				translated = map[string]any{}
+			}
+		} else if messageCarriage(doc, message) == carriageBytes {
 			// The byte boundary: exact octets as the canonical Base64 string,
 			// regardless of any declared (inexpressible) payload contract.
 			translated = base64BoundarySchema()
+			if messagePayloadLossReason(doc, message) == "asyncapi.payload_byte_carriage" {
+				translated["description"] = lossyBoundaryDescription(messageEffectiveContentType(doc, message))
+			} else {
+				translated["description"] = boundaryDescription(messageEffectiveContentType(doc, message))
+			}
 		} else if classifySchemaFormat(format) == schemaFormatTranslate {
 			translated = translateSchemaDialect(schema)
 		} else {
@@ -330,6 +347,7 @@ type schemaFormatDisposition int
 const (
 	schemaFormatTranslate schemaFormatDisposition = iota
 	schemaFormatPassthrough
+	schemaFormatAvro
 	schemaFormatForeign
 )
 
@@ -353,6 +371,12 @@ func classifySchemaFormat(format string) schemaFormatDisposition {
 	switch strings.ToLower(mediaType) {
 	case "application/vnd.aai.asyncapi", "application/vnd.aai.asyncapi+json", "application/vnd.aai.asyncapi+yaml":
 		return schemaFormatTranslate
+	case "application/vnd.apache.avro", "application/vnd.apache.avro+json", "application/vnd.apache.avro+yaml":
+		// The named Avro correspondence (§9.2): 1.x editions only.
+		if version == "" || strings.HasPrefix(version, "1.") {
+			return schemaFormatAvro
+		}
+		return schemaFormatForeign
 	case "application/schema+json", "application/schema+yaml":
 		switch version {
 		case "draft-07":
@@ -424,8 +448,13 @@ func effectivePayload(m message) (map[string]any, string) {
 // unconstrained schema loses nothing.
 func messagePayloadNotConvertible(doc *document, m message) bool {
 	// Byte carriage is never unconstrained: the direction is represented by
-	// the canonical Base64 boundary schema (unionPayloadSchemas emits it).
+	// the canonical Base64 boundary schema (unionPayloadSchemas emits it) —
+	// and an Avro-declared direction is represented by its derived logical
+	// schema or the boundary schema, likewise never unconstrained.
 	if messageCarriage(doc, m) == carriageBytes {
+		return false
+	}
+	if _, format := effectivePayload(m); classifySchemaFormat(format) == schemaFormatAvro {
 		return false
 	}
 	schema, _ := effectivePayload(m)
@@ -445,6 +474,18 @@ func messagePayloadLossReason(doc *document, m message) string {
 	schema, format := effectivePayload(m)
 	if schema == nil && m.Payload == nil {
 		return ""
+	}
+	if classifySchemaFormat(format) == schemaFormatAvro {
+		// The named correspondence: a derivable Avro contract crosses as
+		// logical values — nothing lost. An underivable declaration is an
+		// inexpressible contract under the byte rule.
+		if _, ok := deriveAvroSchema(schema); ok {
+			return ""
+		}
+		if messageCarriage(doc, m) == carriageBytes {
+			return "asyncapi.payload_byte_carriage"
+		}
+		return "asyncapi.schema_format_not_convertible"
 	}
 	if messageCarriage(doc, m) == carriageBytes {
 		// The byte boundary (§9.2, ruled 2026-08-13): declared binary media
@@ -520,6 +561,16 @@ func contentTypeCarriage(contentType string) payloadCarriage {
 // JSON string is canonical RFC 4648 §4 Base64 of the exact octets.
 func base64BoundarySchema() map[string]any {
 	return map[string]any{"type": "string", "contentEncoding": "base64"}
+}
+
+// The §9.2-pinned boundary descriptions: the loss is stated in the emitted
+// schema itself, not only in synthesis coverage.
+func boundaryDescription(media string) string {
+	return "Canonical RFC 4648 §4 Base64 of the exact " + media + " payload octets."
+}
+
+func lossyBoundaryDescription(media string) string {
+	return boundaryDescription(media) + " The artifact declares a payload contract this boundary cannot express; a codec is required to produce valid payloads."
 }
 
 // schemaEqualsBoundary reports whether the declared schema, carried through

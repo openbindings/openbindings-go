@@ -23,8 +23,12 @@ func TestClassifySchemaFormat(t *testing.T) {
 		// Unknown or absent JSON Schema version: no translation rules to apply.
 		{"application/schema+json", schemaFormatForeign},
 		{"application/schema+json;version=draft-04", schemaFormatForeign},
+		// The named Avro correspondence (ruled 2026-08-14): 1.x editions.
+		{"application/vnd.apache.avro;version=1.9.0", schemaFormatAvro},
+		{"application/vnd.apache.avro+json;version=1.11.1", schemaFormatAvro},
+		{"application/vnd.apache.avro", schemaFormatAvro},
+		{"application/vnd.apache.avro;version=2.0.0", schemaFormatForeign},
 		// Foreign languages that the substring heuristic previously mishandled.
-		{"application/vnd.apache.avro;version=1.9.0", schemaFormatForeign},
 		{"application/vnd.google.protobuf;version=2", schemaFormatForeign},
 		{"application/vnd.oai.openapi;version=3.0.0", schemaFormatForeign},
 		{"application/raml+yaml;version=1.0", schemaFormatForeign},

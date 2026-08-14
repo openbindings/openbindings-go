@@ -219,6 +219,9 @@ func resolveInputCodec(doc *document, msgs []message, contexts ...map[string]any
 		if err != nil {
 			return inputCodec{}, err
 		}
+		if err := avroMediaGuard(msgs[0], lane.ContentType); err != nil {
+			return inputCodec{}, err
+		}
 		return lane, nil
 	case isJSONContentType(t):
 		effective := messageEffectiveContentType(doc, msgs[0])
@@ -228,13 +231,43 @@ func resolveInputCodec(doc *document, msgs []message, contexts ...map[string]any
 		return inputCodec{JSON: true, ContentType: effective}, nil
 	case isTextContentType(t):
 		effective := messageEffectiveContentType(doc, msgs[0])
+		if err := avroMediaGuard(msgs[0], effective); err != nil {
+			return inputCodec{}, err
+		}
 		if err := supportedMessageContentType(effective); err != nil {
 			return inputCodec{}, err
 		}
 		return inputCodec{JSON: false, ContentType: effective}, nil
 	default:
-		return inputCodec{}, fmt.Errorf("effective content type %q has no candidate application-value carriage", messageEffectiveContentType(doc, msgs[0]))
+		effective := messageEffectiveContentType(doc, msgs[0])
+		if err := avroMediaGuard(msgs[0], effective); err != nil {
+			return inputCodec{}, err
+		}
+		return inputCodec{}, fmt.Errorf("effective content type %q has no candidate application-value carriage", effective)
 	}
+}
+
+// avroMediaGuard refuses the unqualified-codec case of the named Avro
+// correspondence (§9.2): a message whose payload declares an on-list Avro
+// schema format with effective media outside the JSON family, whose wire is
+// the Avro BINARY encoding. This build has not qualified an Avro binary
+// codec, so the direction refuses before dispatch, exactly as an
+// unqualified protocol driver does — it never rides the text lane and never
+// invents a byte convention (the synthesized schema is the logical one). A
+// JSON-family media needs no extra codec: the ordinary JSON lane is the
+// Avro-JSON wire.
+func avroMediaGuard(m message, effectiveContentType string) error {
+	if effectiveContentType == "" || isJSONContentType(effectiveContentType) {
+		return nil
+	}
+	if m.Payload == nil {
+		return nil
+	}
+	format, _ := m.Payload["schemaFormat"].(string)
+	if classifySchemaFormat(format) != schemaFormatAvro {
+		return nil
+	}
+	return fmt.Errorf("the governing message declares the Avro correspondence with media %q, whose wire is the Avro binary encoding; this build has no qualified Avro binary codec", effectiveContentType)
 }
 
 func messageEffectiveContentType(doc *document, m message) string {
@@ -294,6 +327,9 @@ func resolveSubscriptionContentType(doc *document, msgs []message, bindCtx map[s
 		if ct == "" {
 			ct = doc.DefaultContentType
 		}
+		if err := avroMediaGuard(m, ct); err != nil {
+			return "", err
+		}
 		if err := supportedMessageContentType(ct); err != nil {
 			return "", err
 		}
@@ -317,6 +353,11 @@ func resolveSubscriptionContentType(doc *document, msgs []message, bindCtx map[s
 		lane, err := requiredCodecLane(bindCtx, "decode")
 		if err != nil {
 			return "", err
+		}
+		for _, m := range msgs {
+			if err := avroMediaGuard(m, lane.ContentType); err != nil {
+				return "", err
+			}
 		}
 		return lane.ContentType, nil
 	}
@@ -351,6 +392,9 @@ func resolveReplyContentType(doc *document, op *asyncOperation, status int, actu
 		}
 		if m.Headers != nil {
 			return "", fmt.Errorf("selected reply message declares headers, which revision 1 cannot carry")
+		}
+		if err := avroMediaGuard(m, messageEffectiveContentType(doc, m)); err != nil {
+			return "", err
 		}
 		if err := supportedMessageContentType(messageEffectiveContentType(doc, m)); err != nil {
 			return "", err
