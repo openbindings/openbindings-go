@@ -180,13 +180,20 @@ func legacyRunBinding(ctx context.Context, client *http.Client, pool *wsPool, ar
 	// configuration.address.parameters pre-fill) and the payload rides on
 	// to the ordinary codec lanes alone.
 	if prepared != nil {
-		payload, envelopeParams, isEnvelope, eerr := splitInputEnvelope(ch, prepared.Value)
+		selected, selErr := selectedInputMessages(doc, &asyncOp, ch, args.Context)
+		if selErr != nil {
+			// Selection defects surface at codec resolution with their own
+			// codes; the split only needs the headers declaration.
+			selected = nil
+		}
+		payload, envelopeParams, envelopeHeaders, isEnvelope, eerr := splitInputEnvelope(ch, selected, prepared.Value)
 		if eerr != nil {
 			h.FireError(openbindings.NewInvocationErrorWithData(openbindings.ErrCodeRefused, map[string]any{"message": eerr.Error()}))
 			return
 		}
 		if isEnvelope {
 			prepared.Value = payload
+			prepared.Headers = envelopeHeaders
 			merged := map[string]string{}
 			for name, value := range addrCfg.Parameters {
 				merged[name] = value
@@ -216,6 +223,15 @@ func legacyRunBinding(ctx context.Context, client *http.Client, pool *wsPool, ar
 		h.FireError(&openbindings.InvocationError{
 			Code: openbindings.ErrCodeSourceConfigError,
 		})
+		return
+	}
+
+	// Header carriage is per protocol cell (§9.2): the built-in HTTP lane
+	// carries the envelope's headers as HTTP fields; raw WebSocket frames
+	// have no native carriage and refuse before any dial.
+	if prepared != nil && prepared.Headers != nil && target.Protocol != "http" && target.Protocol != "https" {
+		h.FireError(openbindings.NewInvocationErrorWithData(openbindings.ErrCodeRefused,
+			map[string]any{"message": "the input declares application headers; this build has no header carriage for the " + target.Protocol + " protocol cell"}))
 		return
 	}
 
@@ -255,7 +271,14 @@ func legacyRunBinding(ctx context.Context, client *http.Client, pool *wsPool, ar
 	}
 }
 
-type preparedInput struct{ Value any }
+type preparedInput struct {
+	Value any
+	// Headers is the routed envelope's application-headers value (nil when
+	// the selected input message declares no headers contract). Carriage is
+	// per protocol cell: HTTP fields carry it; a cell with no native
+	// carriage refuses pre-dispatch.
+	Headers map[string]any
+}
 
 func validateLegacyCell(doc *document, ch *channel, op *asyncOperation, protocol, bindingSpec string, bindCtx map[string]any) error {
 	var httpBinding *httpOperationBinding
@@ -802,6 +825,18 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	if codec.ContentType != "" {
 		req.Header.Set("Content-Type", codec.ContentType)
 	}
+	// The routed envelope's application headers ride the HTTP cell's
+	// native carriage (§9.2): each member becomes one request field.
+	if prepared != nil {
+		for name, value := range prepared.Headers {
+			text, herr := headerFieldText(name, value)
+			if herr != nil {
+				h.FireError(openbindings.NewInvocationErrorWithData(openbindings.ErrCodeRefused, map[string]any{"message": herr.Error()}))
+				return
+			}
+			req.Header.Set(name, text)
+		}
+	}
 	// Direction-correct Accept: the reply-side governing declaration, when
 	// it names exactly one type (ASYNC-P-05); nothing is advertised when
 	// the declaration names none.
@@ -869,6 +904,19 @@ func runUnaryPublish(ctx context.Context, client *http.Client, target resolvedTa
 	if derr != nil {
 		h.FireError(openbindings.AsInvocationError(derr))
 		return
+	}
+	// A headers-declaring reply rides the routed envelope on the output
+	// direction too: the payload pairs with the declared application
+	// headers projected from the HTTP response's fields (§9.2).
+	replyCandidates := messagesForDecodeCT(doc, replyGoverningMessages(doc, asyncOp), replyDecode)
+	for _, m := range replyCandidates {
+		if m.Headers != nil {
+			output = map[string]any{
+				"payload": output,
+				"headers": projectResponseHeaders(replyCandidates, resp.Header),
+			}
+			break
+		}
 	}
 
 	// Success provenance stamps (the conventions record,

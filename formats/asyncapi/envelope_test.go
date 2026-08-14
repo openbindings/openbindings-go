@@ -3,6 +3,9 @@ package asyncapi
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -98,5 +101,83 @@ func TestRoutedEnvelopeSchemas(t *testing.T) {
 	}
 	if _, present := outProps["region"]; present {
 		t.Fatalf("parameters never ride the output direction: %v", watchOutput)
+	}
+}
+
+// Header carriage on the HTTP cell at the SDK invoker surface (client
+// twins: TestClientCarriesTraitHeadersOverHTTP /
+// TestClientProjectsReplyHeadersIntoOutputEnvelope): the envelope's
+// headers ride the request as fields, and a headers-declaring reply comes
+// back as the output envelope with declared properties projected.
+func TestInvokerCarriesHeadersOverHTTP(t *testing.T) {
+	var seen http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+		w.Header().Set("requestId", "r-9")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"accepted":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	artifact := map[string]any{
+		"asyncapi": "3.0.0",
+		"info":     map[string]any{"title": "Headers", "version": "1"},
+		"servers":  map[string]any{"api": map[string]any{"host": strings.TrimPrefix(srv.URL, "http://"), "protocol": "http"}},
+		"channels": map[string]any{
+			"commands": map[string]any{
+				"address": "/commands",
+				"messages": map[string]any{
+					"Command": map[string]any{
+						"contentType": "application/json",
+						"payload":     map[string]any{"type": "object"},
+						"headers":     map[string]any{"type": "object", "properties": map[string]any{"traceId": map[string]any{"type": "string"}}},
+					},
+					"Result": map[string]any{
+						"contentType": "application/json",
+						"payload":     map[string]any{"type": "object"},
+						"headers":     map[string]any{"type": "object", "properties": map[string]any{"requestId": map[string]any{"type": "string"}}},
+					},
+				},
+			},
+		},
+		"operations": map[string]any{
+			"submit": map[string]any{
+				"action":   "receive",
+				"channel":  map[string]any{"$ref": "#/channels/commands"},
+				"messages": []any{map[string]any{"$ref": "#/channels/commands/messages/Command"}},
+				"bindings": map[string]any{"http": map[string]any{"method": "POST"}},
+				"reply":    map[string]any{"messages": []any{map[string]any{"$ref": "#/channels/commands/messages/Result"}}},
+			},
+		},
+	}
+	binv := NewInvoker()
+	defer binv.Close()
+	call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(artifact)},
+		Ref:    "#/operations/submit",
+	})
+	if err := call.Write(context.Background(), map[string]any{
+		"payload": map[string]any{"id": 4},
+		"headers": map[string]any{"traceId": "t-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := call.Close(); err != nil {
+		t.Fatal(err)
+	}
+	outputs, err := drainOutputs(t, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen.Get("traceId") != "t-1" {
+		t.Fatalf("request headers = %v, want the envelope's traceId carried", seen)
+	}
+	if len(outputs) != 1 {
+		t.Fatalf("outputs = %#v", outputs)
+	}
+	envelope, _ := outputs[0].(map[string]any)
+	payload, _ := envelope["payload"].(map[string]any)
+	headers, _ := envelope["headers"].(map[string]any)
+	if payload["accepted"] != true || headers["requestId"] != "r-9" {
+		t.Fatalf("output envelope = %#v", envelope)
 	}
 }

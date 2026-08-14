@@ -93,9 +93,6 @@ func selectedInputMessages(doc *document, op *asyncOperation, ch *channel, bindC
 			return nil, fmt.Errorf("configuration.message %q does not select exactly one operation message", choice)
 		}
 	}
-	if selected.message.Headers != nil {
-		return nil, fmt.Errorf("selected message declares headers, which this AsyncAPI binding revision cannot carry")
-	}
 	return []message{selected.message}, nil
 }
 
@@ -321,7 +318,10 @@ func resolveSubscriptionContentType(doc *document, msgs []message, bindCtx map[s
 			return "", err
 		}
 		if m.Headers != nil {
-			return "", fmt.Errorf("output message declares headers, which revision 1 cannot carry")
+			// Subscription lanes in this build (SSE events, raw WebSocket
+			// frames) have no native header carriage; a headers-declaring
+			// output refuses per cell (§9.2), never a silent drop.
+			return "", fmt.Errorf("the output message declares application headers; this build has no header carriage for the subscription's protocol cell")
 		}
 		ct := m.ContentType
 		if ct == "" {
@@ -364,6 +364,21 @@ func resolveSubscriptionContentType(doc *document, msgs []message, bindCtx map[s
 	return "", fmt.Errorf("operation has no output message declaration")
 }
 
+// messagesForDecodeCT filters a governing set to the members whose
+// effective declaration matches the resolved decode content type (or
+// declare none), so a per-status reply winner's headers projection never
+// absorbs a non-governing sibling's contract.
+func messagesForDecodeCT(doc *document, msgs []message, ct string) []message {
+	var out []message
+	for _, m := range msgs {
+		effective := messageEffectiveContentType(doc, m)
+		if effective == "" || effective == ct {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 func resolveReplyContentType(doc *document, op *asyncOperation, status int, actual string, bindCtx map[string]any) (string, error) {
 	all := replyGoverningMessages(doc, op)
 	if len(all) == 0 {
@@ -389,9 +404,6 @@ func resolveReplyContentType(doc *document, op *asyncOperation, status int, actu
 	for _, m := range candidates {
 		if err := validateMessageBindingVersion(m); err != nil {
 			return "", err
-		}
-		if m.Headers != nil {
-			return "", fmt.Errorf("selected reply message declares headers, which revision 1 cannot carry")
 		}
 		if err := avroMediaGuard(m, messageEffectiveContentType(doc, m)); err != nil {
 			return "", err
