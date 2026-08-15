@@ -336,12 +336,13 @@ func TestAcceptHeader(t *testing.T) {
 	}
 }
 
-// §9.2's string-carriage lane, ruled 2026-08-15: every concrete non-JSON,
-// non-form selection whose GOVERNING SCHEMA resolves to type: string carries
-// the supplied string. The lane is stated once for every such media type
-// rather than as a list of admitted subtypes, and it is selected by the
-// declaration — never by the media type's primary type, and never by the
-// caller's value.
+// §9.2's string-carriage lane, ruled 2026-08-15 and scope-corrected the same
+// day: a concrete non-JSON, non-form selection carries the supplied string
+// when its GOVERNING SCHEMA resolves to type: string AND its media type is
+// character data. Both halves are derived — the OAS decides the value is a
+// string, the media-type registration decides whether a string has an octet
+// image — so the lane is never keyed on the caller's value and never on the
+// media type's primary type alone.
 func TestRequestStringCarriage_DeclarationScoped(t *testing.T) {
 	doc31 := &openapi3.T{OpenAPI: "3.1.2"}
 	doc30 := &openapi3.T{OpenAPI: "3.0.4"}
@@ -355,7 +356,9 @@ func TestRequestStringCarriage_DeclarationScoped(t *testing.T) {
 		}}
 	}
 
-	for _, media := range []string{"text/plain", "text/csv", "text/markdown", "text/x-markdown", "application/xml", "text/xml", "application/x-custom"} {
+	// Character data: the text tree (RFC 6838 §4.2.1), the XML registrations
+	// and the +xml suffix (RFC 7303 §9.1/§9.2/§9.6.1).
+	for _, media := range []string{"text/plain", "text/csv", "text/markdown", "text/x-markdown", "application/xml", "text/xml", "image/svg+xml"} {
 		plans, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
 			media: &openapi3.MediaType{Schema: stringSchema()},
 		}, true), BindingSpec)
@@ -364,6 +367,38 @@ func TestRequestStringCarriage_DeclarationScoped(t *testing.T) {
 		}
 		if plans[0].family != familyText || !plans[0].synthetic {
 			t.Errorf("string-declared %s: family=%s synthetic=%v, want text/synthetic", media, plans[0].family, plans[0].synthetic)
+		}
+	}
+
+	// NOT character data: no registration establishes a charset for these, so
+	// a caller-supplied string has no defined octet image and the declaration
+	// keeps the byte lanes. Under OAS 3.1 `format: binary` is an annotation
+	// with no assertion force, so the arrow-stream declaration below resolves
+	// to a bare `type: string` and is decided entirely by its media type.
+	for _, media := range []string{"application/x-custom", "application/vnd.apache.arrow.stream", "application/octet-stream", "application/cbor"} {
+		for _, schema := range []*openapi3.SchemaRef{
+			stringSchema(),
+			{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, Format: "binary"}},
+		} {
+			if _, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+				media: &openapi3.MediaType{Schema: schema},
+			}, true), BindingSpec); err == nil {
+				t.Errorf("string-declared %s is not character data and must select no string lane", media)
+			}
+		}
+	}
+
+	// A schema that asserts nothing makes no claim the body is a string, so
+	// it is the same declaration as an omitted schema and takes the
+	// artifact-authorized byte lane — including for character-data media.
+	// (The JSON Schema boolean `true` spelling is pinned in media_v3_test.go,
+	// which loads it from artifact bytes.)
+	for _, media := range []string{"text/plain", "application/vnd.apache.arrow.stream"} {
+		plans, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+			media: &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{}}},
+		}, true), BindingSpec)
+		if err != nil || len(plans) != 1 || plans[0].family != familyOctets || !plans[0].rawBoundary {
+			t.Errorf("memberless Schema Object on %s must take the byte lane: plans=%d err=%v", media, len(plans), err)
 		}
 	}
 
@@ -449,17 +484,18 @@ func TestRequestStringCarriage_DeclarationScoped(t *testing.T) {
 		t.Errorf("non-string value error = %v", err)
 	}
 
-	// An unconstrained boolean `true` schema declares no type, so it selects
-	// no lane: the string lane needs `type: string` and OAS 3.1's raw lane
-	// needs an OMITTED schema. This narrows what the incumbent unconditional
-	// text/plain lane accepted; the corner is filed for a ruling rather than
-	// repaired by inventing an "unconstrained schema" admissibility rule the
-	// 2026-08-15 ruling does not state. Twin-pinned with the TypeScript
-	// "selects no lane for an unconstrained boolean text schema" case.
-	if _, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+	// An unconstrained boolean `true` schema asserts nothing, so the artifact
+	// made no claim the body is a string: it is the same declaration as an
+	// omitted `schema` and takes the byte lane. This is the corner the
+	// 2026-08-15 ruling pass filed rather than decided; it is now settled by
+	// the same authority that scopes the lane — an assertion-free schema is
+	// not a string declaration. Twin-pinned with the TypeScript
+	// "unconstrained boolean text schema takes the byte lane" case.
+	plans, err = planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
 		"text/plain": &openapi3.MediaType{Schema: booleanTrueSchemaRef(t)},
-	}, true), BindingSpec); err == nil {
-		t.Error("an unconstrained boolean text declaration must select no carriage lane")
+	}, true), BindingSpec)
+	if err != nil || len(plans) != 1 || plans[0].family != familyOctets || !plans[0].rawBoundary {
+		t.Errorf("an unconstrained boolean text declaration must take the byte lane: plans=%d err=%v", len(plans), err)
 	}
 }
 

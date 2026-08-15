@@ -679,20 +679,81 @@ func exactRequestFamily(doc *openapi3.T, parsed parsedMediaType, media *openapi3
 			return familyOctets, rawBoundary, nil
 		}
 	}
-	// §9.2 string carriage: every other concrete non-JSON, non-form selection
-	// whose governing schema resolves to type: string carries the supplied
-	// string under the declared charset. The CALLER determines these octets,
-	// so the lane authors no correspondence and is stated once for every such
-	// media type rather than as a list of admitted subtypes — text/plain,
-	// text/csv, and a string-schema application/xml alike. Scoped by the
-	// declaration: the supplied value's type never selects a lane.
-	if schemaTypeIs(mediaSchema(media), "string", map[*openapi3.Schema]bool{}) {
+	// §9.2 string carriage. Its scope is DERIVED from two authorities, not
+	// chosen: the OAS decides that the value is a string (and under 3.1
+	// `format` has no content-encoding force, so `format: binary` there is
+	// still a string declaration), while the media-type registration decides
+	// whether a string has an octet image at all. A string becomes wire bytes
+	// only where a character encoding applies, so the lane admits exactly the
+	// character-data media below. The CALLER determines those octets, so the
+	// lane authors no correspondence. Scoped by the declaration: the supplied
+	// value's type never selects a lane.
+	if isCharacterDataMedia(parsed.base) && schemaTypeIs(mediaSchema(media), "string", map[*openapi3.Schema]bool{}) {
 		if err := supportedTextCharset(parsed); err != nil {
 			return "", false, err
 		}
 		return familyText, false, nil
 	}
 	return "", false, nil
+}
+
+// isCharacterDataMedia is §9.2's closed, structural character-data test: the
+// media types whose registration establishes their content as characters
+// under a charset, and therefore the only ones for which a caller-supplied
+// string has a defined octet image. Members, with the authority for each:
+//
+//	text/*                     RFC 6838 §4.2.1, RFC 2046 §4.1 — the text tree
+//	                           is "material that is principally textual in
+//	                           form", every registration must state how its
+//	                           charset is determined, UTF-8 recommended
+//	application/xml, text/xml  RFC 7303 §3, §9.1, §9.2
+//	*+xml                      RFC 7303 §9.6.1
+//	*+json                     RFC 8259 §8.1 (the JSON lanes claim these first)
+//
+// It is deliberately NOT RFC 6838 §4.8's "Encoding considerations" field,
+// which does not decide the question — application/json registers `binary`
+// (RFC 8259 §11) while requiring UTF-8 text, and text/csv (RFC 4180 §3)
+// records no §4.8 value at all — and deliberately not a registry lookup,
+// which would make the accepted domain depend on a mutable source against
+// §2's pinning discipline. The argument must already be normalized.
+func isCharacterDataMedia(base string) bool {
+	primary, subtype, ok := strings.Cut(base, "/")
+	if !ok || primary == "" || subtype == "" {
+		return false
+	}
+	if primary == "text" {
+		return true
+	}
+	if index := strings.LastIndexByte(subtype, '+'); index >= 0 {
+		switch subtype[index:] {
+		case "+xml", "+json":
+			return true
+		}
+	}
+	return base == "application/xml"
+}
+
+// schemaAssertsNothing reports a Media Type Object schema that makes no
+// assertion at all: the JSON Schema boolean `true`, or a Schema Object with
+// no members. §9.2 treats it as the same declaration as an omitted `schema`
+// — the artifact made no claim that the body is a string — so it takes the
+// artifact-authorized byte lanes rather than falling between two lanes.
+func schemaAssertsNothing(schema *openapi3.Schema) bool {
+	if schema == nil {
+		return false
+	}
+	if literal, boolean := booleanSchemaLiteral(schema); boolean {
+		return literal
+	}
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		return false
+	}
+	var raw map[string]any
+	if json.Unmarshal(encoded, &raw) != nil {
+		return false
+	}
+	return len(raw) == 0
 }
 
 func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType) error {
@@ -1043,6 +1104,12 @@ func octetRequestCarriage(doc *openapi3.T, media *openapi3.MediaType, bindingSpe
 		return false, false, nil
 	}
 	schema := mediaSchema(media)
+	// §9.2: a schema that asserts nothing — the JSON Schema boolean `true`,
+	// or a memberless Schema Object — is the same declaration as an omitted
+	// `schema` for these lanes under either edition.
+	if schemaAssertsNothing(schema) {
+		schema = nil
+	}
 	if isOpenAPI30(majorMinor(doc.OpenAPI)) {
 		if schema == nil && hasSchemaOmittedOAS30ByteCarriage(bindingSpec) {
 			return true, true, nil

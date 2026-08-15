@@ -665,7 +665,12 @@ paths:
 	}
 }
 
-func TestRevision3BooleanSchemaIsNotAnOmittedRawShape(t *testing.T) {
+// §9.2: a schema that ASSERTS NOTHING — the JSON Schema boolean `true`, or a
+// memberless Schema Object — is the same declaration as an omitted `schema`,
+// because the artifact made no claim about the body at all; it takes the
+// artifact-authorized byte lane rather than falling between two lanes. The
+// boolean `false` asserts that no value is admissible and is not that case.
+func TestRevision3UnconstrainedSchemaIsAnOmittedRawShape(t *testing.T) {
 	for _, schema := range []string{"true", "false"} {
 		spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"post":{"requestBody":{"required":true,"content":{"image/png":{"schema":` + schema + `}}},"responses":{"204":{"description":"ok"}}}}}}`
 		doc, err := loadDocument("", openbindings.TextContent(spec))
@@ -673,8 +678,12 @@ func TestRevision3BooleanSchemaIsNotAnOmittedRawShape(t *testing.T) {
 			t.Fatalf("load boolean schema %s: %v", schema, err)
 		}
 		plans, planErr := planRequestBodiesFor(doc, doc.Paths.Find("/x").Post, BindingSpec)
-		if planErr == nil || len(plans) != 0 {
-			t.Fatalf("non-JSON boolean schema %s became an omitted raw lane: plans=%#v err=%v", schema, plans, planErr)
+		if schema == "true" {
+			if planErr != nil || len(plans) != 1 || plans[0].family != familyOctets || !plans[0].rawBoundary {
+				t.Fatalf("boolean schema true must take the byte lane: plans=%#v err=%v", plans, planErr)
+			}
+		} else if planErr == nil || len(plans) != 0 {
+			t.Fatalf("unsatisfiable boolean schema false must select no lane: plans=%#v err=%v", plans, planErr)
 		}
 
 		jsonSpec := strings.Replace(spec, `"image/png"`, `"application/json"`, 1)

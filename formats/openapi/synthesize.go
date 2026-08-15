@@ -701,7 +701,12 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 	if op.RequestBody != nil && op.RequestBody.Value != nil && requestPlan != nil {
 		rb := op.RequestBody.Value
 		var bodySchema map[string]any
-		if requestPlan.media != nil && requestPlan.media.Schema != nil {
+		// A schema that asserts nothing is the same declaration as an omitted
+		// one (§9.2), so the byte lane it selects synthesizes the canonical
+		// boundary schema rather than decorating an empty declaration.
+		assertionFreeByteLane := requestPlan.rawBoundary && requestPlan.media != nil &&
+			requestPlan.media.Schema != nil && schemaAssertsNothing(requestPlan.media.Schema.Value)
+		if requestPlan.media != nil && requestPlan.media.Schema != nil && !assertionFreeByteLane {
 			bodySchema = schemaRefToMap(requestPlan.media.Schema, schemaOverlays)
 		} else if requestPlan.rawBoundary {
 			bodySchema = map[string]any{"type": "string", "contentEncoding": "base64"}
