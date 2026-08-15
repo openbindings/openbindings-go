@@ -690,12 +690,10 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 	is30 := doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
 	for name := range props {
 		propertySchema := resolvedMultipartProperty(schema, name, map[*openapi3.Schema]bool{})
-		if literal, boolean := booleanSchemaLiteral(propertySchema); boolean {
-			if !literal {
-				continue
-			}
-			return fmt.Errorf("urlencoded property %q has an unconstrained boolean schema with no defined octet boundary", name)
+		if literal, boolean := booleanSchemaLiteral(propertySchema); boolean && !literal {
+			continue
 		}
+		propertySchema, _ = effectiveRevision3PartSchema(propertySchema)
 		var enc *openapi3.Encoding
 		if media != nil {
 			enc = media.Encoding[name]
@@ -733,12 +731,10 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 	is30 := doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
 	for name := range props {
 		partSchema := resolvedMultipartProperty(schema, name, map[*openapi3.Schema]bool{})
-		if literal, boolean := booleanSchemaLiteral(partSchema); boolean {
-			if !literal {
-				continue // an unsatisfiable property has no admissible runtime value
-			}
-			return fmt.Errorf("multipart part %q has an unconstrained boolean schema with no defined octet boundary", name)
+		if literal, boolean := booleanSchemaLiteral(partSchema); boolean && !literal {
+			continue // an unsatisfiable property has no admissible runtime value
 		}
+		partSchema, _ = effectiveRevision3PartSchema(partSchema)
 		var enc *openapi3.Encoding
 		if media != nil {
 			enc = media.Encoding[name]
@@ -828,8 +824,11 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 	if schema == nil {
 		return parsedMediaType{}, fmt.Errorf("an absent part schema defaults to application/octet-stream, but this binding revision defines no JSON-to-octet boundary")
 	}
-	if _, boolean := booleanSchemaLiteral(schema); boolean {
-		return parsedMediaType{}, fmt.Errorf("an unconstrained boolean part schema has no defined octet boundary")
+	if literal, boolean := booleanSchemaLiteral(schema); boolean {
+		if !literal {
+			return parsedMediaType{}, fmt.Errorf("an unsatisfiable false part schema admits no value")
+		}
+		schema = &openapi3.Schema{} // true is the same unconstrained declaration as {}
 	}
 	contentEncoding, encodingConflict := resolvedSchemaKeywordString(schema, "contentEncoding")
 	if encodingConflict {
@@ -860,6 +859,17 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 		var ok bool
 		declared, ok = defaultRevision3PartContentType(schema, is30)
 		if !ok {
+			if partSchemaValueDispatches(schema, map[*openapi3.Schema]bool{}) {
+				// §9.2: an unconstrained property schema's OAS per-type part
+				// default is keyed by the supplied value's JSON application
+				// type; the concrete part media type materializes at
+				// invocation. The zero parsedMediaType is the value-dispatch
+				// signal recognized by revision3PropertyCarriage.
+				return parsedMediaType{}, nil
+			}
+			if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 {
+				return parsedMediaType{}, fmt.Errorf("part schema declares a choice applicator that does not collapse to one non-null branch; no single part carriage is defined")
+			}
 			return parsedMediaType{}, fmt.Errorf("typeless part schema defaults to application/octet-stream, but this binding revision defines no JSON-to-octet boundary")
 		}
 	}
@@ -898,9 +908,16 @@ const (
 	revision3PropertyText
 	revision3PropertyRaw30
 	revision3PropertyEncoded31
+	revision3PropertyValueDispatch
 )
 
 func revision3PropertyCarriage(schema *openapi3.Schema, contentType parsedMediaType, is30, allowRaw30 bool) (revision3PropertyCarriageMode, error) {
+	if contentType.base == "" {
+		// revision3PartContentType's value-dispatch signal: the unconstrained
+		// schema's concrete media type and carriage follow the supplied
+		// value's JSON application type (§9.2).
+		return revision3PropertyValueDispatch, nil
+	}
 	if !is30 && schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) && schemaHasContentEncoding(schema) {
 		return revision3PropertyEncoded31, nil
 	}
@@ -1510,6 +1527,13 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 			map[*openapi3.Schema]bool{},
 			hasDynamicObjectCarriage(bindingSpec),
 		)
+		if hasMediaFidelity(bindingSpec) {
+			var partNullable bool
+			propSchema, partNullable = effectiveRevision3PartSchema(propSchema)
+			if partNullable && value == nil {
+				continue // §9.2: a JSON null value elides the nullable optional part
+			}
+		}
 		var enc *openapi3.Encoding
 		if media != nil {
 			enc = media.Encoding[name]
@@ -1659,6 +1683,119 @@ func writeMultipartSerializedField(writer *multipart.Writer, name, value string)
 
 func resolvedMultipartProperty(schema *openapi3.Schema, name string, seen map[*openapi3.Schema]bool) *openapi3.Schema {
 	return resolvedMultipartPropertyFor(schema, name, seen, false)
+}
+
+// effectiveRevision3PartSchema applies this candidate's part-schema
+// interpretations before carriage selection (§9.2 of the binding
+// specification). The boolean literal true is the same unconstrained
+// declaration as {}. A resolved top level declaring exactly one anyOf/oneOf
+// whose branches comprise one non-null branch beside {type: "null"}-only
+// branches collapses to that non-null branch — the artifact declares exactly
+// one carriage, so this is schema interpretation, not branch selection — and
+// the returned nullable flag lets a JSON null value elide the optional part.
+func effectiveRevision3PartSchema(schema *openapi3.Schema) (*openapi3.Schema, bool) {
+	if literal, boolean := booleanSchemaLiteral(schema); boolean {
+		if literal {
+			return &openapi3.Schema{}, false
+		}
+		return schema, false
+	}
+	if collapsed, ok := collapsedNullableChoiceBranch(schema); ok {
+		return collapsed, true
+	}
+	return schema, false
+}
+
+// collapsedNullableChoiceBranch reports the single-non-null-branch collapse:
+// the schema's top level declares exactly one of anyOf/oneOf, no type and no
+// other applicator, and the branches are exactly one non-null branch with
+// every remaining branch declaring {type: "null"} alone. A choice with more
+// than one non-null branch declares value-dependent alternatives and does
+// not collapse.
+func collapsedNullableChoiceBranch(schema *openapi3.Schema) (*openapi3.Schema, bool) {
+	if schema == nil {
+		return nil, false
+	}
+	branches := schema.AnyOf
+	if len(schema.OneOf) > 0 {
+		if len(branches) > 0 {
+			return nil, false
+		}
+		branches = schema.OneOf
+	}
+	if len(branches) < 2 {
+		return nil, false
+	}
+	if (schema.Type != nil && len(schema.Type.Slice()) > 0) || len(schema.AllOf) > 0 || schema.Not != nil ||
+		schema.If != nil || schema.Then != nil || schema.Else != nil || len(schema.DependentSchemas) > 0 ||
+		len(schema.Properties) > 0 || schema.Items != nil {
+		return nil, false
+	}
+	var nonNull *openapi3.Schema
+	for _, branch := range branches {
+		if branch == nil || branch.Value == nil {
+			return nil, false
+		}
+		if nullOnlyBranch(branch.Value) {
+			continue
+		}
+		if nonNull != nil {
+			return nil, false
+		}
+		nonNull = branch.Value
+	}
+	if nonNull == nil {
+		return nil, false
+	}
+	return nonNull, true
+}
+
+// nullOnlyBranch reports a branch declaring {type: "null"} alone (annotations
+// aside): the null arm of the nullable-choice idiom.
+func nullOnlyBranch(schema *openapi3.Schema) bool {
+	if schema == nil || schema.Type == nil {
+		return false
+	}
+	types := schema.Type.Slice()
+	if len(types) != 1 || types[0] != "null" {
+		return false
+	}
+	return len(schema.AnyOf) == 0 && len(schema.OneOf) == 0 && len(schema.AllOf) == 0 && schema.Not == nil &&
+		len(schema.Properties) == 0 && schema.Items == nil && len(schema.Enum) == 0
+}
+
+// partSchemaValueDispatches reports a carriage-unconstrained resolved part
+// schema: a declaration with no type and no choice or conditional
+// applicator, through allOf. §9.2: such a schema's OAS per-type part default
+// is keyed by the supplied value's JSON application type — the value's TYPE
+// is structure, never payload sniffing. An absent schema is not a
+// declaration and never dispatches.
+func partSchemaValueDispatches(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) bool {
+	if schema == nil || seen[schema] {
+		return false
+	}
+	if literal, boolean := booleanSchemaLiteral(schema); boolean {
+		return literal
+	}
+	seen[schema] = true
+	defer delete(seen, schema)
+	if schema.Type != nil && len(schema.Type.Slice()) > 0 {
+		return false
+	}
+	if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 || schema.Not != nil ||
+		schema.If != nil || schema.Then != nil || schema.Else != nil || len(schema.DependentSchemas) > 0 ||
+		schema.Format == "binary" {
+		return false
+	}
+	for _, member := range schema.AllOf {
+		if member == nil || member.Value == nil {
+			continue
+		}
+		if !partSchemaValueDispatches(member.Value, seen) {
+			return false
+		}
+	}
+	return true
 }
 
 func resolvedMultipartPropertyFor(schema *openapi3.Schema, name string, seen map[*openapi3.Schema]bool, dynamic bool) *openapi3.Schema {
@@ -1901,6 +2038,26 @@ func writeMultipartPart(writer *multipart.Writer, name string, value any, schema
 	return nil
 }
 
+// valueDispatchedPartCarriage keys the OAS per-type part default from the
+// supplied value's JSON application type (§9.2): objects and arrays ride as
+// application/json parts, primitives as text/plain. JSON null names no OAS
+// per-type default; an unconstrained part therefore defines no carriage for
+// it and refuses.
+func valueDispatchedPartCarriage(value any) (parsedMediaType, revision3PropertyCarriageMode, error) {
+	if value == nil {
+		return parsedMediaType{}, 0, fmt.Errorf("an unconstrained part schema defines no form carriage for JSON null")
+	}
+	family := "text/plain"
+	mode := revision3PropertyText
+	if _, object := asObject(value); object {
+		family, mode = "application/json", revision3PropertyJSON
+	} else if _, array := asArray(value); array {
+		family, mode = "application/json", revision3PropertyJSON
+	}
+	parsed, err := parseRevision3MediaType(family)
+	return parsed, mode, err
+}
+
 func writeRevision3MultipartPart(writer *multipart.Writer, name string, value any, schema *openapi3.Schema, enc *openapi3.Encoding, is30 bool) error {
 	if enc != nil && len(enc.Headers) > 0 {
 		return fmt.Errorf("multipart part %q declares encoding.headers, but this binding revision defines no caller source for dynamic part-header values", name)
@@ -1913,6 +2070,12 @@ func writeRevision3MultipartPart(writer *multipart.Writer, name string, value an
 	mode, err := revision3PropertyCarriage(schema, parsedContentType, is30, true)
 	if err != nil {
 		return fmt.Errorf("multipart part %q: %w", name, err)
+	}
+	if mode == revision3PropertyValueDispatch {
+		parsedContentType, mode, err = valueDispatchedPartCarriage(value)
+		if err != nil {
+			return fmt.Errorf("multipart part %q: %w", name, err)
+		}
 	}
 	rawBinary := mode == revision3PropertyRaw30
 	var body []byte
@@ -2213,6 +2376,11 @@ func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, 
 				map[*openapi3.Schema]bool{},
 				hasDynamicObjectCarriage(bindingSpec),
 			)
+			var propertyNullable bool
+			propertySchema, propertyNullable = effectiveRevision3PartSchema(propertySchema)
+			if propertyNullable && fields[name] == nil {
+				continue // §9.2: a JSON null value elides the nullable optional field
+			}
 			contentType, err := revision3PartContentType(propertySchema, enc, is30)
 			if err != nil {
 				return "", fmt.Errorf("form field %q: %w", name, err)
@@ -2249,6 +2417,12 @@ func revision3PropertyBytes(name string, value any, schema *openapi3.Schema, con
 	mode, err := revision3PropertyCarriage(schema, contentType, is30, false)
 	if err != nil {
 		return nil, err
+	}
+	if mode == revision3PropertyValueDispatch {
+		contentType, mode, err = valueDispatchedPartCarriage(value)
+		if err != nil {
+			return nil, err
+		}
 	}
 	switch mode {
 	case revision3PropertyJSON:

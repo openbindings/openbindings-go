@@ -1043,7 +1043,15 @@ func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
 		{"dynamic headers", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}})}, Encoding: map[string]*openapi3.Encoding{"value": {Headers: openapi3.Headers{"X-Part": {Value: &openapi3.Header{Parameter: openapi3.Parameter{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}}}}}}}}, "encoding.headers"},
 		{"content type list", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}})}, Encoding: map[string]*openapi3.Encoding{"value": {ContentType: "text/plain, application/json"}}}, "member selection"},
 		{"content type wildcard", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}})}, Encoding: map[string]*openapi3.Encoding{"value": {ContentType: "text/*"}}}, "not one supported concrete"},
-		{"typeless", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{})}}, "octet boundary"},
+		{"multi-non-null choice", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{AnyOf: openapi3.SchemaRefs{
+			{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+			{Value: &openapi3.Schema{Type: &openapi3.Types{"integer"}}},
+		}})}}, "choice applicator"},
+		{"nullable multi-non-null choice", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{AnyOf: openapi3.SchemaRefs{
+			{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+			{Value: &openapi3.Schema{Type: &openapi3.Types{"integer"}}},
+			{Value: &openapi3.Schema{Type: &openapi3.Types{"null"}}},
+		}})}}, "choice applicator"},
 		{"content media type on non-string", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"object"}, ContentMediaType: "application/json"})}}, "requires a resolved string"},
 		{"content media conflict", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{AllOf: openapi3.SchemaRefs{{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, ContentMediaType: "image/png"}}, {Value: &openapi3.Schema{ContentMediaType: "image/jpeg"}}}})}}, "conflicting contentMediaType"},
 		{"content encoding header injection", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}, ContentEncoding: "base64\r\nX-Evil"})}}, "valid HTTP token"},
@@ -1055,6 +1063,151 @@ func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
 				t.Fatalf("plan error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+// §9.2: an unconstrained part schema (a bare description, no type) is
+// admitted, and the OAS per-type part default is keyed by the supplied
+// value's JSON application type — string as text/plain, object as
+// application/json. JSON null names no per-type default and refuses.
+func TestRevision3MultipartUnconstrainedPartUsesValueTypedDefaults(t *testing.T) {
+	doc := &openapi3.T{OpenAPI: "3.1.2"}
+	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: openapi3.Schemas{
+			"file": {Value: &openapi3.Schema{Description: "Profile picture file"}},
+		},
+	}}}
+	if err := validateRevision3MultipartMedia(doc, media); err != nil {
+		t.Fatalf("unconstrained part admission = %v", err)
+	}
+	op := opWithRequestBody(openapi3.Content{"multipart/form-data": media}, true)
+	if _, err := planRequestBodiesFor(doc, op, BindingSpec); err != nil {
+		t.Fatalf("unconstrained part plan = %v", err)
+	}
+
+	r, ct, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": "hello"}, BindingSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parseMultipart(t, r, ct)["file"][0]; got != [2]string{"text/plain", "hello"} {
+		t.Fatalf("string-valued unconstrained part = %v", got)
+	}
+
+	r, ct, err = buildMultipartBodyForRevision(doc, media, map[string]any{"file": map[string]any{"a": float64(1)}}, BindingSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parseMultipart(t, r, ct)["file"][0]; got != [2]string{"application/json", `{"a":1}`} {
+		t.Fatalf("object-valued unconstrained part = %v", got)
+	}
+
+	r, ct, err = buildMultipartBodyForRevision(doc, media, map[string]any{"file": []any{"a", float64(2)}}, BindingSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parseMultipart(t, r, ct)["file"][0]; got != [2]string{"application/json", `["a",2]`} {
+		t.Fatalf("array-valued unconstrained part = %v", got)
+	}
+
+	if _, _, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": nil}, BindingSpec); err == nil || !strings.Contains(err.Error(), "JSON null") {
+		t.Fatalf("null-valued unconstrained part error = %v", err)
+	}
+}
+
+// §9.2: a part schema declaring one non-null anyOf/oneOf branch beside
+// {type: "null"}-only branches collapses to the non-null branch's carriage;
+// a JSON null value elides the optional part from the wire.
+func TestRevision3MultipartNullableChoiceCollapsesToBranchCarriage(t *testing.T) {
+	doc := &openapi3.T{OpenAPI: "3.1.0"}
+	dynamicTrue := true
+	nullBranch := &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"null"}}}
+	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: openapi3.Schemas{
+			"file": {Value: &openapi3.Schema{Description: "nullable upload", AnyOf: openapi3.SchemaRefs{
+				{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, ContentMediaType: "application/octet-stream"}},
+				nullBranch,
+			}}},
+			"file_id": {Value: &openapi3.Schema{AnyOf: openapi3.SchemaRefs{
+				{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+				nullBranch,
+			}}},
+			"options": {Value: &openapi3.Schema{OneOf: openapi3.SchemaRefs{
+				{Value: &openapi3.Schema{Type: &openapi3.Types{"object"}, AdditionalProperties: openapi3.AdditionalProperties{Has: &dynamicTrue}}},
+				nullBranch,
+			}}},
+		},
+	}}}
+	if err := validateRevision3MultipartMedia(doc, media); err != nil {
+		t.Fatalf("nullable-choice admission = %v", err)
+	}
+	op := opWithRequestBody(openapi3.Content{"multipart/form-data": media}, true)
+	if _, err := planRequestBodiesFor(doc, op, BindingSpec); err != nil {
+		t.Fatalf("nullable-choice plan = %v", err)
+	}
+
+	r, ct, err := buildMultipartBodyForRevision(doc, media, map[string]any{
+		"file":    "raw-text",
+		"file_id": "id-1",
+		"options": map[string]any{"k": "v"},
+	}, BindingSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := parseMultipart(t, r, ct)
+	if got := parts["file"][0]; got != [2]string{"text/plain", "raw-text"} {
+		t.Fatalf("collapsed contentMediaType string part = %v", got)
+	}
+	if got := parts["file_id"][0]; got != [2]string{"text/plain", "id-1"} {
+		t.Fatalf("collapsed string part = %v", got)
+	}
+	if got := parts["options"][0]; got != [2]string{"application/json", `{"k":"v"}`} {
+		t.Fatalf("collapsed object part = %v", got)
+	}
+
+	r, ct, err = buildMultipartBodyForRevision(doc, media, map[string]any{
+		"file":    nil,
+		"file_id": "id-2",
+	}, BindingSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts = parseMultipart(t, r, ct)
+	if _, present := parts["file"]; present {
+		t.Fatalf("null nullable part must be elided, got %v", parts["file"])
+	}
+	if got := parts["file_id"][0]; got != [2]string{"text/plain", "id-2"} {
+		t.Fatalf("sibling part after elision = %v", got)
+	}
+}
+
+// The urlencoded lane observes the same §9.2 rules: unconstrained
+// properties take value-typed per-type defaults and a nullable-choice
+// property's JSON null elides the field.
+func TestRevision3URLEncodedUnconstrainedAndNullableProperties(t *testing.T) {
+	doc := &openapi3.T{OpenAPI: "3.1.2"}
+	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: openapi3.Schemas{
+			"note": {Value: &openapi3.Schema{Description: "free-form"}},
+			"tag": {Value: &openapi3.Schema{AnyOf: openapi3.SchemaRefs{
+				{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+				{Value: &openapi3.Schema{Type: &openapi3.Types{"null"}}},
+			}}},
+		},
+	}}}
+	if err := validateRevision3URLEncodedMedia(doc, media); err != nil {
+		t.Fatalf("urlencoded admission = %v", err)
+	}
+
+	body, err := buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": "x y", "tag": "t1"}, BindingSpec)
+	if err != nil || body != "note=x+y&tag=t1" {
+		t.Fatalf("urlencoded body = %q, %v", body, err)
+	}
+	body, err = buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": map[string]any{"a": float64(1)}, "tag": nil}, BindingSpec)
+	if err != nil || body != "note=%7B%22a%22%3A1%7D" {
+		t.Fatalf("object-valued unconstrained field with elided null = %q, %v", body, err)
 	}
 }
 
