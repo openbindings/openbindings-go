@@ -82,6 +82,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 	// See inlineRefs / buildRefRegistry above for the rationale.
 	refRegistry := buildRefRegistry(doc, schemaOverlays)
 	cyclic := cyclicRefs(refRegistry)
+	namer := newCutPointNamer(location, schemaOverlays.externalComponents())
 
 	usedKeys := map[string]bool{}
 
@@ -221,7 +222,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			routes := planAbstractInputRoutes(params, requestPlans)
 			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, refRegistry, routes, schemaOverlays)
 			if inputSchema != nil {
-				inlined, hoisted := inlineRefsInOperationSchema(inputSchema, refRegistry, cyclic, opPointer+"/input")
+				inlined, hoisted := inlineRefsInOperationSchema(inputSchema, refRegistry, cyclic, opPointer+"/input", namer)
 				projected := pruneUnreachableDefs(projectOpenAPISchema(inlined, openAPIRequestSchema, requestSchemaProjectionExemptions(routes)), opPointer+"/input", hoisted)
 				restored := restoreBooleanSchemas(projected)
 				if object, ok := restored.(map[string]any); ok {
@@ -233,7 +234,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 
 			outputSchema := buildOutputSchemaWithCyclicRefs(op, schemaOverlays, bindingSpec, cyclic, doc.OpenAPI)
 			if outputSchema != nil {
-				inlined, hoisted := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output")
+				inlined, hoisted := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output", namer)
 				projected := pruneUnreachableDefs(projectOpenAPISchema(inlined, openAPIResponseSchema, nil), opPointer+"/output", hoisted)
 				restored := restoreBooleanSchemas(projected)
 				if object, ok := restored.(map[string]any); ok {
@@ -1572,14 +1573,17 @@ func inlineRefsAt(node any, position schemaTraversalPosition, registry map[strin
 				// same-document reference to a hoisted $defs entry (the
 				// dialect's own recursion mechanism — OBI-D-16-resolvable
 				// from the OBI root). Mirrors the TS SDK's decycleSchema.
-				name := defNameForRef(ref)
-				if _, materialized := ctx.defs[name]; !materialized {
-					ctx.defs[name] = nil // reserve before expansion: terminates self-reference
+				// Hoisting is keyed by the ref's own identity, and the `$defs`
+				// key is assigned afterwards over the complete set of cut
+				// points (finalizeHoistedNames). Naming during the walk would
+				// make the key a function of traversal order.
+				if _, materialized := ctx.defs[ref]; !materialized {
+					ctx.defs[ref] = nil // reserve before expansion: terminates self-reference
 					if resolved, found := resolveRegistryRef(ref, registry); found {
-						ctx.defs[name] = inlineRefsAt(resolved, schemaObjectPosition, registry, seen, ctx)
+						ctx.defs[ref] = inlineRefsAt(resolved, schemaObjectPosition, registry, seen, ctx)
 					}
 				}
-				expanded = map[string]any{"$ref": ctx.refBase + "/$defs/" + escapeJSONPointerSegment(name)}
+				expanded = map[string]any{"$ref": provisionalDefPointer(ctx.refBase, ref)}
 			} else if seen[ref] {
 				// Cycle outside the registry graph: leave the ref in place.
 				expanded = map[string]any{"$ref": ref}
@@ -1665,7 +1669,7 @@ func inlineRefsAt(node any, position schemaTraversalPosition, registry map[strin
 // minted definitions are subject to the reachability closure applied after
 // direction projection (pruneUnreachableDefs): an authorial definition is
 // declared artifact content and stands whether or not anything references it.
-func inlineRefsInOperationSchema(schema map[string]any, registry map[string]any, cyclic map[string]bool, refBase string) (map[string]any, map[string]bool) {
+func inlineRefsInOperationSchema(schema map[string]any, registry map[string]any, cyclic map[string]bool, refBase string, namer *cutPointNamer) (map[string]any, map[string]bool) {
 	if schema == nil {
 		return nil, nil
 	}
@@ -1675,14 +1679,79 @@ func inlineRefsInOperationSchema(schema map[string]any, registry map[string]any,
 	if !ok {
 		return schema, nil
 	}
-	hoisted := make(map[string]bool, len(ctx.defs))
-	for name := range ctx.defs {
+	return finalizeHoistedNames(m, ctx, namer)
+}
+
+// provisionalDefPointer is the pointer emitted while walking, before the set of
+// cut points is complete. It embeds the ref's own identity, so it is unique and
+// cannot be forged by artifact content.
+func provisionalDefPointer(refBase, ref string) string {
+	return refBase + "/$defs/" + escapeJSONPointerSegment(ref)
+}
+
+// finalizeHoistedNames assigns the `$defs` keys once the complete set of cut
+// points minted for this operation schema is known, then rewrites the
+// provisional pointers the walk emitted. The rewrite is position-aware, so a
+// `$ref` spelling that is ordinary application data (a default, an example, an
+// extension payload) is never touched.
+func finalizeHoistedNames(m map[string]any, ctx *decycleContext, namer *cutPointNamer) (map[string]any, map[string]bool) {
+	if len(ctx.defs) == 0 {
+		return m, nil
+	}
+	refs := make([]string, 0, len(ctx.defs))
+	for ref := range ctx.defs {
+		refs = append(refs, ref)
+	}
+	names := namer.assign(refs)
+	rewrite := make(map[string]string, len(refs))
+	defs := make(map[string]any, len(refs))
+	hoisted := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		name := names[ref]
+		rewrite[provisionalDefPointer(ctx.refBase, ref)] = ctx.refBase + "/$defs/" + escapeJSONPointerSegment(name)
+		defs[name] = ctx.defs[ref]
 		hoisted[name] = true
 	}
-	if len(ctx.defs) > 0 {
-		m["$defs"] = ctx.defs
+	rewriteHoistedPointers(m, schemaObjectPosition, rewrite)
+	for _, value := range defs {
+		rewriteHoistedPointers(value, schemaObjectPosition, rewrite)
 	}
+	m["$defs"] = defs
 	return m, hoisted
+}
+
+func rewriteHoistedPointers(node any, position schemaTraversalPosition, rewrite map[string]string) {
+	if position == schemaDataPosition {
+		return
+	}
+	switch v := node.(type) {
+	case map[string]any:
+		if position == schemaObjectPosition {
+			if ref, ok := v["$ref"].(string); ok {
+				if replacement, found := rewrite[ref]; found {
+					v["$ref"] = replacement
+				}
+			}
+		}
+		for key, value := range v {
+			childPosition := schemaDataPosition
+			switch position {
+			case schemaObjectPosition:
+				childPosition = schemaChildPosition(key)
+			case schemaMapPosition:
+				childPosition = schemaObjectPosition
+			}
+			rewriteHoistedPointers(value, childPosition, rewrite)
+		}
+	case []any:
+		childPosition := schemaDataPosition
+		if position == schemaArrayPosition {
+			childPosition = schemaObjectPosition
+		}
+		for _, item := range v {
+			rewriteHoistedPointers(item, childPosition, rewrite)
+		}
+	}
 }
 
 // majorMinor reduces an artifact version string to its major.minor form

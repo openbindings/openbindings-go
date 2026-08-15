@@ -21,7 +21,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
-	doc.InternalizeRefs(ctx, internalizedRefName)
+	schemaOverlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
 
 	// Inspection and synthesis share the same realizability filter: an OAS
 	// operation whose revision-1 flattened boundary cannot be represented is

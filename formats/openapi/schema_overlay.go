@@ -33,6 +33,13 @@ type rawSchemaOverlayCollector struct {
 	pending   map[string]map[string]any
 	byRef     map[*openapi3.SchemaRef]map[string]any
 	bySchema  map[*openapi3.Schema]map[string]any
+
+	// externals records what each internalized component key was internalized
+	// FROM. Internalization moves a component reached through an external
+	// reference into the root document under a generated key; without this the
+	// artifact's own name for it is unrecoverable, and a cut point would have
+	// to be named by that generated key. See cutpoint_names.go.
+	externals map[string]refIdentity
 }
 
 func newRawSchemaOverlayCollector() *rawSchemaOverlayCollector {
@@ -42,6 +49,25 @@ func newRawSchemaOverlayCollector() *rawSchemaOverlayCollector {
 		byRef:     map[*openapi3.SchemaRef]map[string]any{},
 		bySchema:  map[*openapi3.Schema]map[string]any{},
 	}
+}
+
+// setExternalComponents records the internalization table for this load.
+func (c *rawSchemaOverlayCollector) setExternalComponents(externals map[string]refIdentity) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.externals = externals
+}
+
+func (c *rawSchemaOverlayCollector) externalComponents() map[string]refIdentity {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.externals
 }
 
 // markRawSchema records the fields the typed representation would erase and

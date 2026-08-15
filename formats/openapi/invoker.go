@@ -642,7 +642,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 	// Internalize the already-resolved closure before projection so the
 	// existing self-contained-schema pass can materialize every reachable
 	// schema without exposing artifact reference semantics in the OBI.
-	doc.InternalizeRefs(ctx, internalizedRefName)
+	schemaOverlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
 	warn := func(w openbindings.SynthesizerWarning) {
 		if in.OnWarning != nil {
 			in.OnWarning(w)
@@ -667,16 +667,45 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 	return &iface, doc, nil
 }
 
+// internalizeExternalRefs internalizes the already-resolved external closure
+// and returns what each generated component key was internalized FROM. These
+// keys never escape the binding processor: a cut point that would otherwise be
+// named by one is named from the recorded identity instead (cutpoint_names.go).
+func internalizeExternalRefs(ctx context.Context, doc *openapi3.T) map[string]refIdentity {
+	externals := map[string]refIdentity{}
+	doc.InternalizeRefs(ctx, func(_ *openapi3.T, ref openapi3.ComponentRef) string {
+		identity := referenceIdentity(ref)
+		name := internalizedRefName(ref.CollectionName(), identity)
+		externals[name] = identity
+		return name
+	})
+	return externals
+}
+
+// referenceIdentity reads a resolved reference's declaring document and
+// pointer. The fragment is normalized because kin-openapi records it in two
+// spellings (refIdentity's own documentation): without normalization one
+// component acquires two identities and internalizes twice, publishing the same
+// artifact component as two cut points.
+func referenceIdentity(ref openapi3.ComponentRef) refIdentity {
+	path := ref.RefPath()
+	if path == nil {
+		return refIdentity{pointer: normalizeReferenceFragment(ref.RefString())}
+	}
+	document := *path
+	document.Fragment = ""
+	return refIdentity{
+		document: document.String(),
+		pointer:  normalizeReferenceFragment(path.Fragment),
+	}
+}
+
 // internalizedRefName is stable and collision-resistant across the complete
 // artifact closure. The upstream default is human-readable but explicitly not
 // injective for every URI; fidelity matters more than generated component
 // aesthetics because these names never escape the binding processor.
-func internalizedRefName(_ *openapi3.T, ref openapi3.ComponentRef) string {
-	identity := ref.CollectionName() + "\x00" + ref.RefString()
-	if path := ref.RefPath(); path != nil {
-		identity = ref.CollectionName() + "\x00" + path.String()
-	}
-	sum := sha256.Sum256([]byte(identity))
+func internalizedRefName(collection string, identity refIdentity) string {
+	sum := sha256.Sum256([]byte(collection + "\x00" + identity.canonical()))
 	return fmt.Sprintf("ob_%x", sum)
 }
 
