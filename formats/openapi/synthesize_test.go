@@ -535,20 +535,23 @@ func TestSynthesize_MediaSchemaMismatchWarns(t *testing.T) {
 	}
 	byPath := map[string]openbindings.SynthesizerWarning{}
 	for _, w := range warnings {
-		if w.Code == "openapi.media_schema_mismatch" {
-			byPath[w.Path] = w
-		}
+		byPath[w.Path] = w
 	}
 	if len(byPath) != 2 {
-		t.Fatalf("want exactly two media_schema_mismatch warnings (the co-declared-JSON operation is fine), got %v", warnings)
+		t.Fatalf("want exactly two warnings (the co-declared-JSON operation is fine), got %v", warnings)
 	}
+	// multipart's lane is selected by the media type, so a non-object schema
+	// is a degenerate media/schema combination (§9.2).
 	wantMultipart := `request media candidate multipart/form-data has a non-object body schema and is inadmissible; optional body omitted from the synthesized contract`
-	if w := byPath["operations.scalarMultipart.input"]; w.Message != wantMultipart {
-		t.Errorf("multipart warning = %q, want %q", w.Message, wantMultipart)
+	if w := byPath["operations.scalarMultipart.input"]; w.Code != "openapi.media_schema_mismatch" || w.Message != wantMultipart {
+		t.Errorf("multipart warning = %q/%q, want openapi.media_schema_mismatch/%q", w.Code, w.Message, wantMultipart)
 	}
-	wantText := `request media candidate text/plain has an object body schema and is inadmissible; optional body omitted from the synthesized contract`
-	if w := byPath["operations.objectText.input"]; w.Message != wantText {
-		t.Errorf("text warning = %q, want %q", w.Message, wantText)
+	// The string-carriage lane is selected by the DECLARATION (§9.2, ruled
+	// 2026-08-15), so an object-schema text declaration selects no lane at
+	// all rather than selecting one and then failing its schema test.
+	wantText := `request body declares no media type whose declaration selects a request carriage lane openbindings.openapi@1 defines (declared: text/plain); optional body omitted from the synthesized contract`
+	if w := byPath["operations.objectText.input"]; w.Code != "openapi.unresolvable_request_body" || w.Message != wantText {
+		t.Errorf("text warning = %q/%q, want openapi.unresolvable_request_body/%q", w.Code, w.Message, wantText)
 	}
 }
 
@@ -667,7 +670,7 @@ func TestSynthesizeInterfaceWithCoverageAccountsForAlternativesAndReverseInterac
 	        "operationId": "createJob",
 	        "requestBody": {"required": true, "content": {
 	          "application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}},
-	          "application/x-custom": {"schema": {"type": "string"}}
+	          "application/x-custom": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}
 	        }},
 	        "callbacks": {
 	          "completed": {

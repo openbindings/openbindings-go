@@ -479,7 +479,7 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 			return nil, &degenerateMediaError{msg: strings.Join(rejected, "; ")}
 		}
 		sort.Strings(declared)
-		return nil, fmt.Errorf("request body declares only media types outside the families openbindings.openapi@1 defines a request carriage for (declared: %s)", strings.Join(declared, ", "))
+		return nil, fmt.Errorf("request body declares no media type whose declaration selects a request carriage lane openbindings.openapi@1 defines (declared: %s)", strings.Join(declared, ", "))
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].parsed.identity < candidates[j].parsed.identity })
 	plans := make([]*bodyPlan, 0, len(candidates))
@@ -611,7 +611,7 @@ func buildBodyPlanFromMedia(rb *openapi3.RequestBody, key string, parsed parsedM
 		}
 	case familyText:
 		if schema != nil && flattens {
-			return nil, fmt.Errorf("request media candidate text/plain has an object body schema and is inadmissible")
+			return nil, fmt.Errorf("request media candidate %s has an object body schema and is inadmissible", plan.mediaType)
 		}
 		plan.synthetic = true
 	case familyOctets:
@@ -657,23 +657,40 @@ func exactRequestFamily(doc *openapi3.T, parsed parsedMediaType, media *openapi3
 			}
 		}
 		return familyURLEncoded, false, nil
-	case parsed.base == "text/plain":
-		if hasMediaFidelity(bindingSpec) {
-			if err := supportedTextCharset(parsed); err != nil {
-				return "", false, err
-			}
-		}
+	case parsed.base == "text/plain" && !hasMediaFidelity(bindingSpec):
 		return familyText, false, nil
 	}
-	if !hasMediaFidelity(bindingSpec) || doc == nil {
+	if !hasMediaFidelity(bindingSpec) {
 		return "", false, nil
 	}
-	eligible, rawBoundary, err := octetRequestCarriage(doc, media, bindingSpec)
-	if err != nil {
-		return "", false, err
+	// The artifact-authorized byte lanes are evaluated first: they are the
+	// cases where the ARTIFACT determines the octets. §9.2 carries no
+	// media-type carve-out here — a schema-omitted text declaration is a
+	// schema-omitted declaration like any other, which is what keeps it from
+	// being orphaned between two lanes. They are also the only edition-
+	// dependent lanes, so they need the document; the string lane below does
+	// not, and is decided identically under every accepted edition.
+	if doc != nil {
+		eligible, rawBoundary, err := octetRequestCarriage(doc, media, bindingSpec)
+		if err != nil {
+			return "", false, err
+		}
+		if eligible {
+			return familyOctets, rawBoundary, nil
+		}
 	}
-	if eligible {
-		return familyOctets, rawBoundary, nil
+	// §9.2 string carriage: every other concrete non-JSON, non-form selection
+	// whose governing schema resolves to type: string carries the supplied
+	// string under the declared charset. The CALLER determines these octets,
+	// so the lane authors no correspondence and is stated once for every such
+	// media type rather than as a list of admitted subtypes — text/plain,
+	// text/csv, and a string-schema application/xml alike. Scoped by the
+	// declaration: the supplied value's type never selects a lane.
+	if schemaTypeIs(mediaSchema(media), "string", map[*openapi3.Schema]bool{}) {
+		if err := supportedTextCharset(parsed); err != nil {
+			return "", false, err
+		}
+		return familyText, false, nil
 	}
 	return "", false, nil
 }
@@ -1434,9 +1451,10 @@ func buildRequestBody(doc *openapi3.T, plan *bodyPlan, routed *routedInput) (io.
 		}
 		s, ok := routed.bodyValue.(string)
 		if !ok {
-			// The selection condition failed: text/plain is selected only
-			// when the body value is a string (OAPI-P-04).
-			return nil, "", fmt.Errorf("request media text/plain was selected but the body value is %T, not a string", routed.bodyValue)
+			// §9.2 selects this lane from the declaration alone, so a
+			// non-string value is a pre-dispatch refusal against the
+			// artifact's own type, not a change of candidate set.
+			return nil, "", fmt.Errorf("request media %s declares a string body but the supplied value is %T, not a string", plan.mediaType, routed.bodyValue)
 		}
 		if hasMediaFidelity(plan.bindingSpec) {
 			parsed, err := parseRevision3MediaType(plan.mediaType)

@@ -2,10 +2,12 @@ package openapi
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"mime"
 	"mime/multipart"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -20,6 +22,12 @@ func opWithRequestBody(content openapi3.Content, required bool) *openapi3.Operat
 }
 
 func emptyMedia() *openapi3.MediaType { return &openapi3.MediaType{} }
+
+// stringMedia declares the `type: string` governing schema §9.2's
+// string-carriage lane is scoped on.
+func stringMedia() *openapi3.MediaType {
+	return &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}}
+}
 
 // OAPI-P-04 gives artifact alternatives no preference. planRequestBody's
 // declaration-identity sort is only the reference SDK's deterministic
@@ -53,8 +61,12 @@ func TestPlanRequestBody_SelectionOrder(t *testing.T) {
 			"application/vnd.a+json", familyJSON,
 		},
 		{
-			"text/plain last",
-			openapi3.Content{"text/plain": emptyMedia()},
+			// §9.2's string-carriage lane is declaration-scoped (ruled
+			// 2026-08-15): the governing schema, not the media type, selects
+			// it. A schema-omitted text declaration is not a string
+			// declaration and takes the artifact-authorized byte lanes.
+			"string-schema text last",
+			openapi3.Content{"text/plain": stringMedia()},
 			"text/plain", familyText,
 		},
 		{
@@ -114,10 +126,10 @@ func TestPlanRequestBody_SyntheticModes(t *testing.T) {
 		t.Errorf("object plan must carry declared property names, got %v", plan.props)
 	}
 
-	// text/plain always rides the synthetic lane.
-	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{"text/plain": emptyMedia()}, false))
+	// A string-declared text body always rides the synthetic lane.
+	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{"text/plain": stringMedia()}, false))
 	if err != nil || !plan.synthetic {
-		t.Errorf("text/plain must be synthetic, got %+v (%v)", plan, err)
+		t.Errorf("string-schema text/plain must be synthetic, got %+v (%v)", plan, err)
 	}
 
 	// §9.1's object determination is declaration-only, one predicate shared
@@ -322,4 +334,145 @@ func TestAcceptHeader(t *testing.T) {
 	if !isStreamingCapable(defOnly) {
 		t.Error("a default entry that can govern a 2xx participates in shape determination (§8)")
 	}
+}
+
+// §9.2's string-carriage lane, ruled 2026-08-15: every concrete non-JSON,
+// non-form selection whose GOVERNING SCHEMA resolves to type: string carries
+// the supplied string. The lane is stated once for every such media type
+// rather than as a list of admitted subtypes, and it is selected by the
+// declaration — never by the media type's primary type, and never by the
+// caller's value.
+func TestRequestStringCarriage_DeclarationScoped(t *testing.T) {
+	doc31 := &openapi3.T{OpenAPI: "3.1.2"}
+	doc30 := &openapi3.T{OpenAPI: "3.0.4"}
+	stringSchema := func() *openapi3.SchemaRef {
+		return &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}
+	}
+	objectSchema := func() *openapi3.SchemaRef {
+		return &openapi3.SchemaRef{Value: &openapi3.Schema{
+			Type:       &openapi3.Types{"object"},
+			Properties: openapi3.Schemas{"a": {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}},
+		}}
+	}
+
+	for _, media := range []string{"text/plain", "text/csv", "text/markdown", "text/x-markdown", "application/xml", "text/xml", "application/x-custom"} {
+		plans, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+			media: &openapi3.MediaType{Schema: stringSchema()},
+		}, true), BindingSpec)
+		if err != nil || len(plans) != 1 {
+			t.Fatalf("string-declared %s: plans=%d err=%v", media, len(plans), err)
+		}
+		if plans[0].family != familyText || !plans[0].synthetic {
+			t.Errorf("string-declared %s: family=%s synthetic=%v, want text/synthetic", media, plans[0].family, plans[0].synthetic)
+		}
+	}
+
+	// No lane builds a document from an object model, so an object-declared
+	// selection outside the JSON and form lanes selects nothing at all.
+	for _, media := range []string{"text/plain", "text/csv", "text/json", "application/xml", "text/xml"} {
+		if _, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+			media: &openapi3.MediaType{Schema: objectSchema()},
+		}, true), BindingSpec); err == nil {
+			t.Errorf("object-declared %s must select no carriage lane", media)
+		}
+	}
+
+	// The incumbent text lane's value-dependent test is gone: a declaration
+	// that does not resolve to type: string selects nothing, whatever the
+	// caller later supplies.
+	anyOfSchema := &openapi3.SchemaRef{Value: &openapi3.Schema{AnyOf: openapi3.SchemaRefs{
+		{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+		{Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}},
+	}}}
+	if _, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+		"text/plain": &openapi3.MediaType{Schema: anyOfSchema},
+	}, true), BindingSpec); err == nil {
+		t.Error("a two-branch anyOf text declaration must select no carriage lane")
+	}
+
+	// The artifact-authorized byte lanes are evaluated first and carry no
+	// text carve-out: a schema-omitted text declaration is a schema-omitted
+	// declaration like any other, not an orphan between two lanes.
+	plans, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+		"text/csv": &openapi3.MediaType{},
+	}, true), BindingSpec)
+	if err != nil || len(plans) != 1 || plans[0].family != familyOctets {
+		t.Errorf("schema-omitted text/csv must take the raw lane, got %d plans (%v)", len(plans), err)
+	}
+
+	// OAS 3.0 `format: binary` is the artifact declaring octets; it wins.
+	binarySchema := &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, Format: "binary"}}
+	plans, err = planRequestBodiesFor(doc30, opWithRequestBody(openapi3.Content{
+		"text/csv": &openapi3.MediaType{Schema: binarySchema},
+	}, true), BindingSpec)
+	if err != nil || len(plans) != 1 || plans[0].family != familyOctets {
+		t.Errorf("OAS 3.0 binary text/csv must take the raw lane, got %d plans (%v)", len(plans), err)
+	}
+
+	// The charset rule applies to the whole family, not just text/plain.
+	if _, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+		"text/csv; charset=shift_jis": &openapi3.MediaType{Schema: stringSchema()},
+	}, true), BindingSpec); err == nil {
+		t.Error("an unsupported charset must refuse for the whole string-carriage family")
+	}
+	plans, err = planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+		"text/csv; charset=iso-8859-1": &openapi3.MediaType{Schema: stringSchema()},
+	}, true), BindingSpec)
+	if err != nil || len(plans) != 1 {
+		t.Fatalf("iso-8859-1 text/csv: plans=%d err=%v", len(plans), err)
+	}
+	body, contentType, err := buildRequestBody(doc31, plans[0], &routedInput{bodySet: true, bodyValue: "é"})
+	if err != nil {
+		t.Fatalf("build iso-8859-1 body: %v", err)
+	}
+	if contentType != "text/csv; charset=iso-8859-1" {
+		t.Errorf("Content-Type = %q", contentType)
+	}
+	encoded, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) != 1 || encoded[0] != 0xe9 {
+		t.Errorf("emitted bytes = %v, want [233]", encoded)
+	}
+
+	// A non-string supplied value is a refusal against the artifact's own
+	// declaration, and the diagnostic names that declaration.
+	plans, err = planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+		"application/xml": &openapi3.MediaType{Schema: stringSchema()},
+	}, true), BindingSpec)
+	if err != nil || len(plans) != 1 {
+		t.Fatalf("application/xml string plan: %d (%v)", len(plans), err)
+	}
+	_, _, err = buildRequestBody(doc31, plans[0], &routedInput{bodySet: true, bodyValue: 42})
+	if err == nil || !strings.Contains(err.Error(), "request media application/xml declares a string body") {
+		t.Errorf("non-string value error = %v", err)
+	}
+
+	// An unconstrained boolean `true` schema declares no type, so it selects
+	// no lane: the string lane needs `type: string` and OAS 3.1's raw lane
+	// needs an OMITTED schema. This narrows what the incumbent unconditional
+	// text/plain lane accepted; the corner is filed for a ruling rather than
+	// repaired by inventing an "unconstrained schema" admissibility rule the
+	// 2026-08-15 ruling does not state. Twin-pinned with the TypeScript
+	// "selects no lane for an unconstrained boolean text schema" case.
+	if _, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
+		"text/plain": &openapi3.MediaType{Schema: booleanTrueSchemaRef(t)},
+	}, true), BindingSpec); err == nil {
+		t.Error("an unconstrained boolean text declaration must select no carriage lane")
+	}
+}
+
+// booleanTrueSchemaRef builds the JSON Schema boolean `true` literal in the
+// structural form kin-openapi round-trips it through.
+func booleanTrueSchemaRef(t *testing.T) *openapi3.SchemaRef {
+	t.Helper()
+	schema := &openapi3.Schema{}
+	if err := json.Unmarshal([]byte(`{"anyOf":[{},{"not":{}}]}`), schema); err != nil {
+		t.Fatalf("build boolean schema: %v", err)
+	}
+	if _, boolean := booleanSchemaLiteral(schema); !boolean {
+		t.Fatalf("constructed schema is not the boolean literal form")
+	}
+	return &openapi3.SchemaRef{Value: schema}
 }
