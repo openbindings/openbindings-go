@@ -50,7 +50,9 @@ type openAPISchemaProjector struct {
 // already-decycled operation schema. Request projection omits readOnly
 // properties; response projection omits writeOnly properties. Applying the
 // projection after decycling deliberately leaves stable $defs names and refs
-// untouched while still projecting every reachable definition.
+// untouched while still projecting every reachable definition. Projection can
+// however remove the last reference to a hoisted definition, so callers close
+// the emitted schema over reachability afterwards (pruneUnreachableDefs).
 //
 // rootExemptions names request-wrapper properties that are not source-schema
 // properties at all (parameters and a synthetic whole-body field). A

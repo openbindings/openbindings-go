@@ -221,8 +221,8 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			routes := planAbstractInputRoutes(params, requestPlans)
 			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, refRegistry, routes, schemaOverlays)
 			if inputSchema != nil {
-				inlined := inlineRefsInOperationSchema(inputSchema, refRegistry, cyclic, opPointer+"/input")
-				projected := projectOpenAPISchema(inlined, openAPIRequestSchema, requestSchemaProjectionExemptions(routes))
+				inlined, hoisted := inlineRefsInOperationSchema(inputSchema, refRegistry, cyclic, opPointer+"/input")
+				projected := pruneUnreachableDefs(projectOpenAPISchema(inlined, openAPIRequestSchema, requestSchemaProjectionExemptions(routes)), opPointer+"/input", hoisted)
 				restored := restoreBooleanSchemas(projected)
 				if object, ok := restored.(map[string]any); ok {
 					obiOp.Input = normalizeOperationSchema(object, formatVersion, schemaSalvageWarner(warn, opKey, "input"))
@@ -233,8 +233,8 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 
 			outputSchema := buildOutputSchemaWithCyclicRefs(op, schemaOverlays, bindingSpec, cyclic, doc.OpenAPI)
 			if outputSchema != nil {
-				inlined := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output")
-				projected := projectOpenAPISchema(inlined, openAPIResponseSchema, nil)
+				inlined, hoisted := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output")
+				projected := pruneUnreachableDefs(projectOpenAPISchema(inlined, openAPIResponseSchema, nil), opPointer+"/output", hoisted)
 				restored := restoreBooleanSchemas(projected)
 				if object, ok := restored.(map[string]any); ok {
 					obiOp.Output = normalizeOperationSchema(object, formatVersion, schemaSalvageWarner(warn, opKey, "output"))
@@ -1660,20 +1660,29 @@ func inlineRefsAt(node any, position schemaTraversalPosition, registry map[strin
 // input or output schema (a map[string]any built by schemaRefToMap or
 // buildInputSchema/buildOutputSchema). Returns the input map mutated
 // in place (and also returned, for chaining).
-func inlineRefsInOperationSchema(schema map[string]any, registry map[string]any, cyclic map[string]bool, refBase string) map[string]any {
+// The second return value names the definitions this pass minted, as
+// distinct from any `$defs` the artifact's own Schema Object declared. Only
+// minted definitions are subject to the reachability closure applied after
+// direction projection (pruneUnreachableDefs): an authorial definition is
+// declared artifact content and stands whether or not anything references it.
+func inlineRefsInOperationSchema(schema map[string]any, registry map[string]any, cyclic map[string]bool, refBase string) (map[string]any, map[string]bool) {
 	if schema == nil {
-		return nil
+		return nil, nil
 	}
 	ctx := &decycleContext{cyclic: cyclic, refBase: refBase, defs: map[string]any{}}
 	result := inlineRefs(schema, registry, map[string]bool{}, ctx)
 	m, ok := result.(map[string]any)
 	if !ok {
-		return schema
+		return schema, nil
+	}
+	hoisted := make(map[string]bool, len(ctx.defs))
+	for name := range ctx.defs {
+		hoisted[name] = true
 	}
 	if len(ctx.defs) > 0 {
 		m["$defs"] = ctx.defs
 	}
-	return m
+	return m, hoisted
 }
 
 // majorMinor reduces an artifact version string to its major.minor form
