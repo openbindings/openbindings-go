@@ -4,6 +4,29 @@
 
 ### Changed
 
+- **AsyncAPI 2.x Reference Objects at non-admitting positions refuse
+  whole-artifact, before reference composition.** Position admission is
+  pinned from the 2.x edition texts: the whole `servers`/`channels` maps,
+  `publish`/`subscribe` (the 2.x Operation Object), string-typed fields
+  (descriptions, `contentType`, `schemaFormat`, channel `servers` name
+  strings), and — before 2.4.0 — servers-map values admit no Reference
+  Object. A document writing `$ref` there has no interpretation under its
+  own edition (ASYNC-P-01); the refusal is the adjudicated
+  consistent-loud-refusal convergence for the parser-tolerance class (MC5
+  seal-1 finding F-V3-1; ASYNC-SS-22/23; shared rule in asyncapi-client's
+  `ValidateReferenceAdmission`, byte-identical in the TS SDK).
+
+- **External reference composition admits non-object documents at
+  Avro-declared schema positions.** A top-level Avro union is a JSON array
+  and a bare primitive type name is a JSON string — legal Avro schema forms
+  the §9.2 named correspondence reaches — so a `payload`/wrapper-`schema`
+  `$ref` whose declared `schemaFormat` is on the Avro list composes them
+  instead of rejecting the artifact ("root is not an object" stays the rule
+  at every structural position). A composed or authored non-object
+  message-level Avro payload takes the Multi Format Schema Object wrapper
+  shape during normalization, and the derivation accepts a top-level union
+  exactly like an interior one (MC5 seal-1 finding F-V3-2; ASYNC-SS-24).
+
 - **BREAKING: `configuration.server` accepts exactly the SDK's composable
   carriage for the §9.2 server point** — `{"key": "<server-name>"?,
   "variables": {"<variable-name>": "<string-value>"}?, "url":

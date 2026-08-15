@@ -10,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	asyncapiclient "github.com/openbindings/asyncapi-client/go"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -24,8 +27,14 @@ const (
 // transplanted into the primary tree.
 type artifactReferenceDocument struct {
 	location string
-	root     map[string]any
-	primary  bool
+	// root is the parsed document. AsyncAPI structural references demand an
+	// object root; a reference at an Avro-declared schema position (§9.2's
+	// named correspondence) may compose a non-object document — a top-level
+	// Avro union is a JSON array, and a bare primitive type name is a JSON
+	// string — so the root is held untyped and the object demand is applied
+	// per referencing position.
+	root    any
+	primary bool
 }
 
 type artifactReferenceResolver struct {
@@ -44,6 +53,13 @@ type artifactReferenceResolver struct {
 func resolveArtifactReferences(ctx context.Context, client *http.Client, location string, data []byte) ([]byte, error) {
 	root, err := decodeReferenceDocument(data)
 	if err != nil {
+		return nil, err
+	}
+	// Reference-position admission runs BEFORE composition: inlining a
+	// reference at a position the declared edition does not admit one would
+	// silently erase the evidence the refusal is about (shared rule:
+	// asyncapi-client, ValidateReferenceAdmission).
+	if err := asyncapiclient.ValidateReferenceAdmission(root); err != nil {
 		return nil, err
 	}
 	if !containsExternalReference(root) {
@@ -68,7 +84,7 @@ func resolveArtifactReferences(ctx context.Context, client *http.Client, locatio
 		resolver.documents[base] = primary
 	}
 
-	resolved, err := resolver.walk(root, primary, map[string]bool{})
+	resolved, err := resolver.walk(root, primary, map[string]bool{}, false)
 	if err != nil {
 		return nil, fmt.Errorf("resolve AsyncAPI references: %w", err)
 	}
@@ -101,6 +117,39 @@ func decodeReferenceDocument(data []byte) (map[string]any, error) {
 		return nil, fmt.Errorf("parse AsyncAPI document: root is not an object")
 	}
 	return root, nil
+}
+
+// decodeReferenceDocumentValue parses an external reference document without
+// demanding an object root. The Avro correspondence (§9.2) admits non-object
+// documents at Avro-declared schema positions; every other position applies
+// the object demand at its use site.
+func decodeReferenceDocumentValue(data []byte) (any, error) {
+	if isJSON(data) {
+		var root any
+		if err := json.Unmarshal(trimUTF8BOM(data), &root); err != nil {
+			return nil, fmt.Errorf("parse AsyncAPI JSON: %w", err)
+		}
+		return root, nil
+	}
+	// The YAML lane shares decodeYAMLObject's full behavior — including the
+	// block-scalar leading-tab protection retry — and relaxes only the
+	// object-root demand.
+	var decoded any
+	if err := yaml.Unmarshal(data, &decoded); err != nil {
+		protected, sentinel, changed := protectBlockScalarLeadingTabs(data)
+		if !changed {
+			return nil, fmt.Errorf("parse AsyncAPI YAML: %w", err)
+		}
+		if retryErr := yaml.Unmarshal(protected, &decoded); retryErr != nil {
+			return nil, fmt.Errorf("parse AsyncAPI YAML: %w", err)
+		}
+		decoded = restoreProtectedYAMLTabs(decoded, sentinel)
+	}
+	normalized, err := normalizeYAMLJSONValue(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("parse AsyncAPI YAML: %w", err)
+	}
+	return normalized, nil
 }
 
 func containsExternalReference(value any) bool {
@@ -140,11 +189,24 @@ func referenceDocumentLocation(location string) (string, error) {
 	return parsed.String(), nil
 }
 
-func (resolver *artifactReferenceResolver) walk(value any, current *artifactReferenceDocument, stack map[string]bool) (any, error) {
+// avroSchemaChild reports whether the child at key enters an Avro-declared
+// schema position: a message-level `schemaFormat` on the Avro correspondence
+// list governs `payload` (the 2.x spelling), and a Multi Format Schema
+// Object's `schemaFormat` governs its `schema` member (the 3.x spelling).
+// Everything below such a position stays in Avro space.
+func avroSchemaChild(owner map[string]any, key string) bool {
+	if key != "payload" && key != "schema" {
+		return false
+	}
+	format, ok := owner["schemaFormat"].(string)
+	return ok && classifySchemaFormat(format) == schemaFormatAvro
+}
+
+func (resolver *artifactReferenceResolver) walk(value any, current *artifactReferenceDocument, stack map[string]bool, avro bool) (any, error) {
 	switch typed := value.(type) {
 	case []any:
 		for index, child := range typed {
-			resolved, err := resolver.walk(child, current, stack)
+			resolved, err := resolver.walk(child, current, stack, avro)
 			if err != nil {
 				return nil, err
 			}
@@ -158,7 +220,7 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 			return nil, err
 		}
 		if ref, ok := typed["$ref"].(string); ok {
-			targetDocument, fragment, external, err := resolver.referenceTarget(current, ref)
+			targetDocument, fragment, external, err := resolver.referenceTarget(current, ref, avro)
 			if err != nil {
 				return nil, err
 			}
@@ -179,7 +241,7 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 					return typed, nil
 				}
 				stack[key] = true
-				resolved, err := resolver.walk(cloneReferenceValue(target), targetDocument, stack)
+				resolved, err := resolver.walk(cloneReferenceValue(target), targetDocument, stack, avro)
 				delete(stack, key)
 				if err != nil {
 					return nil, err
@@ -225,7 +287,7 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 					}
 					sort.Strings(memberNames)
 					for _, name := range memberNames {
-						resolved, err := resolver.walk(members[name], current, stack)
+						resolved, err := resolver.walk(members[name], current, stack, avro)
 						if err != nil {
 							return nil, err
 						}
@@ -237,7 +299,7 @@ func (resolver *artifactReferenceResolver) walk(value any, current *artifactRefe
 			if isLiteralSchemaValueKey(key) || strings.HasPrefix(strings.ToLower(key), "x-") {
 				continue
 			}
-			resolved, err := resolver.walk(typed[key], current, stack)
+			resolved, err := resolver.walk(typed[key], current, stack, avro || avroSchemaChild(typed, key))
 			if err != nil {
 				return nil, err
 			}
@@ -306,7 +368,7 @@ func isASCIILetter(character byte) bool {
 	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
 }
 
-func (resolver *artifactReferenceResolver) referenceTarget(current *artifactReferenceDocument, ref string) (*artifactReferenceDocument, string, bool, error) {
+func (resolver *artifactReferenceResolver) referenceTarget(current *artifactReferenceDocument, ref string, avro bool) (*artifactReferenceDocument, string, bool, error) {
 	parsed, err := url.Parse(ref)
 	if err != nil {
 		return nil, "", false, fmt.Errorf("invalid reference %q: %w", ref, err)
@@ -328,6 +390,9 @@ func (resolver *artifactReferenceResolver) referenceTarget(current *artifactRefe
 	parsed.RawFragment = ""
 	location := parsed.String()
 	if existing := resolver.documents[location]; existing != nil {
+		if err := referenceDocumentRootAdmissible(existing, avro); err != nil {
+			return nil, "", true, err
+		}
 		return existing, fragment, true, nil
 	}
 	if resolver.fetchCount >= maxExternalReferenceDocuments {
@@ -342,13 +407,32 @@ func (resolver *artifactReferenceResolver) referenceTarget(current *artifactRefe
 	if resolver.totalBytes > maxExternalReferenceBytes {
 		return nil, "", true, fmt.Errorf("external reference closure exceeds %d bytes", maxExternalReferenceBytes)
 	}
-	root, err := decodeReferenceDocument(data)
+	root, err := decodeReferenceDocumentValue(data)
 	if err != nil {
 		return nil, "", true, fmt.Errorf("parse external reference document %q: %w", location, err)
 	}
 	document := &artifactReferenceDocument{location: location, root: root}
+	if err := referenceDocumentRootAdmissible(document, avro); err != nil {
+		return nil, "", true, err
+	}
 	resolver.documents[location] = document
 	return document, fragment, true, nil
+}
+
+// referenceDocumentRootAdmissible applies the object demand per referencing
+// position: an AsyncAPI structural reference requires an object document,
+// while a reference at an Avro-declared schema position admits any JSON
+// document — a top-level Avro union is an array and a bare primitive type
+// name is a string, both legal Avro schema forms (§9.2's named
+// correspondence).
+func referenceDocumentRootAdmissible(document *artifactReferenceDocument, avro bool) error {
+	if avro {
+		return nil
+	}
+	if _, ok := document.root.(map[string]any); !ok {
+		return fmt.Errorf("parse external reference document %q: document root is not an object", document.location)
+	}
+	return nil
 }
 
 func resolveReferenceFragment(root any, fragment string) (any, error) {

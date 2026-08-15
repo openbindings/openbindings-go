@@ -6,6 +6,13 @@
 
 ### Changed
 
+- **Synthesis coverage: an `invalid` entry now clears `FullyRepresented`.**
+  Every non-represented status — lossy, excluded, invalid,
+  implementation-unsupported — clears the derived flag; previously an
+  upstream-invalid unit left it standing, so a document whose every target
+  was invalid could report `fullyRepresented: true` (MC5 seal-1 finding
+  F-V3-1). The TS SDK carries the identical change.
+
 - **Invocation failures now use the minimal abstract record `{code,data?}`.**
   Portable message, details, and diagnostics members were removed; data is
   normalized to the JSON domain and preserves absent versus explicit null.

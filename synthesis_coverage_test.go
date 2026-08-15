@@ -52,6 +52,39 @@ func TestNewSynthesisResultDerivesCoverage(t *testing.T) {
 	}
 }
 
+// An invalid entry clears FullyRepresented exactly like every other
+// non-represented status: an upstream-invalid unit is still an inventoried
+// unit the emitted OBI does not represent. Pinned by MC5 seal-1 finding
+// F-V3-1, where a document whose every target was invalid reported
+// fullyRepresented true.
+func TestNewSynthesisResultInvalidEntryClearsFullyRepresented(t *testing.T) {
+	result, err := NewSynthesisResult(synthesisCoverageTestInterface(), []SynthesisCoverageEntry{
+		{
+			SourceIndex:  0,
+			SourceRef:    "#/getUser",
+			Scope:        SynthesisCoverageTarget,
+			Status:       SynthesisRepresented,
+			OperationKey: "getUser",
+			BindingRef:   "#/getUser",
+		},
+		{
+			SourceIndex: 0,
+			SourceRef:   "#/operations/broken",
+			Scope:       SynthesisCoverageTarget,
+			Status:      SynthesisInvalid,
+			ReasonCode:  "example.invalid_target",
+			Rule:        "EXAMPLE-D-03",
+			Message:     "the target does not resolve to an operation object",
+		},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Coverage.FullyRepresented {
+		t.Fatal("an invalid entry must clear FullyRepresented")
+	}
+}
+
 func TestNewSynthesisResultRejectsUnbackedRepresentation(t *testing.T) {
 	_, err := NewSynthesisResult(synthesisCoverageTestInterface(), []SynthesisCoverageEntry{
 		{

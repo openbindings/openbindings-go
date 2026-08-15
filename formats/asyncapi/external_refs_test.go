@@ -184,3 +184,193 @@ func addressableOperation(t *testing.T, doc *document, name string) *asyncOperat
 	}
 	return &op
 }
+
+// A top-level Avro union is a JSON ARRAY — a legal Avro schema form — so an
+// external .avsc referenced from an Avro-declared payload position must
+// compose even though its document root is not an object, and the direction
+// must derive under the named Avro correspondence with nothing lost
+// (MC5 seal-1 finding F-V3-2; the admission is positional — see
+// referenceDocumentRootAdmissible).
+func TestLoadDocumentComposesTopLevelAvroUnionExternalDocument(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/File.avsc", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`["null", {"type": "record", "name": "File", "fields": [{"name": "path", "type": "string"}]}]`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	content := openbindings.TextContent(`asyncapi: 2.6.0
+info: {title: Avro union, version: "1"}
+channels:
+  files:
+    publish:
+      message:
+        name: file
+        schemaFormat: application/vnd.apache.avro;version=1.9.0
+        payload:
+          $ref: "./File.avsc"
+`)
+	doc, err := loadDocument(context.Background(), server.Client(), server.URL+"/root.yaml", content)
+	if err != nil {
+		t.Fatalf("loadDocument: %v", err)
+	}
+	message, ok := doc.Channels["files"].Messages["file"]
+	if !ok {
+		t.Fatalf("normalized channel message missing; have %v", doc.Channels["files"].Messages)
+	}
+	// The composed non-object schema rides the Multi Format Schema Object
+	// wrapper (hoistNonObjectAvroPayloads), the shape the typed model
+	// carries a non-object schema in.
+	schema, format := effectivePayload(message)
+	if classifySchemaFormat(format) != schemaFormatAvro {
+		t.Fatalf("effective schemaFormat = %q, want the declared Avro format", format)
+	}
+	union, ok := schema.([]any)
+	if !ok || len(union) != 2 {
+		t.Fatalf("effective schema = %#v, want the composed two-branch union array", schema)
+	}
+	if reason := messagePayloadLossReason(doc, message); reason != "" {
+		t.Fatalf("loss reason = %q, want none: a derivable top-level union crosses as logical values", reason)
+	}
+	boundary := messagePayloadBoundarySchema(doc, message)
+	branches, ok := boundary["oneOf"].([]any)
+	if !ok || len(branches) != 2 {
+		t.Fatalf("boundary schema = %#v, want the union's oneOf derivation", boundary)
+	}
+	if !operationBindable(doc, addressableOperation(t, doc, "v2:publish:files"), BindingSpec) {
+		t.Fatal("the Avro-union operation must stay bindable")
+	}
+}
+
+// The 3.x spelling of the same cell: a Multi Format Schema Object whose
+// schema member references the external union document.
+func TestLoadDocumentComposesTopLevelAvroUnionAtWrapperSchemaRef(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/File.avsc", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`["null", "string"]`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	content := openbindings.TextContent(`asyncapi: 3.0.0
+info: {title: Avro union wrapper, version: "1"}
+channels:
+  files:
+    address: files.v1
+    messages:
+      file:
+        payload:
+          schemaFormat: application/vnd.apache.avro;version=1.9.0
+          schema:
+            $ref: "./File.avsc"
+operations:
+  publishFile:
+    action: receive
+    channel: {$ref: "#/channels/files"}
+    messages: [{$ref: "#/channels/files/messages/file"}]
+`)
+	doc, err := loadDocument(context.Background(), server.Client(), server.URL+"/root.yaml", content)
+	if err != nil {
+		t.Fatalf("loadDocument: %v", err)
+	}
+	message := doc.Channels["files"].Messages["file"]
+	if reason := messagePayloadLossReason(doc, message); reason != "" {
+		t.Fatalf("loss reason = %q, want none", reason)
+	}
+	boundary := messagePayloadBoundarySchema(doc, message)
+	branches, ok := boundary["oneOf"].([]any)
+	if !ok || len(branches) != 2 {
+		t.Fatalf("boundary schema = %#v, want the union's oneOf derivation", boundary)
+	}
+}
+
+// A non-object external document at an ORDINARY (non-Avro) position keeps
+// the object demand.
+func TestLoadDocumentRejectsNonObjectExternalDocumentAtStructuralPosition(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/channel.json", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`["not", "a", "channel"]`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	content := openbindings.TextContent(`asyncapi: 3.0.0
+info: {title: Bad structural ref, version: "1"}
+channels:
+  events: {$ref: "./channel.json"}
+operations: {}
+`)
+	_, err := loadDocument(context.Background(), server.Client(), server.URL+"/root.yaml", content)
+	if err == nil || !strings.Contains(err.Error(), "not an object") {
+		t.Fatalf("err = %v, want the structural object-root refusal", err)
+	}
+}
+
+// A 2.x document carrying Reference Objects at positions its edition does
+// not admit them refuses whole-artifact BEFORE any composition fetch (MC5
+// seal-1 finding F-V3-1; the pinned position table lives in the shared
+// client, ValidateReferenceAdmission).
+func TestLoadDocumentRefusesV2ReferenceObjectAtNonAdmittingPositionBeforeFetch(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"operation position", `asyncapi: 2.4.0
+info: {title: Bad, version: "1"}
+channels:
+  events:
+    publish: {$ref: "./ops.yml#/publish"}
+`},
+		{"whole servers map", `asyncapi: 2.4.0
+info: {title: Bad, version: "1"}
+servers: {$ref: "./servers.yml"}
+channels: {}
+`},
+		{"string-typed channel description", `asyncapi: 2.4.0
+info: {title: Bad, version: "1"}
+channels:
+  events:
+    description: {$ref: "./descriptions.yml#/events"}
+    subscribe:
+      message: {payload: {type: object}}
+`},
+		{"servers value before 2.4.0", `asyncapi: 2.2.0
+info: {title: Bad, version: "1"}
+servers:
+  main: {$ref: "./servers.yml#/main"}
+channels: {}
+`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			transport := &countingRejectTransport{}
+			client := &http.Client{Transport: transport}
+			_, err := loadDocument(context.Background(), client, "https://example.test/root.yaml", openbindings.TextContent(testCase.content))
+			if err == nil || !strings.Contains(err.Error(), "does not admit a Reference Object") {
+				t.Fatalf("err = %v, want the position-admission refusal", err)
+			}
+			if transport.calls != 0 {
+				t.Fatalf("composition fetched %d documents; admission must refuse first", transport.calls)
+			}
+		})
+	}
+}
+
+// The same positions with an admitting counterpart: a servers-map VALUE ref
+// is legal from 2.4.0 (Server Object | Reference Object), and the Channel
+// Item's own $ref field is legal in every 2.x edition.
+func TestLoadDocumentAdmitsV2ReferenceObjectAtAdmittingPositions(t *testing.T) {
+	content := openbindings.TextContent(`asyncapi: 2.4.0
+info: {title: Fine, version: "1"}
+servers:
+  main: {$ref: "#/components/x-servers/main"}
+channels:
+  events:
+    subscribe:
+      message: {payload: {type: object}}
+`)
+	client := &http.Client{Transport: &countingRejectTransport{}}
+	if _, err := loadDocument(context.Background(), client, "https://example.test/root.yaml", content); err != nil {
+		t.Fatalf("loadDocument: %v", err)
+	}
+}

@@ -297,12 +297,21 @@ func messagePayloadBoundarySchema(doc *document, message message) map[string]any
 		} else {
 			translated["description"] = boundaryDescription(messageEffectiveContentType(doc, message))
 		}
-	} else if classifySchemaFormat(format) == schemaFormatTranslate {
-		translated = translateSchemaDialect(schema)
 	} else {
-		// Passthrough must not alias document memory: downstream passes
-		// (cyclic hoisting) rewrite the boundary schema in place.
-		translated = deepCopyMap(schema)
+		// messagePayloadNotConvertible has already floored every non-object
+		// schema under a translate/passthrough format, so the assertion holds
+		// on this path; the guard keeps an unexpected shape unconstrained
+		// rather than panicking.
+		schemaMap, isObject := schema.(map[string]any)
+		if !isObject {
+			translated = map[string]any{}
+		} else if classifySchemaFormat(format) == schemaFormatTranslate {
+			translated = translateSchemaDialect(schemaMap)
+		} else {
+			// Passthrough must not alias document memory: downstream passes
+			// (cyclic hoisting) rewrite the boundary schema in place.
+			translated = deepCopyMap(schemaMap)
+		}
 	}
 	return translated
 }
@@ -441,10 +450,18 @@ func foreignSchemaFormat(format string) bool {
 // member IS the wrapper, and the declared schema is its `schema` member.
 // Treating the wrapper itself as the schema silently buried the real
 // contract under an unknown keyword while reporting full representation.
-func effectivePayload(m message) (map[string]any, string) {
+//
+// The wrapper's schema member is untyped: a foreign schema language's
+// document need not be a JSON object — a top-level Avro union is an array
+// and a bare Avro primitive name is a string, both legal schema forms the
+// Avro correspondence reaches (external composition and the normalization
+// hoist deliver them in wrapper form).
+func effectivePayload(m message) (any, string) {
 	if format, ok := m.Payload["schemaFormat"].(string); ok {
-		schema, _ := m.Payload["schema"].(map[string]any)
-		return schema, format
+		return m.Payload["schema"], format
+	}
+	if m.Payload == nil {
+		return nil, m.SchemaFormat
 	}
 	return m.Payload, m.SchemaFormat
 }
@@ -469,6 +486,13 @@ func messagePayloadNotConvertible(doc *document, m message) bool {
 	}
 	schema, _ := effectivePayload(m)
 	if schema == nil {
+		return true
+	}
+	// A declared JSON Schema dialect types its schemas as objects (the OBI
+	// position additionally excludes boolean schemas); a wrapper carrying a
+	// non-object schema under a translate/passthrough format declares no
+	// carryable contract, so the direction is the unconstrained schema.
+	if _, isObject := schema.(map[string]any); !isObject {
 		return true
 	}
 	return messagePayloadLossReason(doc, m) != ""
@@ -509,7 +533,7 @@ func messagePayloadLossReason(doc *document, m message) string {
 			if schema == nil {
 				return ""
 			}
-			if schemaEqualsBoundary(schema, classifySchemaFormat(format)) {
+			if schemaMap, isObject := schema.(map[string]any); isObject && schemaEqualsBoundary(schemaMap, classifySchemaFormat(format)) {
 				return ""
 			}
 		}

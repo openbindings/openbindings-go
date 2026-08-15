@@ -119,9 +119,12 @@ func NewSynthesisResultWithLimitation(iface *Interface, entries []SynthesisCover
 			if entry.Message == "" {
 				return nil, fmt.Errorf("synthesis coverage entry %d requires a message", index)
 			}
-			if entry.Status != SynthesisInvalid {
-				fullyRepresented = false
-			}
+			// Every non-represented status clears FullyRepresented — invalid
+			// included. An upstream-invalid unit is still an inventoried unit
+			// the emitted OBI does not represent (MC5 seal-1 finding F-V3-1: a
+			// document whose every target was invalid reported
+			// fullyRepresented true).
+			fullyRepresented = false
 		default:
 			return nil, fmt.Errorf("synthesis coverage entry %d has invalid status %q", index, entry.Status)
 		}

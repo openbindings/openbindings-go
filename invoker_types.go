@@ -371,8 +371,10 @@ type SynthesisCoverage struct {
 	// Exhaustive is true when every interaction unit in every accepted source,
 	// under the governing binding revision's inventory, has one disposition.
 	Exhaustive bool `json:"exhaustive"`
-	// FullyRepresented is true when Exhaustive is true and every upstream-valid
-	// unit is represented. NewSynthesisResult derives it from Entries.
+	// FullyRepresented is true when Exhaustive is true and every inventoried
+	// unit is represented. Any non-represented entry — lossy, excluded,
+	// invalid, or implementation-unsupported — clears it.
+	// NewSynthesisResult derives it from Entries.
 	FullyRepresented bool `json:"fullyRepresented"`
 	// Limitation explains what may be missing when Exhaustive is false.
 	Limitation *SynthesisCoverageLimitation `json:"limitation,omitempty"`

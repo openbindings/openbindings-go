@@ -130,3 +130,33 @@ func TestAvroMediaGuard(t *testing.T) {
 		t.Fatalf("non-Avro payload must not trip the guard: %v", err)
 	}
 }
+
+// A top-level union: the Avro specification admits a JSON ARRAY as a
+// complete schema, so the derivation must accept it at the root exactly as
+// at an interior position (MC5 seal-1 finding F-V3-2's derivation cell;
+// ASYNC-SS-24 pins the end-to-end projection).
+func TestDeriveAvroSchemaTopLevelUnion(t *testing.T) {
+	derived, ok := deriveAvroSchema([]any{
+		"null",
+		map[string]any{
+			"type":   "record",
+			"name":   "File",
+			"fields": []any{map[string]any{"name": "path", "type": "string"}},
+		},
+	})
+	if !ok {
+		t.Fatal("a top-level union is a legal Avro schema and must derive")
+	}
+	branches, ok := derived["oneOf"].([]any)
+	if !ok || len(branches) != 2 {
+		t.Fatalf("derived = %#v, want a two-branch oneOf", derived)
+	}
+	if branches[0].(map[string]any)["type"] != "null" {
+		t.Fatalf("null branch = %#v", branches[0])
+	}
+	wrapper := branches[1].(map[string]any)
+	required, _ := wrapper["required"].([]any)
+	if len(required) != 1 || required[0] != "File" {
+		t.Fatalf("named branch must carry the single-key JSON Encoding wrapper, got %#v", wrapper)
+	}
+}
