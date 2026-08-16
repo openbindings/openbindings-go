@@ -20,7 +20,7 @@ import (
 // file is executed by openapi-client/go and by
 // openbindings-ts/packages/openapi; changing it in one engine without the
 // others fails here.
-const externalCompositionCasesDigest = "b9bd9111602a0e85b884aeb4a373e49143cabe0b28ab10cc4913d2eee3820bb7"
+const externalCompositionCasesDigest = "e14547ad29ea33a9e1c1aea190a044016a78f2548a3c2df21c6f402f2dc95c61"
 
 type externalCompositionTable struct {
 	Note  string                    `json:"note"`

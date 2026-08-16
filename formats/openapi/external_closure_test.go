@@ -193,23 +193,33 @@ components:
 	}
 }
 
-func TestPruneToRetainedKeepsASequenceWhole(t *testing.T) {
+// A sequence keeps every index and empties the ones outside the closure. This
+// is the piece that decides the shared table's sequence cases: a sibling
+// element is outside the composed closure exactly as a sibling property is, so
+// keeping it would refuse an artifact §6 says resolves.
+func TestPruneToRetainedEmptiesSequenceElementsOutsideTheClosure(t *testing.T) {
 	tree, ok := parseRawResource([]byte(`
 components:
   schemas:
     Composed:
       allOf:
         - {type: object}
-        - {$ref: "#/components/schemas/Other"}
+        - {$ref: "#/components/schemas/Gone"}
+        - {type: string}
+        - [{$ref: "#/components/schemas/AlsoGone"}]
+        - a scalar element
 `))
 	if !ok {
 		t.Fatal("parse")
 	}
 	retained := &retainedPointers{}
-	// An index-addressed member cannot be dropped without renumbering its
-	// siblings, so a sequence any pointer enters is retained whole.
 	retained.add("/components/schemas/Composed/allOf/0")
-	pruned, _ := pruneToRetained(tree, retained.root)
+	retained.add("/components/schemas/Composed/allOf/2")
+
+	pruned, changed := pruneToRetained(tree, retained.root)
+	if !changed {
+		t.Fatal("nothing was pruned")
+	}
 	encoded, err := json.Marshal(pruned)
 	if err != nil {
 		t.Fatal(err)
@@ -219,8 +229,54 @@ components:
 		t.Fatal(err)
 	}
 	allOf := reparsed["components"].(map[string]any)["schemas"].(map[string]any)["Composed"].(map[string]any)["allOf"].([]any)
-	if len(allOf) != 2 {
-		t.Fatalf("sequence length = %d, want 2: %s", len(allOf), encoded)
+
+	// Every index survives: a JSON Pointer denotes an element by position, so
+	// dropping one would rename its siblings.
+	if len(allOf) != 5 {
+		t.Fatalf("sequence length = %d, want 5: %s", len(allOf), encoded)
+	}
+	if !reflect.DeepEqual(allOf[0], map[string]any{"type": "object"}) {
+		t.Fatalf("the first composed element did not survive whole: %s", encoded)
+	}
+	if !reflect.DeepEqual(allOf[2], map[string]any{"type": "string"}) {
+		t.Fatalf("the second composed element did not survive at its own index: %s", encoded)
+	}
+	// An element the closure never reaches is emptied in place, kind preserved.
+	if !reflect.DeepEqual(allOf[1], map[string]any{}) {
+		t.Fatalf("a mapping element outside the closure survived: %s", encoded)
+	}
+	if !reflect.DeepEqual(allOf[3], []any{}) {
+		t.Fatalf("a sequence element outside the closure survived: %s", encoded)
+	}
+	// A scalar element has no members to drop and cannot carry a reference.
+	if allOf[4] != "a scalar element" {
+		t.Fatalf("a scalar element was rewritten: %s", encoded)
+	}
+}
+
+// A sequence every element of which is composed is returned unchanged; one no
+// pointer enters is dropped whole by its parent mapping (above).
+func TestPruneToRetainedLeavesAFullyComposedSequenceAlone(t *testing.T) {
+	tree, ok := parseRawResource([]byte(`
+components:
+  schemas:
+    Composed:
+      allOf:
+        - {type: object}
+        - {type: string}
+`))
+	if !ok {
+		t.Fatal("parse")
+	}
+	retained := &retainedPointers{}
+	retained.add("/components/schemas/Composed/allOf/0")
+	retained.add("/components/schemas/Composed/allOf/1")
+
+	composed := tree.(map[string]any)["components"].(map[string]any)["schemas"].(map[string]any)["Composed"].(map[string]any)
+	pruned, _ := pruneToRetained(composed["allOf"], retained.root.
+		children["components"].children["schemas"].children["Composed"].children["allOf"])
+	if !reflect.DeepEqual(pruned, composed["allOf"]) {
+		t.Fatalf("a fully composed sequence was rewritten: %#v", pruned)
 	}
 }
 

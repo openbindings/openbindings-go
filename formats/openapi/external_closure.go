@@ -158,6 +158,17 @@ func (c *externalComposition) compose(target compositionTarget) {
 	// its target, or because it names nothing — still composes what it did
 	// reach: the reference standing in the way is itself part of the closure,
 	// and a pointer that names nothing leaves the loader to say so.
+	//
+	// That a pointer may run BELOW a reference at all is THIS IMPLEMENTATION'S
+	// CONVENTION, not an authority answer. RFC 6901 §4 evaluates each token
+	// "against the document's contents", under which the position denotes
+	// nothing; JSON Reference §4 says an implementation "MAY choose to replace
+	// the reference with the referenced value", after which it denotes the
+	// reached value. Neither text sequences the two. kin-openapi drills the
+	// RESOLVED typed value and did so before pointer scope existed, so the
+	// behavior is preserved rather than decided here, and the TypeScript twin
+	// pins the same convention. Open item: corpus-lab's OPENAPI-RUNTIME.md,
+	// "Pointer-scoped external composition".
 	if node, ok := rawPointerReach(tree, target.fragment); ok {
 		c.scan(node, target.key, resource)
 	}
@@ -339,6 +350,12 @@ func (n *retentionNode) add(tokens []string) {
 // `$anchor` or `$ref` that decides how the resource itself is read. Everything
 // else is dropped: it is outside the composed closure, so under §6 it is not
 // part of this artifact at all.
+//
+// Retention is per MEMBER in both kinds of container. A sequence is addressed
+// by index rather than by name, so its members cannot be dropped — a JSON
+// Pointer denotes an element by position, and removing one would silently
+// rename every element after it. An index outside the closure is therefore
+// EMPTIED in place instead: the position survives, its content does not.
 func pruneToRetained(value any, retained *retentionNode) (any, bool) {
 	if retained == nil || retained.whole {
 		return value, false
@@ -365,12 +382,43 @@ func pruneToRetained(value any, retained *retentionNode) (any, bool) {
 		}
 		return out, true
 	case []any:
-		// An index-addressed member cannot be dropped without renumbering its
-		// siblings, so a sequence any pointer enters is retained whole.
-		return value, false
+		out := make([]any, len(typed))
+		changed := false
+		for index, child := range typed {
+			if sub, ok := retained.children[strconv.Itoa(index)]; ok {
+				prunedChild, childChanged := pruneToRetained(child, sub)
+				out[index] = prunedChild
+				changed = changed || childChanged
+				continue
+			}
+			if isRawScalar(child) {
+				// Kept for the same reason a scalar member is kept: it has no
+				// members to drop and cannot carry a reference.
+				out[index] = child
+				continue
+			}
+			out[index] = emptyRawContainer(child)
+			changed = true
+		}
+		if !changed {
+			return value, false
+		}
+		return out, true
 	default:
 		return value, false
 	}
+}
+
+// emptyRawContainer is the empty value of a composite's own JSON kind. It
+// stands in for a sequence element outside the composed closure: the element's
+// position has to survive so its siblings keep their indices, its content does
+// not, and preserving the kind keeps the sequence readable by a typed loader
+// that expects one.
+func emptyRawContainer(value any) any {
+	if _, isSequence := value.([]any); isSequence {
+		return []any{}
+	}
+	return map[string]any{}
 }
 
 func isRawScalar(value any) bool {
@@ -386,9 +434,16 @@ func isRawScalar(value any) bool {
 //
 // It is deliberately position-blind: every `$ref` string member and every
 // Discriminator Object mapping value that looks like a reference is visited,
-// which can only OVER-approximate what the typed loader resolves. The direction
-// matters — over-approximation retains a node the loader never looks at, while
-// under-approximation would drop one it does.
+// which can only OVER-approximate what the typed loader resolves.
+//
+// The direction matters, though not because an over-approximated node goes
+// unread: everything retained IS served to the loader, which resolves it. It
+// matters because of what each error costs. Over-retaining composes a node §6
+// does not put in this artifact, and the worst that can do is reproduce the
+// whole-document behavior this pass replaced — a refusal on a defect outside
+// the closure. Under-retaining would drop a node the loader must resolve,
+// inventing a failure that neither scope produces, or changing what is emitted.
+// One error is the old behavior; the other is a new wrong answer.
 func rawReferenceStrings(value any, visit func(string)) {
 	switch typed := value.(type) {
 	case map[string]any:
