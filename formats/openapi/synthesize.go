@@ -371,15 +371,20 @@ func loadDocumentWithResolverInternal(ctx context.Context, client *http.Client, 
 	normalizer := newRawRefSiblingNormalizer(loader.JoinFunc)
 	normalizer.schemaOverlays = schemaOverlays
 	readArtifact := artifactReadFunc(client, content != nil && location == "", retrievalURIs, &retrievalMu)
+	composition := newExternalComposition(
+		func(resource *url.URL) ([]byte, error) { return readArtifact(loader, resource) },
+		loader.JoinFunc,
+	)
 	loader.ReadFromURIFunc = func(loader *openapi3.Loader, resource *url.URL) ([]byte, error) {
 		data, err := readArtifact(loader, resource)
 		if err != nil {
 			return nil, err
 		}
+		data = composition.prune(resource, data)
 		return normalizer.normalizeResourceAt(data, resource, artifactRetrievalURI(resource, retrievalURIs, &retrievalMu))
 	}
 
-	doc, err := loadDocumentRaw(loader, normalizer, location, content)
+	doc, err := loadDocumentRaw(loader, normalizer, composition, location, content)
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +430,7 @@ func validateDocumentAddress(location string) error {
 	return nil
 }
 
-func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalizer, location string, content json.RawMessage) (*openapi3.T, error) {
+func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalizer, composition *externalComposition, location string, content json.RawMessage) (*openapi3.T, error) {
 	// `location`, when present, must be an absolute URI (OAPI-D-02) —
 	// whether it is the fetch target or only the embedded content's base.
 	// The former bare-path lenience ("for local tooling") is gone: the
@@ -449,6 +454,7 @@ func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalize
 		if err != nil {
 			return nil, err
 		}
+		composition.setEntry(resource, data)
 		if location != "" {
 			if resource != nil {
 				return loader.LoadFromDataWithPath(data, resource)
@@ -470,6 +476,7 @@ func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalize
 		if err != nil {
 			return nil, fmt.Errorf("invalid URL %q: %w", location, err)
 		}
+		composition.setEntry(loc, nil)
 		return loader.LoadFromURI(loc)
 	}
 
@@ -480,6 +487,7 @@ func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalize
 		if err != nil {
 			return nil, fmt.Errorf("invalid URL %q: %w", location, err)
 		}
+		composition.setEntry(&url.URL{Path: filepath.ToSlash(loc.Path)}, nil)
 		return loader.LoadFromFile(loc.Path)
 	}
 	u, _ := url.Parse(location) // validated above: absolute, non-opaque
