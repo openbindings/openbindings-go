@@ -771,7 +771,7 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 		if literal, boolean := booleanSchemaLiteral(propertySchema); boolean && !literal {
 			continue
 		}
-		propertySchema, _ = effectiveRevision3PartSchema(propertySchema)
+		propertySchema, _ = effectiveRevision3PartSchema(propertySchema, is30)
 		var enc *openapi3.Encoding
 		if media != nil {
 			enc = media.Encoding[name]
@@ -812,7 +812,7 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 		if literal, boolean := booleanSchemaLiteral(partSchema); boolean && !literal {
 			continue // an unsatisfiable property has no admissible runtime value
 		}
-		partSchema, _ = effectiveRevision3PartSchema(partSchema)
+		partSchema, _ = effectiveRevision3PartSchema(partSchema, is30)
 		var enc *openapi3.Encoding
 		if media != nil {
 			enc = media.Encoding[name]
@@ -947,6 +947,12 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 			}
 			if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 {
 				return parsedMediaType{}, fmt.Errorf("part schema declares a choice applicator that does not collapse to one non-null branch; no single part carriage is defined")
+			}
+			if types, union := nonCollapsingUnionType(schema); union {
+				if is30 {
+					return parsedMediaType{}, fmt.Errorf("part schema declares type %v, but an OAS 3.0 `type` MUST be a string and multiple types via an array are not supported; no part carriage is defined", types)
+				}
+				return parsedMediaType{}, fmt.Errorf("part schema declares union type %v, which does not collapse to one non-null type; no single part carriage is defined", types)
 			}
 			return parsedMediaType{}, fmt.Errorf("typeless part schema defaults to application/octet-stream, but this binding revision defines no JSON-to-octet boundary")
 		}
@@ -1614,7 +1620,7 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 		)
 		if hasMediaFidelity(bindingSpec) {
 			var partNullable bool
-			propSchema, partNullable = effectiveRevision3PartSchema(propSchema)
+			propSchema, partNullable = effectiveRevision3PartSchema(propSchema, is30)
 			if partNullable && value == nil {
 				continue // §9.2: a JSON null value elides the nullable optional part
 			}
@@ -1778,7 +1784,9 @@ func resolvedMultipartProperty(schema *openapi3.Schema, name string, seen map[*o
 // branches collapses to that non-null branch — the artifact declares exactly
 // one carriage, so this is schema interpretation, not branch selection — and
 // the returned nullable flag lets a JSON null value elide the optional part.
-func effectiveRevision3PartSchema(schema *openapi3.Schema) (*openapi3.Schema, bool) {
+// The union-type spelling of the same declaration takes the same collapse;
+// see collapsedNullableTypeMember.
+func effectiveRevision3PartSchema(schema *openapi3.Schema, is30 bool) (*openapi3.Schema, bool) {
 	if literal, boolean := booleanSchemaLiteral(schema); boolean {
 		if literal {
 			return &openapi3.Schema{}, false
@@ -1788,7 +1796,72 @@ func effectiveRevision3PartSchema(schema *openapi3.Schema) (*openapi3.Schema, bo
 	if collapsed, ok := collapsedNullableChoiceBranch(schema); ok {
 		return collapsed, true
 	}
+	if member, ok := collapsedNullableTypeMember(schema, is30); ok {
+		// The sibling keywords are the same schema's own assertions and keep
+		// applying: only the union spelling of the type is resolved.
+		collapsed := *schema
+		collapsed.Type = &openapi3.Types{member}
+		return &collapsed, true
+	}
 	return schema, false
+}
+
+// collapsedNullableTypeMember reports the union-type spelling of the same
+// nullable declaration collapsedNullableChoiceBranch handles. JSON Schema
+// 2020-12 §6.1.1 defines an array-valued `type` as a union — "If the value of
+// `type` is an array, then an instance validates successfully if its type
+// matches any of the types indicated by the strings in the array" — so
+// {"type": ["string", "null"]} asserts exactly what
+// {"anyOf": [{"type": "string"}, {"type": "null"}]} asserts, and takes the
+// same collapse to its single non-null member. Two or more non-null members
+// declare value-dependent alternatives, leave no single faithful part
+// carriage, and do not collapse.
+//
+// The union spelling belongs to the OAS 3.1 line, which adopts JSON Schema
+// 2020-12 wholesale. Every 3.0 edition states of the Schema Object: "type -
+// Value MUST be a string. Multiple types via an array are not supported"
+// (3.0.0 §Schema Object through 3.0.4, verbatim in all five). An array-valued
+// `type` under that line is therefore not a union declaration this
+// specification can read, and gains no part carriage from one.
+//
+// The collapse reads the resolved top level only, exactly as the choice
+// collapse does; a union reached through allOf is not rewritten.
+func collapsedNullableTypeMember(schema *openapi3.Schema, is30 bool) (string, bool) {
+	if schema == nil || is30 || schema.Type == nil {
+		return "", false
+	}
+	types := schema.Type.Slice()
+	if len(types) < 2 {
+		return "", false // a single-member `type` already denotes that member
+	}
+	member := ""
+	for _, candidate := range types {
+		if candidate == "null" {
+			continue
+		}
+		if member != "" {
+			return "", false
+		}
+		member = candidate
+	}
+	if member == "" {
+		return "", false // "null" alone declares no carriable value
+	}
+	return member, true
+}
+
+// nonCollapsingUnionType reports a resolved top-level array-valued `type`
+// that collapsedNullableTypeMember declined, so a caller can say which of the
+// two reasons applies instead of reporting the schema as typeless.
+func nonCollapsingUnionType(schema *openapi3.Schema) ([]string, bool) {
+	if schema == nil || schema.Type == nil {
+		return nil, false
+	}
+	types := schema.Type.Slice()
+	if len(types) < 2 {
+		return nil, false
+	}
+	return types, true
 }
 
 // collapsedNullableChoiceBranch reports the single-non-null-branch collapse:
@@ -2462,7 +2535,7 @@ func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, 
 				hasDynamicObjectCarriage(bindingSpec),
 			)
 			var propertyNullable bool
-			propertySchema, propertyNullable = effectiveRevision3PartSchema(propertySchema)
+			propertySchema, propertyNullable = effectiveRevision3PartSchema(propertySchema, is30)
 			if propertyNullable && fields[name] == nil {
 				continue // §9.2: a JSON null value elides the nullable optional field
 			}
