@@ -3,6 +3,7 @@ package openapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -321,21 +322,178 @@ components:
 	}
 }
 
-// The naming rule's own unit surface, pinned identically in
+// The naming rule's own unit surface, pinned cell for cell in
 // openapi-client/typescript/src/cutpoint-names.test.ts. Both engines must
-// derive the same qualified spelling from the same two addresses, including the
-// decoded path spelling and the member-name sanitization.
+// derive the same qualified spelling from the same two addresses. The whole
+// base x document matrix is here because the twin claim was once made by three
+// absolute http cases, and the two engines disagreed on every RELATIVE and
+// every OPAQUE address without a test noticing.
 func TestRelativeDocumentNameMatchesTheTypeScriptTwin(t *testing.T) {
-	const artifact = "https://api.example/root.yaml"
-	cases := []struct{ document, want string }{
-		{"https://api.example/shared/node.yaml", "shared/node"},
-		{"https://api.example/one.json", "one"},
-		{"https://other.example/one.yaml", "other.example/one"},
+	// Read down a column to see one document qualified from every artifact
+	// address; read across a row to see one artifact address qualify every
+	// document form. rule 3 in cutpoint_names.go states the three cases.
+	documents := []string{
+		"https://api.example/shared/node.yaml",
+		"https://api.example/one.json",
+		"https://other.example/one.yaml",
+		"https://api.example:8443/v1/defs.yaml",
+		"file:///checkout/api/shared/node.yaml",
+		"/checkout/api/shared/node.yaml",
+		"defs.yaml",
+		"schemas/defs.yaml",
+		"./defs.yaml",
+		"urn:example:one",
+		"https://api.example/a b/c.yaml",
+		"https://api.example/a%20b/c.yaml",
+		"https://api.example/v1/defs",
 	}
-	base := mustParseArtifactURL(t, artifact)
-	for _, testCase := range cases {
-		if got := relativeDocumentName(base, testCase.document); got != testCase.want {
-			t.Errorf("relativeDocumentName(%q) = %q, want %q", testCase.document, got, testCase.want)
+	matrix := []struct {
+		base string
+		want []string
+	}{
+		{"https://api.example/root.yaml", []string{
+			"shared/node",
+			"one",
+			"other.example/one",
+			"api.example:8443/v1/defs",
+			"checkout/api/shared/node",
+			"checkout/api/shared/node",
+			"defs",
+			"schemas/defs",
+			"defs",
+			"urn:example:one",
+			"a b/c",
+			"a b/c",
+			"v1/defs",
+		}},
+		{"https://api.example/v1/root.yaml", []string{
+			"shared/node",
+			"one",
+			"other.example/one",
+			"api.example:8443/v1/defs",
+			"checkout/api/shared/node",
+			"checkout/api/shared/node",
+			"defs",
+			"schemas/defs",
+			"defs",
+			"urn:example:one",
+			"a b/c",
+			"a b/c",
+			"defs",
+		}},
+		{"https://api.example/root", []string{
+			"shared/node",
+			"one",
+			"other.example/one",
+			"api.example:8443/v1/defs",
+			"checkout/api/shared/node",
+			"checkout/api/shared/node",
+			"defs",
+			"schemas/defs",
+			"defs",
+			"urn:example:one",
+			"a b/c",
+			"a b/c",
+			"v1/defs",
+		}},
+		{"https://api.example:8443/v1/root.yaml", []string{
+			"api.example/shared/node",
+			"api.example/one",
+			"other.example/one",
+			"defs",
+			"checkout/api/shared/node",
+			"checkout/api/shared/node",
+			"defs",
+			"schemas/defs",
+			"defs",
+			"urn:example:one",
+			"api.example/a b/c",
+			"api.example/a b/c",
+			"api.example/v1/defs",
+		}},
+		{"file:///checkout/api/root.yaml", []string{
+			"api.example/shared/node",
+			"api.example/one",
+			"other.example/one",
+			"api.example:8443/v1/defs",
+			"shared/node",
+			"shared/node",
+			"defs",
+			"schemas/defs",
+			"defs",
+			"urn:example:one",
+			"api.example/a b/c",
+			"api.example/a b/c",
+			"api.example/v1/defs",
+		}},
+		{"/checkout/api/root.yaml", []string{
+			"api.example/shared/node",
+			"api.example/one",
+			"other.example/one",
+			"api.example:8443/v1/defs",
+			"shared/node",
+			"shared/node",
+			"defs",
+			"schemas/defs",
+			"defs",
+			"urn:example:one",
+			"api.example/a b/c",
+			"api.example/a b/c",
+			"api.example/v1/defs",
+		}},
+		{"root.yaml", []string{
+			"api.example/shared/node",
+			"api.example/one",
+			"other.example/one",
+			"api.example:8443/v1/defs",
+			"checkout/api/shared/node",
+			"checkout/api/shared/node",
+			"defs",
+			"schemas/defs",
+			"defs",
+			"urn:example:one",
+			"api.example/a b/c",
+			"api.example/a b/c",
+			"api.example/v1/defs",
+		}},
+		{"https://api.example/", []string{
+			"shared/node",
+			"one",
+			"other.example/one",
+			"api.example:8443/v1/defs",
+			"checkout/api/shared/node",
+			"checkout/api/shared/node",
+			"defs",
+			"schemas/defs",
+			"defs",
+			"urn:example:one",
+			"a b/c",
+			"a b/c",
+			"v1/defs",
+		}},
+		{"urn:example:root", []string{
+			"api.example/shared/node",
+			"api.example/one",
+			"other.example/one",
+			"api.example:8443/v1/defs",
+			"checkout/api/shared/node",
+			"checkout/api/shared/node",
+			"defs",
+			"schemas/defs",
+			"defs",
+			"urn:example:one",
+			"api.example/a b/c",
+			"api.example/a b/c",
+			"api.example/v1/defs",
+		}},
+	}
+	for _, row := range matrix {
+		base := mustParseArtifactURL(t, row.base)
+		for i, document := range documents {
+			if got := relativeDocumentName(base, document); got != row.want[i] {
+				t.Errorf("relativeDocumentName(%q, %q) = %q, want %q",
+					row.base, document, got, row.want[i])
+			}
 		}
 	}
 	// Independent of how the artifact was reached: the same layout qualifies
@@ -344,54 +502,175 @@ func TestRelativeDocumentNameMatchesTheTypeScriptTwin(t *testing.T) {
 		mustParseArtifactURL(t, "file:///checkout/api/root.yaml"),
 		"file:///checkout/api/shared/node.yaml",
 	)
-	if fromDisk != "shared/node" {
-		t.Errorf("file:// layout produced %q, want %q", fromDisk, "shared/node")
+	fromServer := relativeDocumentName(
+		mustParseArtifactURL(t, "https://api.example/root.yaml"),
+		"https://api.example/shared/node.yaml",
+	)
+	if fromDisk != fromServer || fromDisk != "shared/node" {
+		t.Errorf("checkout produced %q and server %q, want %q from both",
+			fromDisk, fromServer, "shared/node")
 	}
 }
 
+// Every claimant shape the assignment rule admits, pinned identically in
+// openapi-client/typescript/src/cutpoint-names.test.ts. The rule must be TOTAL
+// (every claimant gets a key) and INJECTIVE (no two get the same one): `$defs`
+// is a map, so a repeated key drops one definition and silently resolves the
+// other cut point's `$ref` to the survivor.
+//
+// A claimant here is either the artifact's own component — a plain registry ref
+// with no recorded external identity — or a component reached through an
+// external reference, whose declaring document may be a real address or, where
+// the resolver recorded none, empty. Note that the artifact cannot itself
+// declare one name twice: its registry is keyed by the pointer. The reachable
+// same-name-no-document contest is between external references whose documents
+// were not recorded.
 func TestAssignCutPointNamesMatchesTheTypeScriptTwin(t *testing.T) {
-	namer := newCutPointNamer("https://api.example/root.yaml", map[string]refIdentity{
-		"ob_one":   {document: "https://api.example/one.yaml", pointer: "/components/schemas/Node"},
-		"ob_two":   {document: "https://api.example/two.yaml", pointer: "/components/schemas/Node"},
-		"ob_team":  {document: "https://api.example/shared/model.yaml", pointer: "/components/schemas/Team"},
-		"ob_space": {document: "https://api.example/a b/c.yaml", pointer: "/components/schemas/Node"},
-	})
-	assert := func(refs []string, want map[string]string) {
-		t.Helper()
-		got := namer.assign(refs)
-		for ref, expected := range want {
-			if got[ref] != expected {
-				t.Errorf("assign(%v)[%s] = %q, want %q", refs, ref, got[ref], expected)
+	const artifact = "https://api.example/root.yaml"
+	type claimant struct {
+		name     string
+		document *string
+		pointer  string
+	}
+	external := func(document string) *string { return &document }
+	cases := []struct {
+		label     string
+		claimants []claimant
+		want      []string
+	}{
+		{
+			label: "uncontested names are the declaring document's own",
+			claimants: []claimant{
+				{name: "Node", document: nil, pointer: "/components/schemas/Node"},
+				{name: "Team", document: external("https://api.example/shared/model.yaml"), pointer: "/components/schemas/Team"},
+			},
+			want: []string{"Node", "Team"},
+		},
+		{
+			label: "the artifact's own component keeps the name, composed documents qualify",
+			claimants: []claimant{
+				{name: "Node", document: nil, pointer: "/components/schemas/Node"},
+				{name: "Node", document: external("https://api.example/one.yaml"), pointer: "/components/schemas/Node"},
+				{name: "Node", document: external("https://api.example/two.yaml"), pointer: "/components/schemas/Node"},
+			},
+			want: []string{"Node", "one_Node", "two_Node"},
+		},
+		{
+			label: "two claimants with no declaring document to qualify by",
+			claimants: []claimant{
+				{name: "Node", document: external(""), pointer: "/components/schemas/Node"},
+				{name: "Node", document: external(""), pointer: "/definitions/Node"},
+			},
+			want: []string{"Node", "Node_2"},
+		},
+		{
+			label: "three claimants with no declaring document to qualify by",
+			claimants: []claimant{
+				{name: "Node", document: external(""), pointer: "/a/Node"},
+				{name: "Node", document: external(""), pointer: "/b/Node"},
+				{name: "Node", document: external(""), pointer: "/c/Node"},
+			},
+			want: []string{"Node", "Node_2", "Node_3"},
+		},
+		{
+			label: "the artifact's own component outranks an unqualifiable claimant",
+			claimants: []claimant{
+				{name: "Node", document: nil, pointer: "/components/schemas/Node"},
+				{name: "Node", document: external(""), pointer: "/definitions/Node"},
+			},
+			want: []string{"Node", "Node_2"},
+		},
+		{
+			label: "three-way collision between composed documents",
+			claimants: []claimant{
+				{name: "Node", document: external("https://api.example/one.yaml"), pointer: "/components/schemas/Node"},
+				{name: "Node", document: external("https://api.example/two.yaml"), pointer: "/components/schemas/Node"},
+				{name: "Node", document: external("https://api.example/three.yaml"), pointer: "/components/schemas/Node"},
+			},
+			want: []string{"one_Node", "two_Node", "three_Node"},
+		},
+		{
+			label: "two documents that qualify to one name",
+			claimants: []claimant{
+				{name: "Node", document: external("https://api.example/one.yaml"), pointer: "/components/schemas/Node"},
+				{name: "Node", document: external("https://api.example/one.json"), pointer: "/components/schemas/Node"},
+			},
+			want: []string{"one_Node_2", "one_Node"},
+		},
+		{
+			label: "a qualified name the artifact already spells itself",
+			claimants: []claimant{
+				{name: "one_Node", document: nil, pointer: "/components/schemas/one_Node"},
+				{name: "Node", document: external("https://api.example/one.yaml"), pointer: "/components/schemas/Node"},
+				{name: "Node", document: external("https://api.example/two.yaml"), pointer: "/components/schemas/Node"},
+			},
+			want: []string{"one_Node", "one_Node_2", "two_Node"},
+		},
+		{
+			label: "unknown and absent declaring documents together",
+			claimants: []claimant{
+				{name: "Node", document: external(""), pointer: "/a/Node"},
+				{name: "Node", document: external(""), pointer: "/b/Node"},
+				{name: "Node", document: nil, pointer: "/components/schemas/Node"},
+			},
+			want: []string{"Node_2", "Node_3", "Node"},
+		},
+		{
+			label: "opaque and relative declaring documents",
+			claimants: []claimant{
+				{name: "Node", document: external("urn:example:one"), pointer: "/components/schemas/Node"},
+				{name: "Node", document: external("defs.yaml"), pointer: "/components/schemas/Node"},
+				{name: "Node", document: external("./defs.yaml"), pointer: "/components/schemas/Node"},
+			},
+			want: []string{"urn_example_one_Node", "defs_Node_2", "defs_Node"},
+		},
+	}
+	for _, testCase := range cases {
+		externals := map[string]refIdentity{}
+		refs := make([]string, 0, len(testCase.claimants))
+		for i, claim := range testCase.claimants {
+			if claim.document == nil {
+				// The artifact's own component: the registry ref IS its pointer.
+				refs = append(refs, "#"+claim.pointer)
+				continue
+			}
+			key := fmt.Sprintf("ob_k%d", i)
+			externals[key] = refIdentity{document: *claim.document, pointer: claim.pointer}
+			refs = append(refs, "#/components/schemas/"+key)
+		}
+		names := newCutPointNamer(artifact, externals).assign(refs)
+		got := make([]string, len(refs))
+		assigned := map[string]bool{}
+		for i, ref := range refs {
+			got[i] = names[ref]
+			if got[i] == "" {
+				t.Errorf("%s: claimant %d received no name: the rule is not total", testCase.label, i)
+			}
+			if assigned[got[i]] {
+				t.Errorf("%s: two claimants received %q: the rule is not injective, and one\n"+
+					"definition is dropped from the emitted $defs map", testCase.label, got[i])
+			}
+			assigned[got[i]] = true
+		}
+		if len(got) != len(testCase.want) {
+			t.Fatalf("%s: got %v, want %v", testCase.label, got, testCase.want)
+		}
+		for i := range got {
+			if got[i] != testCase.want[i] {
+				t.Errorf("%s: claimant %d = %q, want %q (got %v)", testCase.label, i, got[i], testCase.want[i], got)
 			}
 		}
-	}
-	// Uncontested names are the declaring document's own.
-	assert([]string{"#/components/schemas/Node", "#/components/schemas/ob_team"}, map[string]string{
-		"#/components/schemas/Node":    "Node",
-		"#/components/schemas/ob_team": "Team",
-	})
-	// The artifact's own component keeps its name; every contesting composed
-	// document qualifies.
-	assert([]string{
-		"#/components/schemas/Node",
-		"#/components/schemas/ob_one",
-		"#/components/schemas/ob_two",
-	}, map[string]string{
-		"#/components/schemas/Node":   "Node",
-		"#/components/schemas/ob_one": "one_Node",
-		"#/components/schemas/ob_two": "two_Node",
-	})
-	// Characters a member name cannot carry are replaced, on the decoded path.
-	assert([]string{"#/components/schemas/ob_space", "#/components/schemas/ob_one"}, map[string]string{
-		"#/components/schemas/ob_space": "a_b_c_Node",
-		"#/components/schemas/ob_one":   "one_Node",
-	})
-	// Assignment is over the set: reversing the input changes nothing.
-	forward := namer.assign([]string{"#/components/schemas/ob_one", "#/components/schemas/ob_two"})
-	reversed := namer.assign([]string{"#/components/schemas/ob_two", "#/components/schemas/ob_one"})
-	for ref, name := range forward {
-		if reversed[ref] != name {
-			t.Errorf("reordering changed %s: %q then %q", ref, name, reversed[ref])
+		// Assignment is over the SET: reversing the input reverses only the output.
+		reversed := make([]string, len(refs))
+		copy(reversed, refs)
+		for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+			reversed[i], reversed[j] = reversed[j], reversed[i]
+		}
+		again := newCutPointNamer(artifact, externals).assign(reversed)
+		for _, ref := range refs {
+			if again[ref] != names[ref] {
+				t.Errorf("%s: reordering changed %s: %q then %q", testCase.label, ref, names[ref], again[ref])
+			}
 		}
 	}
 }
