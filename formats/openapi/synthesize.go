@@ -81,7 +81,11 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 	// kin-openapi's MarshalJSON pass on operation input/output schemas.
 	// See inlineRefs / buildRefRegistry above for the rationale.
 	refRegistry := buildRefRegistry(doc, schemaOverlays)
-	cyclic := cyclicRefs(refRegistry)
+	// Cut points are decided per direction, over the registry as that direction
+	// will emit it: read/write projection can remove the only edge that closed a
+	// cycle, and a cycle that is not in the emitted graph must not be cut there.
+	// See cut_points.go for the convention and its TypeScript twin.
+	requestGraph, responseGraph := newDirectionGraphs(refRegistry)
 	namer := newCutPointNamer(location, schemaOverlays.externalComponents())
 
 	usedKeys := map[string]bool{}
@@ -220,11 +224,16 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 
 			opPointer := "#/operations/" + escapeJSONPointerSegment(opKey)
 			routes := planAbstractInputRoutes(params, requestPlans)
-			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, refRegistry, routes, schemaOverlays)
+			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, &requestGraph, routes, schemaOverlays)
 			if inputSchema != nil {
-				inlined, hoisted := inlineRefsInOperationSchema(inputSchema, refRegistry, cyclic, opPointer+"/input", namer)
-				projected := pruneUnreachableDefs(projectOpenAPISchema(inlined, openAPIRequestSchema, requestSchemaProjectionExemptions(routes)), opPointer+"/input", hoisted)
-				restored := restoreBooleanSchemas(projected)
+				// Project, then decycle — the TypeScript engine's order, and the
+				// one the cut-point question is asked in: the decycler walks the
+				// graph this direction actually emits. Projecting the root reads
+				// annotations through the unprojected registry, because a
+				// reference has not been inlined yet.
+				projected := projectOpenAPISchemaWithRegistry(inputSchema, openAPIRequestSchema, requestSchemaProjectionExemptions(routes), refRegistry)
+				inlined, hoisted := inlineRefsInOperationSchema(projected, requestGraph.registry, requestGraph.cyclic, opPointer+"/input", namer)
+				restored := restoreBooleanSchemas(pruneUnreachableDefs(inlined, opPointer+"/input", hoisted))
 				if object, ok := restored.(map[string]any); ok {
 					obiOp.Input = normalizeOperationSchema(object, formatVersion, schemaSalvageWarner(warn, opKey, "input"))
 				} else {
@@ -232,11 +241,11 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				}
 			}
 
-			outputSchema := buildOutputSchemaWithCyclicRefs(op, schemaOverlays, bindingSpec, cyclic, doc.OpenAPI)
+			outputSchema := buildOutputSchemaWithCyclicRefs(op, schemaOverlays, bindingSpec, &responseGraph, doc.OpenAPI)
 			if outputSchema != nil {
-				inlined, hoisted := inlineRefsInOperationSchema(outputSchema, refRegistry, cyclic, opPointer+"/output", namer)
-				projected := pruneUnreachableDefs(projectOpenAPISchema(inlined, openAPIResponseSchema, nil), opPointer+"/output", hoisted)
-				restored := restoreBooleanSchemas(projected)
+				projected := projectOpenAPISchemaWithRegistry(outputSchema, openAPIResponseSchema, nil, refRegistry)
+				inlined, hoisted := inlineRefsInOperationSchema(projected, responseGraph.registry, responseGraph.cyclic, opPointer+"/output", namer)
+				restored := restoreBooleanSchemas(pruneUnreachableDefs(inlined, opPointer+"/output", hoisted))
 				if object, ok := restored.(map[string]any); ok {
 					obiOp.Output = normalizeOperationSchema(object, formatVersion, schemaSalvageWarner(warn, opKey, "output"))
 				} else {
@@ -637,18 +646,18 @@ func buildJSONPointerRef(path, method string) string {
 	return "#/paths/" + escaped + "/" + strings.ToLower(method)
 }
 
-func buildInputSchemaForPlans(op *openapi3.Operation, allParams openapi3.Parameters, requestPlans []*bodyPlan, refRegistry map[string]any, routes abstractInputRoutes, schemaOverlays *rawSchemaOverlayCollector) map[string]any {
+func buildInputSchemaForPlans(op *openapi3.Operation, allParams openapi3.Parameters, requestPlans []*bodyPlan, graph *directionGraph, routes abstractInputRoutes, schemaOverlays *rawSchemaOverlayCollector) map[string]any {
 	if op.RequestBody == nil || op.RequestBody.Value == nil {
-		return buildInputSchema(op, allParams, nil, refRegistry, routes, schemaOverlays)
+		return buildInputSchema(op, allParams, nil, graph, routes, schemaOverlays)
 	}
 	var variants []map[string]any
 	if !op.RequestBody.Value.Required {
-		if parameterOnly := buildInputSchema(op, allParams, nil, refRegistry, routes, schemaOverlays); parameterOnly != nil {
+		if parameterOnly := buildInputSchema(op, allParams, nil, graph, routes, schemaOverlays); parameterOnly != nil {
 			variants = append(variants, parameterOnly)
 		}
 	}
 	for _, plan := range requestPlans {
-		if schema := buildInputSchema(op, allParams, plan, refRegistry, routes, schemaOverlays); schema != nil {
+		if schema := buildInputSchema(op, allParams, plan, graph, routes, schemaOverlays); schema != nil {
 			variants = append(variants, schema)
 		}
 	}
@@ -675,7 +684,7 @@ func buildInputSchemaForPlans(op *openapi3.Operation, allParams openapi3.Paramet
 	return map[string]any{"anyOf": anyOf}
 }
 
-func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, requestPlan *bodyPlan, refRegistry map[string]any, routes abstractInputRoutes, schemaOverlays *rawSchemaOverlayCollector) map[string]any {
+func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, requestPlan *bodyPlan, graph *directionGraph, routes abstractInputRoutes, schemaOverlays *rawSchemaOverlayCollector) map[string]any {
 	properties := map[string]any{}
 	var required []string
 	// Only JSON-family object candidates can carry undeclared fields. The
@@ -688,7 +697,7 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 		}
 		param := paramRef.Value
 
-		prop := paramToSchema(param, schemaOverlays)
+		prop := paramToSchema(param, graph, schemaOverlays)
 		field := routes.parameterField(param.In, param.Name)
 		if prop != nil {
 			properties[field] = prop
@@ -708,7 +717,7 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 		assertionFreeByteLane := requestPlan.rawBoundary && requestPlan.media != nil &&
 			requestPlan.media.Schema != nil && schemaAssertsNothing(requestPlan.media.Schema.Value)
 		if requestPlan.media != nil && requestPlan.media.Schema != nil && !assertionFreeByteLane {
-			bodySchema = schemaRefToMap(requestPlan.media.Schema, schemaOverlays)
+			bodySchema = graph.declaredForm(requestPlan.media.Schema, schemaOverlays)
 		} else if requestPlan.rawBoundary {
 			bodySchema = map[string]any{"type": "string", "contentEncoding": "base64"}
 		} else if hasMediaFidelity(requestPlan.bindingSpec) && requestPlan.synthetic {
@@ -722,11 +731,11 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 			// declared by reference are the production norm, and wrapping
 			// the unresolved {"$ref"} in a phantom "body" property emits a
 			// contract the invoker then sends literally onto the wire.
-			if _, isRef := bodySchema["$ref"]; isRef {
+			if _, isRef := bodySchema["$ref"]; isRef && !graph.hoists(requestPlan.media.Schema) {
 				// nil decycle context: this expansion only informs the
 				// flatten decision; the embedded schema is decycled later by
 				// inlineRefsInOperationSchema.
-				if resolved, ok := inlineRefs(bodySchema, refRegistry, map[string]bool{}, nil).(map[string]any); ok {
+				if resolved, ok := inlineRefs(bodySchema, graph.registryOrNil(), map[string]bool{}, nil).(map[string]any); ok {
 					bodySchema = resolved
 				}
 			}
@@ -740,7 +749,7 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 			var bodyProps map[string]any
 			var bodyRequired map[string]bool
 			if requestPlan.media != nil && requestPlan.media.Schema != nil {
-				bodyObject, bodyProps, bodyRequired = resolvedSynthesisBodyShape(requestPlan.media.Schema.Value, map[*openapi3.Schema]bool{}, schemaOverlays)
+				bodyObject, bodyProps, bodyRequired = resolvedSynthesisBodyShape(requestPlan.media.Schema.Value, map[*openapi3.Schema]bool{}, graph, schemaOverlays)
 			} else {
 				bodyProps = map[string]any{}
 				bodyRequired = map[string]bool{}
@@ -878,7 +887,7 @@ func projectedSchemaList(value any) []map[string]any {
 // required-name union; wrapping the allOf node as a synthetic whole body
 // would publish a contract that the invoker (correctly) routes as object
 // properties.
-func resolvedSynthesisBodyShape(schema *openapi3.Schema, seen map[*openapi3.Schema]bool, schemaOverlays *rawSchemaOverlayCollector) (bool, map[string]any, map[string]bool) {
+func resolvedSynthesisBodyShape(schema *openapi3.Schema, seen map[*openapi3.Schema]bool, graph *directionGraph, schemaOverlays *rawSchemaOverlayCollector) (bool, map[string]any, map[string]bool) {
 	properties := map[string]any{}
 	required := map[string]bool{}
 	if schema == nil || seen[schema] {
@@ -889,7 +898,7 @@ func resolvedSynthesisBodyShape(schema *openapi3.Schema, seen map[*openapi3.Sche
 
 	object := schema.Type.Is("object") || schema.Properties != nil
 	for name, property := range schema.Properties {
-		properties[name] = schemaRefToMap(property, schemaOverlays)
+		properties[name] = graph.declaredForm(property, schemaOverlays)
 	}
 	for _, name := range schema.Required {
 		required[name] = true
@@ -898,7 +907,7 @@ func resolvedSynthesisBodyShape(schema *openapi3.Schema, seen map[*openapi3.Sche
 		if member == nil || member.Value == nil {
 			continue
 		}
-		memberObject, memberProperties, memberRequired := resolvedSynthesisBodyShape(member.Value, seen, schemaOverlays)
+		memberObject, memberProperties, memberRequired := resolvedSynthesisBodyShape(member.Value, seen, graph, schemaOverlays)
 		object = object || memberObject
 		for name, property := range memberProperties {
 			if existing, present := properties[name]; present {
@@ -941,9 +950,15 @@ func mergeParameters(pathParams, opParams openapi3.Parameters) openapi3.Paramete
 	return merged
 }
 
-func paramToSchema(param *openapi3.Parameter, schemaOverlays *rawSchemaOverlayCollector) map[string]any {
+func paramToSchema(param *openapi3.Parameter, graph *directionGraph, schemaOverlays *rawSchemaOverlayCollector) map[string]any {
 	if param.Schema != nil && param.Schema.Value != nil {
-		schema := schemaRefToMap(param.Schema, schemaOverlays)
+		// A Parameter Object description belongs to the PARAMETER, and merging it
+		// produces a schema that is no longer the referenced component — so the
+		// merged schema is not that cut point, and the component still cuts
+		// wherever it is referenced inside. Both engines read it that way; the
+		// TypeScript twin's merge allocates a new node for the same reason
+		// (packages/openapi/src/synthesize.ts, paramToSchema).
+		schema := graph.parameterForm(param.Schema, param.Description != "", schemaOverlays)
 		if param.Description != "" {
 			if schema == nil {
 				schema = map[string]any{}
@@ -959,7 +974,7 @@ func paramToSchema(param *openapi3.Parameter, schemaOverlays *rawSchemaOverlayCo
 		}
 		sort.Strings(keys)
 		if media := param.Content[keys[0]]; media != nil && media.Schema != nil {
-			schema := schemaRefToMap(media.Schema, schemaOverlays)
+			schema := graph.parameterForm(media.Schema, param.Description != "", schemaOverlays)
 			if param.Description != "" {
 				schema = schemaWithParameterDescription(schema, param.Description)
 			}
@@ -1033,7 +1048,7 @@ func buildOutputSchema(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayC
 	return buildOutputSchemaWithCyclicRefs(op, schemaOverlays, bindingSpec, nil, openapiVersions...)
 }
 
-func buildOutputSchemaWithCyclicRefs(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayCollector, bindingSpec string, cyclic map[string]bool, openapiVersions ...string) map[string]any {
+func buildOutputSchemaWithCyclicRefs(op *openapi3.Operation, schemaOverlays *rawSchemaOverlayCollector, bindingSpec string, graph *directionGraph, openapiVersions ...string) map[string]any {
 	openapiVersion := "3.0"
 	if len(openapiVersions) > 0 {
 		openapiVersion = openapiVersions[0]
@@ -1102,10 +1117,10 @@ func buildOutputSchemaWithCyclicRefs(op *openapi3.Operation, schemaOverlays *raw
 					return nil // an unconstrained JSON success can emit any JSON value
 				}
 				cyclicRootRef := ""
-				if media.Schema.Ref != "" && cyclic[media.Schema.Ref] {
+				if media.Schema.Ref != "" && graph.isCyclic(media.Schema.Ref) {
 					cyclicRootRef = media.Schema.Ref
 				}
-				appendSchema(schemaRefToMap(media.Schema, schemaOverlays), cyclicRootRef)
+				appendSchema(graph.rootForm(media.Schema, schemaOverlays), cyclicRootRef)
 			}
 			admitsNonJSON := !isJSONMediaType(parsed.base) || parsed.rangeSpecificity < 2
 			if admitsNonJSON {
@@ -1235,75 +1250,6 @@ func buildRefRegistry(doc *openapi3.T, schemaOverlays *rawSchemaOverlayCollector
 		registry["#/components/schemas/"+escapeJSONPointerSegment(name)] = v
 	}
 	return registry
-}
-
-// cyclicRefs computes, once per document, the set of registry refs that
-// participate in a reference cycle (can reach themselves through $ref
-// strings). Mirrors the TS SDK's cyclicComponents (packages/openapi/src/util.ts).
-func cyclicRefs(registry map[string]any) map[string]bool {
-	// direct successor refs per registry entry
-	succ := make(map[string][]string, len(registry))
-	var collect func(node any, position schemaTraversalPosition, out *[]string)
-	collect = func(node any, position schemaTraversalPosition, out *[]string) {
-		if position == schemaDataPosition {
-			return
-		}
-		switch v := node.(type) {
-		case map[string]any:
-			if position == schemaObjectPosition {
-				if ref, ok := v["$ref"].(string); ok {
-					*out = append(*out, ref)
-				}
-			}
-			keys := make([]string, 0, len(v))
-			for k := range v {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				childPosition := schemaDataPosition
-				switch position {
-				case schemaObjectPosition:
-					childPosition = schemaChildPosition(k)
-				case schemaMapPosition:
-					childPosition = schemaObjectPosition
-				}
-				collect(v[k], childPosition, out)
-			}
-		case []any:
-			childPosition := schemaDataPosition
-			if position == schemaArrayPosition {
-				childPosition = schemaObjectPosition
-			}
-			for _, item := range v {
-				collect(item, childPosition, out)
-			}
-		}
-	}
-	for ref, node := range registry {
-		var out []string
-		collect(node, schemaObjectPosition, &out)
-		succ[ref] = out
-	}
-	cyclic := make(map[string]bool)
-	for ref := range registry {
-		visited := map[string]bool{}
-		work := append([]string(nil), succ[ref]...)
-		for len(work) > 0 {
-			current := work[len(work)-1]
-			work = work[:len(work)-1]
-			if current == ref {
-				cyclic[ref] = true
-				break
-			}
-			if visited[current] {
-				continue
-			}
-			visited[current] = true
-			work = append(work, succ[current]...)
-		}
-	}
-	return cyclic
 }
 
 // schemaTraversalPosition keeps JSON-shaped annotation and extension data

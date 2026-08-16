@@ -203,9 +203,18 @@ func (n *cutPointNamer) identityOf(ref string) (refIdentity, bool) {
 	if n == nil {
 		return refIdentity{}, false
 	}
-	key := ref
-	if i := strings.LastIndex(key, "/"); i >= 0 {
-		key = key[i+1:]
+	// Only a component ROOT can name an internalized component. A cut point at a
+	// position below a component — `#/components/schemas/Wrapper/properties/inner`
+	// — is addressed by the artifact itself, and reading its trailing segment as a
+	// registry key would let `inner` claim the identity of an external component
+	// that happens to be named `inner`.
+	const prefix = "#/components/schemas/"
+	if !strings.HasPrefix(ref, prefix) {
+		return refIdentity{}, false
+	}
+	key := strings.TrimPrefix(ref, prefix)
+	if strings.Contains(key, "/") {
+		return refIdentity{}, false
 	}
 	identity, external := n.externals[unescapeJSONPointerSegment(key)]
 	return identity, external

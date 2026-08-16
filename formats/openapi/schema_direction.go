@@ -44,6 +44,17 @@ type openAPISchemaProjector struct {
 	direction      openAPISchemaDirection
 	rootExemptions map[string]bool
 	defs           map[string]any
+	// registry, when set, lets the ownership calculation follow an artifact-space
+	// `#/components/schemas/...` reference the way it follows a local `$defs`
+	// one. It is set only when projecting the reference registry itself (see
+	// projectRefRegistry): there the references have not been inlined yet, so a
+	// property whose schema is a reference to a readOnly component would
+	// otherwise look unannotated.
+	registry map[string]any
+	// omitted records whether this projection dropped anything. Callers that
+	// project a whole registry use it to tell the two directions apart without
+	// comparing their results.
+	omitted bool
 }
 
 // projectOpenAPISchema applies OpenAPI read/write directionality to an
@@ -59,10 +70,18 @@ type openAPISchemaProjector struct {
 // readOnly annotation on such a schema root cannot erase the independently
 // declared OpenAPI input; nested properties are still projected normally.
 func projectOpenAPISchema(schema map[string]any, direction openAPISchemaDirection, rootExemptions map[string]bool) map[string]any {
+	return projectOpenAPISchemaWithRegistry(schema, direction, rootExemptions, nil)
+}
+
+// projectOpenAPISchemaWithRegistry is projectOpenAPISchema over a schema whose
+// `$ref`s have not been inlined yet. `registry` lets the ownership calculation
+// read a referenced declaration's annotations, which the inlined form would have
+// carried inline.
+func projectOpenAPISchemaWithRegistry(schema map[string]any, direction openAPISchemaDirection, rootExemptions map[string]bool, registry map[string]any) map[string]any {
 	if schema == nil {
 		return nil
 	}
-	projector := openAPISchemaProjector{direction: direction, rootExemptions: rootExemptions}
+	projector := openAPISchemaProjector{direction: direction, rootExemptions: rootExemptions, registry: registry}
 	projector.defs, _ = schema["$defs"].(map[string]any)
 	projected, ok := projector.project(schema, true).(map[string]any)
 	if !ok {
@@ -112,6 +131,7 @@ func (p *openAPISchemaProjector) project(value any, root bool) any {
 			projected := make(map[string]any, len(properties))
 			for name, property := range properties {
 				if omitted[name] {
+					p.omitted = true
 					continue
 				}
 				projected[name] = p.project(property, false)
@@ -237,7 +257,17 @@ func (p *openAPISchemaProjector) excludedProperty(value any, seenRefs map[string
 
 func (p *openAPISchemaProjector) resolveLocalRef(schema map[string]any) (map[string]any, string, bool) {
 	ref, ok := schema["$ref"].(string)
-	if !ok || p.defs == nil {
+	if !ok {
+		return nil, "", false
+	}
+	if p.registry != nil {
+		if resolved, found := resolveRegistryRef(ref, p.registry); found {
+			if target, ok := resolved.(map[string]any); ok {
+				return target, ref, true
+			}
+		}
+	}
+	if p.defs == nil {
 		return nil, "", false
 	}
 	marker := "/$defs/"
