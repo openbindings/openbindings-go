@@ -905,23 +905,41 @@ func queryEscape(s string, allowReserved bool) string {
 // application/x-www-form-urlencoded body for the CONTENT lane — the lane the
 // OAS reaches when an Encoding Object declares none of style, explode or
 // allowReserved, and which it assigns to RFC 1866 Section 8.2.1 rather than to
-// RFC 6570 (OAS 3.0.4 / 3.1.1 Appendix E.3, E.4 in 3.1.2: the
+// RFC 6570.
+//
+// Every accepted edition reaches RFC 1866: "the contents in the requestBody
+// MUST be stringified per [RFC1866] when passed to the server" (3.0.0-3.0.3,
+// 3.1.0) or "the request body MUST be encoded per [RFC1866]" (3.0.4, 3.1.1,
+// 3.1.2). Only the latter three carry Appendix E, whose
 // normatively-cited-standards table pairs "content-based serialization" with
 // "[RFC1866] Section 8.2.1" and percent-encoding "[RFC1738]", and pairs
 // "style-based serialization" with "[RFC6570]", noting that it "does not use +
-// for form-urlencoded").
+// for form-urlencoded" (E.3 in 3.0.4 / 3.1.1, E.4 in 3.1.2).
 //
 // RFC 1866 Section 8.2.1 names the space: "The form field names and values are
 // escaped: space characters are replaced by `+', and then reserved characters
-// are escaped as per [URL]". It does not settle the exact literal set — its own
-// gloss ("non-alphanumeric characters are replaced by `%HH'") is stricter than
-// the [URL] rule it restates, RFC 1738 Section 2.2 permitting `$-_.+!*'(),`.
-// The OAS records that more than one rule set is in use and gives two
-// media-type-scoped SHOULDs (Appendix E.3.1: historical interoperability SHOULD
-// use RFC1738's rules; E.3.2: maximum browser compatibility SHOULD use WHATWG's
-// form-urlencoded rules). The set below is WHATWG's, which satisfies E.3.2
-// directly and E.3.1 by containment, since it leaves literal only characters
-// RFC 1738 also permits.
+// are escaped as per [URL]". The rest of the set is delegated, not stated here:
+// the following gloss ("that is, non-alphanumeric characters are replaced by
+// `%HH'") is stricter than the [URL] rule it presents itself as restating, and
+// no accepted OAS edition asks for the stricter form. [URL] is RFC 1738, pinned
+// at corpus-lab/authorities/texts/openapi/url/rfc1738.txt. Its Section 2.2
+// settles the set below on every edition:
+//
+//   - "only alphanumerics, the special characters `$-_.+!*'(),`, and reserved
+//     characters used for their reserved purposes may be used unencoded" — so
+//     leaving `*`, `-`, `.` and `_` literal is permitted;
+//   - "characters that are not required to be encoded (including
+//     alphanumerics) may be encoded ... as long as they are not being used for
+//     a reserved purpose" — so encoding more is permitted too, which is why
+//     `+`, reserved by this media type for the space, is escaped in data;
+//   - `~` is named among the unsafe characters, and "All unsafe characters must
+//     always be encoded within a URL" — so escaping the tilde is required, not
+//     a preference.
+//
+// The set below is the WHATWG form-urlencoded serializer set, which lies inside
+// that permission on every edition. On 3.0.4, 3.1.1 and 3.1.2 it is also named
+// outright: Appendix E.3.2 (E.4.2 in 3.1.2) gives a SHOULD for WHATWG's
+// form-urlencoded rules, and 3.1.2 Section 4.8.12.4 names the tilde.
 //
 // Which member of that permitted set to pick is the IMPLEMENTATIONS'
 // convention, not the binding specification's: openbindings.openapi@1 states

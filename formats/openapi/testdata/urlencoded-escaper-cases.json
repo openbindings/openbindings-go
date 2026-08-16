@@ -1,8 +1,8 @@
 {
-  "$comment": "urlencoded body escaper case table, shared byte-for-byte by the three engines that build an\napplication/x-www-form-urlencoded request body: openbindings-go/formats/openapi,\nopenapi-client/go, and openapi-client/typescript/src (which openbindings-ts/packages/openapi\nre-exports). Every expectation is derived from upstream authority text, never from an engine.\n\nThe OAS assigns a DIFFERENT percent-encoding specification to each of the two lanes, and the\ntwo lanes are therefore SUPPOSED to disagree about the space character. From the normatively-\ncited-standards table in OAS 3.0.4 / 3.1.1 Appendix E.3 (E.4 in 3.1.2):\n  [RFC6570]              style-based serialization   percent-encoding [RFC3986]\n                         notes: 'does not use + for form-urlencoded'\n  [RFC1866] Section 8.2.1 content-based serialization percent-encoding [RFC1738]\nand, immediately after it: 'Style-based serialization is used ... in the Encoding Object when\nat least one of style, explode, or allowReserved is present', while 'Content-based\nserialization ... [is used] with the Encoding Object based on the contentType field when the\nfields style, explode, and allowReserved are absent.'\n\nSTYLE lane  = RFC 6570 form expansion, allowReserved absent: literals are RFC 3986's unreserved\n              set (ALPHA / DIGIT / '-' / '.' / '_' / '~'); every other byte is uppercase %HH;\n              a space is %20.\nCONTENT lane = RFC 1866 Section 8.2.1 ('space characters are replaced by `+`'), with the literal\n              set fixed to the WHATWG form-urlencoded serializer set (ALPHA / DIGIT / '*' / '-'\n              / '.' / '_') on the authority of OAS Appendix E.3.2's SHOULD for browser\n              compatibility; that output is also a subset of what RFC 1738 permits unencoded,\n              satisfying E.3.1's SHOULD. Which member of the authority-permitted set the engines\n              pick is the IMPLEMENTATIONS' convention, not the binding specification's.\n\nLane selection is the OAS's own predicate, not a project invention, with one edition branch:\nOAS 3.0.0-3.0.3 apply the Encoding Object's form/explode defaults to every urlencoded property,\nso on that line BOTH declaration shapes take the style lane. The 3.0-line rows exist to prove\nthat no property moves lanes when the content lane's escaper changes.\n\nEach case declares one urlencoded request body with exactly one property; `expect` is the whole\nemitted body, which all three engines must produce byte for byte.",
+  "$comment": "urlencoded body escaper case table, shared byte-for-byte by the three engines that build an\napplication/x-www-form-urlencoded request body: openbindings-go/formats/openapi,\nopenapi-client/go, and openapi-client/typescript/src (which openbindings-ts/packages/openapi\nre-exports). Every expectation is derived from upstream authority text, never from an engine.\nEach case is loaded as a WHOLE OpenAPI document through the engine's own loader, so the table\nexercises the shipped path rather than a hand-built typed model.\n\nThe OAS assigns a DIFFERENT percent-encoding specification to each of the two lanes, and the\ntwo lanes are therefore SUPPOSED to disagree about the space character. From the normatively-\ncited-standards table in OAS 3.0.4 / 3.1.1 Appendix E.3 (E.4 in 3.1.2):\n  [RFC6570]              style-based serialization   percent-encoding [RFC3986]\n                         notes: 'does not use + for form-urlencoded'\n  [RFC1866] Section 8.2.1 content-based serialization percent-encoding [RFC1738]\n\nSTYLE lane  = RFC 6570 form expansion, allowReserved not in effect: literals are RFC 3986's\n              unreserved set (ALPHA / DIGIT / '-' / '.' / '_' / '~'); every other byte is\n              uppercase %HH; a space is %20.\nCONTENT lane = RFC 1866 Section 8.2.1 ('space characters are replaced by `+'), whose operative\n              clause escapes the rest 'as per [URL]' = RFC 1738. RFC 1738 Section 2.2 permits\n              'only alphanumerics, the special characters \"$-_.+!*'(),\", and reserved characters\n              used for their reserved purposes' unencoded, names '~' among the UNSAFE characters\n              that 'must always be encoded', and adds that 'characters that are not required to\n              be encoded (including alphanumerics) MAY be encoded'. The engines emit the WHATWG\n              form-urlencoded serializer set (ALPHA / DIGIT / '*' / '-' / '.' / '_'), which lies\n              inside that permission and which OAS 3.0.4 / 3.1.1 Appendix E.3.2 (E.4.2 in 3.1.2)\n              gives a SHOULD for. Which member of the permitted set the engines pick is the\n              IMPLEMENTATIONS' convention, not the binding specification's.\n\nLANE SELECTION is the OAS's own predicate, and it is PRESENCE, not truthiness. OAS 3.0.4 /\n3.1.1 / 3.1.2 state it twice: the Encoding Object's closing note ('the presence of at least one\nof style, explode, or allowReserved WITH AN EXPLICIT VALUE is equivalent to using schema with\nin: \"query\" Parameter Objects. The absence of all three of those fields is the equivalent of\nusing content'), and Appendix E ('in the Encoding Object when at least one of style, explode,\nor allowReserved is present'). OAS 3.1.0 reaches the same result through a different sentence,\ncarried on each of the three fields: 'If a value is explicitly defined, then the value of\ncontentType (implicit or explicit) SHALL be ignored.' OAS 3.0.0-3.0.3 state neither, and apply\nthe Encoding Object's form/explode defaults to every urlencoded property, so on that line every\ndeclaration shape takes the style lane; what that line's ABSENT-encoding cell should do is an\nopen question this table does not prejudge.\n\nEDITION DIMENSION covers each branch the engines distinguish: 3.0.3 (3.0 dialect, style lane\nunconditionally), 3.0.4 (3.0 dialect, content lane reachable — the edition where the 3.0 line\nfirst states the content interpretation and where Appendix E first appears), and 3.1.1 (3.1\ndialect, content lane reachable).\n\nThe 'allow-reserved-false' declaration is the presence class: 'allowReserved: false' writes a\nvalue that equals the field's default, so a typed model that stores it as a plain boolean cannot\ntell it from an absent field. It selects the STYLE lane on every edition that states the\npredicate, and its cells are red against any engine that reads truthiness instead of presence.\n\nEach case declares one urlencoded request body with exactly one property; `expect` is the whole\nemitted body, which all three engines must produce byte for byte.",
   "cases": [
     {
-      "name": "3.0-line|content|name|space",
+      "name": "3.0.3|content|name|space",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -14,7 +14,7 @@
       "expect": "n%20=v"
     },
     {
-      "name": "3.0-line|content|name|plus",
+      "name": "3.0.3|content|name|plus",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -26,7 +26,7 @@
       "expect": "n%2B=v"
     },
     {
-      "name": "3.0-line|content|name|ampersand",
+      "name": "3.0.3|content|name|ampersand",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -38,7 +38,7 @@
       "expect": "n%26=v"
     },
     {
-      "name": "3.0-line|content|name|equals",
+      "name": "3.0.3|content|name|equals",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -50,7 +50,7 @@
       "expect": "n%3D=v"
     },
     {
-      "name": "3.0-line|content|name|percent",
+      "name": "3.0.3|content|name|percent",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -62,7 +62,7 @@
       "expect": "n%25=v"
     },
     {
-      "name": "3.0-line|content|name|asterisk",
+      "name": "3.0.3|content|name|asterisk",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -74,7 +74,7 @@
       "expect": "n%2A=v"
     },
     {
-      "name": "3.0-line|content|name|colon",
+      "name": "3.0.3|content|name|colon",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -86,7 +86,7 @@
       "expect": "n%3A=v"
     },
     {
-      "name": "3.0-line|content|name|tilde",
+      "name": "3.0.3|content|name|tilde",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -98,7 +98,7 @@
       "expect": "n~=v"
     },
     {
-      "name": "3.0-line|content|name|non-ascii",
+      "name": "3.0.3|content|name|non-ascii",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -110,7 +110,7 @@
       "expect": "n%C3%A9=v"
     },
     {
-      "name": "3.0-line|content|name|empty",
+      "name": "3.0.3|content|name|empty",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -122,7 +122,7 @@
       "expect": "n=v"
     },
     {
-      "name": "3.0-line|content|value|space",
+      "name": "3.0.3|content|value|space",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -134,7 +134,7 @@
       "expect": "p=%20"
     },
     {
-      "name": "3.0-line|content|value|plus",
+      "name": "3.0.3|content|value|plus",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -146,7 +146,7 @@
       "expect": "p=%2B"
     },
     {
-      "name": "3.0-line|content|value|ampersand",
+      "name": "3.0.3|content|value|ampersand",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -158,7 +158,7 @@
       "expect": "p=%26"
     },
     {
-      "name": "3.0-line|content|value|equals",
+      "name": "3.0.3|content|value|equals",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -170,7 +170,7 @@
       "expect": "p=%3D"
     },
     {
-      "name": "3.0-line|content|value|percent",
+      "name": "3.0.3|content|value|percent",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -182,7 +182,7 @@
       "expect": "p=%25"
     },
     {
-      "name": "3.0-line|content|value|asterisk",
+      "name": "3.0.3|content|value|asterisk",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -194,7 +194,7 @@
       "expect": "p=%2A"
     },
     {
-      "name": "3.0-line|content|value|colon",
+      "name": "3.0.3|content|value|colon",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -206,7 +206,7 @@
       "expect": "p=%3A"
     },
     {
-      "name": "3.0-line|content|value|tilde",
+      "name": "3.0.3|content|value|tilde",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -218,7 +218,7 @@
       "expect": "p=~"
     },
     {
-      "name": "3.0-line|content|value|non-ascii",
+      "name": "3.0.3|content|value|non-ascii",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -230,7 +230,7 @@
       "expect": "p=%C3%A9"
     },
     {
-      "name": "3.0-line|content|value|empty",
+      "name": "3.0.3|content|value|empty",
       "openapi": "3.0.3",
       "declaration": "content",
       "encoding": null,
@@ -242,7 +242,7 @@
       "expect": "p="
     },
     {
-      "name": "3.0-line|style|name|space",
+      "name": "3.0.3|style|name|space",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -257,7 +257,7 @@
       "expect": "n%20=v"
     },
     {
-      "name": "3.0-line|style|name|plus",
+      "name": "3.0.3|style|name|plus",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -272,7 +272,7 @@
       "expect": "n%2B=v"
     },
     {
-      "name": "3.0-line|style|name|ampersand",
+      "name": "3.0.3|style|name|ampersand",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -287,7 +287,7 @@
       "expect": "n%26=v"
     },
     {
-      "name": "3.0-line|style|name|equals",
+      "name": "3.0.3|style|name|equals",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -302,7 +302,7 @@
       "expect": "n%3D=v"
     },
     {
-      "name": "3.0-line|style|name|percent",
+      "name": "3.0.3|style|name|percent",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -317,7 +317,7 @@
       "expect": "n%25=v"
     },
     {
-      "name": "3.0-line|style|name|asterisk",
+      "name": "3.0.3|style|name|asterisk",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -332,7 +332,7 @@
       "expect": "n%2A=v"
     },
     {
-      "name": "3.0-line|style|name|colon",
+      "name": "3.0.3|style|name|colon",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -347,7 +347,7 @@
       "expect": "n%3A=v"
     },
     {
-      "name": "3.0-line|style|name|tilde",
+      "name": "3.0.3|style|name|tilde",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -362,7 +362,7 @@
       "expect": "n~=v"
     },
     {
-      "name": "3.0-line|style|name|non-ascii",
+      "name": "3.0.3|style|name|non-ascii",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -377,7 +377,7 @@
       "expect": "n%C3%A9=v"
     },
     {
-      "name": "3.0-line|style|name|empty",
+      "name": "3.0.3|style|name|empty",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -392,7 +392,7 @@
       "expect": "n=v"
     },
     {
-      "name": "3.0-line|style|value|space",
+      "name": "3.0.3|style|value|space",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -407,7 +407,7 @@
       "expect": "p=%20"
     },
     {
-      "name": "3.0-line|style|value|plus",
+      "name": "3.0.3|style|value|plus",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -422,7 +422,7 @@
       "expect": "p=%2B"
     },
     {
-      "name": "3.0-line|style|value|ampersand",
+      "name": "3.0.3|style|value|ampersand",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -437,7 +437,7 @@
       "expect": "p=%26"
     },
     {
-      "name": "3.0-line|style|value|equals",
+      "name": "3.0.3|style|value|equals",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -452,7 +452,7 @@
       "expect": "p=%3D"
     },
     {
-      "name": "3.0-line|style|value|percent",
+      "name": "3.0.3|style|value|percent",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -467,7 +467,7 @@
       "expect": "p=%25"
     },
     {
-      "name": "3.0-line|style|value|asterisk",
+      "name": "3.0.3|style|value|asterisk",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -482,7 +482,7 @@
       "expect": "p=%2A"
     },
     {
-      "name": "3.0-line|style|value|colon",
+      "name": "3.0.3|style|value|colon",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -497,7 +497,7 @@
       "expect": "p=%3A"
     },
     {
-      "name": "3.0-line|style|value|tilde",
+      "name": "3.0.3|style|value|tilde",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -512,7 +512,7 @@
       "expect": "p=~"
     },
     {
-      "name": "3.0-line|style|value|non-ascii",
+      "name": "3.0.3|style|value|non-ascii",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -527,7 +527,7 @@
       "expect": "p=%C3%A9"
     },
     {
-      "name": "3.0-line|style|value|empty",
+      "name": "3.0.3|style|value|empty",
       "openapi": "3.0.3",
       "declaration": "style",
       "encoding": {
@@ -542,7 +542,1107 @@
       "expect": "p="
     },
     {
-      "name": "3.1-line|content|name|space",
+      "name": "3.0.3|allow-reserved-false|name|space",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "n ",
+      "value": "v",
+      "expect": "n%20=v"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|name|plus",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "n+",
+      "value": "v",
+      "expect": "n%2B=v"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|name|ampersand",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "n&",
+      "value": "v",
+      "expect": "n%26=v"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|name|equals",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "n=",
+      "value": "v",
+      "expect": "n%3D=v"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|name|percent",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "n%",
+      "value": "v",
+      "expect": "n%25=v"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|name|asterisk",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "n*",
+      "value": "v",
+      "expect": "n%2A=v"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|name|colon",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "n:",
+      "value": "v",
+      "expect": "n%3A=v"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|name|tilde",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "n~",
+      "value": "v",
+      "expect": "n~=v"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|name|non-ascii",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "né",
+      "value": "v",
+      "expect": "n%C3%A9=v"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|name|empty",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "n",
+      "value": "v",
+      "expect": "n=v"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|value|space",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "p",
+      "value": " ",
+      "expect": "p=%20"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|value|plus",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "+",
+      "expect": "p=%2B"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|value|ampersand",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "&",
+      "expect": "p=%26"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|value|equals",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "=",
+      "expect": "p=%3D"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|value|percent",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "%",
+      "expect": "p=%25"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|value|asterisk",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "*",
+      "expect": "p=%2A"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|value|colon",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "p",
+      "value": ":",
+      "expect": "p=%3A"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|value|tilde",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "~",
+      "expect": "p=~"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|value|non-ascii",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "é",
+      "expect": "p=%C3%A9"
+    },
+    {
+      "name": "3.0.3|allow-reserved-false|value|empty",
+      "openapi": "3.0.3",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "",
+      "expect": "p="
+    },
+    {
+      "name": "3.0.4|content|name|space",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "space",
+      "lane": "content",
+      "propertyName": "n ",
+      "value": "v",
+      "expect": "n+=v"
+    },
+    {
+      "name": "3.0.4|content|name|plus",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "plus",
+      "lane": "content",
+      "propertyName": "n+",
+      "value": "v",
+      "expect": "n%2B=v"
+    },
+    {
+      "name": "3.0.4|content|name|ampersand",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "ampersand",
+      "lane": "content",
+      "propertyName": "n&",
+      "value": "v",
+      "expect": "n%26=v"
+    },
+    {
+      "name": "3.0.4|content|name|equals",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "equals",
+      "lane": "content",
+      "propertyName": "n=",
+      "value": "v",
+      "expect": "n%3D=v"
+    },
+    {
+      "name": "3.0.4|content|name|percent",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "percent",
+      "lane": "content",
+      "propertyName": "n%",
+      "value": "v",
+      "expect": "n%25=v"
+    },
+    {
+      "name": "3.0.4|content|name|asterisk",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "asterisk",
+      "lane": "content",
+      "propertyName": "n*",
+      "value": "v",
+      "expect": "n*=v"
+    },
+    {
+      "name": "3.0.4|content|name|colon",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "colon",
+      "lane": "content",
+      "propertyName": "n:",
+      "value": "v",
+      "expect": "n%3A=v"
+    },
+    {
+      "name": "3.0.4|content|name|tilde",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "tilde",
+      "lane": "content",
+      "propertyName": "n~",
+      "value": "v",
+      "expect": "n%7E=v"
+    },
+    {
+      "name": "3.0.4|content|name|non-ascii",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "non-ascii",
+      "lane": "content",
+      "propertyName": "né",
+      "value": "v",
+      "expect": "n%C3%A9=v"
+    },
+    {
+      "name": "3.0.4|content|name|empty",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "empty",
+      "lane": "content",
+      "propertyName": "n",
+      "value": "v",
+      "expect": "n=v"
+    },
+    {
+      "name": "3.0.4|content|value|space",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "space",
+      "lane": "content",
+      "propertyName": "p",
+      "value": " ",
+      "expect": "p=+"
+    },
+    {
+      "name": "3.0.4|content|value|plus",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "plus",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "+",
+      "expect": "p=%2B"
+    },
+    {
+      "name": "3.0.4|content|value|ampersand",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "ampersand",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "&",
+      "expect": "p=%26"
+    },
+    {
+      "name": "3.0.4|content|value|equals",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "equals",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "=",
+      "expect": "p=%3D"
+    },
+    {
+      "name": "3.0.4|content|value|percent",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "percent",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "%",
+      "expect": "p=%25"
+    },
+    {
+      "name": "3.0.4|content|value|asterisk",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "asterisk",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "*",
+      "expect": "p=*"
+    },
+    {
+      "name": "3.0.4|content|value|colon",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "colon",
+      "lane": "content",
+      "propertyName": "p",
+      "value": ":",
+      "expect": "p=%3A"
+    },
+    {
+      "name": "3.0.4|content|value|tilde",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "tilde",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "~",
+      "expect": "p=%7E"
+    },
+    {
+      "name": "3.0.4|content|value|non-ascii",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "non-ascii",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "é",
+      "expect": "p=%C3%A9"
+    },
+    {
+      "name": "3.0.4|content|value|empty",
+      "openapi": "3.0.4",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "empty",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "",
+      "expect": "p="
+    },
+    {
+      "name": "3.0.4|style|name|space",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "n ",
+      "value": "v",
+      "expect": "n%20=v"
+    },
+    {
+      "name": "3.0.4|style|name|plus",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "n+",
+      "value": "v",
+      "expect": "n%2B=v"
+    },
+    {
+      "name": "3.0.4|style|name|ampersand",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "n&",
+      "value": "v",
+      "expect": "n%26=v"
+    },
+    {
+      "name": "3.0.4|style|name|equals",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "n=",
+      "value": "v",
+      "expect": "n%3D=v"
+    },
+    {
+      "name": "3.0.4|style|name|percent",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "n%",
+      "value": "v",
+      "expect": "n%25=v"
+    },
+    {
+      "name": "3.0.4|style|name|asterisk",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "n*",
+      "value": "v",
+      "expect": "n%2A=v"
+    },
+    {
+      "name": "3.0.4|style|name|colon",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "n:",
+      "value": "v",
+      "expect": "n%3A=v"
+    },
+    {
+      "name": "3.0.4|style|name|tilde",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "n~",
+      "value": "v",
+      "expect": "n~=v"
+    },
+    {
+      "name": "3.0.4|style|name|non-ascii",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "né",
+      "value": "v",
+      "expect": "n%C3%A9=v"
+    },
+    {
+      "name": "3.0.4|style|name|empty",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "n",
+      "value": "v",
+      "expect": "n=v"
+    },
+    {
+      "name": "3.0.4|style|value|space",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "p",
+      "value": " ",
+      "expect": "p=%20"
+    },
+    {
+      "name": "3.0.4|style|value|plus",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "+",
+      "expect": "p=%2B"
+    },
+    {
+      "name": "3.0.4|style|value|ampersand",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "&",
+      "expect": "p=%26"
+    },
+    {
+      "name": "3.0.4|style|value|equals",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "=",
+      "expect": "p=%3D"
+    },
+    {
+      "name": "3.0.4|style|value|percent",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "%",
+      "expect": "p=%25"
+    },
+    {
+      "name": "3.0.4|style|value|asterisk",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "*",
+      "expect": "p=%2A"
+    },
+    {
+      "name": "3.0.4|style|value|colon",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "p",
+      "value": ":",
+      "expect": "p=%3A"
+    },
+    {
+      "name": "3.0.4|style|value|tilde",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "~",
+      "expect": "p=~"
+    },
+    {
+      "name": "3.0.4|style|value|non-ascii",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "é",
+      "expect": "p=%C3%A9"
+    },
+    {
+      "name": "3.0.4|style|value|empty",
+      "openapi": "3.0.4",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "",
+      "expect": "p="
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|name|space",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "n ",
+      "value": "v",
+      "expect": "n%20=v"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|name|plus",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "n+",
+      "value": "v",
+      "expect": "n%2B=v"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|name|ampersand",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "n&",
+      "value": "v",
+      "expect": "n%26=v"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|name|equals",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "n=",
+      "value": "v",
+      "expect": "n%3D=v"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|name|percent",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "n%",
+      "value": "v",
+      "expect": "n%25=v"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|name|asterisk",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "n*",
+      "value": "v",
+      "expect": "n%2A=v"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|name|colon",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "n:",
+      "value": "v",
+      "expect": "n%3A=v"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|name|tilde",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "n~",
+      "value": "v",
+      "expect": "n~=v"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|name|non-ascii",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "né",
+      "value": "v",
+      "expect": "n%C3%A9=v"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|name|empty",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "n",
+      "value": "v",
+      "expect": "n=v"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|value|space",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "p",
+      "value": " ",
+      "expect": "p=%20"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|value|plus",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "+",
+      "expect": "p=%2B"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|value|ampersand",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "&",
+      "expect": "p=%26"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|value|equals",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "=",
+      "expect": "p=%3D"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|value|percent",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "%",
+      "expect": "p=%25"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|value|asterisk",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "*",
+      "expect": "p=%2A"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|value|colon",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "p",
+      "value": ":",
+      "expect": "p=%3A"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|value|tilde",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "~",
+      "expect": "p=~"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|value|non-ascii",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "é",
+      "expect": "p=%C3%A9"
+    },
+    {
+      "name": "3.0.4|allow-reserved-false|value|empty",
+      "openapi": "3.0.4",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "",
+      "expect": "p="
+    },
+    {
+      "name": "3.1.1|content|name|space",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -554,7 +1654,7 @@
       "expect": "n+=v"
     },
     {
-      "name": "3.1-line|content|name|plus",
+      "name": "3.1.1|content|name|plus",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -566,7 +1666,7 @@
       "expect": "n%2B=v"
     },
     {
-      "name": "3.1-line|content|name|ampersand",
+      "name": "3.1.1|content|name|ampersand",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -578,7 +1678,7 @@
       "expect": "n%26=v"
     },
     {
-      "name": "3.1-line|content|name|equals",
+      "name": "3.1.1|content|name|equals",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -590,7 +1690,7 @@
       "expect": "n%3D=v"
     },
     {
-      "name": "3.1-line|content|name|percent",
+      "name": "3.1.1|content|name|percent",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -602,7 +1702,7 @@
       "expect": "n%25=v"
     },
     {
-      "name": "3.1-line|content|name|asterisk",
+      "name": "3.1.1|content|name|asterisk",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -614,7 +1714,7 @@
       "expect": "n*=v"
     },
     {
-      "name": "3.1-line|content|name|colon",
+      "name": "3.1.1|content|name|colon",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -626,7 +1726,7 @@
       "expect": "n%3A=v"
     },
     {
-      "name": "3.1-line|content|name|tilde",
+      "name": "3.1.1|content|name|tilde",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -638,7 +1738,7 @@
       "expect": "n%7E=v"
     },
     {
-      "name": "3.1-line|content|name|non-ascii",
+      "name": "3.1.1|content|name|non-ascii",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -650,7 +1750,7 @@
       "expect": "n%C3%A9=v"
     },
     {
-      "name": "3.1-line|content|name|empty",
+      "name": "3.1.1|content|name|empty",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -662,7 +1762,7 @@
       "expect": "n=v"
     },
     {
-      "name": "3.1-line|content|value|space",
+      "name": "3.1.1|content|value|space",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -674,7 +1774,7 @@
       "expect": "p=+"
     },
     {
-      "name": "3.1-line|content|value|plus",
+      "name": "3.1.1|content|value|plus",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -686,7 +1786,7 @@
       "expect": "p=%2B"
     },
     {
-      "name": "3.1-line|content|value|ampersand",
+      "name": "3.1.1|content|value|ampersand",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -698,7 +1798,7 @@
       "expect": "p=%26"
     },
     {
-      "name": "3.1-line|content|value|equals",
+      "name": "3.1.1|content|value|equals",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -710,7 +1810,7 @@
       "expect": "p=%3D"
     },
     {
-      "name": "3.1-line|content|value|percent",
+      "name": "3.1.1|content|value|percent",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -722,7 +1822,7 @@
       "expect": "p=%25"
     },
     {
-      "name": "3.1-line|content|value|asterisk",
+      "name": "3.1.1|content|value|asterisk",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -734,7 +1834,7 @@
       "expect": "p=*"
     },
     {
-      "name": "3.1-line|content|value|colon",
+      "name": "3.1.1|content|value|colon",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -746,7 +1846,7 @@
       "expect": "p=%3A"
     },
     {
-      "name": "3.1-line|content|value|tilde",
+      "name": "3.1.1|content|value|tilde",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -758,7 +1858,7 @@
       "expect": "p=%7E"
     },
     {
-      "name": "3.1-line|content|value|non-ascii",
+      "name": "3.1.1|content|value|non-ascii",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -770,7 +1870,7 @@
       "expect": "p=%C3%A9"
     },
     {
-      "name": "3.1-line|content|value|empty",
+      "name": "3.1.1|content|value|empty",
       "openapi": "3.1.1",
       "declaration": "content",
       "encoding": null,
@@ -782,7 +1882,7 @@
       "expect": "p="
     },
     {
-      "name": "3.1-line|style|name|space",
+      "name": "3.1.1|style|name|space",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -797,7 +1897,7 @@
       "expect": "n%20=v"
     },
     {
-      "name": "3.1-line|style|name|plus",
+      "name": "3.1.1|style|name|plus",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -812,7 +1912,7 @@
       "expect": "n%2B=v"
     },
     {
-      "name": "3.1-line|style|name|ampersand",
+      "name": "3.1.1|style|name|ampersand",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -827,7 +1927,7 @@
       "expect": "n%26=v"
     },
     {
-      "name": "3.1-line|style|name|equals",
+      "name": "3.1.1|style|name|equals",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -842,7 +1942,7 @@
       "expect": "n%3D=v"
     },
     {
-      "name": "3.1-line|style|name|percent",
+      "name": "3.1.1|style|name|percent",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -857,7 +1957,7 @@
       "expect": "n%25=v"
     },
     {
-      "name": "3.1-line|style|name|asterisk",
+      "name": "3.1.1|style|name|asterisk",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -872,7 +1972,7 @@
       "expect": "n%2A=v"
     },
     {
-      "name": "3.1-line|style|name|colon",
+      "name": "3.1.1|style|name|colon",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -887,7 +1987,7 @@
       "expect": "n%3A=v"
     },
     {
-      "name": "3.1-line|style|name|tilde",
+      "name": "3.1.1|style|name|tilde",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -902,7 +2002,7 @@
       "expect": "n~=v"
     },
     {
-      "name": "3.1-line|style|name|non-ascii",
+      "name": "3.1.1|style|name|non-ascii",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -917,7 +2017,7 @@
       "expect": "n%C3%A9=v"
     },
     {
-      "name": "3.1-line|style|name|empty",
+      "name": "3.1.1|style|name|empty",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -932,7 +2032,7 @@
       "expect": "n=v"
     },
     {
-      "name": "3.1-line|style|value|space",
+      "name": "3.1.1|style|value|space",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -947,7 +2047,7 @@
       "expect": "p=%20"
     },
     {
-      "name": "3.1-line|style|value|plus",
+      "name": "3.1.1|style|value|plus",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -962,7 +2062,7 @@
       "expect": "p=%2B"
     },
     {
-      "name": "3.1-line|style|value|ampersand",
+      "name": "3.1.1|style|value|ampersand",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -977,7 +2077,7 @@
       "expect": "p=%26"
     },
     {
-      "name": "3.1-line|style|value|equals",
+      "name": "3.1.1|style|value|equals",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -992,7 +2092,7 @@
       "expect": "p=%3D"
     },
     {
-      "name": "3.1-line|style|value|percent",
+      "name": "3.1.1|style|value|percent",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -1007,7 +2107,7 @@
       "expect": "p=%25"
     },
     {
-      "name": "3.1-line|style|value|asterisk",
+      "name": "3.1.1|style|value|asterisk",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -1022,7 +2122,7 @@
       "expect": "p=%2A"
     },
     {
-      "name": "3.1-line|style|value|colon",
+      "name": "3.1.1|style|value|colon",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -1037,7 +2137,7 @@
       "expect": "p=%3A"
     },
     {
-      "name": "3.1-line|style|value|tilde",
+      "name": "3.1.1|style|value|tilde",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -1052,7 +2152,7 @@
       "expect": "p=~"
     },
     {
-      "name": "3.1-line|style|value|non-ascii",
+      "name": "3.1.1|style|value|non-ascii",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
@@ -1067,12 +2167,292 @@
       "expect": "p=%C3%A9"
     },
     {
-      "name": "3.1-line|style|value|empty",
+      "name": "3.1.1|style|value|empty",
       "openapi": "3.1.1",
       "declaration": "style",
       "encoding": {
         "style": "form",
         "explode": true
+      },
+      "position": "value",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "",
+      "expect": "p="
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|name|space",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "n ",
+      "value": "v",
+      "expect": "n%20=v"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|name|plus",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "n+",
+      "value": "v",
+      "expect": "n%2B=v"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|name|ampersand",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "n&",
+      "value": "v",
+      "expect": "n%26=v"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|name|equals",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "n=",
+      "value": "v",
+      "expect": "n%3D=v"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|name|percent",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "n%",
+      "value": "v",
+      "expect": "n%25=v"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|name|asterisk",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "n*",
+      "value": "v",
+      "expect": "n%2A=v"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|name|colon",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "n:",
+      "value": "v",
+      "expect": "n%3A=v"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|name|tilde",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "n~",
+      "value": "v",
+      "expect": "n~=v"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|name|non-ascii",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "né",
+      "value": "v",
+      "expect": "n%C3%A9=v"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|name|empty",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "name",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "n",
+      "value": "v",
+      "expect": "n=v"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|value|space",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "p",
+      "value": " ",
+      "expect": "p=%20"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|value|plus",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "+",
+      "expect": "p=%2B"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|value|ampersand",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "&",
+      "expect": "p=%26"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|value|equals",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "=",
+      "expect": "p=%3D"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|value|percent",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "%",
+      "expect": "p=%25"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|value|asterisk",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "*",
+      "expect": "p=%2A"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|value|colon",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "p",
+      "value": ":",
+      "expect": "p=%3A"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|value|tilde",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "~",
+      "expect": "p=~"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|value|non-ascii",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
+      },
+      "position": "value",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "é",
+      "expect": "p=%C3%A9"
+    },
+    {
+      "name": "3.1.1|allow-reserved-false|value|empty",
+      "openapi": "3.1.1",
+      "declaration": "allow-reserved-false",
+      "encoding": {
+        "allowReserved": false
       },
       "position": "value",
       "cell": "empty",
