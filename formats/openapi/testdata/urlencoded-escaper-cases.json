@@ -1,0 +1,1085 @@
+{
+  "$comment": "urlencoded body escaper case table, shared byte-for-byte by the three engines that build an\napplication/x-www-form-urlencoded request body: openbindings-go/formats/openapi,\nopenapi-client/go, and openapi-client/typescript/src (which openbindings-ts/packages/openapi\nre-exports). Every expectation is derived from upstream authority text, never from an engine.\n\nThe OAS assigns a DIFFERENT percent-encoding specification to each of the two lanes, and the\ntwo lanes are therefore SUPPOSED to disagree about the space character. From the normatively-\ncited-standards table in OAS 3.0.4 / 3.1.1 Appendix E.3 (E.4 in 3.1.2):\n  [RFC6570]              style-based serialization   percent-encoding [RFC3986]\n                         notes: 'does not use + for form-urlencoded'\n  [RFC1866] Section 8.2.1 content-based serialization percent-encoding [RFC1738]\nand, immediately after it: 'Style-based serialization is used ... in the Encoding Object when\nat least one of style, explode, or allowReserved is present', while 'Content-based\nserialization ... [is used] with the Encoding Object based on the contentType field when the\nfields style, explode, and allowReserved are absent.'\n\nSTYLE lane  = RFC 6570 form expansion, allowReserved absent: literals are RFC 3986's unreserved\n              set (ALPHA / DIGIT / '-' / '.' / '_' / '~'); every other byte is uppercase %HH;\n              a space is %20.\nCONTENT lane = RFC 1866 Section 8.2.1 ('space characters are replaced by `+`'), with the literal\n              set fixed to the WHATWG form-urlencoded serializer set (ALPHA / DIGIT / '*' / '-'\n              / '.' / '_') on the authority of OAS Appendix E.3.2's SHOULD for browser\n              compatibility; that output is also a subset of what RFC 1738 permits unencoded,\n              satisfying E.3.1's SHOULD. Which member of the authority-permitted set the engines\n              pick is the IMPLEMENTATIONS' convention, not the binding specification's.\n\nLane selection is the OAS's own predicate, not a project invention, with one edition branch:\nOAS 3.0.0-3.0.3 apply the Encoding Object's form/explode defaults to every urlencoded property,\nso on that line BOTH declaration shapes take the style lane. The 3.0-line rows exist to prove\nthat no property moves lanes when the content lane's escaper changes.\n\nEach case declares one urlencoded request body with exactly one property; `expect` is the whole\nemitted body, which all three engines must produce byte for byte.",
+  "cases": [
+    {
+      "name": "3.0-line|content|name|space",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "n ",
+      "value": "v",
+      "expect": "n%20=v"
+    },
+    {
+      "name": "3.0-line|content|name|plus",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "n+",
+      "value": "v",
+      "expect": "n%2B=v"
+    },
+    {
+      "name": "3.0-line|content|name|ampersand",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "n&",
+      "value": "v",
+      "expect": "n%26=v"
+    },
+    {
+      "name": "3.0-line|content|name|equals",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "n=",
+      "value": "v",
+      "expect": "n%3D=v"
+    },
+    {
+      "name": "3.0-line|content|name|percent",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "n%",
+      "value": "v",
+      "expect": "n%25=v"
+    },
+    {
+      "name": "3.0-line|content|name|asterisk",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "n*",
+      "value": "v",
+      "expect": "n%2A=v"
+    },
+    {
+      "name": "3.0-line|content|name|colon",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "n:",
+      "value": "v",
+      "expect": "n%3A=v"
+    },
+    {
+      "name": "3.0-line|content|name|tilde",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "n~",
+      "value": "v",
+      "expect": "n~=v"
+    },
+    {
+      "name": "3.0-line|content|name|non-ascii",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "né",
+      "value": "v",
+      "expect": "n%C3%A9=v"
+    },
+    {
+      "name": "3.0-line|content|name|empty",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "n",
+      "value": "v",
+      "expect": "n=v"
+    },
+    {
+      "name": "3.0-line|content|value|space",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "p",
+      "value": " ",
+      "expect": "p=%20"
+    },
+    {
+      "name": "3.0-line|content|value|plus",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "+",
+      "expect": "p=%2B"
+    },
+    {
+      "name": "3.0-line|content|value|ampersand",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "&",
+      "expect": "p=%26"
+    },
+    {
+      "name": "3.0-line|content|value|equals",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "=",
+      "expect": "p=%3D"
+    },
+    {
+      "name": "3.0-line|content|value|percent",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "%",
+      "expect": "p=%25"
+    },
+    {
+      "name": "3.0-line|content|value|asterisk",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "*",
+      "expect": "p=%2A"
+    },
+    {
+      "name": "3.0-line|content|value|colon",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "p",
+      "value": ":",
+      "expect": "p=%3A"
+    },
+    {
+      "name": "3.0-line|content|value|tilde",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "~",
+      "expect": "p=~"
+    },
+    {
+      "name": "3.0-line|content|value|non-ascii",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "é",
+      "expect": "p=%C3%A9"
+    },
+    {
+      "name": "3.0-line|content|value|empty",
+      "openapi": "3.0.3",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "",
+      "expect": "p="
+    },
+    {
+      "name": "3.0-line|style|name|space",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "n ",
+      "value": "v",
+      "expect": "n%20=v"
+    },
+    {
+      "name": "3.0-line|style|name|plus",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "n+",
+      "value": "v",
+      "expect": "n%2B=v"
+    },
+    {
+      "name": "3.0-line|style|name|ampersand",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "n&",
+      "value": "v",
+      "expect": "n%26=v"
+    },
+    {
+      "name": "3.0-line|style|name|equals",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "n=",
+      "value": "v",
+      "expect": "n%3D=v"
+    },
+    {
+      "name": "3.0-line|style|name|percent",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "n%",
+      "value": "v",
+      "expect": "n%25=v"
+    },
+    {
+      "name": "3.0-line|style|name|asterisk",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "n*",
+      "value": "v",
+      "expect": "n%2A=v"
+    },
+    {
+      "name": "3.0-line|style|name|colon",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "n:",
+      "value": "v",
+      "expect": "n%3A=v"
+    },
+    {
+      "name": "3.0-line|style|name|tilde",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "n~",
+      "value": "v",
+      "expect": "n~=v"
+    },
+    {
+      "name": "3.0-line|style|name|non-ascii",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "né",
+      "value": "v",
+      "expect": "n%C3%A9=v"
+    },
+    {
+      "name": "3.0-line|style|name|empty",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "n",
+      "value": "v",
+      "expect": "n=v"
+    },
+    {
+      "name": "3.0-line|style|value|space",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "p",
+      "value": " ",
+      "expect": "p=%20"
+    },
+    {
+      "name": "3.0-line|style|value|plus",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "+",
+      "expect": "p=%2B"
+    },
+    {
+      "name": "3.0-line|style|value|ampersand",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "&",
+      "expect": "p=%26"
+    },
+    {
+      "name": "3.0-line|style|value|equals",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "=",
+      "expect": "p=%3D"
+    },
+    {
+      "name": "3.0-line|style|value|percent",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "%",
+      "expect": "p=%25"
+    },
+    {
+      "name": "3.0-line|style|value|asterisk",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "*",
+      "expect": "p=%2A"
+    },
+    {
+      "name": "3.0-line|style|value|colon",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "p",
+      "value": ":",
+      "expect": "p=%3A"
+    },
+    {
+      "name": "3.0-line|style|value|tilde",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "~",
+      "expect": "p=~"
+    },
+    {
+      "name": "3.0-line|style|value|non-ascii",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "é",
+      "expect": "p=%C3%A9"
+    },
+    {
+      "name": "3.0-line|style|value|empty",
+      "openapi": "3.0.3",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "",
+      "expect": "p="
+    },
+    {
+      "name": "3.1-line|content|name|space",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "space",
+      "lane": "content",
+      "propertyName": "n ",
+      "value": "v",
+      "expect": "n+=v"
+    },
+    {
+      "name": "3.1-line|content|name|plus",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "plus",
+      "lane": "content",
+      "propertyName": "n+",
+      "value": "v",
+      "expect": "n%2B=v"
+    },
+    {
+      "name": "3.1-line|content|name|ampersand",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "ampersand",
+      "lane": "content",
+      "propertyName": "n&",
+      "value": "v",
+      "expect": "n%26=v"
+    },
+    {
+      "name": "3.1-line|content|name|equals",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "equals",
+      "lane": "content",
+      "propertyName": "n=",
+      "value": "v",
+      "expect": "n%3D=v"
+    },
+    {
+      "name": "3.1-line|content|name|percent",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "percent",
+      "lane": "content",
+      "propertyName": "n%",
+      "value": "v",
+      "expect": "n%25=v"
+    },
+    {
+      "name": "3.1-line|content|name|asterisk",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "asterisk",
+      "lane": "content",
+      "propertyName": "n*",
+      "value": "v",
+      "expect": "n*=v"
+    },
+    {
+      "name": "3.1-line|content|name|colon",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "colon",
+      "lane": "content",
+      "propertyName": "n:",
+      "value": "v",
+      "expect": "n%3A=v"
+    },
+    {
+      "name": "3.1-line|content|name|tilde",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "tilde",
+      "lane": "content",
+      "propertyName": "n~",
+      "value": "v",
+      "expect": "n%7E=v"
+    },
+    {
+      "name": "3.1-line|content|name|non-ascii",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "non-ascii",
+      "lane": "content",
+      "propertyName": "né",
+      "value": "v",
+      "expect": "n%C3%A9=v"
+    },
+    {
+      "name": "3.1-line|content|name|empty",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "name",
+      "cell": "empty",
+      "lane": "content",
+      "propertyName": "n",
+      "value": "v",
+      "expect": "n=v"
+    },
+    {
+      "name": "3.1-line|content|value|space",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "space",
+      "lane": "content",
+      "propertyName": "p",
+      "value": " ",
+      "expect": "p=+"
+    },
+    {
+      "name": "3.1-line|content|value|plus",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "plus",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "+",
+      "expect": "p=%2B"
+    },
+    {
+      "name": "3.1-line|content|value|ampersand",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "ampersand",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "&",
+      "expect": "p=%26"
+    },
+    {
+      "name": "3.1-line|content|value|equals",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "equals",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "=",
+      "expect": "p=%3D"
+    },
+    {
+      "name": "3.1-line|content|value|percent",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "percent",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "%",
+      "expect": "p=%25"
+    },
+    {
+      "name": "3.1-line|content|value|asterisk",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "asterisk",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "*",
+      "expect": "p=*"
+    },
+    {
+      "name": "3.1-line|content|value|colon",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "colon",
+      "lane": "content",
+      "propertyName": "p",
+      "value": ":",
+      "expect": "p=%3A"
+    },
+    {
+      "name": "3.1-line|content|value|tilde",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "tilde",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "~",
+      "expect": "p=%7E"
+    },
+    {
+      "name": "3.1-line|content|value|non-ascii",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "non-ascii",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "é",
+      "expect": "p=%C3%A9"
+    },
+    {
+      "name": "3.1-line|content|value|empty",
+      "openapi": "3.1.1",
+      "declaration": "content",
+      "encoding": null,
+      "position": "value",
+      "cell": "empty",
+      "lane": "content",
+      "propertyName": "p",
+      "value": "",
+      "expect": "p="
+    },
+    {
+      "name": "3.1-line|style|name|space",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "n ",
+      "value": "v",
+      "expect": "n%20=v"
+    },
+    {
+      "name": "3.1-line|style|name|plus",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "n+",
+      "value": "v",
+      "expect": "n%2B=v"
+    },
+    {
+      "name": "3.1-line|style|name|ampersand",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "n&",
+      "value": "v",
+      "expect": "n%26=v"
+    },
+    {
+      "name": "3.1-line|style|name|equals",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "n=",
+      "value": "v",
+      "expect": "n%3D=v"
+    },
+    {
+      "name": "3.1-line|style|name|percent",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "n%",
+      "value": "v",
+      "expect": "n%25=v"
+    },
+    {
+      "name": "3.1-line|style|name|asterisk",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "n*",
+      "value": "v",
+      "expect": "n%2A=v"
+    },
+    {
+      "name": "3.1-line|style|name|colon",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "n:",
+      "value": "v",
+      "expect": "n%3A=v"
+    },
+    {
+      "name": "3.1-line|style|name|tilde",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "n~",
+      "value": "v",
+      "expect": "n~=v"
+    },
+    {
+      "name": "3.1-line|style|name|non-ascii",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "né",
+      "value": "v",
+      "expect": "n%C3%A9=v"
+    },
+    {
+      "name": "3.1-line|style|name|empty",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "name",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "n",
+      "value": "v",
+      "expect": "n=v"
+    },
+    {
+      "name": "3.1-line|style|value|space",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "space",
+      "lane": "style",
+      "propertyName": "p",
+      "value": " ",
+      "expect": "p=%20"
+    },
+    {
+      "name": "3.1-line|style|value|plus",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "plus",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "+",
+      "expect": "p=%2B"
+    },
+    {
+      "name": "3.1-line|style|value|ampersand",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "ampersand",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "&",
+      "expect": "p=%26"
+    },
+    {
+      "name": "3.1-line|style|value|equals",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "equals",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "=",
+      "expect": "p=%3D"
+    },
+    {
+      "name": "3.1-line|style|value|percent",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "percent",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "%",
+      "expect": "p=%25"
+    },
+    {
+      "name": "3.1-line|style|value|asterisk",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "asterisk",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "*",
+      "expect": "p=%2A"
+    },
+    {
+      "name": "3.1-line|style|value|colon",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "colon",
+      "lane": "style",
+      "propertyName": "p",
+      "value": ":",
+      "expect": "p=%3A"
+    },
+    {
+      "name": "3.1-line|style|value|tilde",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "tilde",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "~",
+      "expect": "p=~"
+    },
+    {
+      "name": "3.1-line|style|value|non-ascii",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "non-ascii",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "é",
+      "expect": "p=%C3%A9"
+    },
+    {
+      "name": "3.1-line|style|value|empty",
+      "openapi": "3.1.1",
+      "declaration": "style",
+      "encoding": {
+        "style": "form",
+        "explode": true
+      },
+      "position": "value",
+      "cell": "empty",
+      "lane": "style",
+      "propertyName": "p",
+      "value": "",
+      "expect": "p="
+    }
+  ]
+}

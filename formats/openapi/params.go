@@ -900,3 +900,55 @@ func queryEscape(s string, allowReserved bool) string {
 	}
 	return b.String()
 }
+
+// formURLEncodedEscape percent-encodes one piece of an
+// application/x-www-form-urlencoded body for the CONTENT lane — the lane the
+// OAS reaches when an Encoding Object declares none of style, explode or
+// allowReserved, and which it assigns to RFC 1866 Section 8.2.1 rather than to
+// RFC 6570 (OAS 3.0.4 / 3.1.1 Appendix E.3, E.4 in 3.1.2: the
+// normatively-cited-standards table pairs "content-based serialization" with
+// "[RFC1866] Section 8.2.1" and percent-encoding "[RFC1738]", and pairs
+// "style-based serialization" with "[RFC6570]", noting that it "does not use +
+// for form-urlencoded").
+//
+// RFC 1866 Section 8.2.1 names the space: "The form field names and values are
+// escaped: space characters are replaced by `+', and then reserved characters
+// are escaped as per [URL]". It does not settle the exact literal set — its own
+// gloss ("non-alphanumeric characters are replaced by `%HH'") is stricter than
+// the [URL] rule it restates, RFC 1738 Section 2.2 permitting `$-_.+!*'(),`.
+// The OAS records that more than one rule set is in use and gives two
+// media-type-scoped SHOULDs (Appendix E.3.1: historical interoperability SHOULD
+// use RFC1738's rules; E.3.2: maximum browser compatibility SHOULD use WHATWG's
+// form-urlencoded rules). The set below is WHATWG's, which satisfies E.3.2
+// directly and E.3.1 by containment, since it leaves literal only characters
+// RFC 1738 also permits.
+//
+// Which member of that permitted set to pick is the IMPLEMENTATIONS'
+// convention, not the binding specification's: openbindings.openapi@1 states
+// the permitted set and does not narrow it. The pick is pinned by the shared
+// twin case table (testdata/urlencoded-escaper-cases.json), executed by both Go
+// engines and by openapi-client/typescript.
+//
+// The STYLE lane keeps revision3URIEscape and its RFC 6570 %20; the two lanes
+// disagree about the space character because the OAS assigns them different
+// percent-encoding specifications.
+func formURLEncodedEscape(s string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', '0' <= c && c <= '9',
+			c == '*', c == '-', c == '.', c == '_':
+			b.WriteByte(c)
+		case c == ' ':
+			b.WriteByte('+')
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&0xF])
+		}
+	}
+	return b.String()
+}

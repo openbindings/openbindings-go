@@ -12,7 +12,6 @@ import (
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net/textproto"
-	"net/url"
 	"sort"
 	"strings"
 
@@ -2547,7 +2546,7 @@ func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, 
 			if err != nil {
 				return "", fmt.Errorf("form field %q: %w", name, err)
 			}
-			units = append(units, url.QueryEscape(name)+"="+url.QueryEscape(string(value)))
+			units = append(units, formURLEncodedEscape(name)+"="+formURLEncodedEscape(string(value)))
 			continue
 		}
 		style, explode, allowReserved := openapi3.SerializationForm, true, false
