@@ -850,12 +850,58 @@ func encodingUsesSerialization(enc *openapi3.Encoding) bool {
 	return enc.Style != "" || enc.Explode != nil || enc.AllowReserved
 }
 
-// OAS 3.0.0 through 3.0.3 apply the Encoding Object's form/explode defaults
-// to urlencoded properties even when no Encoding Object is written. OAS
-// 3.0.4 added the content-based interpretation as a compatibility
-// recommendation, and the 3.1 line uses it when all three RFC6570 controls
-// are absent. Revision 3 incorporates each accepted edition's own immutable
-// text, so an older artifact must retain its older default.
+// legacyOpenAPIFormEncoding reports whether an accepted OAS edition puts an
+// application/x-www-form-urlencoded property on the RFC6570-style lane even
+// when the artifact writes no style, explode or allowReserved.
+//
+// The discriminator is which editions state that an EXPLICITLY DEFINED
+// serialization control displaces the Encoding Object's contentType. A rule
+// saying "an explicit style wins over contentType" is only meaningful because
+// contentType otherwise governs, so exactly the editions carrying it put a
+// control-free property on the content lane. Per edition, at its own text:
+//
+//	3.0.0-3.0.3  No such rule anywhere. The style, explode and allowReserved
+//	             descriptions in section 4.7.15.1 condition nothing on
+//	             contentType, and section 4.7.14.4 says "the default
+//	             serialization strategy of such properties is described in the
+//	             Encoding Object's style property as form". Style applies,
+//	             written or not.                                -> style lane
+//	3.0.4        Section 4.7.15.1.2: "whenever any of style, explode, or
+//	             allowReserved are present with an explicit value: The value of
+//	             contentType, whether it is explicitly defined or has the
+//	             default value, is to be ignored ... However, if all three of
+//	             style, explode, and allowReserved fields are absent ...
+//	             Encoding is to be based on contentType alone".
+//	                                                            -> content lane
+//	3.1.0        Section 4.8.15.1 carries, on EACH of style, explode and
+//	             allowReserved: "If a value is explicitly defined, then the
+//	             value of contentType (implicit or explicit) SHALL be ignored."
+//	                                                            -> content lane
+//	3.1.1, 3.1.2 Section 4.8.15.1.2 ("Fixed Fields for RFC6570-style
+//	             Serialization") carries that same sentence on each of the
+//	             three fields.                                  -> content lane
+//
+// NOT the discriminator, and the reason this comment was rewritten: the
+// section 4.7.14.4 / 4.8.14.4 sentence quoted above. It is present verbatim in
+// 3.0.0, 3.0.1, 3.0.2, 3.0.3 AND 3.1.0, and absent from 3.0.4, 3.1.1 and
+// 3.1.2, so it does not partition these editions into these lanes; by that
+// test 3.1.0 would belong on the legacy side. An earlier version of this
+// comment, in all three engines, justified the split by it. The predicate was
+// right and its stated reason was wrong. Reproduce the presence pattern with
+//
+//	node corpus-lab/scripts/strip-oas-html.mjs --count "the default
+//	serialization strategy of such properties is described in the Encoding
+//	Object.s style property as form"
+//
+// (one line; the "." stands for the right single quotation mark the published
+// HTML uses). It prints 1/1/1/1/0/1/0/0 in edition order 3.0.0, 3.0.1, 3.0.2,
+// 3.0.3, 3.0.4, 3.1.0, 3.1.1, 3.1.2. The digests of the renderings it counts
+// into are recorded in corpus-lab/OPENAPI-RUNTIME.md.
+//
+// Revision 3 incorporates each accepted edition's own immutable text, so an
+// older artifact retains its older default. The partition is pinned by the
+// 64-cell twin table in urlencoded_lane_partition_test.go, shared
+// byte-for-byte with the other two engines.
 func legacyOpenAPIFormEncoding(version string) bool {
 	switch version {
 	case "3.0.0", "3.0.1", "3.0.2", "3.0.3":
