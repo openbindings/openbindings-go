@@ -1061,7 +1061,17 @@ func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
 			{Value: &openapi3.Schema{Type: &openapi3.Types{"integer"}}},
 			{Value: &openapi3.Schema{Type: &openapi3.Types{"null"}}},
 		}})}}, "choice applicator"},
-		{"content media type on non-string", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"object"}, ContentMediaType: "application/json"})}}, "requires a resolved string"},
+		// A part that declares NO type is the one cell where either content
+		// annotation still stops carriage: OAS 3.1.1 and 3.1.2 §4.8.15.1.1
+		// give `type` absent the default application/octet-stream, for which
+		// this binding revision defines no JSON-to-octet part boundary. On a
+		// DECLARED non-string type neither keyword has force (JSON Schema
+		// 2020-12 §8.3/§8.4 condition both on a string instance), so
+		// `{type: object, contentMediaType: ...}` is admitted as
+		// application/json by the object row and is pinned in the shared
+		// part-content-encoding case table instead of refused here.
+		{"content media type on a typeless part", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{ContentMediaType: "application/json"})}}, "no JSON-to-octet boundary"},
+		{"content encoding on a typeless part", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{ContentEncoding: "base64"})}}, "no JSON-to-octet boundary"},
 		{"content media conflict", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{AllOf: openapi3.SchemaRefs{{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, ContentMediaType: "image/png"}}, {Value: &openapi3.Schema{ContentMediaType: "image/jpeg"}}}})}}, "conflicting contentMediaType"},
 		{"content encoding header injection", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}, ContentEncoding: "base64\r\nX-Evil"})}}, "valid HTTP token"},
 	}

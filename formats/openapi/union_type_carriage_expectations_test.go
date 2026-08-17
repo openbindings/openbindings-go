@@ -24,6 +24,18 @@ package openapi
 //   - Every multi-member spelling refuses under the 3.0 line whatever its
 //     members, because all five 3.0 editions state "type - Value MUST be a
 //     string. Multiple types via an array are not supported."
+//   - The contentEncoding column stopped changing any cell whose collapsed
+//     type is not `string` (2026-08-17). Every 3.1 edition scopes the
+//     encoded-string row to `type: string` — 3.1.0 §4.8.14.5 "a `type:
+//     string` with a `contentEncoding`", the 3.1.1/3.1.2 §4.8.15.1.1 table
+//     rows — and 3.1.1/3.1.2 add in their own note that "an n/a in the
+//     contentEncoding column means that the presence or value of
+//     contentEncoding is irrelevant", n/a being what the
+//     number/integer/boolean, object and array rows hold. So
+//     `integer-null`, `object-null` and `array-null` now read the same in
+//     both columns. A part that declares NO type is a different cell and
+//     still refuses: 3.1.1/3.1.2 give it application/octet-stream, for
+//     which this revision defines no JSON-to-octet part boundary.
 //   - A one-member or empty array raises no union question — it denotes
 //     exactly the type it names, or none — and is read as that under both
 //     lines. That tolerance is the engines' own, is identical in both, and
@@ -87,13 +99,13 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.0.4|multipart/form-data|string|plain":                                 "admitted;value=text/plain:x;null=text/plain:",
 	"3.1.2|application/x-www-form-urlencoded|absent-type|contentEncoding":    "refused",
 	"3.1.2|application/x-www-form-urlencoded|absent-type|plain":              "admitted;value=p=x;null=error",
-	"3.1.2|application/x-www-form-urlencoded|array-null|contentEncoding":     "refused",
+	"3.1.2|application/x-www-form-urlencoded|array-null|contentEncoding":     "admitted;value=p=%5B%22a%22%5D;null=elided",
 	"3.1.2|application/x-www-form-urlencoded|array-null|plain":               "admitted;value=p=%5B%22a%22%5D;null=elided",
 	"3.1.2|application/x-www-form-urlencoded|boolean-true|contentEncoding":   "refused",
 	"3.1.2|application/x-www-form-urlencoded|boolean-true|plain":             "admitted;value=p=x;null=error",
 	"3.1.2|application/x-www-form-urlencoded|empty-array|contentEncoding":    "refused",
 	"3.1.2|application/x-www-form-urlencoded|empty-array|plain":              "admitted;value=p=x;null=error",
-	"3.1.2|application/x-www-form-urlencoded|integer-null|contentEncoding":   "refused",
+	"3.1.2|application/x-www-form-urlencoded|integer-null|contentEncoding":   "admitted;value=p=7;null=elided",
 	"3.1.2|application/x-www-form-urlencoded|integer-null|plain":             "admitted;value=p=7;null=elided",
 	"3.1.2|application/x-www-form-urlencoded|memberless|contentEncoding":     "refused",
 	"3.1.2|application/x-www-form-urlencoded|memberless|plain":               "admitted;value=p=x;null=error",
@@ -101,7 +113,7 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.1.2|application/x-www-form-urlencoded|null-only|plain":                "refused",
 	"3.1.2|application/x-www-form-urlencoded|null-string|contentEncoding":    "admitted;value=p=x;null=elided",
 	"3.1.2|application/x-www-form-urlencoded|null-string|plain":              "admitted;value=p=x;null=elided",
-	"3.1.2|application/x-www-form-urlencoded|object-null|contentEncoding":    "refused",
+	"3.1.2|application/x-www-form-urlencoded|object-null|contentEncoding":    "admitted;value=p=%7B%22k%22%3A%22v%22%7D;null=elided",
 	"3.1.2|application/x-www-form-urlencoded|object-null|plain":              "admitted;value=p=%7B%22k%22%3A%22v%22%7D;null=elided",
 	"3.1.2|application/x-www-form-urlencoded|string-array-1|contentEncoding": "admitted;value=p=x;null=error",
 	"3.1.2|application/x-www-form-urlencoded|string-array-1|plain":           "admitted;value=p=x;null=p=",
@@ -121,7 +133,7 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.1.2|multipart/form-data|boolean-true|plain":                           "admitted;value=text/plain:x;null=error",
 	"3.1.2|multipart/form-data|empty-array|contentEncoding":                  "refused",
 	"3.1.2|multipart/form-data|empty-array|plain":                            "admitted;value=text/plain:x;null=error",
-	"3.1.2|multipart/form-data|integer-null|contentEncoding":                 "refused",
+	"3.1.2|multipart/form-data|integer-null|contentEncoding":                 "admitted;value=text/plain:7;null=elided",
 	"3.1.2|multipart/form-data|integer-null|plain":                           "admitted;value=text/plain:7;null=elided",
 	"3.1.2|multipart/form-data|memberless|contentEncoding":                   "refused",
 	"3.1.2|multipart/form-data|memberless|plain":                             "admitted;value=text/plain:x;null=error",
@@ -129,7 +141,7 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.1.2|multipart/form-data|null-only|plain":                              "refused",
 	"3.1.2|multipart/form-data|null-string|contentEncoding":                  "admitted;value=application/octet-stream:x;null=elided",
 	"3.1.2|multipart/form-data|null-string|plain":                            "admitted;value=text/plain:x;null=elided",
-	"3.1.2|multipart/form-data|object-null|contentEncoding":                  "refused",
+	"3.1.2|multipart/form-data|object-null|contentEncoding":                  "admitted;value=application/json:{\"k\":\"v\"};null=elided",
 	"3.1.2|multipart/form-data|object-null|plain":                            "admitted;value=application/json:{\"k\":\"v\"};null=elided",
 	"3.1.2|multipart/form-data|string-array-1|contentEncoding":               "admitted;value=application/octet-stream:x;null=error",
 	"3.1.2|multipart/form-data|string-array-1|plain":                         "admitted;value=text/plain:x;null=text/plain:",
