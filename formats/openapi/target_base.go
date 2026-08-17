@@ -41,17 +41,9 @@ import "strings"
 // `{name}` is not guessed at. A server URL that is not a URI leaves the target
 // undetermined, and §9.3 sends that to the `server` configuration point.
 //
-// Twinned with the TypeScript implementation in
+// Twinned byte-for-byte with the TypeScript implementation in
 // openapi-client/typescript/src/servers.ts and pinned by the shared case table
 // testdata/server-target-base-cases.json.
-//
-// `openapi-client/go/target_base.go` and
-// `openbindings-go/formats/openapi/target_base.go` are twins, identical apart
-// from the package clause and the three prose sentences that name the governing
-// authority: the openbindings-go copy cites the binding specification by
-// identifier and section, and the standalone copy names the incorporated RFCs
-// directly, because it must stay readable outside OpenBindings. Deliberate
-// divergence, not drift.
 
 // denotesTargetBase reports whether s is a URI under RFC 3986 that also
 // satisfies RFC 9110's host requirement for the http and https schemes.
