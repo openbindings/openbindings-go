@@ -223,6 +223,9 @@ func (n *rawRefSiblingNormalizer) normalizeResourceAt(data []byte, requested, re
 	if !changed {
 		return data, nil
 	}
+	// Not jsonImage's class: this re-encodes the ARTIFACT tree for the
+	// loader to re-parse. It is not an application value and never reaches a
+	// wire.
 	encoded, err := json.Marshal(root)
 	if err != nil {
 		return nil, fmt.Errorf("marshal normalized OpenAPI resource: %w", err)

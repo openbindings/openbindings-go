@@ -443,7 +443,7 @@ func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec stri
 	}
 	switch {
 	case isJSONMediaType(mt):
-		b, err := json.Marshal(value)
+		b, err := jsonImage(value)
 		if err != nil {
 			return "", fmt.Errorf("parameter %q: serialize as %s: %w", p.Name, mt, err)
 		}
@@ -778,6 +778,8 @@ func primitiveString(v any) (string, error) {
 	case json.Number:
 		return t.String(), nil
 	case float64, float32, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		// Not jsonImage's class: a JSON number's image contains no character
+		// any encoder may escape, so the two encoders cannot disagree here.
 		b, err := json.Marshal(t)
 		if err != nil {
 			return "", err
