@@ -66,32 +66,7 @@ func resolveServer(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Op
 		}
 	}
 	if len(servers) != 1 {
-		// Declared alternatives without a selection are missing consumer
-		// configuration, not source misconfiguration (ruled 2026-08-13,
-		// R1+R5): §9.3 calls this "the retryable context challenge above,
-		// never a terminal refusal", so the signal is a configRequired, which
-		// the twin's invoke path turns into a CONTEXT_REQUIRED challenge.
-		//
-		// The class is unobservable in THIS package — invocation delegates to
-		// openapi-client/go and the only caller here is synthesis coverage,
-		// which emits `configuration.server` on any error. It is twinned
-		// because the shared case table asserts the class in both engines, and
-		// because an untwinned line in twinned files is how two engines that
-		// are supposed to agree stop agreeing (filed as residue (b) of
-		// F-O1-11, closed here).
-		choices := make([]string, 0, len(servers))
-		for _, srv := range servers {
-			if srv != nil {
-				choices = append(choices, srv.URL)
-			}
-		}
-		return "", &configRequired{
-			point:       "server",
-			path:        "/url",
-			description: fmt.Sprintf("the effective server list has %d alternatives; configuration.server must select one (openbindings.openapi@1 OAPI-P-05)", len(servers)),
-			choices:     choices,
-			durable:     &serverChoiceDurable,
-		}
+		return "", fmt.Errorf("the effective server list has %d alternatives; configuration.server must select one (openbindings.openapi@1 OAPI-P-05)", len(servers))
 	}
 
 	substituted, err := substituteServerVariables(servers[0], nil)
@@ -253,23 +228,6 @@ func substituteServerVariables(srv *openapi3.Server, supplied map[string]string)
 // (target_base.go), which reads RFC 3986's URI production and RFC 9110's
 // non-empty-host requirement for the http and https schemes, rather than by
 // net/url. See that file for why the host parser was the wrong authority.
-//
-// THE OUTCOME CLASS IS A REFUSAL, NOT A RETRYABLE CHALLENGE. §9.3 partitions
-// the two ways the `server` point can go unanswered inside one sentence: "A
-// missing selection from a multi-entry list is the retryable context challenge
-// above, never a terminal refusal; an out-of-enum variable value, or a server
-// URL that cannot resolve to an absolute URL — the implied `/` with no base
-// URI, for instance — is a pre-dispatch refusal." OAPI-P-05 restates it
-// ("unresolvable targets refuse before dispatch"). This function is the second
-// half of that sentence, so it MUST NOT return a configRequired: that type is
-// the first half's signal, which the invoke path turns into a retryable
-// CONTEXT_REQUIRED challenge.
-//
-// In THIS package the class is unobservable — invocation delegates to
-// openapi-client/go, and the only caller here is synthesis coverage
-// (coverage.go), which emits `configuration.server` on any error and is
-// therefore unmoved. It is twinned anyway, because an untwinned line in twinned
-// files is how the two engines drift apart.
 func absolutizeServerURL(serverURL, sourceLocation string) (string, error) {
 	if denotesTargetBase(serverURL) {
 		return strings.TrimRight(serverURL, "/"), nil
@@ -284,7 +242,11 @@ func absolutizeServerURL(serverURL, sourceLocation string) (string, error) {
 			return strings.TrimRight(base.ResolveReference(ref).String(), "/"), nil
 		}
 	}
-	return "", fmt.Errorf("server URL %q cannot resolve to an absolute URL: supply a base URL at the server configuration point (openbindings.openapi@1 §9.3, OAPI-P-05)", serverURL)
+	return "", &configRequired{
+		point:       "server",
+		path:        "/url",
+		description: fmt.Sprintf("server URL %q cannot resolve to an absolute URL: supply a base URL at the server configuration point", serverURL),
+	}
 }
 
 // configRequired is the typed signal a resolution helper returns when a named
@@ -305,5 +267,3 @@ type configRequired struct {
 }
 
 func (c *configRequired) Error() string { return c.description }
-
-var serverChoiceDurable = true

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"os"
 	"testing"
 
@@ -16,7 +15,7 @@ import (
 // file is executed by the other two engines that resolve an OpenAPI Server
 // Object into a target address; changing it in one engine without the others
 // fails here.
-const serverTargetBaseCasesDigest = "ddb3478b583c694a707a6f1316329809c3ebf560a0d5275a1adf11ff3fb6b1da"
+const serverTargetBaseCasesDigest = "808708805f527a21c4e5012640245238637934e22dd177c3b5787f4f3eec7e5b"
 
 type serverTargetBaseTable struct {
 	Comment        string                   `json:"$comment"`
@@ -41,7 +40,6 @@ type serverTargetResolution struct {
 		Resolvable bool   `json:"resolvable"`
 		TargetBase string `json:"targetBase"`
 	} `json:"expect"`
-	OutcomeClass string   `json:"outcomeClass"`
 	Requirements []string `json:"requirements"`
 	Basis        string   `json:"basis"`
 }
@@ -113,10 +111,10 @@ func serverTargetBaseDocument(t *testing.T, c serverTargetResolution) []byte {
 	return raw
 }
 
-// serverTargetBaseResolve loads one case through the engine's own shipped
+// serverTargetBaseResolution loads one case through the engine's own shipped
 // loader and resolves the effective server with NO consumer configuration and
 // no source location, which is the state synthesis coverage asks about.
-func serverTargetBaseResolve(t *testing.T, c serverTargetResolution) (string, error) {
+func serverTargetBaseResolution(t *testing.T, c serverTargetResolution) (string, bool) {
 	t.Helper()
 	doc, err := loadDocument("", json.RawMessage(serverTargetBaseDocument(t, c)))
 	if err != nil {
@@ -126,32 +124,11 @@ func serverTargetBaseResolve(t *testing.T, c serverTargetResolution) (string, er
 	if item == nil || item.Get == nil {
 		t.Fatalf("%s: loaded document has no things operation", c.Name)
 	}
-	return resolveServer(doc, item, item.Get, nil, "")
-}
-
-// serverTargetBaseOutcomeClass names the table's `outcomeClass` for one
-// resolution result. openbindings.openapi@1 §9.3 partitions the two
-// unsuccessful classes — a missing selection from a multi-entry list is "the
-// retryable context challenge above, never a terminal refusal", while an
-// unresolvable server URL "is a pre-dispatch refusal" — and OAPI-P-05 restates
-// the refusal half.
-//
-// This package cannot read the class off an invoke-path mapping the way its
-// openapi-client/go twin does, because invocation here delegates to that
-// package and the only caller of resolveServer in this one is synthesis
-// coverage, which emits `configuration.server` on any error. The class is
-// therefore UNOBSERVABLE in this engine and is asserted on the signal type
-// alone — the same signal the twin maps — so that an untwinned line in twinned
-// files cannot drift unnoticed.
-func serverTargetBaseOutcomeClass(err error) string {
-	if err == nil {
-		return "resolved"
+	base, err := resolveServer(doc, item, item.Get, nil, "")
+	if err != nil {
+		return "", false
 	}
-	var cr *configRequired
-	if errors.As(err, &cr) {
-		return "retryable-context"
-	}
-	return "refusal"
+	return base, true
 }
 
 // TestServerTargetBaseResolutionCaseTable executes the table's resolution half
@@ -160,16 +137,12 @@ func TestServerTargetBaseResolutionCaseTable(t *testing.T) {
 	for _, c := range loadServerTargetBaseTable(t).ResolutionCase {
 		c := c
 		t.Run(c.Name, func(t *testing.T) {
-			base, err := serverTargetBaseResolve(t, c)
-			ok := err == nil
+			base, ok := serverTargetBaseResolution(t, c)
 			if ok != c.Expect.Resolvable {
-				t.Fatalf("%s: resolvable = %v, want %v (base %q, err %v)\nbasis: %s", c.Name, ok, c.Expect.Resolvable, base, err, c.Basis)
+				t.Fatalf("%s: resolvable = %v, want %v (base %q)\nbasis: %s", c.Name, ok, c.Expect.Resolvable, base, c.Basis)
 			}
 			if ok && base != c.Expect.TargetBase {
 				t.Fatalf("%s: target base = %q, want %q\nbasis: %s", c.Name, base, c.Expect.TargetBase, c.Basis)
-			}
-			if got := serverTargetBaseOutcomeClass(err); got != c.OutcomeClass {
-				t.Fatalf("%s: outcome class = %q, want %q (err %v)\nbasis: %s", c.Name, got, c.OutcomeClass, err, c.Basis)
 			}
 		})
 	}

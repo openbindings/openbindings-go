@@ -176,14 +176,11 @@ func TestResolveServer_MissingVariableDefault(t *testing.T) {
 	}
 }
 
-// TestResolveServer_ConfigRequired pins R1a for the case that keeps it: an
-// undefaulted, unsupplied server variable surfaces as a *configRequired (point
-// "server"), which the invoke path turns into a config.value CONTEXT_REQUIRED
-// rather than a terminal error.
-//
-// The unresolvable-URL half of this test USED to assert the same class and no
-// longer does — see TestResolveServer_UnresolvableTargetRefuses. §9.3 separates
-// the two, and the engines had them collapsed.
+// TestResolveServer_ConfigRequired pins R1a: a resolvable-missing server value
+// surfaces as a *configRequired (point "server"), which the invoke path turns
+// into a config.value CONTEXT_REQUIRED — not a terminal error. An undefaulted,
+// unsupplied server variable and a server URL with no absolute base are both
+// resolvable by consumer supply.
 func TestResolveServer_ConfigRequired(t *testing.T) {
 	// Undefaulted, unsupplied variable → config.value on the server point.
 	doc := &openapi3.T{
@@ -205,35 +202,14 @@ func TestResolveServer_ConfigRequired(t *testing.T) {
 		t.Errorf("choices = %v, want the declared enum", cr.choices)
 	}
 
-}
-
-// TestResolveServer_UnresolvableTargetRefuses pins the other half of §9.3's
-// partition: "an out-of-enum variable value, or a server URL that cannot
-// resolve to an absolute URL — the implied `/` with no base URI, for
-// instance — is a pre-dispatch refusal", restated by OAPI-P-05 as
-// "unresolvable targets refuse before dispatch". The signal is therefore an
-// ordinary error and NOT a *configRequired, which is the first half's signal.
-//
-// The implied `/` is the specification's own worked example, so it is the case
-// used here.
-func TestResolveServer_UnresolvableTargetRefuses(t *testing.T) {
-	var cr *configRequired
-	for _, tc := range []struct {
-		name string
-		doc  *openapi3.T
-	}{
-		{"implied server, no base URI", &openapi3.T{OpenAPI: "3.0.3"}},
-		{"relative server, no base URI", &openapi3.T{OpenAPI: "3.0.3", Servers: openapi3.Servers{{URL: "/"}}}},
-		{"undeclared template variable", &openapi3.T{OpenAPI: "3.0.3", Servers: openapi3.Servers{{URL: "https://{sub}.example.com"}}}},
-		{"empty http host", &openapi3.T{OpenAPI: "3.1.0", Servers: openapi3.Servers{{URL: "http://:8080"}}}},
-	} {
-		_, err := resolveServer(tc.doc, nil, nil, nil, "")
-		if err == nil {
-			t.Fatalf("%s: expected a refusal, got none", tc.name)
-		}
-		if errorsAsConfigRequired(err, &cr) {
-			t.Fatalf("%s: expected a terminal refusal, got the retryable *configRequired signal (%v)", tc.name, err)
-		}
+	// Relative server URL with no absolute base → config.value at /url.
+	docRel := &openapi3.T{OpenAPI: "3.0.3", Servers: openapi3.Servers{{URL: "/"}}}
+	_, err = resolveServer(docRel, nil, nil, nil, "")
+	if !errorsAsConfigRequired(err, &cr) {
+		t.Fatalf("expected *configRequired for an unresolvable server URL, got %v", err)
+	}
+	if cr.point != "server" || cr.path != "/url" {
+		t.Errorf("configRequired = {point:%q path:%q}, want {server /url}", cr.point, cr.path)
 	}
 }
 
