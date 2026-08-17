@@ -744,8 +744,6 @@ func schemaAssertsNothing(schema *openapi3.Schema) bool {
 	if literal, boolean := booleanSchemaLiteral(schema); boolean {
 		return literal
 	}
-	// Not jsonImage's class: this round-trips a typed schema into a generic
-	// tree and re-parses it below. The bytes never reach a wire.
 	encoded, err := json.Marshal(schema)
 	if err != nil {
 		return false
@@ -1227,8 +1225,6 @@ func booleanSchemaLiteral(schema *openapi3.Schema) (bool, bool) {
 	if schema == nil {
 		return false, false
 	}
-	// Not jsonImage's class: this round-trips a typed schema into a generic
-	// tree and re-parses it below. The bytes never reach a wire.
 	encoded, err := json.Marshal(schema)
 	if err != nil {
 		return false, false
@@ -1528,7 +1524,7 @@ func buildRequestBody(doc *openapi3.T, plan *bodyPlan, routed *routedInput) (io.
 				// no body rides the wire.
 				return nil, "", nil
 			}
-			b, err := jsonImage(routed.bodyValue)
+			b, err := json.Marshal(routed.bodyValue)
 			if err != nil {
 				return nil, "", err
 			}
@@ -1540,7 +1536,7 @@ func buildRequestBody(doc *openapi3.T, plan *bodyPlan, routed *routedInput) (io.
 			}
 			return nil, "", nil
 		}
-		b, err := jsonImage(routed.bodyFields)
+		b, err := json.Marshal(routed.bodyFields)
 		if err != nil {
 			return nil, "", err
 		}
@@ -2187,7 +2183,7 @@ func writeMultipartPart(writer *multipart.Writer, name string, value any, schema
 			}
 			body = []byte(s)
 		} else if isJSONMediaType(ct) {
-			b, err := jsonImage(value)
+			b, err := json.Marshal(value)
 			if err != nil {
 				return fmt.Errorf("part %q: %w", name, err)
 			}
@@ -2197,7 +2193,7 @@ func writeMultipartPart(writer *multipart.Writer, name string, value any, schema
 		} else if s, err := primitiveString(value); err == nil {
 			body = []byte(s)
 		} else {
-			b, err := jsonImage(value)
+			b, err := json.Marshal(value)
 			if err != nil {
 				return fmt.Errorf("part %q: %w", name, err)
 			}
@@ -2219,7 +2215,7 @@ func writeMultipartPart(writer *multipart.Writer, name string, value any, schema
 	// Per-type defaults: objects (and undeclared complex values) ride as
 	// application/json parts; primitives as plain form fields.
 	if isComplexPartValue(value, schema) {
-		b, err := jsonImage(value)
+		b, err := json.Marshal(value)
 		if err != nil {
 			return fmt.Errorf("part %q: %w", name, err)
 		}
@@ -2294,7 +2290,7 @@ func writeRevision3MultipartPart(writer *multipart.Writer, name string, value an
 		}
 		body, err = canonicalBase64BoundaryBytes(name, text)
 	case revision3PropertyJSON:
-		body, err = jsonImage(value)
+		body, err = json.Marshal(value)
 	case revision3PropertyEncoded31:
 		text, ok := value.(string)
 		if !ok {
@@ -2633,7 +2629,7 @@ func revision3PropertyBytes(name string, value any, schema *openapi3.Schema, con
 	}
 	switch mode {
 	case revision3PropertyJSON:
-		return jsonImage(value)
+		return json.Marshal(value)
 	case revision3PropertyRaw30:
 		text, ok := value.(string)
 		if !ok {

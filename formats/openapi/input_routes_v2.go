@@ -176,7 +176,7 @@ func (r abstractInputRoutes) transformExpressionFor(bindingSpec string) string {
 		// route set and remains byte-for-byte aligned across SDKs.
 		parameters = []abstractParameterRoute{}
 	}
-	params, _ := jsonImage(parameters)
+	params, _ := json.Marshal(parameters)
 	body := map[string]any{}
 	if len(r.bodyFields) > 0 {
 		body["properties"] = r.bodyFields
@@ -184,7 +184,7 @@ func (r abstractInputRoutes) transformExpressionFor(bindingSpec string) string {
 	if r.wholeBodyField != "" {
 		body["whole"] = r.wholeBodyField
 	}
-	bodyJSON, _ := jsonImage(body)
+	bodyJSON, _ := json.Marshal(body)
 	return fmt.Sprintf(`[{"$openbindings":"%s","value":$,"parameters":%s,"body":%s}]`,
 		bindingSpec, params, bodyJSON)
 }
@@ -363,8 +363,6 @@ func toStringAnyMap(value any) (map[string]any, bool) {
 	if m, ok := value.(map[string]any); ok {
 		return m, true
 	}
-	// Not jsonImage's class: marshal-then-unmarshal, re-parsed on the next
-	// line. Escaping is transparent through the round trip.
 	b, err := json.Marshal(value)
 	if err != nil {
 		return nil, false
@@ -383,8 +381,6 @@ func toAnySlice(value any) ([]any, bool) {
 	if items, ok := value.([]any); ok {
 		return items, true
 	}
-	// Not jsonImage's class: marshal-then-unmarshal, re-parsed on the next
-	// line. Escaping is transparent through the round trip.
 	b, err := json.Marshal(value)
 	if err != nil {
 		return nil, false
