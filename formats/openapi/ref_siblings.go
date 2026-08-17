@@ -2,8 +2,10 @@ package openapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,6 +85,24 @@ func (n *rawRefSiblingNormalizer) normalizeResourceAt(data []byte, requested, re
 		return data, nil
 	}
 
+	// Scalars resolve by YAML 1.2.2 §10.3.2, not by the incumbent decoder's
+	// YAML 1.1 leftovers (yaml_scalars.go). The conformant tree replaces the
+	// incumbent one only where the two disagree, and the disagreement is what
+	// makes this pass re-emit the resource as JSON below — which is also what
+	// keeps kin-openapi's own decode of the ORIGINAL bytes from re-introducing
+	// the divergence further down.
+	scalarsChanged := false
+	conformant, scalarErr := resolveScalarsConformantly(data)
+	switch {
+	case errors.Is(scalarErr, errScalarResolutionUnavailable):
+		// The incumbent tree stands; its decoder owns the diagnostic.
+	case scalarErr != nil:
+		return nil, scalarErr
+	case !reflect.DeepEqual(root, conformant):
+		root = conformant
+		scalarsChanged = true
+	}
+
 	object, _ := root.(map[string]any)
 	version := ""
 	if object != nil {
@@ -106,7 +126,7 @@ func (n *rawRefSiblingNormalizer) normalizeResourceAt(data []byte, requested, re
 			}
 		}
 	}
-	changed := false
+	changed := scalarsChanged
 	if semantics == rawRefSemanticsCompose {
 		var lifted bool
 		var err error

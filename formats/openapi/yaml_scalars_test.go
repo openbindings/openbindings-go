@@ -49,35 +49,63 @@ func TestSynthesizeInterface_YAMLCoreScalarsAtTheBoundary(t *testing.T) {
 	}
 }
 
-// Three spellings this decoder resolves by YAML 1.1 rules the accepted OAS
-// editions do not admit, recorded here so the divergence is named rather
-// than absent. Under YAML 1.2.2 §10.3.2 a leading zero is decimal
-// ("[-+]? [0-9]+", base 10), the underscore-bearing and 0b-prefixed forms
-// match no pattern at all and are strings, and the TypeScript twin agrees
-// with the authority on the first two. The decoder is kin-openapi's, whose
-// DecodeOpts exposes only DisableTimestamps, so converging costs a
-// conformant YAML-to-JSON layer of our own in both twins; that is filed as
-// F-O1-7 in corpus-lab/OPENAPI-RUNTIME.md rather than half-fixed here,
-// since fixing one twin alone would trade a conformance gap for a parity
-// gap. No corpus specimen's emitted OBI depends on any of the three.
-func TestSynthesizeInterface_YAMLScalarKnownNonConformance(t *testing.T) {
-	known := map[string]struct{ emitted, authority string }{
-		"017":   {emitted: "15", authority: "17 (base 10)"},
-		"1_000": {emitted: "1000", authority: `"1_000" (matches no pattern)`},
-		"0b101": {emitted: "5", authority: `"0b101" (matches no pattern)`},
+// The spellings this engine used to resolve by YAML 1.1 rules the accepted
+// OAS editions do not admit — F-O1-7, closed. Under YAML 1.2.2 §10.3.2 a
+// leading zero is a decimal digit ("[-+]? [0-9]+", base 10), and the
+// underscore-bearing and 0b-prefixed forms match no pattern at all and are
+// the strings they spell. The decode is kin-openapi's, whose DecodeOpts
+// exposes only DisableTimestamps, so the conformant answer comes from this
+// engine's own scalar-resolution layer (yaml_scalars.go) rather than from
+// the decoder. These pin the value at the EMITTED boundary, which the
+// shared case table cannot reach: it stops at the loaded document.
+func TestSynthesizeInterface_YAMLScalarConvergedOnCoreResolution(t *testing.T) {
+	converged := map[string]string{
+		"017":     "17",
+		"-017":    "-17",
+		"0120":    "120",
+		"010":     "10",
+		"1_000":   `"1_000"`,
+		"1_000.5": `"1_000.5"`,
+		"0b101":   `"0b101"`,
+		"-0b101":  `"-0b101"`,
+		"0x_1F":   `"0x_1F"`,
+		"-0x1F":   `"-0x1F"`,
+		"-0o17":   `"-0o17"`,
+		"-.5":     "-0.5",
 	}
-	for spelling, want := range known {
+	for spelling, want := range converged {
 		t.Run(spelling, func(t *testing.T) {
-			tree, err := synthesizeYAMLScalarDocument(t, spelling)
-			if err != nil {
-				t.Fatalf("synthesize %s: %v", spelling, err)
-			}
-			if got := yamlScalarExample(t, tree); got != want.emitted {
-				t.Fatalf("example %s emitted %s, want the recorded %s (YAML 1.2.2 §10.3.2 says %s)",
-					spelling, got, want.emitted, want.authority)
-			}
+			assertYAMLScalarExample(t, spelling, want)
 		})
 	}
+}
+
+// A magnitude the double domain cannot hold keeps its source text. §10.3.2
+// resolves it to a float, but §10.2.1.4 says "The supported range and
+// accuracy depends on the implementation", which makes refusing, carrying
+// ±Inf and clamping all permitted — a choice, not a deduction. Both twins
+// keep the text, and the question is filed as F-O1-15. Underflow is not in
+// that class and resolves to 0.
+func TestSynthesizeInterface_YAMLScalarUnrepresentableMagnitude(t *testing.T) {
+	for spelling, want := range map[string]string{
+		"1e400":        `"1e400"`,
+		"600e27371700": `"600e27371700"`,
+		"1e-400":       "0",
+	} {
+		t.Run(spelling, func(t *testing.T) {
+			assertYAMLScalarExample(t, spelling, want)
+		})
+	}
+}
+
+// `<<` matches no row in §10.3.2's table, so it is the string it spells
+// wherever it appears — and YAML 1.1's merge type, which would otherwise
+// give it meaning in key position, is outside the tag set OAS §4.2 permits.
+// The KEY-position half of that (a `<<` entry merges nothing) is pinned by
+// the shared twin case table and by portable scenario OAPI-SS-25; this pins
+// the value crossing the emitted boundary.
+func TestSynthesizeInterface_YAMLMergeSpellingIsAString(t *testing.T) {
+	assertYAMLScalarExample(t, "<<", `"\u003c\u003c"`)
 }
 
 // ±.inf and .nan resolve to floats JSON cannot spell. The operation value
