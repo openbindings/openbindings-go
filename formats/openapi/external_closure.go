@@ -52,6 +52,17 @@ type externalComposition struct {
 	kept       map[string]*retainedPointers
 	pending    []compositionTarget
 	seen       map[compositionTarget]bool
+
+	// The artifact's declared OAS edition, and the reference-traversal verdict
+	// it decides. `reference_traversal.go` carries the rule and its authorities:
+	// a `$ref` standing in a fragment's path is resolved on the 3.0 line and
+	// makes the reference unresolvable on the 3.1 line. This pass already walks
+	// every composed pointer over the raw resource trees, so it is where that
+	// question is asked; the load lane reads `refusal` and reports it.
+	edition          string
+	entryScanned     bool
+	traversalRefusal error
+	references       map[compositionTarget]string
 }
 
 // compositionTarget is one composed pointer into one resource. The fragment is
@@ -67,13 +78,14 @@ func newExternalComposition(
 	join func(*url.URL, *url.URL) *url.URL,
 ) *externalComposition {
 	return &externalComposition{
-		read:      read,
-		join:      join,
-		resources: map[string]*url.URL{},
-		trees:     map[string]any{},
-		parsed:    map[string]bool{},
-		kept:      map[string]*retainedPointers{},
-		seen:      map[compositionTarget]bool{},
+		read:       read,
+		join:       join,
+		resources:  map[string]*url.URL{},
+		trees:      map[string]any{},
+		parsed:     map[string]bool{},
+		kept:       map[string]*retainedPointers{},
+		seen:       map[compositionTarget]bool{},
+		references: map[compositionTarget]string{},
 	}
 }
 
@@ -91,40 +103,88 @@ func (c *externalComposition) setEntry(entry *url.URL, data []byte) {
 	c.entryData = data
 }
 
-// discover walks the entry document's raw bytes and every composed value
-// reachable from them, recording which pointers of which external resources the
-// artifact composes. Read and parse failures are silent here: this pass decides
-// only what to RETAIN, and the typed loader still reports whatever it cannot
-// read or resolve when it reaches the same reference.
+// scanEntry reads the entry document's own raw tree: it records the artifact's
+// declared edition, enqueues every external value the entry composes, and
+// decides reference traversal for the entry's own same-resource references.
 //
-// It runs at most once, and only when the loader actually reaches outside the
-// entry document. That laziness is not an optimization detail: an artifact the
-// loader refuses before following any reference — an edition it does not
-// accept, a component map it cannot even unmarshal — must not have its
-// reference closure retrieved on its way to that refusal.
-func (c *externalComposition) discover() {
-	if c == nil || c.discovered {
+// It RETRIEVES NOTHING. Everything it enqueues waits for `discover`, so an
+// artifact the loader refuses before following any reference does not have its
+// closure fetched on the way to that refusal — the laziness a corpus specimen
+// bought at 38 seconds. The entry's own bytes are already in hand at both call
+// sites, so parsing them here is the only cost, and it buys the same-resource
+// half of the traversal question, which no later pass sees.
+//
+// Read and parse failures are silent: this pass decides what to RETAIN and
+// whether one specific reference is unresolvable, and the typed loader still
+// reports whatever it cannot read, parse or resolve when it reaches it.
+func (c *externalComposition) scanEntry(data []byte) {
+	if c == nil || c.entryScanned {
 		return
 	}
-	c.discovered = true
-	data := c.entryData
+	c.entryScanned = true
 	if data == nil && c.entry != nil && c.read != nil {
 		// Already read by the loader, so this is a cache hit, not a retrieval.
 		data, _ = c.read(c.entry)
 	}
-	if !mayReferenceAnotherResource(data) {
+	if !mayReferenceAnotherResource(data) && !mayCarryAReference(data) {
 		return
 	}
 	tree, ok := parseRawResource(data)
 	if !ok {
 		return
 	}
+	if object, isObject := tree.(map[string]any); isObject {
+		c.edition, _ = object["openapi"].(string)
+	}
+	c.trees[c.entryKey] = tree
+	c.parsed[c.entryKey] = true
 	c.scan(tree, c.entryKey, c.entry)
+}
+
+// discover drains everything the entry document reaches, recording which
+// pointers of which external resources the artifact composes.
+//
+// It runs at most once, and only when the loader actually reaches outside the
+// entry document, for the retrieval reason stated on `scanEntry`.
+func (c *externalComposition) discover() {
+	if c == nil || c.discovered {
+		return
+	}
+	c.discovered = true
+	c.scanEntry(nil)
 	for len(c.pending) > 0 {
 		target := c.pending[0]
 		c.pending = c.pending[1:]
 		c.compose(target)
 	}
+}
+
+// refusal reports a reference this pass found unresolvable. Today that is the
+// 3.1-line pointer-below-a-reference rule and nothing else; the load lane calls
+// it after every served resource and at the embedded-content entry.
+func (c *externalComposition) refusal() error {
+	if c == nil {
+		return nil
+	}
+	return c.traversalRefusal
+}
+
+// checkTraversal applies the edition-split rule of `reference_traversal.go` to
+// one composed pointer. `reference` is the artifact's own `$ref` string, kept
+// for the diagnostic; `tree` is the referenced document's raw contents.
+//
+// The first refusal wins and is not overwritten: a later reference's verdict
+// says nothing more useful, and holding the first keeps the diagnostic
+// deterministic under the queue's own order.
+func (c *externalComposition) checkTraversal(reference, fragment string, tree any) {
+	if c == nil || c.traversalRefusal != nil || openAPIFollowsPointerBelowReference(c.edition) {
+		return
+	}
+	standing, token, below := pointerBelowReference(tree, fragment)
+	if !below {
+		return
+	}
+	c.traversalRefusal = pointerBelowReferenceRefusal(reference, c.edition, token, standing)
 }
 
 func (c *externalComposition) compose(target compositionTarget) {
@@ -154,21 +214,19 @@ func (c *externalComposition) compose(target compositionTarget) {
 	}
 
 	retained.add(target.fragment)
+	// Whether a pointer may run BELOW a reference at all is decided by the
+	// artifact's own edition line, not by this implementation: the 3.0 line
+	// processes `$ref` as per JSON Reference and follows, the 3.1 line makes the
+	// fragment a JSON-Pointer over the referenced document's literal contents
+	// and the reference is unresolvable. `reference_traversal.go` carries both
+	// branches with their authorities.
+	c.checkTraversal(c.references[target], target.fragment, tree)
 	// A pointer that stops short — because a reference stands between it and
-	// its target, or because it names nothing — still composes what it did
-	// reach: the reference standing in the way is itself part of the closure,
-	// and a pointer that names nothing leaves the loader to say so.
-	//
-	// That a pointer may run BELOW a reference at all is THIS IMPLEMENTATION'S
-	// CONVENTION, not an authority answer. RFC 6901 §4 evaluates each token
-	// "against the document's contents", under which the position denotes
-	// nothing; JSON Reference §4 says an implementation "MAY choose to replace
-	// the reference with the referenced value", after which it denotes the
-	// reached value. Neither text sequences the two. kin-openapi drills the
-	// RESOLVED typed value and did so before pointer scope existed, so the
-	// behavior is preserved rather than decided here, and the TypeScript twin
-	// pins the same convention. Open item: corpus-lab's OPENAPI-RUNTIME.md,
-	// "Pointer-scoped external composition".
+	// its target on the following branch, or because it names nothing — still
+	// composes what it did reach: the reference standing in the way is itself
+	// part of the closure, and a pointer that names nothing leaves the loader to
+	// say so. Retention is unchanged on the refusing branch, so the loader's own
+	// diagnostics stay available for every reference that is not this one.
 	if node, ok := rawPointerReach(tree, target.fragment); ok {
 		c.scan(node, target.key, resource)
 	}
@@ -188,8 +246,13 @@ func (c *externalComposition) scan(node any, resourceKey string, resource *url.U
 		}
 		if strings.HasPrefix(ref, "#") {
 			if resourceKey != c.entryKey {
-				c.enqueue(resourceKey, resource, parsed.Fragment)
+				c.enqueue(resourceKey, resource, parsed.Fragment, ref)
+				return
 			}
+			// The entry document is composed whole and needs no retention, but
+			// its own same-resource references ask the traversal question like
+			// any other, and no later pass revisits them.
+			c.checkTraversal(ref, parsed.Fragment, c.trees[c.entryKey])
 			return
 		}
 		resolved := c.resolvePath(resource, parsed)
@@ -199,14 +262,22 @@ func (c *externalComposition) scan(node any, resourceKey string, resource *url.U
 		key := artifactResourceKey(resolved)
 		if key == "" || key == c.entryKey {
 			// The entry document is composed whole and was scanned whole; a
-			// reference back into it adds nothing to retain.
+			// reference back into it adds nothing to retain — but it addresses
+			// the entry's contents, so it asks the traversal question there.
+			if key == c.entryKey {
+				c.checkTraversal(ref, parsed.Fragment, c.trees[c.entryKey])
+			}
 			return
 		}
-		c.enqueue(key, resolved, parsed.Fragment)
+		c.enqueue(key, resolved, parsed.Fragment, ref)
 	})
 }
 
-func (c *externalComposition) enqueue(key string, resource *url.URL, fragment string) {
+// enqueue records one composed pointer. `reference` is the artifact's own `$ref`
+// string, kept only for a diagnostic: two spellings can address one target, so
+// deduplication stays keyed on the resource and fragment and the first spelling
+// seen is the one a refusal names.
+func (c *externalComposition) enqueue(key string, resource *url.URL, fragment, reference string) {
 	if _, known := c.resources[key]; !known && resource != nil {
 		c.resources[key] = cloneURL(resource)
 	}
@@ -215,6 +286,7 @@ func (c *externalComposition) enqueue(key string, resource *url.URL, fragment st
 		return
 	}
 	c.seen[target] = true
+	c.references[target] = reference
 	c.pending = append(c.pending, target)
 }
 
@@ -275,6 +347,9 @@ func (c *externalComposition) prune(resource *url.URL, data []byte) []byte {
 	}
 	key := artifactResourceKey(resource)
 	if key == c.entryKey {
+		// The entry is never pruned, but its bytes are in hand here and nowhere
+		// else on this lane, so this is where its own tree is read.
+		c.scanEntry(data)
 		return data
 	}
 	// The loader has left the entry document, so the closure is now worth
@@ -578,6 +653,13 @@ func parseRawResource(data []byte) (any, bool) {
 		return nil, false
 	}
 	return root, true
+}
+
+// mayCarryAReference is the byte-level pre-check for the traversal question,
+// which a single-file artifact asks too: a document with no `$ref` anywhere has
+// no fragment to evaluate against anything.
+func mayCarryAReference(data []byte) bool {
+	return bytes.Contains(data, []byte("$ref"))
 }
 
 // mayReferenceAnotherResource is a byte-level pre-check that skips the closure
