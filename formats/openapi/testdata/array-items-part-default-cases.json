@@ -674,8 +674,8 @@
         1
       ],
       "derivedFrom": "items",
-      "expect": "admitted;emit=text/plain:a&text/plain:1",
-      "basis": "OAS 3.1.1 Encoding Object, contentType default table: 'array | n/a | according to the type of the items schema'. An unconstrained items schema asserts nothing. The 3.1 table's row for it is 'absent | n/a | application/octet-stream', and this candidate defines no JSON-to-octet boundary for a declaration that made no claim, so `openbindings.openapi@1` \u00a79.2's stated convention applies: the supplied value's JSON application type supplies the corresponding OAS per-type default, per element."
+      "expect": "refused",
+      "basis": "OAS 3.1.1 Encoding Object, contentType default table: 'array | n/a | according to the type of the items schema'. The items schema declares no `type`, and the same table's FIRST row states that part's default as 'absent | n/a | application/octet-stream'. `openbindings.openapi@1` defines no JSON-to-octet part boundary, so the part refuses before dispatch. Until 2026-08-17 this cell read `admitted;emit=text/plain:a&text/plain:1`, on the reading that an unconstrained items schema asserts nothing and \u00a79.2's convention therefore answered; that reading displaced a stated authority row and was withdrawn. The convention now covers the 3.0 line alone, where no stated row reaches a declaration carrying no `type`."
     },
     {
       "name": "3.1.1|multipart|string-base64",

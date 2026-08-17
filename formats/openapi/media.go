@@ -983,10 +983,35 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 		declared, ok = defaultRevision3PartContentType(schema, is30)
 		if !ok {
 			if partSchemaValueDispatches(schema, map[*openapi3.Schema]bool{}) {
-				// §9.2: an unconstrained property schema's OAS per-type part
-				// default is keyed by the supplied value's JSON application
-				// type; the concrete part media type materializes at
-				// invocation. The zero parsedMediaType is the value-dispatch
+				if !is30 {
+					if schema.Type != nil {
+						// `type` is present but names no type at all. No
+						// accepted 3.1 default contentType row reaches that —
+						// 3.1.1 and 3.1.2 key their first row on `type` being
+						// ABSENT, and 3.1.0's catch-all keys on the property
+						// type it does not have — and JSON Schema 2020-12's
+						// own meta-schema requires an array-valued `type` to
+						// carry at least one member, so the declaration admits
+						// no instance.
+						return parsedMediaType{}, fmt.Errorf("part schema declares an empty `type`, which no accepted OAS 3.1 default part Content-Type row reaches and which admits no instance; no part carriage is defined")
+					}
+					// §9.2, per edition: every accepted 3.1 edition states a
+					// default for a part schema declaring no `type`, and all
+					// three state application/octet-stream. 3.1.1 and 3.1.2
+					// tabulate it as the Encoding Object default table's
+					// `type`-absent row; 3.1.0 reaches it through the total
+					// catch-all closing its prose enumeration ("for all other
+					// cases the default is application/octet-stream"). This
+					// revision defines no JSON-to-octet part boundary, so the
+					// part refuses rather than taking the 3.0-line convention.
+					return parsedMediaType{}, fmt.Errorf("a part schema declaring no `type` defaults to application/octet-stream on every accepted OAS 3.1 edition, but this binding revision defines no JSON-to-octet part boundary")
+				}
+				// §9.2, this specification's own convention, covering the 3.0
+				// line alone: every 3.0 default row is keyed on a declared
+				// `type` and none reaches a declaration carrying none, so the
+				// supplied value's JSON application type selects the per-type
+				// part default. The concrete part media type materializes at
+				// invocation; the zero parsedMediaType is the value-dispatch
 				// signal recognized by revision3PropertyCarriage.
 				return parsedMediaType{}, nil
 			}

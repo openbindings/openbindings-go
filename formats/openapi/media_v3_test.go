@@ -1079,8 +1079,15 @@ func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
 // admitted, and the OAS per-type part default is keyed by the supplied
 // value's JSON application type — string as text/plain, object as
 // application/json. JSON null names no per-type default and refuses.
+// §9.2's type-absent convention covers the 3.0 line alone: no accepted 3.0
+// edition states a default contentType row that reaches a declaration with no
+// `type`, so this specification's own convention keys the part default from
+// the supplied value's JSON application type. This test read `3.1.2` until
+// 2026-08-17, where the Encoding Object's own default table states
+// application/octet-stream for that part; TestRevision3MultipartTypeAbsentPartRefusesOn31
+// now pins that half.
 func TestRevision3MultipartUnconstrainedPartUsesValueTypedDefaults(t *testing.T) {
-	doc := &openapi3.T{OpenAPI: "3.1.2"}
+	doc := &openapi3.T{OpenAPI: "3.0.4"}
 	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
 		Type: &openapi3.Types{"object"},
 		Properties: openapi3.Schemas{
@@ -1121,6 +1128,28 @@ func TestRevision3MultipartUnconstrainedPartUsesValueTypedDefaults(t *testing.T)
 
 	if _, _, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": nil}, BindingSpec); err == nil || !strings.Contains(err.Error(), "JSON null") {
 		t.Fatalf("null-valued unconstrained part error = %v", err)
+	}
+}
+
+// TestRevision3MultipartTypeAbsentPartRefusesOn31 pins the other half of the
+// edition split. Every accepted 3.1 edition states application/octet-stream
+// for a part whose `type` is absent -- 3.1.1 and 3.1.2 in the Encoding
+// Object default table's first row, 3.1.0 through the total catch-all closing
+// its prose enumeration -- and this revision defines no JSON-to-octet part
+// boundary, so the part refuses before dispatch on all three.
+func TestRevision3MultipartTypeAbsentPartRefusesOn31(t *testing.T) {
+	for _, edition := range []string{"3.1.0", "3.1.1", "3.1.2"} {
+		doc := &openapi3.T{OpenAPI: edition}
+		media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
+			Type: &openapi3.Types{"object"},
+			Properties: openapi3.Schemas{
+				"file": {Value: &openapi3.Schema{Description: "Profile picture file"}},
+			},
+		}}}
+		err := validateRevision3MultipartMedia(doc, media)
+		if err == nil || !strings.Contains(err.Error(), "application/octet-stream") {
+			t.Fatalf("%s type-absent part admission = %v", edition, err)
+		}
 	}
 }
 
@@ -1194,12 +1223,15 @@ func TestRevision3MultipartNullableChoiceCollapsesToBranchCarriage(t *testing.T)
 // The urlencoded lane observes the same §9.2 rules: unconstrained
 // properties take value-typed per-type defaults and a nullable-choice
 // property's JSON null elides the field.
-func TestRevision3URLEncodedUnconstrainedAndNullableProperties(t *testing.T) {
+// The nullable-choice collapse is read under the 3.1 line, which is where a
+// {"type": "null"} branch belongs; the type-absent field beside it was moved
+// to the 3.0 line on 2026-08-17, because every accepted 3.1 edition states
+// application/octet-stream for a part declaring no `type`.
+func TestRevision3URLEncodedNullableChoiceProperties(t *testing.T) {
 	doc := &openapi3.T{OpenAPI: "3.1.2"}
 	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
 		Type: &openapi3.Types{"object"},
 		Properties: openapi3.Schemas{
-			"note": {Value: &openapi3.Schema{Description: "free-form"}},
 			"tag": {Value: &openapi3.Schema{AnyOf: openapi3.SchemaRefs{
 				{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
 				{Value: &openapi3.Schema{Type: &openapi3.Types{"null"}}},
@@ -1209,14 +1241,40 @@ func TestRevision3URLEncodedUnconstrainedAndNullableProperties(t *testing.T) {
 	if err := validateRevision3URLEncodedMedia(doc, media); err != nil {
 		t.Fatalf("urlencoded admission = %v", err)
 	}
-
-	body, err := buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": "x y", "tag": "t1"}, BindingSpec)
-	if err != nil || body != "note=x+y&tag=t1" {
+	body, err := buildURLEncodedBodyForRevision(doc, media, map[string]any{"tag": "t1"}, BindingSpec)
+	if err != nil || body != "tag=t1" {
 		t.Fatalf("urlencoded body = %q, %v", body, err)
 	}
-	body, err = buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": map[string]any{"a": float64(1)}, "tag": nil}, BindingSpec)
+	if body, err = buildURLEncodedBodyForRevision(doc, media, map[string]any{"tag": nil}, BindingSpec); err != nil || body != "" {
+		t.Fatalf("elided null = %q, %v", body, err)
+	}
+}
+
+// §9.2's type-absent convention, on the line that has it.
+func TestRevision3URLEncodedTypeAbsentPropertyOn30(t *testing.T) {
+	doc := &openapi3.T{OpenAPI: "3.0.4"}
+	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: openapi3.Schemas{
+			"note": {Value: &openapi3.Schema{Description: "free-form"}},
+		},
+	}}}
+	if err := validateRevision3URLEncodedMedia(doc, media); err != nil {
+		t.Fatalf("urlencoded admission = %v", err)
+	}
+	body, err := buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": "x y"}, BindingSpec)
+	if err != nil || body != "note=x+y" {
+		t.Fatalf("urlencoded body = %q, %v", body, err)
+	}
+	body, err = buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": map[string]any{"a": float64(1)}}, BindingSpec)
 	if err != nil || body != "note=%7B%22a%22%3A1%7D" {
-		t.Fatalf("object-valued unconstrained field with elided null = %q, %v", body, err)
+		t.Fatalf("object-valued type-absent field = %q, %v", body, err)
+	}
+	for _, edition := range []string{"3.1.0", "3.1.1", "3.1.2"} {
+		refused := &openapi3.T{OpenAPI: edition}
+		if err := validateRevision3URLEncodedMedia(refused, media); err == nil || !strings.Contains(err.Error(), "application/octet-stream") {
+			t.Fatalf("%s type-absent urlencoded property admission = %v", edition, err)
+		}
 	}
 }
 
