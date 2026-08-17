@@ -90,9 +90,14 @@ import (
 // RFC 6901 §7 delegates a pointer application's error handling to that
 // application. §7's path-item rule is unchanged in both branches.
 //
-// This file is a byte-for-byte twin of `openapi-client/go/reference_traversal.go`
-// apart from its package clause, and states the same rule as
-// `openapi-client/typescript/src/internal/deref.ts`.
+// `openapi-client/go/reference_traversal.go` and
+// `openbindings-go/formats/openapi/reference_traversal.go` are twins, identical
+// apart from the package clause and the edition-acceptance sentence above: the
+// openbindings-go copy attributes the accepted edition set to the governing
+// binding specification by identifier and section, and the standalone copy
+// states it as this package's own accepted set, because it must stay readable
+// outside OpenBindings. Deliberate divergence, not drift. Both state the same
+// rule as `openapi-client/typescript/src/internal/deref.ts`.
 
 // openAPIFollowsPointerBelowReference reports whether the artifact's declared
 // OAS edition resolves a `$ref` standing in a fragment's path and continues

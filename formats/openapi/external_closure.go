@@ -15,14 +15,32 @@ import (
 // externalComposition narrows external reference composition to the used
 // closure.
 //
-// `openbindings.openapi@1` §6 ("Reference scope") states the rule: a reference
-// that leaves the current document composes the value at the referenced JSON
-// Pointer together with that value's transitive closure of references, and
-// nothing else — so a defect OUTSIDE the composed closure does not make the
-// referencing artifact unresolvable. That is the incorporated authority's own
-// answer: the OAS defines the Reference Object by JSON Reference, which denotes
-// the value a pointer identifies and says nothing about the document that value
-// was found in.
+// Reference scope. A reference that leaves the current document composes the
+// value at the referenced JSON Pointer together with that value's transitive
+// closure of references, and nothing else — so a defect OUTSIDE the composed
+// closure does not make the referencing artifact unresolvable. The referencing
+// authorities decide this, not this package: JSON Reference
+// (draft-pbryan-zyp-json-ref-03) §3 says the `$ref` string "identifies the
+// location of the JSON value being referenced" and §4 that resolution "SHOULD
+// yield the referenced JSON value", while RFC 6901 §4 evaluates a pointer to
+// "some value within the document". Neither says anything about the rest of the
+// document that value was found in, so nothing licenses composing it.
+//
+// TWIN. `openapi-client/go/external_closure.go` and
+// `openbindings-go/formats/openapi/external_closure.go` are maintained as
+// twins, byte-identical apart from TWO deliberate divergences: the package
+// clause, and ONE attribution paragraph that only the openbindings-go copy
+// carries. A twin check must read both as intended, not as drift. The
+// attribution is absent from openapi-client because that package has to stay
+// reusable outside OpenBindings; the rule above is stated in the upstream
+// authorities' own terms, so the standalone copy is complete without it.
+//
+// ATTRIBUTION (this copy only — the second divergence the twin note names).
+// `openbindings.openapi@1` §6 ("Reference scope") states the same rule for this
+// family, and records it as the incorporated authority's own answer rather than
+// an addition to it. §10 of the same candidate places document translation and
+// synthesis outside the specification, which is why the neutral-element
+// convention below is the implementations' to make.
 //
 // The typed loader beneath this package composes a referenced file as a UNIT:
 // reading it resolves every reference in it, so one rotten schema in a shared
@@ -423,8 +441,8 @@ func (n *retentionNode) add(tokens []string) {
 // to one, and keeps every scalar member on the way — a scalar cannot carry a
 // reference, and dropping one would take an `openapi`, `$schema`, `$id`,
 // `$anchor` or `$ref` that decides how the resource itself is read. Everything
-// else is dropped: it is outside the composed closure, so under §6 it is not
-// part of this artifact at all.
+// else is dropped: it is outside the composed closure, so under the reference
+// scope above it is not part of this artifact at all.
 //
 // Retention is per MEMBER in both kinds of container. A sequence is addressed
 // by index rather than by name, so its members cannot be dropped — a JSON
@@ -434,10 +452,11 @@ func (n *retentionNode) add(tokens []string) {
 //
 // What it is replaced BY is decided by the kinds of the indices the closure
 // does reach, not by the kind of the element being discarded — the
-// implementations' convention, since §10 of the candidate places synthesis and
-// document translation outside the specification. A sequence position in the
-// OAS holds Objects, and the retained element is this pass's only evidence of
-// which kind of value the position holds, so:
+// implementations' convention, and no authority decides it: JSON Reference and
+// RFC 6901 fix which value a pointer denotes, not how a resource is stored or
+// served to a resolver, so the substitution is invisible outside this pass. A
+// sequence position in the OAS holds Objects, and the retained element is this
+// pass's only evidence of which kind of value the position holds, so:
 //
 //   - a retained index holding a mapping makes every non-composed index the
 //     empty mapping `{}`, whatever kind it had;
@@ -454,8 +473,10 @@ func (n *retentionNode) add(tokens []string) {
 // the cost of keeping it does: a string, a number, `null`, a sequence, and (at
 // an Object-only position such as `parameters`) a boolean are all values the
 // typed loader cannot read where it expects an Object, so keeping one refuses
-// an artifact `openbindings.openapi@1` §6 says resolves, "however the
-// referenced document is stored".
+// an artifact the reference scope above says resolves — however the referenced
+// document happens to be stored. RFC 6901 §4 addresses a sequence element by
+// index exactly as it addresses a mapping member by name, and neither it nor
+// JSON Reference draws a line at a sibling's kind.
 //
 // `null` is not usable as the neutral element: kin-openapi refuses
 // `allOf: [{…}, null]` and `parameters: [{…}, null]` with "value MUST be an
@@ -576,9 +597,9 @@ func isRawScalar(value any) bool {
 //
 // The direction matters, though not because an over-approximated node goes
 // unread: everything retained IS served to the loader, which resolves it. It
-// matters because of what each error costs. Over-retaining composes a node §6
-// does not put in this artifact, and the worst that can do is reproduce the
-// whole-document behavior this pass replaced — a refusal on a defect outside
+// matters because of what each error costs. Over-retaining composes a node the
+// reference scope does not put in this artifact, and the worst that can do is
+// reproduce the whole-document behavior this pass replaced — a refusal outside
 // the closure. Under-retaining would drop a node the loader must resolve,
 // inventing a failure that neither scope produces, or changing what is emitted.
 // One error is the old behavior; the other is a new wrong answer.
