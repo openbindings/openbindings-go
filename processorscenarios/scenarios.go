@@ -159,17 +159,8 @@ func matchAlternative(expected Expected, got Observation) error {
 	if got.Phase != expected.Phase {
 		return fmt.Errorf("phase = %q, want %q", got.Phase, expected.Phase)
 	}
-	return CheckAssertions(got.Data, expected.Assertions)
-}
-
-// CheckAssertions applies every assertion to one JSON-shaped root value. It is
-// exported so the other portable-corpus runners in this module evaluate the
-// shared assertion vocabulary through this evaluator instead of reimplementing
-// it; the synthesis corpus addresses an emitted OBI document with the same five
-// verbs this corpus addresses a normalized observation with.
-func CheckAssertions(root any, assertions []Assertion) error {
-	for _, assertion := range assertions {
-		value, present, err := pointer(root, assertion.Path)
+	for _, assertion := range expected.Assertions {
+		value, present, err := pointer(got.Data, assertion.Path)
 		if err != nil {
 			return err
 		}

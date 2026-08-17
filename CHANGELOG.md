@@ -6,19 +6,6 @@
 
 ### Changed
 
-- **The portable synthesis runner implements
-  `openbindings.binding-spec-synthesis-scenarios@3`.**
-  `synthesisscenarios.Verify` now takes a `SynthesizerFactory` instead of one
-  synthesizer per family, because a scenario may declare companion documents and
-  the synthesizer has to be built from them; `synthesisscenarios.Fixed` adapts a
-  single synthesizer for families whose corpus sources are self-contained and
-  refuses a scenario that declares resources rather than running it against a
-  resolver that would never see them. A scenario's optional `assertions` are
-  evaluated against the emitted OBI document through
-  `processorscenarios.CheckAssertions`, newly exported so both portable corpora
-  share one evaluator instead of two. `@2` files are refused, as `@1` files
-  already were.
-
 - **Synthesis coverage: an `invalid` entry now clears `FullyRepresented`.**
   Every non-represented status — lossy, excluded, invalid,
   implementation-unsupported — clears the derived flag; previously an
