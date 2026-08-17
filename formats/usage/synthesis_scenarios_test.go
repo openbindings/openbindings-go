@@ -14,7 +14,7 @@ func TestSynthesisScenarios(t *testing.T) {
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
-	err := synthesisscenarios.Verify(context.Background(), root, "usage", NewSynthesizer())
+	err := synthesisscenarios.Verify(context.Background(), root, "usage", synthesisscenarios.Fixed(NewSynthesizer()))
 	if err != nil {
 		if os.IsNotExist(err) && os.Getenv("OB_CORPUS_REQUIRED") == "" {
 			t.Skip(err)
