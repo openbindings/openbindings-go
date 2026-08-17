@@ -430,7 +430,36 @@ func (n *retentionNode) add(tokens []string) {
 // by index rather than by name, so its members cannot be dropped — a JSON
 // Pointer denotes an element by position, and removing one would silently
 // rename every element after it. An index outside the closure is therefore
-// EMPTIED in place instead: the position survives, its content does not.
+// REPLACED in place instead: the position survives, its content does not.
+//
+// What it is replaced BY is decided by the kinds of the indices the closure
+// does reach, not by the kind of the element being discarded — the
+// implementations' convention, since §10 of the candidate places synthesis and
+// document translation outside the specification. A sequence position in the
+// OAS holds Objects, and the retained element is this pass's only evidence of
+// which kind of value the position holds, so:
+//
+//   - a retained index holding a mapping makes every non-composed index the
+//     empty mapping `{}`, whatever kind it had;
+//   - failing that, a retained index holding a sequence makes them `[]`;
+//   - where the closure reaches no container at all — every retained index is
+//     a scalar, or the trie reaches none of them — nothing is substituted for a
+//     scalar, and a container is emptied to its own kind.
+//
+// The scalar-retention rule the mapping branch applies deliberately does NOT
+// carry over to a sequence in the first two cases. A mapping member is kept
+// because it is NAMED: dropping it would take an `openapi`, `$schema`, `$id`,
+// `$anchor` or `$ref` that decides how the resource is read. A sequence element
+// has no name and can be none of those, so the reason does not transfer — while
+// the cost of keeping it does: a string, a number, `null`, a sequence, and (at
+// an Object-only position such as `parameters`) a boolean are all values the
+// typed loader cannot read where it expects an Object, so keeping one refuses
+// an artifact `openbindings.openapi@1` §6 says resolves, "however the
+// referenced document is stored".
+//
+// `null` is not usable as the neutral element: kin-openapi refuses
+// `allOf: [{…}, null]` and `parameters: [{…}, null]` with "value MUST be an
+// object", so it would invent a refusal of its own. Tested, not assumed.
 func pruneToRetained(value any, retained *retentionNode) (any, bool) {
 	if retained == nil || retained.whole {
 		return value, false
@@ -457,6 +486,7 @@ func pruneToRetained(value any, retained *retentionNode) (any, bool) {
 		}
 		return out, true
 	case []any:
+		neutral := neutralSequenceElement(typed, retained)
 		out := make([]any, len(typed))
 		changed := false
 		for index, child := range typed {
@@ -466,9 +496,12 @@ func pruneToRetained(value any, retained *retentionNode) (any, bool) {
 				changed = changed || childChanged
 				continue
 			}
+			if neutral != nil {
+				out[index] = neutral()
+				changed = true
+				continue
+			}
 			if isRawScalar(child) {
-				// Kept for the same reason a scalar member is kept: it has no
-				// members to drop and cannot carry a reference.
 				out[index] = child
 				continue
 			}
@@ -484,11 +517,41 @@ func pruneToRetained(value any, retained *retentionNode) (any, bool) {
 	}
 }
 
+// neutralSequenceElement reports what a sequence's non-composed indices are
+// replaced by, read off the indices the closure DOES reach. It returns nil when
+// the closure reaches no container in this sequence, which is the only case in
+// which a scalar element is left as written.
+//
+// It returns a constructor rather than a value so no two indices ever share one
+// map or slice: the pruned tree is marshalled, and aliasing an empty container
+// across positions would be a latent bug the marshaller happens not to expose.
+func neutralSequenceElement(elements []any, retained *retentionNode) func() any {
+	sawSequence := false
+	for index, child := range elements {
+		if _, ok := retained.children[strconv.Itoa(index)]; !ok {
+			continue
+		}
+		switch child.(type) {
+		case map[string]any:
+			// A mapping wins outright: every OAS sequence position holds
+			// Objects, so this is the common and the decisive case.
+			return func() any { return map[string]any{} }
+		case []any:
+			sawSequence = true
+		}
+	}
+	if sawSequence {
+		return func() any { return []any{} }
+	}
+	return nil
+}
+
 // emptyRawContainer is the empty value of a composite's own JSON kind. It
-// stands in for a sequence element outside the composed closure: the element's
-// position has to survive so its siblings keep their indices, its content does
-// not, and preserving the kind keeps the sequence readable by a typed loader
-// that expects one.
+// stands in for a sequence element outside the composed closure when the
+// closure reaches no container in that sequence to read a kind from: the
+// element's position has to survive so its siblings keep their indices, its
+// content does not, and preserving the kind is the most conservative stand-in
+// available with no evidence to the contrary.
 func emptyRawContainer(value any) any {
 	if _, isSequence := value.([]any); isSequence {
 		return []any{}

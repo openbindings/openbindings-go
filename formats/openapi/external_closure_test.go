@@ -193,10 +193,15 @@ components:
 	}
 }
 
-// A sequence keeps every index and empties the ones outside the closure. This
+// A sequence keeps every index and replaces the ones outside the closure. This
 // is the piece that decides the shared table's sequence cases: a sibling
 // element is outside the composed closure exactly as a sibling property is, so
 // keeping it would refuse an artifact §6 says resolves.
+//
+// The replacement's kind is read off the RETAINED indices, not off the element
+// being discarded: a retained mapping means the position holds Objects, so
+// every non-composed index becomes `{}` whatever kind it had — including a
+// scalar, which the mapping branch would have kept.
 func TestPruneToRetainedEmptiesSequenceElementsOutsideTheClosure(t *testing.T) {
 	tree, ok := parseRawResource([]byte(`
 components:
@@ -241,16 +246,79 @@ components:
 	if !reflect.DeepEqual(allOf[2], map[string]any{"type": "string"}) {
 		t.Fatalf("the second composed element did not survive at its own index: %s", encoded)
 	}
-	// An element the closure never reaches is emptied in place, kind preserved.
-	if !reflect.DeepEqual(allOf[1], map[string]any{}) {
-		t.Fatalf("a mapping element outside the closure survived: %s", encoded)
+	// Every element the closure never reaches becomes the empty mapping,
+	// because a retained index holds one: a mapping element, a sequence
+	// element and a scalar element alike. The last is the whole point — a
+	// scalar at an Object-shaped index is a value the typed loader cannot
+	// read, so keeping it would refuse the artifact.
+	for _, index := range []int{1, 3, 4} {
+		if !reflect.DeepEqual(allOf[index], map[string]any{}) {
+			t.Fatalf("allOf/%d outside the closure was not replaced by the empty mapping: %s", index, encoded)
+		}
 	}
-	if !reflect.DeepEqual(allOf[3], []any{}) {
-		t.Fatalf("a sequence element outside the closure survived: %s", encoded)
+}
+
+// Where the closure reaches no container in a sequence, nothing is substituted
+// for a scalar. A pointer terminating at a scalar element is a doomed reference
+// under every OAS position, but it must not corrupt the scalar array it sits
+// in on the way to its own diagnostic.
+func TestPruneToRetainedLeavesAScalarOnlySequenceAlone(t *testing.T) {
+	tree, ok := parseRawResource([]byte(`
+components:
+  schemas:
+    Composed:
+      required: [alpha, beta, gamma]
+`))
+	if !ok {
+		t.Fatal("parse")
 	}
-	// A scalar element has no members to drop and cannot carry a reference.
-	if allOf[4] != "a scalar element" {
-		t.Fatalf("a scalar element was rewritten: %s", encoded)
+	retained := &retainedPointers{}
+	retained.add("/components/schemas/Composed/required/1")
+
+	required := tree.(map[string]any)["components"].(map[string]any)["schemas"].(map[string]any)["Composed"].(map[string]any)["required"]
+	node := retained.root.children["components"].children["schemas"].children["Composed"].children["required"]
+	pruned, changed := pruneToRetained(required, node)
+	if changed {
+		t.Fatalf("a scalar-only sequence was rewritten: %#v", pruned)
+	}
+	if !reflect.DeepEqual(pruned, []any{"alpha", "beta", "gamma"}) {
+		t.Fatalf("scalar elements did not survive: %#v", pruned)
+	}
+}
+
+// A retained index holding a sequence makes the neutral element `[]`, so the
+// rule is total over both container kinds rather than assuming Objects.
+func TestPruneToRetainedTakesTheNeutralElementFromTheRetainedIndex(t *testing.T) {
+	tree, ok := parseRawResource([]byte(`
+outer:
+  - [{$ref: "#/kept"}]
+  - [{$ref: "#/gone"}]
+  - a scalar element
+`))
+	if !ok {
+		t.Fatal("parse")
+	}
+	retained := &retainedPointers{}
+	retained.add("/outer/0")
+
+	pruned, changed := pruneToRetained(tree.(map[string]any)["outer"], retained.root.children["outer"])
+	if !changed {
+		t.Fatal("nothing was pruned")
+	}
+	elements, ok := pruned.([]any)
+	if !ok || len(elements) != 3 {
+		t.Fatalf("sequence length changed: %#v", pruned)
+	}
+	for _, index := range []int{1, 2} {
+		if !reflect.DeepEqual(elements[index], []any{}) {
+			t.Fatalf("outer/%d was not replaced by the empty sequence: %#v", index, elements[index])
+		}
+	}
+	// No two positions may share one container: the tree is marshalled, and
+	// aliasing would be a latent bug the marshaller happens not to expose.
+	elements[1] = append(elements[1].([]any), "mutated")
+	if len(elements[2].([]any)) != 0 {
+		t.Fatal("two replaced indices share one container")
 	}
 }
 
