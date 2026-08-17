@@ -1740,6 +1740,17 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 				}
 				continue
 			}
+			// §9.2: "An invalid value or a member for which the resolved schema
+			// leaves no faithful form carriage refuses before dispatch." The
+			// declaration decides this part's carriage — an array property
+			// rides as one part per element — so a supplied value with no
+			// elements to carry has no faithful form carriage at all. Falling
+			// through would serialize it against the whole-property schema and
+			// send one application/json part the declaration never described,
+			// which is the silent-carriage outcome the rule exists to prevent.
+			if hasMediaFidelity(bindingSpec) {
+				return nil, "", fmt.Errorf("multipart part %q is declared as an array but the supplied value is %T, which carries no elements", name, value)
+			}
 		}
 		if err := writeMultipartPart(writer, name, value, propSchema, enc, is30, bindingSpec); err != nil {
 			return nil, "", err

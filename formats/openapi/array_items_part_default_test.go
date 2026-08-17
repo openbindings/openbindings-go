@@ -19,7 +19,7 @@ import (
 // identical file is executed by openbindings-go/formats/openapi and by
 // openapi-client/typescript/src; changing it in one engine without the others
 // fails here.
-const arrayItemsPartDefaultCasesDigest = "54bfba9f3480ef4d2670cb2c57f9b0e7afd378b02d9a34c86d34bc3dcd221266"
+const arrayItemsPartDefaultCasesDigest = "ab97e415bb05951f406037c1850878d65beb6f9c8457ead87c51cfe0ff88be12"
 
 type arrayItemsPartDefaultTable struct {
 	Comment string                      `json:"$comment"`
@@ -27,17 +27,19 @@ type arrayItemsPartDefaultTable struct {
 }
 
 type arrayItemsPartDefaultCase struct {
-	Name         string         `json:"name"`
-	OpenAPI      string         `json:"openapi"`
-	Media        string         `json:"media"`
-	Items        string         `json:"items"`
-	ItemsSchema  map[string]any `json:"itemsSchema"`
-	PropertyName string         `json:"propertyName"`
-	Value        []any          `json:"value"`
-	DerivedFrom  string         `json:"derivedFrom"`
-	Expect       string         `json:"expect"`
-	WriteLane    string         `json:"writeLane"`
-	Basis        string         `json:"basis"`
+	Name                string         `json:"name"`
+	OpenAPI             string         `json:"openapi"`
+	Media               string         `json:"media"`
+	Items               string         `json:"items"`
+	ItemsSchema         map[string]any `json:"itemsSchema"`
+	PropertyName        string         `json:"propertyName"`
+	Value               []any          `json:"value"`
+	DerivedFrom         string         `json:"derivedFrom"`
+	Expect              string         `json:"expect"`
+	WriteLane           string         `json:"writeLane"`
+	NonArrayValue       any            `json:"nonArrayValue"`
+	NonArrayValueExpect string         `json:"nonArrayValueExpect"`
+	Basis               string         `json:"basis"`
 }
 
 func loadArrayItemsPartDefaultTable(t *testing.T) []arrayItemsPartDefaultCase {
@@ -122,7 +124,14 @@ func arrayItemsPartDefaultDecision(t *testing.T, c arrayItemsPartDefaultCase) st
 
 func arrayItemsPartDefaultEmission(t *testing.T, doc *openapi3.T, media *openapi3.MediaType, c arrayItemsPartDefaultCase) string {
 	t.Helper()
-	fields := map[string]any{c.PropertyName: c.Value}
+	return arrayItemsPartDefaultRendering(t, doc, media, c, map[string]any{c.PropertyName: c.Value})
+}
+
+// arrayItemsPartDefaultRendering is the emission renderer with the supplied
+// fields as a parameter, so one rendering serves both the table's declared
+// array value and its nonArrayValue row.
+func arrayItemsPartDefaultRendering(t *testing.T, doc *openapi3.T, media *openapi3.MediaType, c arrayItemsPartDefaultCase, fields map[string]any) string {
+	t.Helper()
 	if c.Media == "application/x-www-form-urlencoded" {
 		encoded, err := buildURLEncodedBodyForRevision(doc, media, fields, BindingSpec)
 		if err != nil {
@@ -178,6 +187,68 @@ func TestArrayItemsPartDefaultCaseTable(t *testing.T) {
 				t.Fatalf("%s: decision = %q, want %q\nbasis: %s", c.Name, got, c.Expect, c.Basis)
 			}
 		})
+	}
+}
+
+// TestArrayItemsPartDefaultRefusesANonArrayValue runs every multipart cell a
+// second time with a value that is not an array.
+//
+// openbindings.openapi@1 §9.2 says of the form lanes: "An invalid value or a
+// member for which the resolved schema leaves no faithful form carriage refuses
+// before dispatch." An array property's multipart carriage is one part per
+// element, so a value with no elements has no faithful carriage at all. The
+// engines used to fall through to the WHOLE-property schema and send one
+// application/json part carrying the invalid value — a part the declaration
+// never described, emitted silently.
+func TestArrayItemsPartDefaultRefusesANonArrayValue(t *testing.T) {
+	executed := 0
+	for _, c := range loadArrayItemsPartDefaultTable(t) {
+		if c.NonArrayValueExpect == "" {
+			continue
+		}
+		executed++
+		t.Run(c.Name, func(t *testing.T) {
+			if c.Media != "multipart/form-data" {
+				t.Fatalf("%s: nonArrayValueExpect is defined for the multipart lane only", c.Name)
+			}
+			doc, err := loadDocument("", json.RawMessage(arrayItemsPartDefaultDocument(t, c)))
+			if err != nil {
+				t.Fatalf("%s: load document: %v", c.Name, err)
+			}
+			item := doc.Paths.Find("/form")
+			got := "refused"
+			if _, planErr := planRequestBodiesFor(doc, item.Post, BindingSpec); planErr == nil {
+				media := item.Post.RequestBody.Value.Content[c.Media]
+				fields := map[string]any{c.PropertyName: c.NonArrayValue}
+				got = "admitted;emit=" + arrayItemsPartDefaultRendering(t, doc, media, c, fields)
+			}
+			if got != c.NonArrayValueExpect {
+				t.Fatalf("%s: decision with a non-array value = %q, want %q\nbasis: %s", c.Name, got, c.NonArrayValueExpect, c.Basis)
+			}
+		})
+	}
+	if executed != 24 {
+		t.Fatalf("%d cells carry a nonArrayValueExpect decision, want 24 (every multipart cell)", executed)
+	}
+}
+
+// TestArrayItemsPartDefaultStillExpandsAGoStringSlice pins the breadth of the
+// value side of that rule in this language. Go's asArray recognizes []any and
+// []string, which is what the routed JSON boundary produces; the refusal above
+// must not turn a []string into a refusal.
+func TestArrayItemsPartDefaultStillExpandsAGoStringSlice(t *testing.T) {
+	c := arrayItemsPartDefaultCase{
+		Name: "go []string", OpenAPI: "3.1.1", Media: "multipart/form-data",
+		ItemsSchema: map[string]any{"type": "string"}, PropertyName: "p",
+	}
+	doc, err := loadDocument("", json.RawMessage(arrayItemsPartDefaultDocument(t, c)))
+	if err != nil {
+		t.Fatalf("load document: %v", err)
+	}
+	media := doc.Paths.Find("/form").Post.RequestBody.Value.Content[c.Media]
+	fields := map[string]any{"p": []string{"a", "b"}}
+	if got := arrayItemsPartDefaultRendering(t, doc, media, c, fields); got != "text/plain:a&text/plain:b" {
+		t.Fatalf("[]string rendering = %q, want two repeated parts", got)
 	}
 }
 

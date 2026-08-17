@@ -1,5 +1,5 @@
 {
-  "$comment": "Array-items part-default case table, shared byte-for-byte by the three engines that build an\nOpenAPI form request body: openbindings-go/formats/openapi, openapi-client/go, and\nopenapi-client/typescript/src (which openbindings-ts/packages/openapi re-exports). Each case is\nrendered as a WHOLE OpenAPI document and loaded through the engine's own loader, so the table\nexercises the shipped path rather than a hand-built typed model.\n\nWHAT THIS TABLE GUARDS. Every accepted OAS edition derives an ARRAY property's default\n`contentType` from its ITEMS schema, never from the array itself:\n\n  3.0.0-3.0.3, 3.1.0  'for array - the default is defined based on the inner type'\n  3.0.4               'array | n/a | according to the type and format of the items schema'\n  3.1.1, 3.1.2        'array | n/a | according to the type of the items schema'\n\nThe three engines hold that invariant on the multipart lane by reducing an array property to its\nitems schema before the per-type default is consulted, in BOTH the media-admission lane and the\nbody-encoding lane. Until this table existed, nothing asserted it: deleting the reduction turned\nno test red. That is what the multipart cells are for.\n\nTwo independent sentences say it, and they are complementary: the Encoding Object row above\nappears in every edition, and the multipart guidance in 3.0.0-3.0.3 and 3.1.0 - exactly the five\neditions whose row says 'inner type' - adds 'If the property is a primitive, or an array of\nprimitive values, the default Content-Type is text/plain' and 'If the property is complex, or an\narray of complex values, the default Content-Type is application/json'. Counted against the\npinned edition texts with corpus-lab/scripts/strip-oas-html.mjs: 1/1/1/1/0/1/0/0.\n\nMultiplicity is NOT this table's claim. OAS 3.0.4 / 3.1.1 / 3.1.2 state 'Array properties are\nhandled by applying the same name to multiple parts, as is recommended by [RFC7578] Section 4'\n(count 0/0/0/0/1/0/1/1) and 3.1.0 says 'each schema property, or each element of a schema array\nproperty, takes a section in the payload with an internal header as defined by [RFC7578]' (count\n0/0/0/0/0/1/0/0). OAS 3.0.0-3.0.3 state neither, and the repeated-part expansion those four\neditions get is the implementations' pre-existing convention. The table pins the expansion as it\nstands rather than deriving it.\n\nTHE URLENCODED CONTENT LANE IS AN OPEN CELL, PINNED AS OBSERVED, NOT AS AUTHORITY. On 3.0.4 and\nthe 3.1 line an urlencoded property with no Encoding Object takes the content path, and there the\nengines derive an array property's default from the ARRAY (application/json) rather than from its\nitems schema. Those cells carry basis 'OPEN' and record the emission as it stands today, so that\na future change to them has to be a deliberate edit of this table. The cell is filed in\ncorpus-lab/OPENAPI-RUNTIME.md under 'The array-items part default'; it is entangled with the\npending 3.0-line lane question in design/openapi-30-urlencoded-default-lane-ruling.md, because a\nruling that moves 3.0.0-3.0.3 onto the content machine moves those properties into this same\ncell. Nothing here prejudges either question.\n\nDECISION FORMAT, identical in all three engines. 'refused' means the request-body plan refuses\nthe candidate before any value is supplied. Otherwise 'admitted;emit=<rendering>', where the\nrendering is:\n  multipart   each emitted part as '<Content-Type>:<body>', joined by '&', in emission order;\n              'elided' when no part is emitted; 'error' when the encoder refuses the value.\n              A part with NO Content-Type header renders as 'text/plain:', because [RFC7578]\n              Section 4.4 says 'Each part MAY have an (optional) \"Content-Type\" header field,\n              which defaults to \"text/plain\"' - so emitting the header and omitting it are the\n              same wire fact and both are inside the permitted set. The Go engines emit it; the\n              TypeScript engine, which builds parts through FormData, omits it for a plain text\n              field. Requiring either spelling would invent a preference no authority states.\n              Content-Transfer-Encoding is outside the rendering for the same reason of\n              expressibility: TypeScript inserts it after FormData has serialized, so a twin\n              table cannot compare it. It is pinned by each engine's own tests.\n  urlencoded  the whole emitted body; 'elided' when empty; 'error' when the encoder refuses.\n\nRefusal MESSAGES are each implementation's own surface and are never compared.\n\nTHE WRITE LANE REFUSES WHAT THE ADMISSION LANE REFUSES. A multipart nested-array cell is refused by the media-admission lane, so no plan carrying that declaration can be selected and the body-encoding lane is unreachable for it on the wire. It was not unreachable BY CONSTRUCTION: the encoder expanded the declaration anyway and emitted one application/json part per element. The `writeLane` field pins the encoder's own decision for those cells, measured by calling the body-encoding entry point directly rather than through admission, so the two lanes are asserted to agree about one declaration instead of one lane being asserted and the other trusted. Refusal MESSAGES stay each engine's own surface; only the decision crosses the twin boundary.",
+  "$comment": "Array-items part-default case table, shared byte-for-byte by the three engines that build an\nOpenAPI form request body: openbindings-go/formats/openapi, openapi-client/go, and\nopenapi-client/typescript/src (which openbindings-ts/packages/openapi re-exports). Each case is\nrendered as a WHOLE OpenAPI document and loaded through the engine's own loader, so the table\nexercises the shipped path rather than a hand-built typed model.\n\nWHAT THIS TABLE GUARDS. Every accepted OAS edition derives an ARRAY property's default\n`contentType` from its ITEMS schema, never from the array itself:\n\n  3.0.0-3.0.3, 3.1.0  'for array - the default is defined based on the inner type'\n  3.0.4               'array | n/a | according to the type and format of the items schema'\n  3.1.1, 3.1.2        'array | n/a | according to the type of the items schema'\n\nThe three engines hold that invariant on the multipart lane by reducing an array property to its\nitems schema before the per-type default is consulted, in BOTH the media-admission lane and the\nbody-encoding lane. Until this table existed, nothing asserted it: deleting the reduction turned\nno test red. That is what the multipart cells are for.\n\nTwo independent sentences say it, and they are complementary: the Encoding Object row above\nappears in every edition, and the multipart guidance in 3.0.0-3.0.3 and 3.1.0 - exactly the five\neditions whose row says 'inner type' - adds 'If the property is a primitive, or an array of\nprimitive values, the default Content-Type is text/plain' and 'If the property is complex, or an\narray of complex values, the default Content-Type is application/json'. Counted against the\npinned edition texts with corpus-lab/scripts/strip-oas-html.mjs: 1/1/1/1/0/1/0/0.\n\nMultiplicity is NOT this table's claim. OAS 3.0.4 / 3.1.1 / 3.1.2 state 'Array properties are\nhandled by applying the same name to multiple parts, as is recommended by [RFC7578] Section 4'\n(count 0/0/0/0/1/0/1/1) and 3.1.0 says 'each schema property, or each element of a schema array\nproperty, takes a section in the payload with an internal header as defined by [RFC7578]' (count\n0/0/0/0/0/1/0/0). OAS 3.0.0-3.0.3 state neither, and the repeated-part expansion those four\neditions get is the implementations' pre-existing convention. The table pins the expansion as it\nstands rather than deriving it.\n\nTHE URLENCODED CONTENT LANE IS AN OPEN CELL, PINNED AS OBSERVED, NOT AS AUTHORITY. On 3.0.4 and\nthe 3.1 line an urlencoded property with no Encoding Object takes the content path, and there the\nengines derive an array property's default from the ARRAY (application/json) rather than from its\nitems schema. Those cells carry basis 'OPEN' and record the emission as it stands today, so that\na future change to them has to be a deliberate edit of this table. The cell is filed in\ncorpus-lab/OPENAPI-RUNTIME.md under 'The array-items part default'; it is entangled with the\npending 3.0-line lane question in design/openapi-30-urlencoded-default-lane-ruling.md, because a\nruling that moves 3.0.0-3.0.3 onto the content machine moves those properties into this same\ncell. Nothing here prejudges either question.\n\nDECISION FORMAT, identical in all three engines. 'refused' means the request-body plan refuses\nthe candidate before any value is supplied. Otherwise 'admitted;emit=<rendering>', where the\nrendering is:\n  multipart   each emitted part as '<Content-Type>:<body>', joined by '&', in emission order;\n              'elided' when no part is emitted; 'error' when the encoder refuses the value.\n              A part with NO Content-Type header renders as 'text/plain:', because [RFC7578]\n              Section 4.4 says 'Each part MAY have an (optional) \"Content-Type\" header field,\n              which defaults to \"text/plain\"' - so emitting the header and omitting it are the\n              same wire fact and both are inside the permitted set. The Go engines emit it; the\n              TypeScript engine, which builds parts through FormData, omits it for a plain text\n              field. Requiring either spelling would invent a preference no authority states.\n              Content-Transfer-Encoding is outside the rendering for the same reason of\n              expressibility: TypeScript inserts it after FormData has serialized, so a twin\n              table cannot compare it. It is pinned by each engine's own tests.\n  urlencoded  the whole emitted body; 'elided' when empty; 'error' when the encoder refuses.\n\nRefusal MESSAGES are each implementation's own surface and are never compared.\n\nTHE WRITE LANE REFUSES WHAT THE ADMISSION LANE REFUSES. A multipart nested-array cell is refused by the media-admission lane, so no plan carrying that declaration can be selected and the body-encoding lane is unreachable for it on the wire. It was not unreachable BY CONSTRUCTION: the encoder expanded the declaration anyway and emitted one application/json part per element. The `writeLane` field pins the encoder's own decision for those cells, measured by calling the body-encoding entry point directly rather than through admission, so the two lanes are asserted to agree about one declaration instead of one lane being asserted and the other trusted. Refusal MESSAGES stay each engine's own surface; only the decision crosses the twin boundary.\n\nAN ARRAY-DECLARED PROPERTY SUPPLIED A NON-ARRAY VALUE REFUSES BEFORE DISPATCH. Every multipart cell additionally carries `nonArrayValue` and `nonArrayValueExpect`: the same declaration, the same engine entry points, and a supplied value that is not an array. openbindings.openapi@1 section 9.2 states of the form-serialization lanes that 'An invalid value or a member for which the resolved schema leaves no faithful form carriage refuses before dispatch.' An array property's multipart carriage is one part per element, so a value with no elements has no faithful carriage at all. Before this row the three engines fell through to the WHOLE-property schema and emitted one application/json part carrying the invalid value - a part the declaration never described, sent silently. The urlencoded lane carries no such row: it serializes the whole property as one value and is entangled with the OPEN cell above.",
   "cases": [
     {
       "name": "3.0.3|multipart|string",
@@ -16,6 +16,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=text/plain:a&text/plain:b",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.0.3 Encoding Object, contentType: 'for array - the default is defined based on the inner type'. The items schema is a string with no binary signal, so the applicable row is 'for other primitive types - text/plain'. The same edition's multipart guidance states it a second time and directly for arrays: 'If the property is a primitive, or an array of primitive values, the default Content-Type is text/plain'; 'If the property is complex, or an array of complex values, the default Content-Type is application/json'."
     },
     {
@@ -33,6 +35,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=text/plain:1&text/plain:2",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.0.3 Encoding Object, contentType: 'for array - the default is defined based on the inner type'. The items schema is an integer, so the applicable row is 'for other primitive types - text/plain'. The same edition's multipart guidance states it a second time and directly for arrays: 'If the property is a primitive, or an array of primitive values, the default Content-Type is text/plain'; 'If the property is complex, or an array of complex values, the default Content-Type is application/json'."
     },
     {
@@ -51,6 +55,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=application/json:{\"k\":\"v\"}",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.0.3 Encoding Object, contentType: 'for array - the default is defined based on the inner type'. The items schema is an object, so the applicable row is 'for object - application/json'. The same edition's multipart guidance states it a second time and directly for arrays: 'If the property is a primitive, or an array of primitive values, the default Content-Type is text/plain'; 'If the property is complex, or an array of complex values, the default Content-Type is application/json'."
     },
     {
@@ -73,6 +79,8 @@
       "derivedFrom": "items",
       "expect": "refused",
       "writeLane": "refused",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "refused",
       "basis": "OAS 3.0.3 Encoding Object, contentType: 'for array - the default is defined based on the inner type'. The items schema is itself an array, so the row recurses with no base case, and no accepted edition states how the members of an inner array map onto one part name. Deciding that would be authorship rather than incorporation, so the candidate refuses before dispatch (deference order rung 4)."
     },
     {
@@ -88,6 +96,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=text/plain:a&text/plain:1",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.0.3 Encoding Object, contentType: 'for array - the default is defined based on the inner type'. An unconstrained items schema asserts nothing. The 3.0 line's own list has no row for a schema with no type, and this candidate defines no JSON-to-octet boundary for a declaration that made no claim, so `openbindings.openapi@1` \u00a79.2's stated convention applies: the supplied value's JSON application type supplies the corresponding OAS per-type default, per element."
     },
     {
@@ -105,6 +115,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=text/plain:QUJD",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.0.3 Encoding Object, contentType: 'for array - the default is defined based on the inner type'. `contentEncoding` is not a keyword of the 3.0 Schema Object's dialect - the 3.0 binary signal is `format` - so the applicable row is the one for a string with no binary format, and the annotation carries no content-encoding force."
     },
     {
@@ -124,6 +136,8 @@
       ],
       "derivedFrom": "items",
       "expect": "refused",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "refused",
       "basis": "OAS 3.0.3 Encoding Object, contentType: 'for array - the default is defined based on the inner type'. Every 3.0 edition states of the Schema Object: 'type - Value MUST be a string. Multiple types via an array are not supported.' An array-valued `type` is therefore not a union declaration on this line and no part carriage follows from one."
     },
     {
@@ -147,6 +161,8 @@
       ],
       "derivedFrom": "items",
       "expect": "refused",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "refused",
       "basis": "OAS 3.0.3 Encoding Object, contentType: 'for array - the default is defined based on the inner type'. The items schema declares a choice with more than one non-null branch, which `openbindings.openapi@1` \u00a79.2 refuses: it declares value-dependent alternatives and leaves no single faithful form carriage."
     },
     {
@@ -311,6 +327,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=text/plain:a&text/plain:b",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.0.4 Encoding Object, contentType default table: 'array | n/a | according to the type and format of the items schema'. The items schema is a string with no binary signal, so the applicable row is 'string | none, or any except binary or byte | text/plain'."
     },
     {
@@ -328,6 +346,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=text/plain:1&text/plain:2",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.0.4 Encoding Object, contentType default table: 'array | n/a | according to the type and format of the items schema'. The items schema is an integer, so the applicable row is 'number, integer, or boolean | n/a | text/plain'."
     },
     {
@@ -346,6 +366,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=application/json:{\"k\":\"v\"}",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.0.4 Encoding Object, contentType default table: 'array | n/a | according to the type and format of the items schema'. The items schema is an object, so the applicable row is 'object | n/a | application/json'."
     },
     {
@@ -368,6 +390,8 @@
       "derivedFrom": "items",
       "expect": "refused",
       "writeLane": "refused",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "refused",
       "basis": "OAS 3.0.4 Encoding Object, contentType default table: 'array | n/a | according to the type and format of the items schema'. The items schema is itself an array, so the row recurses with no base case, and no accepted edition states how the members of an inner array map onto one part name. Deciding that would be authorship rather than incorporation, so the candidate refuses before dispatch (deference order rung 4)."
     },
     {
@@ -383,6 +407,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=text/plain:a&text/plain:1",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.0.4 Encoding Object, contentType default table: 'array | n/a | according to the type and format of the items schema'. An unconstrained items schema asserts nothing. The 3.0 line's own list has no row for a schema with no type, and this candidate defines no JSON-to-octet boundary for a declaration that made no claim, so `openbindings.openapi@1` \u00a79.2's stated convention applies: the supplied value's JSON application type supplies the corresponding OAS per-type default, per element."
     },
     {
@@ -400,6 +426,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=text/plain:QUJD",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.0.4 Encoding Object, contentType default table: 'array | n/a | according to the type and format of the items schema'. `contentEncoding` is not a keyword of the 3.0 Schema Object's dialect - the 3.0 binary signal is `format` - so the applicable row is the one for a string with no binary format, and the annotation carries no content-encoding force."
     },
     {
@@ -419,6 +447,8 @@
       ],
       "derivedFrom": "items",
       "expect": "refused",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "refused",
       "basis": "OAS 3.0.4 Encoding Object, contentType default table: 'array | n/a | according to the type and format of the items schema'. Every 3.0 edition states of the Schema Object: 'type - Value MUST be a string. Multiple types via an array are not supported.' An array-valued `type` is therefore not a union declaration on this line and no part carriage follows from one."
     },
     {
@@ -442,6 +472,8 @@
       ],
       "derivedFrom": "items",
       "expect": "refused",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "refused",
       "basis": "OAS 3.0.4 Encoding Object, contentType default table: 'array | n/a | according to the type and format of the items schema'. The items schema declares a choice with more than one non-null branch, which `openbindings.openapi@1` \u00a79.2 refuses: it declares value-dependent alternatives and leaves no single faithful form carriage."
     },
     {
@@ -606,6 +638,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=text/plain:a&text/plain:b",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.1.1 Encoding Object, contentType default table: 'array | n/a | according to the type of the items schema'. The items schema is a string with no binary signal, so the applicable row is 'string | absent | text/plain'."
     },
     {
@@ -623,6 +657,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=text/plain:1&text/plain:2",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.1.1 Encoding Object, contentType default table: 'array | n/a | according to the type of the items schema'. The items schema is an integer, so the applicable row is 'number, integer, or boolean | n/a | text/plain'."
     },
     {
@@ -641,6 +677,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=application/json:{\"k\":\"v\"}",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.1.1 Encoding Object, contentType default table: 'array | n/a | according to the type of the items schema'. The items schema is an object, so the applicable row is 'object | n/a | application/json'."
     },
     {
@@ -663,6 +701,8 @@
       "derivedFrom": "items",
       "expect": "refused",
       "writeLane": "refused",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "refused",
       "basis": "OAS 3.1.1 Encoding Object, contentType default table: 'array | n/a | according to the type of the items schema'. The items schema is itself an array, so the row recurses with no base case, and no accepted edition states how the members of an inner array map onto one part name. Deciding that would be authorship rather than incorporation, so the candidate refuses before dispatch (deference order rung 4)."
     },
     {
@@ -678,6 +718,8 @@
       ],
       "derivedFrom": "items",
       "expect": "refused",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "refused",
       "basis": "OAS 3.1.1 Encoding Object, contentType default table: 'array | n/a | according to the type of the items schema'. The items schema declares no `type`, and the same table's FIRST row states that part's default as 'absent | n/a | application/octet-stream'. `openbindings.openapi@1` defines no JSON-to-octet part boundary, so the part refuses before dispatch. Until 2026-08-17 this cell read `admitted;emit=text/plain:a&text/plain:1`, on the reading that an unconstrained items schema asserts nothing and \u00a79.2's convention therefore answered; that reading displaced a stated authority row and was withdrawn. The convention now covers the 3.0 line alone, where no stated row reaches a declaration carrying no `type`."
     },
     {
@@ -695,6 +737,8 @@
       ],
       "derivedFrom": "items",
       "expect": "admitted;emit=application/octet-stream:QUJD",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "admitted;emit=error",
       "basis": "OAS 3.1.1 Encoding Object, contentType default table: 'array | n/a | according to the type of the items schema'. The items schema is a string carrying contentEncoding, so the applicable row is 'string | present | application/octet-stream'."
     },
     {
@@ -714,6 +758,8 @@
       ],
       "derivedFrom": "items",
       "expect": "refused",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "refused",
       "basis": "OAS 3.1.1 Encoding Object, contentType default table: 'array | n/a | according to the type of the items schema'. [JSON Schema 2020-12] \u00a76.1.1 makes an array-valued `type` a union - 'an instance validates successfully if its type matches any of the types indicated by the strings in the array' - and two non-null members declare value-dependent alternatives, which `openbindings.openapi@1` \u00a79.2 refuses."
     },
     {
@@ -737,6 +783,8 @@
       ],
       "derivedFrom": "items",
       "expect": "refused",
+      "nonArrayValue": "scalar",
+      "nonArrayValueExpect": "refused",
       "basis": "OAS 3.1.1 Encoding Object, contentType default table: 'array | n/a | according to the type of the items schema'. The items schema declares a choice with more than one non-null branch, which `openbindings.openapi@1` \u00a79.2 refuses: it declares value-dependent alternatives and leaves no single faithful form carriage."
     },
     {
