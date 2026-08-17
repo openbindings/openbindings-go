@@ -373,9 +373,6 @@ func (c *externalComposition) prune(resource *url.URL, data []byte) []byte {
 	if !changed {
 		return data
 	}
-	// Not jsonImage's class: this re-encodes the ARTIFACT tree for the
-	// loader to re-parse. It is not an application value and never reaches a
-	// wire.
 	encoded, err := json.Marshal(pruned)
 	if err != nil {
 		return data

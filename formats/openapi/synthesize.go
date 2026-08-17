@@ -685,7 +685,6 @@ func buildInputSchemaForPlans(op *openapi3.Operation, allParams openapi3.Paramet
 	seen := map[string]bool{}
 	unique := make([]map[string]any, 0, len(variants))
 	for _, schema := range variants {
-		// Not jsonImage's class: an in-process dedup identity, never emitted.
 		encoded, _ := json.Marshal(schema)
 		key := string(encoded)
 		if !seen[key] {
@@ -1097,7 +1096,6 @@ func buildOutputSchemaWithCyclicRefs(op *openapi3.Operation, schemaOverlays *raw
 	seen := map[string]bool{}
 	cyclicRootRefs := map[string]string{}
 	appendSchema := func(schema map[string]any, cyclicRootRef string) {
-		// Not jsonImage's class: an in-process dedup identity, never emitted.
 		encoded, _ := json.Marshal(schema)
 		identity := string(encoded)
 		if cyclicRootRef != "" {
@@ -1170,7 +1168,6 @@ func buildOutputSchemaWithCyclicRefs(op *openapi3.Operation, schemaOverlays *raw
 	}
 	anyOf := make([]any, len(schemas))
 	for i, schema := range schemas {
-		// Not jsonImage's class: the same in-process dedup identity as above.
 		encoded, _ := json.Marshal(schema)
 		if ref := cyclicRootRefs[string(encoded)]; ref != "" {
 			// The TypeScript processor retains dereferenced object identity:
