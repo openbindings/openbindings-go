@@ -14,7 +14,14 @@ import (
 	"sort"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/processorscenarios"
 )
+
+// Format is the exact portable synthesis-scenario format this runner
+// implements. A file naming any other revision is refused rather than run:
+// a runner that silently skips what it does not understand reports green
+// having verified none of it.
+const Format = "openbindings.binding-spec-synthesis-scenarios@3"
 
 type File struct {
 	Format      string     `json:"format"`
@@ -28,15 +35,21 @@ type Scenario struct {
 	ID          string                        `json:"id"`
 	Description string                        `json:"description"`
 	Source      openbindings.SynthesizeSource `json:"source"`
-	Expected    Expected                      `json:"expected"`
+	// Resources is the scenario's closed, immutable companion-document set,
+	// keyed by absolute retrieval URI. Harness input only: the family adapter
+	// serves it through its ordinary artifact resolver, and it adds no
+	// comparison semantics.
+	Resources map[string]any `json:"resources,omitempty"`
+	Expected  Expected       `json:"expected"`
 }
 
 type Expected struct {
-	Outcome    string            `json:"outcome"`
-	Rules      []string          `json:"rules,omitempty"`
-	Operations []string          `json:"operations"`
-	Bindings   []BindingIdentity `json:"bindings"`
-	Coverage   ExpectedCoverage  `json:"coverage"`
+	Outcome    string                         `json:"outcome"`
+	Rules      []string                       `json:"rules,omitempty"`
+	Operations []string                       `json:"operations"`
+	Bindings   []BindingIdentity              `json:"bindings"`
+	Assertions []processorscenarios.Assertion `json:"assertions,omitempty"`
+	Coverage   ExpectedCoverage               `json:"coverage"`
 }
 
 type BindingIdentity struct {
@@ -71,7 +84,7 @@ func Load(root, family string) (*File, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return nil, err
 	}
-	if file.Format != "openbindings.binding-spec-synthesis-scenarios@2" {
+	if file.Format != Format {
 		return nil, fmt.Errorf("%s: unsupported synthesis scenario format %q", family, file.Format)
 	}
 	if file.Family != family || len(file.Scenarios) == 0 {
@@ -80,14 +93,43 @@ func Load(root, family string) (*File, error) {
 	return &file, nil
 }
 
+// SynthesizerFactory builds the synthesizer that executes one scenario. A
+// scenario may declare companion documents, so the synthesizer is constructed
+// per scenario rather than once per family: the family adapter wires
+// scenario.Resources into its ordinary artifact resolver seam and serves them
+// offline.
+type SynthesizerFactory func(scenario Scenario) (openbindings.CoverageSynthesizer, error)
+
+// Fixed adapts one synthesizer for families whose corpus sources are
+// self-contained. A scenario declaring companion documents is refused loudly
+// rather than executed against a resolver that would never see them.
+//
+// The refusal is deliberately outside the expected-outcome handling in Verify:
+// a scenario the runner cannot serve is a runner defect, and reporting it as a
+// satisfied "refused" outcome would be the silent green this whole revision
+// exists to prevent. `fixedSynthesizer` in @openbindings/sdk is the twin, with
+// the same message and the same placement.
+func Fixed(synth openbindings.CoverageSynthesizer) SynthesizerFactory {
+	return func(scenario Scenario) (openbindings.CoverageSynthesizer, error) {
+		if len(scenario.Resources) > 0 {
+			return nil, fmt.Errorf("%s: declares companion resources, which this family's runner does not serve", scenario.ID)
+		}
+		return synth, nil
+	}
+}
+
 // Verify executes every scenario for one family through its real coverage
 // synthesizer and compares the normalized OpenBindings boundary.
-func Verify(ctx context.Context, root, family string, synth openbindings.CoverageSynthesizer) error {
+func Verify(ctx context.Context, root, family string, factory SynthesizerFactory) error {
 	file, err := Load(root, family)
 	if err != nil {
 		return err
 	}
 	for _, scenario := range file.Scenarios {
+		synth, err := factory(scenario)
+		if err != nil {
+			return err
+		}
 		result, err := synth.SynthesizeInterfaceWithCoverage(ctx, &openbindings.SynthesizeInput{
 			Sources: []openbindings.SynthesizeSource{scenario.Source},
 		})
@@ -114,6 +156,9 @@ func Match(s Scenario, result *openbindings.SynthesizeResult) error {
 	if result == nil || result.Interface == nil {
 		return fmt.Errorf("%s: synthesizer returned no interface", s.ID)
 	}
+	if err := checkAssertions(s, result.Interface); err != nil {
+		return err
+	}
 	got := Expected{
 		Outcome:    "synthesized",
 		Operations: operationKeys(result.Interface),
@@ -129,6 +174,28 @@ func Match(s Scenario, result *openbindings.SynthesizeResult) error {
 		gotJSON, _ := json.MarshalIndent(got, "", "  ")
 		wantJSON, _ := json.MarshalIndent(want, "", "  ")
 		return fmt.Errorf("%s synthesis mismatch\ngot:\n%s\nwant:\n%s", s.ID, gotJSON, wantJSON)
+	}
+	return nil
+}
+
+// checkAssertions evaluates a scenario's optional pointer-addressed assertions
+// against the emitted OBI document, through the same evaluator the processor
+// corpus uses. Each assertion pins exactly the fact its finding is about; the
+// compared surface for everything else stays operations, bindings and coverage.
+func checkAssertions(s Scenario, iface *openbindings.Interface) error {
+	if len(s.Expected.Assertions) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(iface)
+	if err != nil {
+		return fmt.Errorf("%s: marshal emitted interface: %w", s.ID, err)
+	}
+	var document any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		return fmt.Errorf("%s: reparse emitted interface: %w", s.ID, err)
+	}
+	if err := processorscenarios.CheckAssertions(document, s.Expected.Assertions); err != nil {
+		return fmt.Errorf("%s emitted-document assertion failed: %w", s.ID, err)
 	}
 	return nil
 }
@@ -175,6 +242,9 @@ func coverageEntries(entries []openbindings.SynthesisCoverageEntry) []CoverageEn
 func normalizedExpected(in Expected) Expected {
 	out := in
 	out.Rules = nil
+	// Assertions are evaluated against the emitted document, not diffed as
+	// part of the normalized identity/coverage surface.
+	out.Assertions = nil
 	out.Operations = append([]string{}, in.Operations...)
 	sort.Strings(out.Operations)
 	out.Bindings = append([]BindingIdentity{}, in.Bindings...)
