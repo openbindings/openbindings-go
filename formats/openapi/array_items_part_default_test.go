@@ -19,7 +19,7 @@ import (
 // identical file is executed by openbindings-go/formats/openapi and by
 // openapi-client/typescript/src; changing it in one engine without the others
 // fails here.
-const arrayItemsPartDefaultCasesDigest = "16ac8ae3c08e081b82c1f6d9a7ffebefe1a215292eded8dea677a6b63a561be0"
+const arrayItemsPartDefaultCasesDigest = "54bfba9f3480ef4d2670cb2c57f9b0e7afd378b02d9a34c86d34bc3dcd221266"
 
 type arrayItemsPartDefaultTable struct {
 	Comment string                      `json:"$comment"`
@@ -36,6 +36,7 @@ type arrayItemsPartDefaultCase struct {
 	Value        []any          `json:"value"`
 	DerivedFrom  string         `json:"derivedFrom"`
 	Expect       string         `json:"expect"`
+	WriteLane    string         `json:"writeLane"`
 	Basis        string         `json:"basis"`
 }
 
@@ -177,6 +178,67 @@ func TestArrayItemsPartDefaultCaseTable(t *testing.T) {
 				t.Fatalf("%s: decision = %q, want %q\nbasis: %s", c.Name, got, c.Expect, c.Basis)
 			}
 		})
+	}
+}
+
+// TestArrayItemsPartDefaultWriteLaneAgreesWithAdmission executes the
+// body-encoding lane DIRECTLY, bypassing media admission, for every cell whose
+// table row carries a `writeLane` decision.
+//
+// Admission and encoding are two lanes reading one declaration. Where admission
+// refuses, nothing selects the plan, so the encoder's own answer is invisible on
+// the wire — which is precisely why it went unasserted and why the two lanes
+// were free to disagree. This test measures the encoder without admission in
+// front of it, so "unreachable" is a property of the code rather than of what
+// happens to run first.
+func TestArrayItemsPartDefaultWriteLaneAgreesWithAdmission(t *testing.T) {
+	executed := 0
+	for _, c := range loadArrayItemsPartDefaultTable(t) {
+		if c.WriteLane == "" {
+			continue
+		}
+		executed++
+		t.Run(c.Name, func(t *testing.T) {
+			if c.Media != "multipart/form-data" {
+				t.Fatalf("%s: writeLane is defined for the multipart body-encoding lane only", c.Name)
+			}
+			doc, err := loadDocument("", json.RawMessage(arrayItemsPartDefaultDocument(t, c)))
+			if err != nil {
+				t.Fatalf("%s: load document: %v", c.Name, err)
+			}
+			media := doc.Paths.Find("/form").Post.RequestBody.Value.Content[c.Media]
+			fields := map[string]any{c.PropertyName: c.Value}
+			_, _, buildErr := buildMultipartBodyForRevision(doc, media, fields, BindingSpec)
+			got := "admitted"
+			if buildErr != nil {
+				got = "refused"
+			}
+			if got != c.WriteLane {
+				t.Fatalf("%s: write-lane decision = %q, want %q (admission decides %q)\nbasis: %s", c.Name, got, c.WriteLane, c.Expect, c.Basis)
+			}
+		})
+	}
+	if executed == 0 {
+		t.Fatal("no case carries a writeLane decision; the shared table lost its write-lane cells")
+	}
+}
+
+// TestArrayItemsPartDefaultNestedArrayCellsPinBothLanes fails if a multipart
+// nested-array cell stops carrying its write-lane decision, so the guard cannot
+// be removed by deleting a table field instead of a test.
+func TestArrayItemsPartDefaultNestedArrayCellsPinBothLanes(t *testing.T) {
+	seen := 0
+	for _, c := range loadArrayItemsPartDefaultTable(t) {
+		if c.Media != "multipart/form-data" || c.Items != "nested-array" {
+			continue
+		}
+		seen++
+		if c.Expect != "refused" || c.WriteLane != "refused" {
+			t.Fatalf("%s: expect = %q, writeLane = %q; both lanes must refuse a nested array declaration", c.Name, c.Expect, c.WriteLane)
+		}
+	}
+	if seen != 3 {
+		t.Fatalf("table carries %d multipart nested-array cells, want 3 (one per edition branch)", seen)
 	}
 }
 

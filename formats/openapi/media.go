@@ -1723,6 +1723,16 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 		if schemaTypeIs(propSchema, "array", map[*openapi3.Schema]bool{}) {
 			if arr, ok := asArray(value); ok {
 				items := resolvedMultipartItems(propSchema, map[*openapi3.Schema]bool{})
+				// The write lane refuses exactly what the admission lane
+				// refuses. validateRevision3Multipart excludes a nested array
+				// declaration from the candidate set, so a plan carrying one
+				// cannot be selected; without this the two lanes disagree
+				// about the same declaration, and the disagreement is only
+				// invisible because something else happens to exclude it
+				// first. Same decision, each engine's own wording.
+				if hasMediaFidelity(bindingSpec) && schemaTypeIs(items, "array", map[*openapi3.Schema]bool{}) {
+					return nil, "", fmt.Errorf("multipart part %q has nested array items with no defined repeated-part mapping", name)
+				}
 				for _, elem := range arr {
 					if err := writeMultipartPart(writer, name, elem, items, enc, is30, bindingSpec); err != nil {
 						return nil, "", err
