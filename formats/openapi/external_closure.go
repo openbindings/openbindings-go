@@ -227,7 +227,11 @@ func (c *externalComposition) compose(target compositionTarget) {
 	// part of the closure, and a pointer that names nothing leaves the loader to
 	// say so. Retention is unchanged on the refusing branch, so the loader's own
 	// diagnostics stay available for every reference that is not this one.
-	if node, ok := rawPointerReach(tree, target.fragment); ok {
+	node, passed, ok := rawPointerReach(tree, target.fragment, openAPIIgnoresReferenceSiblings(c.edition))
+	for _, at := range passed {
+		retained.markUncomposedReference(at)
+	}
+	if ok {
 		c.scan(node, target.key, resource)
 	}
 }
@@ -394,9 +398,24 @@ func (r *retainedPointers) add(pointer string) {
 	r.root.add(rawPointerTokens(pointer))
 }
 
+// markUncomposedReference records that a composed pointer PASSED THROUGH the
+// reference at this position on its way to a member of the same node, so the
+// reference is not itself part of the closure.
+func (r *retainedPointers) markUncomposedReference(pointer string) {
+	if r.root == nil {
+		r.root = &retentionNode{}
+	}
+	r.root.markUncomposedReference(rawPointerTokens(pointer))
+}
+
 type retentionNode struct {
-	whole    bool
-	children map[string]*retentionNode
+	whole bool
+	// uncomposedReference marks a position whose `$ref` member a composed
+	// pointer walked past rather than into. It is never set on a node the
+	// closure composes: a composed value is retained whole, and `pruneToRetained`
+	// returns such a subtree untouched before it can look at this flag.
+	uncomposedReference bool
+	children            map[string]*retentionNode
 }
 
 func (n *retentionNode) add(tokens []string) {
@@ -419,12 +438,40 @@ func (n *retentionNode) add(tokens []string) {
 	child.add(tokens[1:])
 }
 
+func (n *retentionNode) markUncomposedReference(tokens []string) {
+	if n.whole {
+		return
+	}
+	if len(tokens) == 0 {
+		n.uncomposedReference = true
+		return
+	}
+	if n.children == nil {
+		n.children = map[string]*retentionNode{}
+	}
+	child := n.children[tokens[0]]
+	if child == nil {
+		child = &retentionNode{}
+		n.children[tokens[0]] = child
+	}
+	child.markUncomposedReference(tokens[1:])
+}
+
 // pruneToRetained keeps every composed value whole, keeps the members that lead
 // to one, and keeps every scalar member on the way — a scalar cannot carry a
-// reference, and dropping one would take an `openapi`, `$schema`, `$id`,
-// `$anchor` or `$ref` that decides how the resource itself is read. Everything
-// else is dropped: it is outside the composed closure, so under §6 it is not
-// part of this artifact at all.
+// reference, and dropping one would take an `openapi`, `$schema`, `$id` or
+// `$anchor` that decides how the resource itself is read. Everything else is
+// dropped: it is outside the composed closure, so under §6 it is not part of
+// this artifact at all.
+//
+// The one scalar exception is a `$ref` at a position the closure only walked
+// PAST — recorded by `markUncomposedReference` and possible on the 3.1 line
+// alone. Unlike the four keywords above, a reference on an ancestor does not
+// decide how a descendant is read: JSON Schema 2020-12 §8.2.3.1 makes it an
+// applicator on ITS node, whose results are the referenced schema's, and the
+// composed value here is a member of that node rather than the node. Serving it
+// would put a target §6's "and nothing else" excludes into the artifact, and a
+// defect there would refuse a source §6 says resolves.
 //
 // Retention is per MEMBER in both kinds of container. A sequence is addressed
 // by index rather than by name, so its members cannot be dropped — a JSON
@@ -473,6 +520,17 @@ func pruneToRetained(value any, retained *retentionNode) (any, bool) {
 				prunedChild, childChanged := pruneToRetained(child, sub)
 				out[key] = prunedChild
 				changed = changed || childChanged
+				continue
+			}
+			if key == "$ref" && retained.uncomposedReference {
+				// The pointer walked PAST this reference into a member of the
+				// same node, which only the 3.1 line admits. There the node
+				// keeps its own members (JSON Schema 2020-12 §8.2.3.1's note),
+				// the composed value is the member, and the reference is
+				// outside the "and nothing else" of §6's reference scope.
+				// Serving it would ask the loader to resolve a target this
+				// artifact never composed — and refuse on its defects.
+				changed = true
 				continue
 			}
 			if isRawScalar(child) {
@@ -610,31 +668,79 @@ func rawReferenceStrings(value any, visit func(string)) {
 	}
 }
 
+// openAPIIgnoresReferenceSiblings reports whether the artifact's declared OAS
+// edition makes a `$ref` node's other members undenotable, so that a pointer
+// token naming one of them addresses nothing on that node and the reference
+// itself is what the pointer's path runs into.
+//
+// It is the SAME edition split `reference_traversal.go` states, read from its
+// other side, and it is deliberately expressed as that one predicate rather
+// than a second enumeration that could drift from it. On the 3.0 line the
+// Reference Object is defined by JSON Reference, whose §3 says "Any members
+// other than "$ref" in a JSON Reference object SHALL be ignored" — so such a
+// node has no other denotable members at all, and a pointer continuing past it
+// continues into the referenced value (which is why that line FOLLOWS). On the
+// 3.1 line JSON Schema 2020-12 §8.2.3.1's note has "other keywords can appear
+// alongside of "$ref" in the same schema object", the node keeps its own
+// members, and a token naming none of them resolves nothing (which is why that
+// line REFUSES).
+func openAPIIgnoresReferenceSiblings(edition string) bool {
+	return openAPIFollowsPointerBelowReference(edition)
+}
+
 // rawPointerReach evaluates a JSON Pointer as far as the raw resource takes it
 // and returns the deepest value reached. A pointer that runs through a
 // reference stops AT that reference, whose own target the caller then composes;
 // a pointer that names nothing stops where the artifact stops describing it.
-func rawPointerReach(root any, pointer string) (any, bool) {
+//
+// `ignoreSiblings` is the edition's answer above. When it holds, a `$ref` node
+// standing in the pointer's path ends the walk WHETHER OR NOT it also declares
+// the next token: the token cannot name an ignored member, so what the pointer
+// runs into is the reference, and composing the node is what puts the
+// reference's own target in the closure. Reading the sibling instead would
+// under-retain — the served resource would keep a `$ref` whose target the
+// closure never reached, and the typed loader would then be unable to resolve a
+// reference this artifact's own edition says it must follow.
+//
+// It also reports every pointer prefix at which a reference was PASSED THROUGH
+// rather than composed. That happens only on the other branch, where the token
+// does name a member of the node in hand: the composed value is that member,
+// the node's own `$ref` is outside the closure §6 defines, and serving it would
+// compose a value that section's "and nothing else" excludes.
+func rawPointerReach(root any, pointer string, ignoreSiblings bool) (any, []string, bool) {
 	current := root
+	var passed []string
+	prefix := ""
 	for _, token := range rawPointerTokens(pointer) {
+		if object, isObject := current.(map[string]any); isObject {
+			if _, isReference := object["$ref"].(string); isReference {
+				if ignoreSiblings {
+					return current, passed, true
+				}
+				if _, sibling := object[token]; sibling {
+					passed = append(passed, prefix)
+				}
+			}
+		}
+		prefix += "/" + escapeRawPointerToken(token)
 		switch typed := current.(type) {
 		case map[string]any:
 			child, ok := typed[token]
 			if !ok {
-				return current, true
+				return current, passed, true
 			}
 			current = child
 		case []any:
 			index, ok := rawSequenceIndex(token, len(typed))
 			if !ok {
-				return current, true
+				return current, passed, true
 			}
 			current = typed[index]
 		default:
-			return current, true
+			return current, passed, true
 		}
 	}
-	return current, true
+	return current, passed, true
 }
 
 // rawSequenceIndex applies RFC 6901 §4's array-index grammar: base ten, no

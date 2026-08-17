@@ -96,6 +96,10 @@ func TestRawPointerReachStopsAtAReferenceAndAtAMissingToken(t *testing.T) {
 components:
   schemas:
     Alias: {$ref: "#/components/schemas/Real"}
+    Sibling:
+      $ref: "#/components/schemas/Real"
+      properties:
+        name: {type: string}
     Real:
       properties:
         name: {type: string}
@@ -108,27 +112,108 @@ components:
 
 	// Through a reference: evaluation stops AT the reference object, whose own
 	// target the caller then composes.
-	node, _ := rawPointerReach(tree, "/components/schemas/Alias/properties/name")
+	node, passed, _ := rawPointerReach(tree, "/components/schemas/Alias/properties/name", true)
 	object, isObject := node.(map[string]any)
 	if !isObject || object["$ref"] != "#/components/schemas/Real" {
 		t.Fatalf("reach = %#v, want the reference object", node)
 	}
+	if len(passed) != 0 {
+		t.Fatalf("passed = %v, want none: the walk composed the reference, it did not pass it", passed)
+	}
+
+	// The same pointer where the reference ALSO declares the next token. On the
+	// line that ignores siblings (JSON Reference §3) the token cannot name an
+	// ignored member, so the walk still stops at the reference.
+	node, passed, _ = rawPointerReach(tree, "/components/schemas/Sibling/properties/name", true)
+	object, isObject = node.(map[string]any)
+	if !isObject || object["$ref"] != "#/components/schemas/Real" {
+		t.Fatalf("reach = %#v, want the reference object", node)
+	}
+	if len(passed) != 0 {
+		t.Fatalf("passed = %v, want none", passed)
+	}
+
+	// On the line that keeps them, the token names a member of the node in hand,
+	// the walk continues into it, and the reference it walked PAST is reported
+	// so the served resource does not carry a target the closure never composed.
+	node, passed, _ = rawPointerReach(tree, "/components/schemas/Sibling/properties/name", false)
+	if object, _ := node.(map[string]any); object["type"] != "string" {
+		t.Fatalf("reach = %#v, want the sibling member", node)
+	}
+	if !reflect.DeepEqual(passed, []string{"/components/schemas/Sibling"}) {
+		t.Fatalf("passed = %v, want the reference the walk went past", passed)
+	}
 
 	// A token the artifact does not declare: evaluation stops where the
 	// artifact stops describing it, and the loader owns the diagnostic.
-	node, _ = rawPointerReach(tree, "/components/schemas/Real/properties/absent/deeper")
+	node, _, _ = rawPointerReach(tree, "/components/schemas/Real/properties/absent/deeper", true)
 	if _, isObject := node.(map[string]any); !isObject {
 		t.Fatalf("reach = %#v, want the deepest declared value", node)
 	}
 
 	// A sequence index resolves; a non-index token does not.
-	node, _ = rawPointerReach(tree, "/components/schemas/List/items/1")
+	node, _, _ = rawPointerReach(tree, "/components/schemas/List/items/1", true)
 	if object, _ := node.(map[string]any); object["type"] != "integer" {
 		t.Fatalf("reach = %#v, want the second item", node)
 	}
-	node, _ = rawPointerReach(tree, "/components/schemas/List/items/01")
+	node, _, _ = rawPointerReach(tree, "/components/schemas/List/items/01", true)
 	if _, isSlice := node.([]any); !isSlice {
 		t.Fatalf("reach = %#v, want the sequence itself: RFC 6901 forbids a leading zero", node)
+	}
+}
+
+// TestPruneToRetainedDropsAReferenceTheClosureOnlyWalkedPast pins the retention
+// half directly: a `$ref` at a position a composed pointer merely passed
+// through is outside `openbindings.openapi@1` §6's closure and is not served,
+// while every other scalar on the way — and a reference the closure DID compose
+// — stays.
+func TestPruneToRetainedDropsAReferenceTheClosureOnlyWalkedPast(t *testing.T) {
+	tree, ok := parseRawResource([]byte(`
+openapi: "3.1.2"
+components:
+  schemas:
+    Sibling:
+      $ref: "#/components/schemas/Gone"
+      title: kept
+      properties:
+        name: {type: string}
+    Composed: {$ref: "#/components/schemas/Real"}
+    Real: {type: object}
+`))
+	if !ok {
+		t.Fatal("parse")
+	}
+	retained := &retainedPointers{}
+	retained.add("/components/schemas/Sibling/properties/name")
+	retained.markUncomposedReference("/components/schemas/Sibling")
+	retained.add("/components/schemas/Composed")
+
+	pruned, changed := pruneToRetained(tree, retained.root)
+	if !changed {
+		t.Fatal("prune reported no change")
+	}
+	encoded, err := json.Marshal(pruned)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got any
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatalf("reparse: %v", err)
+	}
+	sibling, _ := evaluateJSONPointer(got, "/components/schemas/Sibling")
+	object, isObject := sibling.(map[string]any)
+	if !isObject {
+		t.Fatalf("Sibling = %#v, want an object", sibling)
+	}
+	if _, present := object["$ref"]; present {
+		t.Fatalf("Sibling kept a reference the closure only walked past: %s", encoded)
+	}
+	if object["title"] != "kept" {
+		t.Fatalf("Sibling lost a scalar on the way: %s", encoded)
+	}
+	composed, _ := evaluateJSONPointer(got, "/components/schemas/Composed/$ref")
+	if composed != "#/components/schemas/Real" {
+		t.Fatalf("a composed reference was dropped: %s", encoded)
 	}
 }
 
