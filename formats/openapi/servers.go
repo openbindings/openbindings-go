@@ -100,13 +100,13 @@ func resolveServerConfig(raw any, servers openapi3.Servers) (string, error) {
 		if srv := serverByURL(servers, v); srv != nil {
 			return substituteServerVariables(srv, nil)
 		}
-		if u, err := url.Parse(v); err == nil && u.IsAbs() {
+		if denotesTargetBase(v) {
 			return v, nil
 		}
 		return "", fmt.Errorf("configuration.server %q matches no declared server entry and is not an absolute base URL", v)
 	case map[string]any:
 		if base, ok := v["baseUrl"].(string); ok && base != "" {
-			if u, err := url.Parse(base); err != nil || !u.IsAbs() {
+			if !denotesTargetBase(base) {
 				return "", fmt.Errorf("configuration.server.baseUrl %q is not an absolute URL", base)
 			}
 			return base, nil
@@ -217,29 +217,35 @@ func substituteServerVariables(srv *openapi3.Server, supplied map[string]string)
 }
 
 // absolutizeServerURL resolves a (possibly relative) server URL to an
-// absolute URL: absolute URLs pass through; relative ones resolve against
-// the artifact's base URI — the source's location (§6) — per RFC 3986. A
-// server URL that cannot resolve to an absolute URL is the §9.3
-// pre-dispatch refusal. The returned URL carries no trailing slash, so
-// joining with the operation's path template is concatenation.
+// absolute target base: a URL that already denotes a target address passes
+// through; a relative reference resolves against the artifact's base URI —
+// the source's location (§6) — per RFC 3986. A server URL that cannot
+// resolve to an absolute URL is the §9.3 pre-dispatch refusal. The returned
+// URL carries no trailing slash, so joining with the operation's path
+// template is concatenation.
+//
+// Whether a string denotes a target address is decided by denotesTargetBase
+// (target_base.go), which reads RFC 3986's URI production and RFC 9110's
+// non-empty-host requirement for the http and https schemes, rather than by
+// net/url. See that file for why the host parser was the wrong authority.
 func absolutizeServerURL(serverURL, sourceLocation string) (string, error) {
-	u, err := url.Parse(serverURL)
-	if err != nil {
-		return "", fmt.Errorf("server URL %q does not parse: %w", serverURL, err)
-	}
-	if u.IsAbs() {
+	if denotesTargetBase(serverURL) {
 		return strings.TrimRight(serverURL, "/"), nil
 	}
-	if sourceLocation != "" {
+	// Only a relative reference can be completed by a base URI. A string
+	// carrying a scheme has already named an address, so failing the
+	// predicate means that address does not exist and no base can supply it.
+	if !hasURIScheme(serverURL) && sourceLocation != "" && denotesTargetBase(sourceLocation) {
 		base, berr := url.Parse(sourceLocation)
-		if berr == nil && base.IsAbs() {
-			return strings.TrimRight(base.ResolveReference(u).String(), "/"), nil
+		ref, rerr := url.Parse(serverURL)
+		if berr == nil && rerr == nil {
+			return strings.TrimRight(base.ResolveReference(ref).String(), "/"), nil
 		}
 	}
 	return "", &configRequired{
 		point:       "server",
 		path:        "/url",
-		description: fmt.Sprintf("server URL %q cannot resolve to an absolute URL: the source has no absolute-URI location to serve as the artifact's base URI; supply a base URL at the server configuration point", serverURL),
+		description: fmt.Sprintf("server URL %q cannot resolve to an absolute URL: supply a base URL at the server configuration point", serverURL),
 	}
 }
 
