@@ -964,28 +964,8 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 	if mediaConflict {
 		return parsedMediaType{}, fmt.Errorf("resolved schema declares conflicting contentMediaType values")
 	}
-	// The 3.1 dialect's two content annotations have force only on a string.
-	// JSON Schema 2020-12 conditions both on it — §8.3 "If the instance value
-	// is a string, this property defines that the string SHOULD be interpreted
-	// as encoded binary data", §8.4 "If the instance is a string, this property
-	// indicates the media type of the contents of the string" — and §8.1 makes
-	// the whole Content vocabulary annotations that "do not function as
-	// validation assertions". Every accepted 3.1 edition's per-type part
-	// default says the same in its own words: 3.1.0 §4.8.14.5's only
-	// encoding-keyed bullet is scoped to "a `type: string` with a
-	// `contentEncoding`", and the 3.1.1 / 3.1.2 tables at §4.8.15.1.1 carry the
-	// note that "an n/a in the contentEncoding column means that the presence
-	// or value of contentEncoding is irrelevant" — n/a being what the
-	// number/integer/boolean, object and array rows hold — plus "the Encoding
-	// Object's contentType defaulting rules do not take the Schema Object's
-	// contentMediaType into account". So a part that DECLARES a non-string type
-	// keeps its own row and neither keyword changes anything.
-	//
-	// A part that declares NO type is a different cell and still refuses here:
-	// 3.1.1 and 3.1.2 give it application/octet-stream, for which this binding
-	// revision defines no JSON-to-octet part boundary.
-	if !is30 && (contentEncoding != "" || contentMediaType != "") && !schemaDeclaresType(schema, map[*openapi3.Schema]bool{}) {
-		return parsedMediaType{}, fmt.Errorf("a typeless part schema declaring contentEncoding/contentMediaType defaults to application/octet-stream, but this binding revision defines no JSON-to-octet boundary")
+	if !is30 && (contentEncoding != "" || contentMediaType != "") && !schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) {
+		return parsedMediaType{}, fmt.Errorf("contentEncoding/contentMediaType requires a resolved string schema")
 	}
 
 	declared := ""
@@ -1993,37 +1973,6 @@ func nullOnlyBranch(schema *openapi3.Schema) bool {
 // is keyed by the supplied value's JSON application type — the value's TYPE
 // is structure, never payload sniffing. An absent schema is not a
 // declaration and never dispatches.
-// schemaDeclaresType reports whether a resolved part schema declares any
-// `type` member, directly or through `allOf`. It is the twin of
-// openapi-client/typescript/src/media.ts's hasDeclaredSchemaType, and it
-// answers the question the 3.1 per-type part-default table is keyed on:
-// which row a part falls in. A schema that declares no type falls in no
-// typed row at all, which is why the two content annotations are refused
-// there and irrelevant everywhere else.
-func schemaDeclaresType(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) bool {
-	if schema == nil || seen[schema] {
-		return false
-	}
-	seen[schema] = true
-	defer delete(seen, schema)
-	if schema.Type != nil {
-		for _, member := range schema.Type.Slice() {
-			if member != "" {
-				return true
-			}
-		}
-	}
-	for _, member := range schema.AllOf {
-		if member == nil || member.Value == nil {
-			continue
-		}
-		if schemaDeclaresType(member.Value, seen) {
-			return true
-		}
-	}
-	return false
-}
-
 func partSchemaValueDispatches(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) bool {
 	if schema == nil || seen[schema] {
 		return false
