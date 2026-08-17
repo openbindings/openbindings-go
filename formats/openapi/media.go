@@ -960,13 +960,21 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 	if contentEncoding != "" && !httpToken(contentEncoding) {
 		return parsedMediaType{}, fmt.Errorf("contentEncoding %q is not a valid HTTP token", contentEncoding)
 	}
-	contentMediaType, mediaConflict := resolvedSchemaKeywordString(schema, "contentMediaType")
+	_, mediaConflict := resolvedSchemaKeywordString(schema, "contentMediaType")
 	if mediaConflict {
 		return parsedMediaType{}, fmt.Errorf("resolved schema declares conflicting contentMediaType values")
 	}
-	if !is30 && (contentEncoding != "" || contentMediaType != "") && !schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) {
-		return parsedMediaType{}, fmt.Errorf("contentEncoding/contentMediaType requires a resolved string schema")
-	}
+	// A declared non-string part carrying contentEncoding or contentMediaType
+	// is NOT refused. Both keywords belong to [JSON Schema 2020-12]'s Content
+	// vocabulary, whose Section 8.1 makes them annotations that "do not
+	// function as validation assertions", and whose Section 8.3 and Section
+	// 8.4 each open on the instance being a string ("If the instance value is
+	// a string" / "If the instance is a string"). On a declaration that names
+	// a non-string type they are therefore inert, and every accepted 3.1
+	// edition states what such a part gets instead — see the per-row basis on
+	// defaultRevision3PartContentType. The part-Content-Type rows below key
+	// application/octet-stream on a declared string, which is the whole force
+	// the keywords have here.
 
 	declared := ""
 	if enc != nil && enc.ContentType != "" {
@@ -1037,6 +1045,26 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 	return parsed, nil
 }
 
+// defaultRevision3PartContentType applies the accepted editions' own default
+// part-Content-Type rows. Every row is keyed on the DECLARED type:
+//
+//   - 3.0.0-3.0.3 and 3.0.4 key application/octet-stream on "a `type: string`
+//     with `format: binary` or `format: base64`"; `contentEncoding` is not in
+//     the 3.0 Schema Object's dialect at all and appears zero times in the
+//     first four editions' text.
+//   - 3.1.0 Section 4.8.14.5 keys it on "a `type: string` with a
+//     `contentEncoding`", and gives primitives text/plain and complex values
+//     application/json without reference to the keyword.
+//   - 3.1.1 and 3.1.2 Section 4.8.15.1.1 tabulate `string` x contentEncoding
+//     present -> application/octet-stream, and give `number, integer, or
+//     boolean` -> text/plain, `object` -> application/json and `array` ->
+//     "according to the type of the items schema" an `n/a` in the
+//     contentEncoding column, which the table's own note defines as "the
+//     presence or value of contentEncoding is irrelevant".
+//
+// So the encoded row requires a declared string in all three 3.1 editions, and
+// a declared non-string keeps its own row. No accepted edition states a
+// refusal for that combination.
 func defaultRevision3PartContentType(schema *openapi3.Schema, is30 bool) (string, bool) {
 	switch {
 	case schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) && is30 && binarySignaled(schema, true):
@@ -2366,7 +2394,12 @@ func writeRevision3MultipartPart(writer *multipart.Writer, name string, value an
 		if conflict {
 			return fmt.Errorf("multipart part %q: resolved schema declares conflicting contentEncoding values", name)
 		}
-		if contentEncoding != "" {
+		// [JSON Schema 2020-12] Section 8.3 derives contentEncoding from MIME's
+		// Content-Transfer-Encoding header and conditions it on the instance
+		// being a string. On a declared non-string type the keyword is inert,
+		// so the header it maps to is not emitted either; emitting it would
+		// give an annotation that carries no meaning force on the wire.
+		if contentEncoding != "" && schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) {
 			h.Set("Content-Transfer-Encoding", contentEncoding)
 		}
 	}

@@ -1039,6 +1039,52 @@ func TestRevision3MultipartNestedArrayCandidateRefuses(t *testing.T) {
 	}
 }
 
+// TestRevision3MultipartAdmitsInertContentKeywordsOnDeclaredNonString is the
+// re-pointed incumbent of a case that read
+// `{"type":"object","contentMediaType":"application/json"}` -> refused until
+// 2026-08-17, on a pre-check that required a resolved string schema whenever
+// either Content-vocabulary keyword was present. No accepted OAS edition states
+// that refusal, and two authorities state the opposite:
+//
+//   - [JSON Schema 2020-12] Section 8.1 makes the Content vocabulary
+//     ANNOTATIONS that "do not function as validation assertions", and Section
+//     8.3 / Section 8.4 each condition their keyword on the instance being a
+//     string. On a declared non-string type both are inert.
+//   - OAS 3.1.1 and 3.1.2 Section 4.8.15.1.1 tabulate `object` with `n/a` in
+//     the contentEncoding column -> application/json, where the table's own
+//     note defines `n/a` as "the presence or value of contentEncoding is
+//     irrelevant"; 3.1.0 Section 4.8.14.5 gives complex properties
+//     application/json without reference to either keyword.
+//
+// The cell is pinned HERE as well as in the shared part-content-encoding case
+// table, because it is the cell whose incumbent pin this block moved and a
+// moved pin owes an assertion, not a pointer.
+func TestRevision3MultipartAdmitsInertContentKeywordsOnDeclaredNonString(t *testing.T) {
+	for _, edition := range []string{"3.1.0", "3.1.1", "3.1.2"} {
+		t.Run(edition, func(t *testing.T) {
+			doc := &openapi3.T{OpenAPI: edition}
+			media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
+				Type: &openapi3.Types{"object"},
+				Properties: openapi3.Schemas{"value": {Value: &openapi3.Schema{
+					Type:             &openapi3.Types{"object"},
+					ContentMediaType: "application/json",
+				}}},
+			}}}
+			op := opWithRequestBody(openapi3.Content{"multipart/form-data": media}, true)
+			if _, err := planRequestBodiesFor(doc, op, BindingSpec); err != nil {
+				t.Fatalf("declared object part carrying contentMediaType = %v, want admitted", err)
+			}
+			parsed, err := revision3PartContentType(media.Schema.Value.Properties["value"].Value, nil, false)
+			if err != nil {
+				t.Fatalf("part content type = %v", err)
+			}
+			if parsed.canonical != "application/json" {
+				t.Fatalf("part Content-Type = %q, want application/json (the `object` row)", parsed.canonical)
+			}
+		})
+	}
+}
+
 func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
 	doc := &openapi3.T{OpenAPI: "3.1.2"}
 	baseSchema := func(property *openapi3.Schema) *openapi3.Schema {
@@ -1061,7 +1107,7 @@ func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
 			{Value: &openapi3.Schema{Type: &openapi3.Types{"integer"}}},
 			{Value: &openapi3.Schema{Type: &openapi3.Types{"null"}}},
 		}})}}, "choice applicator"},
-		{"content media type on non-string", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"object"}, ContentMediaType: "application/json"})}}, "requires a resolved string"},
+		{"content media type with no declared type", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{ContentMediaType: "application/json"})}}, "no JSON-to-octet part boundary"},
 		{"content media conflict", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{AllOf: openapi3.SchemaRefs{{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, ContentMediaType: "image/png"}}, {Value: &openapi3.Schema{ContentMediaType: "image/jpeg"}}}})}}, "conflicting contentMediaType"},
 		{"content encoding header injection", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}, ContentEncoding: "base64\r\nX-Evil"})}}, "valid HTTP token"},
 	}
