@@ -92,7 +92,9 @@ func TestConfinement_UnattributedDefectRefusesWithTheOriginalError(t *testing.T)
 // is referenced from a response SCHEMA position. kin reports a
 // reference-target-kind defect naming the target; the referencing site is
 // inlined with the value the pointer denotes, which on the 3.0 line is
-// admitted because D6 proves this target carries a conforming Schema Object.
+// admitted because the target is a D6 hit AND is Schema-shaped: it carries
+// Schema Object keywords (`type`, `properties`) and no Response Object fixed
+// field. Both halves are load-bearing -- see the companion case below.
 func TestConfinement_SeamCSchemaPositionInlinesTheDenotedValue(t *testing.T) {
 	content := `{
 	  "openapi": "3.0.3",
@@ -210,5 +212,43 @@ func TestConfinement_FastPathUnchanged(t *testing.T) {
 	}
 	if len(result.Interface.Operations) != 1 || !result.Coverage.FullyRepresented {
 		t.Errorf("conforming document must be fully represented with one operation: %+v", result.Coverage)
+	}
+}
+
+// Seam C, schema position, the 3.0 gate's OTHER half. The target here is a
+// description-less RESPONSE Object -- it carries `content`. It is a D6 hit
+// (D6's test is only the absence of a string `description`), but it is not
+// Schema-shaped, so the 3.0 line must NOT inline it: a Response Object body
+// standing where an operation's output SCHEMA belongs, on a line whose dialect
+// has no `content` keyword, is not something D6 licenses. The load keeps the
+// loader's original error.
+//
+// This is the case the gate admitted before record 84's F2 narrowing; it
+// reddens if `isFloorSchemaShaped` is widened back to "is an object".
+func TestConfinement_SeamCSchemaPositionRefusesAResponseShapedTarget(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {"responses": {"ThingResponse": {"content": {"application/json": {"schema": {"type": "object"}}}}}},
+	  "paths": {
+	    "/things": {
+	      "get": {
+	        "operationId": "listThings",
+	        "responses": {
+	          "200": {
+	            "description": "ok",
+	            "content": {"application/json": {"schema": {"$ref": "#/components/responses/ThingResponse"}}}
+	          }
+	        }
+	      }
+	    }
+	  }
+	}`
+	_, err := synthesizeRaw(content)
+	if err == nil {
+		t.Fatalf("a Response-shaped target must not be inlined into a schema position on the 3.0 line")
+	}
+	if !strings.Contains(err.Error(), "expecting ref to schema object") {
+		t.Errorf("the loader's original error must stand, got %q", err)
 	}
 }

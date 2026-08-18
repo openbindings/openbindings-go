@@ -233,9 +233,11 @@ type acceptanceFloor struct {
 	// member whose value cannot be read as a Response Object.
 	ResponseMemberDefects map[string]bool
 	// ConformantSchemaComponents is the set of `components.responses` members
-	// the D6 reading proves carry a conforming Schema Object, so that a
-	// schema-position reference to one denotes a value that needs no edition
-	// disjunction to be read as a schema.
+	// D6 hits AND that are Schema-shaped in the decidable sense
+	// `isFloorSchemaShaped` states, so that a schema-position reference to one
+	// denotes a value that needs no edition disjunction to be read as a schema.
+	// Failing D6's Response Object test is only a DISPROOF of Response
+	// Object-hood; Schema-shape is tested separately and positively.
 	ConformantSchemaComponents map[string]bool
 }
 
@@ -415,10 +417,12 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 				if !isFloorResponseObject(value) {
 					projectionPositions[ptr] = defect(floorD6, ptr)
 					attribute(floorD6, ptr)
-					// D6's own finding: the value at this position is a
-					// conforming Schema Object, which is why a `$ref` from a
-					// SCHEMA position resolves normally here.
-					if _, isObject := value.(map[string]any); isObject {
+					// D6's class is "Schema-SHAPED and omits the REQUIRED
+					// `description`". The test above establishes only the
+					// second half. A `$ref` from a SCHEMA position resolves
+					// normally here only when the value is also Schema-shaped,
+					// so that half is tested on its own terms.
+					if isFloorSchemaShaped(value) {
 						f.ConformantSchemaComponents[ptr] = true
 					}
 				}
@@ -1127,6 +1131,61 @@ func isFloorResponseObject(v any) bool {
 	}
 	_, has := m["description"].(string)
 	return has
+}
+
+// floorResponseObjectFixedFields are the Response Object's fixed fields other
+// than `description`. Their presence is decidable proof that a value IS a
+// Response Object -- one that merely omitted its REQUIRED `description` -- and
+// so is not a Schema Object: no accepted edition's Schema Object dialect
+// declares any of them.
+var floorResponseObjectFixedFields = []string{"content", "headers", "links"}
+
+// floorSchemaKeywords is the union of the Schema Object vocabularies of the
+// accepted editions -- the 3.0 line's JSON Schema subset plus its own
+// `nullable`/`discriminator`/`xml`, and the 3.1 line's 2020-12 dialect. Shared
+// vocabulary that both object kinds declare (`description`) is deliberately
+// absent: it is not evidence of Schema-shape.
+var floorSchemaKeywords = map[string]bool{
+	"title": true, "multipleOf": true, "maximum": true, "exclusiveMaximum": true,
+	"minimum": true, "exclusiveMinimum": true, "maxLength": true, "minLength": true,
+	"pattern": true, "maxItems": true, "minItems": true, "uniqueItems": true,
+	"maxProperties": true, "minProperties": true, "required": true, "enum": true,
+	"type": true, "allOf": true, "oneOf": true, "anyOf": true, "not": true,
+	"items": true, "properties": true, "additionalProperties": true,
+	"format": true, "default": true, "nullable": true, "discriminator": true,
+	"readOnly": true, "writeOnly": true, "xml": true, "externalDocs": true,
+	"example": true, "deprecated": true,
+	"$id": true, "$schema": true, "$anchor": true, "$defs": true, "$comment": true,
+	"$dynamicRef": true, "$dynamicAnchor": true, "$vocabulary": true,
+	"const": true, "contains": true, "maxContains": true, "minContains": true,
+	"prefixItems": true, "if": true, "then": true, "else": true,
+	"dependentSchemas": true, "dependentRequired": true, "patternProperties": true,
+	"propertyNames": true, "unevaluatedItems": true, "unevaluatedProperties": true,
+	"contentEncoding": true, "contentMediaType": true, "contentSchema": true,
+	"examples": true,
+}
+
+// isFloorSchemaShaped reports whether a value can be read as a Schema Object,
+// decidably and without a complete structural validator, as D6's class title
+// ("Schema-shaped") requires. Two conjuncts: no Response Object fixed field is
+// present (their presence disproves Schema-shape), and at least one Schema
+// Object keyword IS present (positive evidence, rather than "it is an object").
+func isFloorSchemaShaped(v any) bool {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, fixed := range floorResponseObjectFixedFields {
+		if _, has := m[fixed]; has {
+			return false
+		}
+	}
+	for key := range m {
+		if floorSchemaKeywords[key] {
+			return true
+		}
+	}
+	return false
 }
 
 type floorResolution struct {
