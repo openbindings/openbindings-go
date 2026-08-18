@@ -635,3 +635,44 @@ func TestCheckInterfaceCompatibility_SchemaRefsResolvePerSide(t *testing.T) {
 		t.Fatalf("expected one output_incompatible issue through the refs, got %+v", issues)
 	}
 }
+
+func TestCheckInterfaceCompatibility_BooleanFalseSchemas(t *testing.T) {
+	// `false` is the spec's spelling for "carries no input" / "emits no
+	// output" — a call-convention fact, compatible exactly with itself. Its
+	// object spelling ({"not": {}}) is outside the schema profile, so it
+	// short-circuits before normalization (regression: a no-input operation
+	// resolved unavailable with `outside profile at <root>: keyword "not"`).
+	// Mirrors the TS SDK's "boolean schemas" describe block.
+	iface := func(op Operation) *Interface {
+		return &Interface{OpenBindings: "0.1.0", Operations: map[string]Operation{"op": op}}
+	}
+
+	// input false vs input false → compatible
+	if issues := CheckInterfaceCompatibility(iface(Operation{Input: false}), iface(Operation{Input: false})); len(issues) != 0 {
+		t.Fatalf("input false vs false: expected 0 issues, got %+v", issues)
+	}
+	// input false vs input object → incompatible, both directions
+	withInput := iface(Operation{Input: map[string]any{"type": []any{"object"}}})
+	for name, pair := range map[string][2]*Interface{
+		"false-vs-object": {iface(Operation{Input: false}), withInput},
+		"object-vs-false": {withInput, iface(Operation{Input: false})},
+	} {
+		issues := CheckInterfaceCompatibility(pair[0], pair[1])
+		if len(issues) != 1 || issues[0].Kind != CompatibilityInputIncompatible {
+			t.Fatalf("%s: expected one input_incompatible issue, got %+v", name, issues)
+		}
+	}
+	// input true vs input {} → compatible (true is the empty schema)
+	if issues := CheckInterfaceCompatibility(iface(Operation{Input: true}), iface(Operation{Input: map[string]any{}})); len(issues) != 0 {
+		t.Fatalf("input true vs {}: expected 0 issues, got %+v", issues)
+	}
+	// output false vs output false → compatible
+	if issues := CheckInterfaceCompatibility(iface(Operation{Output: false}), iface(Operation{Output: false})); len(issues) != 0 {
+		t.Fatalf("output false vs false: expected 0 issues, got %+v", issues)
+	}
+	// output false vs output object → incompatible
+	issues := CheckInterfaceCompatibility(iface(Operation{Output: false}), iface(Operation{Output: map[string]any{"type": []any{"string"}}}))
+	if len(issues) != 1 || issues[0].Kind != CompatibilityOutputIncompatible {
+		t.Fatalf("output false vs object: expected one output_incompatible issue, got %+v", issues)
+	}
+}

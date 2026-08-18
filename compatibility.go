@@ -134,12 +134,22 @@ func checkCompatibility(required *Interface, requiredOperations []requiredOperat
 		// Per spec: absent/null schemas are "unspecified" (skip in compatibility).
 		// Empty {} schemas are "accepts anything" (must be checked).
 		// Use != nil to distinguish: nil = unspecified, non-nil (including empty) = specified.
-		// Boolean schemas take their equivalent object spellings (true = {},
-		// false = {"not": {}}) so the profile normalizer sees one form.
+		// `true` is identical to {} and flows through the normal check via
+		// SchemaObjectForm. `false` — the spec's spelling for "carries no
+		// input" / "emits no output" — is a call-convention fact, not a value
+		// set the profile can express (its object spelling is {"not": {}},
+		// outside the profile), so it short-circuits: compatible exactly with
+		// itself.
 		if reqOp.Output != nil && provOp.Output != nil {
-			reqOut, reqOK := SchemaObjectForm(reqOp.Output)
-			provOut, provOK := SchemaObjectForm(provOp.Output)
-			if !reqOK || !provOK {
+			if isFalseSchema(reqOp.Output) || isFalseSchema(provOp.Output) {
+				if !(isFalseSchema(reqOp.Output) && isFalseSchema(provOp.Output)) {
+					issues = append(issues, CompatibilityIssue{
+						Operation: opKey,
+						Kind:      CompatibilityOutputIncompatible,
+						Detail:    "output schema `false` (emits no output) is compatible only with `false`",
+					})
+				}
+			} else if reqOut, provOut, bothOK := schemaObjectForms(reqOp.Output, provOp.Output); !bothOK {
 				issues = append(issues, CompatibilityIssue{
 					Operation: opKey,
 					Kind:      CompatibilityOutputIncompatible,
@@ -165,9 +175,15 @@ func checkCompatibility(required *Interface, requiredOperations []requiredOperat
 		}
 
 		if reqOp.Input != nil && provOp.Input != nil {
-			reqIn, reqOK := SchemaObjectForm(reqOp.Input)
-			provIn, provOK := SchemaObjectForm(provOp.Input)
-			if !reqOK || !provOK {
+			if isFalseSchema(reqOp.Input) || isFalseSchema(provOp.Input) {
+				if !(isFalseSchema(reqOp.Input) && isFalseSchema(provOp.Input)) {
+					issues = append(issues, CompatibilityIssue{
+						Operation: opKey,
+						Kind:      CompatibilityInputIncompatible,
+						Detail:    "input schema `false` (carries no input) is compatible only with `false`",
+					})
+				}
+			} else if reqIn, provIn, bothOK := schemaObjectForms(reqOp.Input, provOp.Input); !bothOK {
 				issues = append(issues, CompatibilityIssue{
 					Operation: opKey,
 					Kind:      CompatibilityInputIncompatible,
@@ -194,6 +210,21 @@ func checkCompatibility(required *Interface, requiredOperations []requiredOperat
 	}
 
 	return issues
+}
+
+// isFalseSchema reports whether v is the boolean JSON Schema `false` — the
+// spec's spelling for "carries no input" / "emits no output".
+func isFalseSchema(v JSONSchema) bool {
+	b, ok := v.(bool)
+	return ok && !b
+}
+
+// schemaObjectForms returns both schemas' object forms, or ok=false when
+// either is not a JSON Schema object or boolean.
+func schemaObjectForms(a, b JSONSchema) (ma, mb map[string]any, ok bool) {
+	ma, aOK := SchemaObjectForm(a)
+	mb, bOK := SchemaObjectForm(b)
+	return ma, mb, aOK && bOK
 }
 
 // normalizedCompatible normalizes each schema against its own side's rooted
