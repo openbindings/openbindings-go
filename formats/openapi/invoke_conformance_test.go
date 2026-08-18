@@ -748,7 +748,17 @@ func TestInvoke_DegenerateCombinationUnreachableWithJSONCoDeclared(t *testing.T)
 	}
 }
 
-// urlencoded selection serializes fields per the OAS encoding rules.
+// urlencoded selection serializes fields per the OAS encoding rules. This
+// artifact writes no Encoding Object, so every accepted edition puts both
+// properties on the CONTENT path: `name` takes the string row's text/plain and
+// rides as-is with its space spelled `+` per RFC 1866 section 8.2.1, and `ids`
+// takes the array row and rides as one field carrying its JSON image. Before
+// 2026-08-17 a legacyOpenAPIFormEncoding predicate put a 3.0.3 artifact on the
+// RFC6570-style path instead and this test expected `ids=1&ids=2&name=a%20st`;
+// see design/openapi-30-urlencoded-default-lane-ruling.md. The array's
+// application/json default is the engines' own convention on an open cell
+// (corpus-lab/OPENAPI-RUNTIME.md, "The array-items part default"), pinned here
+// as observed rather than claimed as authority.
 func TestInvoke_URLEncodedBodyOnTheWire(t *testing.T) {
 	var gotCT string
 	var gotBody []byte
@@ -779,7 +789,7 @@ func TestInvoke_URLEncodedBodyOnTheWire(t *testing.T) {
 	if gotCT != "application/x-www-form-urlencoded" {
 		t.Errorf("Content-Type = %q", gotCT)
 	}
-	if string(gotBody) != "ids=1&ids=2&name=a%20b" {
+	if string(gotBody) != "ids=%5B1%2C2%5D&name=a+b" {
 		t.Errorf("body = %q", gotBody)
 	}
 }

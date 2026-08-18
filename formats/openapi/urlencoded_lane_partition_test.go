@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -13,7 +14,7 @@ import (
 // identical file is executed by openapi-client/go and by
 // openapi-client/typescript/src; changing it in one engine without the others
 // fails here.
-const urlencodedLanePartitionCasesDigest = "26ec2ca0143b630fe045e3ec8841057b2afb26e68ef4c86922bca36ef73a1d5b"
+const urlencodedLanePartitionCasesDigest = "254966b36a9ee291416330518bbc2af341a2f54c2fe547f58e946ceb4e0d1e09"
 
 type urlencodedLanePartitionTable struct {
 	Comment   string                        `json:"$comment"`
@@ -129,12 +130,14 @@ func urlencodedLanePartitionDecision(t *testing.T, c urlencodedLanePartitionCase
 
 // TestURLEncodedLanePartitionCaseTable executes the shared table.
 //
-// The partition it pins is edition-keyed and comes from upstream authority
-// text: 3.0.4 and the 3.1 line each state that an explicitly defined style,
-// explode or allowReserved makes the Encoding Object's contentType ignored,
-// which is meaningful only because contentType otherwise governs; 3.0.4 adds
-// that with all three absent "Encoding is to be based on contentType alone".
-// No 3.0.0-3.0.3 text says either thing. See each case's "basis".
+// What it pins is that lane selection is PRESENCE-keyed and the same on every
+// accepted edition. 3.0.4 and the 3.1 line each state that an explicitly
+// defined style, explode or allowReserved makes the Encoding Object's
+// contentType ignored, which is meaningful only because contentType otherwise
+// governs; 3.0.4 adds that with all three absent "Encoding is to be based on
+// contentType alone". 3.0.0-3.0.3 state no lane-selection rule of their own and
+// reach the same behavior through their own section 4.1 patch-uniformity
+// instruction. See each case's "basis".
 func TestURLEncodedLanePartitionCaseTable(t *testing.T) {
 	for _, c := range loadURLEncodedLanePartitionTable(t).Cases {
 		t.Run(c.Name, func(t *testing.T) {
@@ -145,17 +148,18 @@ func TestURLEncodedLanePartitionCaseTable(t *testing.T) {
 	}
 }
 
-// TestURLEncodedLanePartitionMatchesTheLiteralEditionTable states the partition
-// as a claim in its own right, against the table's own literal edition->lane
-// map, so a silent drift in legacyOpenAPIFormEncoding cannot pass by moving the
-// expectations with it.
+// TestURLEncodedLanePartitionMatchesTheLiteralEditionTable states the rule as a
+// claim in its own right, against the table's own literal edition->lane map, so
+// a drift in the engine cannot pass by moving the expectations with it. The map
+// is UNIFORM, and its uniformity is the assertion: no urlencoded behavior here
+// keys on the artifact's openapi field.
 func TestURLEncodedLanePartitionMatchesTheLiteralEditionTable(t *testing.T) {
 	table := loadURLEncodedLanePartitionTable(t)
 	want := map[string]string{
-		"3.0.0": "style",
-		"3.0.1": "style",
-		"3.0.2": "style",
-		"3.0.3": "style",
+		"3.0.0": "content",
+		"3.0.1": "content",
+		"3.0.2": "content",
+		"3.0.3": "content",
 		"3.0.4": "content",
 		"3.1.0": "content",
 		"3.1.1": "content",
@@ -164,13 +168,15 @@ func TestURLEncodedLanePartitionMatchesTheLiteralEditionTable(t *testing.T) {
 	if len(table.Partition) != len(want) {
 		t.Fatalf("table partition covers %d editions, want %d", len(table.Partition), len(want))
 	}
+	lanes := map[string]bool{}
 	for edition, lane := range want {
 		if got := table.Partition[edition]; got != lane {
 			t.Fatalf("table partition[%s] = %q, want %q", edition, got, lane)
 		}
-		if got := legacyOpenAPIFormEncoding(edition); got != (lane == "style") {
-			t.Fatalf("legacyOpenAPIFormEncoding(%s) = %v, but the edition's lane is %q", edition, got, lane)
-		}
+		lanes[table.Partition[edition]] = true
+	}
+	if len(lanes) != 1 {
+		t.Fatalf("the edition->lane map is not uniform: %v", table.Partition)
 	}
 	for _, c := range table.Cases {
 		if c.ExplicitControl {
@@ -180,7 +186,33 @@ func TestURLEncodedLanePartitionMatchesTheLiteralEditionTable(t *testing.T) {
 			continue
 		}
 		if c.Lane != want[c.OpenAPI] {
-			t.Fatalf("%s writes no RFC6570-style control, so its lane must be the edition's (%q), not %q", c.Name, want[c.OpenAPI], c.Lane)
+			t.Fatalf("%s writes no RFC6570-style control, so its lane must be %q on every accepted edition, not %q", c.Name, want[c.OpenAPI], c.Lane)
+		}
+	}
+}
+
+// TestURLEncodedLanePartitionIgnoresThePatchComponent states the deleted
+// predicate as an executable claim rather than as an absence in prose: two
+// documents differing ONLY in the patch component of their openapi field emit
+// the same bytes, for every Encoding Object shape on both accepted lines.
+func TestURLEncodedLanePartitionIgnoresThePatchComponent(t *testing.T) {
+	table := loadURLEncodedLanePartitionTable(t)
+	byVariant := map[string]map[string][]string{}
+	for _, c := range table.Cases {
+		line := c.OpenAPI[:strings.LastIndex(c.OpenAPI, ".")]
+		key := line + "|" + c.Variant
+		if byVariant[key] == nil {
+			byVariant[key] = map[string][]string{}
+		}
+		decision := urlencodedLanePartitionDecision(t, c)
+		byVariant[key][decision] = append(byVariant[key][decision], c.OpenAPI)
+	}
+	if len(byVariant) != 16 {
+		t.Fatalf("covered %d line/variant cells, want 16", len(byVariant))
+	}
+	for key, decisions := range byVariant {
+		if len(decisions) != 1 {
+			t.Fatalf("%s emits different bytes across the patch component of one line: %v", key, decisions)
 		}
 	}
 }

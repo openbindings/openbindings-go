@@ -1,10 +1,10 @@
 {
-  "$comment": "Urlencoded edition-to-lane case table, shared byte-for-byte by the three engines that build an\nOpenAPI application/x-www-form-urlencoded request body: openbindings-go/formats/openapi,\nopenapi-client/go, and openapi-client/typescript/src (which openbindings-ts/packages/openapi\nre-exports).\n\nWHAT THIS TABLE GUARDS. Which of two lanes an urlencoded property takes when the artifact writes\nno RFC6570-style control:\n\n  style lane    RFC6570 form expansion of the property value (an object explodes into its own\n                members), per the Encoding Object style/explode/allowReserved fields\n  content lane  the property value encoded as one unit under the Encoding Object contentType,\n                whose default for an object is application/json\n\nThe partition below is an EDITION partition, and it is not a matter of taste: 3.0.4 and the 3.1\nline each state that an explicitly defined style, explode or allowReserved makes contentType\nignored -- which is only meaningful if contentType otherwise governs -- and 3.0.4 says outright\nthat with all three absent \"Encoding is to be based on contentType alone\". No 3.0.0-3.0.3 text\nsays anything of the kind, so on that line the Encoding Object style field applies with its\ndefault, written or not.\n\nDO NOT re-derive this partition from the sentence \"the default serialization strategy of such\nproperties is described in the Encoding Object’s style property as form\". That sentence is\npresent in 3.0.0, 3.0.1, 3.0.2, 3.0.3 AND 3.1.0, and absent from 3.0.4, 3.1.1 and 3.1.2\n(reproduce: node corpus-lab/scripts/strip-oas-html.mjs --count \"the default serialization\nstrategy of such properties is described in the Encoding Object.s style property as form\"\n-> 1/1/1/1/0/1/0/0). It does not partition the editions the way the lanes do, and an earlier\ndoc comment in all three engines cited it as though it did.\n\nEach case is rendered as a WHOLE OpenAPI document and loaded through each Go engine’s own\nloader, so the table exercises the shipped path rather than a hand-built typed model. Every\ncell was observed in all three engines before it was written down; the authority quotations in\n\"basis\" were verified against corpus-lab/authorities/texts/openapi/oas at the digests recorded\nin corpus-lab/OPENAPI-RUNTIME.md.\n\nShape of every case: one urlencoded request body whose schema is\n{type: object, properties: {address: {type: object, properties: {street: {type: string}}}}},\ninvoked with {\"address\": {\"street\": \"main st\"}}. An object-valued property is used because it is\nthe smallest value whose two lanes emit different bytes; a primitive emits the same bytes on\nboth lanes and would guard nothing.",
+  "$comment": "Urlencoded edition-to-lane case table, shared byte-for-byte by the three engines that build an\nOpenAPI application/x-www-form-urlencoded request body: openbindings-go/formats/openapi,\nopenapi-client/go, and openapi-client/typescript/src (which openbindings-ts/packages/openapi\nre-exports).\n\nWHAT THIS TABLE GUARDS. Which of two paths an urlencoded property takes:\n\n  style path    RFC6570 form expansion of the property value (an object explodes into its own\n                members), per the Encoding Object style/explode/allowReserved fields\n  content path  the property value encoded as one unit under the Encoding Object contentType,\n                whose default for an object is application/json\n\nTHE SELECTOR IS PRESENCE, AND IT IS EDITION-INDEPENDENT. A property whose Encoding Object writes\nan explicit style, explode or allowReserved takes the style path; one that writes none of the\nthree takes the content path. That holds on ALL EIGHT accepted editions, which is why the\n\"partition\" map below is uniform -- ITS UNIFORMITY IS THE ASSERTION, not a placeholder. 3.0.4 and\nthe 3.1 line state the predicate in their own text. 3.0.0-3.0.3 state no lane-selection rule at\nall, and reach the same behaviour through their OWN section 4.1: \"Tooling which supports OAS 3.0\nSHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by\ntooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version and\nsays outright that with all three fields absent \"Encoding is to be based on contentType alone\", so\nonly the content path is consistent with all five 3.0-line texts read under section 2's\nper-edition discipline. Each cell's \"basis\" carries the passage for its own edition.\n\nHISTORY, BECAUSE THIS TABLE'S 3.0-LINE ROWS USED TO SAY THE OPPOSITE. Until 2026-08-17 the three\nengines carried a legacyOpenAPIFormEncoding(3.0.0|3.0.1|3.0.2|3.0.3) predicate that routed those\nfour editions' control-free properties onto the style path. It was the only patch-version-keyed\nbehavioural switch in any of them; it silently discarded an explicitly written encoding.contentType\n(and with it the field name that contentType governed), collided sibling field names, and refused\nat dispatch for values the artifact had fully declared. It was removed by the ruling in\ndesign/openapi-30-urlencoded-default-lane-ruling.md, and openbindings.openapi@1 section 2 now\nstates the patch-uniformity reading once for the whole family.\n\nDO NOT re-derive the answer from the sentence \"the default serialization strategy of such\nproperties is described in the Encoding Object's style property as form\". That sentence is present\nin 3.0.0, 3.0.1, 3.0.2, 3.0.3 AND 3.1.0, and absent from 3.0.4, 3.1.1 and 3.1.2 (reproduce: node\ncorpus-lab/scripts/strip-oas-html.mjs --count \"the default serialization strategy of such\nproperties is described in the Encoding Object.s style property as form\" -> 1/1/1/1/0/1/0/0). It\npartitions nothing, and a doc comment in all three engines once cited it as though it did.\n\nEach case is rendered as a WHOLE OpenAPI document and loaded through each engine's own loader, so\nthe table exercises the shipped path rather than a hand-built typed model. Every cell was observed\nin all three engines before it was written down; the authority quotations in \"basis\" were verified\nagainst corpus-lab/authorities/texts/openapi/oas at the digests recorded in\ncorpus-lab/OPENAPI-RUNTIME.md.\n\nShape of every case: one urlencoded request body whose schema is\n{type: object, properties: {address: {type: object, properties: {street: {type: string}}}}},\ninvoked with {\"address\": {\"street\": \"main st\"}}. An object-valued property is used because it is\nthe smallest value whose two paths emit different bytes; a primitive emits the same bytes on both\npaths and would guard nothing -- for primitives, and for the %20/+ escaper boundary the two paths\ndraw differently, see urlencoded-escaper-cases.json and urlencoded-content-lane-cases.json.",
   "partition": {
-    "3.0.0": "style",
-    "3.0.1": "style",
-    "3.0.2": "style",
-    "3.0.3": "style",
+    "3.0.0": "content",
+    "3.0.1": "content",
+    "3.0.2": "content",
+    "3.0.3": "content",
     "3.0.4": "content",
     "3.1.0": "content",
     "3.1.1": "content",
@@ -17,9 +17,9 @@
       "variant": "no-encoding",
       "encoding": null,
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. No edition-3.0.0 rule lets contentType displace the RFC6570-style fields. The Encoding Object's style/explode/allowReserved descriptions (§4.7.15.1) say only that they SHALL be ignored when the body media type is not application/x-www-form-urlencoded, and §4.7.14.4 states that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\". So style applies whether or not an Encoding Object is written."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.0 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.0|empty-encoding",
@@ -27,9 +27,9 @@
       "variant": "empty-encoding",
       "encoding": {},
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. No edition-3.0.0 rule lets contentType displace the RFC6570-style fields. The Encoding Object's style/explode/allowReserved descriptions (§4.7.15.1) say only that they SHALL be ignored when the body media type is not application/x-www-form-urlencoded, and §4.7.14.4 states that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\". So style applies whether or not an Encoding Object is written."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.0 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.0|content-type",
@@ -39,9 +39,9 @@
         "contentType": "application/json"
       },
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. No edition-3.0.0 rule lets contentType displace the RFC6570-style fields. The Encoding Object's style/explode/allowReserved descriptions (§4.7.15.1) say only that they SHALL be ignored when the body media type is not application/x-www-form-urlencoded, and §4.7.14.4 states that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\". So style applies whether or not an Encoding Object is written."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.0 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.0|style",
@@ -53,7 +53,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written style puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. No edition-3.0.0 rule lets contentType displace the RFC6570-style fields. The Encoding Object's style/explode/allowReserved descriptions (§4.7.15.1) say only that they SHALL be ignored when the body media type is not application/x-www-form-urlencoded, and §4.7.14.4 states that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\". So style applies whether or not an Encoding Object is written."
+      "basis": "An explicitly written style selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.0|explode-true",
@@ -65,7 +65,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. No edition-3.0.0 rule lets contentType displace the RFC6570-style fields. The Encoding Object's style/explode/allowReserved descriptions (§4.7.15.1) say only that they SHALL be ignored when the body media type is not application/x-www-form-urlencoded, and §4.7.14.4 states that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\". So style applies whether or not an Encoding Object is written."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.0|explode-false",
@@ -77,7 +77,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=address=street,main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. No edition-3.0.0 rule lets contentType displace the RFC6570-style fields. The Encoding Object's style/explode/allowReserved descriptions (§4.7.15.1) say only that they SHALL be ignored when the body media type is not application/x-www-form-urlencoded, and §4.7.14.4 states that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\". So style applies whether or not an Encoding Object is written."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.0|allow-reserved-true",
@@ -89,7 +89,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. No edition-3.0.0 rule lets contentType displace the RFC6570-style fields. The Encoding Object's style/explode/allowReserved descriptions (§4.7.15.1) say only that they SHALL be ignored when the body media type is not application/x-www-form-urlencoded, and §4.7.14.4 states that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\". So style applies whether or not an Encoding Object is written."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.0|allow-reserved-false",
@@ -101,7 +101,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. No edition-3.0.0 rule lets contentType displace the RFC6570-style fields. The Encoding Object's style/explode/allowReserved descriptions (§4.7.15.1) say only that they SHALL be ignored when the body media type is not application/x-www-form-urlencoded, and §4.7.14.4 states that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\". So style applies whether or not an Encoding Object is written."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.1|no-encoding",
@@ -109,9 +109,9 @@
       "variant": "no-encoding",
       "encoding": null,
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.1 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.1|empty-encoding",
@@ -119,9 +119,9 @@
       "variant": "empty-encoding",
       "encoding": {},
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.1 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.1|content-type",
@@ -131,9 +131,9 @@
         "contentType": "application/json"
       },
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.1 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.1|style",
@@ -145,7 +145,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written style puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written style selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.1|explode-true",
@@ -157,7 +157,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.1|explode-false",
@@ -169,7 +169,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=address=street,main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.1|allow-reserved-true",
@@ -181,7 +181,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.1|allow-reserved-false",
@@ -193,7 +193,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.2|no-encoding",
@@ -201,9 +201,9 @@
       "variant": "no-encoding",
       "encoding": null,
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.2 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.2|empty-encoding",
@@ -211,9 +211,9 @@
       "variant": "empty-encoding",
       "encoding": {},
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.2 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.2|content-type",
@@ -223,9 +223,9 @@
         "contentType": "application/json"
       },
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.2 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.2|style",
@@ -237,7 +237,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written style puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written style selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.2|explode-true",
@@ -249,7 +249,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.2|explode-false",
@@ -261,7 +261,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=address=street,main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.2|allow-reserved-true",
@@ -273,7 +273,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.2|allow-reserved-false",
@@ -285,7 +285,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.3|no-encoding",
@@ -293,9 +293,9 @@
       "variant": "no-encoding",
       "encoding": null,
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.3 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.3|empty-encoding",
@@ -303,9 +303,9 @@
       "variant": "empty-encoding",
       "encoding": {},
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.3 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.3|content-type",
@@ -315,9 +315,9 @@
         "contentType": "application/json"
       },
       "explicitControl": false,
-      "lane": "style",
-      "expect": "admitted;emit=street=main%20st",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "lane": "content",
+      "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
+      "basis": "No RFC6570-style control is written. Edition 3.0.3 states no lane-selection rule of its own: its §4.7.15.1 style/explode/allowReserved descriptions condition nothing on contentType, and §4.7.14.4 says only that \"the default serialization strategy of such properties is described in the Encoding Object’s style property as form\" — a sentence present verbatim in 3.1.0 as well, so it partitions nothing. The rule that governs this cell is THIS edition’s own §4.1: \"Tooling which supports OAS 3.0 SHOULD be compatible with all OAS 3.0.* versions. The patch version SHOULD NOT be considered by tooling, making no distinction between 3.0.0 and 3.0.1 for example.\" 3.0.4 is a 3.0.* version, so the whole 3.0 line takes ONE behaviour, and 3.0.4 §4.7.15.1.2 fixes which one: with all three fields absent, \"Encoding is to be based on contentType alone\". Running the style path here would contradict 3.0.4 read under its own text, which openbindings.openapi@1 §2 equally requires, so the content path is the only reading consistent with all five 3.0-line texts."
     },
     {
       "name": "3.0.3|style",
@@ -329,7 +329,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written style puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written style selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.3|explode-true",
@@ -341,7 +341,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.3|explode-false",
@@ -353,7 +353,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=address=street,main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.3|allow-reserved-true",
@@ -365,7 +365,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.3|allow-reserved-false",
@@ -377,7 +377,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. Same as 3.0.0; §4.7.15.1 and §4.7.14.4 are unchanged."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.4|no-encoding",
@@ -387,7 +387,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\"."
+      "basis": "No RFC6570-style control is written. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\". Worked bytes for this exact shape are at §4.7.15.2.1."
     },
     {
       "name": "3.0.4|empty-encoding",
@@ -397,7 +397,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\"."
+      "basis": "No RFC6570-style control is written. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\". Worked bytes for this exact shape are at §4.7.15.2.1."
     },
     {
       "name": "3.0.4|content-type",
@@ -409,7 +409,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\"."
+      "basis": "No RFC6570-style control is written. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\". Worked bytes for this exact shape are at §4.7.15.2.1."
     },
     {
       "name": "3.0.4|style",
@@ -421,7 +421,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written style puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\"."
+      "basis": "An explicitly written style selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.4|explode-true",
@@ -433,7 +433,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\"."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.4|explode-false",
@@ -445,7 +445,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=address=street,main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\"."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.4|allow-reserved-true",
@@ -457,7 +457,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\"."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.0.4|allow-reserved-false",
@@ -469,7 +469,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.7.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\"): \"The role of contentType with application/x-www-form-urlencoded request bodies was not described in detail in version 3.0.3 and earlier of this specification. To match the intent of these fields and be compatible with version 3.1 of this specification, it is RECOMMENDED that whenever any of style, explode, or allowReserved are present with an explicit value: The value of contentType, whether it is explicitly defined or has the default value, is to be ignored ... However, if all three of style, explode, and allowReserved fields are absent, it is RECOMMENDED that: All three keywords are to be entirely ignored, rather than treated as having their default values Encoding is to be based on contentType alone\"."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.0|no-encoding",
@@ -479,7 +479,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
+      "basis": "No RFC6570-style control is written. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
     },
     {
       "name": "3.1.0|empty-encoding",
@@ -489,7 +489,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
+      "basis": "No RFC6570-style control is written. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
     },
     {
       "name": "3.1.0|content-type",
@@ -501,7 +501,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
+      "basis": "No RFC6570-style control is written. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
     },
     {
       "name": "3.1.0|style",
@@ -513,7 +513,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written style puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
+      "basis": "An explicitly written style selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.0|explode-true",
@@ -525,7 +525,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.0|explode-false",
@@ -537,7 +537,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=address=street,main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.0|allow-reserved-true",
@@ -549,7 +549,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.0|allow-reserved-false",
@@ -561,7 +561,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1 carries, on EACH of style, explode and allowReserved: \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored.\" Displacement conditioned on explicit definition is what makes contentType govern when no control is written."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.1|no-encoding",
@@ -571,7 +571,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries the same sentence on each of the three fields."
+      "basis": "No RFC6570-style control is written. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored\" on each of the three fields."
     },
     {
       "name": "3.1.1|empty-encoding",
@@ -581,7 +581,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries the same sentence on each of the three fields."
+      "basis": "No RFC6570-style control is written. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored\" on each of the three fields."
     },
     {
       "name": "3.1.1|content-type",
@@ -593,7 +593,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries the same sentence on each of the three fields."
+      "basis": "No RFC6570-style control is written. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored\" on each of the three fields."
     },
     {
       "name": "3.1.1|style",
@@ -605,7 +605,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written style puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries the same sentence on each of the three fields."
+      "basis": "An explicitly written style selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.1|explode-true",
@@ -617,7 +617,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries the same sentence on each of the three fields."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.1|explode-false",
@@ -629,7 +629,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=address=street,main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries the same sentence on each of the three fields."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.1|allow-reserved-true",
@@ -641,7 +641,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries the same sentence on each of the three fields."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.1|allow-reserved-false",
@@ -653,7 +653,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1.2 (\"Fixed Fields for RFC6570-style Serialization\") carries the same sentence on each of the three fields."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.2|no-encoding",
@@ -663,7 +663,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.8.15.1.2 carries the same sentence on each of the three fields."
+      "basis": "No RFC6570-style control is written. §4.8.15.1.2 carries \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored\" on each of the three fields."
     },
     {
       "name": "3.1.2|empty-encoding",
@@ -673,7 +673,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.8.15.1.2 carries the same sentence on each of the three fields."
+      "basis": "No RFC6570-style control is written. §4.8.15.1.2 carries \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored\" on each of the three fields."
     },
     {
       "name": "3.1.2|content-type",
@@ -685,7 +685,7 @@
       "explicitControl": false,
       "lane": "content",
       "expect": "admitted;emit=address=%7B%22street%22%3A%22main+st%22%7D",
-      "basis": "No RFC6570-style control is written, so this cell IS the edition partition. §4.8.15.1.2 carries the same sentence on each of the three fields."
+      "basis": "No RFC6570-style control is written. §4.8.15.1.2 carries \"If a value is explicitly defined, then the value of contentType (implicit or explicit) SHALL be ignored\" on each of the three fields."
     },
     {
       "name": "3.1.2|style",
@@ -697,7 +697,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written style puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1.2 carries the same sentence on each of the three fields."
+      "basis": "An explicitly written style selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.2|explode-true",
@@ -709,7 +709,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1.2 carries the same sentence on each of the three fields."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.2|explode-false",
@@ -721,7 +721,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=address=street,main%20st",
-      "basis": "An explicitly written explode puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1.2 carries the same sentence on each of the three fields."
+      "basis": "An explicitly written explode selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.2|allow-reserved-true",
@@ -733,7 +733,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1.2 carries the same sentence on each of the three fields."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     },
     {
       "name": "3.1.2|allow-reserved-false",
@@ -745,7 +745,7 @@
       "explicitControl": true,
       "lane": "style",
       "expect": "admitted;emit=street=main%20st",
-      "basis": "An explicitly written allowReserved puts the property on the RFC6570-style lane in every accepted edition: the 3.0.0-3.0.3 line applies style unconditionally, and 3.0.4 and the 3.1 line state that an explicitly defined control makes contentType ignored. §4.8.15.1.2 carries the same sentence on each of the three fields."
+      "basis": "An explicitly written allowReserved selects the RFC6570-style path, on every accepted edition. 3.0.4 §4.7.15.1.2 and the 3.1 line’s §4.8.15.1 / §4.8.15.1.2 each state that an explicitly defined control makes contentType ignored; 3.0.0–3.0.3 state no lane-selection rule of their own and reach the same behaviour through their own §4.1 patch-uniformity instruction, as the no-control cells of this table set out. The predicate is PRESENCE, not truthiness: an allowReserved: false or explode: false that merely restates the field’s own default is still an explicit value."
     }
   ]
 }

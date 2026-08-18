@@ -19,7 +19,7 @@ import (
 // openapi-client/typescript, and by openbindings-ts/packages/openapi against
 // that package's BUILT dist; changing it in one engine without the others
 // fails here.
-const partDefaultTypeAbsentCasesDigest = "7bed2d6f962c776724e94dbfa298437d7a3ad0cb8d45f187116a42368acd886b"
+const partDefaultTypeAbsentCasesDigest = "0750e5d5ed6bf8ca8bdb06d35b23e88145dc70ceaf2abedcd157e0750c792b69"
 
 type partDefaultTypeAbsentTable struct {
 	Comment string                      `json:"$comment"`
