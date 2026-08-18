@@ -114,7 +114,8 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			// it (its invalid coverage entry is emitted by the coverage
 			// walk); the strict surface refuses, preserving its guarantee.
 			// Skipped BEFORE key derivation, in every engine identically.
-			if verdict := floor.opVerdict(buildJSONPointerRef(path, method)); verdict != nil && verdict.Disposition == "invalid" {
+			verdict := floor.opVerdict(buildJSONPointerRef(path, method))
+			if verdict != nil && verdict.Disposition == "invalid" {
 				if onUnrealizable != nil {
 					continue
 				}
@@ -182,6 +183,18 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			var requestPlans []*bodyPlan
 			if op.RequestBody != nil && op.RequestBody.Value != nil {
 				plans, planErr := planRequestBodiesFor(doc, op, bindingSpec)
+				// The acceptance floor (openbindings.openapi@1 §3): a
+				// ladder-invalid request media ALTERNATIVE is a unit that is
+				// malformed under its upstream authority, so it is not a
+				// candidate the operation may carry. It never climbs -- the
+				// operation survives on its remaining alternatives, and a
+				// REQUIRED body left with none falls to the existing
+				// unresolvable-request-body exclusion below (OAPI-P-04),
+				// carried and not reopened. Applied BEFORE the candidate count
+				// the exclusion reason is chosen from, so a body whose only
+				// alternative the ladder invalidated is not misreported as a
+				// flattening collision.
+				plans = filterLadderInvalidAlternatives(plans, verdict, buildJSONPointerRef(path, method))
 				plannedCount := len(plans)
 				if planErr == nil {
 					for _, plan := range plans {
@@ -1834,4 +1847,27 @@ func majorMinor(version string) string {
 		return parts[0] + "." + parts[1]
 	}
 	return version
+}
+
+// filterLadderInvalidAlternatives drops the request media candidates whose
+// alternative the ladder judged invalid. The alternative is the unit that
+// carries the defect and it never climbs, so the operation keeps whatever
+// alternatives remain; only a REQUIRED body left with none is excluded, by the
+// existing unresolvable-request-body rule. A synthetic (undeclared) candidate
+// occupies no declared position and is never a ladder unit.
+func filterLadderInvalidAlternatives(plans []*bodyPlan, verdict *floorOp, opRef string) []*bodyPlan {
+	if verdict == nil || len(verdict.InvalidAlternatives) == 0 {
+		return plans
+	}
+	kept := plans[:0:0]
+	for _, plan := range plans {
+		if plan.declared {
+			altRef := opRef + "/requestBody/content/" + escapeJSONPointerToken(plan.mediaKey)
+			if _, invalid := verdict.InvalidAlternatives[altRef]; invalid {
+				continue
+			}
+		}
+		kept = append(kept, plan)
+	}
+	return kept
 }

@@ -85,11 +85,24 @@ var floorD15Cases = []floorD15Case{
 		wantDisposition: "represented",
 	},
 	{
-		// The same spelling on the 3.0 line, whose Schema Object requires the
-		// property definition to be a Schema Object.
-		name: "the same boolean properties member is this class on the 3.0 line",
+		// The 3.0 line's Schema Object is not the 2020-12 dialect and a
+		// boolean is not a Schema Object there -- but `openbindings.openapi@1`
+		// §9.2 already ascribes a part interpretation to a boolean-valued
+		// multipart part on this line, so the spelling is REFERRED rather than
+		// classified, the same device D1n/D1a use. Zero corpus incidence.
+		name: "a boolean properties member on the 3.0 line is REFERRED, not this class",
 		document: `{"openapi":"3.0.0","paths":{"/a":{"get":{"responses":{"200":{"description":"ok",
 		  "content":{"application/json":{"schema":{"type":"object","properties":{"f":true}}}}}}}}}}`,
+		wantPositions:   nil,
+		wantMethod:      "get",
+		wantDisposition: "represented",
+	},
+	{
+		// The clause that DOES fire at a `properties` member on the 3.0 line:
+		// the bohr-io shape, a bare string where a Schema Object belongs.
+		name: "a string properties member is this class on the 3.0 line",
+		document: `{"openapi":"3.0.0","paths":{"/a":{"get":{"responses":{"200":{"description":"ok",
+		  "content":{"application/json":{"schema":{"type":"object","properties":{"f":"array"}}}}}}}}}}`,
 		wantPositions:   []string{"#/paths/~1a/get/responses/200/content/application~1json/schema/properties/f"},
 		wantMethod:      "get",
 		wantDisposition: "invalid",
