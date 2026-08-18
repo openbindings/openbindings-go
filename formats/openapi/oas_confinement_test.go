@@ -69,22 +69,68 @@ func TestConfinement_MethodMemberArrayConfinesAndSiblingSurvives(t *testing.T) {
 	}
 }
 
-// The rail that makes this a confinement and not salvage. `properties/thing`
-// holds an ARRAY, which no shipped class names (it is the registry-scoped D15
-// that block 8d-3 owns). The load must refuse, with the loader's own error.
+// The rail that makes this a confinement and not salvage. A `components.schemas`
+// member that is a bare STRING is one of the shape table's `hits: []` cells
+// (`C2-component-value-string`): the position is a defective one no shipped
+// class names, so nothing attributes it and the load must refuse with the
+// loader's own error rather than neutralise the member.
 func TestConfinement_UnattributedDefectRefusesWithTheOriginalError(t *testing.T) {
 	content := `{
 	  "openapi": "3.0.3",
 	  "info": {"title": "T", "version": "1"},
-	  "components": {"schemas": {"Thing": {"type": "object", "properties": {"member": []}}}},
+	  "components": {"schemas": {"Thing": "not a schema"}},
 	  "paths": {"/good": {"get": {"operationId": "getGood", "responses": {"200": {"description": "ok"}}}}}
 	}`
 	_, err := synthesizeRaw(content)
 	if err == nil {
 		t.Fatalf("a defect no shipped class attributes must never be confined")
 	}
-	if !strings.Contains(err.Error(), "Schema.properties") {
+	if !strings.Contains(err.Error(), "failed to unmarshal") {
 		t.Errorf("the loader's original error must stand, got %q", err)
+	}
+}
+
+// Block 8d-3: the registry-scoped class D15 -- a Schema Object keyword whose
+// value violates the governing dialect's declared JSON type. This is the Kong
+// shape at the schema rung: `properties/member` holds an ARRAY, which kin
+// refuses at unmarshal. The ladder now owns the position, so the pass
+// neutralises it, the operation whose closure REACHES it becomes an invalid
+// target, and the operation that does not reach it survives.
+func TestConfinement_D15SchemaKeywordConfinesAndReachIsAttributed(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {"schemas": {"Thing": {"type": "object", "properties": {"member": []}}}},
+	  "paths": {
+	    "/good": {"get": {"operationId": "getGood", "responses": {"200": {"description": "ok"}}}},
+	    "/reaching": {"get": {"operationId": "getReaching", "responses": {"200": {"description": "ok",
+	      "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}}}}}}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
+	if err != nil {
+		t.Fatalf("a D15 position the ladder owns must confine: %v", err)
+	}
+	if _, ok := result.Interface.Operations["getGood"]; !ok {
+		t.Fatalf("the non-reaching sibling must synthesize: %v", result.Interface.Operations)
+	}
+	if _, ok := result.Interface.Operations["getReaching"]; ok {
+		t.Fatalf("the reaching operation must not synthesize: %v", result.Interface.Operations)
+	}
+	var invalid *openbindings.SynthesisCoverageEntry
+	for i := range result.Coverage.Entries {
+		if result.Coverage.Entries[i].Status == openbindings.SynthesisInvalid {
+			invalid = &result.Coverage.Entries[i]
+		}
+	}
+	if invalid == nil {
+		t.Fatalf("the reaching unit must be entried, never silently dropped: %+v", result.Coverage.Entries)
+	}
+	if invalid.SourceRef != "#/paths/~1reaching/get" || invalid.ReasonCode != invalidUnitReasonCode {
+		t.Errorf("entry %q/%q, want #/paths/~1reaching/get / %s", invalid.SourceRef, invalid.ReasonCode, invalidUnitReasonCode)
+	}
+	if result.Coverage.FullyRepresented {
+		t.Errorf("fullyRepresented must be cleared by the invalid entry")
 	}
 }
 
