@@ -348,7 +348,7 @@ paths:
       responses:
         "204": {description: no content}
 `, schemaOverlayMarker, foreignMarker)
-	doc, _, err := loadDocumentForSynthesis(context.Background(), nil, "", openbindings.TextContent(document))
+	doc, _, _, err := loadDocumentForSynthesis(context.Background(), nil, "", openbindings.TextContent(document))
 	if err != nil {
 		t.Fatalf("loadDocumentForSynthesis: %v", err)
 	}

@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -238,19 +239,39 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 }
 
 func TestInspectSource_NoPaths(t *testing.T) {
+	// The 3.0 line makes `paths` REQUIRED: a document that declares none has
+	// no position from which any target can be addressed, and §3 part 2's
+	// derived whole-source refusal fires (openbindings.openapi@1 §3).
 	content := `{
   "openapi": "3.0.3",
   "info": {"title": "Empty", "version": "1.0.0"}
 }`
 
 	synthesizer := NewSynthesizer()
-	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
+	_, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
 		Content: openbindings.TextContent(content),
+	})
+	if err == nil {
+		t.Fatal("expected the §3 part-2 whole-source refusal for a 3.0 document with no paths")
+	}
+	if !strings.Contains(err.Error(), "whole-source refusal") {
+		t.Errorf("refusal should cite §3 part 2, got: %v", err)
+	}
+
+	// The 3.1 line requires only one of paths/components/webhooks: a
+	// components-only document conformantly declares no target and inspects
+	// as an empty, exhaustive inventory (the emptiness carve-out).
+	componentsOnly := `{
+  "openapi": "3.1.0",
+  "info": {"title": "Empty", "version": "1.0.0"},
+  "components": {"schemas": {"Thing": {"type": "object"}}}
+}`
+	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
+		Content: openbindings.TextContent(componentsOnly),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if len(result.Targets) != 0 {
 		t.Errorf("expected 0 refs, got %d", len(result.Targets))
 	}

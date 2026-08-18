@@ -573,7 +573,7 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
-	iface, _, err := c.synthesizeObserved(ctx, in, nil)
+	iface, _, _, err := c.synthesizeObserved(ctx, in, nil)
 	return iface, err
 }
 
@@ -589,31 +589,31 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 // (SynthesizeInterface) is unchanged.
 func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
 	unrealizable := map[string]unrealizableTarget{}
-	iface, doc, err := c.synthesizeObserved(ctx, in, func(target unrealizableTarget) {
+	iface, doc, floor, err := c.synthesizeObserved(ctx, in, func(target unrealizableTarget) {
 		unrealizable[target.ref] = target
 	})
 	if err != nil {
 		return nil, err
 	}
-	entries := openAPISynthesisCoverage(doc, iface, unrealizable)
+	entries := openAPISynthesisCoverage(doc, iface, unrealizable, floor)
 	return openbindings.NewSynthesisResult(iface, entries, true)
 }
 
-func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput, onUnrealizable func(unrealizableTarget)) (*openbindings.Interface, *openapi3.T, error) {
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput, onUnrealizable func(unrealizableTarget)) (*openbindings.Interface, *openapi3.T, *acceptanceFloor, error) {
 	if len(in.Sources) == 0 {
 		skeleton, err := openbindings.SynthesisSkeleton(in)
-		return &skeleton, nil, err
+		return &skeleton, nil, nil, err
 	}
 	if len(in.Sources) > 1 {
-		return nil, nil, openbindings.ErrMultipleSources
+		return nil, nil, nil, openbindings.ErrMultipleSources
 	}
 	src := in.Sources[0]
 	if src.BindingSpec != BindingSpec {
-		return nil, nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+		return nil, nil, nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {
-			return nil, nil, fmt.Errorf("outputLocation: %w", err)
+			return nil, nil, nil, fmt.Errorf("outputLocation: %w", err)
 		}
 	}
 	// Authoring convenience: a bare filesystem path loads and is emitted as
@@ -622,19 +622,26 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 	// refuse under OAPI-D-02.
 	loadLocation, err := absolutizeArtifactLocation(src.Location)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	artifactContent := src.Content
 	if src.Embed && artifactContent == nil {
 		data, embedErr := readAuthoringArtifact(ctx, c.resolverClient(), loadLocation)
 		if embedErr != nil {
-			return nil, nil, fmt.Errorf("embed OpenAPI source: %w", embedErr)
+			return nil, nil, nil, fmt.Errorf("embed OpenAPI source: %w", embedErr)
 		}
 		artifactContent = openbindings.TextContent(string(data))
 	}
-	doc, schemaOverlays, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, artifactContent)
+	doc, schemaOverlays, entryBytes, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, artifactContent)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
+		return nil, nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
+	}
+	// The invalid-artifact acceptance floor (openbindings.openapi@1 §3),
+	// computed over the entry document's raw image. Part 2's single derived
+	// whole-source refusal fires here, on every synthesis surface.
+	floor := computeAcceptanceFloorFromBytes(entryBytes)
+	if floor != nil && floor.Refusal != "" {
+		return nil, nil, nil, errors.New(floor.Refusal)
 	}
 	// kin-openapi resolves external SchemaRefs into Value but intentionally
 	// retains their artifact-relative Ref spelling. That spelling would dangle
@@ -648,9 +655,9 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 			in.OnWarning(w)
 		}
 	}
-	iface, err := convertDocToInterfaceWithOverlay(doc, loadLocation, src.BindingSpec, warn, onUnrealizable, schemaOverlays)
+	iface, err := convertDocToInterfaceWithOverlay(doc, loadLocation, src.BindingSpec, warn, onUnrealizable, schemaOverlays, floor)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Content is authoritative and remains byte-for-byte in the synthesized
 	// source. A co-present location is its base/provenance, not permission to
@@ -662,9 +669,9 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		}
 	}
 	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, src.BindingSpec); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return &iface, doc, nil
+	return &iface, doc, floor, nil
 }
 
 // internalizeExternalRefs internalizes the already-resolved external closure

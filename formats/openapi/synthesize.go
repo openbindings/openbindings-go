@@ -42,10 +42,10 @@ type unrealizableTarget struct {
 // the convenient strict surface's guarantee that it never returns a
 // statically unbindable partial interface without evidence.
 func convertDocToInterface(doc *openapi3.T, location, bindingSpec string, warn func(openbindings.SynthesizerWarning), onUnrealizable func(unrealizableTarget)) (openbindings.Interface, error) {
-	return convertDocToInterfaceWithOverlay(doc, location, bindingSpec, warn, onUnrealizable, nil)
+	return convertDocToInterfaceWithOverlay(doc, location, bindingSpec, warn, onUnrealizable, nil, nil)
 }
 
-func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec string, warn func(openbindings.SynthesizerWarning), onUnrealizable func(unrealizableTarget), schemaOverlays *rawSchemaOverlayCollector) (openbindings.Interface, error) {
+func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec string, warn func(openbindings.SynthesizerWarning), onUnrealizable func(unrealizableTarget), schemaOverlays *rawSchemaOverlayCollector, floor *acceptanceFloor) (openbindings.Interface, error) {
 	// The schema-dialect translation keys off the artifact's own declared
 	// version (3.0 vs 3.1); the identifier stays exact and version-free.
 	formatVersion := majorMinor(doc.OpenAPI)
@@ -107,6 +107,18 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			op := pathItem.GetOperation(strings.ToUpper(method))
 			if op == nil {
 				continue
+			}
+
+			// The acceptance floor (openbindings.openapi@1 §3): a
+			// ladder-invalid target is not addressed. Tolerant surfaces skip
+			// it (its invalid coverage entry is emitted by the coverage
+			// walk); the strict surface refuses, preserving its guarantee.
+			// Skipped BEFORE key derivation, in every engine identically.
+			if verdict := floor.opVerdict(buildJSONPointerRef(path, method)); verdict != nil && verdict.Disposition == "invalid" {
+				if onUnrealizable != nil {
+					continue
+				}
+				return iface, fmt.Errorf("cannot synthesize OpenAPI operation at %q: %s; synthesis would return a statically unbindable partial interface", buildJSONPointerRef(path, method), floorInvalidTargetMessage(len(verdict.Defects)))
 			}
 
 			opKey := deriveOperationKey(op, path, method, usedKeys)
@@ -369,17 +381,26 @@ func loadDocumentWithResolver(ctx context.Context, client *http.Client, location
 	return loadDocumentWithResolverInternal(ctx, client, location, content, nil)
 }
 
-func loadDocumentForSynthesis(ctx context.Context, client *http.Client, location string, content json.RawMessage) (*openapi3.T, *rawSchemaOverlayCollector, error) {
+func loadDocumentForSynthesis(ctx context.Context, client *http.Client, location string, content json.RawMessage) (*openapi3.T, *rawSchemaOverlayCollector, []byte, error) {
 	overlays := newRawSchemaOverlayCollector()
-	doc, err := loadDocumentWithResolverInternal(ctx, client, location, content, overlays)
+	var entryBytes []byte
+	doc, err := loadDocumentWithResolverEntry(ctx, client, location, content, overlays, &entryBytes)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	overlays.bindDocument(doc)
-	return doc, overlays, nil
+	return doc, overlays, entryBytes, nil
 }
 
 func loadDocumentWithResolverInternal(ctx context.Context, client *http.Client, location string, content json.RawMessage, schemaOverlays *rawSchemaOverlayCollector) (*openapi3.T, error) {
+	return loadDocumentWithResolverEntry(ctx, client, location, content, schemaOverlays, nil)
+}
+
+// loadDocumentWithResolverEntry additionally captures the ENTRY document's
+// raw bytes (pre-normalization: the artifact's own image, which the
+// acceptance floor classifies against) when entryBytes is non-nil. In the
+// location lanes the entry is the loader's first resource read.
+func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, location string, content json.RawMessage, schemaOverlays *rawSchemaOverlayCollector, entryBytes *[]byte) (*openapi3.T, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -404,6 +425,9 @@ func loadDocumentWithResolverInternal(ctx context.Context, client *http.Client, 
 		if err != nil {
 			return nil, err
 		}
+		if entryBytes != nil && *entryBytes == nil {
+			*entryBytes = append([]byte(nil), data...)
+		}
 		data = composition.prune(resource, data)
 		// A reference the edition's own text makes unresolvable is reported
 		// here, at the seam that already serves every resource, rather than
@@ -414,7 +438,7 @@ func loadDocumentWithResolverInternal(ctx context.Context, client *http.Client, 
 		return normalizer.normalizeResourceAt(data, resource, artifactRetrievalURI(resource, retrievalURIs, &retrievalMu))
 	}
 
-	doc, err := loadDocumentRaw(loader, normalizer, composition, location, content)
+	doc, err := loadDocumentRaw(loader, normalizer, composition, location, content, entryBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -460,7 +484,7 @@ func validateDocumentAddress(location string) error {
 	return nil
 }
 
-func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalizer, composition *externalComposition, location string, content json.RawMessage) (*openapi3.T, error) {
+func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalizer, composition *externalComposition, location string, content json.RawMessage, entryBytes *[]byte) (*openapi3.T, error) {
 	// `location`, when present, must be an absolute URI (OAPI-D-02) —
 	// whether it is the fetch target or only the embedded content's base.
 	// The former bare-path lenience ("for local tooling") is gone: the
@@ -475,6 +499,11 @@ func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalize
 		data, err := openbindings.ContentToBytes(content)
 		if err != nil {
 			return nil, err
+		}
+		if entryBytes != nil && *entryBytes == nil {
+			// The artifact's own image, before ref-sibling normalization: what
+			// the acceptance floor classifies against.
+			*entryBytes = append([]byte(nil), data...)
 		}
 		var resource *url.URL
 		if location != "" {

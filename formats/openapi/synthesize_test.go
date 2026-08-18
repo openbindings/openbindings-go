@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -746,10 +747,14 @@ func TestSynthesizeInterfaceWithCoverageCanProveFullRepresentation(t *testing.T)
 }
 
 // PokeAPI's published openapi.yml declares `type: ”` (empty string) inside
-// evolution-chain response schemas. Synthesis must salvage the dirty keyword
-// — with a warning — instead of failing validation and rejecting every
-// operation in the interface.
-func TestSynthesizeInterface_SalvagesInvalidTypeKeyword(t *testing.T) {
+// evolution-chain response schemas. Under the acceptance floor
+// (openbindings.openapi@1 §3) that operation is a ladder-INVALID target: the
+// strict surface refuses rather than salvaging, and where every declared
+// target is invalid the §3 part-2 whole-source refusal fires. Salvage
+// (schema_overlay's dirty-keyword drop, the dogfood fix) remains for
+// positions the entry document's raw image cannot see — external closures —
+// proven by the companion test below.
+func TestSynthesizeInterface_RefusesEntryInvalidTypeKeyword(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dirty.json")
 	content := `{
 	  "openapi": "3.1.0",
@@ -781,27 +786,68 @@ func TestSynthesizeInterface_SalvagesInvalidTypeKeyword(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: path}},
+	})
+	if err == nil {
+		t.Fatal("expected the §3 part-2 whole-source refusal: the document's only declared target is ladder-invalid")
+	}
+	if !strings.Contains(err.Error(), "whole-source refusal") {
+		t.Errorf("refusal should cite §3 part 2, got: %v", err)
+	}
+}
+
+// The salvage lane's remaining home: a dirty `type` inside an EXTERNAL
+// resource is invisible to the entry document's raw image, so the floor does
+// not own it; the loaded closure still salvages with a warning (the dogfood
+// fix's evidence, unchanged).
+func TestSynthesizeInterface_SalvagesExternalInvalidTypeKeyword(t *testing.T) {
+	dir := t.TempDir()
+	external := `{
+	  "type": "object",
+	  "properties": {
+	    "known_move": {"type": "", "nullable": true},
+	    "name": {"type": "string"}
+	  }
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "chain.json"), []byte(external), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "dirty.json")
+	content := `{
+	  "openapi": "3.1.0",
+	  "info": {"title": "Dirty", "version": "1"},
+	  "paths": {
+	    "/chain": {
+	      "get": {
+	        "operationId": "getChain",
+	        "responses": {
+	          "200": {
+	            "description": "ok",
+	            "content": {
+	              "application/json": {
+	                "schema": {"$ref": "./chain.json"}
+	              }
+	            }
+	          }
+	        }
+	      }
+	    }
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var warnings []openbindings.SynthesizerWarning
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources:   []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: path}},
 		OnWarning: func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
 	if err != nil {
-		t.Fatalf("synthesis must salvage the invalid type keyword, got: %v", err)
+		t.Fatalf("synthesis must salvage the external invalid type keyword, got: %v", err)
 	}
-	op, ok := iface.Operations["getChain"]
-	if !ok {
+	if _, ok := iface.Operations["getChain"]; !ok {
 		t.Fatalf("getChain missing from synthesized interface: %v", iface.Operations)
-	}
-	props, _ := op.Output.(map[string]any)["properties"].(map[string]any)
-	known, _ := props["known_move"].(map[string]any)
-	// The invalid type drops with evidence. The 3.1 nullable spelling remains
-	// inert and cannot manufacture a null-only schema.
-	if _, present := known["type"]; present {
-		t.Errorf("known_move.type = %#v, want invalid type removed", known["type"])
-	}
-	if known["nullable"] != true {
-		t.Errorf("stray nullable annotation was not preserved: %#v", known)
 	}
 	found := false
 	for _, w := range warnings {

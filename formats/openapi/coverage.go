@@ -19,7 +19,7 @@ import (
 // Incorporated parameter serialization, response selection, server
 // resolution, and security requirements are behavior of a represented target,
 // not independently addressable units.
-func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, unrealizable map[string]unrealizableTarget) []openbindings.SynthesisCoverageEntry {
+func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, unrealizable map[string]unrealizableTarget, floor *acceptanceFloor) []openbindings.SynthesisCoverageEntry {
 	if doc == nil || iface == nil {
 		return []openbindings.SynthesisCoverageEntry{}
 	}
@@ -42,24 +42,68 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 		}
 	}
 
-	var entries []openbindings.SynthesisCoverageEntry
+	// The walk is driven from the UNION of the loaded document's path×method
+	// inventory and the acceptance floor's raw-tree inventory (block 8d
+	// design §3): a ladder-invalid operation may be absent from the loaded
+	// document (confined) or present (a loadable defect); either way its
+	// invalid entry is owed. Deterministic order: sorted paths × the
+	// httpMethods order.
+	pathSet := map[string]bool{}
 	if doc.Paths != nil {
-		pathKeys := make([]string, 0, doc.Paths.Len())
 		for path := range doc.Paths.Map() {
+			pathSet[path] = true
+		}
+	}
+	if floor != nil {
+		for _, ref := range floor.OpOrder {
+			pathSet[floor.Ops[ref].Path] = true
+		}
+	}
+
+	var entries []openbindings.SynthesisCoverageEntry
+	{
+		pathKeys := make([]string, 0, len(pathSet))
+		for path := range pathSet {
 			pathKeys = append(pathKeys, path)
 		}
 		sort.Strings(pathKeys)
 		for _, path := range pathKeys {
-			pathItem := doc.Paths.Find(path)
-			if pathItem == nil {
-				continue
+			var pathItem *openapi3.PathItem
+			if doc.Paths != nil {
+				pathItem = doc.Paths.Find(path)
 			}
 			for _, method := range httpMethods {
-				op := pathItem.GetOperation(strings.ToUpper(method))
-				if op == nil {
-					continue
+				var op *openapi3.Operation
+				if pathItem != nil {
+					op = pathItem.GetOperation(strings.ToUpper(method))
 				}
 				ref := buildJSONPointerRef(path, method)
+				verdict := floor.opVerdict(ref)
+				if op == nil && verdict == nil {
+					continue
+				}
+				if verdict != nil && verdict.Disposition == "invalid" {
+					// A ladder-invalid target: one invalid target entry
+					// carrying the owning unit and its defects, then the
+					// operation's projection entries.
+					entries = append(entries, openbindings.SynthesisCoverageEntry{
+						SourceIndex: 0,
+						SourceRef:   ref,
+						Scope:       openbindings.SynthesisCoverageTarget,
+						Status:      openbindings.SynthesisInvalid,
+						ReasonCode:  invalidUnitReasonCode,
+						Message:     floorInvalidTargetMessage(len(verdict.Defects)),
+						Details:     map[string]any{"defects": floorDefectDetails(verdict.Defects)},
+					})
+					entries = append(entries, floorProjectionEntries(verdict)...)
+					continue
+				}
+				if op == nil {
+					// Raw-inventory-only and not ladder-invalid: nothing the
+					// loaded document can account further (a confined or
+					// unloadable position without a ladder verdict).
+					continue
+				}
 				identity, ok := byRef[ref]
 				if !ok {
 					// Tolerant synthesis skipped this operation with a
@@ -77,6 +121,11 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 							Rule:        skipped.rule,
 							Message:     skipped.message,
 						})
+						// An excluded target is still ADDRESSED; its
+						// ladder-invalid request media alternatives and
+						// projection entries are owed regardless.
+						entries = append(entries, floorInvalidAlternativeEntries(verdict)...)
+						entries = append(entries, floorProjectionEntries(verdict)...)
 						continue
 					}
 					entries = append(entries, openbindings.SynthesisCoverageEntry{
@@ -100,7 +149,8 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					BindingRef:   identity.ref,
 					Requirements: targetRequirements,
 				})
-				entries = append(entries, openAPIRequestMediaCoverage(doc, op, pathItem, identity, bindingSpec)...)
+				entries = append(entries, openAPIRequestMediaCoverage(doc, op, pathItem, identity, bindingSpec, verdict)...)
+				entries = append(entries, floorProjectionEntries(verdict)...)
 				entries = append(entries, openAPICallbackCoverage(op, ref)...)
 			}
 		}
@@ -150,7 +200,7 @@ func openAPIServerRequirements(
 func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathItem *openapi3.PathItem, identity struct {
 	operationKey string
 	ref          string
-}, bindingSpec string) []openbindings.SynthesisCoverageEntry {
+}, bindingSpec string, verdict *floorOp) []openbindings.SynthesisCoverageEntry {
 	if op.RequestBody == nil || op.RequestBody.Value == nil || len(op.RequestBody.Value.Content) == 0 {
 		return nil
 	}
@@ -174,6 +224,26 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 	entries := make([]openbindings.SynthesisCoverageEntry, 0, len(mediaKeys))
 	for _, mediaKey := range mediaKeys {
 		sourceRef := identity.ref + "/requestBody/content/" + escapeJSONPointerToken(mediaKey)
+		if verdict != nil {
+			if defects, invalid := verdict.InvalidAlternatives[sourceRef]; invalid {
+				// The ladder invalidates this alternative: `invalid`, not
+				// `excluded` -- the unit is malformed under its upstream
+				// authority, not declined by the revision.
+				entries = append(entries, openbindings.SynthesisCoverageEntry{
+					SourceIndex: 0,
+					SourceRef:   sourceRef,
+					Scope:       openbindings.SynthesisCoverageAlternative,
+					Status:      openbindings.SynthesisInvalid,
+					ReasonCode:  invalidUnitReasonCode,
+					Message:     floorInvalidAlternativeMessage(len(defects)),
+					Details: map[string]any{
+						"defects":   floorDefectDetails(defects),
+						"mediaType": mediaKey,
+					},
+				})
+				continue
+			}
+		}
 		if represented[mediaKey] {
 			var requirements []string
 			if requiresRequestMedia[mediaKey] {
@@ -308,4 +378,57 @@ func escapeJSONPointerToken(value string) string {
 
 func formatCoverageRef(parts ...string) string {
 	return fmt.Sprintf("#/%s", strings.Join(parts, "/"))
+}
+
+// floorInvalidAlternativeEntries renders a ladder-invalid operation's or an
+// excluded operation's invalid request media alternatives.
+func floorInvalidAlternativeEntries(verdict *floorOp) []openbindings.SynthesisCoverageEntry {
+	if verdict == nil || len(verdict.AltOrder) == 0 {
+		return nil
+	}
+	entries := make([]openbindings.SynthesisCoverageEntry, 0, len(verdict.AltOrder))
+	for _, altRef := range verdict.AltOrder {
+		defects := verdict.InvalidAlternatives[altRef]
+		entries = append(entries, openbindings.SynthesisCoverageEntry{
+			SourceIndex: 0,
+			SourceRef:   altRef,
+			Scope:       openbindings.SynthesisCoverageAlternative,
+			Status:      openbindings.SynthesisInvalid,
+			ReasonCode:  invalidUnitReasonCode,
+			Message:     floorInvalidAlternativeMessage(len(defects)),
+			Details: map[string]any{
+				"defects":   floorDefectDetails(defects),
+				"mediaType": unescapeJSONPointerToken(altRef[strings.LastIndex(altRef, "/")+1:]),
+			},
+		})
+	}
+	return entries
+}
+
+// floorProjectionEntries renders one projection-scope entry per unit whose
+// emitted closure reaches, or whose response rungs record, invalid positions
+// that cost it nothing.
+func floorProjectionEntries(verdict *floorOp) []openbindings.SynthesisCoverageEntry {
+	if verdict == nil || len(verdict.ProjOrder) == 0 {
+		return nil
+	}
+	entries := make([]openbindings.SynthesisCoverageEntry, 0, len(verdict.ProjOrder))
+	for _, unit := range verdict.ProjOrder {
+		defects := verdict.Projections[unit]
+		entries = append(entries, openbindings.SynthesisCoverageEntry{
+			SourceIndex: 0,
+			SourceRef:   unit,
+			Scope:       openbindings.SynthesisCoverageProjection,
+			Status:      openbindings.SynthesisInvalid,
+			ReasonCode:  invalidUnitReasonCode,
+			Message:     floorProjectionMessage(len(defects)),
+			Details:     map[string]any{"defects": floorDefectDetails(defects)},
+		})
+	}
+	return entries
+}
+
+func unescapeJSONPointerToken(token string) string {
+	token = strings.ReplaceAll(token, "~1", "/")
+	return strings.ReplaceAll(token, "~0", "~")
 }
