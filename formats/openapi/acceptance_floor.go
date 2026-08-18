@@ -100,6 +100,7 @@ const (
 	floorD1s  = "D1s"
 	floorD2   = "D2"
 	floorD2b  = "D2b"
+	floorD3   = "D3"
 	floorD4   = "D4"
 	floorD5   = "D5"
 	floorD6   = "D6"
@@ -213,6 +214,29 @@ type acceptanceFloor struct {
 	// ExternalPathItemMembers counts Paths Object members that are external
 	// Reference Objects: externals defer the part-2 question to resolution.
 	ExternalPathItemMembers int
+
+	// ---- the confinement pass's read-only view of this instrument ---------
+	//
+	// Block 8d-2's load-path confinement never decides for itself what a raw
+	// position means: every question it asks is answered here, by the ladder.
+	// These four maps carry no emission and change no verdict.
+
+	// Attributed records every raw position the ladder CLASSIFIES, including
+	// the classes whose owning unit is NONE and which therefore emit nothing
+	// (D2, D3, and D5 at `info`/`tags`). A located defect this map cannot name
+	// is never confined: the load refuses with its original error.
+	Attributed map[string]string
+	// SchemaPositions is the set of pointers this instrument's own closure
+	// walk reads as Schema Object positions.
+	SchemaPositions map[string]bool
+	// ResponseMemberDefects is the set of D7 positions -- a Responses Object
+	// member whose value cannot be read as a Response Object.
+	ResponseMemberDefects map[string]bool
+	// ConformantSchemaComponents is the set of `components.responses` members
+	// the D6 reading proves carry a conforming Schema Object, so that a
+	// schema-position reference to one denotes a value that needs no edition
+	// disjunction to be read as a schema.
+	ConformantSchemaComponents map[string]bool
 }
 
 func (f *acceptanceFloor) opVerdict(ref string) *floorOp {
@@ -220,6 +244,39 @@ func (f *acceptanceFloor) opVerdict(ref string) *floorOp {
 		return nil
 	}
 	return f.Ops[ref]
+}
+
+// attributes reports whether the ladder classifies the raw position the
+// confinement oracle located. A position one level BELOW a classified
+// position, at its `$ref` member, is the same finding read one level deeper
+// (block 8a §2: `{}` at `#/paths` is a conforming Paths Object, so the defect
+// is the string at the `$ref` member) and is accepted as the same attribution.
+func (f *acceptanceFloor) attributes(pointer string) (string, bool) {
+	if f == nil {
+		return "", false
+	}
+	if class, ok := f.Attributed[pointer]; ok {
+		return class, true
+	}
+	if parent, last, ok := floorSplitPointer(pointer); ok && last == "$ref" {
+		if class, found := f.Attributed[parent]; found {
+			return class, true
+		}
+	}
+	return "", false
+}
+
+// floorSplitPointer splits a `#/a/b` pointer into `#/a` and the decoded final
+// token.
+func floorSplitPointer(pointer string) (string, string, bool) {
+	i := strings.LastIndex(pointer, "/")
+	if i < 0 {
+		return "", "", false
+	}
+	token := pointer[i+1:]
+	token = strings.ReplaceAll(token, "~1", "/")
+	token = strings.ReplaceAll(token, "~0", "~")
+	return pointer[:i], token, true
 }
 
 // computeAcceptanceFloorFromBytes parses the entry document's raw bytes and
@@ -254,7 +311,20 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 		return nil // the edition gate (part 1) owns every other value
 	}
 
-	f := &acceptanceFloor{Edition: edition, Line: line, Ops: map[string]*floorOp{}}
+	f := &acceptanceFloor{
+		Edition:                    edition,
+		Line:                       line,
+		Ops:                        map[string]*floorOp{},
+		Attributed:                 map[string]string{},
+		SchemaPositions:            map[string]bool{},
+		ResponseMemberDefects:      map[string]bool{},
+		ConformantSchemaComponents: map[string]bool{},
+	}
+	attribute := func(class, position string) {
+		if _, seen := f.Attributed[position]; !seen {
+			f.Attributed[position] = class
+		}
+	}
 
 	componentFields := floorComponentFields30
 	types := floorTypes30
@@ -277,6 +347,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 		if _, seen := defectPositions[d.Position]; !seen {
 			defectPositions[d.Position] = d
 		}
+		attribute(d.Class, d.Position)
 	}
 
 	// D5: paths carrying a Reference Object (info/tags route `nowhere` and
@@ -285,6 +356,29 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 	pathsIsRef := isFloorRefObj(pathsValue)
 	if pathsIsRef {
 		destroyedDeclared = true
+		attribute(floorD5, "#/paths")
+	}
+
+	// D3 and the two `nowhere` legs of D5, recorded for attribution ONLY.
+	// Neither emits a coverage entry (`info` never enters the OBI and no
+	// unit's emitted closure reaches it; the same holds for `tags`), so the
+	// ladder's answers are unchanged -- but a load-path confinement that
+	// neutralises one of these positions must be able to name what it is
+	// neutralising, which is what this records.
+	if infoValue, infoDeclared := root["info"]; infoDeclared {
+		if isFloorRefObj(infoValue) {
+			attribute(floorD5, "#/info")
+		}
+		if infoMap, isMap := infoValue.(map[string]any); isMap {
+			if license, licenseDeclared := infoMap["license"]; licenseDeclared {
+				if _, isLicenseObject := license.(map[string]any); !isLicenseObject {
+					attribute(floorD3, "#/info/license")
+				}
+			}
+		}
+	}
+	if isFloorRefObj(root["tags"]) {
+		attribute(floorD5, "#/tags")
 	}
 
 	// D4 / D11 / D6: Components Object member maps.
@@ -304,6 +398,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 				if !floorComponentKeyRE.MatchString(key) {
 					ptr := "#/components/" + floorEsc(fieldName) + "/" + floorEsc(key)
 					projectionPositions[ptr] = defect(floorD11, ptr)
+					attribute(floorD11, ptr)
 				}
 			}
 		}
@@ -316,9 +411,16 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 				if isFloorRefObj(value) {
 					continue
 				}
+				ptr := "#/components/responses/" + floorEsc(key)
 				if !isFloorResponseObject(value) {
-					ptr := "#/components/responses/" + floorEsc(key)
 					projectionPositions[ptr] = defect(floorD6, ptr)
+					attribute(floorD6, ptr)
+					// D6's own finding: the value at this position is a
+					// conforming Schema Object, which is why a `$ref` from a
+					// SCHEMA position resolves normally here.
+					if _, isObject := value.(map[string]any); isObject {
+						f.ConformantSchemaComponents[ptr] = true
+					}
 				}
 			}
 		}
@@ -350,6 +452,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 			pathItem, isMap := pathValue.(map[string]any)
 			if !isMap {
 				destroyedDeclared = true // D2: a declared member that is not a Path Item Object
+				attribute(floorD2, "#/paths/"+floorEsc(pathKey))
 				continue
 			}
 			if isFloorRefObj(pathValue) && !strings.HasPrefix(refString(pathValue), "#") {
@@ -406,12 +509,14 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 							target, res := floorResolveInternal(root, refString(rv))
 							if res.resolved && !isFloorResponseObject(target) {
 								addDefect(defect(floorD7, rptr))
+								f.ResponseMemberDefects[rptr] = true
 							}
 							continue
 						}
 						rvm, rvIsMap := rv.(map[string]any)
 						if !rvIsMap {
 							addDefect(defect(floorD7, rptr))
+							f.ResponseMemberDefects[rptr] = true
 							continue
 						}
 						if !isFloorResponseObject(rv) {
@@ -555,6 +660,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 			return
 		}
 		visitedSchemaPtrs[ptr] = true
+		f.SchemaPositions[ptr] = true
 		visitSchema(nodeMap, ptr)
 		for _, key := range floorSchemaSubSingle {
 			if child, childDeclared := nodeMap[key]; childDeclared {

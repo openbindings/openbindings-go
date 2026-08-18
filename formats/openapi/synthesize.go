@@ -407,46 +407,88 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 	if client == nil {
 		client = http.DefaultClient
 	}
-	loader := openapi3.NewLoader()
-	loader.Context = ctx
-	loader.IsExternalRefsAllowed = true
-	retrievalURIs := map[string]*url.URL{}
-	var retrievalMu sync.RWMutex
-	loader.JoinFunc = artifactJoinFunc(retrievalURIs, &retrievalMu)
-	normalizer := newRawRefSiblingNormalizer(loader.JoinFunc)
-	normalizer.schemaOverlays = schemaOverlays
-	readArtifact := artifactReadFunc(client, content != nil && location == "", retrievalURIs, &retrievalMu)
-	composition := newExternalComposition(
-		func(resource *url.URL) ([]byte, error) { return readArtifact(loader, resource) },
-		loader.JoinFunc,
-	)
-	loader.ReadFromURIFunc = func(loader *openapi3.Loader, resource *url.URL) ([]byte, error) {
-		data, err := readArtifact(loader, resource)
+
+	// The artifact's own entry image, captured once by the first attempt and
+	// never overwritten: it is what the acceptance floor classifies against
+	// and what block 8d-2's confinement pass reads.
+	var captured []byte
+
+	// attempt runs one complete shipped load. `entryOverride`, when non-nil,
+	// replaces the ENTRY document's bytes at the seam block 8a proved --
+	// before normalizeResource, in every lane -- so a confined retry keeps
+	// each lane's own base-URI and retrieval semantics.
+	attempt := func(entryOverride []byte) (*openapi3.T, error) {
+		loader := openapi3.NewLoader()
+		loader.Context = ctx
+		loader.IsExternalRefsAllowed = true
+		retrievalURIs := map[string]*url.URL{}
+		var retrievalMu sync.RWMutex
+		loader.JoinFunc = artifactJoinFunc(retrievalURIs, &retrievalMu)
+		normalizer := newRawRefSiblingNormalizer(loader.JoinFunc)
+		normalizer.schemaOverlays = schemaOverlays
+		readArtifact := artifactReadFunc(client, content != nil && location == "", retrievalURIs, &retrievalMu)
+		composition := newExternalComposition(
+			func(resource *url.URL) ([]byte, error) { return readArtifact(loader, resource) },
+			loader.JoinFunc,
+		)
+		entrySeen := false
+		loader.ReadFromURIFunc = func(loader *openapi3.Loader, resource *url.URL) ([]byte, error) {
+			data, err := readArtifact(loader, resource)
+			if err != nil {
+				return nil, err
+			}
+			if !entrySeen {
+				entrySeen = true
+				if captured == nil {
+					captured = append([]byte(nil), data...)
+				}
+				if entryOverride != nil {
+					data = append([]byte(nil), entryOverride...)
+				}
+			}
+			data = composition.prune(resource, data)
+			// A reference the edition's own text makes unresolvable is reported
+			// here, at the seam that already serves every resource, rather than
+			// left for the typed loader to fail on some later symptom.
+			if err := composition.refusal(); err != nil {
+				return nil, err
+			}
+			return normalizer.normalizeResourceAt(data, resource, artifactRetrievalURI(resource, retrievalURIs, &retrievalMu))
+		}
+
+		doc, err := loadDocumentRaw(loader, normalizer, composition, location, content, &captured, entryOverride)
 		if err != nil {
 			return nil, err
 		}
-		if entryBytes != nil && *entryBytes == nil {
-			*entryBytes = append([]byte(nil), data...)
-		}
-		data = composition.prune(resource, data)
-		// A reference the edition's own text makes unresolvable is reported
-		// here, at the seam that already serves every resource, rather than
-		// left for the typed loader to fail on some later symptom.
-		if err := composition.refusal(); err != nil {
+		localizeReferenceMetadata(doc)
+		if err := checkAcceptedOpenAPIVersion(doc); err != nil {
 			return nil, err
 		}
-		return normalizer.normalizeResourceAt(data, resource, artifactRetrievalURI(resource, retrievalURIs, &retrievalMu))
+		return doc, nil
 	}
 
-	doc, err := loadDocumentRaw(loader, normalizer, composition, location, content, entryBytes)
-	if err != nil {
-		return nil, err
+	doc, err := attempt(nil)
+	if entryBytes != nil {
+		*entryBytes = captured
 	}
-	localizeReferenceMetadata(doc)
-	if err := checkAcceptedOpenAPIVersion(doc); err != nil {
-		return nil, err
+	if err == nil {
+		return doc, nil
 	}
-	return doc, nil
+
+	// Fast path first: confinement is reached only after the shipped load has
+	// already refused. On any confinement failure the ORIGINAL error stands.
+	confined, confinedErr, took := confineEntryDocument(captured, func(data []byte) (*openapi3.T, error) {
+		schemaOverlays.reset()
+		return attempt(data)
+	}, err)
+	switch {
+	case !took:
+		return nil, err
+	case confinedErr != nil:
+		return nil, confinedErr
+	default:
+		return confined, nil
+	}
 }
 
 // absolutizeArtifactLocation lifts a bare filesystem path to the file://
@@ -484,7 +526,7 @@ func validateDocumentAddress(location string) error {
 	return nil
 }
 
-func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalizer, composition *externalComposition, location string, content json.RawMessage, entryBytes *[]byte) (*openapi3.T, error) {
+func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalizer, composition *externalComposition, location string, content json.RawMessage, entryBytes *[]byte, entryOverride []byte) (*openapi3.T, error) {
 	// `location`, when present, must be an absolute URI (OAPI-D-02) —
 	// whether it is the fetch target or only the embedded content's base.
 	// The former bare-path lenience ("for local tooling") is gone: the
@@ -504,6 +546,11 @@ func loadDocumentRaw(loader *openapi3.Loader, normalizer *rawRefSiblingNormalize
 			// The artifact's own image, before ref-sibling normalization: what
 			// the acceptance floor classifies against.
 			*entryBytes = append([]byte(nil), data...)
+		}
+		if entryOverride != nil {
+			// A confined retry (block 8d-2) substitutes the entry document at
+			// the same seam the normalizer already occupies.
+			data = append([]byte(nil), entryOverride...)
 		}
 		var resource *url.URL
 		if location != "" {

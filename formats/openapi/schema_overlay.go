@@ -51,6 +51,20 @@ func newRawSchemaOverlayCollector() *rawSchemaOverlayCollector {
 	}
 }
 
+// reset discards everything collected by a load that failed, so that a
+// confined retry (block 8d-2) starts from the same state a first attempt does.
+func (c *rawSchemaOverlayCollector) reset() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pending = map[string]map[string]any{}
+	c.byRef = map[*openapi3.SchemaRef]map[string]any{}
+	c.bySchema = map[*openapi3.Schema]map[string]any{}
+	c.externals = nil
+}
+
 // setExternalComponents records the internalization table for this load.
 func (c *rawSchemaOverlayCollector) setExternalComponents(externals map[string]refIdentity) {
 	if c == nil {

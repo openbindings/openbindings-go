@@ -1,0 +1,504 @@
+package openapi
+
+// Load-path confinement (block 8d-2), behind the fast path.
+//
+// The acceptance floor (acceptance_floor.go) decides which UNIT owns a defect.
+// This file answers the other half of the same question: when the shipped
+// loader refuses the whole artifact over a defect the floor has already
+// confined to one unit, the load must not throw away every sibling unit that
+// is intact. The pass neutralises the defective raw position and retries, so
+// that the floor's per-unit verdicts are the ones a consumer sees.
+//
+// Two mechanisms, in order, both ported from the block 8a spike
+// (`corpus-lab/go-evaluator/oas_confinement.go` and `…_seamc.go`, whose
+// findings are recorded at `corpus-lab/openapi-runtime/22-…`):
+//
+//	(a) the ORACLE walk. The only oracle is kin-openapi's own typed unmarshal:
+//
+//	        probe(tree) := json.Unmarshal(render(tree), &openapi3.T{}) == nil
+//
+//	    which is the loader's own call with the loader's own destination type.
+//	    This file holds no OAS type model and no kin-openapi struct knowledge.
+//	    Localization is by RESTRICTION: to ask whether the value at pointer P
+//	    carries a kind defect, build a skeleton document holding only the
+//	    container chain down to P with the value at P, and ask the oracle.
+//	    That is sound because kin-openapi decodes every fixed field
+//	    independently of its siblings, so removing siblings can neither create
+//	    a kind error nor hide one inside the retained value. Descent stops
+//	    where a container's OWN kind is wrong.
+//
+//	(b) SEAM C. Reference-target-kind defects never reach the unmarshal
+//	    oracle: kin reports them from reference resolution as
+//	    `bad data in "<target>" (expecting ref to <kind> object)`, naming the
+//	    TARGET and never the referencing site. The sites are recovered by a raw
+//	    search for `$ref` strings denoting that target, and each site is then
+//	    handled by what the OAS says about the position it occupies.
+//
+// THE RAIL THAT MAKES THIS A CONFINEMENT AND NOT SALVAGE: every position this
+// pass touches must be a position the LADDER ATTRIBUTES. A located defect the
+// floor cannot name is refused with the loader's original error -- behaviour
+// unchanged, and never silently dropped. Removing a member the floor does not
+// account for would be exactly the Scenario-C salvage the ruling forbids.
+//
+// Consequence, stated because it is load-bearing: the registry-scoped classes
+// D14/D15 are deliberately not part of the shipped roster (block 8d-1 record
+// §2, left to 8d-3). Every specimen whose located defect set includes one of
+// them therefore still refuses here, by design.
+
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/getkin/kin-openapi/openapi3"
+)
+
+// confinementSeamCRounds bounds the seam-C iteration. Each round closes one
+// reference target; a document may carry several (the corpus's worst is two).
+const confinementSeamCRounds = 8
+
+// confinementProbe reports whether kin-openapi's typed unmarshal accepts the
+// tree. This is the loader's own `json.Unmarshal(data, doc)` reached with the
+// loader's own destination type -- no local type model.
+func confinementProbe(tree any) error {
+	data, err := json.Marshal(tree)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, &openapi3.T{})
+}
+
+// ---- pointers --------------------------------------------------------------
+
+type confinementToken struct {
+	key     string
+	index   int
+	inArray bool
+}
+
+func confinementPointerOf(path []confinementToken) string {
+	var b strings.Builder
+	for _, t := range path {
+		b.WriteByte('/')
+		if t.inArray {
+			b.WriteString(strconv.Itoa(t.index))
+			continue
+		}
+		b.WriteString(floorEsc(t.key))
+	}
+	if b.Len() == 0 {
+		return "#"
+	}
+	return "#" + b.String()
+}
+
+func confinementParsePointer(pointer string) ([]confinementToken, error) {
+	body := strings.TrimPrefix(pointer, "#")
+	if body == "" {
+		return nil, fmt.Errorf("root pointer is not confinable")
+	}
+	parts := strings.Split(strings.TrimPrefix(body, "/"), "/")
+	out := make([]confinementToken, 0, len(parts))
+	for _, p := range parts {
+		decoded := strings.ReplaceAll(strings.ReplaceAll(p, "~1", "/"), "~0", "~")
+		out = append(out, confinementToken{key: decoded})
+	}
+	return out, nil
+}
+
+// confinementSkeleton rebuilds only the container chain down to path, with
+// value at the end. A sequence token becomes a one-element sequence: an
+// element's decoding context is its position's type, not its index.
+func confinementSkeleton(path []confinementToken, value any) any {
+	current := value
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i].inArray {
+			current = []any{current}
+			continue
+		}
+		current = map[string]any{path[i].key: current}
+	}
+	return current
+}
+
+func confinementEmptyLike(value any) (any, bool) {
+	switch value.(type) {
+	case map[string]any:
+		return map[string]any{}, true
+	case []any:
+		return []any{}, true
+	}
+	return nil, false
+}
+
+// confinementResolveParent walks the live tree, deciding at each step from the
+// CONTAINER's own runtime kind whether a token is a key or an index.
+func confinementResolveParent(root any, tokens []confinementToken) (any, confinementToken, bool) {
+	current := root
+	for i := 0; i < len(tokens)-1; i++ {
+		next, ok := confinementStep(current, &tokens[i])
+		if !ok {
+			return nil, confinementToken{}, false
+		}
+		current = next
+	}
+	last := tokens[len(tokens)-1]
+	if arr, ok := current.([]any); ok {
+		index, err := strconv.Atoi(last.key)
+		if err != nil || index < 0 || index >= len(arr) {
+			return nil, confinementToken{}, false
+		}
+		last.inArray = true
+		last.index = index
+	}
+	return current, last, true
+}
+
+func confinementStep(container any, t *confinementToken) (any, bool) {
+	switch c := container.(type) {
+	case map[string]any:
+		v, ok := c[t.key]
+		return v, ok
+	case []any:
+		index, err := strconv.Atoi(t.key)
+		if err != nil || index < 0 || index >= len(c) {
+			return nil, false
+		}
+		t.inArray = true
+		t.index = index
+		return c[index], true
+	}
+	return nil, false
+}
+
+// ---- localization ----------------------------------------------------------
+
+// confinementLocate returns the deepest positions whose own value the oracle
+// rejects.
+func confinementLocate(root any) []string {
+	if confinementProbe(root) == nil {
+		return nil
+	}
+	var out []string
+	confinementWalk(nil, root, &out)
+	return out
+}
+
+func confinementWalk(path []confinementToken, node any, out *[]string) {
+	// Precondition: confinementSkeleton(path, node) is rejected by the oracle.
+	if empty, isContainer := confinementEmptyLike(node); isContainer {
+		if confinementProbe(confinementSkeleton(path, empty)) != nil {
+			// The container's own kind is wrong at this position; its children
+			// are not examined.
+			*out = append(*out, confinementPointerOf(path))
+			return
+		}
+	} else {
+		*out = append(*out, confinementPointerOf(path))
+		return
+	}
+
+	found := false
+	switch typed := node.(type) {
+	case map[string]any:
+		for _, k := range floorKeys(typed) {
+			child := append(append([]confinementToken{}, path...), confinementToken{key: k})
+			if confinementProbe(confinementSkeleton(child, typed[k])) != nil {
+				found = true
+				confinementWalk(child, typed[k], out)
+			}
+		}
+	case []any:
+		for i, v := range typed {
+			child := append(append([]confinementToken{}, path...), confinementToken{index: i, inArray: true})
+			if confinementProbe(confinementSkeleton(child, v)) != nil {
+				found = true
+				confinementWalk(child, v, out)
+			}
+		}
+	}
+	if !found {
+		*out = append(*out, confinementPointerOf(path))
+	}
+}
+
+// ---- neutralization --------------------------------------------------------
+
+// confinementNeutralize neutralises one located position in place. A mapping
+// member is REMOVED; a sequence element is EMPTIED IN PLACE so that no sibling
+// index moves -- the retention discipline the external-closure pruner already
+// established. Every candidate neutral value is accepted only if the oracle
+// then accepts the position: this pass never decides what a position may hold.
+func confinementNeutralize(root any, pointer string) bool {
+	tokens, err := confinementParsePointer(pointer)
+	if err != nil {
+		return false
+	}
+	parent, last, ok := confinementResolveParent(root, tokens)
+	if !ok {
+		return false
+	}
+	switch p := parent.(type) {
+	case map[string]any:
+		delete(p, last.key)
+		return true
+	case []any:
+		for _, neutral := range []any{map[string]any{}, "", []any{}} {
+			original := p[last.index]
+			p[last.index] = neutral
+			if confinementProbe(confinementSkeleton(tokens, neutral)) == nil {
+				return true
+			}
+			p[last.index] = original
+		}
+	}
+	return false
+}
+
+// ---- seam C ----------------------------------------------------------------
+
+// confinementBadData matches kin-openapi's reference-target-kind report. The
+// pass depends on this error TEXT, which the unmarshal oracle does not; that
+// dependence is why seam C is the second mechanism and not the first.
+var confinementBadData = regexp.MustCompile(`bad data in "([^"]+)" \(expecting ref to ([a-z ]+) object\)`)
+
+// confinementRefSites returns the pointers of every raw object carrying a
+// `$ref` member whose value denotes the given entry-document pointer. BOTH
+// fragment spellings are matched -- with and without the leading `#` -- because
+// the loader's report and the artifact's own strings do not always agree on it.
+func confinementRefSites(root any, target string) []string {
+	fragment := strings.TrimPrefix(target, "#")
+	spellings := map[string]bool{target: true, fragment: true, "#" + fragment: true}
+	var out []string
+	var walkNode func(path []confinementToken, node any)
+	walkNode = func(path []confinementToken, node any) {
+		switch typed := node.(type) {
+		case map[string]any:
+			if ref, ok := typed["$ref"].(string); ok && spellings[ref] {
+				out = append(out, confinementPointerOf(path))
+			}
+			for _, k := range floorKeys(typed) {
+				walkNode(append(append([]confinementToken{}, path...), confinementToken{key: k}), typed[k])
+			}
+		case []any:
+			for i, v := range typed {
+				walkNode(append(append([]confinementToken{}, path...), confinementToken{index: i, inArray: true}), v)
+			}
+		}
+	}
+	walkNode(nil, root)
+	sort.Strings(out)
+	return out
+}
+
+// confinementResolveRaw resolves an entry-document JSON Pointer against the raw
+// tree and returns the value at it.
+func confinementResolveRaw(root any, pointer string) (any, bool) {
+	tokens, err := confinementParsePointer(pointer)
+	if err != nil {
+		return nil, false
+	}
+	parent, last, ok := confinementResolveParent(root, tokens)
+	if !ok {
+		return nil, false
+	}
+	switch p := parent.(type) {
+	case map[string]any:
+		v, found := p[last.key]
+		return v, found
+	case []any:
+		if last.index < 0 || last.index >= len(p) {
+			return nil, false
+		}
+		return p[last.index], true
+	}
+	return nil, false
+}
+
+// confinementSetAt replaces the value at a pointer.
+func confinementSetAt(root any, pointer string, value any) bool {
+	tokens, err := confinementParsePointer(pointer)
+	if err != nil {
+		return false
+	}
+	parent, last, ok := confinementResolveParent(root, tokens)
+	if !ok {
+		return false
+	}
+	switch p := parent.(type) {
+	case map[string]any:
+		p[last.key] = value
+		return true
+	case []any:
+		if last.index < 0 || last.index >= len(p) {
+			return false
+		}
+		p[last.index] = value
+		return true
+	}
+	return false
+}
+
+func confinementRemoveAt(root any, pointer string) bool {
+	tokens, err := confinementParsePointer(pointer)
+	if err != nil {
+		return false
+	}
+	parent, last, ok := confinementResolveParent(root, tokens)
+	if !ok {
+		return false
+	}
+	if p, isMap := parent.(map[string]any); isMap {
+		delete(p, last.key)
+		return true
+	}
+	return false
+}
+
+// confinementApplySeamC handles one referencing site by what the OAS says
+// about the position the site occupies. The ladder answers the position
+// question; this function never decides it itself.
+//
+//   - a SCHEMA position: the site is INLINED with the target's raw value. A
+//     JSON Reference denotes the value at the pointer (3.0: the Reference
+//     Object "is defined by JSON Reference"; 3.1 §4.6 interprets the fragment
+//     as a JSON Pointer per RFC 6901), so on the 3.1 line -- where any object
+//     is a valid Schema Object -- there is no authority defect at all, and on
+//     the 3.0 line the same holds for a target D6 proves carries a conforming
+//     Schema Object. Nothing is authored: the value the artifact points at is
+//     the value that lands.
+//   - a RESPONSE position that the ladder has already recorded as D7: the
+//     member is removed. The D7 entry the floor emits at that position is what
+//     accounts for it; the response rung then decides, through P2, whether the
+//     containing operation climbs.
+//   - anything else: refused, so the load keeps its original error.
+func confinementApplySeamC(root any, floor *acceptanceFloor, target, site string) bool {
+	if floor.ResponseMemberDefects[site] {
+		return confinementRemoveAt(root, site)
+	}
+	if floor.SchemaPositions[site] {
+		if floor.Line != "3.1" && !floor.ConformantSchemaComponents[target] {
+			return false
+		}
+		// Only a bare Reference Object is inlined. A `$ref` carrying siblings
+		// is the ref-sibling composition question, which the shipped
+		// normalizer owns; replacing the node would discard what it composes.
+		node, ok := confinementResolveRaw(root, site)
+		if !ok {
+			return false
+		}
+		nodeMap, isMap := node.(map[string]any)
+		if !isMap || len(nodeMap) != 1 {
+			return false
+		}
+		value, found := confinementResolveRaw(root, target)
+		if !found {
+			return false
+		}
+		return confinementSetAt(root, site, value)
+	}
+	return false
+}
+
+// ---- the pass --------------------------------------------------------------
+
+// confineEntryDocument runs behind the fast path: it is reached only after the
+// shipped load has already failed.
+//
+// `entry` is the entry document's own raw image (pre-normalization), which is
+// also what the acceptance floor classifies against; `reload` re-runs the
+// shipped load with those bytes substituted for the entry document, so every
+// lane keeps its own base-URI and retrieval semantics.
+//
+// The third result is whether the pass reached a verdict at all:
+//
+//   - false: the caller keeps its ORIGINAL error. This is what a located
+//     defect with no ladder attribution produces, and what an unplaceable
+//     seam-C site produces -- behaviour unchanged, and never a silent drop.
+//   - true with a nil error: the confined document, whose per-unit accounting
+//     is the floor's.
+//   - true with a non-nil error: the entry document was fully confined and
+//     accounted, and the load still failed for a reason that is not the entry
+//     document's shape -- offline retrieval of an external resource, in the
+//     corpus's two instances. That error is the honest one to report, and
+//     reporting the pre-confinement unmarshal error instead would name a
+//     defect that is no longer what blocks the load.
+func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error), originalErr error) (*openapi3.T, error, bool) {
+	if len(entry) == 0 || reload == nil {
+		return nil, nil, false
+	}
+	tree, parsed := parseRawResource(entry)
+	if !parsed {
+		return nil, nil, false
+	}
+	root, isObject := tree.(map[string]any)
+	if !isObject {
+		return nil, nil, false
+	}
+	// The edition gate is part 1's, owned by the load path: an artifact this
+	// instrument declines to read is never confined.
+	floor := computeAcceptanceFloor(root)
+	if floor == nil {
+		return nil, nil, false
+	}
+
+	// (a) the oracle walk.
+	located := confinementLocate(tree)
+	if len(located) == 0 && !confinementBadData.MatchString(errorText(originalErr)) {
+		// Nothing for either mechanism to do; do not pay for a second load.
+		return nil, nil, false
+	}
+	for _, pointer := range located {
+		if _, attributed := floor.attributes(pointer); !attributed {
+			return nil, nil, false
+		}
+		if !confinementNeutralize(tree, pointer) {
+			return nil, nil, false
+		}
+	}
+
+	data, err := json.Marshal(tree)
+	if err != nil {
+		return nil, nil, false
+	}
+	doc, loadErr := reload(data)
+	if loadErr == nil {
+		return doc, nil, true
+	}
+
+	// (b) seam-C rounds.
+	for round := 0; round < confinementSeamCRounds; round++ {
+		match := confinementBadData.FindStringSubmatch(loadErr.Error())
+		if match == nil {
+			return nil, loadErr, true
+		}
+		sites := confinementRefSites(tree, match[1])
+		if len(sites) == 0 {
+			return nil, nil, false
+		}
+		for _, site := range sites {
+			if !confinementApplySeamC(tree, floor, match[1], site) {
+				return nil, nil, false
+			}
+		}
+		data, err = json.Marshal(tree)
+		if err != nil {
+			return nil, nil, false
+		}
+		doc, loadErr = reload(data)
+		if loadErr == nil {
+			return doc, nil, true
+		}
+	}
+	return nil, nil, false
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
