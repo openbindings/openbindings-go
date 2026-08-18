@@ -437,7 +437,12 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 			if err != nil {
 				return nil, err
 			}
-			if !entrySeen {
+			// The entry document is the loader's first resource read ONLY in
+			// the location lanes. When content is co-present the entry never
+			// passes through here, and this call is an EXTERNAL resource --
+			// substituting the entry into it is exactly the confusion that
+			// dropped an externally referenced Path Item member.
+			if content == nil && !entrySeen {
 				entrySeen = true
 				if captured == nil {
 					captured = append([]byte(nil), data...)
