@@ -14,7 +14,7 @@ import (
 // file is executed by openapi-client/go and by
 // openapi-client/typescript/src; changing it in one engine without the others
 // fails here.
-const urlencodedEscaperCasesDigest = "c019a6aa163add2a943d953b0cb904441615b29a58c0525d51222177c32060d0"
+const urlencodedEscaperCasesDigest = "1af21db9a7c158d671bd4e388f7729dc5372d571c4c00fa257bfb707d162d818"
 
 type urlencodedEscaperTable struct {
 	Comment string                  `json:"$comment"`
@@ -203,14 +203,11 @@ func TestURLEncodedEscaperTableCoversEveryEditionBranchAndThePresenceClass(t *te
 		}
 		seen[c.OpenAPI][c.Declaration] = c.Lane
 	}
-	// One edition per dialect branch the engines distinguish, plus the pair whose
-	// identity is the point: 3.0.3 states the content interpretation nowhere in
-	// its own text and reaches it through its own section 4.1, while 3.0.4
-	// states it outright, so the two editions' rows must agree cell for cell.
-	// A difference between them is what a reintroduced patch-version switch
-	// would produce.
+	// One edition per branch the engines distinguish: the 3.0 line that applies
+	// the style defaults unconditionally, the 3.0 edition that reaches the
+	// content lane, and the 3.1 line.
 	want := map[string]map[string]string{
-		"3.0.3": {"content": "content", "style": "style", "allow-reserved-false": "style"},
+		"3.0.3": {"content": "style", "style": "style", "allow-reserved-false": "style"},
 		"3.0.4": {"content": "content", "style": "style", "allow-reserved-false": "style"},
 		"3.1.1": {"content": "content", "style": "style", "allow-reserved-false": "style"},
 	}
@@ -227,24 +224,6 @@ func TestURLEncodedEscaperTableCoversEveryEditionBranchAndThePresenceClass(t *te
 	}
 	if len(seen) != len(want) {
 		t.Fatalf("case table covers editions %v, want exactly %v", keysOf(seen), keysOf(want))
-	}
-	// The patch component decides nothing: 3.0.3 and 3.0.4 emit the same bytes
-	// for every cell they share.
-	byCell := map[string]map[string]string{}
-	for _, c := range loadURLEncodedEscaperTable(t) {
-		key := c.Declaration + "|" + c.Position + "|" + c.Cell
-		if byCell[key] == nil {
-			byCell[key] = map[string]string{}
-		}
-		byCell[key][c.OpenAPI] = c.Expect
-	}
-	if len(byCell) != 60 {
-		t.Fatalf("case table covers %d declaration/position/cell combinations, want 60", len(byCell))
-	}
-	for key, byEdition := range byCell {
-		if byEdition["3.0.3"] != byEdition["3.0.4"] {
-			t.Fatalf("%s: 3.0.3 emits %q and 3.0.4 emits %q; nothing here may key on the patch component", key, byEdition["3.0.3"], byEdition["3.0.4"])
-		}
 	}
 }
 

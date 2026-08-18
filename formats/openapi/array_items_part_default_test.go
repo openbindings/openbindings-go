@@ -19,7 +19,7 @@ import (
 // identical file is executed by openbindings-go/formats/openapi and by
 // openapi-client/typescript/src; changing it in one engine without the others
 // fails here.
-const arrayItemsPartDefaultCasesDigest = "128716ca17b0545aa890f2c5d441fa77638f9f7598bf2bb23ce52a7162af3ae9"
+const arrayItemsPartDefaultCasesDigest = "ab97e415bb05951f406037c1850878d65beb6f9c8457ead87c51cfe0ff88be12"
 
 type arrayItemsPartDefaultTable struct {
 	Comment string                      `json:"$comment"`
