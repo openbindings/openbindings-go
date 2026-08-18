@@ -776,7 +776,7 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 			enc = media.Encoding[name]
 		}
 		if encodingUsesSerialization(enc) {
-			if err := validateMultipartSerializationMethod(name, propertySchema, enc); err != nil {
+			if err := validateMultipartSerializationMethod(name, propertySchema, enc, is30); err != nil {
 				return err
 			}
 			continue
@@ -816,7 +816,7 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 			return fmt.Errorf("multipart part %q declares encoding.headers, but this binding revision defines no caller source for dynamic part-header values", name)
 		}
 		if encodingUsesSerialization(enc) {
-			if err := validateMultipartSerializationMethod(name, partSchema, enc); err != nil {
+			if err := validateMultipartSerializationMethod(name, partSchema, enc, is30); err != nil {
 				return err
 			}
 			continue
@@ -909,24 +909,241 @@ func encodingUsesSerialization(enc *openapi3.Encoding) bool {
 	return enc.Style != "" || enc.Explode != nil || enc.AllowReserved
 }
 
-func validateMultipartSerializationMethod(name string, schema *openapi3.Schema, enc *openapi3.Encoding) error {
+func validateMultipartSerializationMethod(name string, schema *openapi3.Schema, enc *openapi3.Encoding, is30 bool) error {
 	method := revision3EncodingSerializationMethod(enc)
 	switch method.Style {
 	case openapi3.SerializationForm:
-		return nil
 	case openapi3.SerializationSpaceDelimited, openapi3.SerializationPipeDelimited:
 		if method.Explode || !schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{}) {
 			return fmt.Errorf("multipart part %q style %q is defined only for arrays with explode=false", name, method.Style)
 		}
-		return nil
 	case openapi3.SerializationDeepObject:
 		if !method.Explode || !schemaTypeIs(schema, "object", map[*openapi3.Schema]bool{}) {
 			return fmt.Errorf("multipart part %q style deepObject is defined only for objects with explode=true", name)
 		}
-		return nil
 	default:
 		return fmt.Errorf("multipart part %q declares unsupported encoding style %q", name, method.Style)
 	}
+	if member := styleLaneUndefinedExpansionMember(schema, is30); member != "" {
+		return fmt.Errorf("multipart part %q member %q has no expansion defined for style %q", name, name+member, method.Style)
+	}
+	return nil
+}
+
+// styleLaneUndefinedExpansionMember reports the first DECLARED member of a
+// resolved RFC6570-style-lane schema whose expansion the governing OAS style
+// row leaves undefined. It answers "[]" for an array's items, ".<name>" for
+// an object's property, and "" when no declared member offends. Members are
+// visited in code-point order, so both engines name the same one.
+//
+// A member offends when its resolved schema is `object` or `array`. Every
+// style this lane serves expands a composite value exactly one level: each
+// member becomes a member STRING. A member that is itself composite has no
+// representation, and the refusal is decided by the DECLARATION, not by a
+// supplied value — every value conforming to such a declaration is composite,
+// so an operation admitted here would be one this candidate is statically
+// guaranteed to refuse. That is why the exclusion is accounted at synthesis
+// rather than raised at invocation.
+//
+// WHERE THE AUTHORITY SPEAKS, AND WHERE IT DOES NOT. Read per edition, because
+// section 2 of the binding specification reads every accepted edition under its
+// own immutable text and does not aggregate them. The style table is section
+// 4.7.12.3 "Style Values" on the 3.0 line and section 4.8.12.3 on the 3.1 line.
+//
+//	form              Every accepted edition's row cites the incorporated
+//	                  authority by section: "Form style parameters defined by
+//	                  [RFC6570] Section 3.2.8." RFC 6570 section 2.4.2 states
+//	                  that an explode modifier applies "the expansion process
+//	                  ... to each member of the composite as if it were listed
+//	                  as a separate variable", and the expansions it defines
+//	                  append member strings. A member that is itself a list or
+//	                  an associative array has no expansion there.
+//	spaceDelimited,   No accepted edition's row cites any RFC section. The
+//	pipeDelimited     rows read "Space separated array values" / "Pipe
+//	                  separated array values" on 3.0.0 through 3.0.3, and
+//	                  "... array values or object properties and values" on
+//	                  3.0.4 and the 3.1 line.
+//	deepObject        No accepted edition's row cites any RFC section either,
+//	                  and the row's own text differs by edition:
+//
+//	                    3.0.0, 3.0.1, 3.0.2, 3.0.3, 3.1.0
+//	                      "deepObject | object | query | Provides a simple way
+//	                      of rendering nested objects using form parameters."
+//	                      The row GOVERNS this case and does not DEFINE it.
+//	                      The worked example beside it has scalar members only
+//	                      (color[R]=100&color[G]=200&color[B]=150).
+//
+//	                    3.0.4, 3.1.1, 3.1.2
+//	                      "Allows objects with scalar properties to be
+//	                      represented using form parameters. The
+//	                      representation of array or object properties is not
+//	                      defined."
+//
+// The later editions say in words what the earlier ones leave undefined; on no
+// accepted edition does an authority this specification incorporates supply a
+// representation for a composite member. So this function refuses and the
+// synthesizer accounts the exclusion. Nothing here authors bytes for the
+// member: an interpretation choice for these cells remains available to a
+// future revision and is deliberately not taken.
+//
+// Reproduce the per-edition presence pattern (edition order 3.0.0, 3.0.1,
+// 3.0.2, 3.0.3, 3.0.4, 3.1.0, 3.1.1, 3.1.2):
+//
+//	node corpus-lab/scripts/strip-oas-html.mjs --count \
+//	  "Provides a simple way of rendering nested objects using form \
+//	   parameters"                                           -> 1/1/1/1/0/1/0/0
+//	node corpus-lab/scripts/strip-oas-html.mjs --count \
+//	  "The representation of array or object properties is not defined"
+//	                                                         -> 0/0/0/0/1/0/1/1
+//	node corpus-lab/scripts/strip-oas-html.mjs --count \
+//	  "Form style parameters defined by \[RFC6570\] Section 3\.2\.8"
+//	                                                         -> 1/1/1/1/1/1/1/1
+//
+// (each --count is one line). The digests of the renderings those counts run
+// over are recorded in corpus-lab/OPENAPI-RUNTIME-INDEX.md.
+//
+// Pinned by the shared style-lane-composite-member-cases.json case table,
+// carried byte-for-byte by the other two engines. Package:
+// design/openapi-style-lane-composite-member-ruling.md, RULED 2026-08-18.
+func styleLaneUndefinedExpansionMember(schema *openapi3.Schema, is30 bool) string {
+	resolved := collapsedStyleLaneSchema(schema, is30)
+	if resolved == nil {
+		return ""
+	}
+	if schemaTypeIs(resolved, "array", map[*openapi3.Schema]bool{}) {
+		items := collapsedStyleLaneSchema(resolvedMultipartItems(resolved, map[*openapi3.Schema]bool{}), is30)
+		if styleLaneCompositeMember(items) {
+			return "[]"
+		}
+		return ""
+	}
+	if !schemaTypeIs(resolved, "object", map[*openapi3.Schema]bool{}) {
+		return ""
+	}
+	names := resolvedStyleLanePropertyNames(resolved, map[*openapi3.Schema]bool{})
+	sort.Strings(names)
+	for _, name := range names {
+		member := resolvedMultipartProperty(resolved, name, map[*openapi3.Schema]bool{})
+		if styleLaneCompositeMember(collapsedStyleLaneSchema(member, is30)) {
+			return "." + name
+		}
+	}
+	return ""
+}
+
+// styleLaneCompositeMember reports a resolved member schema that declares a
+// composite JSON value. A member declaring no type is NOT composite by
+// declaration: its runtime value may be a scalar, and a declaration-keyed
+// refusal must not reach a declaration that admits one.
+func styleLaneCompositeMember(schema *openapi3.Schema) bool {
+	if schema == nil {
+		return false
+	}
+	return schemaTypeIs(schema, "object", map[*openapi3.Schema]bool{}) ||
+		schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{})
+}
+
+// collapsedStyleLaneSchema applies section 9.2's single-non-null-branch and
+// union-type collapses before the member kinds are read, so the nullable
+// spelling of a declaration is classified as the declaration it restates.
+// It is the same collapse effectiveRevision3PartSchema applies, reached
+// through that function so the family holds one implementation of it.
+func collapsedStyleLaneSchema(schema *openapi3.Schema, is30 bool) *openapi3.Schema {
+	for i := 0; schema != nil && i < 8; i++ {
+		if literal, boolean := booleanSchemaLiteral(schema); boolean {
+			if literal {
+				return &openapi3.Schema{} // the same unconstrained declaration as {}
+			}
+			return nil // an unsatisfiable member has no admissible runtime value
+		}
+		collapsed, _ := effectiveRevision3PartSchema(schema, is30)
+		if collapsed == schema {
+			return schema
+		}
+		schema = collapsed
+	}
+	return schema
+}
+
+// resolvedStyleLanePropertyNames collects a resolved object's declared
+// property names, including those an allOf member contributes. Each name's
+// schema is then resolved through resolvedMultipartProperty, which is the
+// family's own notion of a resolved property schema and merges the allOf
+// contributions for that name.
+func resolvedStyleLanePropertyNames(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) []string {
+	if schema == nil || seen[schema] {
+		return nil
+	}
+	seen[schema] = true
+	defer delete(seen, schema)
+	present := map[string]bool{}
+	var names []string
+	for name := range schema.Properties {
+		if !present[name] {
+			present[name] = true
+			names = append(names, name)
+		}
+	}
+	for _, member := range schema.AllOf {
+		if member == nil {
+			continue
+		}
+		for _, name := range resolvedStyleLanePropertyNames(member.Value, seen) {
+			if !present[name] {
+				present[name] = true
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
+// parameterStyleLaneUndefinedExpansionMember reports a style-lane parameter's
+// first offending declared member as "<parameter><member path>", or "" when
+// the parameter is not on the style lane or declares no offending member.
+//
+// The four styles below are the ones the ruling covers: they are the query and
+// cookie styles, and they are where the corpus population lives. The path and
+// header styles (simple, label, matrix) carry the same structural question and
+// are deliberately NOT decided here — see the residue note in
+// corpus-lab/openapi-runtime/70-*.md.
+func parameterStyleLaneUndefinedExpansionMember(p *openapi3.Parameter, is30 bool) string {
+	if p == nil || len(p.Content) > 0 || p.Schema == nil {
+		return ""
+	}
+	method, err := revision3ParameterSerializationMethod(p)
+	if err != nil {
+		return ""
+	}
+	switch method.Style {
+	case openapi3.SerializationForm, openapi3.SerializationSpaceDelimited,
+		openapi3.SerializationPipeDelimited, openapi3.SerializationDeepObject:
+	default:
+		return ""
+	}
+	member := styleLaneUndefinedExpansionMember(p.Schema.Value, is30)
+	if member == "" {
+		return ""
+	}
+	return p.Name + member
+}
+
+// styleLaneUndefinedExpansionParamFor reports the first effective parameter
+// whose style-lane declaration carries a member with no defined expansion.
+// Parameters are visited in their effective declaration order.
+func styleLaneUndefinedExpansionParamFor(params openapi3.Parameters, bindingSpec string, is30 bool) string {
+	if !hasMediaFidelity(bindingSpec) {
+		return ""
+	}
+	for _, ref := range params {
+		if ref == nil || ref.Value == nil {
+			continue
+		}
+		if member := parameterStyleLaneUndefinedExpansionMember(ref.Value, is30); member != "" {
+			return member
+		}
+	}
+	return ""
 }
 
 func revision3EncodingSerializationMethod(enc *openapi3.Encoding) openapi3.SerializationMethod {

@@ -143,6 +143,30 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				return iface, unrealizableOperation(opKey, reason)
 			}
 
+			// A style-lane parameter declaring a member with no defined
+			// expansion can never be populated faithfully: every value
+			// conforming to the declaration carries that member as a
+			// composite, and the governing OAS style row defines no
+			// representation for one. The refusal is decided by the
+			// DECLARATION, so the operation is excluded here with durable
+			// evidence rather than published as represented and refused at
+			// invocation. See styleLaneUndefinedExpansionMember in media.go
+			// for the per-edition authority reading.
+			if member := styleLaneUndefinedExpansionParamFor(params, bindingSpec, isOpenAPI30(formatVersion)); member != "" {
+				reason := fmt.Sprintf("parameter member %q has no expansion defined by its governing OAS style row", member)
+				if onUnrealizable != nil {
+					onUnrealizable(unrealizableTarget{
+						ref:          buildJSONPointerRef(path, method),
+						operationKey: opKey,
+						reasonCode:   "openapi.parameter_style_expansion_excluded",
+						rule:         "OAPI-P-02",
+						message:      reason,
+					})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
+			}
+
 			var requestPlans []*bodyPlan
 			if op.RequestBody != nil && op.RequestBody.Value != nil {
 				plans, planErr := planRequestBodiesFor(doc, op, bindingSpec)

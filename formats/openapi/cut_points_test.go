@@ -28,6 +28,12 @@ import (
 // documents where the two directions cut for different reasons; and a
 // referenced component declaring an empty `required` list.
 //
+// Both parameter cases declare `content` rather than `schema`. A cycle through
+// an object parameter requires a composite member, and a style-lane parameter
+// declaring one is excluded at synthesis (styleLaneUndefinedExpansionMember in
+// media.go), so the style lane cannot carry a cyclic parameter at all. The
+// content lane keeps the cut-point question the cases exist to ask.
+//
 // The last two came from the corpus rather than from the drawing board: they
 // are the classes the first measured run of this change moved, and both are
 // here because the measurement caught them.
