@@ -8,12 +8,27 @@ package openapi
 // any dependence on the shared 66-cell case table, which block 8d-1 proved
 // cannot redden under an over-firing mutation (record 80, FIX 7):
 //
-//   - UNDER-fire: disable the pass and the four cases that require it to fire
-//     go red, because the loader refuses the whole artifact again.
+//   - UNDER-fire: disable the pass and the cases that require it to fire go
+//     red, because the loader refuses the whole artifact again.
 //   - OVER-fire: remove the ladder-attribution rail and
 //     TestConfinement_UnattributedDefectRefusesWithTheOriginalError goes red,
 //     because an unrostered defect would then be silently neutralised --
 //     exactly the salvage the ruling forbids.
+//
+// Block 8h adds a third direction, and it is the one the two 8g parks were
+// about. The pair
+// TestConfinement_OracleWalkIntoAnEmittedSchemaIsRefused /
+// TestConfinement_OracleWalkOutsideEmittedContentIsAdmitted are the same
+// document differing ONLY in whether a SURVIVING unit reaches the authored
+// component, and they exercise EMISSION rather than the ladder's walk:
+//
+//   - stop the ledger recording mechanism (a) and the first goes red, because
+//     a component a surviving unit emits ships with a declared member gone.
+//   - make the gate refuse unconditionally and the second goes red, because
+//     the pass would refuse a confinement nothing emitted can read.
+//
+// Neither can be satisfied by narrowing or widening a traversal, which is why
+// they are written as a pair over one document.
 
 import (
 	"context"
@@ -41,8 +56,39 @@ const confinementD2bDocument = `{
   }
 }`
 
-func TestConfinement_MethodMemberArrayConfinesAndSiblingSurvives(t *testing.T) {
-	result, err := synthesizeRaw(confinementD2bDocument)
+// Block 8h: this position -- an Operation Object member of a Path Item -- has
+// NO markable anchor. Its container chain is a Path Item, `#/paths` and the
+// root, and none of them is a Schema Object position whose value an emitter
+// carries verbatim, so the pass cannot show what it authored is unreachable and
+// declines. The measured cost of that is `Kong/kong`, `tsuru/tsuru` and
+// `inngest/inngest`, and it is recorded at
+// `corpus-lab/openapi-runtime/103-block-8h-*` §7 rather than argued here.
+func TestConfinement_MethodMemberArrayHasNoMarkableAnchorAndDeclines(t *testing.T) {
+	_, err := synthesizeRaw(confinementD2bDocument)
+	if err == nil {
+		t.Fatalf("an authored position with no markable anchor must decline")
+	}
+	if !strings.Contains(err.Error(), "cannot unmarshal") {
+		t.Errorf("the loader's ORIGINAL error must stand, got %q", err)
+	}
+}
+
+// The confinement's purpose, kept proven: the same shape one rung down, where
+// the authored position DOES have a markable anchor and nothing emitted reads
+// it. This is the under-fire proof -- disable the pass and it goes red.
+func TestConfinement_SchemaMemberConfinesAndSiblingSurvives(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {"schemas": {"Owned": {"type": "object", "properties": {"m": []}}}},
+	  "paths": {
+	    "/good": {"get": {"operationId": "getGood", "responses": {"200": {"description": "ok"}}}},
+	    "/bad": {"get": {"operationId": "getBad",
+	      "parameters": [{"name": "p", "in": "query", "schema": {"$ref": "#/components/schemas/Owned"}}],
+	      "responses": {"200": {"description": "ok"}}}}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
 	if err != nil {
 		t.Fatalf("confinement must let the intact sibling load: %v", err)
 	}
@@ -51,21 +97,6 @@ func TestConfinement_MethodMemberArrayConfinesAndSiblingSurvives(t *testing.T) {
 	}
 	if len(result.Interface.Operations) != 1 {
 		t.Fatalf("the confined target must not synthesize: %v", result.Interface.Operations)
-	}
-	var invalid *openbindings.SynthesisCoverageEntry
-	for i := range result.Coverage.Entries {
-		if result.Coverage.Entries[i].Status == openbindings.SynthesisInvalid {
-			invalid = &result.Coverage.Entries[i]
-		}
-	}
-	if invalid == nil {
-		t.Fatalf("the confined position must be entried, never silently dropped: %+v", result.Coverage.Entries)
-	}
-	if invalid.SourceRef != "#/paths/~1bad/get" || invalid.ReasonCode != invalidUnitReasonCode {
-		t.Errorf("entry %q/%q, want #/paths/~1bad/get / %s", invalid.SourceRef, invalid.ReasonCode, invalidUnitReasonCode)
-	}
-	if result.Coverage.FullyRepresented {
-		t.Errorf("fullyRepresented must be cleared by the invalid entry")
 	}
 }
 
@@ -185,9 +216,15 @@ func TestConfinement_SeamCSchemaPositionInlinesTheDenotedValue(t *testing.T) {
 
 // Seam C, response position: the tsuru shape. A Responses Object member is a
 // Reference Object resolving to a Schema Object, which the ladder already
-// records as D7. The member is removed and the operation keeps its explicit
-// 2xx; the D7 entry at that position is what accounts for it.
-func TestConfinement_SeamCResponsePositionRemovesTheMemberAndEntriesIt(t *testing.T) {
+// records as D7, and seam C removes the member.
+//
+// Block 8h: that removal AUTHORS -- the Responses Object that remains is not
+// what the artifact declared -- and a Responses Object has no markable anchor,
+// so the pass declines. Being ENTRIED is not the same as being admissible: 8g
+// deleted the URef round's `Projections` subtraction for exactly this reason,
+// and an accounted drop buys no more here than it does there. The measured cost
+// is `tsuru/tsuru`, whose fifteen `default` members are all of this shape.
+func TestConfinement_SeamCResponsePositionHasNoMarkableAnchorAndDeclines(t *testing.T) {
 	content := `{
 	  "openapi": "3.0.3",
 	  "info": {"title": "T", "version": "1"},
@@ -204,25 +241,9 @@ func TestConfinement_SeamCResponsePositionRemovesTheMemberAndEntriesIt(t *testin
 	    }
 	  }
 	}`
-	result, err := synthesizeRaw(content)
-	if err != nil {
-		t.Fatalf("seam C must close this load: %v", err)
-	}
-	if _, ok := result.Interface.Operations["getInfo"]; !ok {
-		t.Fatalf("the operation keeps its explicit 2xx and must synthesize: %v", result.Interface.Operations)
-	}
-	var projection *openbindings.SynthesisCoverageEntry
-	for i := range result.Coverage.Entries {
-		e := &result.Coverage.Entries[i]
-		if e.Scope == openbindings.SynthesisCoverageProjection && e.Status == openbindings.SynthesisInvalid {
-			projection = e
-		}
-	}
-	if projection == nil {
-		t.Fatalf("the removed response member must be entried: %+v", result.Coverage.Entries)
-	}
-	if projection.ReasonCode != invalidUnitReasonCode {
-		t.Errorf("projection reasonCode %q, want %s", projection.ReasonCode, invalidUnitReasonCode)
+	_, err := synthesizeRaw(content)
+	if err == nil {
+		t.Fatalf("removing a Responses Object member is authoring with no markable anchor and must decline")
 	}
 }
 
@@ -688,5 +709,90 @@ func TestConfinement_URefNonSuccessResponseRouteStillConfines(t *testing.T) {
 	}
 	if _, ok := result.Interface.Operations["getSurvive"]; !ok {
 		t.Fatalf("the surviving unit must synthesize: %v", result.Interface.Operations)
+	}
+}
+
+// ---- block 8h: the mechanism-(a) emission pair -------------------------------
+
+// oracleWalkDocument is one artifact in two versions. The only defect is a
+// single `"m": []` inside a shared component -- a `properties` member whose
+// value is an array, which kin-openapi's own typed unmarshal refuses, which is
+// what puts it in mechanism (a)'s hands. `/climb` reaches the component through
+// a query-parameter schema and CLIMBS. The two versions differ only in whether
+// `/survive` reaches the same component.
+//
+// `reached` is record 102's `n2`, stored verbatim at
+// `corpus-lab/data/oas-mechanism-a-reproducers/n2-oracle-unwalked-paramcontent.json`.
+// Its channel -- a Parameter Object's `content` form -- is one the acceptance
+// floor's closure walk does not visit, which is why two blocks keyed on that
+// walk shipped it. Nothing in this pair names that channel.
+func oracleWalkDocument(reached bool) string {
+	survivingParameter := `{"name": "q", "in": "query", "schema": {"type": "string"}}`
+	if reached {
+		survivingParameter = `{"name": "q", "in": "query", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}}`
+	}
+	return `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {"schemas": {"Shared": {"type": "object", "properties": {"x": {"type": "string"}, "m": []}}}},
+	  "paths": {
+	    "/climb": {"get": {"operationId": "getClimb",
+	      "parameters": [{"name": "p", "in": "query", "schema": {"$ref": "#/components/schemas/Shared"}}],
+	      "responses": {"200": {"description": "ok"}}}},
+	    "/survive": {"get": {"operationId": "getSurvive",
+	      "parameters": [` + survivingParameter + `],
+	      "responses": {"200": {"description": "ok"}}}}
+	  }
+	}`
+}
+
+// RED PROOF, mechanism (a), emission side. A surviving unit reaches the
+// component mechanism (a) authored into, so the member the artifact declared
+// would be gone from shipped content. The engine's own emitter says so -- the
+// marked and shipped images do not emit identically -- and the confinement is
+// refused.
+//
+// Stop `confinementNeutralize` recording with the ledger and this goes red: the
+// document synthesizes, `getSurvive` is reported `represented` with
+// `exhaustive=true` and no projection entry, and its shipped schema is
+// `{"properties":{"x":{"type":"string"}},"type":"object"}` -- the artifact's
+// `m` silently absent. That was the behaviour at `5acb82a`.
+func TestConfinement_OracleWalkIntoAnEmittedSchemaIsRefused(t *testing.T) {
+	result, err := synthesizeRaw(oracleWalkDocument(true))
+	if err == nil {
+		t.Fatalf("a component a surviving unit emits must not ship an authored value: %+v", result.Interface.Operations)
+	}
+	if !strings.Contains(err.Error(), "cannot unmarshal") {
+		t.Errorf("the loader's ORIGINAL error must stand, got %q", err)
+	}
+}
+
+// RED PROOF, the other direction, over the SAME document. Nothing emitted
+// reaches the authored component, the emitter says the two images are
+// identical, and the confinement is admitted: the intact sibling survives and
+// the defective unit is entried.
+//
+// Make the gate refuse unconditionally and this goes red. Without it the pair
+// above is satisfiable by refusing everything, which is the failure mode a
+// one-directional proof cannot see.
+func TestConfinement_OracleWalkOutsideEmittedContentIsAdmitted(t *testing.T) {
+	result, err := synthesizeRaw(oracleWalkDocument(false))
+	if err != nil {
+		t.Fatalf("nothing emitted reads the authored position; the confinement must be admitted: %v", err)
+	}
+	if _, ok := result.Interface.Operations["getSurvive"]; !ok {
+		t.Fatalf("the surviving unit must synthesize: %v", result.Interface.Operations)
+	}
+	if _, ok := result.Interface.Operations["getClimb"]; ok {
+		t.Fatalf("the climbing unit must not synthesize: %v", result.Interface.Operations)
+	}
+	var invalid *openbindings.SynthesisCoverageEntry
+	for i := range result.Coverage.Entries {
+		if result.Coverage.Entries[i].Status == openbindings.SynthesisInvalid {
+			invalid = &result.Coverage.Entries[i]
+		}
+	}
+	if invalid == nil || invalid.SourceRef != "#/paths/~1climb/get" {
+		t.Fatalf("the climbing unit must be entried: %+v", result.Coverage.Entries)
 	}
 }
