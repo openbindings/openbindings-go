@@ -501,26 +501,12 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 		return doc, nil
 	}
 
-	// The gate's own load. It is ISOLATED: its own collector, filled and bound
-	// exactly as `loadDocumentForSynthesis` fills and binds the one the shipped
-	// interface is built from, and never the enclosing `schemaOverlays`, whose
-	// state must describe the document this call returns.
-	isolate := func(data []byte) (*openapi3.T, *rawSchemaOverlayCollector, error) {
-		overlays := newRawSchemaOverlayCollector()
-		image, imageErr := attempt(data, overlays)
-		if imageErr != nil {
-			return nil, nil, imageErr
-		}
-		overlays.bindDocument(image)
-		return image, overlays, nil
-	}
-
 	// Fast path first: confinement is reached only after the shipped load has
 	// already refused. On any confinement failure the ORIGINAL error stands.
 	confined, confinedErr, took := confineEntryDocument(captured, func(data []byte) (*openapi3.T, error) {
 		schemaOverlays.reset()
 		return attempt(data, schemaOverlays)
-	}, err, synthesisEmissionGate(ctx, location, isolate))
+	}, err, synthesisEmissionGate(ctx, location, attempt))
 	switch {
 	case !took:
 		return nil, err
@@ -548,25 +534,35 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 //
 // THE GATE RUNS THE SHIPPING EMISSION FUNCTION, and that is not a restatement
 // of the two choices above -- it is the correction record 112 §6 ground 1
-// required. This gate used to be handed two already-loaded documents, neither
-// of them `bindDocument`-ed, and to convert both with `schemaOverlays` NIL,
-// defended by the argument that overlays only ADD members to a schema the
-// emitter already carries, so their absence could hide no mark. THAT ARGUMENT
-// IS FALSE. The collector carries the authorial presence facts kin-openapi's
-// typed model erases -- `erasedSchemaPresence` names them -- and they reach
-// emitted content only once `bindDocument` has paired them with typed identity.
-// A difference spelled in any of eleven measured facts (`title`, `description`,
-// `format`, `pattern`, `default`, `example`, `enum`, `minLength`,
-// `uniqueItems`, `readOnly`, `deprecated`, each in its erased spelling) was
-// therefore INVISIBLE to the gate and VISIBLE to what ships:
-// `TestSynthesisEmissionGate_TheSupersededEmitterWasBlindToTheOverlay`.
+// required. This gate used to be handed two already-loaded documents and to
+// convert both with `schemaOverlays` NIL, defended by the argument that
+// overlays only ADD members to a schema the emitter already carries, so their
+// absence could hide no mark. THAT ARGUMENT IS FALSE, and the reason it is
+// false is not the argument it answers.
+//
+// The gate's two loads came from `reload`, which is
+// `schemaOverlays.reset(); attempt(data)`. That collects the authorial presence
+// facts kin-openapi's typed model erases -- `erasedSchemaPresence` names them
+// -- and then NEVER BINDS THEM. `bindDocument` is what pairs a collected
+// overlay with typed identity, and only `loadDocumentForSynthesis` called it.
+// So the gate's images were emitted from documents whose erased spellings had
+// been collected and dropped, and eleven measured facts -- `title`,
+// `description`, `format`, `pattern`, `default`, `example`, `enum`,
+// `minLength`, `uniqueItems`, `readOnly`, `deprecated`, each in the erased
+// spelling `erasedSchemaPresence` recognises -- were INVISIBLE to the gate and
+// VISIBLE to what ships. A difference at an authored position spelled in any of
+// them would have been certified unreachable and would have shipped.
+// `TestSynthesisEmissionGate_TheSupersededEmitterWasBlindToTheOverlay` is that
+// measurement, and it attributes the blindness to the missing BIND: once a
+// document is bound, the eleven reach emitted content whether or not the
+// collector is also handed to the conversion.
 //
 // So each side is now built by exactly what `loadDocumentForSynthesis` and
 // `invoker.go` build the shipped interface by, in that order:
 //
 //	overlays := newRawSchemaOverlayCollector()   -- its OWN, per image
 //	doc      := attempt(image, overlays)
-//	overlays.bindDocument(doc)
+//	overlays.bindDocument(doc)                   -- `newIsolatedEmissionLoad`
 //	overlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
 //	convertDocToInterfaceWithOverlay(doc, location, bindingSpec, …, overlays, floor)
 //
@@ -580,8 +576,35 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 // The shipped image is the same bytes in every round, so its images are
 // computed ONCE and reused, and the pass's total entry-document loads are
 // unchanged by the move.
+// newIsolatedEmissionLoad is the emission gate's own load: one complete shipped
+// load into its OWN overlay collector, BOUND, and never the collector whose
+// state has to describe the document the surrounding call returns.
+//
+// It is a named function and not an inline closure for one reason: it is the
+// half of the shipping emission function that the gate was missing, so a proof
+// that the gate runs the shipping emitter has to be able to drive THIS, and a
+// perturbation that removes the bind has to be able to redden it. An inline
+// closure the shipped path alone can see is exactly the shape of proof this
+// file has had defeated twice.
+func newIsolatedEmissionLoad(attempt func([]byte, *rawSchemaOverlayCollector) (*openapi3.T, error)) func([]byte) (*openapi3.T, *rawSchemaOverlayCollector, error) {
+	return func(data []byte) (*openapi3.T, *rawSchemaOverlayCollector, error) {
+		overlays := newRawSchemaOverlayCollector()
+		image, err := attempt(data, overlays)
+		if err != nil {
+			return nil, nil, err
+		}
+		overlays.bindDocument(image)
+		return image, overlays, nil
+	}
+}
+
+// It takes `attempt` -- one shipped load -- rather than an already-isolated
+// loader, so that no caller can hand it a load that shares a collector with
+// anything else. The isolation is the gate's own and there is no wiring line
+// between them for a later change to get wrong.
 func synthesisEmissionGate(ctx context.Context, location string,
-	isolate func(data []byte) (*openapi3.T, *rawSchemaOverlayCollector, error)) confinementEmissionGate {
+	attempt func([]byte, *rawSchemaOverlayCollector) (*openapi3.T, error)) confinementEmissionGate {
+	isolate := newIsolatedEmissionLoad(attempt)
 
 	// emit returns this engine's shipped emission for one image, and whether
 	// that image LOADED at all. `(nil, true)` is "loaded, and this engine

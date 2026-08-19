@@ -17,14 +17,22 @@ const confinementEmitterProbe = `{"openapi":"3.0.3","info":{"title":"T","version
 	`"content":{"application/json":{"schema":{"type":"object",` +
 	`"properties":{"a":{"type":"string"%s}}}}}}}}}}}`
 
-// shippingEmission is the emission function that SHIPS, spelled exactly as
-// `loadDocumentForSynthesis` and `invoker.go` spell it: a load into its own
-// overlay collector, `bindDocument`, the external-closure internalization, and
-// the conversion WITH those overlays.
+// confinementEmitterAttempt is one complete shipped load into the collector it
+// is handed -- the same shape `loadDocumentWithResolverEntry`'s `attempt` has,
+// and the argument `newIsolatedEmissionLoad` takes.
+func confinementEmitterAttempt(data []byte, overlays *rawSchemaOverlayCollector) (*openapi3.T, error) {
+	return loadDocumentWithResolverInternal(context.Background(), nil, "",
+		openbindings.TextContent(string(data)), overlays)
+}
+
+// shippingEmission is the emission function that SHIPS: the gate's own
+// `newIsolatedEmissionLoad` -- which is where `bindDocument` lives -- followed
+// by the external-closure internalization and the conversion WITH those
+// overlays, exactly as `invoker.go` spells it.
 func shippingEmission(t *testing.T, text string) []byte {
 	t.Helper()
 	ctx := context.Background()
-	doc, overlays, _, err := loadDocumentForSynthesis(ctx, nil, "", openbindings.TextContent(text))
+	doc, overlays, err := newIsolatedEmissionLoad(confinementEmitterAttempt)([]byte(text))
 	if err != nil {
 		t.Fatalf("the probe must load: %v", err)
 	}
@@ -126,16 +134,10 @@ func TestSynthesisEmissionGate_TheSupersededEmitterWasBlindToTheOverlay(t *testi
 // `bindDocument` from its isolated load, each reddens the IDENTICAL assertion.
 func TestSynthesisEmissionGate_ComparesUnderTheShippingEmissionFunction(t *testing.T) {
 	ctx := context.Background()
-	// The gate's own isolated load, spelled through the shipped function whose
-	// collector the shipped interface is built from.
-	isolate := func(data []byte) (*openapi3.T, *rawSchemaOverlayCollector, error) {
-		doc, overlays, _, err := loadDocumentForSynthesis(ctx, nil, "", openbindings.TextContent(string(data)))
-		if err != nil {
-			return nil, nil, err
-		}
-		return doc, overlays, nil
-	}
-	gate := synthesisEmissionGate(ctx, "", isolate)
+	// The gate's own isolated load, which is the SHIPPED one:
+	// `newIsolatedEmissionLoad` is the function the shipped path hands to
+	// `synthesisEmissionGate`, and it is where `bindDocument` lives.
+	gate := synthesisEmissionGate(ctx, "", confinementEmitterAttempt)
 
 	shipped := []byte(fmt.Sprintf(confinementEmitterProbe, ""))
 	marked := []byte(fmt.Sprintf(confinementEmitterProbe, `,"title":""`))
