@@ -255,12 +255,15 @@ type acceptanceFloor struct {
 	// pass may neutralise the position without changing any surviving unit's
 	// output.
 	//
-	// A URef position that only PROJECTS is deliberately ABSENT. Its unit
-	// SURVIVES and is emitted, so neutralising the position would put an
-	// authored value into shipped content -- the Scenario-C salvage the ruling
-	// forbids -- rather than confining a defect the ladder already owns. A
-	// URef position no unit's closure walk reaches is likewise absent: the
-	// ladder classifies nothing there.
+	// A URef position that PROJECTS on any unit that SURVIVES is ABSENT, and
+	// the absence is enforced in two steps because the verdict is per UNIT
+	// while this set is keyed by POSITION: the projecting sinks never add, and
+	// a subtraction after the unit loop removes every position a surviving
+	// unit names. Its unit SURVIVES and is emitted, so neutralising the
+	// position would put an authored value into shipped content -- the
+	// Scenario-C salvage the ruling forbids -- rather than confining a defect
+	// the ladder already owns. A URef position no unit's closure walk reaches
+	// is likewise absent: the ladder classifies nothing there.
 	ClimbingURefSites map[string]bool
 }
 
@@ -1145,6 +1148,26 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 		}
 		f.Ops[op.Ref] = op
 		f.OpOrder = append(f.OpOrder, op.Ref)
+	}
+
+	// ClimbingURefSites is keyed by POSITION and the ladder's verdict is PER
+	// UNIT, so one position inside a shared component can climb for one unit
+	// and PROJECT on another that survives and is emitted. Nothing above
+	// subtracts that case, and neutralising such a position would put an
+	// authored value into shipped content -- exactly the salvage the set
+	// exists to avoid. Every position a SURVIVING unit names is removed here,
+	// by position rather than by class: the same position can be classed URef
+	// on one unit's walk and D4 on another's, and either way the surviving
+	// unit would carry the neutralisation.
+	for _, op := range f.Ops {
+		if op.Disposition == "invalid" {
+			continue
+		}
+		for _, ds := range op.Projections {
+			for _, d := range ds {
+				delete(f.ClimbingURefSites, d.Position)
+			}
+		}
 	}
 
 	// §3 part 2, the single derived rule: refuse only when no addressable

@@ -307,14 +307,19 @@ func TestConfinement_SeamCSchemaPositionRefusesAResponseShapedTarget(t *testing.
 // ladder already classifies the position (URef at the referencing site), so
 // the round neutralises exactly the sites whose verdict CLIMBS.
 //
-// These four cases bite in both directions:
+// These five cases bite in both directions:
 //
 //   - UNDER-fire: delete the (c) block and the first and fourth cases go red,
 //     because the loader refuses the whole artifact again.
 //   - OVER-fire: populate ClimbingURefSites from the PROJECTING sink as well
 //     and the second case goes red; populate it from the whole raw tree rather
-//     than the ladder's own closure walk and the third goes red. Either change
-//     turns a confinement into salvage.
+//     than the ladder's own closure walk and the third goes red; remove the
+//     post-loop subtraction of positions a SURVIVING unit projects and the
+//     fifth goes red. Every one of those turns a confinement into salvage.
+//
+// The fifth case is the one the first four cannot reach. Each of them perturbs
+// a position with exactly ONE role, so all four are satisfied by a set that
+// ignores the per-unit split that this set's per-position keying creates.
 
 // The elmasy shape: a success response's only media alternative carries a
 // schema `$ref` that identifies no location. The defect climbs, so the
@@ -419,5 +424,47 @@ func TestConfinement_URefWithSiblingsConfinesAndKeepsTheSiblings(t *testing.T) {
 	}
 	if _, ok := result.Interface.Operations["getSib"]; ok {
 		t.Fatalf("the operation carrying the dangling reference must not synthesize: %v", result.Interface.Operations)
+	}
+}
+
+// A position with TWO ROLES. `ClimbingURefSites` is keyed by POSITION while the
+// ladder's verdict is per UNIT, so one position inside a shared component can
+// climb for one unit and PROJECT on another unit that survives and is emitted.
+//
+// The three single-role cases above are structurally blind to this: each
+// perturbs a position that has exactly one role, so each can be satisfied by a
+// set that ignores the per-unit split entirely. Without the subtraction that
+// removes every position a surviving unit names, this document synthesizes
+// `getSurvive` with `output.anyOf[0].properties.x = {}` -- a value the pass
+// authored by deleting a `$ref` member inside SHIPPED content, and a divergence
+// from TypeScript, which refuses the same document under OBI-D-16.
+//
+// The nocodb shape: the corpus reported this class as an unpredicted refusal
+// text move, and record 95 read the signal as a prediction miss.
+func TestConfinement_URefDualRolePositionIsNeverConfined(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {"schemas": {
+	    "Shared": {"type": "object", "properties": {"x": {"$ref": "#/components/schemas/Missing"}}}
+	  }},
+	  "paths": {
+	    "/climb": {"get": {"operationId": "getClimb",
+	      "parameters": [{"name": "p", "in": "query", "schema": {"$ref": "#/components/schemas/Shared"}}],
+	      "responses": {"200": {"description": "ok"}}}},
+	    "/survive": {"get": {"operationId": "getSurvive",
+	      "responses": {"200": {"description": "ok", "content": {
+	        "application/json": {"schema": {"$ref": "#/components/schemas/Shared"}},
+	        "text/plain": {"schema": {"type": "string"}}
+	      }}}}}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
+	if err == nil {
+		t.Fatalf("a URef position a SURVIVING unit still emits must never be confined; synthesized %v",
+			result.Interface.Operations)
+	}
+	if !strings.Contains(err.Error(), "Missing") {
+		t.Errorf("the loader's original error must stand, got %q", err)
 	}
 }
