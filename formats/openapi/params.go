@@ -77,6 +77,71 @@ func checkEffectiveParameterOwnership(params openapi3.Parameters) error {
 	return nil
 }
 
+// checkPathTemplateAddressability enforces §9.3 (OAPI-P-05): the target URL is
+// the resolved server joined with the operation's path template, so a template
+// variable that no declared path parameter can supply leaves no target to
+// address and refuses before dispatch — the same ground §9.1 states for the
+// neighbouring case of a declared path parameter the caller omitted ("the URL
+// cannot be built"). Every accepted OAS edition requires a path template
+// variable to have a corresponding `in: path` Parameter Object with
+// `required: true`, so this reaches only artifacts that violate that
+// requirement. Emitting the unsubstituted template instead would percent-encode
+// the braces and put a meaningless segment on a live service.
+//
+// The predicate is the exact inverse of the substitution routeParameter
+// performs (ReplaceAll of "{" + name + "}"): an expression is addressable iff a
+// declared path parameter's name equals the enclosed text. It is declaration-
+// only — independent of any invocation input — and so is checked before input
+// consumption. This package's invocation delegates to the standalone engine
+// (invoker.go), which applies the same check; the twin is kept here because
+// this file mirrors that engine's input model.
+func checkPathTemplateAddressability(pathTemplate string, params openapi3.Parameters) error {
+	declared := map[string]bool{}
+	for _, pref := range params {
+		if pref == nil || pref.Value == nil {
+			continue
+		}
+		if pref.Value.In == openapi3.ParameterInPath {
+			declared[pref.Value.Name] = true
+		}
+	}
+	var unaddressable []string
+	seen := map[string]bool{}
+	for _, name := range pathTemplateVariables(pathTemplate) {
+		if declared[name] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		unaddressable = append(unaddressable, name)
+	}
+	if len(unaddressable) == 0 {
+		return nil
+	}
+	sort.Strings(unaddressable)
+	return fmt.Errorf("path template variable(s) %s have no declared path parameter: the target URL cannot be built (OAPI-P-05: unresolvable target)", strings.Join(unaddressable, ", "))
+}
+
+// pathTemplateVariables returns the names of the brace-delimited expressions in
+// a path template, in order. An unclosed "{" delimits nothing and is an
+// ordinary literal; an inner "{" restarts the expression, matching the
+// innermost pair the substitution would otherwise have to match.
+func pathTemplateVariables(pathTemplate string) []string {
+	var names []string
+	open := -1
+	for index, char := range pathTemplate {
+		switch char {
+		case '{':
+			open = index
+		case '}':
+			if open >= 0 {
+				names = append(names, pathTemplate[open+1:index])
+				open = -1
+			}
+		}
+	}
+	return names
+}
+
 // unflattenableParam reports the first parameter name declared in two
 // DIFFERENT locations (legal per the OAS's name-plus-location identity, but
 // unrepresentable by the flattened model): such an operation is refused
