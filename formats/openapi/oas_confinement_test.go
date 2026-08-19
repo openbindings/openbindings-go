@@ -29,6 +29,25 @@ package openapi
 //
 // Neither can be satisfied by narrowing or widening a traversal, which is why
 // they are written as a pair over one document.
+//
+// Block 8h's re-run adds three more, all of which exercise EMISSION and none of
+// which reads the shared 66-cell table:
+//
+//   - TestConfinement_ExcludedOperationPositionNothingReadsIsAdmitted /
+//     TestConfinement_OperationPositionASurvivingPathItemReadsIsRefused are a
+//     second such pair, at a position that has no Schema Object above it at all.
+//     The first was DECLINED while the ledger recorded a markable ancestor
+//     instead of the authored position; the second goes red if the gate stops
+//     asking about the position.
+//   - TestConfinement_RequestBodyReferenceObjectInputRootIsRefused is the case
+//     the ancestor rule got wrong, and goes red the moment an ancestor is
+//     recorded again.
+//   - TestConfinement_EveryAcceptedCandidateMustAgree goes red under a ladder
+//     that stops at the first candidate the oracle accepts.
+//
+// And TestConfinement_UnledgeredAuthoringIsNotAccounted exercises the accounting
+// obligation directly, because the mechanism it guards against is one that by
+// definition cannot be shipped in order to be tested.
 
 import (
 	"context"
@@ -56,20 +75,208 @@ const confinementD2bDocument = `{
   }
 }`
 
-// Block 8h: this position -- an Operation Object member of a Path Item -- has
-// NO markable anchor. Its container chain is a Path Item, `#/paths` and the
-// root, and none of them is a Schema Object position whose value an emitter
-// carries verbatim, so the pass cannot show what it authored is unreachable and
-// declines. The measured cost of that is `Kong/kong`, `tsuru/tsuru` and
-// `inngest/inngest`, and it is recorded at
-// `corpus-lab/openapi-runtime/103-block-8h-*` §7 rather than argued here.
-func TestConfinement_MethodMemberArrayHasNoMarkableAnchorAndDeclines(t *testing.T) {
-	_, err := synthesizeRaw(confinementD2bDocument)
+// An Operation Object member of a Path Item, and NOTHING READS IT: the floor
+// has already made `#/paths/~1bad/get` an invalid target, so the emitter skips
+// it in both images and the removal takes nothing out of shipped content.
+//
+// The gate says so and the confinement is admitted. Its companion below is the
+// same position with a surviving unit reaching it, which is refused -- the pair
+// is what distinguishes "the emitter does not read this" from "the gate cannot
+// see this position at all", and only the pair can.
+//
+// This case DECLINED while the ledger recorded a markable Schema Object ANCESTOR
+// rather than the position, because an Operation Object has no Schema Object
+// above it. Nothing about emission had changed; the pass simply had no
+// instrument. That cost `Kong/kong`, `n8n-io/n8n`, `gameap/gameap`,
+// `tsuru/tsuru` and `inngest/inngest`, 318 operations, and record 105 measures
+// how much of it was the instrument.
+func TestConfinement_ExcludedOperationPositionNothingReadsIsAdmitted(t *testing.T) {
+	result, err := synthesizeRaw(confinementD2bDocument)
+	if err != nil {
+		t.Fatalf("nothing emitted reads an excluded operation position: %v", err)
+	}
+	if _, ok := result.Interface.Operations["getGood"]; !ok {
+		t.Fatalf("the intact sibling must synthesize: %v", result.Interface.Operations)
+	}
+	if len(result.Interface.Operations) != 1 {
+		t.Fatalf("the authored position must contribute no operation: %v", result.Interface.Operations)
+	}
+	var invalid *openbindings.SynthesisCoverageEntry
+	for i := range result.Coverage.Entries {
+		if result.Coverage.Entries[i].Status == openbindings.SynthesisInvalid {
+			invalid = &result.Coverage.Entries[i]
+		}
+	}
+	if invalid == nil || invalid.SourceRef != "#/paths/~1bad/get" {
+		t.Fatalf("the authored unit must be entried, never silently dropped: %+v", result.Coverage.Entries)
+	}
+}
+
+// RED PROOF at an Operation position, emission side. The same removal as above,
+// with a second Path Item that is a Reference Object denoting the FIRST one --
+// so a surviving, emitted unit reads the position the pass authored at, and the
+// declared `get` would be gone from what that unit ships.
+//
+// The engine's own emitter says so: with a candidate at `#/paths/~1bad/get` the
+// two images do not emit identically, and the confinement is refused with the
+// loader's original error. At the landed head this document SYNTHESIZES with the
+// member gone.
+//
+// Note which channel this is. A Path Item that is a Reference Object is not one
+// of the four channels the two 8g parks named, and nothing in the pass names it
+// here either. It is caught because the gate asks the emitter about the position
+// rather than about the channel.
+func TestConfinement_OperationPositionASurvivingPathItemReadsIsRefused(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "paths": {
+	    "/bad": {
+	      "get": [],
+	      "post": {"operationId": "postBad", "responses": {"200": {"description": "ok"}}}
+	    },
+	    "/other": {"$ref": "#/paths/~1bad"}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
 	if err == nil {
-		t.Fatalf("an authored position with no markable anchor must decline")
+		t.Fatalf("a position a surviving unit reads must not ship an authored value: %+v", result.Interface.Operations)
 	}
 	if !strings.Contains(err.Error(), "cannot unmarshal") {
 		t.Errorf("the loader's ORIGINAL error must stand, got %q", err)
+	}
+}
+
+// RED PROOF for the whole-body input route, and the case that made the ANCHOR
+// rule unsound.
+//
+// A component schema is reached only through a `requestBody` that is a Reference
+// Object. Mechanism (a) removes a member of that schema's `properties`. The
+// whole-body input route rebuilds the operation's input from the schema's
+// MEMBERS, so the schema's own ROOT keys never reach `input` -- and the anchor
+// rule's mark went to exactly that root. The gate compared, reported identical,
+// and ADMITTED a document shipping `postSurvive` with a declared member gone,
+// the surviving unit `represented` and no limitation.
+//
+// Marking AT `#/components/schemas/Shared/properties/m` puts the difference
+// where the route reads, the images differ, and the confinement is refused. This
+// case goes red if the ledger records an ancestor again.
+//
+// Stored as `corpus-lab/data/oas-mechanism-a-reproducers/n10-*.json`.
+func TestConfinement_RequestBodyReferenceObjectInputRootIsRefused(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {
+	    "schemas": {"Shared": {"type": "object", "properties": {"x": {"type": "string"}, "m": []}}},
+	    "requestBodies": {"B": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}}}
+	  },
+	  "paths": {
+	    "/climb": {"get": {"operationId": "getClimb",
+	      "parameters": [{"name": "p", "in": "query", "schema": {"$ref": "#/components/schemas/Shared"}}],
+	      "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}}}}},
+	    "/survive": {"post": {"operationId": "postSurvive",
+	      "requestBody": {"$ref": "#/components/requestBodies/B"},
+	      "responses": {"200": {"description": "ok"}}}}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
+	if err == nil {
+		t.Fatalf("the whole-body input route reads the authored member: %+v", result.Interface.Operations)
+	}
+	if !strings.Contains(err.Error(), "cannot unmarshal") {
+		t.Errorf("the loader's ORIGINAL error must stand, got %q", err)
+	}
+}
+
+// RED PROOF for the AND rule. A Path Item member of `#/paths` whose value is an
+// array: mechanism (a) removes the whole path.
+//
+// Three of the four object candidates report NO emitted difference at this
+// position -- a Schema Object, a Parameter Object and a Response Object all
+// decode there as a Path Item carrying nothing an emitter emits. Only the Path
+// Item candidate produces an operation, and it differs. A ladder that stopped at
+// the first candidate the oracle accepted would admit this, which is the false
+// negative the whole rail exists to prevent; every accepted candidate must
+// agree.
+//
+// This is `Kong/kong`'s shape, and it is why 45 of that specimen's operations
+// are a refusal this block does NOT recover.
+func TestConfinement_EveryAcceptedCandidateMustAgree(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "paths": {
+	    "/good": {"get": {"operationId": "getGood", "responses": {"200": {"description": "ok"}}}},
+	    "/targets": []
+	  }
+	}`
+	result, err := synthesizeRaw(content)
+	if err == nil {
+		t.Fatalf("a Path Item position is read by the emitter and must not be admitted: %+v", result.Interface.Operations)
+	}
+	if !strings.Contains(err.Error(), "cannot unmarshal") {
+		t.Errorf("the loader's ORIGINAL error must stand, got %q", err)
+	}
+}
+
+// The accounting obligation, exercised directly because a mechanism that
+// authors without a ledger cannot be shipped in order to test it. This is the
+// property that replaced a claimed compile obligation the language does not
+// supply: `confinementUnledgeredDifference` compares the tree about to be handed
+// back against a second parse of the artifact's own bytes.
+//
+// It goes red if the walk stops descending, if prefix coverage is widened to
+// "anything under the root", or if the check is skipped when the ledger is
+// empty -- which is exactly the state a forgetful mechanism leaves behind.
+func TestConfinement_UnledgeredAuthoringIsNotAccounted(t *testing.T) {
+	entry := []byte(`{"openapi":"3.0.3","info":{"title":"T","version":"1"},"paths":{"/x":{"get":{"operationId":"getX","responses":{"200":{"description":"ok"}}}}}}`)
+	parse := func() map[string]any {
+		tree, ok := parseRawResource(entry)
+		if !ok {
+			t.Fatal("entry must parse")
+		}
+		root, ok := tree.(map[string]any)
+		if !ok {
+			t.Fatal("entry must be an object")
+		}
+		return root
+	}
+
+	// Unchanged: nothing to account for, with an empty ledger.
+	if where, unaccounted := confinementUnledgeredDifference(entry, parse(), newConfinementLedger()); unaccounted {
+		t.Errorf("an unchanged tree has nothing unaccounted, got %q", where)
+	}
+
+	// A fifth mechanism's change, with no ledger entry anywhere.
+	fifth := parse()
+	fifth["info"].(map[string]any)["title"] = "AUTHORED BY A MECHANISM WITH NO LEDGER"
+	where, unaccounted := confinementUnledgeredDifference(entry, fifth, newConfinementLedger())
+	if !unaccounted {
+		t.Fatalf("an unledgered change must not be accounted")
+	}
+	if where != "#/info/title" {
+		t.Errorf("the decline must name the position, got %q", where)
+	}
+
+	// The same change, recorded. An entry accounts for the position and for
+	// everything beneath it, and for nothing else.
+	ledger := newConfinementLedger()
+	ledger.author("#/info/title")
+	if where, unaccounted := confinementUnledgeredDifference(entry, fifth, ledger); unaccounted {
+		t.Errorf("a recorded position is accounted, got %q", where)
+	}
+	elsewhere := newConfinementLedger()
+	elsewhere.author("#/info/version")
+	if _, unaccounted := confinementUnledgeredDifference(entry, fifth, elsewhere); !unaccounted {
+		t.Errorf("an entry at another position accounts for nothing here")
+	}
+
+	// A removed member is a difference AT the removed position.
+	removed := parse()
+	delete(removed["paths"].(map[string]any)["/x"].(map[string]any), "get")
+	if where, _ := confinementUnledgeredDifference(entry, removed, newConfinementLedger()); where != "#/paths/~1x/get" {
+		t.Errorf("a removal is a difference at the removed position, got %q", where)
 	}
 }
 
@@ -218,13 +425,19 @@ func TestConfinement_SeamCSchemaPositionInlinesTheDenotedValue(t *testing.T) {
 // Reference Object resolving to a Schema Object, which the ladder already
 // records as D7, and seam C removes the member.
 //
-// Block 8h: that removal AUTHORS -- the Responses Object that remains is not
-// what the artifact declared -- and a Responses Object has no markable anchor,
-// so the pass declines. Being ENTRIED is not the same as being admissible: 8g
-// deleted the URef round's `Projections` subtraction for exactly this reason,
-// and an accounted drop buys no more here than it does there. The measured cost
-// is `tsuru/tsuru`, whose fifteen `default` members are all of this shape.
-func TestConfinement_SeamCResponsePositionHasNoMarkableAnchorAndDeclines(t *testing.T) {
+// That removal AUTHORS -- the Responses Object that remains is not what the
+// artifact declared -- and it is REFUSED for the emitter's reason, not for want
+// of an instrument: `default` is a success code here (the floor's `has2XX`
+// tracks the literal `2XX` range key, and this document declares none), so a
+// Response Object at the removed position contributes to the operation's
+// `output` and the two images do not emit identically.
+//
+// Being ENTRIED is not the same as being admissible: 8g deleted the URef round's
+// `Projections` subtraction for exactly this reason, and an accounted drop buys
+// no more here than it does there. The measured cost is `tsuru/tsuru`, whose
+// fifteen `default` members are all of this shape and whose fifteen operations
+// do NOT climb -- each is a represented target carrying a projection entry.
+func TestConfinement_SeamCResponsePositionIsReadByTheOutputLaneAndIsRefused(t *testing.T) {
 	content := `{
 	  "openapi": "3.0.3",
 	  "info": {"title": "T", "version": "1"},
