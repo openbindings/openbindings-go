@@ -341,13 +341,13 @@ func restoreBooleanSchemas(value any) any {
 	}
 }
 
-// schemaSalvageWarner adapts the schema walker's salvage reports to
-// SynthesizerWarnings at the operation's schema path. Salvage (repairing or
-// dropping something the source spec shipped malformed) must never be
-// silent — the warning is the evidence that the contract differs from what
-// the artifact literally claimed. The walker decides code and message; this
-// adapter contributes only the operation-rooted path. Returns nil when there
-// is no warn sink, which the walker treats as "salvage without reporting".
+// unrealizableOperation builds the error returned when an operation has no
+// faithful carriage and the caller supplied no unrealizable sink. Callers that
+// do supply one (the coverage path) instead record the position as an excluded
+// coverage entry carrying its reason code, rule and artifact pointer, and
+// synthesis continues past the operation. Without that sink there is nowhere to
+// disclose the exclusion, so synthesis fails rather than return an interface
+// whose operation set is silently narrower than the artifact declared.
 func unrealizableOperation(operationKey, reason string) error {
 	return fmt.Errorf("cannot synthesize OpenAPI operation %q: %s; synthesis would return a statically unbindable partial interface", operationKey, reason)
 }
