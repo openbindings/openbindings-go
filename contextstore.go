@@ -35,7 +35,14 @@ var requirementFamilyFields = map[string][]string{
 	"auth.bearer": {"bearerToken"},
 	"auth.apiKey": {"apiKey"},
 	"auth.basic":  {"basic"},
-	"auth.oauth2": {"accessToken", "refreshToken", "clientSecret"},
+	// `bearerToken` belongs here because requirementSatisfied's oauth2 arm
+	// accepts one. Without it the two rules in this file contradicted each
+	// other: the challenge validated against a stored bearer token and then
+	// ScopeContext admitted nothing, so the caller supplied exactly what the
+	// error asked for, the scope gate dropped it, and the invoker re-challenged
+	// forever. A rule that says a value satisfies a requirement has to let that
+	// value through.
+	"auth.oauth2": {"accessToken", "bearerToken", "refreshToken", "clientSecret"},
 }
 
 // credentialFieldNames are the BindingContext fields RedactContext always
