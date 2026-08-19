@@ -44,16 +44,39 @@ package openapi
 //	    neutralises exactly the sites whose verdict CLIMBS. Sites no unit's
 //	    closure walk reaches are never touched.
 //
-//	    Unlike (a) and (b), this round AUTHORS: deleting a `$ref` member leaves
-//	    a value the artifact never wrote. So it alone is gated on EMISSION --
-//	    see `confinementEmissionGate` below, and read that before changing
+//	    This round AUTHORS: deleting a `$ref` member leaves a value the
+//	    artifact never wrote. It is gated on EMISSION -- see
+//	    `confinementEmissionGate` below, and read that before changing
 //	    anything here.
 //
-// THE RAIL THAT MAKES THIS A CONFINEMENT AND NOT SALVAGE: every position this
-// pass touches must be a position the LADDER ATTRIBUTES. A located defect the
-// floor cannot name is refused with the loader's original error -- behaviour
-// unchanged, and never silently dropped. Removing a member the floor does not
-// account for would be exactly the Scenario-C salvage the ruling forbids.
+//	    IT IS NOT THE ONLY MECHANISM THAT AUTHORS. This comment used to say
+//	    "Unlike (a) and (b), this round AUTHORS", and that was FALSE:
+//	    mechanism (a) authors too -- `confinementNeutralize` DELETES a mapping
+//	    member, and the container that remains is not what the artifact
+//	    declared. (a) is UNGATED. That is an OPEN HOLE, not a property; it is
+//	    filed with reproducers, mechanism attribution and corpus incidence at
+//	    `corpus-lab/openapi-runtime/102-block-8g-THIRD-RUN-LANDED-*` §3.
+//
+// THE RAILS, AND WHICH ONE EACH MECHANISM ACTUALLY HAS.
+//
+// Every position this pass touches must be a position the LADDER ATTRIBUTES.
+// A located defect the floor cannot name is refused with the loader's original
+// error -- behaviour unchanged, and never silently dropped.
+//
+// THAT IS NECESSARY AND NOT SUFFICIENT, and it must not be read as what makes
+// this a confinement rather than salvage. It was offered as exactly that, and
+// it has now been refuted three times over. The ladder's closure walk is not
+// the emitter's traversal: a position the walk attributes to an invalid unit
+// can still be READ by a SURVIVING unit through a channel the walk never
+// visits -- a Parameter Object's `content` form, a success response that is a
+// Reference Object, a `requestBody` that is a Reference Object, a second
+// success-response media alternative. Attribution says which unit OWNS a
+// defect. It says nothing about where the authored value can be read from.
+//
+// Only the URef round (c) is held to the sufficient condition: ask the
+// EMITTER, see `confinementEmissionGate`. Mechanisms (a) and (b) still stand
+// on attribution alone. For (a) that is a MEASURED hole and not an argument
+// (see `confinementNeutralize`); for (b) it is unproven rather than clean.
 //
 // Consequence, stated because it is load-bearing: the registry-scoped classes
 // D14/D15 are deliberately not part of the shipped roster (block 8d-1 record
@@ -247,6 +270,24 @@ func confinementWalk(path []confinementToken, node any, out *[]string) {
 // index moves -- the retention discipline the external-closure pruner already
 // established. Every candidate neutral value is accepted only if the oracle
 // then accepts the position: this pass never decides what a position may hold.
+//
+// THIS AUTHORS, AND IT IS NOT GATED. `delete(p, last.key)` leaves a container
+// the artifact never wrote -- the same act, on the same terms, as the URef
+// round's `$ref` deletion, which IS gated on emission. Mechanism (a) has only
+// the ladder's attribution over it, and attribution is the rail both 8g parks
+// refuted: a SURVIVING unit can reach the neutralised position through a
+// channel the closure walk does not visit, and then the deleted member is
+// silently absent from shipped content with the unit reported `represented`,
+// `exhaustive=true` and no projection entry.
+//
+// Measured, not feared: three constructed OAS 3.0.3 documents do exactly that
+// at this engine's shipped synthesis entry while TypeScript refuses all three
+// under `OBI-D-17`; disabling this mechanism makes all three refuse; and it
+// fires on 12 of the 260 corpus artifacts where the URef round's gate runs on
+// 4. Filed with the reproducers verbatim at
+// `corpus-lab/openapi-runtime/102-block-8g-THIRD-RUN-LANDED-*` §3, which is
+// the next block's specification. Do not read this function's attribution
+// check as an emission argument.
 func confinementNeutralize(root any, pointer string) bool {
 	tokens, err := confinementParsePointer(pointer)
 	if err != nil {
@@ -613,7 +654,12 @@ func confinementSortedSites(set map[string]bool) []string {
 //     defect that is no longer what blocks the load.
 //
 // `gate` is this engine's emission rail; see `confinementEmissionGate`. Only
-// the URef round is gated, because only the URef round authors a value.
+// the URef round is gated. THAT IS NOT BECAUSE ONLY THE UREF ROUND AUTHORS --
+// this comment said so and it was FALSE. Mechanism (a) authors too, by
+// deleting a mapping member (`confinementNeutralize`), and it is ungated. The
+// asymmetry is an OPEN HOLE the next block owns, filed at
+// `corpus-lab/openapi-runtime/102-block-8g-THIRD-RUN-LANDED-*` §3; nothing
+// here may be read as saying the pass as a whole is closed.
 func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error), originalErr error, gate confinementEmissionGate) (*openapi3.T, error, bool) {
 	if len(entry) == 0 || reload == nil {
 		return nil, nil, false
