@@ -19,15 +19,16 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		return nil, err
 	}
 	doc, schemaOverlays, entryBytes, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, source.Content)
-	if err != nil {
-		return nil, fmt.Errorf("load OpenAPI document: %w", err)
-	}
 	// Inspection shares synthesis's acceptance floor: a ladder-invalid target
 	// is not advertised as bindable, and a whole-source refusal (§3 part 2)
-	// refuses inspection the same way it refuses synthesis.
+	// refuses inspection the same way it refuses synthesis -- including when
+	// the load failed, for the reason stated at the same check in `invoker.go`.
 	floor := computeAcceptanceFloorFromBytes(entryBytes)
 	if floor != nil && floor.Refusal != "" {
 		return nil, errors.New(floor.Refusal)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
 	schemaOverlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
 

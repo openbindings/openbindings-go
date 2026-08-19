@@ -387,7 +387,20 @@ func loadDocumentForSynthesis(ctx context.Context, client *http.Client, location
 	var entryBytes []byte
 	doc, err := loadDocumentWithResolverEntry(ctx, client, location, content, overlays, &entryBytes)
 	if err != nil {
-		return nil, nil, nil, err
+		// A load failure does not preempt the whole-source refusal. Part 2's
+		// refusal is a property of the ARTIFACT's raw image, decided by the
+		// ladder over bytes this call has already captured, and it is the
+		// document's own reason -- so a caller that hears the loader's
+		// diagnostic instead hears a defect that is not what makes the source
+		// unusable.
+		//
+		// Block 8h made this visible: it brought the confinement's remaining
+		// authoring mechanisms onto the emission rail, and a confinement that
+		// declines because it cannot gate itself now leaves the loader's error
+		// standing where it used to leave a confined document that then
+		// reached this refusal one line later. The refusal was riding on the
+		// confinement pass succeeding, which was never what decided it.
+		return nil, nil, entryBytes, err
 	}
 	overlays.bindDocument(doc)
 	return doc, overlays, entryBytes, nil
@@ -537,7 +550,62 @@ func emittedImage(doc *openapi3.T, location, bindingSpec string, floor *acceptan
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(iface)
+	data, err := json.Marshal(iface)
+	if err != nil {
+		return nil, err
+	}
+	return withoutInternalJoinKeys(data)
+}
+
+// withoutInternalJoinKeys removes `schemaOverlayMarker` from an emitted image
+// before the gate compares two of them.
+//
+// The marker is a PRIVATE JOIN KEY between one raw Schema Object and the typed
+// schema produced from it, and `schema_overlay.go` states that it exists only
+// inside the loader's normalized bytes. `takeMarker` consumes it during
+// `bindDocument`, but only at the schema entrances that traversal reaches, and
+// a schema it misses carries the marker into the marshaled form. Its VALUE is a
+// per-load ordinal, so two loads of the same document can carry different
+// values at the same position.
+//
+// That is fatal to a gate whose entire question is byte-identity: block 8h
+// measured three corpus specimens -- `lancedb`, `rswag`,
+// `stoatchat/javascript-client-api` -- whose two images differed at NOTHING BUT
+// these ordinals, and the gate refused a confinement for a reason that has
+// nothing to do with whether anything authored reaches emitted content. The
+// defect is latent at the gate's landed head and only fires on documents that
+// record overlays, which no document reaching the URef round happened to do.
+//
+// Removed HERE and not in `schemaRefToMap`, deliberately: the marker can sit at
+// any depth inside a marshaled schema, so a single top-level delete would be a
+// partial guarantee wearing a total one's clothes, and paying for a recursive
+// walk on the shipped emission path would be paying it on every synthesis to
+// serve a comparison only this gate makes. That a marker can survive
+// `bindDocument` at all is a separate defect and is filed, not fixed here.
+func withoutInternalJoinKeys(data []byte) ([]byte, error) {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil, err
+	}
+	stripped := stripJoinKeys(value)
+	return json.Marshal(stripped)
+}
+
+func stripJoinKeys(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		delete(typed, schemaOverlayMarker)
+		for key, child := range typed {
+			typed[key] = stripJoinKeys(child)
+		}
+		return typed
+	case []any:
+		for i, child := range typed {
+			typed[i] = stripJoinKeys(child)
+		}
+		return typed
+	}
+	return value
 }
 
 // absolutizeArtifactLocation lifts a bare filesystem path to the file://

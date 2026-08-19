@@ -633,15 +633,17 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		artifactContent = openbindings.TextContent(string(data))
 	}
 	doc, schemaOverlays, entryBytes, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, artifactContent)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
-	}
 	// The invalid-artifact acceptance floor (openbindings.openapi@1 §3),
 	// computed over the entry document's raw image. Part 2's single derived
-	// whole-source refusal fires here, on every synthesis surface.
+	// whole-source refusal fires here, on every synthesis surface -- and it
+	// fires WHETHER OR NOT the load succeeded, because it is decided over the
+	// artifact's raw image and not over anything the loader produced.
 	floor := computeAcceptanceFloorFromBytes(entryBytes)
 	if floor != nil && floor.Refusal != "" {
 		return nil, nil, nil, errors.New(floor.Refusal)
+	}
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
 	// kin-openapi resolves external SchemaRefs into Value but intentionally
 	// retains their artifact-relative Ref spelling. That spelling would dangle
