@@ -317,7 +317,8 @@ func TestConfinement_SeamCSchemaPositionRefusesAResponseShapedTarget(t *testing.
 //   - UNDER-fire: delete the (c) block and
 //     URefClimbingSchemaPositionConfines,
 //     URefWithSiblingsConfinesAndKeepsTheSiblings,
-//     URefExcludedRequestMediaUnitStillConfines and
+//     URefExcludedRequestMediaUnitStillConfines,
+//     URefProjectingExcludedUnitStillConfines and
 //     URefNonSuccessResponseRouteStillConfines go red, because the loader
 //     refuses the whole artifact again.
 //   - OVER-fire: populate ClimbingURefSites from the PROJECTING sink as well
@@ -327,7 +328,10 @@ func TestConfinement_SeamCSchemaPositionRefusesAResponseShapedTarget(t *testing.
 //     GATE (admit without asking the emitter) and both
 //     URefEmissionThroughAnUnwalkedChannelIsNeverConfined and
 //     URefDualRolePositionIsNeverConfined go red. Every one of those turns a
-//     confinement into salvage.
+//     confinement into salvage; and restore the deleted subtraction over
+//     `Projections` guarded on `Disposition == "invalid"` and
+//     URefProjectingExcludedUnitStillConfines goes red, because that guard
+//     abandons a pass over a unit that emits nothing.
 //
 // URefEmissionThroughAnUnwalkedChannelIsNeverConfined is the case no rail
 // keyed on the ladder's own traversal can pass. Its three channels -- a
@@ -585,12 +589,55 @@ func TestConfinement_URefEmissionThroughAnUnwalkedChannelIsNeverConfined(t *test
 // The converse obligation, and the reason the gate asks the emitter rather than
 // the ladder's dispositions. A unit whose every declared request media
 // alternative is invalidated is ADDRESSED -- it is not `invalid` -- but it
-// emits no operation, so a position it merely reaches costs shipped content
+// emits no operation, so a position it merely PROJECTS costs shipped content
 // nothing and the confinement must still be admitted.
 //
-// A rail that declined whenever a non-`invalid` unit named the position refuses
-// this whole source and loses a conversion TypeScript makes. The emission gate
-// admits it because the emitter, asked, emits nothing from that unit.
+// Here `/excluded` is excluded for a reason of its own (its only request media
+// alternative carries a D15 keyword), while its success response declares one
+// dead alternative and one that survives, so the shared position lands in that
+// unit's `Projections` with the unit NOT `invalid`. A subtraction over
+// `Projections` guarded on `Disposition == "invalid"` therefore removes the
+// position, abandons the whole pass, and refuses a source TypeScript converts.
+// Measured at the parked engine: REFUSED. Measured here and in TypeScript:
+// `{"clean.get": {"output": {"type": "string"}}}`.
+//
+// The emission gate reaches the right answer without consulting a disposition
+// at all: asked, the emitter emits nothing from that unit.
+func TestConfinement_URefProjectingExcludedUnitStillConfines(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {"schemas": {"Shared": {"type": "object", "properties": {"x": {"$ref": "#/components/schemas/Missing"}}}}},
+	  "paths": {
+	    "/climb": {"get": {"operationId": "getClimb",
+	      "parameters": [{"name": "p", "in": "query", "schema": {"$ref": "#/components/schemas/Shared"}}],
+	      "responses": {"200": {"description": "ok"}}}},
+	    "/excluded": {"post": {"operationId": "postExcluded",
+	      "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"m": []}}}}},
+	      "responses": {"200": {"description": "ok", "content": {
+	        "application/json": {"schema": {"$ref": "#/components/schemas/Shared"}},
+	        "text/plain": {"schema": {"type": "string"}}
+	      }}}}},
+	    "/clean": {"get": {"operationId": "getClean", "responses": {"200": {"description": "ok",
+	      "content": {"text/plain": {"schema": {"type": "string"}}}}}}}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
+	if err != nil {
+		t.Fatalf("a position only an ADDRESSED unit that emits nothing projects must not block the confinement: %v", err)
+	}
+	if _, ok := result.Interface.Operations["getClean"]; !ok {
+		t.Fatalf("the intact sibling must synthesize: %v", result.Interface.Operations)
+	}
+	if _, ok := result.Interface.Operations["postExcluded"]; ok {
+		t.Fatalf("the request-media-excluded unit must not synthesize: %v", result.Interface.Operations)
+	}
+}
+
+// The simpler excluded shape, kept because it holds the (c) block itself: the
+// position enters `ClimbingURefSites` through the invalid-alternative sink and
+// no unit projects it at all, so this one is red only when the round is
+// disabled.
 func TestConfinement_URefExcludedRequestMediaUnitStillConfines(t *testing.T) {
 	content := `{
 	  "openapi": "3.0.3",
