@@ -307,19 +307,37 @@ func TestConfinement_SeamCSchemaPositionRefusesAResponseShapedTarget(t *testing.
 // ladder already classifies the position (URef at the referencing site), so
 // the round neutralises exactly the sites whose verdict CLIMBS.
 //
-// These five cases bite in both directions:
+// The round AUTHORS a value, so it alone is gated on EMISSION: the confined
+// tree is loaded twice, differing only at the authored positions, and this
+// engine's own emitter decides whether the difference reaches emitted content.
 //
-//   - UNDER-fire: delete the (c) block and the first and fourth cases go red,
-//     because the loader refuses the whole artifact again.
+// The cases bite in both directions, and the mutation each one answers is
+// named so a later reader does not have to guess:
+//
+//   - UNDER-fire: delete the (c) block and
+//     URefClimbingSchemaPositionConfines,
+//     URefWithSiblingsConfinesAndKeepsTheSiblings,
+//     URefExcludedRequestMediaUnitStillConfines and
+//     URefNonSuccessResponseRouteStillConfines go red, because the loader
+//     refuses the whole artifact again.
 //   - OVER-fire: populate ClimbingURefSites from the PROJECTING sink as well
-//     and the second case goes red; populate it from the whole raw tree rather
-//     than the ladder's own closure walk and the third goes red; remove the
-//     post-loop subtraction of positions a SURVIVING unit projects and the
-//     fifth goes red. Every one of those turns a confinement into salvage.
+//     and URefProjectingPositionIsNeverConfined goes red; populate it from the
+//     whole raw tree rather than the ladder's own closure walk and
+//     URefUnreachedByAnyUnitIsNeverConfined goes red; neutralise the EMISSION
+//     GATE (admit without asking the emitter) and both
+//     URefEmissionThroughAnUnwalkedChannelIsNeverConfined and
+//     URefDualRolePositionIsNeverConfined go red. Every one of those turns a
+//     confinement into salvage.
 //
-// The fifth case is the one the first four cannot reach. Each of them perturbs
-// a position with exactly ONE role, so all four are satisfied by a set that
-// ignores the per-unit split that this set's per-position keying creates.
+// URefEmissionThroughAnUnwalkedChannelIsNeverConfined is the case no rail
+// keyed on the ladder's own traversal can pass. Its three channels -- a
+// Parameter Object's `content` form, a success response that is a Reference
+// Object, and a `requestBody` that is a Reference Object -- are all ordinary
+// OAS, all reach the SAME authored position from a surviving unit, and none of
+// them is visited by `closureDefects`, so the position appears in no
+// `Projections` and no subtraction over that map can see it. It is red under
+// exactly the mutation a `Projections`-route case cannot be red under, and
+// that asymmetry is the reason it exists.
 
 // The elmasy shape: a success response's only media alternative carries a
 // schema `$ref` that identifies no location. The defect climbs, so the
@@ -433,14 +451,21 @@ func TestConfinement_URefWithSiblingsConfinesAndKeepsTheSiblings(t *testing.T) {
 //
 // The three single-role cases above are structurally blind to this: each
 // perturbs a position that has exactly one role, so each can be satisfied by a
-// set that ignores the per-unit split entirely. Without the subtraction that
-// removes every position a surviving unit names, this document synthesizes
-// `getSurvive` with `output.anyOf[0].properties.x = {}` -- a value the pass
-// authored by deleting a `$ref` member inside SHIPPED content, and a divergence
-// from TypeScript, which refuses the same document under OBI-D-16.
+// set that ignores the per-unit split entirely. Ungated, this document
+// synthesizes `getSurvive` with `output.anyOf[0].properties.x = {}` -- a value
+// the pass authored by deleting a `$ref` member inside SHIPPED content, and a
+// divergence from TypeScript, which refuses the same document under OBI-D-16.
 //
 // The nocodb shape: the corpus reported this class as an unpredicted refusal
 // text move, and record 95 read the signal as a prediction miss.
+//
+// This case reaches the surviving unit through a channel the closure walk DOES
+// visit, which is why it could be closed by a subtraction over `Projections`
+// and why that subtraction looked complete. Its sibling below reaches the same
+// position through channels the walk does not visit, and no such subtraction
+// can be red for it. Both are red under the emission gate's removal, which is
+// the point: one rail answers both, because the rail no longer depends on how
+// the position was reached.
 func TestConfinement_URefDualRolePositionIsNeverConfined(t *testing.T) {
 	content := `{
 	  "openapi": "3.0.3",
@@ -466,5 +491,155 @@ func TestConfinement_URefDualRolePositionIsNeverConfined(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Missing") {
 		t.Errorf("the loader's original error must stand, got %q", err)
+	}
+}
+
+// THE EMISSION-EXERCISING RED PROOF.
+//
+// The same authored position as the dual-role case -- one dangling reference
+// inside a shared component, climbing on `/climb` -- reached by a SURVIVING
+// unit through three channels `closureDefects` never walks:
+//
+//	P1 reads `parameters[i]["schema"]` only, so a Parameter Object's `content`
+//	form is never handed to the closure walk (both the operation's own
+//	parameters and the Path Item's).
+//
+//	A success response's media map is read only when the response value is not
+//	a Reference Object, so a RESOLVABLE `components/responses` reference falls
+//	straight through and its content is never walked.
+//
+//	The request-alternative loop is likewise guarded on the requestBody not
+//	being a Reference Object, so a `components/requestBodies` reference is
+//	never walked either.
+//
+// In all three the loader resolves the reference and the synthesizer emits
+// through it, so the authored `{}` lands in a surviving, emitted, represented
+// unit -- while the position appears in no unit's `Projections` at all. That
+// is what makes this the case a rail keyed on the ladder's walk cannot pass and
+// a rail keyed on EMISSION passes without knowing any of the above.
+//
+// Measured at all three engines before the gate existed: every one of these
+// documents is REFUSED by openbindings-go at the landed head and by
+// openbindings-ts under OBI-D-16, and every one SYNTHESIZES the authored `{}`
+// under a subtraction over `Projections`.
+func TestConfinement_URefEmissionThroughAnUnwalkedChannelIsNeverConfined(t *testing.T) {
+	const climbing = `"/climb": {"get": {"operationId": "getClimb",
+		  "parameters": [{"name": "p", "in": "query", "schema": {"$ref": "#/components/schemas/Shared"}}],
+		  "responses": {"200": {"description": "ok"}}}}`
+	const sharedSchemas = `"Shared": {"type": "object", "properties": {"x": {"$ref": "#/components/schemas/Missing"}}}`
+
+	for _, tc := range []struct {
+		name       string
+		components string
+		surviving  string
+	}{
+		{
+			name:       "parameter content form, operation level",
+			components: `"schemas": {` + sharedSchemas + `}`,
+			surviving: `"/survive": {"get": {"operationId": "getSurvive",
+			  "parameters": [{"name": "q", "in": "query", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}}],
+			  "responses": {"200": {"description": "ok"}}}}`,
+		},
+		{
+			name:       "parameter content form, path item level",
+			components: `"schemas": {` + sharedSchemas + `}`,
+			surviving: `"/survive": {
+			  "parameters": [{"name": "q", "in": "query", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}}],
+			  "get": {"operationId": "getSurvive", "responses": {"200": {"description": "ok"}}}}`,
+		},
+		{
+			name: "success response is a Reference Object",
+			components: `"schemas": {` + sharedSchemas + `},
+			  "responses": {"OK": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}}}`,
+			surviving: `"/survive": {"get": {"operationId": "getSurvive",
+			  "responses": {"200": {"$ref": "#/components/responses/OK"}}}}`,
+		},
+		{
+			name: "request body is a Reference Object",
+			components: `"schemas": {` + sharedSchemas + `},
+			  "requestBodies": {"Body": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}}}`,
+			surviving: `"/survive": {"post": {"operationId": "postSurvive",
+			  "requestBody": {"$ref": "#/components/requestBodies/Body"},
+			  "responses": {"200": {"description": "ok"}}}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := `{
+			  "openapi": "3.0.3",
+			  "info": {"title": "T", "version": "1"},
+			  "components": {` + tc.components + `},
+			  "paths": {` + climbing + `,` + tc.surviving + `}
+			}`
+			result, err := synthesizeRaw(content)
+			if err == nil {
+				t.Fatalf("a position a SURVIVING unit EMITS must never be confined, whatever channel carries it; synthesized %v",
+					result.Interface.Operations)
+			}
+			if !strings.Contains(err.Error(), "Missing") {
+				t.Errorf("the loader's original error must stand, got %q", err)
+			}
+		})
+	}
+}
+
+// The converse obligation, and the reason the gate asks the emitter rather than
+// the ladder's dispositions. A unit whose every declared request media
+// alternative is invalidated is ADDRESSED -- it is not `invalid` -- but it
+// emits no operation, so a position it merely reaches costs shipped content
+// nothing and the confinement must still be admitted.
+//
+// A rail that declined whenever a non-`invalid` unit named the position refuses
+// this whole source and loses a conversion TypeScript makes. The emission gate
+// admits it because the emitter, asked, emits nothing from that unit.
+func TestConfinement_URefExcludedRequestMediaUnitStillConfines(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {"schemas": {"Shared": {"type": "object", "properties": {"x": {"$ref": "#/components/schemas/Missing"}}}}},
+	  "paths": {
+	    "/good": {"get": {"operationId": "getGood", "responses": {"200": {"description": "ok"}}}},
+	    "/excluded": {"post": {"operationId": "postExcluded",
+	      "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}},
+	      "responses": {"200": {"description": "ok"}}}}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
+	if err != nil {
+		t.Fatalf("an ADDRESSED unit that emits nothing must not block the confinement: %v", err)
+	}
+	if _, ok := result.Interface.Operations["getGood"]; !ok {
+		t.Fatalf("the intact sibling must synthesize: %v", result.Interface.Operations)
+	}
+	if _, ok := result.Interface.Operations["postExcluded"]; ok {
+		t.Fatalf("the request-media-excluded unit must not synthesize: %v", result.Interface.Operations)
+	}
+}
+
+// The same obligation on the other route the ladder does not walk. A non-success
+// response contributes nothing to the emitted contract, so a position that lives
+// only there costs shipped content nothing even though the unit survives and is
+// emitted. Measured at parity with openbindings-ts, which synthesizes this
+// document too.
+func TestConfinement_URefNonSuccessResponseRouteStillConfines(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {"schemas": {"Shared": {"type": "object", "properties": {"x": {"$ref": "#/components/schemas/Missing"}}}}},
+	  "paths": {
+	    "/climb": {"get": {"operationId": "getClimb",
+	      "parameters": [{"name": "p", "in": "query", "schema": {"$ref": "#/components/schemas/Shared"}}],
+	      "responses": {"200": {"description": "ok"}}}},
+	    "/survive": {"get": {"operationId": "getSurvive", "responses": {
+	      "200": {"description": "ok", "content": {"text/plain": {"schema": {"type": "string"}}}},
+	      "500": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Shared"}}}}
+	    }}}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
+	if err != nil {
+		t.Fatalf("a position only a non-success response reaches must not block the confinement: %v", err)
+	}
+	if _, ok := result.Interface.Operations["getSurvive"]; !ok {
+		t.Fatalf("the surviving unit must synthesize: %v", result.Interface.Operations)
 	}
 }
