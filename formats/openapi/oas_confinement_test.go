@@ -51,9 +51,11 @@ package openapi
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -277,6 +279,147 @@ func TestConfinement_UnledgeredAuthoringIsNotAccounted(t *testing.T) {
 	delete(removed["paths"].(map[string]any)["/x"].(map[string]any), "get")
 	if where, _ := confinementUnledgeredDifference(entry, removed, newConfinementLedger()); where != "#/paths/~1x/get" {
 		t.Errorf("a removal is a difference at the removed position, got %q", where)
+	}
+}
+
+// RED PROOF FOR THE ACCOUNTING CHECK'S CALL SITE, and the reason it exists is a
+// verification finding rather than a design one.
+//
+// The case above proves that `confinementUnledgeredDifference` COMPUTES
+// differences. It calls the helper directly, four times, with hand-built trees,
+// and it cannot notice if the pass stops calling it: with
+// `confinementAdmit`'s call replaced by `if false`, the entire `formats/openapi`
+// suite stayed GREEN (record 107 §6.2). That is exactly the failure block 8h's
+// re-run reported about its own perturbation A -- "an unfaithful perturbation
+// that passes is worth nothing" -- in the perturbation it did not re-check.
+//
+// This case exercises `confinementAdmit`, which is the pass's ONE admission
+// point and the function the obligation is stated over. It is two-sided on
+// purpose:
+//
+//   - an unledgered difference must DECLINE. Red if the call site is removed,
+//     which is the regression the case above cannot see.
+//   - the SAME difference, recorded, must ADMIT. Red if the check is widened to
+//     decline whatever it is handed, which would make the first half pass for
+//     the wrong reason.
+//
+// What it cannot do is drive the difference in through `confineEntryDocument`,
+// because a mechanism that authors without a ledger is by definition one this
+// engine does not ship. This is the tightest faithful proof available without
+// shipping the defect in order to test it, and it is red under the exact
+// perturbation that motivated it.
+func TestConfinement_AdmissionCallsTheAccountingCheck(t *testing.T) {
+	entry := []byte(`{"openapi":"3.0.3","info":{"title":"T","version":"1"},"paths":{"/x":{"get":{"operationId":"getX","responses":{"200":{"description":"ok"}}}}}}`)
+	authored := func() map[string]any {
+		tree, ok := parseRawResource(entry)
+		if !ok {
+			t.Fatal("entry must parse")
+		}
+		root, ok := tree.(map[string]any)
+		if !ok {
+			t.Fatal("entry must be an object")
+		}
+		// A fifth mechanism's change, reaching into the raw tree the way Go will
+		// always let one reach into it.
+		root["info"].(map[string]any)["title"] = "AUTHORED BY A MECHANISM WITH NO LEDGER"
+		return root
+	}
+	reload := func(data []byte) (*openapi3.T, error) {
+		loader := openapi3.NewLoader()
+		return loader.LoadFromData(data)
+	}
+	admittingGate := func(shipped, marked *openapi3.T, floor *acceptanceFloor) bool { return true }
+
+	tree := authored()
+	floor := computeAcceptanceFloor(tree)
+	if floor == nil {
+		t.Fatal("the edition gate must read this artifact")
+	}
+	shipped, err := json.Marshal(tree)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	loaded, err := reload(shipped)
+	if err != nil {
+		t.Fatalf("the authored tree must load: %v", err)
+	}
+
+	if _, _, ok := confinementAdmit(entry, tree, newConfinementLedger(), floor, reload, admittingGate, loaded); ok {
+		t.Fatalf("admission must consult the accounting check: an unledgered change was ADMITTED")
+	}
+
+	ledger := newConfinementLedger()
+	ledger.author("#/info/title")
+	doc, admitErr, ok := confinementAdmit(entry, tree, ledger, floor, reload, admittingGate, loaded)
+	if !ok || admitErr != nil || doc == nil {
+		t.Fatalf("a recorded position an admitting gate clears must be admitted, got ok=%v err=%v", ok, admitErr)
+	}
+}
+
+// RED PROOF FOR THE DENOTATION EXEMPTION, at the half a signature cannot carry.
+//
+// `confinementInlineDenoted` takes a POINTER rather than a value, so no caller
+// can MINT through it. That was claimed to make the exemption structural rather
+// than declared, and it does not: nothing in the signature says `site` has
+// anything to do with `target`, so any caller could RELOCATE the artifact's own
+// value to a position the artifact never put it, past an admitting gate,
+// accounted as denoted. A verifier shipped `info.title = "getSurvive"` that way
+// in one line (record 107 §6.3).
+//
+// The site is now checked to BE a Reference Object whose `$ref` names `target`,
+// which is what the exemption's justification always asserted. Two-sided:
+// relocation must be refused and the shipped seam-C shape must still inline.
+func TestConfinement_DenotationRequiresTheSiteToDenoteTheTarget(t *testing.T) {
+	entry := []byte(`{"openapi":"3.0.3","info":{"title":"T","version":"1"},
+	  "components":{"schemas":{"S":{"type":"object"}}},
+	  "paths":{"/survive":{"get":{"operationId":"getSurvive",
+	    "responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"$ref":"#/components/schemas/S"}}}}}}}}}`)
+	parse := func() map[string]any {
+		tree, ok := parseRawResource(entry)
+		if !ok {
+			t.Fatal("entry must parse")
+		}
+		root, ok := tree.(map[string]any)
+		if !ok {
+			t.Fatal("entry must be an object")
+		}
+		return root
+	}
+
+	// RELOCATION: the artifact's own value, at a position that denotes nothing.
+	relocate := parse()
+	ledger := newConfinementLedger()
+	if confinementInlineDenoted(relocate, "#/info/title", "#/paths/~1survive/get/operationId", ledger) {
+		t.Fatalf("a site that does not denote the target must never be inlined")
+	}
+	if title := relocate["info"].(map[string]any)["title"]; title != "T" {
+		t.Fatalf("nothing may move at a site that denotes nothing, got %v", title)
+	}
+	if len(ledger.denoted) != 0 {
+		t.Fatalf("a refused inline records nothing, got %v", ledger.denoted)
+	}
+
+	// The shipped shape: a bare Reference Object at the position, whose own
+	// `$ref` names the target.
+	inline := parse()
+	site := "#/paths/~1survive/get/responses/200/content/application~1json/schema"
+	if !confinementInlineDenoted(inline, site, "#/components/schemas/S", ledger) {
+		t.Fatalf("a Reference Object must still be inlined with the value its own pointer names")
+	}
+	landed, ok := confinementResolveRaw(inline, site)
+	if !ok {
+		t.Fatalf("the site must still hold a value")
+	}
+	if landedMap, isMap := landed.(map[string]any); !isMap || landedMap["type"] != "object" {
+		t.Fatalf("the target's own value must land, got %v", landed)
+	}
+	if !ledger.denoted[site] {
+		t.Fatalf("an inlined position is recorded as denoted, got %v", ledger.denoted)
+	}
+	// Both spellings of the target name it.
+	fragment := parse()
+	if !confinementInlineDenoted(fragment, site, "/components/schemas/S", newConfinementLedger()) {
+		t.Fatalf("the fragment spelling must name the same target")
 	}
 }
 
@@ -680,6 +823,62 @@ func TestConfinement_URefWithSiblingsConfinesAndKeepsTheSiblings(t *testing.T) {
 	}
 	if _, ok := result.Interface.Operations["getSib"]; ok {
 		t.Fatalf("the operation carrying the dangling reference must not synthesize: %v", result.Interface.Operations)
+	}
+}
+
+// RED PROOF FOR THE URef ROUND'S AUTHORED POSITION, and the case that made
+// marking at `<site>/$ref` vacuous.
+//
+// An unresolvable `$ref` carrying siblings, at a PARAMETER position: the
+// parameters lane adds the site to `ClimbingURefSites`, the round removes the
+// `$ref` member, and what is left -- `{name, in, schema}` -- is a fully valid
+// Parameter Object the artifact's own OAS 3.0 semantics say is not there, since
+// `$ref` siblings are ignored on that line. A second unit reaches the position
+// through a Reference-Object parameter, which the floor `continue`s past and the
+// emitter resolves.
+//
+// Recording `site + "/$ref"` put every candidate where a `$ref` KEY's value goes.
+// kin reads only a string there: five of the six candidates decoded into the
+// containing object's `Extensions`, which a Parameter Object does not carry into
+// emitted content, so five rounds reported IDENTICAL without reading the
+// position at all; the sixth made the site a Reference Object denoting nothing,
+// so its image would not load and the round was INCONCLUSIVE. The gate marked the
+// position shown off vacuous evidence and ADMITTED -- shipping
+// `getSurvive.input.properties.AUTHORED`, a name no reader of this artifact
+// could obtain, with the unit `represented` and `exhaustive=true`, while the two
+// heads it superseded both refused the same document and TypeScript emitted the
+// operation with no input at all.
+//
+// Recording the SITE puts the candidate at the Reference Object's own position,
+// where the images differ by the presence of a whole member in a decoding
+// context the emitter reads. This case goes red the moment the `$ref` member is
+// recorded again.
+//
+// Stored as `corpus-lab/data/oas-mechanism-a-reproducers/n12-*.json`. Its
+// schema-position control is `n13`, which the vacuous gate already refused --
+// a Schema Object's extensions ARE carried, so the discriminating power of a
+// `$ref` position varies by container, silently, which is the finding this case
+// pins down rather than the fix.
+func TestConfinement_URefParameterPositionReadByAReferenceParameterIsRefused(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {"parameters": {"Present": {"name": "q", "in": "query", "schema": {"type": "string"}}}},
+	  "paths": {
+	    "/climb": {"get": {"operationId": "getClimb",
+	      "parameters": [{"$ref": "#/components/parameters/Missing", "name": "AUTHORED", "in": "query", "schema": {"type": "string"}}],
+	      "responses": {"200": {"description": "ok"}}}},
+	    "/survive": {"get": {"operationId": "getSurvive",
+	      "parameters": [{"$ref": "#/paths/~1climb/get/parameters/0"}],
+	      "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "string"}}}}}}}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
+	if err == nil {
+		t.Fatalf("a parameter a surviving unit reads must not ship an authored value: %+v", result.Interface.Operations)
+	}
+	if !strings.Contains(err.Error(), "Missing") {
+		t.Errorf("the loader's ORIGINAL error must stand, got %q", err)
 	}
 }
 
