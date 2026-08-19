@@ -1006,6 +1006,17 @@ func confinementAdmit(entry []byte, tree any, ledger *confinementLedger, floor *
 	// makes the site a Reference Object denoting nothing, and treating that
 	// mechanical failure as a refusal cost three specimens and 114 operations
 	// when it was measured.
+	// The shipped image is the same bytes in every round, so it is loaded ONCE
+	// for the comparison. `reload` resets the surrounding lane state and hands
+	// back a fresh document without touching an earlier one, and the gate reads
+	// no lane state (it passes nil overlays), so one shipped document serves
+	// every round. It is loaded AGAIN at the exit, last, so that the state the
+	// surrounding load collected describes the document this pass returns --
+	// which is why this one is not simply reused as the return value.
+	comparisonDoc, comparisonErr := reload(shippedData)
+	if comparisonErr != nil {
+		return nil, nil, false
+	}
 	shown := make(map[string]bool, len(authored))
 	for round := 0; round < rounds; round++ {
 		placements := make([]confinementPlacement, 0, len(authored))
@@ -1036,11 +1047,7 @@ func confinementAdmit(entry []byte, tree any, ledger *confinementLedger, floor *
 		if markedLoadErr != nil {
 			continue
 		}
-		shippedDoc, shippedLoadErr := reload(shippedData)
-		if shippedLoadErr != nil {
-			return nil, nil, false
-		}
-		if !gate(shippedDoc, markedDoc, floor) {
+		if !gate(comparisonDoc, markedDoc, floor) {
 			return nil, nil, false
 		}
 		for _, site := range covered {
