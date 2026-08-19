@@ -328,7 +328,7 @@ func TestConfinement_AdmissionCallsTheAccountingCheck(t *testing.T) {
 		loader := openapi3.NewLoader()
 		return loader.LoadFromData(data)
 	}
-	admittingGate := func(shipped, marked *openapi3.T, floor *acceptanceFloor) bool { return true }
+	admittingGate := func(shipped, marked []byte, floor *acceptanceFloor) (bool, bool) { return true, true }
 
 	tree := authored()
 	floor := computeAcceptanceFloor(tree)

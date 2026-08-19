@@ -757,13 +757,44 @@ func (l *confinementLedger) records(pointer string) bool {
 // Reference Object. Enumerating channels answers the probes and not the class,
 // so this gate enumerates nothing.
 //
-// The gate is handed two loads of the SAME confined tree, differing only at
-// the authored positions: `shipped`, and `marked`, which carries one
+// The gate is handed two IMAGES of the same confined tree as BYTES, differing
+// only at the authored positions: `shipped`, and `marked`, which carries one
 // distinguishing member at each authored position. It reports whether the two
 // EMIT identically. If they do, then no channel of any kind carries an
 // authored position into emitted content, whatever route an emitter took to
 // look for one; if they do not, the confinement is refused and the loader's
 // original error stands.
+//
+// IT IS HANDED BYTES AND NOT DOCUMENTS, and that is the correction record 112
+// §5.8 required. A document is only half of what an emitter reads. This
+// engine's synthesis reads a loaded `*openapi3.T` AND the lane state that load
+// collected -- the raw schema overlay collector, which carries the authorial
+// presence facts kin-openapi's typed model cannot represent and the
+// external-internalization table -- and it is that PAIR the shipped interface
+// is built from (`invoker.go`, `loadDocumentForSynthesis`). A gate handed two
+// already-loaded documents cannot reconstruct either side's lane state, because
+// one collector describes whichever load ran last; the earlier design
+// therefore compared with overlays nil on both sides and certified
+// unreachability under a strictly NARROWER emission function than the one that
+// ships. Handing over bytes moves the load inside the gate, so each side is
+// loaded into its OWN collector and each image is produced by the emission
+// function that actually ships.
+//
+// It answers TWO questions, because moving the load inside it moves the
+// loadability question with it:
+//
+//   - IDENTICAL -- the two images emit the same bytes.
+//   - CONCLUSIVE -- the MARKED image loaded at all. A document that does not
+//     load emits nothing, so there is no emission to compare and the round is
+//     evidence in neither direction; `confinementAdmit` neither refuses nor
+//     clears on it. A SHIPPED side that fails to load or fails to emit is
+//     conclusive and NOT identical: the shipped image is what the pass proposes
+//     to hand back, and a pass that cannot emit from its own proposal has
+//     nothing to show.
+//
+// The shipped image is the same bytes in every round, so an implementation is
+// expected to memoize its shipped side by those bytes; the pass loads it once
+// either way.
 //
 // A nil gate means this engine cannot demonstrate emission-freedom, and the
 // URef round declines -- the loader's original error, which is the behaviour
@@ -771,7 +802,7 @@ func (l *confinementLedger) records(pointer string) bool {
 // interface from a document at all, so it has no emission to compare, and a
 // pass that cannot show its authored values are unreachable must not admit
 // them.
-type confinementEmissionGate func(shipped, marked *openapi3.T, floor *acceptanceFloor) bool
+type confinementEmissionGate func(shipped, marked []byte, floor *acceptanceFloor) (identical, conclusive bool)
 
 // confinementMarkKey is the extension key every candidate value carries, inside
 // a Schema Object, so that a value reaching emitted content is recognisable
@@ -1060,11 +1091,14 @@ func confinementUnledgeredDifference(entry []byte, confined any, ledger *confine
 //     one candidate. At a position where it accepts none the pass cannot ask the
 //     emitter anything, so it declines rather than guess.
 //
-//  3. EMISSION. For every candidate the oracle accepts, load a marked image and
-//     ask the gate whether it emits identically to the shipped one. EVERY
-//     accepted candidate must agree. The shipped image is loaded LAST so that
-//     every piece of lane state the surrounding load collected describes the
-//     document this pass returns.
+//  3. EMISSION. For every candidate the oracle accepts, hand the gate a marked
+//     image and ask whether it emits identically to the shipped one. EVERY
+//     accepted candidate must agree. Both images go over as BYTES: the gate
+//     loads each side itself, because the emission function that ships reads a
+//     document together with the lane state that load collected, and one
+//     collector cannot describe two documents at once. The document this pass
+//     RETURNS is reloaded LAST, through `reload`, so that every piece of lane
+//     state the surrounding load collected describes it.
 //
 // A confinement that authored NOTHING skips 2 and 3: there is nothing for an
 // emitter to certify, and paying two more loads to compare a document against
@@ -1137,17 +1171,17 @@ func confinementAdmit(entry []byte, tree any, ledger *confinementLedger, floor *
 	// marking would close it and would cost a load per position per round rather
 	// than a load per round; that trade has not been measured and is not made
 	// here.
-	// The shipped image is the same bytes in every round, so it is loaded ONCE
-	// for the comparison. `reload` resets the surrounding lane state and hands
-	// back a fresh document without touching an earlier one, and the gate reads
-	// no lane state (it passes nil overlays), so one shipped document serves
-	// every round. It is loaded AGAIN at the exit, last, so that the state the
-	// surrounding load collected describes the document this pass returns --
-	// which is why this one is not simply reused as the return value.
-	comparisonDoc, comparisonErr := reload(shippedData)
-	if comparisonErr != nil {
-		return nil, nil, false
-	}
+	//
+	// NEITHER IMAGE IS LOADED HERE. Both are handed to the gate as BYTES,
+	// because the emission function that ships reads a loaded document TOGETHER
+	// with the lane state that load collected, and no caller can hand over two
+	// documents and two lane states at once from one collector. The gate loads
+	// each side into its own state and emits from the pair; see
+	// `confinementEmissionGate`. The shipped image is the same bytes in every
+	// round, so the gate is expected to load it once and reuse it, which is why
+	// no comparison load happens here. `reload` is still used at the exit, last,
+	// so that the lane state the SURROUNDING load collected describes the
+	// document this pass returns.
 	shown := make(map[string]bool, len(authored))
 	for round := 0; round < rounds; round++ {
 		placements := make([]confinementPlacement, 0, len(authored))
@@ -1174,11 +1208,11 @@ func confinementAdmit(entry []byte, tree any, ledger *confinementLedger, floor *
 		if !placed || markErr != nil {
 			return nil, nil, false
 		}
-		markedDoc, markedLoadErr := reload(markedData)
-		if markedLoadErr != nil {
+		identical, conclusive := gate(shippedData, markedData, floor)
+		if !conclusive {
 			continue
 		}
-		if !gate(comparisonDoc, markedDoc, floor) {
+		if !identical {
 			return nil, nil, false
 		}
 		for _, site := range covered {

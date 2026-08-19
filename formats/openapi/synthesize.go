@@ -431,7 +431,14 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 	// replaces the ENTRY document's bytes at the seam block 8a proved --
 	// before normalizeResource, in every lane -- so a confined retry keeps
 	// each lane's own base-URI and retrieval semantics.
-	attempt := func(entryOverride []byte) (*openapi3.T, error) {
+	//
+	// `overlays` is the collector this load fills. It is a PARAMETER rather
+	// than the enclosing one because the emission gate loads its own images
+	// and must not write its lane state over the state that describes the
+	// document this call returns: one collector cannot describe two documents
+	// at once, and building the gate's images with no collector at all is
+	// exactly the narrowing record 112 §5.8 refused.
+	attempt := func(entryOverride []byte, overlays *rawSchemaOverlayCollector) (*openapi3.T, error) {
 		loader := openapi3.NewLoader()
 		loader.Context = ctx
 		loader.IsExternalRefsAllowed = true
@@ -439,7 +446,7 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 		var retrievalMu sync.RWMutex
 		loader.JoinFunc = artifactJoinFunc(retrievalURIs, &retrievalMu)
 		normalizer := newRawRefSiblingNormalizer(loader.JoinFunc)
-		normalizer.schemaOverlays = schemaOverlays
+		normalizer.schemaOverlays = overlays
 		readArtifact := artifactReadFunc(client, content != nil && location == "", retrievalURIs, &retrievalMu)
 		composition := newExternalComposition(
 			func(resource *url.URL) ([]byte, error) { return readArtifact(loader, resource) },
@@ -486,7 +493,7 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 		return doc, nil
 	}
 
-	doc, err := attempt(nil)
+	doc, err := attempt(nil, schemaOverlays)
 	if entryBytes != nil {
 		*entryBytes = captured
 	}
@@ -494,12 +501,26 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 		return doc, nil
 	}
 
+	// The gate's own load. It is ISOLATED: its own collector, filled and bound
+	// exactly as `loadDocumentForSynthesis` fills and binds the one the shipped
+	// interface is built from, and never the enclosing `schemaOverlays`, whose
+	// state must describe the document this call returns.
+	isolate := func(data []byte) (*openapi3.T, *rawSchemaOverlayCollector, error) {
+		overlays := newRawSchemaOverlayCollector()
+		image, imageErr := attempt(data, overlays)
+		if imageErr != nil {
+			return nil, nil, imageErr
+		}
+		overlays.bindDocument(image)
+		return image, overlays, nil
+	}
+
 	// Fast path first: confinement is reached only after the shipped load has
 	// already refused. On any confinement failure the ORIGINAL error stands.
 	confined, confinedErr, took := confineEntryDocument(captured, func(data []byte) (*openapi3.T, error) {
 		schemaOverlays.reset()
-		return attempt(data)
-	}, err, synthesisEmissionGate(location))
+		return attempt(data, schemaOverlays)
+	}, err, synthesisEmissionGate(ctx, location, isolate))
 	switch {
 	case !took:
 		return nil, err
@@ -525,28 +546,98 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 //   - Both the family's binding specification and the empty one are compared,
 //     so a projection that only one of them emits cannot hide a mark.
 //
-// Overlays are deliberately nil on BOTH sides. The collector's state describes
-// whichever load ran last, so it cannot describe both documents at once; and
-// overlays only ADD members to a schema the emitter already carries, so their
-// absence can hide no mark.
-func synthesisEmissionGate(location string) confinementEmissionGate {
-	return func(shipped, marked *openapi3.T, floor *acceptanceFloor) bool {
+// THE GATE RUNS THE SHIPPING EMISSION FUNCTION, and that is not a restatement
+// of the two choices above -- it is the correction record 112 §6 ground 1
+// required. This gate used to be handed two already-loaded documents, neither
+// of them `bindDocument`-ed, and to convert both with `schemaOverlays` NIL,
+// defended by the argument that overlays only ADD members to a schema the
+// emitter already carries, so their absence could hide no mark. THAT ARGUMENT
+// IS FALSE. The collector carries the authorial presence facts kin-openapi's
+// typed model erases -- `erasedSchemaPresence` names them -- and they reach
+// emitted content only once `bindDocument` has paired them with typed identity.
+// A difference spelled in any of eleven measured facts (`title`, `description`,
+// `format`, `pattern`, `default`, `example`, `enum`, `minLength`,
+// `uniqueItems`, `readOnly`, `deprecated`, each in its erased spelling) was
+// therefore INVISIBLE to the gate and VISIBLE to what ships:
+// `TestSynthesisEmissionGate_TheSupersededEmitterWasBlindToTheOverlay`.
+//
+// So each side is now built by exactly what `loadDocumentForSynthesis` and
+// `invoker.go` build the shipped interface by, in that order:
+//
+//	overlays := newRawSchemaOverlayCollector()   -- its OWN, per image
+//	doc      := attempt(image, overlays)
+//	overlays.bindDocument(doc)
+//	overlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
+//	convertDocToInterfaceWithOverlay(doc, location, bindingSpec, …, overlays, floor)
+//
+// That is why the gate takes BYTES: the load has to happen inside it, because
+// the document and the lane state that load collected are ONE input and no
+// caller can hand over two of those pairs from one collector.
+// `internalizeExternalRefs` MUTATES the document it is given, which is a second
+// reason each side must be this gate's own isolated load and never the document
+// the pass proposes to return.
+//
+// The shipped image is the same bytes in every round, so its images are
+// computed ONCE and reused, and the pass's total entry-document loads are
+// unchanged by the move.
+func synthesisEmissionGate(ctx context.Context, location string,
+	isolate func(data []byte) (*openapi3.T, *rawSchemaOverlayCollector, error)) confinementEmissionGate {
+
+	// emit returns this engine's shipped emission for one image, and whether
+	// that image LOADED at all. `(nil, true)` is "loaded, and this engine
+	// cannot emit from it", which is a conclusive failure; `(nil, false)` is
+	// "did not load", which is evidence in neither direction.
+	emit := func(data []byte, floor *acceptanceFloor) ([][]byte, bool) {
+		doc, overlays, err := isolate(data)
+		if err != nil {
+			return nil, false
+		}
+		overlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
+		images := make([][]byte, 0, 2)
 		for _, bindingSpec := range []string{BindingSpec, ""} {
-			shippedImage, shippedErr := emittedImage(shipped, location, bindingSpec, floor)
-			markedImage, markedErr := emittedImage(marked, location, bindingSpec, floor)
-			if shippedErr != nil || markedErr != nil {
-				return false
+			image, imageErr := emittedImage(doc, location, bindingSpec, overlays, floor)
+			if imageErr != nil {
+				return nil, true
 			}
-			if !bytes.Equal(shippedImage, markedImage) {
-				return false
+			images = append(images, image)
+		}
+		return images, true
+	}
+
+	var shippedData []byte
+	var shippedImages [][]byte
+	return func(shipped, marked []byte, floor *acceptanceFloor) (bool, bool) {
+		if shippedImages == nil || !bytes.Equal(shippedData, shipped) {
+			images, loaded := emit(shipped, floor)
+			if !loaded || images == nil {
+				// The shipped image is what the pass proposes to hand back. A
+				// proposal this engine cannot load, or cannot emit from, is a
+				// failure to make the showing at all -- conclusive, and not
+				// identical.
+				return false, true
+			}
+			shippedData = append([]byte(nil), shipped...)
+			shippedImages = images
+		}
+		markedImages, loaded := emit(marked, floor)
+		if !loaded {
+			return false, false
+		}
+		if len(markedImages) != len(shippedImages) {
+			return false, true
+		}
+		for i := range shippedImages {
+			if !bytes.Equal(shippedImages[i], markedImages[i]) {
+				return false, true
 			}
 		}
-		return true
+		return true, true
 	}
 }
 
-func emittedImage(doc *openapi3.T, location, bindingSpec string, floor *acceptanceFloor) ([]byte, error) {
-	iface, err := convertDocToInterfaceWithOverlay(doc, location, bindingSpec, nil, func(unrealizableTarget) {}, nil, floor)
+func emittedImage(doc *openapi3.T, location, bindingSpec string,
+	overlays *rawSchemaOverlayCollector, floor *acceptanceFloor) ([]byte, error) {
+	iface, err := convertDocToInterfaceWithOverlay(doc, location, bindingSpec, nil, func(unrealizableTarget) {}, overlays, floor)
 	if err != nil {
 		return nil, err
 	}
