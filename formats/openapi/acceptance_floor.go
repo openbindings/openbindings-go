@@ -248,6 +248,20 @@ type acceptanceFloor struct {
 	// Failing D6's Response Object test is only a DISPROOF of Response
 	// Object-hood; Schema-shape is tested separately and positively.
 	ConformantSchemaComponents map[string]bool
+	// ClimbingURefSites is the set of URef positions -- unresolvable internal
+	// references at their referencing site -- whose ladder verdict CLIMBS: the
+	// position invalidates the operation that owns it, or invalidates one
+	// request media alternative. Those units emit nothing, so the load-path
+	// pass may neutralise the position without changing any surviving unit's
+	// output.
+	//
+	// A URef position that only PROJECTS is deliberately ABSENT. Its unit
+	// SURVIVES and is emitted, so neutralising the position would put an
+	// authored value into shipped content -- the Scenario-C salvage the ruling
+	// forbids -- rather than confining a defect the ladder already owns. A
+	// URef position no unit's closure walk reaches is likewise absent: the
+	// ladder classifies nothing there.
+	ClimbingURefSites map[string]bool
 }
 
 func (f *acceptanceFloor) opVerdict(ref string) *floorOp {
@@ -330,6 +344,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 		SchemaPositions:            map[string]bool{},
 		ResponseMemberDefects:      map[string]bool{},
 		ConformantSchemaComponents: map[string]bool{},
+		ClimbingURefSites:          map[string]bool{},
 	}
 	attribute := func(class, position string) {
 		if _, seen := f.Attributed[position]; !seen {
@@ -888,6 +903,12 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 				}
 				if !dup {
 					climbing = append(climbing, d)
+					if d.Class == floorURef {
+						// A climbing defect always invalidates its operation
+						// (see the disposition switch below), so this position
+						// is confinable.
+						f.ClimbingURefSites[d.Position] = true
+					}
 				}
 			}
 		}
@@ -986,6 +1007,13 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 						if len(defs) > 0 {
 							op.InvalidAlternatives[aptr] = defs
 							op.AltOrder = append(op.AltOrder, aptr)
+							for _, d := range defs {
+								if d.Class == floorURef {
+									// The alternative is invalid and is never
+									// emitted, so this position is confinable.
+									f.ClimbingURefSites[d.Position] = true
+								}
+							}
 						}
 						addProjection(aptr, projs...)
 					}

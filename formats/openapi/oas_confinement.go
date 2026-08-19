@@ -9,7 +9,8 @@ package openapi
 // is intact. The pass neutralises the defective raw position and retries, so
 // that the floor's per-unit verdicts are the ones a consumer sees.
 //
-// Two mechanisms, in order, both ported from the block 8a spike
+// Three mechanisms, in the order (a), (c), (b). The first two are ported from
+// the block 8a spike
 // (`corpus-lab/go-evaluator/oas_confinement.go` and `…_seamc.go`, whose
 // findings are recorded at `corpus-lab/openapi-runtime/22-…`):
 //
@@ -33,6 +34,15 @@ package openapi
 //	    TARGET and never the referencing site. The sites are recovered by a raw
 //	    search for `$ref` strings denoting that target, and each site is then
 //	    handled by what the OAS says about the position it occupies.
+//
+//	(c) the UREF ROUND (block 8g). Reference RESOLUTION failures reach neither
+//	    of the above: kin accepts `{"$ref": "#/x"}` at the unmarshal oracle and
+//	    then fails while resolving it, with a report that names no kind and
+//	    matches no seam-C pattern. The ladder already classifies these -- every
+//	    unresolvable internal reference is a URef defect at its REFERENCING
+//	    site -- so the round reads `acceptanceFloor.ClimbingURefSites` and
+//	    neutralises exactly the sites whose verdict CLIMBS. Sites that only
+//	    PROJECT, and sites no unit's closure walk reaches, are never touched.
 //
 // THE RAIL THAT MAKES THIS A CONFINEMENT AND NOT SALVAGE: every position this
 // pass touches must be a position the LADDER ATTRIBUTES. A located defect the
@@ -403,6 +413,48 @@ func confinementApplySeamC(root any, floor *acceptanceFloor, target, site string
 	return false
 }
 
+// ---- the URef round --------------------------------------------------------
+
+// confinementNeutralizeURef removes the `$ref` MEMBER at one referencing site,
+// leaving any siblings in place.
+//
+// Only the member is removed, never the position, so the declared inventory
+// the ladder counted does not move: the position stays declared and loses the
+// reference that denotes nothing. Its owning unit is invalid by construction
+// (that is what `ClimbingURefSites` means), so what remains never reaches
+// emission.
+//
+// Seam C's bare-Reference-Object restriction deliberately does NOT carry over.
+// There it guards a real composition: the target exists, and replacing the node
+// would discard the siblings the shipped normalizer composes with it. Here the
+// target does not exist -- that is the whole finding -- so there is no
+// composition to discard, and refusing a `$ref` with siblings would only
+// abandon the confinement over a sibling the pass does not touch.
+func confinementNeutralizeURef(root any, site string) bool {
+	node, ok := confinementResolveRaw(root, site)
+	if !ok {
+		return false
+	}
+	nodeMap, isMap := node.(map[string]any)
+	if !isMap {
+		return false
+	}
+	if _, hasRef := nodeMap["$ref"]; !hasRef {
+		return false
+	}
+	delete(nodeMap, "$ref")
+	return true
+}
+
+func confinementSortedSites(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for site := range set {
+		out = append(out, site)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ---- the pass --------------------------------------------------------------
 
 // confineEntryDocument runs behind the fast path: it is reached only after the
@@ -447,8 +499,10 @@ func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error)
 
 	// (a) the oracle walk.
 	located := confinementLocate(tree)
-	if len(located) == 0 && !confinementBadData.MatchString(errorText(originalErr)) {
-		// Nothing for either mechanism to do; do not pay for a second load.
+	if len(located) == 0 &&
+		!confinementBadData.MatchString(errorText(originalErr)) &&
+		len(floor.ClimbingURefSites) == 0 {
+		// Nothing for any mechanism to do; do not pay for a second load.
 		return nil, nil, false
 	}
 	for _, pointer := range located {
@@ -467,6 +521,26 @@ func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error)
 	doc, loadErr := reload(data)
 	if loadErr == nil {
 		return doc, nil, true
+	}
+
+	// (c) the URef round. Reference RESOLUTION failures never reach the
+	// unmarshal oracle -- kin accepts `{"$ref": "#/x"}` and then fails while
+	// resolving it -- and they carry no `bad data in "…"` report, so neither
+	// earlier mechanism can see them. The ladder already does: every
+	// unresolvable internal reference is a URef defect at its referencing
+	// site. The climbing ones are neutralised here, once, together.
+	if len(floor.ClimbingURefSites) > 0 {
+		for _, site := range confinementSortedSites(floor.ClimbingURefSites) {
+			if !confinementNeutralizeURef(tree, site) {
+				return nil, nil, false
+			}
+		}
+		if data, err = json.Marshal(tree); err != nil {
+			return nil, nil, false
+		}
+		if doc, loadErr = reload(data); loadErr == nil {
+			return doc, nil, true
+		}
 	}
 
 	// (b) seam-C rounds.

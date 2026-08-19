@@ -298,3 +298,126 @@ func TestConfinement_SeamCSchemaPositionRefusesAResponseShapedTarget(t *testing.
 		t.Errorf("the loader's original error must stand, got %q", err)
 	}
 }
+
+// ---- block 8g: the URef round ---------------------------------------------
+//
+// Mechanism (c). A reference RESOLUTION failure reaches neither earlier
+// mechanism: kin accepts `{"$ref": "#/x"}` at the unmarshal oracle and fails
+// later while resolving it, with a report that matches no seam-C pattern. The
+// ladder already classifies the position (URef at the referencing site), so
+// the round neutralises exactly the sites whose verdict CLIMBS.
+//
+// These four cases bite in both directions:
+//
+//   - UNDER-fire: delete the (c) block and the first and fourth cases go red,
+//     because the loader refuses the whole artifact again.
+//   - OVER-fire: populate ClimbingURefSites from the PROJECTING sink as well
+//     and the second case goes red; populate it from the whole raw tree rather
+//     than the ladder's own closure walk and the third goes red. Either change
+//     turns a confinement into salvage.
+
+// The elmasy shape: a success response's only media alternative carries a
+// schema `$ref` that identifies no location. The defect climbs, so the
+// operation is an invalid target and the intact sibling survives.
+func TestConfinement_URefClimbingSchemaPositionConfines(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "paths": {
+	    "/good": {"get": {"operationId": "getGood", "responses": {"200": {"description": "ok"}}}},
+	    "/reaching": {"get": {"operationId": "getReaching", "responses": {"200": {"description": "ok",
+	      "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Missing"}}}}}}}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
+	if err != nil {
+		t.Fatalf("a climbing URef position must confine: %v", err)
+	}
+	if _, ok := result.Interface.Operations["getGood"]; !ok {
+		t.Fatalf("the intact sibling must synthesize: %v", result.Interface.Operations)
+	}
+	if _, ok := result.Interface.Operations["getReaching"]; ok {
+		t.Fatalf("the operation whose closure holds the dangling reference must not synthesize: %v", result.Interface.Operations)
+	}
+	var invalid *openbindings.SynthesisCoverageEntry
+	for i := range result.Coverage.Entries {
+		if result.Coverage.Entries[i].Status == openbindings.SynthesisInvalid {
+			invalid = &result.Coverage.Entries[i]
+		}
+	}
+	if invalid == nil {
+		t.Fatalf("the invalid unit must be entried, never silently dropped: %+v", result.Coverage.Entries)
+	}
+	if invalid.SourceRef != "#/paths/~1reaching/get" || invalid.ReasonCode != invalidUnitReasonCode {
+		t.Errorf("entry %q/%q, want #/paths/~1reaching/get / %s", invalid.SourceRef, invalid.ReasonCode, invalidUnitReasonCode)
+	}
+}
+
+// The ensi-platform shape: a dangling reference AT a success response member.
+// The ladder reads that as an invalid declaration that loses no representation
+// -- it PROJECTS, and the operation survives -- so neutralising it would put an
+// authored value into shipped content. The pass must decline and the loader's
+// own error must stand.
+func TestConfinement_URefProjectingPositionIsNeverConfined(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "paths": {
+	    "/good": {"get": {"operationId": "getGood", "responses": {"200": {"description": "ok"}}}},
+	    "/proj": {"get": {"operationId": "getProj", "responses": {"200": {"$ref": "#/components/responses/Missing"}}}}
+	  }
+	}`
+	_, err := synthesizeRaw(content)
+	if err == nil {
+		t.Fatalf("a URef position whose unit SURVIVES must never be confined")
+	}
+	if !strings.Contains(err.Error(), "Missing") {
+		t.Errorf("the loader's original error must stand, got %q", err)
+	}
+}
+
+// A dangling reference inside a component no unit's closure walk reaches. The
+// ladder classifies nothing there, so there is no attribution to confine
+// under, and the pass must decline. This is the algorand shape.
+func TestConfinement_URefUnreachedByAnyUnitIsNeverConfined(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "components": {"schemas": {"Orphan": {"type": "object", "properties": {"p": {"$ref": "#/components/schemas/Missing"}}}}},
+	  "paths": {"/good": {"get": {"operationId": "getGood", "responses": {"200": {"description": "ok"}}}}}
+	}`
+	_, err := synthesizeRaw(content)
+	if err == nil {
+		t.Fatalf("a URef position no unit reaches must never be confined")
+	}
+	if !strings.Contains(err.Error(), "Missing") {
+		t.Errorf("the loader's original error must stand, got %q", err)
+	}
+}
+
+// The spiceai shape: the dangling `$ref` carries a sibling. Seam C's
+// bare-Reference-Object restriction does not carry over -- the target does not
+// exist, so there is no composition to discard -- and the sibling is left where
+// it is rather than the position being rewritten.
+func TestConfinement_URefWithSiblingsConfinesAndKeepsTheSiblings(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "paths": {
+	    "/good": {"get": {"operationId": "getGood", "responses": {"200": {"description": "ok"}}}},
+	    "/sib": {"get": {"operationId": "getSib",
+	      "parameters": [{"name": "p", "in": "query", "schema": {"$ref": "#/components/schemas/Missing", "description": "kept"}}],
+	      "responses": {"200": {"description": "ok"}}}}
+	  }
+	}`
+	result, err := synthesizeRaw(content)
+	if err != nil {
+		t.Fatalf("a climbing URef position carrying siblings must confine: %v", err)
+	}
+	if _, ok := result.Interface.Operations["getGood"]; !ok {
+		t.Fatalf("the intact sibling must synthesize: %v", result.Interface.Operations)
+	}
+	if _, ok := result.Interface.Operations["getSib"]; ok {
+		t.Fatalf("the operation carrying the dangling reference must not synthesize: %v", result.Interface.Operations)
+	}
+}
