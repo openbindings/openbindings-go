@@ -656,6 +656,14 @@ type credentialPlacement struct {
 // later complete alternative. No declared security means no credential wire
 // application, even when unrelated credentials exist in context.
 func selectCredentialPlacements(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters, populated map[string]map[string]bool) ([]credentialPlacement, error) {
+	// An anonymous invocation places nothing, which is the whole point of
+	// asserting it: the caller is asking for the request a client with no
+	// credentials would send. Satisfying the challenge without this would let
+	// a credential left in context from an earlier call ride along, so the
+	// assertion has to reach the wire and not only the negotiation.
+	if openbindings.ContextAnonymous(bindCtx) {
+		return nil, nil
+	}
 	for _, plan := range viableSecurityPlans(doc, op, baseURL, params) {
 		if len(plan.context.Requirements) == 0 {
 			return nil, nil // this complete alternative explicitly allows anonymous access

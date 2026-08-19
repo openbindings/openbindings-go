@@ -81,7 +81,35 @@ func isCredentialField(key string) bool {
 // config.value is satisfied by the named point in context.configuration.
 // Other non-"auth." extension families fall back to a context field named
 // after their type; the extension family owns that convention.
+// ContextAnonymous reports whether the caller has asserted that this
+// invocation carries no credentials.
+//
+// An OpenAPI document's `security` describes what the API ACCEPTS; the server
+// decides what it ENFORCES, and the two routinely disagree — public read
+// endpoints under a blanket document-level requirement are ordinary. Without
+// this, such an operation is unreachable: the challenge cannot be answered
+// truthfully (there is no credential) and answering it falsely is worse than
+// silence, because a rejected token earns a 401 where sending nothing would
+// have been served.
+//
+// The assertion is the caller supplying, for this invocation, exactly what OAS
+// itself spells as `security: []`. It is deliberately an explicit act rather
+// than a fallback: guessing that a declared requirement is decorative would
+// make every credentialed operation silently attempt an unauthenticated call
+// first.
+func ContextAnonymous(ctx map[string]any) bool {
+	value, ok := ctx["anonymous"].(bool)
+	return ok && value
+}
+
 func requirementSatisfied(ctx map[string]any, req ContextRequirement, allowFlatNamedCredential bool) bool {
+	// Anonymity answers credential requirements and nothing else. A
+	// `config.value` point — which server to talk to, which request media to
+	// send — is not a credential and has no anonymous reading, so an
+	// alternative mixing the two still has to answer the configuration half.
+	if ContextAnonymous(ctx) && strings.HasPrefix(req.Type, "auth.") {
+		return true
+	}
 	named := ContextNamedCredential(ctx, req.Name)
 	switch req.Type {
 	case "auth.bearer":
@@ -117,7 +145,19 @@ func requirementSatisfied(ctx map[string]any, req ContextRequirement, allowFlatN
 				return true
 			}
 		}
-		return allowFlatNamedCredential && ContextString(ctx, "accessToken") != ""
+		if !allowFlatNamedCredential {
+			return false
+		}
+		// A flat bearer token counts here because an OAuth2 access token
+		// reaches the wire AS a Bearer credential, and the placement side
+		// already knows it: credentialValues falls back to the flat bearer
+		// token when no accessToken is present. Until these two agreed, an
+		// artifact declaring oauth2 was a dead end -- the challenge asked for
+		// context, the remedy it printed stored a bearerToken, and the next
+		// attempt challenged identically because only `accessToken` counted.
+		// OAuth2 is among the most common schemes in real documents, so that
+		// disagreement closed off a large share of them.
+		return ContextString(ctx, "accessToken") != "" || ContextBearerToken(ctx) != ""
 	}
 	if req.Type == "config.value" {
 		point, _ := req.Extra["point"].(string)
