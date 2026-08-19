@@ -86,6 +86,7 @@ package openapi
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -371,24 +372,35 @@ func confinementResolveRaw(root any, pointer string) (any, bool) {
 	return nil, false
 }
 
-// confinementDenotation is the ONLY warrant under which the pass may change the
-// raw tree without a ledger entry, and it exists so that the exemption is a
-// deliberate, greppable act rather than a forgotten parameter. It is legal at
-// exactly one kind of change: one where the value that lands is a value the
-// ARTIFACT ITSELF WROTE, at the place the artifact's own pointer denotes. That
-// is not authoring; nothing is minted, and there is nothing for an emitter to
-// certify unreachable.
+// confinementInlineDenoted is the ONLY change this pass may make to the raw
+// tree that is not authoring, and the exemption is STRUCTURAL rather than
+// declared: the caller hands over the artifact's own POINTER, never a value,
+// and this function resolves it. There is no signature through which a caller
+// can put a minted value at a position under a denotation claim, so the
+// exemption cannot be borrowed by a mechanism that is not denoting.
 //
-// Seam C's schema-position inline is the only holder. Block 8h measured what
-// putting it on the ledger would cost -- `etsangsplk/openapi-to-normalizr` and
-// `inngest/inngest`, both of which would refuse -- and did not spend it,
-// because the denotation argument is sound and paying for it would be paying
-// to refuse documents whose shipped content is entirely the artifact's own.
-type confinementDenotation struct{ why string }
-
-// confinementSetAt replaces the value at a pointer under a denotation warrant.
-func confinementSetAt(root any, pointer string, value any, _ confinementDenotation) bool {
-	tokens, err := confinementParsePointer(pointer)
+// That shape is deliberate, and it replaces a `confinementDenotation{why: …}`
+// warrant struct that block 8h's verification defeated in one line: any
+// in-package caller could write `confinementDenotation{why: "no reason at all"}`
+// and ship an arbitrary value past an admitting gate (record 104 §4). A warrant
+// whose only content is prose at the call site verifies nothing.
+//
+// What the exemption rests on: a JSON Reference DENOTES the value at its
+// pointer, so when a bare Reference Object is replaced by the value its own
+// pointer names, nothing is minted and there is nothing for an emitter to
+// certify unreachable. What CHANGES is the position the artifact's value
+// occupies, not the value.
+//
+// The position is still recorded on the ledger as DENOTED, because the
+// unledgered-change check at admission compares the shipped tree against the
+// artifact's own and must be able to account for every difference. Denoted
+// positions are exempt from the emission obligation, not from the accounting.
+func confinementInlineDenoted(root any, site, target string, ledger *confinementLedger) bool {
+	value, found := confinementResolveRaw(root, target)
+	if !found {
+		return false
+	}
+	tokens, err := confinementParsePointer(site)
 	if err != nil {
 		return false
 	}
@@ -398,12 +410,14 @@ func confinementSetAt(root any, pointer string, value any, _ confinementDenotati
 	}
 	switch p := parent.(type) {
 	case map[string]any:
+		ledger.denote(site)
 		p[last.key] = value
 		return true
 	case []any:
 		if last.index < 0 || last.index >= len(p) {
 			return false
 		}
+		ledger.denote(site)
 		p[last.index] = value
 		return true
 	}
@@ -466,13 +480,7 @@ func confinementApplySeamC(root any, floor *acceptanceFloor, target, site string
 		if !isMap || len(nodeMap) != 1 {
 			return false
 		}
-		value, found := confinementResolveRaw(root, target)
-		if !found {
-			return false
-		}
-		return confinementSetAt(root, site, value, confinementDenotation{
-			why: "JSON Reference: a bare Reference Object denotes the value at its pointer, so the value that lands is the artifact's own",
-		})
+		return confinementInlineDenoted(root, site, target, ledger)
 	}
 	return false
 }
@@ -530,91 +538,120 @@ func confinementNeutralizeURef(root any, site string, ledger *confinementLedger)
 // yet, and the history of this file is that the thing nobody wired is the thing
 // that ships a value the artifact never wrote.
 //
-// So the ledger is not a log and it is not optional. It is a REQUIRED PARAMETER
+// So the ledger is not a log and it is not optional. It is a required parameter
 // of every function in this file that mutates the raw tree
 // (`confinementNeutralize`, `confinementRemoveAt`, `confinementNeutralizeURef`),
-// with exactly one exemption that must be spelled with a
-// `confinementDenotation` warrant at the call site. A mechanism added later
-// cannot author without holding one, and `confinementAdmit` refuses any
-// confinement whose ledger it cannot clear.
+// and the one non-authoring change has no signature that accepts a minted value
+// at all (`confinementInlineDenoted`).
 //
-// WHAT AN ENTRY IS. Not the authored position: its MARKABLE ANCHOR. The pass
-// must show an emitter that what it authored is unreachable, and it can only
-// show that where it can place a mark whose carriage it can prove -- at a
-// Schema Object position, whose value an emitter carries verbatim, extensions
-// included. A removed MEMBER cannot itself carry a mark; it is gone. So the
-// anchor is the nearest ancestor of the authored position that the ladder
-// recorded as a Schema Object position, and the showing is sound because the
-// authored position's contribution to emitted content is contained in that
-// schema's: an emitter that emits nothing from the anchor emits nothing from
-// anything beneath it.
+// WHAT THAT IS AND IS NOT AN OBLIGATION TO DO. Requiring a parameter binds only
+// the code that calls these functions. Go has no way to stop a mechanism added
+// later from writing `delete(m, k)` in a new function of its own, and block 8h's
+// verification proved the point by doing exactly that: a fifth authoring act
+// compiled cleanly and shipped an `info.title` the artifact never wrote, past an
+// ADMITTING gate, because the gate read a ledger the act was not on (record 104
+// §4). "A mechanism added later cannot author without holding a ledger" was a
+// claim the language does not support, and it is not made here.
 //
-// This is a restriction on WHERE THE PASS MAY AUTHOR. It is not an enumeration
-// of channels and it names no position: whether a pointer has an anchor is
-// decided by the ladder's own `SchemaPositions` set, and the two parks'
-// channels -- a Parameter Object's `content` form, a Reference-Object success
-// response, a Reference-Object request body, a second response media
-// alternative -- appear nowhere in it.
+// What IS enforced, and is enforced over the tree rather than over the code, is
+// `confinementUnledgeredDifference`: at admission the shipped tree is compared
+// against a second parse of the artifact's own entry bytes, and EVERY difference
+// must lie at or beneath a recorded position. A mechanism that authors without a
+// ledger does not fail to compile; it fails to be ADMITTED, which is the
+// property the pass actually needs. The check is mechanism-blind and asks
+// nothing about which code made the change.
 //
-// AN AUTHORED POSITION WITH NO ANCHOR MAKES THE PASS DECLINE. That is the same
-// judgement `openapi-client/go` already makes with a nil gate, and the same one
-// obligation 1 already made for the URef round: a pass that cannot show its
-// authored values are unreachable must not admit them. Block 8h measured what
-// it costs -- record 103 §7.
+// WHAT AN ENTRY IS: the AUTHORED POSITION ITSELF, and nothing above it.
+//
+// An earlier design recorded the nearest ancestor the ladder had seen as a
+// Schema Object -- a "markable anchor" -- on the reasoning that a schema's value
+// is what an emitter carries verbatim, extensions included, so an emitter that
+// emits nothing from the anchor emits nothing beneath it. The reasoning is
+// sound; its instrument was not. Marking an ANCESTOR asks the emitter whether it
+// carries an extension key at that ancestor's ROOT, and block 8h's verification
+// measured one ordinary lane that does not: the whole-body input route rebuilds
+// an operation's input from a request-body schema's MEMBERS, so the body
+// schema's own root keys never reach `input`. The mark was carried at every one
+// of that schema's descendants and dropped at its root -- and the anchor rule
+// picks exactly that root for a removed `properties/<name>` member, so the false
+// negative was systematically aligned with the rule rather than incidental
+// (record 104 §1, reproducer `n10`).
+//
+// Marking AT the position removes the mismatch, because the question and the
+// instrument become the same question. The pass authored at a position; the gate
+// puts a distinguishable value AT that position and asks the emitter whether
+// anything changed. A removed member is not an obstacle to this -- the position
+// is exactly where the value goes back. What the shipped and marked images
+// differ by is then the PRESENCE OF A WHOLE MEMBER, not the survival of an
+// extension key at some ancestor's root, so no carriage assumption is being
+// made about the mark at all.
+//
+// It still enumerates nothing. `confinementMarkCandidates` is a fixed ladder of
+// four OAS object kinds, chosen because an emitter reads them on different
+// routes, and which of them is legal at a position is decided by the pass's own
+// unmarshal oracle in that position's decoding context -- never by a table of
+// positions. The parks' channels -- a Parameter Object's `content` form, a
+// Reference-Object success response, a Reference-Object request body, a second
+// response media alternative -- appear nowhere in this file.
+//
+// AN AUTHORED POSITION AT WHICH THE ORACLE ACCEPTS NO CANDIDATE MAKES THE PASS
+// DECLINE. That is the same judgement `openapi-client/go` already makes with a
+// nil gate: a pass that cannot show its authored values are unreachable must not
+// admit them.
 type confinementLedger struct {
-	floor   *acceptanceFloor
-	anchors map[string]bool
-	// stuck holds the first authored position with no markable anchor, so the
-	// decline can be attributed rather than merely reported.
-	stuck string
+	authored map[string]bool
+	// denoted holds positions changed under `confinementInlineDenoted`. They
+	// carry no emission obligation -- the value that landed is the artifact's
+	// own -- but the unledgered-difference check must still account for them.
+	denoted map[string]bool
 }
 
-func newConfinementLedger(floor *acceptanceFloor) *confinementLedger {
-	return &confinementLedger{floor: floor, anchors: map[string]bool{}}
+func newConfinementLedger() *confinementLedger {
+	return &confinementLedger{authored: map[string]bool{}, denoted: map[string]bool{}}
 }
 
-// author records that the member at `pointer` no longer holds what the artifact
+// author records that the value at `pointer` is no longer what the artifact
 // declared.
 func (l *confinementLedger) author(pointer string) {
 	if l == nil {
 		return
 	}
-	anchor, found := l.anchorFor(pointer)
-	if !found {
-		if l.stuck == "" {
-			l.stuck = pointer
-		}
-		return
-	}
-	l.anchors[anchor] = true
+	l.authored[pointer] = true
 }
 
-// anchorFor walks the authored position's CONTAINER chain outward and returns
-// the first Schema Object position the ladder recorded. The authored position
-// itself is never the anchor: what was authored is the container's value, and
-// where a member was removed the position no longer exists to carry anything.
-// The document root is never an anchor -- "the root is emitted" is true of
-// every document and would make the gate refuse everything.
-func (l *confinementLedger) anchorFor(pointer string) (string, bool) {
-	current := pointer
-	for {
-		parent, _, ok := floorSplitPointer(current)
-		if !ok || parent == "" || parent == "#" {
-			return "", false
-		}
-		if l.floor.SchemaPositions[parent] {
-			return parent, true
-		}
-		current = parent
+// denote records a position changed under a denotation.
+func (l *confinementLedger) denote(pointer string) {
+	if l == nil {
+		return
 	}
+	l.denoted[pointer] = true
 }
 
 func (l *confinementLedger) authoredNothing() bool {
-	return l == nil || (len(l.anchors) == 0 && l.stuck == "")
+	return l == nil || len(l.authored) == 0
 }
 
-func (l *confinementLedger) sortedAnchors() []string {
-	return confinementSortedSites(l.anchors)
+func (l *confinementLedger) sortedAuthored() []string {
+	if l == nil {
+		return nil
+	}
+	return confinementSortedSites(l.authored)
+}
+
+// records reports whether `pointer` is at or beneath a position this ledger
+// holds, in either list.
+func (l *confinementLedger) records(pointer string) bool {
+	if l == nil {
+		return false
+	}
+	for _, set := range []map[string]bool{l.authored, l.denoted} {
+		for site := range set {
+			if pointer == site || strings.HasPrefix(pointer, site+"/") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ---- the emission gate -------------------------------------------------------
@@ -651,31 +688,225 @@ func (l *confinementLedger) sortedAnchors() []string {
 // them.
 type confinementEmissionGate func(shipped, marked *openapi3.T, floor *acceptanceFloor) bool
 
-// confinementMarkKey is the distinguishing member the gate's `marked` image
-// carries at every authored position. It is an extension key, so it is legal
-// wherever the OAS admits specification extensions, and it is carried into
-// emitted content by any emitter that carries the position's value at all.
+// confinementMarkKey is the extension key every candidate value carries, inside
+// a Schema Object, so that a value reaching emitted content is recognisable
+// there. It is an extension key, so it is legal wherever the OAS admits
+// specification extensions.
+//
+// The mark is NOT what the gate compares. What the two images differ by is the
+// PRESENCE of a whole member at the authored position; the mark exists so that
+// the difference cannot be one the artifact could have written itself, which is
+// why `confinementAdmit` refuses outright when the shipped bytes already carry
+// the key.
 const confinementMarkKey = "x-openbindings-confinement-authored"
 
 // confinementMarkValue is fixed rather than random so that two runs over the
 // same artifact produce the same bytes.
 const confinementMarkValue = "confinement-authored-position"
 
-func confinementMarkAt(root any, site string, mark bool) bool {
-	node, ok := confinementResolveRaw(root, site)
+// confinementMarkCandidates is the fixed, position-blind ladder of values the
+// gate places at an authored position.
+//
+// WHY MORE THAN ONE. A position's decoding context decides what an emitter can
+// read from it, and a value of the wrong kind can be inert where a value of the
+// right kind is read. An Operation Object carrying only an extension emits
+// nothing an emitter must carry; a Response Object with content does. One
+// candidate therefore proves nothing in general, and the four here span the
+// object kinds this engine's emitter reads on DIFFERENT ROUTES: a Schema Object
+// (schemas, properties, items, request and response bodies), a Parameter Object
+// (the parameter lane, including its `content` form), a Response Object (the
+// output lane, including success selection), and a Path Item (the unit lane).
+//
+// WHY EVERY ACCEPTED ONE MUST AGREE. Block 8h's verification measured a
+// first-accepted-wins ladder and found it UNSOUND on `Kong/kong`, where three of
+// four accepted candidates report no emitted difference and the fourth reports
+// one (record 104 §2.2). A ladder that stops at the first acceptance is a false
+// negative generator. `confinementAdmit` therefore runs every candidate the
+// oracle accepts and admits only if all of them agree.
+//
+// WHY NOT MORE. The set must stay small, fixed and position-blind, or it becomes
+// the channel enumeration this whole chain exists to avoid. Adding a candidate
+// is adding a ROUTE KIND, never a position.
+func confinementMarkCandidates() []any {
+	mark := func() map[string]any {
+		return map[string]any{confinementMarkKey: confinementMarkValue}
+	}
+	body := func() map[string]any {
+		return map[string]any{"content": map[string]any{"application/json": map[string]any{"schema": mark()}}}
+	}
+	response := func() map[string]any {
+		out := body()
+		out["description"] = confinementMarkValue
+		return out
+	}
+	return []any{
+		mark(),
+		map[string]any{"name": confinementMarkValue, "in": "query", "schema": mark()},
+		response(),
+		map[string]any{"get": map[string]any{"responses": map[string]any{"200": response()}}},
+	}
+}
+
+// confinementPlacement remembers what stood at a position so that a candidate
+// can be withdrawn exactly, leaving the shipped tree byte-identical to what it
+// was. A removed member is restored as removed.
+type confinementPlacement struct {
+	parent  any
+	last    confinementToken
+	existed bool
+	prior   any
+}
+
+// confinementTokensAt parses a pointer and resolves each token's container kind
+// against the live tree, including the last one, so that
+// `confinementSkeleton` rebuilds the position's true decoding context.
+func confinementTokensAt(root any, pointer string) ([]confinementToken, any, confinementToken, bool) {
+	tokens, err := confinementParsePointer(pointer)
+	if err != nil {
+		return nil, nil, confinementToken{}, false
+	}
+	parent, last, ok := confinementResolveParent(root, tokens)
 	if !ok {
-		return false
+		return nil, nil, confinementToken{}, false
 	}
-	nodeMap, isMap := node.(map[string]any)
-	if !isMap {
-		return false
+	tokens[len(tokens)-1] = last
+	return tokens, parent, last, true
+}
+
+// confinementCandidatesAt returns the candidates the pass's own unmarshal oracle
+// accepts in this position's decoding context. It asks the oracle over
+// `confinementSkeleton` -- the container chain alone -- which is the same
+// instrument `confinementNeutralize` already uses to decide what a position may
+// hold, and it decides nothing itself.
+func confinementCandidatesAt(root any, pointer string) []any {
+	tokens, _, _, ok := confinementTokensAt(root, pointer)
+	if !ok {
+		return nil
 	}
-	if mark {
-		nodeMap[confinementMarkKey] = confinementMarkValue
-		return true
+	var out []any
+	for _, candidate := range confinementMarkCandidates() {
+		if confinementProbe(confinementSkeleton(tokens, candidate)) == nil {
+			out = append(out, candidate)
+		}
 	}
-	delete(nodeMap, confinementMarkKey)
-	return true
+	return out
+}
+
+func confinementPlaceAt(root any, pointer string, value any) (confinementPlacement, bool) {
+	_, parent, last, ok := confinementTokensAt(root, pointer)
+	if !ok {
+		return confinementPlacement{}, false
+	}
+	switch p := parent.(type) {
+	case map[string]any:
+		prior, existed := p[last.key]
+		p[last.key] = value
+		return confinementPlacement{parent: parent, last: last, existed: existed, prior: prior}, true
+	case []any:
+		if last.index < 0 || last.index >= len(p) {
+			return confinementPlacement{}, false
+		}
+		prior := p[last.index]
+		p[last.index] = value
+		return confinementPlacement{parent: parent, last: last, existed: true, prior: prior}, true
+	}
+	return confinementPlacement{}, false
+}
+
+func (p confinementPlacement) withdraw() {
+	switch parent := p.parent.(type) {
+	case map[string]any:
+		if p.existed {
+			parent[p.last.key] = p.prior
+			return
+		}
+		delete(parent, p.last.key)
+	case []any:
+		if p.last.index >= 0 && p.last.index < len(parent) {
+			parent[p.last.index] = p.prior
+		}
+	}
+}
+
+// confinementDifferences returns every position at which two raw trees differ,
+// stopping the descent at each difference. A position present on one side and
+// absent on the other is a difference AT that position.
+func confinementDifferences(original, confined any) []string {
+	var out []string
+	var walk func(path []confinementToken, a, b any)
+	walk = func(path []confinementToken, a, b any) {
+		am, aIsMap := a.(map[string]any)
+		bm, bIsMap := b.(map[string]any)
+		if aIsMap && bIsMap {
+			keys := map[string]bool{}
+			for k := range am {
+				keys[k] = true
+			}
+			for k := range bm {
+				keys[k] = true
+			}
+			names := make([]string, 0, len(keys))
+			for k := range keys {
+				names = append(names, k)
+			}
+			sort.Strings(names)
+			for _, k := range names {
+				child := append(append([]confinementToken{}, path...), confinementToken{key: k})
+				av, aHas := am[k]
+				bv, bHas := bm[k]
+				if aHas != bHas {
+					out = append(out, confinementPointerOf(child))
+					continue
+				}
+				walk(child, av, bv)
+			}
+			return
+		}
+		as, aIsSeq := a.([]any)
+		bs, bIsSeq := b.([]any)
+		if aIsSeq && bIsSeq {
+			if len(as) != len(bs) {
+				out = append(out, confinementPointerOf(path))
+				return
+			}
+			for i := range as {
+				child := append(append([]confinementToken{}, path...), confinementToken{index: i, inArray: true})
+				walk(child, as[i], bs[i])
+			}
+			return
+		}
+		if !reflect.DeepEqual(a, b) {
+			out = append(out, confinementPointerOf(path))
+		}
+	}
+	walk(nil, original, confined)
+	return out
+}
+
+// confinementUnledgeredDifference reports the first position at which the tree
+// this pass is about to hand back differs from the artifact's own, and which no
+// ledger entry accounts for.
+//
+// This is the property that a required ledger parameter cannot supply. A
+// parameter binds the callers of three functions; this binds the TREE. A fifth
+// mechanism that reaches into the raw tree with its own `delete` -- which Go
+// will always let it do -- authors a difference that no entry covers, and the
+// pass declines instead of shipping it. Block 8h's verification shipped exactly
+// such an act past an admitting gate (record 104 §4); it does not pass here.
+//
+// It compares against a SECOND PARSE of the entry bytes rather than a copy taken
+// earlier, so nothing the mechanisms did can have reached the reference image.
+func confinementUnledgeredDifference(entry []byte, confined any, ledger *confinementLedger) (string, bool) {
+	original, parsed := parseRawResource(entry)
+	if !parsed {
+		return "#", true
+	}
+	for _, pointer := range confinementDifferences(original, confined) {
+		if !ledger.records(pointer) {
+			return pointer, true
+		}
+	}
+	return "", false
 }
 
 // confinementAdmit is the pass's ONE admission point. Every exit that hands
@@ -685,30 +916,40 @@ func confinementMarkAt(root any, site string, mark bool) bool {
 // decline that keeps the loader's original error.
 //
 // `loaded` is the document the caller has already loaded from the confined
-// tree. A confinement that authored NOTHING is admitted as it stands: there is
-// nothing for an emitter to certify, and paying two more loads to compare a
-// document against itself would be a cost with no question behind it.
+// tree.
 //
-// Otherwise, two obligations, in order:
+// Three obligations, in order:
 //
-//  1. PROVABILITY. Every authored position must have a markable anchor -- see
-//     `confinementLedger`. At a position with none the pass cannot demonstrate
-//     what an emitter would do with what it authored, so it declines rather
-//     than guess.
+//  1. ACCOUNTING. Every difference between the artifact's own tree and the tree
+//     about to be handed back must lie at or beneath a recorded position. This
+//     runs even when the ledger is EMPTY, because an empty ledger is exactly the
+//     state a mechanism that forgot to record leaves behind.
 //
-//  2. EMISSION. Load the marked image and the shipped image through the same
-//     shipped `reload`, and ask the gate whether they emit identically. The
-//     shipped image is loaded LAST so that every piece of lane state the
-//     surrounding load collected describes the document this pass returns.
-func confinementAdmit(tree any, ledger *confinementLedger, floor *acceptanceFloor,
+//  2. PROVABILITY. At every authored position the oracle must accept at least
+//     one candidate. At a position where it accepts none the pass cannot ask the
+//     emitter anything, so it declines rather than guess.
+//
+//  3. EMISSION. For every candidate the oracle accepts, load a marked image and
+//     ask the gate whether it emits identically to the shipped one. EVERY
+//     accepted candidate must agree. The shipped image is loaded LAST so that
+//     every piece of lane state the surrounding load collected describes the
+//     document this pass returns.
+//
+// A confinement that authored NOTHING skips 2 and 3: there is nothing for an
+// emitter to certify, and paying two more loads to compare a document against
+// itself would be a cost with no question behind it. It does not skip 1.
+func confinementAdmit(entry []byte, tree any, ledger *confinementLedger, floor *acceptanceFloor,
 	reload func([]byte) (*openapi3.T, error), gate confinementEmissionGate, loaded *openapi3.T) (*openapi3.T, error, bool) {
+	if _, unaccounted := confinementUnledgeredDifference(entry, tree, ledger); unaccounted {
+		return nil, nil, false
+	}
 	if ledger.authoredNothing() {
 		return loaded, nil, true
 	}
-	if gate == nil || ledger.stuck != "" {
+	if gate == nil {
 		return nil, nil, false
 	}
-	authored := ledger.sortedAnchors()
+	authored := ledger.sortedAuthored()
 	shippedData, err := json.Marshal(tree)
 	if err != nil {
 		return nil, nil, false
@@ -717,26 +958,65 @@ func confinementAdmit(tree any, ledger *confinementLedger, floor *acceptanceFloo
 	if strings.Contains(string(shippedData), confinementMarkKey) {
 		return nil, nil, false
 	}
-	marked := true
+
+	// Obligation 2, and the widest accepted set decides how many rounds
+	// obligation 3 needs.
+	rounds := 0
+	available := make(map[string][]any, len(authored))
 	for _, site := range authored {
-		if !confinementMarkAt(tree, site, true) {
-			marked = false
-			break
+		candidates := confinementCandidatesAt(tree, site)
+		if len(candidates) == 0 {
+			return nil, nil, false
+		}
+		available[site] = candidates
+		if len(candidates) > rounds {
+			rounds = len(candidates)
 		}
 	}
-	markedData, markErr := json.Marshal(tree)
-	for _, site := range authored {
-		confinementMarkAt(tree, site, false)
+
+	// Obligation 3. Every authored position is marked in every round, so a
+	// difference anywhere refuses and an identical pair clears every position
+	// the round covered. Rounds are indexed so that after `rounds` of them every
+	// (position, accepted candidate) pair has been put to the emitter at least
+	// once; a position whose accepted set is shorter repeats its first.
+	for round := 0; round < rounds; round++ {
+		placements := make([]confinementPlacement, 0, len(authored))
+		placed := true
+		for _, site := range authored {
+			candidates := available[site]
+			pick := candidates[0]
+			if round < len(candidates) {
+				pick = candidates[round]
+			}
+			placement, ok := confinementPlaceAt(tree, site, pick)
+			if !ok {
+				placed = false
+				break
+			}
+			placements = append(placements, placement)
+		}
+		markedData, markErr := json.Marshal(tree)
+		for i := len(placements) - 1; i >= 0; i-- {
+			placements[i].withdraw()
+		}
+		if !placed || markErr != nil {
+			return nil, nil, false
+		}
+		markedDoc, markedLoadErr := reload(markedData)
+		if markedLoadErr != nil {
+			return nil, nil, false
+		}
+		shippedDoc, shippedLoadErr := reload(shippedData)
+		if shippedLoadErr != nil {
+			return nil, nil, false
+		}
+		if !gate(shippedDoc, markedDoc, floor) {
+			return nil, nil, false
+		}
 	}
-	if !marked || markErr != nil {
-		return nil, nil, false
-	}
-	markedDoc, markedLoadErr := reload(markedData)
+
 	shippedDoc, shippedLoadErr := reload(shippedData)
-	if markedLoadErr != nil || shippedLoadErr != nil {
-		return nil, nil, false
-	}
-	if !gate(shippedDoc, markedDoc, floor) {
+	if shippedLoadErr != nil {
 		return nil, nil, false
 	}
 	return shippedDoc, nil, true
@@ -799,7 +1079,7 @@ func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error)
 	if floor == nil {
 		return nil, nil, false
 	}
-	ledger := newConfinementLedger(floor)
+	ledger := newConfinementLedger()
 
 	// (a) the oracle walk.
 	located := confinementLocate(tree)
@@ -824,7 +1104,7 @@ func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error)
 	}
 	doc, loadErr := reload(data)
 	if loadErr == nil {
-		return confinementAdmit(tree, ledger, floor, reload, gate, doc)
+		return confinementAdmit(entry, tree, ledger, floor, reload, gate, doc)
 	}
 
 	// (c) the URef round. Reference RESOLUTION failures never reach the
@@ -843,7 +1123,7 @@ func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error)
 			return nil, nil, false
 		}
 		if doc, loadErr = reload(data); loadErr == nil {
-			return confinementAdmit(tree, ledger, floor, reload, gate, doc)
+			return confinementAdmit(entry, tree, ledger, floor, reload, gate, doc)
 		}
 	}
 
@@ -871,7 +1151,7 @@ func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error)
 		}
 		doc, loadErr = reload(data)
 		if loadErr == nil {
-			return confinementAdmit(tree, ledger, floor, reload, gate, doc)
+			return confinementAdmit(entry, tree, ledger, floor, reload, gate, doc)
 		}
 	}
 	return nil, nil, false
