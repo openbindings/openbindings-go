@@ -53,9 +53,24 @@ package openapi
 //	    "Unlike (a) and (b), this round AUTHORS", and that was FALSE:
 //	    mechanism (a) authors too -- `confinementNeutralize` DELETES a mapping
 //	    member, and the container that remains is not what the artifact
-//	    declared. (a) is UNGATED. That is an OPEN HOLE, not a property; it is
-//	    filed with reproducers, mechanism attribution and corpus incidence at
-//	    `corpus-lab/openapi-runtime/102-block-8g-THIRD-RUN-LANDED-*` §3.
+//	    declared. (a) IS ON THE SAME RAIL: both of its branches call
+//	    `ledger.author`, and `confinementAdmit` puts every ledgered authored
+//	    position to the emission gate and declines every confinement it cannot
+//	    clear. Block 8h moved it there -- see `confinementNeutralize`.
+//
+//	    The sentence that used to stand HERE -- "(a) is UNGATED. That is an
+//	    OPEN HOLE, not a property" -- entered at `5acb82a`, was falsified by
+//	    `387d38b`, and was still standing, FALSE, at `239914e` and at this
+//	    file's own head until record 115 §8 proved it false in one in-package
+//	    line: after `confinementNeutralize` on a mechanism-(a) position,
+//	    `ledger.records(site)` is true and `len(ledger.authored)` is 1. It was
+//	    false in the SAFE direction -- it understated the engine's guarantees --
+//	    which is why nothing measured against this engine is unexplainable by
+//	    it, and it is corrected rather than carried because a false safety
+//	    statement in shipped source is the defect class record 112 §6 ground 2
+//	    was made of. Mechanism (a)'s history -- reproducers, attribution and
+//	    corpus incidence as of the head where it was still ungated -- is filed
+//	    at `corpus-lab/openapi-runtime/102-block-8g-THIRD-RUN-LANDED-*` §3.
 //
 // THE RAILS, AND WHICH ONE EACH MECHANISM ACTUALLY HAS.
 //
@@ -73,10 +88,25 @@ package openapi
 // success-response media alternative. Attribution says which unit OWNS a
 // defect. It says nothing about where the authored value can be read from.
 //
-// Only the URef round (c) is held to the sufficient condition: ask the
-// EMITTER, see `confinementEmissionGate`. Mechanisms (a) and (b) still stand
-// on attribution alone. For (a) that is a MEASURED hole and not an argument
-// (see `confinementNeutralize`); for (b) it is unproven rather than clean.
+// EVERY POSITION THIS PASS TOUCHES IS EITHER PUT TO THE EMITTER OR DENOTED.
+// There is no third rail, and no mechanism stands on attribution alone.
+//
+//   - mechanism (a) AUTHORS, on both branches of `confinementNeutralize`, and
+//     is held to the sufficient condition: ask the EMITTER, see
+//     `confinementEmissionGate`. Block 8h put it there.
+//   - the URef round (c) AUTHORS and is held to the same condition.
+//   - mechanism (b) is not a rail of its own -- it is its two branches. Its
+//     RESPONSE branch removes a member through `confinementRemoveAt`, which
+//     authors and is therefore gated exactly as (a) and (c) are. Its SCHEMA
+//     branch DENOTES through `confinementInlineDenoted`, and that is the ONE
+//     accounted exemption from the emission obligation in the whole pass: a
+//     denoted position is accounted at obligation 1 and is never put to the
+//     emitter. What holds it is not attribution either -- it is the function's
+//     own guard (the site must BE a bare Reference Object whose `$ref` names
+//     the target), which is a property of the FUNCTION and not of a call site;
+//     read `confinementInlineDenoted` before touching it, and read
+//     `confinementUnledgeredDifference` non-totality 4, which is where that
+//     exemption is declared.
 //
 // Consequence, stated because it is load-bearing: the registry-scoped classes
 // D14/D15 are deliberately not part of the shipped roster (block 8d-1 record
