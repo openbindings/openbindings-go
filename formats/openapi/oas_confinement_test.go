@@ -52,6 +52,7 @@ package openapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -1206,5 +1207,188 @@ func TestConfinement_OracleWalkOutsideEmittedContentIsAdmitted(t *testing.T) {
 	}
 	if invalid == nil || invalid.SourceRef != "#/paths/~1climb/get" {
 		t.Fatalf("the climbing unit must be entried: %+v", result.Coverage.Entries)
+	}
+}
+
+// THE BORROW, IN ONE LINE, REFUSED BY THE FUNCTION.
+//
+// Record 112 §6 ground 3: the restriction that makes the denotation exemption
+// safe -- only a BARE Reference Object is inlined -- lived in
+// `confinementApplySeamC`, not in `confinementInlineDenoted`, while the
+// function itself accepted any map carrying a string `$ref`. A safety property
+// held by a call site rather than by a function has been defeated in this exact
+// file twice, each time in one added line (record 104 §4, record 107 §6.3), and
+// each time the block that shipped it believed the class was closed.
+//
+// This is that one line. `#/components/schemas/S` is a Reference Object WITH A
+// SIBLING, so it is not a bare reference and inlining it would DISCARD the
+// sibling -- an authored difference, produced by the one function in the pass
+// that is exempt from being asked about it, and accounted as DENOTED.
+//
+// Two-sided, because a test that only shows the fixed head refuses proves the
+// function is not broken and not that anything was closed:
+//
+//   - a SIBLING-BEARING reference must be refused, and nothing may move;
+//   - a BARE reference at the same position must still be inlined, or the
+//     refusal above would be a function that refuses everything.
+func TestConfinement_DenotationRefusesASiblingBearingReferenceObject(t *testing.T) {
+	build := func(siblings string) map[string]any {
+		entry := []byte(`{"openapi":"3.0.3","info":{"title":"T","version":"1"},
+"components":{"schemas":{"S":{"type":"string"},"Borrower":{"$ref":"#/components/schemas/S"` + siblings + `}}},
+"paths":{}}`)
+		tree, ok := parseRawResource(entry)
+		if !ok {
+			t.Fatal("the probe must parse")
+		}
+		root, ok := tree.(map[string]any)
+		if !ok {
+			t.Fatal("the probe must be an object")
+		}
+		return root
+	}
+	const site = "#/components/schemas/Borrower"
+	const target = "#/components/schemas/S"
+
+	withSibling := build(`,"description":"a sibling the normalizer composes"`)
+	ledger := newConfinementLedger()
+	if confinementInlineDenoted(withSibling, site, target, ledger) {
+		t.Fatalf("the exemption was BORROWED: a sibling-bearing reference was inlined by the function")
+	}
+	node := withSibling["components"].(map[string]any)["schemas"].(map[string]any)["Borrower"].(map[string]any)
+	if _, stillRef := node["$ref"]; !stillRef || len(node) != 2 {
+		t.Fatalf("a refused inline must leave the tree exactly as it was, got %v", node)
+	}
+	if ledger.records(site) {
+		t.Fatalf("a refused inline must record nothing")
+	}
+
+	bare := build("")
+	if !confinementInlineDenoted(bare, site, target, newConfinementLedger()) {
+		t.Fatalf("a BARE reference must still be inlined; a function that refuses everything proves nothing")
+	}
+}
+
+// THE PREFIX IS LOAD-BEARING, stated at the admission point.
+//
+// Record 112 §6 ground 2: `confinementUnledgeredDifference`'s godoc claimed the
+// `records` prefix was "harmless … which is the case today". It was false at
+// the head that shipped it -- reducing `records` to `pointer == site` costs the
+// 260-artifact corpus five specimens and 133 operations -- and a vintage cannot
+// be banked against an engine whose source misstates the safety property the
+// measurement depends on.
+//
+// This is the corrected claim under a proof. It drives `confinementAdmit`, the
+// pass's ONE admission point and the function the accounting obligation is
+// stated over, with the shape the URef round actually produces: the SITE
+// recorded, and the difference lying at `<site>/$ref` BENEATH it.
+//
+// Two-sided, so it cannot pass for the wrong reason:
+//
+//   - the difference beneath a RECORDED site must be admitted. Red the moment
+//     `records` stops matching a prefix.
+//   - the same difference with the site NOT recorded must decline, or the first
+//     half would pass under a check that accounts for everything.
+func TestConfinement_ARecordedSiteAccountsForTheDifferenceBeneathIt(t *testing.T) {
+	entry := []byte(`{"openapi":"3.0.3","info":{"title":"T","version":"1"},
+"components":{"schemas":{"S":{"$ref":"#/components/schemas/Missing","description":"kept"}}},
+"paths":{"/x":{"get":{"operationId":"getX","responses":{"200":{"description":"ok"}}}}}}`)
+	const site = "#/components/schemas/S"
+
+	authored := func() map[string]any {
+		tree, ok := parseRawResource(entry)
+		if !ok {
+			t.Fatal("the probe must parse")
+		}
+		root, ok := tree.(map[string]any)
+		if !ok {
+			t.Fatal("the probe must be an object")
+		}
+		// Exactly what `confinementNeutralizeURef` does: remove the `$ref`
+		// MEMBER, leave the siblings, and record the SITE. The difference is at
+		// `<site>/$ref`, one token BENEATH the position on the ledger.
+		delete(root["components"].(map[string]any)["schemas"].(map[string]any)["S"].(map[string]any), "$ref")
+		return root
+	}
+	reload := func(data []byte) (*openapi3.T, error) {
+		return openapi3.NewLoader().LoadFromData(data)
+	}
+	admittingGate := func(shipped, marked []byte, floor *acceptanceFloor) (bool, bool) { return true, true }
+
+	tree := authored()
+	floor := computeAcceptanceFloor(tree)
+	if floor == nil {
+		t.Fatal("the edition gate must read this artifact")
+	}
+	shipped, err := json.Marshal(tree)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	loaded, err := reload(shipped)
+	if err != nil {
+		t.Fatalf("the authored tree must load: %v", err)
+	}
+
+	ledger := newConfinementLedger()
+	ledger.author(site)
+	if _, _, ok := confinementAdmit(entry, tree, ledger, floor, reload, admittingGate, loaded); !ok {
+		t.Fatalf("a difference BENEATH a recorded site must be accounted: the prefix in ledger.records is load-bearing, " +
+			"and the URef round and the denotation inline both depend on it")
+	}
+
+	if _, _, ok := confinementAdmit(entry, tree, newConfinementLedger(), floor, reload, admittingGate, loaded); ok {
+		t.Fatalf("the same difference with NOTHING recorded must decline; otherwise the half above proves nothing")
+	}
+}
+
+// THE SEAM-C ERROR EXIT IS ROUTED THROUGH THE ACCOUNTING.
+//
+// Record 112 §6 ground 4. `confineEntryDocument`'s seam-C loop returns
+// `(nil, loadErr, true)` when the load error stops matching
+// `confinementBadData`. It hands back no document, so nothing authored can
+// SHIP through it -- and it hands back an error produced by loading bytes the
+// pass itself wrote, with the ledger and the gate never consulted. It is live
+// in the corpus: `basset/basset` reaches it with three authored positions, and
+// the consumer is told `invalid schema: value MUST be an object` while the
+// artifact's own error is `cannot unmarshal bool into field Schema.required of
+// type []string`.
+//
+// Two-sided, driving `confineEntryDocument` itself with a `reload` that fails
+// with an error `confinementBadData` does not match:
+//
+//   - the pass AUTHORED: the diagnostic is pass-derived, so the pass declines
+//     and the caller keeps the ARTIFACT'S OWN error. Red if the exit stops
+//     consulting the ledger.
+//   - the pass changed NOTHING: the tree that failed to load is the artifact's
+//     own, so the error is the artifact's own and still stands. Red if the exit
+//     is closed off entirely instead of routed, which would be the easy wrong
+//     fix and would take the honest error with it.
+func TestConfinement_SeamCErrorExitDoesNotHandOnAPassDerivedDiagnostic(t *testing.T) {
+	passDerived := errors.New("invalid schema: value MUST be an object")
+	reload := func([]byte) (*openapi3.T, error) { return nil, passDerived }
+	gate := func(shipped, marked []byte, floor *acceptanceFloor) (bool, bool) { return true, true }
+
+	// The pass AUTHORS: an empty-array HTTP-method member is located by the
+	// oracle walk and neutralised, so the ledger is non-empty when the exit is
+	// reached.
+	authoring := []byte(`{"openapi":"3.0.3","info":{"title":"T","version":"1"},
+"paths":{"/good":{"get":{"operationId":"getGood","responses":{"200":{"description":"ok"}}}},"/bad":{"get":[]}}}`)
+	doc, err, took := confineEntryDocument(authoring, reload, errors.New("cannot unmarshal array into field PathItem.get"), gate)
+	if took {
+		t.Fatalf("a diagnostic derived from a tree the pass authored must not be handed on; got err=%v doc=%v", err, doc)
+	}
+	if err != nil {
+		t.Fatalf("a decline hands back no error of its own, so the artifact's own stands; got %v", err)
+	}
+
+	// The pass changes NOTHING: no located defect and no climbing URef site, so
+	// the tree handed to the loader is the artifact's own and so is the error.
+	inert := []byte(`{"openapi":"3.0.3","info":{"title":"T","version":"1"},
+"paths":{"/good":{"get":{"operationId":"getGood","responses":{"200":{"description":"ok"}}}}}}`)
+	_, err, took = confineEntryDocument(inert, reload, errors.New(`bad data in "#/components/schemas/S" (expecting ref to schema object)`), gate)
+	if !took || err == nil {
+		t.Fatalf("an unconfined tree's own load error must still be reported; got took=%v err=%v", took, err)
+	}
+	if !errors.Is(err, passDerived) {
+		t.Fatalf("the error reported must be the load's own, got %v", err)
 	}
 }

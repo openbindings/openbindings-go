@@ -419,14 +419,26 @@ func confinementResolveRaw(root any, pointer string) (any, bool) {
 // was RELOCATED to a position the artifact never put it, which is a difference
 // an emitter is never asked about.
 //
-// So the site is checked too: it must BE a Reference Object whose `$ref` names
-// `target`. That is exactly what the exemption's justification asserts -- a JSON
-// Reference DENOTES the value at its pointer, so replacing the reference by that
-// value mints nothing -- and until now the justification was a property of the
-// one call site rather than of the function. `confinementApplySeamC` satisfies
-// it by construction: it selects the site through `confinementRefSites`, which
-// finds sites by their `$ref` naming the target, and it inlines only a node of
-// exactly one member. A relocation satisfies it never.
+// So the site is checked too: it must BE a BARE Reference Object whose `$ref`
+// names `target` -- a map of EXACTLY ONE member. That is exactly what the
+// exemption's justification asserts -- a JSON Reference DENOTES the value at
+// its pointer, so replacing the reference by that value mints nothing.
+//
+// THE ARITY TEST IS HERE, and record 112 §6 ground 3 is why. It used to live in
+// `confinementApplySeamC` (`if !isMap || len(nodeMap) != 1`), and that made the
+// exemption's soundness a property of ONE CALL SITE rather than of the function
+// that grants it -- while the function itself accepted any map with a string
+// `$ref`. A `$ref` carrying SIBLINGS is not a bare Reference Object; it is the
+// ref-sibling composition question, which the shipped normalizer owns, and
+// replacing such a node discards what it composes. So the pre-move function
+// would inline it and DISCARD the siblings, on an exemption whose whole
+// justification is that nothing is authored. In this exact file a safety
+// property held by a call site rather than by a function has been defeated by a
+// verifier twice, each time in one added line, and each time the block that
+// shipped it believed it was closed (record 104 §4's warrant struct, record 107
+// §6.3's relocation). It is not held by a call site any more:
+// `TestConfinement_DenotationRefusesASiblingBearingReferenceObject` borrows the
+// exemption in one line and is refused BY THE FUNCTION.
 //
 // What the exemption rests on, restated with the check in place: when a bare
 // Reference Object is replaced by the value ITS OWN pointer names, nothing is
@@ -444,6 +456,13 @@ func confinementInlineDenoted(root any, site, target string, ledger *confinement
 	}
 	node, resolved := confinementResolveRaw(root, site)
 	if !resolved || !confinementDenotes(node, target) {
+		return false
+	}
+	// Only a BARE Reference Object is inlined. A `$ref` carrying siblings is
+	// the ref-sibling composition question, which the shipped normalizer owns;
+	// replacing the node would discard what it composes, which is authoring,
+	// which is the one thing this function must never do.
+	if nodeMap, isMap := node.(map[string]any); !isMap || len(nodeMap) != 1 {
 		return false
 	}
 	tokens, err := confinementParsePointer(site)
@@ -515,17 +534,10 @@ func confinementApplySeamC(root any, floor *acceptanceFloor, target, site string
 		if floor.Line != "3.1" && !floor.ConformantSchemaComponents[target] {
 			return false
 		}
-		// Only a bare Reference Object is inlined. A `$ref` carrying siblings
-		// is the ref-sibling composition question, which the shipped
-		// normalizer owns; replacing the node would discard what it composes.
-		node, ok := confinementResolveRaw(root, site)
-		if !ok {
-			return false
-		}
-		nodeMap, isMap := node.(map[string]any)
-		if !isMap || len(nodeMap) != 1 {
-			return false
-		}
+		// The bare-Reference-Object test that used to stand HERE now lives in
+		// `confinementInlineDenoted`, where it is a property of the function
+		// that grants the exemption rather than of this one call site. Record
+		// 112 §6 ground 3; the reason is stated at that function.
 		return confinementInlineDenoted(root, site, target, ledger)
 	}
 	return false
@@ -716,6 +728,15 @@ func (l *confinementLedger) authoredNothing() bool {
 	return l == nil || len(l.authored) == 0
 }
 
+// denotedAnything reports whether any position was changed under a denotation.
+// A denoted position carries no EMISSION obligation, because the value that
+// landed is the one the artifact's own reference denotes -- but the tree is
+// still not the artifact's own tree, which is what the seam-C error exit has to
+// know before it hands a diagnostic derived from that tree to a consumer.
+func (l *confinementLedger) denotedAnything() bool {
+	return l != nil && len(l.denoted) > 0
+}
+
 func (l *confinementLedger) sortedAuthored() []string {
 	if l == nil {
 		return nil
@@ -725,6 +746,30 @@ func (l *confinementLedger) sortedAuthored() []string {
 
 // records reports whether `pointer` is at or beneath a position this ledger
 // holds, in either list.
+//
+// THE PREFIX IS LOAD-BEARING, and it is not a convenience. Two mechanisms
+// record a SITE and then change something BENEATH it: the URef round records
+// the site (`ledger.author(site)`) and removes only that site's `$ref` MEMBER,
+// so the difference lies at `<site>/$ref`; and `confinementInlineDenoted`
+// records the site and replaces the node, so every difference between the
+// reference and the value it denotes lies beneath the site too. Exact-position
+// equality would leave both unaccounted and the pass would decline. Measured on
+// the 260-artifact corpus: reducing this to `pointer == site` takes the engine
+// from 241 / 19 / 10,530 / 189 to 236 / 24 / 10,397 / 188 -- five specimens,
+// 133 operations (`elmasy` 8, `etsangsplk` 4, `grocy` 79, `inngest` 15,
+// `spiceai` 27).
+//
+// `TestConfinement_ARecordedSiteAccountsForTheDifferenceBeneathIt` states that
+// property at `confinementAdmit`, the pass's one admission point, and is red
+// under exactly that reduction. The godoc at
+// `confinementUnledgeredDifference` used to call the prefix "harmless … which
+// is the case today"; it was FALSE at the head that shipped it (record 112
+// §5.3) and it is corrected there.
+//
+// What the prefix costs is stated at `confinementUnledgeredDifference` item 2
+// and is not repeated here: a ledgered site BLANKETS everything beneath it, so
+// a mechanism that records a site and then changes something beneath it that
+// the mechanism did not intend is accounted anyway.
 func (l *confinementLedger) records(pointer string) bool {
 	if l == nil {
 		return false
@@ -1048,9 +1093,21 @@ func confinementDifferences(original, confined any) []string {
 //     construction. The claim this check supports is about trees; the bytes are
 //     not the tree.
 //  2. `records` matches a PREFIX, so a ledgered site blankets everything beneath
-//     it. Harmless while every recorded site is a removed member with nothing
-//     beneath it, which is the case today, but it is a prefix and not a
-//     position.
+//     it. THE PREFIX IS LOAD-BEARING AND NOT A CONVENIENCE, and the sentence
+//     that used to stand here -- "harmless while every recorded site is a
+//     removed member with nothing beneath it, which is the case today" -- was
+//     FALSE at the head that shipped it (record 112 §5.3). Two mechanisms
+//     record a site and change something BENEATH it: the URef round records the
+//     site and removes that site's `$ref` member, and `confinementInlineDenoted`
+//     records the site and replaces the node it names. Reducing `records` to
+//     `pointer == site` takes the corpus from 241 / 19 / 10,530 / 189 to
+//     236 / 24 / 10,397 / 188 -- five specimens, 133 operations.
+//     `TestConfinement_ARecordedSiteAccountsForTheDifferenceBeneathIt` states
+//     the property at the admission point and is red under that reduction.
+//     What remains a non-totality is the BLANKET: a site accounts for every
+//     difference beneath it, including one the mechanism that recorded it did
+//     not intend. It is a prefix and not a position, and the pass has no
+//     instrument that can tell those two apart.
 //  3. NON-TREE CHANNELS are outside it entirely. A future mechanism that writes
 //     into lane state -- `schemaOverlays` and its kind -- rather than into the
 //     tree authors nothing this check can see.
@@ -1258,12 +1315,14 @@ func confinementSortedSites(set map[string]bool) []string {
 //     seam-C site produces -- behaviour unchanged, and never a silent drop.
 //   - true with a nil error: the confined document, whose per-unit accounting
 //     is the floor's.
-//   - true with a non-nil error: the entry document was fully confined and
-//     accounted, and the load still failed for a reason that is not the entry
-//     document's shape -- offline retrieval of an external resource, in the
-//     corpus's two instances. That error is the honest one to report, and
+//   - true with a non-nil error: the pass changed NOTHING, and the load still
+//     failed for a reason that is not the entry document's shape -- offline
+//     retrieval of an external resource, in the corpus's two instances. That
+//     error is the artifact's own and is the honest one to report, and
 //     reporting the pre-confinement unmarshal error instead would name a
-//     defect that is no longer what blocks the load.
+//     defect that is no longer what blocks the load. If the pass DID author or
+//     denote anything, this result is not available to it: see the seam-C
+//     error exit.
 //
 // `gate` is this engine's emission rail; see `confinementEmissionGate`. EVERY
 // mechanism is now held to it, because every mechanism that authors registers
@@ -1279,11 +1338,14 @@ func confinementSortedSites(set map[string]bool) []string {
 // covers. A mechanism that authors without a ledger does not fail to compile; it
 // fails to be admitted.
 //
-// One exit does NOT reach that check: the seam-C loop returns
-// `(nil, loadErr, true)` when the load error stops matching
-// `confinementBadData`. No document is handed back on that path, so nothing
-// authored can ship through it -- but the error text it reports is derived from a
-// confined tree, and the accounting is never consulted before reporting it.
+// EVERY exit now reaches that check, including the one that hands back an ERROR
+// rather than a document. The seam-C loop's `(nil, loadErr, true)` used to be
+// the exception: no document is handed back on that path, so nothing authored
+// could ship through it, but the error text was derived from a tree the pass had
+// already written, and the accounting was never consulted before reporting it.
+// It is consulted now, and a pass-derived diagnostic is declined so that the
+// ARTIFACT'S OWN error stands. Record 112 §6 ground 4; the reason is stated at
+// the exit.
 func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error), originalErr error, gate confinementEmissionGate) (*openapi3.T, error, bool) {
 	if len(entry) == 0 || reload == nil {
 		return nil, nil, false
@@ -1357,6 +1419,38 @@ func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error)
 	for round := 0; round < confinementSeamCRounds; round++ {
 		match := confinementBadData.FindStringSubmatch(loadErr.Error())
 		if match == nil {
+			// THIS EXIT IS ROUTED THROUGH THE ACCOUNTING. It hands the caller
+			// an error rather than a document, and an error is not exempt from
+			// the question the accounting asks, because `loadErr` was produced
+			// by loading bytes THIS PASS WROTE. Record 112 §6 ground 4:
+			// `basset/basset` reaches here with three authored positions and
+			// the consumer is told `invalid schema: value MUST be an object`
+			// while the artifact's own error is
+			// `cannot unmarshal bool into field Schema.required of type
+			// []string`. Authored content reached a consumer, unaudited.
+			//
+			// Two conditions, in the order the obligations are stated:
+			//
+			//  1. ACCOUNTING. A difference no entry covers means a mechanism
+			//     authored without recording, and nothing this pass produced --
+			//     document or diagnostic -- may be handed on.
+			//  2. PROVENANCE. If the pass authored or denoted anything at all,
+			//     `loadErr` is PASS-DERIVED. This pass has no emitter question
+			//     it can ask about a diagnostic, so it does not guess: it
+			//     declines, and the ARTIFACT'S OWN error stands, which is the
+			//     contract every other decline on this path already keeps.
+			//
+			// What survives is the case the exit exists for: a tree the pass
+			// changed NOTHING in, whose load fails for a reason that is not the
+			// entry document's shape -- offline retrieval of an external
+			// resource, the corpus's two instances. That error is the
+			// artifact's own and is still the honest one to report.
+			if _, unaccounted := confinementUnledgeredDifference(entry, tree, ledger); unaccounted {
+				return nil, nil, false
+			}
+			if !ledger.authoredNothing() || ledger.denotedAnything() {
+				return nil, nil, false
+			}
 			return nil, loadErr, true
 		}
 		sites := confinementRefSites(tree, match[1])
