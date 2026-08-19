@@ -251,19 +251,21 @@ type acceptanceFloor struct {
 	// ClimbingURefSites is the set of URef positions -- unresolvable internal
 	// references at their referencing site -- whose ladder verdict CLIMBS: the
 	// position invalidates the operation that owns it, or invalidates one
-	// request media alternative. Those units emit nothing, so the load-path
-	// pass may neutralise the position without changing any surviving unit's
-	// output.
+	// request media alternative. A URef position no unit's closure walk reaches
+	// is absent: the ladder classifies nothing there.
 	//
-	// A URef position that PROJECTS on any unit that SURVIVES is ABSENT, and
-	// the absence is enforced in two steps because the verdict is per UNIT
-	// while this set is keyed by POSITION: the projecting sinks never add, and
-	// a subtraction after the unit loop removes every position a surviving
-	// unit names. Its unit SURVIVES and is emitted, so neutralising the
-	// position would put an authored value into shipped content -- the
-	// Scenario-C salvage the ruling forbids -- rather than confining a defect
-	// the ladder already owns. A URef position no unit's closure walk reaches
-	// is likewise absent: the ladder classifies nothing there.
+	// This set is a CANDIDATE list and nothing more. It is keyed by POSITION
+	// while the ladder's verdict is per UNIT, and this instrument's own closure
+	// walk is not the traversal an emitter uses, so membership here is no
+	// evidence that neutralising a position leaves shipped content unchanged.
+	// Two blocks tried to make it that evidence by narrowing the set -- first
+	// by never adding a projecting site, then by subtracting every position a
+	// surviving unit's `Projections` names -- and a position reached through a
+	// channel this walk does not visit defeated both. The question is decided
+	// where it actually lives: `oas_confinement.go`'s EMISSION GATE asks the
+	// engine's own emitter, over the document the confinement produced, whether
+	// anything the pass authored reaches emitted content. Nothing about this
+	// field may be read as answering that.
 	ClimbingURefSites map[string]bool
 }
 
@@ -1148,26 +1150,6 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 		}
 		f.Ops[op.Ref] = op
 		f.OpOrder = append(f.OpOrder, op.Ref)
-	}
-
-	// ClimbingURefSites is keyed by POSITION and the ladder's verdict is PER
-	// UNIT, so one position inside a shared component can climb for one unit
-	// and PROJECT on another that survives and is emitted. Nothing above
-	// subtracts that case, and neutralising such a position would put an
-	// authored value into shipped content -- exactly the salvage the set
-	// exists to avoid. Every position a SURVIVING unit names is removed here,
-	// by position rather than by class: the same position can be classed URef
-	// on one unit's walk and D4 on another's, and either way the surviving
-	// unit would carry the neutralisation.
-	for _, op := range f.Ops {
-		if op.Disposition == "invalid" {
-			continue
-		}
-		for _, ds := range op.Projections {
-			for _, d := range ds {
-				delete(f.ClimbingURefSites, d.Position)
-			}
-		}
 	}
 
 	// §3 part 2, the single derived rule: refuse only when no addressable

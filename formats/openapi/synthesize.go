@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -485,7 +486,7 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 	confined, confinedErr, took := confineEntryDocument(captured, func(data []byte) (*openapi3.T, error) {
 		schemaOverlays.reset()
 		return attempt(data)
-	}, err)
+	}, err, synthesisEmissionGate(location))
 	switch {
 	case !took:
 		return nil, err
@@ -494,6 +495,49 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 	default:
 		return confined, nil
 	}
+}
+
+// synthesisEmissionGate is this engine's answer to the confinement pass's
+// emission question (see `confinementEmissionGate`). The content this engine
+// emits from a document is the interface its own shipped synthesis derives, so
+// the gate runs that synthesis over both loads and compares the emitted bytes.
+// Nothing here knows which OAS channels the synthesis reads; that is the point.
+//
+// Two deliberate choices:
+//
+//   - The TOLERANT surface is used (a non-nil `onUnrealizable`), because it is
+//     the surface that emits the most: a ladder-invalid target is skipped
+//     rather than refused, so every operation this document can put into
+//     shipped content is present in the comparison.
+//   - Both the family's binding specification and the empty one are compared,
+//     so a projection that only one of them emits cannot hide a mark.
+//
+// Overlays are deliberately nil on BOTH sides. The collector's state describes
+// whichever load ran last, so it cannot describe both documents at once; and
+// overlays only ADD members to a schema the emitter already carries, so their
+// absence can hide no mark.
+func synthesisEmissionGate(location string) confinementEmissionGate {
+	return func(shipped, marked *openapi3.T, floor *acceptanceFloor) bool {
+		for _, bindingSpec := range []string{BindingSpec, ""} {
+			shippedImage, shippedErr := emittedImage(shipped, location, bindingSpec, floor)
+			markedImage, markedErr := emittedImage(marked, location, bindingSpec, floor)
+			if shippedErr != nil || markedErr != nil {
+				return false
+			}
+			if !bytes.Equal(shippedImage, markedImage) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func emittedImage(doc *openapi3.T, location, bindingSpec string, floor *acceptanceFloor) ([]byte, error) {
+	iface, err := convertDocToInterfaceWithOverlay(doc, location, bindingSpec, nil, func(unrealizableTarget) {}, nil, floor)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(iface)
 }
 
 // absolutizeArtifactLocation lifts a bare filesystem path to the file://
