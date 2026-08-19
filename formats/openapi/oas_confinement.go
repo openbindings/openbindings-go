@@ -711,11 +711,23 @@ const confinementMarkValue = "confinement-authored-position"
 // read from it, and a value of the wrong kind can be inert where a value of the
 // right kind is read. An Operation Object carrying only an extension emits
 // nothing an emitter must carry; a Response Object with content does. One
-// candidate therefore proves nothing in general, and the four here span the
+// candidate therefore proves nothing in general, and the first four span the
 // object kinds this engine's emitter reads on DIFFERENT ROUTES: a Schema Object
 // (schemas, properties, items, request and response bodies), a Parameter Object
 // (the parameter lane, including its `content` form), a Response Object (the
 // output lane, including success selection), and a Path Item (the unit lane).
+//
+// The last two are not OAS object kinds but JSON ones, and they are here
+// because a position's decoding context is not always an object. The pass
+// authors at Schema Object KEYWORDS -- `required` is a `[]string`, `enum` is a
+// `[]any` -- and at such a position every object candidate is a decode error, so
+// a ladder of objects alone accepts nothing and the pass declines for want of an
+// instrument rather than for anything an emitter said. Block 8h's re-run
+// measured that residue at three specimens and 16 operations (`kaldb`,
+// `lancedb`, `rswag`), all four of `kaldb`'s positions and both of the others'
+// being a `required` or an `enum`. A one-element marked sequence and a marked
+// scalar close it, and the ladder's shape is unchanged: still fixed, still
+// position-blind, still chosen by the oracle in the position's own context.
 //
 // WHY EVERY ACCEPTED ONE MUST AGREE. Block 8h's verification measured a
 // first-accepted-wins ladder and found it UNSOUND on `Kong/kong`, where three of
@@ -744,6 +756,8 @@ func confinementMarkCandidates() []any {
 		map[string]any{"name": confinementMarkValue, "in": "query", "schema": mark()},
 		response(),
 		map[string]any{"get": map[string]any{"responses": map[string]any{"200": response()}}},
+		[]any{confinementMarkValue},
+		confinementMarkValue,
 	}
 }
 
@@ -955,7 +969,10 @@ func confinementAdmit(entry []byte, tree any, ledger *confinementLedger, floor *
 		return nil, nil, false
 	}
 	// A mark the artifact could have written itself would not discriminate.
-	if strings.Contains(string(shippedData), confinementMarkKey) {
+	// Both spellings are checked: the object candidates are recognised by the
+	// key, the sequence and scalar candidates only by the value.
+	if strings.Contains(string(shippedData), confinementMarkKey) ||
+		strings.Contains(string(shippedData), confinementMarkValue) {
 		return nil, nil, false
 	}
 
@@ -975,12 +992,24 @@ func confinementAdmit(entry []byte, tree any, ledger *confinementLedger, floor *
 	}
 
 	// Obligation 3. Every authored position is marked in every round, so a
-	// difference anywhere refuses and an identical pair clears every position
+	// difference anywhere refuses and an identical round clears every position
 	// the round covered. Rounds are indexed so that after `rounds` of them every
 	// (position, accepted candidate) pair has been put to the emitter at least
 	// once; a position whose accepted set is shorter repeats its first.
+	//
+	// A round whose MARKED image does not load is INCONCLUSIVE: a document that
+	// does not load emits nothing, so there is no emission to compare and the
+	// round is evidence in neither direction. It does not refuse, and it does
+	// not clear anything -- `shown` is what records the difference, and a
+	// position no conclusive round covered declines below. The case is real
+	// rather than hypothetical: the scalar candidate placed at a `$ref` member
+	// makes the site a Reference Object denoting nothing, and treating that
+	// mechanical failure as a refusal cost three specimens and 114 operations
+	// when it was measured.
+	shown := make(map[string]bool, len(authored))
 	for round := 0; round < rounds; round++ {
 		placements := make([]confinementPlacement, 0, len(authored))
+		covered := make([]string, 0, len(authored))
 		placed := true
 		for _, site := range authored {
 			candidates := available[site]
@@ -994,6 +1023,7 @@ func confinementAdmit(entry []byte, tree any, ledger *confinementLedger, floor *
 				break
 			}
 			placements = append(placements, placement)
+			covered = append(covered, site)
 		}
 		markedData, markErr := json.Marshal(tree)
 		for i := len(placements) - 1; i >= 0; i-- {
@@ -1004,13 +1034,21 @@ func confinementAdmit(entry []byte, tree any, ledger *confinementLedger, floor *
 		}
 		markedDoc, markedLoadErr := reload(markedData)
 		if markedLoadErr != nil {
-			return nil, nil, false
+			continue
 		}
 		shippedDoc, shippedLoadErr := reload(shippedData)
 		if shippedLoadErr != nil {
 			return nil, nil, false
 		}
 		if !gate(shippedDoc, markedDoc, floor) {
+			return nil, nil, false
+		}
+		for _, site := range covered {
+			shown[site] = true
+		}
+	}
+	for _, site := range authored {
+		if !shown[site] {
 			return nil, nil, false
 		}
 	}
