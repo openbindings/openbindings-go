@@ -324,8 +324,7 @@ var confinementBadData = regexp.MustCompile(`bad data in "([^"]+)" \(expecting r
 // fragment spellings are matched -- with and without the leading `#` -- because
 // the loader's report and the artifact's own strings do not always agree on it.
 func confinementRefSites(root any, target string) []string {
-	fragment := strings.TrimPrefix(target, "#")
-	spellings := map[string]bool{target: true, fragment: true, "#" + fragment: true}
+	spellings := confinementRefSpellings(target)
 	var out []string
 	var walkNode func(path []confinementToken, node any)
 	walkNode = func(path []confinementToken, node any) {
@@ -346,6 +345,30 @@ func confinementRefSites(root any, target string) []string {
 	walkNode(nil, root)
 	sort.Strings(out)
 	return out
+}
+
+// confinementRefSpellings is the set of `$ref` strings that name `target`. The
+// pass reads a pointer out of the loader's own `bad data in "…"` report, which
+// spells it with a leading `#`, while an artifact may write either spelling.
+func confinementRefSpellings(target string) map[string]bool {
+	fragment := strings.TrimPrefix(target, "#")
+	return map[string]bool{target: true, fragment: true, "#" + fragment: true}
+}
+
+// confinementDenotes reports whether `node` is a Reference Object whose `$ref`
+// names `target`. It is the check that makes the denotation exemption a
+// property of the TREE rather than of the caller's intent; see
+// `confinementInlineDenoted`.
+func confinementDenotes(node any, target string) bool {
+	nodeMap, isMap := node.(map[string]any)
+	if !isMap {
+		return false
+	}
+	ref, isString := nodeMap["$ref"].(string)
+	if !isString {
+		return false
+	}
+	return confinementRefSpellings(target)[ref]
 }
 
 // confinementResolveRaw resolves an entry-document JSON Pointer against the raw
@@ -373,23 +396,42 @@ func confinementResolveRaw(root any, pointer string) (any, bool) {
 }
 
 // confinementInlineDenoted is the ONLY change this pass may make to the raw
-// tree that is not authoring, and the exemption is STRUCTURAL rather than
-// declared: the caller hands over the artifact's own POINTER, never a value,
-// and this function resolves it. There is no signature through which a caller
-// can put a minted value at a position under a denotation claim, so the
-// exemption cannot be borrowed by a mechanism that is not denoting.
+// tree that is not authoring, and the exemption is checked at BOTH ends.
 //
-// That shape is deliberate, and it replaces a `confinementDenotation{why: …}`
-// warrant struct that block 8h's verification defeated in one line: any
-// in-package caller could write `confinementDenotation{why: "no reason at all"}`
-// and ship an arbitrary value past an admitting gate (record 104 §4). A warrant
-// whose only content is prose at the call site verifies nothing.
+// The caller hands over the artifact's own POINTER, never a value, and this
+// function resolves it -- so no minted value can enter through the signature.
+// That half replaces a `confinementDenotation{why: …}` warrant struct which
+// block 8h's first verification defeated in one line: any in-package caller
+// could write `confinementDenotation{why: "no reason at all"}` and ship an
+// arbitrary value past an admitting gate (record 104 §4). A warrant whose only
+// content is prose at the call site verifies nothing.
 //
-// What the exemption rests on: a JSON Reference DENOTES the value at its
-// pointer, so when a bare Reference Object is replaced by the value its own
-// pointer names, nothing is minted and there is nothing for an emitter to
-// certify unreachable. What CHANGES is the position the artifact's value
-// occupies, not the value.
+// The signature half is not sufficient on its own, and the claim that it was is
+// the third thing in this file a verifier has refuted by execution. "There is no
+// signature through which a caller can put a MINTED value at a position under a
+// denotation claim" is true; "the exemption cannot be borrowed by a mechanism
+// that is not denoting" does not follow from it, because nothing in the
+// signature says `site` has anything to do with `target`. Block 8h's second
+// verification added one line to `confineEntryDocument` --
+// `confinementInlineDenoted(tree, "#/info/title", "#/paths/~1survive/get/operationId", ledger)`
+// -- and shipped `info.title = "getSurvive"` past an admitting gate, accounted
+// as DENOTED (record 107 §6.3). Nothing was minted. A value the artifact owns
+// was RELOCATED to a position the artifact never put it, which is a difference
+// an emitter is never asked about.
+//
+// So the site is checked too: it must BE a Reference Object whose `$ref` names
+// `target`. That is exactly what the exemption's justification asserts -- a JSON
+// Reference DENOTES the value at its pointer, so replacing the reference by that
+// value mints nothing -- and until now the justification was a property of the
+// one call site rather than of the function. `confinementApplySeamC` satisfies
+// it by construction: it selects the site through `confinementRefSites`, which
+// finds sites by their `$ref` naming the target, and it inlines only a node of
+// exactly one member. A relocation satisfies it never.
+//
+// What the exemption rests on, restated with the check in place: when a bare
+// Reference Object is replaced by the value ITS OWN pointer names, nothing is
+// minted and nothing moves that was not already denoted at that position, so
+// there is nothing for an emitter to certify unreachable.
 //
 // The position is still recorded on the ledger as DENOTED, because the
 // unledgered-change check at admission compares the shipped tree against the
@@ -398,6 +440,10 @@ func confinementResolveRaw(root any, pointer string) (any, bool) {
 func confinementInlineDenoted(root any, site, target string, ledger *confinementLedger) bool {
 	value, found := confinementResolveRaw(root, target)
 	if !found {
+		return false
+	}
+	node, resolved := confinementResolveRaw(root, site)
+	if !resolved || !confinementDenotes(node, target) {
 		return false
 	}
 	tokens, err := confinementParsePointer(site)
@@ -508,6 +554,45 @@ func confinementApplySeamC(root any, floor *acceptanceFloor, target, site string
 // target does not exist -- that is the whole finding -- so there is no
 // composition to discard, and refusing a `$ref` with siblings would only
 // abandon the confinement over a sibling the pass does not touch.
+//
+// WHAT IS RECORDED IS THE SITE, NOT THE `$ref` MEMBER, and that distinction is
+// load-bearing rather than cosmetic. Both are true statements about the tree --
+// the value at the member is gone, and the value at the site is no longer what
+// the artifact declared -- but only one of them gives the gate a position it can
+// ask a question at.
+//
+// Recording `site + "/$ref"` puts every candidate where a `$ref` KEY's value
+// goes, and kin reads only a STRING there. Five of the six candidates are
+// objects or a sequence, which kin decodes into the containing object's
+// `Extensions`; a Parameter Object's, a Response Object's, a Path Item's
+// extensions do not reach emitted content, so those rounds report IDENTICAL
+// whether or not anything reads the position -- inert by construction, not
+// evidence of unreachability. The sixth, the scalar, is the only value kin reads
+// at a `$ref`, and it makes the site a Reference Object denoting nothing, so the
+// marked image does not load and the round is INCONCLUSIVE. The gate then marks
+// the position shown off vacuous rounds and admits.
+//
+// That is not a hypothesis. Block 8h's second verification built it -- `n12`,
+// stored beside `n10` -- and measured `690086c` shipping
+// `getSurvive.input.properties.AUTHORED`, a name no reader of the artifact could
+// obtain, past an ADMITTING gate with the unit `represented` and
+// `exhaustive=true`, while both heads it superseded refused the same document
+// (record 107 §1). The failure had the same shape as the one that made the
+// ANCESTOR rule unsound: the false negative was systematically aligned with the
+// rule rather than incidental.
+//
+// Recording the SITE puts the candidate AT the Reference Object's own position,
+// so the two images differ by the presence of a whole member in a decoding
+// context an emitter reads -- a Parameter Object slot, a Schema Object position
+// -- rather than by an extension key kin drops. Nothing about the ladder, the
+// oracle or the AND rule changes; the position does.
+//
+// Note what this does NOT close, so that a later block attacks it rather than
+// inheriting it as settled: a `$ref` authored position reached by mechanism (a)
+// rather than by this round -- a literal `$ref` KEY inside a Components map --
+// still has the vacuity property, because its last token is `$ref` for a
+// different reason. No harm is measured there, because a Components map emits
+// nothing; the evidence is vacuous all the same.
 func confinementNeutralizeURef(root any, site string, ledger *confinementLedger) bool {
 	node, ok := confinementResolveRaw(root, site)
 	if !ok {
@@ -520,7 +605,7 @@ func confinementNeutralizeURef(root any, site string, ledger *confinementLedger)
 	if _, hasRef := nodeMap["$ref"]; !hasRef {
 		return false
 	}
-	ledger.author(site + "/$ref")
+	ledger.author(site)
 	delete(nodeMap, "$ref")
 	return true
 }
@@ -910,6 +995,38 @@ func confinementDifferences(original, confined any) []string {
 //
 // It compares against a SECOND PARSE of the entry bytes rather than a copy taken
 // earlier, so nothing the mechanisms did can have reached the reference image.
+//
+// OVER TREE MUTATIONS IT IS TOTAL, and that was established by execution rather
+// than by reading: `confinementDifferences` covers presence asymmetry in a map,
+// length change in a sequence, elementwise descent, and `reflect.DeepEqual` for
+// every remaining pair including map-against-sequence and scalar-against-
+// container; both sides come from the same `parseRawResource` over the same
+// bytes, so nothing can be smoothed between them; and the check runs BEFORE the
+// gate's rounds, over the bytes that are marshaled and handed back. Two
+// verifications built a fifth authoring act that reaches into the raw tree with
+// the language's own map operations, and both times the pass declined (record
+// 106 §7, record 107 §5.1).
+//
+// FOUR THINGS IT IS NOT TOTAL OVER, none of them a mutation of the tree, all
+// four named here so a later block attacks them rather than rediscovering them:
+//
+//  1. The parse/serialize ROUND TRIP is on the wrong side of the comparison.
+//     Both sides are parsed trees, so anything introduced between the tree and
+//     the shipped bytes -- scalar canonicalization, a YAML 1.1-against-1.2
+//     scalar reading, a number's representation -- is invisible here by
+//     construction. The claim this check supports is about trees; the bytes are
+//     not the tree.
+//  2. `records` matches a PREFIX, so a ledgered site blankets everything beneath
+//     it. Harmless while every recorded site is a removed member with nothing
+//     beneath it, which is the case today, but it is a prefix and not a
+//     position.
+//  3. NON-TREE CHANNELS are outside it entirely. A future mechanism that writes
+//     into lane state -- `schemaOverlays` and its kind -- rather than into the
+//     tree authors nothing this check can see.
+//  4. The DENOTED exemption. Narrowed by `confinementInlineDenoted`'s
+//     site-denotes-target check, which is what stops it from being borrowed to
+//     relocate a value, but it remains an exemption: a position on the denoted
+//     list is accounted without being put to the emitter.
 func confinementUnledgeredDifference(entry []byte, confined any, ledger *confinementLedger) (string, bool) {
 	original, parsed := parseRawResource(entry)
 	if !parsed {
@@ -1006,6 +1123,20 @@ func confinementAdmit(entry []byte, tree any, ledger *confinementLedger, floor *
 	// makes the site a Reference Object denoting nothing, and treating that
 	// mechanical failure as a refusal cost three specimens and 114 operations
 	// when it was measured.
+	//
+	// THE RESIDUAL THIS LEAVES, stated so a later block attacks it: a round is
+	// discarded WHOLE, so one position's unloadable candidate suppresses the
+	// evidence of every other position's candidate at the same round index. A
+	// construction with positions P and Q where P's DIFFERING candidate and Q's
+	// UNLOADABLE candidate share an index would be admitted here and refused
+	// under per-position isolation. It is structurally real and has zero measured
+	// incidence: over the 260-artifact corpus four specimens have an inconclusive
+	// round and in every one of them the ladder is aligned, so the scalar is
+	// unloadable at all of that specimen's positions at once, and no position is
+	// left uncovered by a conclusive round (record 107 §1.6). Per-position
+	// marking would close it and would cost a load per position per round rather
+	// than a load per round; that trade has not been measured and is not made
+	// here.
 	// The shipped image is the same bytes in every round, so it is loaded ONCE
 	// for the comparison. `reload` resets the surrounding lane state and hands
 	// back a fresh document without touching an earlier one, and the gate reads
@@ -1104,8 +1235,21 @@ func confinementSortedSites(set map[string]bool) []string {
 // mechanism is now held to it, because every mechanism that authors registers
 // with the same `confinementLedger` and every exit that hands back a document
 // goes through the same `confinementAdmit`. There is no per-mechanism rail left
-// in this file to get out of step, and no mechanism added later can author
-// without holding a ledger.
+// in this file to get out of step.
+//
+// What holds a mechanism added LATER is not the ledger parameter -- Go cannot
+// make that binding, and a verifier proved it by writing a fifth authoring act
+// that compiled cleanly (record 104 §4). It is `confinementUnledgeredDifference`
+// at admission, which compares the tree about to be handed back against a second
+// parse of the artifact's own bytes and declines on any difference no entry
+// covers. A mechanism that authors without a ledger does not fail to compile; it
+// fails to be admitted.
+//
+// One exit does NOT reach that check: the seam-C loop returns
+// `(nil, loadErr, true)` when the load error stops matching
+// `confinementBadData`. No document is handed back on that path, so nothing
+// authored can ship through it -- but the error text it reports is derived from a
+// confined tree, and the accounting is never consulted before reporting it.
 func confineEntryDocument(entry []byte, reload func([]byte) (*openapi3.T, error), originalErr error, gate confinementEmissionGate) (*openapi3.T, error, bool) {
 	if len(entry) == 0 || reload == nil {
 		return nil, nil, false
