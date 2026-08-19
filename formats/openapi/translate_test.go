@@ -338,54 +338,62 @@ func TestTranslateSchemaDialect_DoesNotMutateInput(t *testing.T) {
 	}
 }
 
-// --- invalid-type salvage (OBI-D-17) -----------------------------------------
-// Real-world specs ship schemas like {type: ''} (PokeAPI does, on
-// evolution_detail.known_move). An invalid type constrains nothing; dropping
-// the keyword salvages the interface instead of rejecting every operation.
+// --- NO invalid-type salvage (acceptance-floor ruling, rider 3) --------------
+// The translator used to drop a `type` value no 2020-12 validator accepts.
+// The ruling's audit struck that posture (deference rung 4 disfavours
+// "discarding required information"; the correspondence ladder's falseness
+// test wants a round-trippable mapping and dropping a token has no inverse),
+// and rider 3 removed it. A `type` naming no type is now the acceptance
+// floor's D1/D1s, attributed to its smallest owning unit and reported as an
+// `invalid` coverage entry under openapi.invalid_unit. The translator itself
+// carries the artifact's token through unchanged; a position the floor does
+// not attribute reaches OBI-D-17 and refuses, which is where TypeScript
+// already stood.
 
-func TestTranslateSchemaDialect_DropsEmptyStringType31(t *testing.T) {
+func TestTranslateSchemaDialect_CarriesEmptyStringType31(t *testing.T) {
 	in := map[string]any{"type": "", "nullable": true, "description": "x"}
-	// The invalid type is salvaged independently; nullable remains an inert
-	// annotation and cannot contribute an invented null assertion.
-	want := map[string]any{"nullable": true, "description": "x"}
+	// 3.1: nullable is an inert annotation and the invalid token is carried,
+	// not deleted.
+	want := map[string]any{"type": "", "nullable": true, "description": "x"}
 	got := translateSchemaDialect(in, "3.1")
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %#v, want %#v", got, want)
 	}
 }
 
-func TestTranslateSchemaDialect_EmptyTypeWithNullable30KeepsNull(t *testing.T) {
+func TestTranslateSchemaDialect_EmptyTypeWithNullable30WidensAndCarries(t *testing.T) {
 	in := map[string]any{"type": "", "nullable": true}
-	// 3.0: the nullable transform contributes "null"; the invalid member is
-	// filtered out of the resulting array.
-	want := map[string]any{"type": []any{"null"}}
+	// 3.0: the nullable transform is INCORPORATION, not salvage (ruling
+	// §5.3's scoping), so it still contributes "null" -- and the artifact's
+	// own invalid member rides along instead of being filtered out.
+	want := map[string]any{"type": []any{"", "null"}}
 	got := translateSchemaDialect(in, "3.0")
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %#v, want %#v", got, want)
 	}
 }
 
-func TestTranslateSchemaDialect_FiltersInvalidTypeArrayMembers(t *testing.T) {
+func TestTranslateSchemaDialect_CarriesInvalidTypeArrayMembers(t *testing.T) {
 	in := map[string]any{"type": []any{"string", "", "integer"}}
-	want := map[string]any{"type": []any{"string", "integer"}}
+	want := map[string]any{"type": []any{"string", "", "integer"}}
 	got := translateSchemaDialect(in, "3.1")
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %#v, want %#v", got, want)
 	}
 }
 
-func TestTranslateSchemaDialect_DropsNonStringType(t *testing.T) {
+func TestTranslateSchemaDialect_CarriesNonStringType(t *testing.T) {
 	in := map[string]any{"type": float64(3)}
-	want := map[string]any{}
+	want := map[string]any{"type": float64(3)}
 	got := translateSchemaDialect(in, "3.1")
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %#v, want %#v", got, want)
 	}
 }
 
-func TestTranslateSchemaDialect_SalvageRecursesIntoProperties31(t *testing.T) {
-	// A property literally named "type" stays a property; only the keyword
-	// position inside its schema is sanitized.
+func TestTranslateSchemaDialect_NoSanitizationInsideProperties31(t *testing.T) {
+	// A property literally named "type" stays a property, and the keyword
+	// position inside its schema is no longer sanitized either.
 	in := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -395,7 +403,7 @@ func TestTranslateSchemaDialect_SalvageRecursesIntoProperties31(t *testing.T) {
 	want := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"type": map[string]any{},
+			"type": map[string]any{"type": ""},
 		},
 	}
 	got := translateSchemaDialect(in, "3.1")
@@ -409,21 +417,5 @@ func TestTranslateSchemaDialect_ValidTypesUntouched(t *testing.T) {
 	got := translateSchemaDialect(in, "3.1")
 	if !reflect.DeepEqual(got, in) {
 		t.Errorf("got %#v, want %#v", got, in)
-	}
-}
-
-func TestNormalizeOperationSchema_ReportsDrops(t *testing.T) {
-	in := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"known_move": map[string]any{"type": ""},
-		},
-	}
-	var drops []string
-	normalizeOperationSchema(in, "3.1", func(path, code, message string) {
-		drops = append(drops, path+"="+code)
-	})
-	if len(drops) != 1 || drops[0] != "/properties/known_move/type=openapi.invalid_schema_type" {
-		t.Errorf("drops = %#v, want one entry at /properties/known_move/type", drops)
 	}
 }

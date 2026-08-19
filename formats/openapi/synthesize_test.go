@@ -797,11 +797,17 @@ func TestSynthesizeInterface_RefusesEntryInvalidTypeKeyword(t *testing.T) {
 	}
 }
 
-// The salvage lane's remaining home: a dirty `type` inside an EXTERNAL
-// resource is invisible to the entry document's raw image, so the floor does
-// not own it; the loaded closure still salvages with a warning (the dogfood
-// fix's evidence, unchanged).
-func TestSynthesizeInterface_SalvagesExternalInvalidTypeKeyword(t *testing.T) {
+// The salvage lane's former remaining home, now closed. A dirty `type`
+// inside an EXTERNAL resource is invisible to the entry document's raw
+// image, so the acceptance floor does not attribute it. Before rider 3 the
+// Go SDK salvaged it with a warning while TypeScript refused the same
+// document at OBI-D-17 -- a twin divergence. Rider 3 removed the salvage,
+// so the token now reaches OBI-D-17 in both engines and the source refuses.
+// That is the one posture the ruling's audit left standing here: salvage is
+// struck (§0.8), carrying the token into an emitted operation is eliminated
+// by Core, and attributing an external position to an owning unit is a
+// confinement the floor does not yet author.
+func TestSynthesizeInterface_RefusesExternalInvalidTypeKeyword(t *testing.T) {
 	dir := t.TempDir()
 	external := `{
 	  "type": "object",
@@ -839,23 +845,19 @@ func TestSynthesizeInterface_SalvagesExternalInvalidTypeKeyword(t *testing.T) {
 		t.Fatal(err)
 	}
 	var warnings []openbindings.SynthesizerWarning
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
+	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
 		Sources:   []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: path}},
 		OnWarning: func(w openbindings.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
-	if err != nil {
-		t.Fatalf("synthesis must salvage the external invalid type keyword, got: %v", err)
+	if err == nil {
+		t.Fatalf("synthesis must refuse the external invalid type keyword rather than salvage it")
 	}
-	if _, ok := iface.Operations["getChain"]; !ok {
-		t.Fatalf("getChain missing from synthesized interface: %v", iface.Operations)
+	if !strings.Contains(err.Error(), "OBI-D-17") {
+		t.Errorf("refusal should be the Core schema rule, got: %v", err)
 	}
-	found := false
 	for _, w := range warnings {
 		if w.Code == "openapi.invalid_schema_type" {
-			found = true
+			t.Errorf("the salvage warning channel must be gone; warnings = %#v", warnings)
 		}
-	}
-	if !found {
-		t.Errorf("salvage must not be silent; warnings = %#v", warnings)
 	}
 }

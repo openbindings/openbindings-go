@@ -284,7 +284,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				inlined, hoisted := inlineRefsInOperationSchema(projected, requestGraph.registry, requestGraph.cyclic, opPointer+"/input", namer)
 				restored := restoreBooleanSchemas(pruneUnreachableDefs(inlined, opPointer+"/input", hoisted))
 				if object, ok := restored.(map[string]any); ok {
-					obiOp.Input = normalizeOperationSchema(object, formatVersion, schemaSalvageWarner(warn, opKey, "input"))
+					obiOp.Input = translateSchemaDialect(object, formatVersion)
 				} else {
 					obiOp.Input = restored
 				}
@@ -296,7 +296,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				inlined, hoisted := inlineRefsInOperationSchema(projected, responseGraph.registry, responseGraph.cyclic, opPointer+"/output", namer)
 				restored := restoreBooleanSchemas(pruneUnreachableDefs(inlined, opPointer+"/output", hoisted))
 				if object, ok := restored.(map[string]any); ok {
-					obiOp.Output = normalizeOperationSchema(object, formatVersion, schemaSalvageWarner(warn, opKey, "output"))
+					obiOp.Output = translateSchemaDialect(object, formatVersion)
 				} else {
 					obiOp.Output = restored
 				}
@@ -348,19 +348,6 @@ func restoreBooleanSchemas(value any) any {
 // the artifact literally claimed. The walker decides code and message; this
 // adapter contributes only the operation-rooted path. Returns nil when there
 // is no warn sink, which the walker treats as "salvage without reporting".
-func schemaSalvageWarner(warn func(openbindings.SynthesizerWarning), opKey, side string) func(path, code, message string) {
-	if warn == nil {
-		return nil
-	}
-	return func(path, code, message string) {
-		warn(openbindings.SynthesizerWarning{
-			Code:    code,
-			Message: message,
-			Path:    fmt.Sprintf("operations.%s.%s%s", opKey, side, path),
-		})
-	}
-}
-
 func unrealizableOperation(operationKey, reason string) error {
 	return fmt.Errorf("cannot synthesize OpenAPI operation %q: %s; synthesis would return a statically unbindable partial interface", operationKey, reason)
 }

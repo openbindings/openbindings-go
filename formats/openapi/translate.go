@@ -1,7 +1,6 @@
 package openapi
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -30,30 +29,25 @@ import (
 // that a stray 3.0 spelling carries the old meaning would overfit to common
 // generators and change the accepted instance set without 3.1 authority.
 //
-// For EVERY version the walk additionally salvages obviously-invalid
-// `type` constraints that would fail OBI validation (OBI-D-17) — see
-// normalizeOperationSchema. Unknown versions get the salvage passes only
-// (forward-compatible).
+// The walk translates and NEVER SALVAGES. It carries no drop pass for a
+// `type` value the edition does not name: the acceptance-floor ruling's
+// rider 3 removed one (a `type` that names no type is a defect the floor
+// attributes to its smallest owning unit, coverage-visible under
+// openapi.invalid_unit, not a keyword this walk quietly deletes), and the
+// ruling's audit struck the salvage posture outright — the deference order
+// disfavours "discarding required information" and the correspondence
+// ladder's falseness test requires an authored mapping to be
+// round-trippable, which dropping a token is not. A defective position the
+// floor does not attribute therefore reaches OBI-D-17 and refuses, which is
+// the one live posture the audit left standing and the one TypeScript
+// already held. The 3.0-dialect translations below are NOT salvage: the 3.0
+// text supplies their determinate answer, so they are incorporation
+// (ruling §5.3's scoping).
 func translateSchemaDialect(schema map[string]any, openapiVersion string) map[string]any {
-	return normalizeOperationSchema(schema, openapiVersion, nil)
-}
-
-// normalizeOperationSchema is translateSchemaDialect with drop evidence: it
-// rewrites the 3.0 dialect when applicable and, for all versions, salvages
-// `type` values that are not JSON Schema 2020-12 type names — a string that
-// is not one of the seven primitives is dropped, invalid members of a type
-// array are filtered out (dropping the keyword when nothing valid remains).
-// Real-world specs ship these (PokeAPI's openapi.yml declares `type: ”`),
-// and an invalid type constrains nothing — rejecting a whole
-// multi-operation interface over it hands the user a dead end for a spec
-// every other tool accepts. Salvage is never silent: each dropped token is
-// reported through onDrop with a JSON-pointer-style path into the schema so
-// callers can emit a SynthesizerWarning.
-func normalizeOperationSchema(schema map[string]any, openapiVersion string, report func(path, code, message string)) map[string]any {
 	if schema == nil {
 		return nil
 	}
-	w := &schemaWalker{legacy: isOpenAPI30(openapiVersion), report: report}
+	w := &schemaWalker{legacy: isOpenAPI30(openapiVersion)}
 	out, _ := w.node(schema, "").(map[string]any)
 	return out
 }
@@ -91,25 +85,11 @@ var schemaBearingSingleKeys = map[string]bool{
 	"unevaluatedProperties": true,
 }
 
-// validSchemaTypes are the seven JSON Schema 2020-12 primitive type names —
-// the only values OBI-D-17 admits in a `type` keyword.
-var validSchemaTypes = map[string]bool{
-	"array":   true,
-	"boolean": true,
-	"integer": true,
-	"null":    true,
-	"number":  true,
-	"object":  true,
-	"string":  true,
-}
-
 // schemaWalker carries the per-run configuration through the recursive
-// rewrite: whether 3.0-dialect transforms apply, and where to report
-// salvage drops. Paths use JSON-pointer notation rooted at the schema
-// being normalized.
+// rewrite: whether 3.0-dialect transforms apply. Paths use JSON-pointer
+// notation rooted at the schema being normalized.
 type schemaWalker struct {
 	legacy bool
-	report func(path, code, message string)
 }
 
 func (w *schemaWalker) node(node any, path string) any {
@@ -191,52 +171,7 @@ func (w *schemaWalker) object(in map[string]any, path string) map[string]any {
 		}
 	}
 
-	w.salvageType(out, path)
-
 	return out
-}
-
-// salvageType drops `type` values that no 2020-12 validator accepts. It runs
-// after the legacy transforms so a 3.0 {type: ”, nullable: true} still keeps
-// the "null" member the nullable transform contributed.
-func (w *schemaWalker) salvageType(out map[string]any, path string) {
-	t, present := out["type"]
-	if !present {
-		return
-	}
-	switch v := t.(type) {
-	case string:
-		if !validSchemaTypes[v] {
-			delete(out, "type")
-			w.drop(path+"/type", v)
-		}
-	case []any:
-		kept := make([]any, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok && validSchemaTypes[s] {
-				kept = append(kept, item)
-				continue
-			}
-			w.drop(path+"/type", stringify(item))
-		}
-		if len(kept) == 0 {
-			delete(out, "type")
-		} else if len(kept) < len(v) {
-			out["type"] = kept
-		}
-	default:
-		delete(out, "type")
-		w.drop(path+"/type", stringify(v))
-	}
-}
-
-func (w *schemaWalker) drop(path, token string) {
-	if w.report != nil {
-		w.report(path, "openapi.invalid_schema_type", fmt.Sprintf(
-			"dropped invalid JSON Schema type %q declared by the source artifact; the salvaged position accepts any value",
-			token,
-		))
-	}
 }
 
 func (w *schemaWalker) schemaMap(value any, path string) any {
@@ -282,14 +217,4 @@ func numericValue(v any) (any, bool) {
 		return v, true
 	}
 	return nil, false
-}
-
-// stringify renders a dropped token for the warning message. fmt.Sprintf
-// handles every JSON-decoded shape; strings pass through unchanged so the
-// common case (`type: ”` → "") reads literally.
-func stringify(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprintf("%v", v)
 }
