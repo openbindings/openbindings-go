@@ -509,21 +509,3 @@ func planAllowsObjectPassthrough(plan *bodyPlan) bool {
 	return plan != nil && plan.declared && !plan.synthetic && !plan.wholeObject && plan.family == familyJSON
 }
 
-func envelopeWillEmitBody(envelope *routedEnvelope, op *openapi3.Operation) bool {
-	if !hasRequestBody(op) {
-		return false
-	}
-	if op.RequestBody.Value.Required {
-		return true
-	}
-	parameterFields := map[string]bool{}
-	for _, route := range envelope.parameters {
-		parameterFields[route.Field] = true
-	}
-	for name := range envelope.value {
-		if !parameterFields[name] {
-			return true
-		}
-	}
-	return false
-}

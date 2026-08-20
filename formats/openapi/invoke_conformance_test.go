@@ -495,7 +495,7 @@ func TestInvoke_SuppliedInputMissingPathParamRefuses(t *testing.T) {
 	}`, srv.URL)
 	_, ierr := invokeWith(t, spec, "#/paths/~1w~1{id}/post", map[string]any{"name": "x"})
 	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
-		t.Fatalf("expected ERR_MISSING_INPUT for the unfilled path template, got %v", ierr)
+		t.Fatalf("expected ERR_REFUSED for the unfilled path template, got %v", ierr)
 	}
 	if requests.Load() != 0 {
 		t.Error("refusal must precede dispatch")
