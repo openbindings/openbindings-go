@@ -19,7 +19,7 @@ import (
 // openapi-client/go, by openapi-client/typescript, and by
 // openbindings-ts/packages/openapi against that package's BUILT dist; changing
 // it in one engine without the others fails here.
-const partContentEncodingCasesDigest = "f0695cb733cfd57367090566d629dbc7c9ee23d28ab83931167bf3407d21baae"
+const partContentEncodingCasesDigest = "350a4d87e531218a0f189b754a91c6573eaf98d850c69546a044debdd36fa8b5"
 
 type partContentEncodingTable struct {
 	Comment string                    `json:"$comment"`

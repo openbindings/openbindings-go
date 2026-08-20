@@ -50,22 +50,31 @@ package openapi
 //     `empty-array` refuses on a different and narrower ground: its `type`
 //     is present, so no stated row reaches it at all, and JSON Schema
 //     2020-12's meta-schema requires an array-valued `type` to carry at
-//     least one member, so the declaration admits no instance. All eight
-//     are admitted at 3.0.4, where no stated row reaches a declaration
-//     carrying no `type` and §9.2's own convention answers.
+//     least one member, so the declaration admits no instance. Those eight
+//     were admitted at 3.0.4 until 2026-08-20, where no stated row reached a
+//     declaration carrying no `type` and §9.2's own convention answered.
+//   - FOURTEEN cells moved from admitted to refused on 2026-08-20 (stage-3
+//     block 5, escalation M2), all at 3.0.4: `absent-type`, `memberless`,
+//     `empty-array` and `boolean-true|plain`, on both media. The 3.0-line
+//     value-keyed convention is deleted from §9.2, so a resolved part schema
+//     declaring no `type` refuses on EVERY accepted edition — the 3.1
+//     editions state a default this revision defines no boundary to cross,
+//     the 3.0 editions state no row at all and this revision authors none.
+//     Each of the fourteen now reads exactly as its 3.1.2 twin above, which
+//     is what one rule governing both lines means.
 var unionTypeCarriageExpectations = map[string]string{
-	"3.0.4|application/x-www-form-urlencoded|absent-type|contentEncoding":    "admitted;value=p=x;null=error",
-	"3.0.4|application/x-www-form-urlencoded|absent-type|plain":              "admitted;value=p=x;null=error",
+	"3.0.4|application/x-www-form-urlencoded|absent-type|contentEncoding":    "refused",
+	"3.0.4|application/x-www-form-urlencoded|absent-type|plain":              "refused",
 	"3.0.4|application/x-www-form-urlencoded|array-null|contentEncoding":     "refused",
 	"3.0.4|application/x-www-form-urlencoded|array-null|plain":               "refused",
 	"3.0.4|application/x-www-form-urlencoded|boolean-true|contentEncoding":   "refused",
-	"3.0.4|application/x-www-form-urlencoded|boolean-true|plain":             "admitted;value=p=x;null=error",
-	"3.0.4|application/x-www-form-urlencoded|empty-array|contentEncoding":    "admitted;value=p=x;null=error",
-	"3.0.4|application/x-www-form-urlencoded|empty-array|plain":              "admitted;value=p=x;null=error",
+	"3.0.4|application/x-www-form-urlencoded|boolean-true|plain":             "refused",
+	"3.0.4|application/x-www-form-urlencoded|empty-array|contentEncoding":    "refused",
+	"3.0.4|application/x-www-form-urlencoded|empty-array|plain":              "refused",
 	"3.0.4|application/x-www-form-urlencoded|integer-null|contentEncoding":   "refused",
 	"3.0.4|application/x-www-form-urlencoded|integer-null|plain":             "refused",
-	"3.0.4|application/x-www-form-urlencoded|memberless|contentEncoding":     "admitted;value=p=x;null=error",
-	"3.0.4|application/x-www-form-urlencoded|memberless|plain":               "admitted;value=p=x;null=error",
+	"3.0.4|application/x-www-form-urlencoded|memberless|contentEncoding":     "refused",
+	"3.0.4|application/x-www-form-urlencoded|memberless|plain":               "refused",
 	"3.0.4|application/x-www-form-urlencoded|null-only|contentEncoding":      "refused",
 	"3.0.4|application/x-www-form-urlencoded|null-only|plain":                "refused",
 	"3.0.4|application/x-www-form-urlencoded|null-string|contentEncoding":    "refused",
@@ -82,18 +91,18 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.0.4|application/x-www-form-urlencoded|string-object|plain":            "refused",
 	"3.0.4|application/x-www-form-urlencoded|string|contentEncoding":         "admitted;value=p=x;null=p=",
 	"3.0.4|application/x-www-form-urlencoded|string|plain":                   "admitted;value=p=x;null=p=",
-	"3.0.4|multipart/form-data|absent-type|contentEncoding":                  "admitted;value=text/plain:x;null=error",
-	"3.0.4|multipart/form-data|absent-type|plain":                            "admitted;value=text/plain:x;null=error",
+	"3.0.4|multipart/form-data|absent-type|contentEncoding":                  "refused",
+	"3.0.4|multipart/form-data|absent-type|plain":                            "refused",
 	"3.0.4|multipart/form-data|array-null|contentEncoding":                   "refused",
 	"3.0.4|multipart/form-data|array-null|plain":                             "refused",
 	"3.0.4|multipart/form-data|boolean-true|contentEncoding":                 "refused",
-	"3.0.4|multipart/form-data|boolean-true|plain":                           "admitted;value=text/plain:x;null=error",
-	"3.0.4|multipart/form-data|empty-array|contentEncoding":                  "admitted;value=text/plain:x;null=error",
-	"3.0.4|multipart/form-data|empty-array|plain":                            "admitted;value=text/plain:x;null=error",
+	"3.0.4|multipart/form-data|boolean-true|plain":                           "refused",
+	"3.0.4|multipart/form-data|empty-array|contentEncoding":                  "refused",
+	"3.0.4|multipart/form-data|empty-array|plain":                            "refused",
 	"3.0.4|multipart/form-data|integer-null|contentEncoding":                 "refused",
 	"3.0.4|multipart/form-data|integer-null|plain":                           "refused",
-	"3.0.4|multipart/form-data|memberless|contentEncoding":                   "admitted;value=text/plain:x;null=error",
-	"3.0.4|multipart/form-data|memberless|plain":                             "admitted;value=text/plain:x;null=error",
+	"3.0.4|multipart/form-data|memberless|contentEncoding":                   "refused",
+	"3.0.4|multipart/form-data|memberless|plain":                             "refused",
 	"3.0.4|multipart/form-data|null-only|contentEncoding":                    "refused",
 	"3.0.4|multipart/form-data|null-only|plain":                              "refused",
 	"3.0.4|multipart/form-data|null-string|contentEncoding":                  "refused",

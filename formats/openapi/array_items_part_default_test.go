@@ -19,7 +19,7 @@ import (
 // identical file is executed by openbindings-go/formats/openapi and by
 // openapi-client/typescript/src; changing it in one engine without the others
 // fails here.
-const arrayItemsPartDefaultCasesDigest = "128716ca17b0545aa890f2c5d441fa77638f9f7598bf2bb23ce52a7162af3ae9"
+const arrayItemsPartDefaultCasesDigest = "334169f20f73f42159fcdd45e3b11bdfa87957add143df5bb4ef4fccd30d00e1"
 
 type arrayItemsPartDefaultTable struct {
 	Comment string                      `json:"$comment"`
@@ -310,6 +310,30 @@ func TestArrayItemsPartDefaultNestedArrayCellsPinBothLanes(t *testing.T) {
 	}
 	if seen != 3 {
 		t.Fatalf("table carries %d multipart nested-array cells, want 3 (one per edition branch)", seen)
+	}
+}
+
+// TestArrayItemsTypelessItemsCellsPinBothLanes is the M2 convergence, pinned
+// the same way: a multipart array whose ITEMS schema declares no type is the
+// type-absent part cell — the multipart lane derives the part Content-Type
+// from the items schema, so that schema IS the resolved part schema — and both
+// lanes refuse it on the 3.0 line, as the 3.1 twin already did. The two cells
+// carry `writeLane` for the same reason the nested-array cells do: admission
+// refusing makes the encoder's own answer invisible on the wire, so it has to
+// be measured directly.
+func TestArrayItemsTypelessItemsCellsPinBothLanes(t *testing.T) {
+	seen := 0
+	for _, c := range loadArrayItemsPartDefaultTable(t) {
+		if c.Media != "multipart/form-data" || c.Items != "unconstrained" || !strings.HasPrefix(c.OpenAPI, "3.0") {
+			continue
+		}
+		seen++
+		if c.Expect != "refused" || c.WriteLane != "refused" {
+			t.Fatalf("%s: expect = %q, writeLane = %q; both lanes must refuse a typeless items declaration", c.Name, c.Expect, c.WriteLane)
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("table carries %d 3.0-line multipart typeless-items cells, want 2", seen)
 	}
 }
 

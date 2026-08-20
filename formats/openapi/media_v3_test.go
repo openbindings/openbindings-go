@@ -1166,59 +1166,39 @@ func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
 	}
 }
 
-// §9.2: an unconstrained part schema (a bare description, no type) is
-// admitted, and the OAS per-type part default is keyed by the supplied
-// value's JSON application type — string as text/plain, object as
-// application/json. JSON null names no per-type default and refuses.
-// §9.2's type-absent convention covers the 3.0 line alone: no accepted 3.0
-// edition states a default contentType row that reaches a declaration with no
-// `type`, so this specification's own convention keys the part default from
-// the supplied value's JSON application type. This test read `3.1.2` until
-// 2026-08-17, where the Encoding Object's own default table states
-// application/octet-stream for that part; TestRevision3MultipartTypeAbsentPartRefusesOn31
-// now pins that half.
-func TestRevision3MultipartUnconstrainedPartUsesValueTypedDefaults(t *testing.T) {
-	doc := &openapi3.T{OpenAPI: "3.0.4"}
-	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
-		Type: &openapi3.Types{"object"},
-		Properties: openapi3.Schemas{
-			"file": {Value: &openapi3.Schema{Description: "Profile picture file"}},
-		},
-	}}}
-	if err := validateRevision3MultipartMedia(doc, media); err != nil {
-		t.Fatalf("unconstrained part admission = %v", err)
-	}
-	op := opWithRequestBody(openapi3.Content{"multipart/form-data": media}, true)
-	if _, err := planRequestBodiesFor(doc, op, BindingSpec); err != nil {
-		t.Fatalf("unconstrained part plan = %v", err)
-	}
-
-	r, ct, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": "hello"}, BindingSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := parseMultipart(t, r, ct)["file"][0]; got != [2]string{"text/plain", "hello"} {
-		t.Fatalf("string-valued unconstrained part = %v", got)
-	}
-
-	r, ct, err = buildMultipartBodyForRevision(doc, media, map[string]any{"file": map[string]any{"a": float64(1)}}, BindingSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := parseMultipart(t, r, ct)["file"][0]; got != [2]string{"application/json", `{"a":1}`} {
-		t.Fatalf("object-valued unconstrained part = %v", got)
-	}
-
-	r, ct, err = buildMultipartBodyForRevision(doc, media, map[string]any{"file": []any{"a", float64(2)}}, BindingSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := parseMultipart(t, r, ct)["file"][0]; got != [2]string{"application/json", `["a",2]`} {
-		t.Fatalf("array-valued unconstrained part = %v", got)
-	}
-
-	if _, _, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": nil}, BindingSpec); err == nil || !strings.Contains(err.Error(), "JSON null") {
-		t.Fatalf("null-valued unconstrained part error = %v", err)
+// TestRevision3MultipartTypeAbsentPartRefusesOn30 pins the 3.0 half of §9.2's
+// type-absent part cell. It replaces
+// TestRevision3MultipartUnconstrainedPartUsesValueTypedDefaults, which pinned
+// the specification's own value-keyed convention as an executed assertion --
+// a bare-description part admitted, with the OAS per-type default keyed from
+// the supplied value's JSON application type. Escalation M2 (ruled
+// 2026-08-20) deleted that convention: no accepted 3.0 edition states a
+// default contentType row that reaches a declaration carrying no `type`, and
+// this specification authors none for that residue, so the part refuses
+// before dispatch here exactly as it does on the 3.1 line -- one outcome,
+// two grounds, which is why the two tests state their reasons separately.
+func TestRevision3MultipartTypeAbsentPartRefusesOn30(t *testing.T) {
+	for _, edition := range []string{"3.0.0", "3.0.1", "3.0.2", "3.0.3", "3.0.4"} {
+		doc := &openapi3.T{OpenAPI: edition}
+		media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
+			Type: &openapi3.Types{"object"},
+			Properties: openapi3.Schemas{
+				"file": {Value: &openapi3.Schema{Description: "Profile picture file"}},
+			},
+		}}}
+		err := validateRevision3MultipartMedia(doc, media)
+		if err == nil || !strings.Contains(err.Error(), "no default part Content-Type row on any accepted OAS 3.0 edition") {
+			t.Fatalf("%s type-absent part admission = %v", edition, err)
+		}
+		op := opWithRequestBody(openapi3.Content{"multipart/form-data": media}, true)
+		if _, err := planRequestBodiesFor(doc, op, BindingSpec); err == nil {
+			t.Fatalf("%s type-absent part plan succeeded; the only alternative must leave no candidate", edition)
+		}
+		// The body-encoding lane refuses it too, so the admission refusal is
+		// not the only thing standing between the declaration and the wire.
+		if _, _, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": "hello"}, BindingSpec); err == nil {
+			t.Fatalf("%s type-absent part encoded a body", edition)
+		}
 	}
 }
 
@@ -1341,29 +1321,29 @@ func TestRevision3URLEncodedNullableChoiceProperties(t *testing.T) {
 	}
 }
 
-// §9.2's type-absent convention, on the line that has it.
-func TestRevision3URLEncodedTypeAbsentPropertyOn30(t *testing.T) {
-	doc := &openapi3.T{OpenAPI: "3.0.4"}
+// §9.2's type-absent part cell on the urlencoded lane, both lines. It pinned
+// the deleted 3.0-line value-keyed convention until 2026-08-20 (escalation
+// M2); the two lines now refuse alike, each naming its own ground.
+func TestRevision3URLEncodedTypeAbsentPropertyRefusesOnEveryEdition(t *testing.T) {
 	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
 		Type: &openapi3.Types{"object"},
 		Properties: openapi3.Schemas{
 			"note": {Value: &openapi3.Schema{Description: "free-form"}},
 		},
 	}}}
-	if err := validateRevision3URLEncodedMedia(doc, media); err != nil {
-		t.Fatalf("urlencoded admission = %v", err)
-	}
-	body, err := buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": "x y"}, BindingSpec)
-	if err != nil || body != "note=x+y" {
-		t.Fatalf("urlencoded body = %q, %v", body, err)
-	}
-	body, err = buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": map[string]any{"a": float64(1)}}, BindingSpec)
-	if err != nil || body != "note=%7B%22a%22%3A1%7D" {
-		t.Fatalf("object-valued type-absent field = %q, %v", body, err)
+	for _, edition := range []string{"3.0.0", "3.0.1", "3.0.2", "3.0.3", "3.0.4"} {
+		doc := &openapi3.T{OpenAPI: edition}
+		if err := validateRevision3URLEncodedMedia(doc, media); err == nil ||
+			!strings.Contains(err.Error(), "no default part Content-Type row on any accepted OAS 3.0 edition") {
+			t.Fatalf("%s type-absent urlencoded property admission = %v", edition, err)
+		}
+		if _, err := buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": "x y"}, BindingSpec); err == nil {
+			t.Fatalf("%s type-absent urlencoded property encoded a body", edition)
+		}
 	}
 	for _, edition := range []string{"3.1.0", "3.1.1", "3.1.2"} {
-		refused := &openapi3.T{OpenAPI: edition}
-		if err := validateRevision3URLEncodedMedia(refused, media); err == nil || !strings.Contains(err.Error(), "application/octet-stream") {
+		doc := &openapi3.T{OpenAPI: edition}
+		if err := validateRevision3URLEncodedMedia(doc, media); err == nil || !strings.Contains(err.Error(), "application/octet-stream") {
 			t.Fatalf("%s type-absent urlencoded property admission = %v", edition, err)
 		}
 	}

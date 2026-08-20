@@ -1326,38 +1326,47 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 		var ok bool
 		declared, ok = defaultRevision3PartContentType(schema, is30)
 		if !ok {
-			if partSchemaValueDispatches(schema, map[*openapi3.Schema]bool{}) {
-				if !is30 {
-					if schema.Type != nil {
-						// `type` is present but names no type at all. No
-						// accepted 3.1 default contentType row reaches that —
-						// 3.1.1 and 3.1.2 key their first row on `type` being
-						// ABSENT, and 3.1.0's catch-all keys on the property
-						// type it does not have — and JSON Schema 2020-12's
-						// own meta-schema requires an array-valued `type` to
-						// carry at least one member, so the declaration admits
-						// no instance.
-						return parsedMediaType{}, fmt.Errorf("part schema declares an empty `type`, which no accepted OAS 3.1 default part Content-Type row reaches and which admits no instance; no part carriage is defined")
+			if partSchemaDeclaresNoType(schema, map[*openapi3.Schema]bool{}) {
+				if schema.Type != nil {
+					// `type` is present but names no type at all.
+					if is30 {
+						return parsedMediaType{}, fmt.Errorf("part schema declares an array-valued `type`, but an OAS 3.0 `type` MUST be a string and multiple types via an array are not supported; no part carriage is defined")
 					}
-					// §9.2, per edition: every accepted 3.1 edition states a
-					// default for a part schema declaring no `type`, and all
-					// three state application/octet-stream. 3.1.1 and 3.1.2
-					// tabulate it as the Encoding Object default table's
-					// `type`-absent row; 3.1.0 reaches it through the total
-					// catch-all closing its prose enumeration ("for all other
-					// cases the default is application/octet-stream"). This
-					// revision defines no JSON-to-octet part boundary, so the
-					// part refuses rather than taking the 3.0-line convention.
+					// No accepted 3.1 default contentType row reaches it —
+					// 3.1.1 and 3.1.2 key their first row on `type` being
+					// ABSENT, and 3.1.0's catch-all keys on the property type
+					// it does not have — and JSON Schema 2020-12's own
+					// meta-schema requires an array-valued `type` to carry at
+					// least one member, so the declaration admits no instance.
+					return parsedMediaType{}, fmt.Errorf("part schema declares an empty `type`, which no accepted OAS 3.1 default part Content-Type row reaches and which admits no instance; no part carriage is defined")
+				}
+				// §9.2: a resolved part schema that declares no `type` refuses
+				// before dispatch on EVERY accepted edition, and no supplied
+				// value's JSON type ever selects a part's carriage. The two
+				// lines reach that one outcome on different grounds, so the
+				// diagnostic names the ground the artifact's own edition
+				// supplies.
+				if !is30 {
+					// Every accepted 3.1 edition states a default for such a
+					// part, and all three state application/octet-stream:
+					// 3.1.1 and 3.1.2 tabulate it as the Encoding Object
+					// default table's `type`-absent row, and 3.1.0 reaches it
+					// through the total catch-all closing its prose
+					// enumeration ("for all other cases the default is
+					// application/octet-stream"). This revision defines no
+					// JSON-to-octet part boundary, so the part refuses.
 					return parsedMediaType{}, fmt.Errorf("a part schema declaring no `type` defaults to application/octet-stream on every accepted OAS 3.1 edition, but this binding revision defines no JSON-to-octet part boundary")
 				}
-				// §9.2, this specification's own convention, covering the 3.0
-				// line alone: every 3.0 default row is keyed on a declared
-				// `type` and none reaches a declaration carrying none, so the
-				// supplied value's JSON application type selects the per-type
-				// part default. The concrete part media type materializes at
-				// invocation; the zero parsedMediaType is the value-dispatch
-				// signal recognized by revision3PropertyCarriage.
-				return parsedMediaType{}, nil
+				// The 3.0 line states no row for it at all: 3.0.0 through
+				// 3.0.3 enumerate a `string` with `format: binary`, "other
+				// primitive types", `object` and `array` and close without a
+				// catch-all, and 3.0.4 tabulates the same cases keyed on
+				// `type`. Every stated row is keyed on a declared `type` and
+				// none reaches a declaration carrying none. This
+				// specification authors no row for that residue, so the part
+				// refuses here too and its alternative is an accounted
+				// exclusion.
+				return parsedMediaType{}, fmt.Errorf("a part schema declaring no `type` has no default part Content-Type row on any accepted OAS 3.0 edition, and this binding revision authors none; no part carriage is defined")
 			}
 			if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 {
 				return parsedMediaType{}, fmt.Errorf("part schema declares a choice applicator that does not collapse to one non-null branch; no single part carriage is defined")
@@ -1426,16 +1435,9 @@ const (
 	revision3PropertyText
 	revision3PropertyRaw30
 	revision3PropertyEncoded31
-	revision3PropertyValueDispatch
 )
 
 func revision3PropertyCarriage(schema *openapi3.Schema, contentType parsedMediaType, is30, allowRaw30 bool) (revision3PropertyCarriageMode, error) {
-	if contentType.base == "" {
-		// revision3PartContentType's value-dispatch signal: the unconstrained
-		// schema's concrete media type and carriage follow the supplied
-		// value's JSON application type (§9.2).
-		return revision3PropertyValueDispatch, nil
-	}
 	if !is30 && schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) && schemaHasContentEncoding(schema) {
 		return revision3PropertyEncoded31, nil
 	}
@@ -2389,13 +2391,15 @@ func nullOnlyBranch(schema *openapi3.Schema) bool {
 		len(schema.Properties) == 0 && schema.Items == nil && len(schema.Enum) == 0
 }
 
-// partSchemaValueDispatches reports a carriage-unconstrained resolved part
-// schema: a declaration with no type and no choice or conditional
-// applicator, through allOf. §9.2: such a schema's OAS per-type part default
-// is keyed by the supplied value's JSON application type — the value's TYPE
-// is structure, never payload sniffing. An absent schema is not a
-// declaration and never dispatches.
-func partSchemaValueDispatches(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) bool {
+// partSchemaDeclaresNoType reports the §9.2 type-absent part cell: a resolved
+// part declaration carrying no type and no choice or conditional applicator,
+// through allOf. Such a part refuses before dispatch on every accepted
+// edition — the 3.1 line states a default this revision defines no boundary
+// to cross, the 3.0 line states no row at all and this revision fills
+// nothing — and no supplied value's JSON type ever selects its carriage. An
+// absent schema is not a declaration and is answered by the caller's own
+// absent-schema branch.
+func partSchemaDeclaresNoType(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) bool {
 	if schema == nil || seen[schema] {
 		return false
 	}
@@ -2416,7 +2420,7 @@ func partSchemaValueDispatches(schema *openapi3.Schema, seen map[*openapi3.Schem
 		if member == nil || member.Value == nil {
 			continue
 		}
-		if !partSchemaValueDispatches(member.Value, seen) {
+		if !partSchemaDeclaresNoType(member.Value, seen) {
 			return false
 		}
 	}
@@ -2671,26 +2675,6 @@ func writeMultipartPart(writer *multipart.Writer, name string, value any, schema
 	return nil
 }
 
-// valueDispatchedPartCarriage keys the OAS per-type part default from the
-// supplied value's JSON application type (§9.2): objects and arrays ride as
-// application/json parts, primitives as text/plain. JSON null names no OAS
-// per-type default; an unconstrained part therefore defines no carriage for
-// it and refuses.
-func valueDispatchedPartCarriage(value any) (parsedMediaType, revision3PropertyCarriageMode, error) {
-	if value == nil {
-		return parsedMediaType{}, 0, fmt.Errorf("an unconstrained part schema defines no form carriage for JSON null")
-	}
-	family := "text/plain"
-	mode := revision3PropertyText
-	if _, object := asObject(value); object {
-		family, mode = "application/json", revision3PropertyJSON
-	} else if _, array := asArray(value); array {
-		family, mode = "application/json", revision3PropertyJSON
-	}
-	parsed, err := parseRevision3MediaType(family)
-	return parsed, mode, err
-}
-
 func writeRevision3MultipartPart(writer *multipart.Writer, name string, value any, schema *openapi3.Schema, enc *openapi3.Encoding, is30 bool) error {
 	if enc != nil && len(enc.Headers) > 0 {
 		return fmt.Errorf("multipart part %q declares encoding.headers, but this binding revision defines no caller source for dynamic part-header values", name)
@@ -2703,12 +2687,6 @@ func writeRevision3MultipartPart(writer *multipart.Writer, name string, value an
 	mode, err := revision3PropertyCarriage(schema, parsedContentType, is30, true)
 	if err != nil {
 		return fmt.Errorf("multipart part %q: %w", name, err)
-	}
-	if mode == revision3PropertyValueDispatch {
-		parsedContentType, mode, err = valueDispatchedPartCarriage(value)
-		if err != nil {
-			return fmt.Errorf("multipart part %q: %w", name, err)
-		}
 	}
 	rawBinary := mode == revision3PropertyRaw30
 	var body []byte
@@ -3052,12 +3030,6 @@ func revision3PropertyBytes(name string, value any, schema *openapi3.Schema, con
 	mode, err := revision3PropertyCarriage(schema, contentType, is30, false)
 	if err != nil {
 		return nil, err
-	}
-	if mode == revision3PropertyValueDispatch {
-		contentType, mode, err = valueDispatchedPartCarriage(value)
-		if err != nil {
-			return nil, err
-		}
 	}
 	switch mode {
 	case revision3PropertyJSON:

@@ -14,7 +14,7 @@ import (
 // identical file is executed by openbindings-go/formats/openapi and by
 // openapi-client/typescript/src (and carried by openbindings-ts's openapi
 // package); changing it in one engine without the others fails here.
-const urlencodedContentPathCasesDigest = "cdd4c439ff453c3b5a8c2df13edb4ed9065766ac8e1210fcfbf3c6a337c2c732"
+const urlencodedContentPathCasesDigest = "ca17623d67205f5c85424e58295400571394c8e095850c13d7ada68eb72a0fa8"
 
 type urlencodedContentPathCase struct {
 	Name           string         `json:"name"`
@@ -162,14 +162,16 @@ func TestURLEncodedContentPathIgnoresThePatchComponent(t *testing.T) {
 	}
 }
 
-// TestURLEncodedContentPathEditionDifferencesAreLineScoped states, positively,
-// which shapes are allowed to differ between the two accepted lines and why.
-// The type-absent part default is the only one: every 3.1 edition states
-// application/octet-stream for a part declaring no type and this specification
-// defines no JSON-to-octet part boundary, while no 3.0 edition states a row for
-// it and section 9.2's own five-edition convention answers instead. Any other
-// shape differing between the lines is a defect.
-func TestURLEncodedContentPathEditionDifferencesAreLineScoped(t *testing.T) {
+// TestURLEncodedContentPathDecidesIdenticallyOnBothLines states, positively,
+// that NO declaration shape on this lane decides differently between the two
+// accepted lines. It replaces TestURLEncodedContentPathEditionDifferencesAreLineScoped,
+// whose whole content was the one exception: the type-absent part default,
+// which the 3.0 line's deleted value-keyed convention admitted while the 3.1
+// line refused. Escalation M2 (ruled 2026-08-20) removed that convention, so
+// the shapes agree — on grounds that still differ per line, which is why the
+// exception was legitimate while it stood and why its removal is a
+// convergence rather than an erasure.
+func TestURLEncodedContentPathDecidesIdenticallyOnBothLines(t *testing.T) {
 	typeAbsent := map[string]bool{"typeless-with-members": true, "unconstrained": true}
 	byShape := map[string]map[string]string{}
 	for _, c := range loadURLEncodedContentPathTable(t) {
@@ -183,19 +185,18 @@ func TestURLEncodedContentPathEditionDifferencesAreLineScoped(t *testing.T) {
 		t.Fatalf("covered %d shapes, want 10", len(byShape))
 	}
 	for shape, byLine := range byShape {
-		differs := byLine["3.0"] != byLine["3.1"]
-		if differs != typeAbsent[shape] {
-			t.Fatalf("shape %q: 3.0 line emits %q and 3.1 line emits %q; only the type-absent shapes may differ between the lines",
+		if byLine["3.0"] != byLine["3.1"] {
+			t.Fatalf("shape %q: 3.0 line emits %q and 3.1 line emits %q; no shape on this lane may differ between the lines",
 				shape, byLine["3.0"], byLine["3.1"])
 		}
 	}
-	// And the difference is the one the editions state, not an arbitrary one.
+	// And the converged answer for the type-absent shapes is the refusal, not
+	// some other agreement reached by widening one line.
 	for shape := range typeAbsent {
-		if byShape[shape]["3.1"] != "refused" {
-			t.Fatalf("shape %q on the 3.1 line = %q, want refused (application/octet-stream with no JSON-to-octet part boundary)", shape, byShape[shape]["3.1"])
-		}
-		if byShape[shape]["3.0"] != "admitted;emit=p=main+st" {
-			t.Fatalf("shape %q on the 3.0 line = %q, want the value-keyed text/plain default", shape, byShape[shape]["3.0"])
+		for _, line := range []string{"3.0", "3.1"} {
+			if byShape[shape][line] != "refused" {
+				t.Fatalf("shape %q on the %s line = %q, want refused (a resolved part schema declaring no `type` refuses on every accepted edition)", shape, line, byShape[shape][line])
+			}
 		}
 	}
 }
