@@ -19,10 +19,15 @@ in [`IMPLEMENTATION_PARITY.md`](IMPLEMENTATION_PARITY.md).
 
 ## Layout
 
-This is a multi-module Go monorepo. Each subdirectory below is its own module:
+This is a multi-module Go monorepo. The root module carries the core package
+plus its `invoke`, `synthesize`, and `compare` sub-packages; each `formats/*`
+subdirectory is its own module:
 
 ```
 .                          ← github.com/openbindings/openbindings-go (the core SDK)
+  invoke/                  ← .../invoke (binding-invoker / operation-invoker runtime)
+  synthesize/              ← .../synthesize (interface synthesis, source inspection, discovery)
+  compare/                 ← .../compare (interface/operation compatibility checking)
 formats/
   openapi/                 ← .../formats/openapi
   asyncapi/                ← .../formats/asyncapi
@@ -37,7 +42,8 @@ formats/
 The binding libraries previously lived in separate repos
 (`openbindings/openapi-go`, `openbindings/asyncapi-go`, etc.). They were
 consolidated into this monorepo because they all implement the same
-`BindingInvoker`/`InterfaceSynthesizer` interfaces from the core SDK and need
+`BindingInvoker`/`InterfaceSynthesizer` interfaces from the SDK's `invoke`
+and `synthesize` sub-packages and need
 to evolve in lockstep with it. Their historical `formats/*` import paths are
 package locations, not a claim that every binding specification governs a
 document format: a binding specification may incorporate an artifact or
@@ -130,17 +136,18 @@ for name, op := range iface.Operations {
 
 ```go
 import (
-    openbindings "github.com/openbindings/openbindings-go"
+    "github.com/openbindings/openbindings-go/invoke"
+    "github.com/openbindings/openbindings-go/synthesize"
     openapi "github.com/openbindings/openbindings-go/formats/openapi"
 )
 
 // Wire up an operation invoker with the binding implementation(s) you need.
-opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
+opInv := invoke.NewOperationInvoker(openapi.NewInvoker())
 
 // Resolve an OBI from a URL (well-known discovery, with synthesis as the
 // fallback when the target only exposes a raw spec such as an OpenAPI doc).
-fetched, err := openbindings.FetchInterface(ctx, "https://api.example.com",
-    openbindings.WithSynthesizers(openapi.NewSynthesizer()))
+fetched, err := synthesize.FetchInterface(ctx, "https://api.example.com",
+    synthesize.WithSynthesizers(openapi.NewSynthesizer()))
 if err != nil {
     log.Fatal(err)
 }
@@ -149,12 +156,12 @@ iface := fetched.Interface
 // Invoke. One cardinality-agnostic handle serves every operation; a unary call
 // writes one input and reads one output. Options are rarely needed; the common
 // call passes none.
-call := openbindings.Invoke(ctx, opInv, iface,
-    openbindings.NewOperationSignature[any, any]("listItems"))
+call := invoke.Invoke(ctx, opInv, iface,
+    invoke.NewOperationSignature[any, any]("listItems"))
 if err := call.Write(ctx, map[string]any{"limit": 10}); err != nil {
     log.Fatal(err)
 }
-out, err := openbindings.Single(ctx, call.Outputs())
+out, err := invoke.Single(ctx, call.Outputs())
 if err != nil {
     log.Fatal(err)
 }
@@ -166,7 +173,7 @@ For compile-time-typed operations, run `ob codegen <obi> --lang go` to generate 
 ### Check compatibility
 
 ```go
-issues := openbindings.CheckInterfaceCompatibility(required, provided)
+issues := compare.CheckInterfaceCompatibility(required, provided)
 for _, issue := range issues {
     fmt.Printf("%s: %s — %s\n", issue.Operation, issue.Kind, issue.Detail)
 }
@@ -179,7 +186,7 @@ typically unbound OBI contract a consumer expects. The application supplies
 concrete, invocable interfaces; the consumer does not choose their protocols:
 
 ```go
-requirement, err := openbindings.NewOperationRequirement(
+requirement, err := invoke.NewOperationRequirement(
     requiredInterface,
     OperationSignatures.CreateTask,
 )
@@ -187,22 +194,22 @@ if err != nil {
     log.Fatal(err)
 }
 
-resolution, err := openbindings.ResolveOperationRequirement(
+resolution, err := invoke.ResolveOperationRequirement(
     ctx,
     requirement,
-    []openbindings.OperationImplementation{{
+    []invoke.OperationImplementation{{
         Interface: tasksAPI,
-        Invoker: openbindings.NewOperationInvoker(openapi.NewInvoker()),
+        Invoker: invoke.NewOperationInvoker(openapi.NewInvoker()),
         Label: "tasks-api",
     }},
 )
 if err != nil {
     log.Fatal(err)
 }
-if resolution.Status == openbindings.OperationRequirementAvailable {
+if resolution.Status == invoke.OperationRequirementAvailable {
     call := resolution.Match.Invoke(ctx)
     _ = call.Write(ctx, CreateTaskInput{Title: "Ship it"})
-    task, err := openbindings.Single(ctx, call.Outputs())
+    task, err := invoke.Single(ctx, call.Outputs())
     // handle task / err
 }
 ```
@@ -228,8 +235,8 @@ bidirectional bindings. Cardinality is a property of the selected binding,
 never of the call signature:
 
 ```go
-sig := openbindings.NewOperationSignature[any, any]("listItems")
-call := openbindings.Invoke(ctx, opInv, iface, sig)
+sig := invoke.NewOperationSignature[any, any]("listItems")
+call := invoke.Invoke(ctx, opInv, iface, sig)
 if err := call.Write(ctx, input); err != nil { /* handle */ } // unary: binding closes input after one read
 out := call.Outputs()
 for {
@@ -241,12 +248,12 @@ for {
 ```
 
 For an operation you are confident yields exactly one output, the one blessed
-terminal is `openbindings.Single`:
+terminal is `invoke.Single`:
 
 ```go
-call := openbindings.Invoke(ctx, opInv, iface, openbindings.NewOperationSignature[any, any]("getItem"))
+call := invoke.Invoke(ctx, opInv, iface, invoke.NewOperationSignature[any, any]("getItem"))
 _ = call.Write(ctx, map[string]any{"id": "item_1"})
-item, err := openbindings.Single(ctx, call.Outputs())
+item, err := invoke.Single(ctx, call.Outputs())
 ```
 
 `Write`'s error contract makes both styles above safe: every error it returns
@@ -284,7 +291,7 @@ directly on OpenBindings concepts. See the binding-specification guide's
 [implementation-layering doctrine](https://github.com/openbindings/spec/blob/main/binding-specs/README.md#implementation-layering).
 
 ```go
-opInv := openbindings.NewOperationInvoker(
+opInv := invoke.NewOperationInvoker(
     openapi.NewInvoker(),   // unreleased openbindings.openapi@1 candidate
     asyncapi.NewInvoker(),  // openbindings.asyncapi@1
     grpc.NewInvoker(),      // openbindings.grpc@1
@@ -323,7 +330,7 @@ contract does not prescribe storage or keying. For applications that choose
 origin-scoped reuse, the SDK provides a scheme-agnostic normalization helper:
 
 ```go
-key := openbindings.NormalizeContextKey("https://api.example.com/v1/users")
+key := invoke.NormalizeContextKey("https://api.example.com/v1/users")
 // key = "api.example.com"
 ```
 
@@ -344,14 +351,14 @@ family the challenge declares:
 so satisfying a bearer challenge is one complete call:
 
 ```go
-_ = store.Set(ctx, openbindings.NormalizeContextKey("https://api.example.com"),
+_ = store.Set(ctx, invoke.NormalizeContextKey("https://api.example.com"),
     map[string]any{"bearerToken": token})
 ```
 
 A binding that needs context it wasn't given raises a `CONTEXT_REQUIRED`
 challenge before any side effect; the operation invoker resolves challenges
 through its configured `ContextResolver` and re-drives the binding.
-`openbindings.StoreContextResolver(store)` is an optional store-backed
+`invoke.StoreContextResolver(store)` is an optional store-backed
 realization of the published binding-invoker challenge. It treats a challenge
 as a scope, not a hint: via `ScopeContext` it returns only
 the fields the satisfied requirement-alternative names. It does not forward
@@ -364,8 +371,8 @@ an omitted durability flag means one-shot and cannot authorize stored-context
 release or persistence.
 
 ```go
-opInv := openbindings.NewOperationInvoker(openapi.NewInvoker()).
-    WithRuntime(openbindings.StoreContextResolver(store)) // store implements ContextStore
+opInv := invoke.NewOperationInvoker(openapi.NewInvoker()).
+    WithRuntime(invoke.StoreContextResolver(store)) // store implements ContextStore
 ```
 
 Apps that resolve interactively (prompts, browser redirects, keychains) supply

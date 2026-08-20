@@ -6,6 +6,20 @@
 
 ### Changed
 
+- **The SDK is layered into core plus `invoke`, `synthesize`, and `compare`
+  sub-packages** (breaking; import-path changes only, no renames or behavior
+  changes). Placement follows the authority source: what `openbindings.md`
+  defines stays in the root package (document model, validation, operation
+  resolution, boundary schema validation, versions/constants); the
+  binding-invoker/operation-invoker realization lives in `invoke`; the
+  interface-synthesizer/source-inspector realization — including
+  `FetchInterface` and the synthesis-scenarios runner, now at
+  `synthesize/synthesisscenarios` — lives in `synthesize`; interface and
+  operation compatibility checking lives in `compare`. The root package
+  imports none of the three. The former unexported `compileOperationSchema`
+  is exported as `CompileOperationSchema` (core) for the invocation runtime;
+  `IsOBInterface`, `IsHTTPURL`, and `BindingSpecInfo` are seated in core.
+
 - **The portable synthesis corpus runs at
   `openbindings.binding-spec-synthesis-scenarios@3`.** `synthesisscenarios.Verify`
   takes a `SynthesizerFactory` rather than one synthesizer, because a scenario
