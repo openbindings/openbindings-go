@@ -989,16 +989,21 @@ func TestInvoke_DeclaredBothShapesSelectByFraming(t *testing.T) {
 	}
 }
 
-// WHATWG extraction: comment-only, empty-data, and event/id-only events emit
-// nothing; an incomplete final event is discarded.
-func TestInvoke_SSEEmptyEventsEmitNothing(t *testing.T) {
+// WHATWG extraction: a lone empty `data:` line DISPATCHES an event whose
+// data is the empty string (the data-buffer emptiness check precedes the
+// trailing-LF strip; openapi@1 §8), at its position in the stream. Blocks
+// with no data line — comment-only or `event:`/`id:`-only — dispatch
+// nothing, and an incomplete final event is discarded. Shared empty-data
+// case: byte-identical stream across the openapi and asyncapi engines.
+func TestInvoke_SSEEmptyDataEventDispatchesEmptyString(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)
 		_, _ = io.WriteString(w, ": comment only\n\n")           // comment-only: nothing
 		_, _ = io.WriteString(w, "event: tick\nid: 7\n\n")       // fields-only: nothing
-		_, _ = io.WriteString(w, "data:\n\n")                    // empty-data: nothing
-		_, _ = io.WriteString(w, "data: real\n\n")               // emits "real"
+		_, _ = io.WriteString(w, "data: first\n\n")              // emits "first"
+		_, _ = io.WriteString(w, "data:\n\n")                    // lone empty data line: emits ""
+		_, _ = io.WriteString(w, "data: third\n\n")              // emits "third"
 		_, _ = io.WriteString(w, "data: incomplete-final-event") // no blank line: discarded
 	}))
 	defer srv.Close()
@@ -1007,8 +1012,8 @@ func TestInvoke_SSEEmptyEventsEmitNothing(t *testing.T) {
 	if ierr != nil {
 		t.Fatalf("stream: %v", ierr)
 	}
-	if len(events) != 1 || events[0] != "real" {
-		t.Fatalf("events = %v, want exactly [real]", events)
+	if len(events) != 3 || events[0] != "first" || events[1] != "" || events[2] != "third" {
+		t.Fatalf("events = %v, want [first, empty string, third]", events)
 	}
 }
 

@@ -1011,7 +1011,11 @@ func runSSESubscribe(ctx context.Context, client *http.Client, target resolvedTa
 //
 //   - `data:` lines accumulate; an event's data lines joined with U+000A
 //     form the event's text
-//   - comment-only and empty-`data` events emit nothing
+//   - a block that carried no `data` line — comment-only and
+//     `event:`/`id:`-only blocks included — dispatches nothing, while a
+//     received `data` line whose value is empty dispatches like any other:
+//     a lone empty `data:` line emits the empty string (WHATWG dispatch
+//     checks the data buffer for emptiness BEFORE the trailing-LF strip)
 //   - `event`, `id`, and `retry` are FRAMING: they never enter the output
 //     value; they surface out of band on the per-unit Meta
 //     (x-sse-event / x-sse-id / x-sse-retry). `retry` is never acted on:
@@ -1039,13 +1043,18 @@ func streamSSE(ctx context.Context, resp *http.Response, decodeCT string, args *
 	// dispatch emits the accumulated event; false stops the read loop (the
 	// invocation terminated, or decode failed terminally).
 	dispatch := func() bool {
+		hadDataLine := len(dataLines) > 0
 		rawData := strings.Join(dataLines, "\n")
 		name := eventName
 		eventName = ""
 		dataLines = nil
-		// Comment-only and empty-data events emit nothing (§8): an event
-		// whose joined data text is empty is discarded.
-		if rawData == "" {
+		// A block that carried no data line dispatches nothing (WHATWG
+		// dispatch step 2: the data buffer is the empty string; comment-only
+		// and `event:`/`id:`-only blocks included). The emptiness check
+		// precedes the trailing-LF strip, so a received data line whose
+		// value is empty dispatches like any other — a lone empty `data:`
+		// line emits the empty string.
+		if !hadDataLine {
 			return true
 		}
 
@@ -1067,7 +1076,7 @@ func streamSSE(ctx context.Context, resp *http.Response, decodeCT string, args *
 		}
 
 		raw := invoke.RawResult{Status: &status, Body: []byte(rawData), Meta: meta}
-		ev, derr := args.Hooks.DecodeOutput(site, raw, builtinDecodeFor(decodeCT))
+		ev, derr := args.Hooks.DecodeOutput(site, raw, builtinPerEventDecodeFor(decodeCT))
 		if derr != nil {
 			// A decode error mid-stream is terminal; already-emitted
 			// outputs stand (drain-before-terminal).
@@ -1660,11 +1669,26 @@ func applyCredentialsViaSecuritySchemes(req *http.Request, doc *document, secSrv
 // OutputDecoder — a returned error is terminal, which IS the override
 // channel for error-frame conventions.
 func builtinDecodeFor(contentType string) invoke.OutputDecoder {
-	isJSON := isJSONContentType(contentType)
-	return func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
+	perEvent := builtinPerEventDecodeFor(contentType)
+	return func(site invoke.InvokeSite, raw invoke.RawResult) (any, error) {
+		// An empty delivery unit emits no value. This rule is
+		// whole-unit-scoped: the SSE per-event lane bypasses it via
+		// builtinPerEventDecodeFor — a DISPATCHED event whose data text is
+		// empty (a lone empty `data:` line, WHATWG) is a value, never an
+		// absent output.
 		if len(raw.Body) == 0 {
 			return nil, nil
 		}
+		return perEvent(site, raw)
+	}
+}
+
+// builtinPerEventDecodeFor is builtinDecodeFor's declaration-keyed lane set
+// without the empty-unit→no-value rule, used by the SSE per-event lane
+// where an empty data text is the empty-string value under the text lane.
+func builtinPerEventDecodeFor(contentType string) invoke.OutputDecoder {
+	isJSON := isJSONContentType(contentType)
+	return func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 		if isJSON {
 			var parsed any
 			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
