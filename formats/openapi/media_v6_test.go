@@ -82,14 +82,15 @@ func TestRevision6DoesNotInventCombinatorialFormSerialization(t *testing.T) {
 
 func TestRevision6WholeJSONDeclarationTriggers(t *testing.T) {
 	tests := map[string]string{
-		"anyOf":                 `{"anyOf":[{"type":"object"},{"type":"array"}]}`,
-		"not":                   `{"type":"object","not":{"required":["forbidden"]}}`,
-		"if":                    `{"type":"object","if":{"required":["kind"]}}`,
-		"then":                  `{"type":"object","then":{"required":["name"]}}`,
-		"else":                  `{"type":"object","else":{"required":["fallback"]}}`,
-		"dependentSchemas":      `{"type":"object","dependentSchemas":{"kind":{"required":["name"]}}}`,
-		"unevaluatedProperties": `{"type":"object","unevaluatedProperties":true}`,
-		"allOf traversal":       `{"allOf":[{"type":"object"},{"anyOf":[{"required":["a"]},{"required":["b"]}]}]}`,
+		"anyOf":                       `{"anyOf":[{"type":"object"},{"type":"array"}]}`,
+		"not":                         `{"type":"object","not":{"required":["forbidden"]}}`,
+		"if":                          `{"type":"object","if":{"required":["kind"]}}`,
+		"then":                        `{"type":"object","then":{"required":["name"]}}`,
+		"else":                        `{"type":"object","else":{"required":["fallback"]}}`,
+		"dependentSchemas":            `{"type":"object","dependentSchemas":{"kind":{"required":["name"]}}}`,
+		"unevaluatedProperties":       `{"type":"object","unevaluatedProperties":true}`,
+		"unevaluatedProperties false": `{"type":"object","properties":{"value":{"type":"string"}},"unevaluatedProperties":false}`,
+		"allOf traversal":             `{"allOf":[{"type":"object"},{"anyOf":[{"required":["a"]},{"required":["b"]}]}]}`,
 	}
 	for name, schema := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -113,9 +114,8 @@ func TestRevision6WholeJSONDeclarationTriggers(t *testing.T) {
 
 func TestRevision6DoesNotPromoteInertOrNestedDeclarations(t *testing.T) {
 	tests := map[string]string{
-		"empty dependentSchemas":       `{"type":"object","properties":{"value":{"type":"string"}},"dependentSchemas":{}}`,
-		"closed unevaluatedProperties": `{"type":"object","properties":{"value":{"type":"string"}},"unevaluatedProperties":false}`,
-		"nested oneOf":                 `{"type":"object","properties":{"value":{"oneOf":[{"type":"string"},{"type":"number"}]}}}`,
+		"empty dependentSchemas": `{"type":"object","properties":{"value":{"type":"string"}},"dependentSchemas":{}}`,
+		"nested oneOf":           `{"type":"object","properties":{"value":{"oneOf":[{"type":"string"},{"type":"number"}]}}}`,
 	}
 	for name, schema := range tests {
 		t.Run(name, func(t *testing.T) {

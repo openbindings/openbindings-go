@@ -483,10 +483,11 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].parsed.identity < candidates[j].parsed.identity })
 	plans := make([]*bodyPlan, 0, len(candidates))
+	oas30 := doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
 	for _, candidate := range candidates {
 		media := rb.Content[candidate.key]
 		wholeJSON := hasWholeJSONCarriage(bindingSpec) && !candidate.mediaRange && candidate.family == familyJSON &&
-			requiresWholeJSONCarriage(mediaSchema(media), map[*openapi3.Schema]bool{})
+			requiresWholeJSONCarriage(mediaSchema(media), map[*openapi3.Schema]bool{}, oas30)
 		var plan *bodyPlan
 		var err error
 		if wholeJSON {
@@ -509,7 +510,7 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 		plan.mediaRange = candidate.mediaRange
 		plan.rawBoundary = candidate.rawBoundary
 		plan.bindingSpec = bindingSpec
-		plan.oas30 = doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
+		plan.oas30 = oas30
 		applyRevision3BodyShape(plan)
 		if hasDynamicObjectCarriage(bindingSpec) {
 			applyDynamicObjectShape(plan)
@@ -531,7 +532,12 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 // whose complete validation or possible object surface cannot survive a
 // projection to finitely named body properties. Only allOf is traversed:
 // applicators inside a named property do not change the top-level route.
-func requiresWholeJSONCarriage(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) bool {
+//
+// The keywords are read under the GOVERNING EDITION'S dialect (§9.1). The
+// 3.0 line's Schema Object carries oneOf, anyOf and not only, so if/then/
+// else, dependentSchemas and unevaluatedProperties are strictly-unsupported
+// keywords there and decide as if absent.
+func requiresWholeJSONCarriage(schema *openapi3.Schema, seen map[*openapi3.Schema]bool, oas30 bool) bool {
 	if schema == nil || seen[schema] {
 		return false
 	}
@@ -540,38 +546,54 @@ func requiresWholeJSONCarriage(schema *openapi3.Schema, seen map[*openapi3.Schem
 	}
 	seen[schema] = true
 	defer delete(seen, schema)
-	if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 || schema.Not != nil ||
-		schema.If != nil || schema.Then != nil || schema.Else != nil || len(schema.DependentSchemas) > 0 ||
-		explicitDynamicAdditionalProperties(schema.UnevaluatedProperties) {
+	if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 || schema.Not != nil {
+		return true
+	}
+	if !oas30 && (schema.If != nil || schema.Then != nil || schema.Else != nil ||
+		len(schema.DependentSchemas) > 0 || declaresUnevaluatedProperties(schema.UnevaluatedProperties)) {
 		return true
 	}
 	for _, member := range schema.AllOf {
-		if member != nil && requiresWholeJSONCarriage(member.Value, seen) {
+		if member != nil && requiresWholeJSONCarriage(member.Value, seen, oas30) {
 			return true
 		}
 	}
 	return false
 }
 
+// declaresUnevaluatedProperties is §9.1's presence trigger: a schema
+// "carries an explicit unevaluatedProperties (any value)". Presence is the
+// whole test — the declared value, `false` included, never narrows it. This
+// is deliberately NOT explicitDynamicAdditionalProperties, which answers the
+// different question of whether additionalProperties opens a dynamic surface.
+func declaresUnevaluatedProperties(declared openapi3.BoolSchema) bool {
+	return declared.Has != nil || declared.Schema != nil
+}
+
 func applyDynamicObjectShape(plan *bodyPlan) {
-	if plan == nil || plan.synthetic || !hasExplicitDynamicProperties(mediaSchema(plan.media), map[*openapi3.Schema]bool{}) {
+	if plan == nil || plan.synthetic ||
+		!hasExplicitDynamicProperties(mediaSchema(plan.media), map[*openapi3.Schema]bool{}, plan.oas30) {
 		return
 	}
 	plan.wholeObject = true
 	plan.props = nil
 }
 
-func hasExplicitDynamicProperties(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) bool {
+// hasExplicitDynamicProperties reads its trigger keywords under the
+// governing edition's dialect (§9.1): patternProperties is not in the 3.0
+// line's Schema Object at all, so there it decides as if absent and the
+// 3.0-line trigger is an explicit additionalProperties alone.
+func hasExplicitDynamicProperties(schema *openapi3.Schema, seen map[*openapi3.Schema]bool, oas30 bool) bool {
 	if schema == nil || seen[schema] {
 		return false
 	}
 	seen[schema] = true
 	defer delete(seen, schema)
-	if len(schema.PatternProperties) > 0 || explicitDynamicAdditionalProperties(schema.AdditionalProperties) {
+	if (!oas30 && len(schema.PatternProperties) > 0) || explicitDynamicAdditionalProperties(schema.AdditionalProperties) {
 		return true
 	}
 	for _, member := range schema.AllOf {
-		if member != nil && hasExplicitDynamicProperties(member.Value, seen) {
+		if member != nil && hasExplicitDynamicProperties(member.Value, seen, oas30) {
 			return true
 		}
 	}
@@ -1931,6 +1953,7 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 			name,
 			map[*openapi3.Schema]bool{},
 			hasDynamicObjectCarriage(bindingSpec),
+			is30,
 		)
 		if hasMediaFidelity(bindingSpec) {
 			var partNullable bool
@@ -2107,8 +2130,11 @@ func writeMultipartSerializedField(writer *multipart.Writer, name, value string)
 	return nil
 }
 
+// resolvedMultipartProperty resolves the STATIC chain, which reads neither
+// patternProperties nor additionalProperties, so the governing edition's
+// dialect never enters it.
 func resolvedMultipartProperty(schema *openapi3.Schema, name string, seen map[*openapi3.Schema]bool) *openapi3.Schema {
-	return resolvedMultipartPropertyFor(schema, name, seen, false)
+	return resolvedMultipartPropertyFor(schema, name, seen, false, false)
 }
 
 // effectiveRevision3PartSchema applies this candidate's part-schema
@@ -2291,7 +2317,13 @@ func partSchemaValueDispatches(schema *openapi3.Schema, seen map[*openapi3.Schem
 	return true
 }
 
-func resolvedMultipartPropertyFor(schema *openapi3.Schema, name string, seen map[*openapi3.Schema]bool, dynamic bool) *openapi3.Schema {
+// resolvedMultipartPropertyFor walks §9.2's dynamic-member resolution
+// chain: an exact `properties` schema and every matching `patternProperties`
+// schema, or the `additionalProperties` schema when neither matches. The
+// resolution keywords are read under the governing edition's dialect
+// (§9.1/§9.2): on the 3.0 line `patternProperties` has no meaning, so the
+// chain there is `properties`, then `additionalProperties`.
+func resolvedMultipartPropertyFor(schema *openapi3.Schema, name string, seen map[*openapi3.Schema]bool, dynamic, oas30 bool) *openapi3.Schema {
 	if schema == nil || seen[schema] {
 		return nil
 	}
@@ -2307,8 +2339,10 @@ func resolvedMultipartPropertyFor(schema *openapi3.Schema, name string, seen map
 	patternMatched := false
 	if dynamic {
 		patterns := make([]string, 0, len(schema.PatternProperties))
-		for pattern := range schema.PatternProperties {
-			patterns = append(patterns, pattern)
+		if !oas30 {
+			for pattern := range schema.PatternProperties {
+				patterns = append(patterns, pattern)
+			}
 		}
 		sort.Strings(patterns)
 		for _, pattern := range patterns {
@@ -2342,7 +2376,7 @@ func resolvedMultipartPropertyFor(schema *openapi3.Schema, name string, seen map
 		if member == nil || member.Value == nil {
 			continue
 		}
-		if match := resolvedMultipartPropertyFor(member.Value, name, seen, dynamic); match != nil {
+		if match := resolvedMultipartPropertyFor(member.Value, name, seen, dynamic, oas30); match != nil {
 			matches = append(matches, match)
 		}
 	}
@@ -2869,6 +2903,7 @@ func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, 
 				name,
 				map[*openapi3.Schema]bool{},
 				hasDynamicObjectCarriage(bindingSpec),
+				is30,
 			)
 			var propertyNullable bool
 			propertySchema, propertyNullable = effectiveRevision3PartSchema(propertySchema, is30)
