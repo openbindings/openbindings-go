@@ -4,6 +4,17 @@
 
 ### Changed
 
+- **config.value challenges carry an engine-asserted `schema` instead of
+  `choices`** (the 2026-08-20 working-draft amendment of the binding-invoker
+  contract). Artifact-declared closed sets — bindable server keys, server
+  variable enums, address parameter enums — emit `{"enum": […]}`; a point
+  with no declared set emits no schema (absent = unconstrained).
+
+- **The challenge target asserts the strongest scope the engine knows**
+  (context-scope model, 2026-08-19): resolved server URL, else the
+  artifact's host hint, else the canonicalized source location; empty for a
+  content-only source, which asserts nothing.
+
 - **AsyncAPI 2.x Reference Objects at non-admitting positions refuse
   whole-artifact, before reference composition.** Position admission is
   pinned from the 2.x edition texts: the whole `servers`/`channels` maps,

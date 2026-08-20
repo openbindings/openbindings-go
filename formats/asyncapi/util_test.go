@@ -1026,7 +1026,7 @@ func TestResolveInputCodec(t *testing.T) {
 
 // assertConfigValue narrows err to a config.value CONTEXT_REQUIRED challenge
 // (R1a) and checks its point and relative path. Returns the requirement for further
-// assertions (choices, durable).
+// assertions (schema, durable).
 func assertConfigValue(t *testing.T, err error, point, path string) invoke.ContextRequirement {
 	t.Helper()
 	var ie *invoke.InvocationError
