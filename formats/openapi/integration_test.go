@@ -519,10 +519,12 @@ func widgetSpec(baseURL string) string {
 	return string(b)
 }
 
-// TestIntegration_MissingRequiredInput_NoDispatch verifies cross-SDK parity:
-// a bare input close on an operation with a required parameter (or required
-// requestBody) fires ERR_MISSING_INPUT BEFORE dispatch — the server sees
-// zero requests.
+// TestIntegration_MissingRequiredInput_NoDispatch verifies cross-SDK parity
+// for the two §9.1 pre-dispatch refusals: a bare input close on an operation
+// with an unsupplied path parameter (URL unbuildable) or a required
+// requestBody with no value to carry fires ERR_REFUSED BEFORE dispatch —
+// the server sees zero requests. Any other required parameter no longer
+// refuses; see TestIntegration_BareCloseDispatchesWhenArtifactPermits.
 func TestIntegration_MissingRequiredInput_NoDispatch(t *testing.T) {
 	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
@@ -547,7 +549,7 @@ func TestIntegration_MissingRequiredInput_NoDispatch(t *testing.T) {
 			// Bare close: no input written.
 			_, ierr := driveOutputs(context.Background(), call, nil)
 			if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
-				t.Fatalf("expected ERR_MISSING_INPUT, got %v", ierr)
+				t.Fatalf("expected ERR_REFUSED, got %v", ierr)
 			}
 			if got := requests.Load(); got != before {
 				t.Errorf("missing input must fire before dispatch: %d requests hit the server", got-before)

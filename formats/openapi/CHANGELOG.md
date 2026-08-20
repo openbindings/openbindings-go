@@ -98,6 +98,14 @@
 
 ### Fixed
 
+- **A lone empty SSE `data:` line now dispatches an event whose value is the
+  empty string** (via the standalone engine), at its position in the output
+  sequence. The WHATWG dispatch steps check the data buffer for emptiness
+  BEFORE the trailing-LF strip, so only a block that carried no `data` line
+  — comment-only and `event:`/`id:`-only blocks — dispatches nothing;
+  previously the engines dropped the empty-string event. The package's dead
+  local SSE helper twin (`sse.go`) is removed.
+
 - **Security alternatives, credential ownership, and synthesis soundness now
   follow the first OpenAPI candidate exactly.** Security Requirement Objects remain an
   OR of complete AND sets; a selected request never combines credentials from
@@ -143,7 +151,7 @@
 - **Request/response media (OAPI-P-04).** Request media selection follows the declared preference order (exact JSON → least `+json` → multipart → urlencoded → `text/plain` for string bodies) with pre-dispatch refusal of out-of-family-only declarations. Multipart parts are binary-signaled per edition (3.0 `format: binary`; 3.1 `contentMediaType`/`contentEncoding`), with caller strings decoded per declared `contentEncoding` or Base64 (previously required Go `[]byte`, which still passes through raw as an in-process convenience). urlencoded bodies serialize per the OAS `encoding` rules. The `Accept` header advertises the declared success-response media (previously a fixed `application/json, text/event-stream`).
 - **Servers (OAPI-P-05).** The OAS effective server list (operation → path item → document → implied `/`) with variable substitution; `context.configuration.server` is the named configuration point (entry selection by url/index, variable values, outright `baseUrl`); relative server URLs resolve against the source's location per RFC 3986. `metadata.baseURL` still works, below the configuration point.
 - **Ref (OAPI-D-03).** `#/paths/<escaped-path>/<method>` is enforced exactly: lowercase method (an uppercase method is refused, never case-folded), `#/paths/` prefix required, single escaped path token.
-- **Interaction shape (OAPI-P-06).** Streaming capability is static — declared `text/event-stream` on a success response — and the response's `Content-Type` framing selects among declared shapes; an undeclared event-stream response is an `ERR_PROTOCOL` failure (previously any 2xx SSE response silently streamed). SSE extraction is WHATWG-exact: empty-data/fields-only events emit nothing, incomplete final events are discarded, CR/CRLF line endings and the leading BOM are handled, `id` follows lastEventId semantics.
+- **Interaction shape (OAPI-P-06).** Streaming capability is static — declared `text/event-stream` on a success response — and the response's `Content-Type` framing selects among declared shapes; an undeclared event-stream response is an `ERR_PROTOCOL` failure (previously any 2xx SSE response silently streamed). SSE extraction is WHATWG-exact: blocks with no `data` line emit nothing while a lone empty `data:` line dispatches the empty string, incomplete final events are discarded, CR/CRLF line endings and the leading BOM are handled, `id` follows lastEventId semantics.
 - **Decode (OAPI-P-07).** The text lane honors the `charset` parameter (UTF-8 default) and refuses invalid sequences loudly.
 - **Channel assembly (OAPI-P-10).** Declared cookie parameters and cookie-riding credentials merge into one `Cookie` header (parameters in declaration order, credentials appended); credential/parameter name collisions on a channel refuse pre-dispatch.
 - **Loading (OAPI-P-01, §3–§6).** The artifact's `openapi` field discriminates the exact accepted 3.0.0–3.0.4 and 3.1.0–3.1.2 editions (Swagger 2.0 and every other value refuse loudly); duplicate YAML mapping keys refuse; embedded content without a location must be self-contained (relative external `$ref`s fail with a readable error instead of resolving against the process working directory).

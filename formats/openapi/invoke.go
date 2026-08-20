@@ -575,42 +575,6 @@ func hasRequestBody(op *openapi3.Operation) bool {
 	return op.RequestBody != nil && op.RequestBody.Value != nil
 }
 
-// requiredInputMissing reports why a bare input close cannot satisfy the
-// operation: a non-empty string names the first required parameter or the
-// required request body. Empty string means an empty request is dispatchable.
-func requiredInputMissing(params openapi3.Parameters, op *openapi3.Operation) string {
-	for _, paramRef := range params {
-		if paramRef != nil && paramRef.Value != nil && paramRef.Value.Required {
-			return fmt.Sprintf("operation requires parameter %q", paramRef.Value.Name)
-		}
-	}
-	if hasRequestBody(op) && op.RequestBody.Value.Required {
-		return "operation requires a request body"
-	}
-	return ""
-}
-
-func requestWillEmitBody(params openapi3.Parameters, input map[string]any, op *openapi3.Operation) bool {
-	if !hasRequestBody(op) {
-		return false
-	}
-	if op.RequestBody.Value.Required {
-		return true
-	}
-	parameterNames := map[string]bool{}
-	for _, parameter := range params {
-		if parameter != nil && parameter.Value != nil {
-			parameterNames[parameter.Value.Name] = true
-		}
-	}
-	for name := range input {
-		if !parameterNames[name] {
-			return true
-		}
-	}
-	return false
-}
-
 // encodePathValue percent-encodes one path parameter value with exactly
 // JavaScript's encodeURIComponent byte set (every byte except ALPHA / DIGIT /
 // "-" "_" "." "!" "~" "*" "'" "(" ")" is %XX-escaped, UTF-8 bytewise), so the

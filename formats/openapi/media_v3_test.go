@@ -153,12 +153,29 @@ func TestRevision3MediaParameterSemantics(t *testing.T) {
 	media := func() *openapi3.MediaType {
 		return &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}}}
 	}
+	// A content map whose ONLY entries collide has no usable alternative left
+	// once the collision confines to its parsed identity, so the body refuses.
 	op := opWithRequestBody(openapi3.Content{
 		"application/json; charset=UTF-8": media(),
 		"Application/JSON;charset=utf-8":  media(),
 	}, true)
-	if _, err := planRequestBodiesFor(&openapi3.T{OpenAPI: "3.1.0"}, op, BindingSpec); err == nil || !strings.Contains(err.Error(), "normalized collision") {
+	if _, err := planRequestBodiesFor(&openapi3.T{OpenAPI: "3.1.0"}, op, BindingSpec); err == nil || !strings.Contains(err.Error(), "normalized-colliding") {
 		t.Fatalf("charset-semantic collision error = %v", err)
+	}
+
+	// The same collision beside a non-colliding sibling confines: the sibling
+	// stays a usable candidate and the colliding identity contributes none.
+	confined := opWithRequestBody(openapi3.Content{
+		"application/json; charset=UTF-8": media(),
+		"Application/JSON;charset=utf-8":  media(),
+		"application/vnd.safe+json":       media(),
+	}, true)
+	plans, err := planRequestBodiesFor(&openapi3.T{OpenAPI: "3.1.0"}, confined, BindingSpec)
+	if err != nil {
+		t.Fatalf("confined collision must not poison the sibling: %v", err)
+	}
+	if len(plans) != 1 || plans[0].mediaKey != "application/vnd.safe+json" {
+		t.Fatalf("confined candidate set = %#v", plans)
 	}
 }
 
@@ -766,24 +783,37 @@ func TestRevision3ResponseRangesAndCollisions(t *testing.T) {
 		t.Fatalf("range-only response match = %#v, %v", matched, err)
 	}
 
-	// The collision does not match the actual image response, but the whole
-	// concrete candidate set is unresolvable and must be refused before any
-	// first-key or actual-match shortcut.
+	// §9.2 confinement: the collision owns its parsed identity and nothing
+	// more. The clean image/png sibling still governs the actual response...
 	colliding := &openapi3.Response{Content: openapi3.Content{
 		"image/png":                          emptyMedia(),
 		"application/json; charset=UTF-8":    emptyMedia(),
 		"Application/JSON;charset=\"utf-8\"": emptyMedia(),
 	}}
-	if _, err := governingResponseMediaFor(colliding, "image/png", BindingSpec); err == nil || !strings.Contains(err.Error(), "denote the same parsed media type") {
-		t.Fatalf("nonmatching response collision error = %v", err)
+	if matched, err := governingResponseMediaFor(colliding, "image/png", BindingSpec); err != nil || matched.base != "image/png" {
+		t.Fatalf("confined collision poisoned a clean sibling = %#v, %v", matched, err)
 	}
+	// ...while no response match may be governed by the colliding identity.
+	if _, err := governingResponseMediaFor(colliding, "application/json; charset=utf-8", BindingSpec); err == nil || !strings.Contains(err.Error(), "normalized collision") {
+		t.Fatalf("colliding-identity response error = %v", err)
+	}
+	// A collision between two RANGE keys cannot govern a concrete decode in
+	// revision 3 at all, and it no longer poisons the concrete match either.
 	rangeCollision := &openapi3.Response{Content: openapi3.Content{
 		"image/png":                       emptyMedia(),
 		"application/*; charset=UTF-8":    emptyMedia(),
 		"Application/*;charset=\"utf-8\"": emptyMedia(),
 	}}
-	if _, err := governingResponseMediaFor(rangeCollision, "image/png", BindingSpec); err == nil || !strings.Contains(err.Error(), "denote the same parsed media type") {
-		t.Fatalf("excluded-range collision error = %v", err)
+	if matched, err := governingResponseMediaFor(rangeCollision, "image/png", BindingSpec); err != nil || matched.base != "image/png" {
+		t.Fatalf("confined range collision = %#v, %v", matched, err)
+	}
+	// A map whose ONLY entries collide governs nothing.
+	onlyColliding := &openapi3.Response{Content: openapi3.Content{
+		"application/json; charset=UTF-8":    emptyMedia(),
+		"Application/JSON;charset=\"utf-8\"": emptyMedia(),
+	}}
+	if _, err := governingResponseMediaFor(onlyColliding, "application/json; charset=utf-8", BindingSpec); err == nil || !strings.Contains(err.Error(), "normalized collision") {
+		t.Fatalf("all-colliding response error = %v", err)
 	}
 	ordinary := &openapi3.Response{Content: openapi3.Content{"application/json; profile=UPPER": emptyMedia()}}
 	if _, err := governingResponseMediaFor(ordinary, "application/json; profile=upper", BindingSpec); err == nil {
@@ -808,28 +838,39 @@ func TestRevision3AcceptUsesParsedParameterSemantics(t *testing.T) {
 		"application/json; charset=UTF-8":    emptyMedia(),
 		"Application/JSON;charset=\"utf-8\"": emptyMedia(),
 	}}})
+	// The two application/json spellings denote one parsed identity in ONE
+	// content map: a normalized collision. No response match may be governed
+	// by it (§9.2), so it is not an available representation and advertising
+	// it would invite exactly the response the decode lane must refuse. The
+	// non-colliding quoted-pair sibling advertises unaffected -- confinement,
+	// not a first-key pick between the two colliding spellings.
 	types := successMediaTypesFor(op, BindingSpec)
-	if len(types) != 2 {
+	if len(types) != 1 {
 		t.Fatalf("semantic Accept membership = %v", types)
 	}
-	foundQuotedPair, foundCharset := false, false
-	for _, mediaType := range types {
-		parsed, err := parseRevision3MediaType(mediaType)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if parsed.params["note"] == "az" {
-			foundQuotedPair = true
-		}
-		if strings.EqualFold(parsed.params["charset"], "utf-8") {
-			foundCharset = true
-		}
+	parsed, err := parseRevision3MediaType(types[0])
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !foundQuotedPair || !foundCharset {
+	if parsed.params["note"] != "az" {
 		t.Fatalf("Accept lost governed parameters: %v", types)
 	}
-	if got := acceptHeaderFor(op, BindingSpec); strings.Count(got, "charset=") != 1 || strings.Contains(got, `\z`) {
-		t.Fatalf("Accept = %q, want one semantic charset identity and unescaped quoted-pair value", got)
+	if got := acceptHeaderFor(op, BindingSpec); strings.Contains(got, "charset=") || strings.Contains(got, `\z`) {
+		t.Fatalf("Accept = %q, want the colliding charset identity dropped and the quoted-pair value unescaped", got)
+	}
+
+	// One identity declared by two DIFFERENT response content maps is not a
+	// collision: §9.2's unit is one content map. The set carries the identity
+	// once, with a deterministic spelling rather than a first-key pick.
+	crossMap := &openapi3.Operation{Responses: openapi3.NewResponses()}
+	crossMap.Responses.Set("200", &openapi3.ResponseRef{Value: &openapi3.Response{Content: openapi3.Content{
+		"text/plain; charset=UTF-8": emptyMedia(),
+	}}})
+	crossMap.Responses.Set("default", &openapi3.ResponseRef{Value: &openapi3.Response{Content: openapi3.Content{
+		"TEXT/PLAIN; CHARSET=utf-8": emptyMedia(),
+	}}})
+	if got := acceptHeaderFor(crossMap, BindingSpec); got != "text/plain; charset=UTF-8" {
+		t.Fatalf("cross-map identity Accept = %q", got)
 	}
 }
 

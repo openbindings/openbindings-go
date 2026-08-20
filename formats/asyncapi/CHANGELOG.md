@@ -85,6 +85,15 @@
 
 ### Fixed
 
+- **The retained SSE event framing now follows the WHATWG dispatch steps
+  for empty `data` values**: a lone empty `data:` line dispatches an event
+  whose value is the empty string (the data-buffer emptiness check precedes
+  the trailing-LF strip); only a block that carried no `data` line
+  dispatches nothing. No observable package behavior changes today — the
+  built-in HTTP driver refuses every standalone HTTP send before dispatch,
+  so the SSE subscribe lane is unreachable — the retained copy is kept
+  aligned with the openapi engines' corrected model.
+
 - **WebSocket messages were accidentally capped at ~32 KiB**: no read limit
   was ever set on pooled sockets, so the websocket library's 32768-byte
   default applied per message — ~300x below the documented 10 MiB
