@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // The style-lane composite-member case table is SHARED, byte-for-byte, with
@@ -150,8 +150,8 @@ func TestStyleLaneCompositeMemberCaseTable(t *testing.T) {
 			refusedCells++
 		}
 		t.Run(testCase.Name, func(t *testing.T) {
-			result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{
+			result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+				Sources: []synthesize.SynthesizeSource{{
 					BindingSpec: BindingSpec,
 					Content:     json.RawMessage(styleLaneCompositeMemberDocument(t, testCase)),
 				}},
@@ -174,12 +174,12 @@ func TestStyleLaneCompositeMemberCaseTable(t *testing.T) {
 	}
 }
 
-func assertStyleLaneParameterCell(t *testing.T, c styleLaneCompositeMemberCase, result *openbindings.SynthesizeResult) {
+func assertStyleLaneParameterCell(t *testing.T, c styleLaneCompositeMemberCase, result *synthesize.SynthesizeResult) {
 	t.Helper()
 	_, present := result.Interface.Operations["query"]
-	var entry *openbindings.SynthesisCoverageEntry
+	var entry *synthesize.SynthesisCoverageEntry
 	for index := range result.Coverage.Entries {
-		if result.Coverage.Entries[index].Scope == openbindings.SynthesisCoverageTarget {
+		if result.Coverage.Entries[index].Scope == synthesize.SynthesisCoverageTarget {
 			entry = &result.Coverage.Entries[index]
 			break
 		}
@@ -192,14 +192,14 @@ func assertStyleLaneParameterCell(t *testing.T, c styleLaneCompositeMemberCase, 
 		if !present {
 			t.Fatalf("operation absent; coverage says %s / %s", entry.Status, entry.ReasonCode)
 		}
-		if entry.Status != openbindings.SynthesisRepresented {
+		if entry.Status != synthesize.SynthesisRepresented {
 			t.Fatalf("target status = %s, want represented", entry.Status)
 		}
 	case "refused":
 		if present {
 			t.Fatalf("operation present, want it excluded")
 		}
-		if entry.Status != openbindings.SynthesisExcluded {
+		if entry.Status != synthesize.SynthesisExcluded {
 			t.Fatalf("target status = %s, want excluded", entry.Status)
 		}
 		if entry.ReasonCode != "openapi.parameter_style_expansion_excluded" {
@@ -213,11 +213,11 @@ func assertStyleLaneParameterCell(t *testing.T, c styleLaneCompositeMemberCase, 
 	}
 }
 
-func assertStyleLaneBodyCell(t *testing.T, c styleLaneCompositeMemberCase, result *openbindings.SynthesizeResult) {
+func assertStyleLaneBodyCell(t *testing.T, c styleLaneCompositeMemberCase, result *synthesize.SynthesizeResult) {
 	t.Helper()
-	var entry *openbindings.SynthesisCoverageEntry
+	var entry *synthesize.SynthesisCoverageEntry
 	for index := range result.Coverage.Entries {
-		if result.Coverage.Entries[index].Scope == openbindings.SynthesisCoverageAlternative {
+		if result.Coverage.Entries[index].Scope == synthesize.SynthesisCoverageAlternative {
 			entry = &result.Coverage.Entries[index]
 			break
 		}
@@ -227,11 +227,11 @@ func assertStyleLaneBodyCell(t *testing.T, c styleLaneCompositeMemberCase, resul
 	}
 	switch c.Expect {
 	case "admitted":
-		if entry.Status != openbindings.SynthesisRepresented {
+		if entry.Status != synthesize.SynthesisRepresented {
 			t.Fatalf("alternative status = %s / %s, want represented", entry.Status, entry.ReasonCode)
 		}
 	case "refused":
-		if entry.Status != openbindings.SynthesisExcluded {
+		if entry.Status != synthesize.SynthesisExcluded {
 			t.Fatalf("alternative status = %s, want excluded", entry.Status)
 		}
 		if entry.ReasonCode != "openapi.request_media_excluded" {

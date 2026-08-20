@@ -8,7 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // The routed envelope's schema shape (§9.2, ruled 2026-08-14; TS twin:
@@ -52,8 +53,8 @@ func TestRoutedEnvelopeSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iface, err := (&Synthesizer{}).SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	iface, err := (&Synthesizer{}).SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -151,8 +152,8 @@ func TestInvokerCarriesHeadersOverHTTP(t *testing.T) {
 	}
 	binv := NewInvoker()
 	defer binv.Close()
-	call := binv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(artifact)},
+	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(artifact)},
 		Ref:    "#/operations/submit",
 	})
 	if err := call.Write(context.Background(), map[string]any{

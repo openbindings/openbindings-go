@@ -6,12 +6,13 @@ import (
 	"sort"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // InspectSource returns all bindable targets from a bare usage source:
 // command-path refs (the format's own grammar), one per bindable command,
 // exactly as synthesis would bind them.
-func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	location, err := absolutizeArtifactLocation(source.Location, source.Content)
 	if err != nil {
 		return nil, fmt.Errorf("load usage source: %w", err)
@@ -29,12 +30,12 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	}
 	meta := spec.Meta()
 	if meta.Bin == "" {
-		return &openbindings.SourceInspection{Exhaustive: true}, nil
+		return &synthesize.SourceInspection{Exhaustive: true}, nil
 	}
 
-	var targets []openbindings.BindableTarget
+	var targets []synthesize.BindableTarget
 	usedOperationKeys := map[string]bool{}
-	rootKey := openbindings.UniqueKey(openbindings.SanitizeKey(meta.Bin), usedOperationKeys)
+	rootKey := synthesize.UniqueKey(synthesize.SanitizeKey(meta.Bin), usedOperationKeys)
 	usedOperationKeys[rootKey] = true
 	rc := rootCommand(spec)
 	if rc == nil {
@@ -47,7 +48,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		if len(path) == 0 {
 			return
 		}
-		opKey := openbindings.UniqueKey(openbindings.SanitizeKey(operationName(path)), usedOperationKeys)
+		opKey := synthesize.UniqueKey(synthesize.SanitizeKey(operationName(path)), usedOperationKeys)
 		usedOperationKeys[opKey] = true
 		if cmd.SubcommandRequired {
 			return
@@ -61,11 +62,11 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	})
 
 	sort.Slice(targets, func(i, j int) bool { return targets[i].Ref < targets[j].Ref })
-	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
+func bindableTarget(ref, operationKey, description string) synthesize.BindableTarget {
+	target := synthesize.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

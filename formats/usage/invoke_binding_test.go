@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 func TestRunCLI_OutputCapEnforced(t *testing.T) {
@@ -17,7 +17,7 @@ func TestRunCLI_OutputCapEnforced(t *testing.T) {
 	// 10MB cap. base64 avoids NUL bytes that BSD tr mishandles.
 	_, err := runCLI(context.Background(), "sh",
 		[]string{"-c", "head -c 20000000 /dev/zero | base64"}, nil, nil,
-		openbindings.DefaultMaxDeliveryUnitBytes)
+		invoke.DefaultMaxDeliveryUnitBytes)
 	if err == nil {
 		t.Fatal("expected an overflow error for oversized output")
 	}
@@ -48,11 +48,11 @@ func TestCappedBuffer_StopsAtLimit(t *testing.T) {
 }
 
 func TestBuiltinDecodeText_RefusesInvalidUTF8(t *testing.T) {
-	_, err := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte{0xff}})
+	_, err := builtinDecodeText(invoke.InvokeSite{}, invoke.RawResult{Body: []byte{0xff}})
 	if err == nil || err.Error() != "Invocation result could not be decoded" {
 		t.Fatalf("invalid UTF-8 must fail loudly, got %v", err)
 	}
-	got, err := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte("ok\r\n\n")})
+	got, err := builtinDecodeText(invoke.InvokeSite{}, invoke.RawResult{Body: []byte("ok\r\n\n")})
 	if err != nil || got != "ok" {
 		t.Fatalf("valid text decode = %q, %v; want ok", got, err)
 	}
@@ -81,10 +81,10 @@ flag "-a" {
   alias "--anonymous"
 }
 `)
-	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"dir": "tmp", "anonymous": true}, nil, nil); ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"dir": "tmp", "anonymous": true}, nil, nil); ierr == nil || ierr.Code != invoke.ErrCodeValidationFailed {
 		t.Fatalf("required_if refusal = %v", ierr)
 	}
-	if _, ierr := applyUsageConfiguration(cmd, nil, nil, nil, nil); ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+	if _, ierr := applyUsageConfiguration(cmd, nil, nil, nil, nil); ierr == nil || ierr.Code != invoke.ErrCodeValidationFailed {
 		t.Fatalf("required_unless refusal = %v", ierr)
 	}
 }
@@ -102,7 +102,7 @@ flag "--environment" {
 	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "prod"}, context, nil); ierr != nil {
 		t.Fatalf("dynamic choice must be accepted: %v", ierr)
 	}
-	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "qa"}, context, nil); ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed {
+	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "qa"}, context, nil); ierr == nil || ierr.Code != invoke.ErrCodeValidationFailed {
 		t.Fatalf("out-of-set choice must refuse: %v", ierr)
 	}
 	if _, ierr := applyUsageConfiguration(cmd, nil, map[string]any{"environment": "dev"}, nil, nil); ierr != nil {

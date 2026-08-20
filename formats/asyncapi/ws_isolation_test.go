@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/coder/websocket"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // TestWSPool_WriteCancelDoesNotTearDownSiblings pins C5f: a pooled socket's
@@ -55,7 +56,7 @@ func TestWSPool_WriteCancelDoesNotTearDownSiblings(t *testing.T) {
 	source := wsSource(srv, nil)
 
 	// The sibling subscription (listener A) that must survive.
-	sub := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	sub := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: source,
 		Ref:    "#/operations/subscribe",
 	})

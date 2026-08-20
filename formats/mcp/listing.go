@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // listing is this family's artifact (openbindings.mcp@1 §3): the aggregate of
@@ -185,8 +186,8 @@ func pinnedDiscovery(content json.RawMessage) (*discovery, error) {
 var maxListItems = 1_000_000
 
 func paginationOverflow() error {
-	return &openbindings.InvocationError{
-		Code: openbindings.ErrCodeProtocol,
+	return &invoke.InvocationError{
+		Code: invoke.ErrCodeProtocol,
 	}
 }
 
@@ -272,7 +273,7 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 // resourceTemplates matches only declared template strings (§7, R5): the two
 // are separate namespaces, so a resource URI and a byte-identical template
 // string never collide — each is reached by its own entity token.
-func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string) (targetKind, *openbindings.InvocationError) {
+func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string) (targetKind, *invoke.InvocationError) {
 	bindingSpec := BindingSpec
 	if len(bindingSpecs) > 0 {
 		bindingSpec = bindingSpecs[0]
@@ -286,14 +287,14 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		}
 		return n
 	}
-	notFound := func(_ string) (targetKind, *openbindings.InvocationError) {
-		return 0, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeRefNotFound,
+	notFound := func(_ string) (targetKind, *invoke.InvocationError) {
+		return 0, &invoke.InvocationError{
+			Code: invoke.ErrCodeRefNotFound,
 		}
 	}
-	ambiguous := func(_ string, _ int) (targetKind, *openbindings.InvocationError) {
-		return 0, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeRefNotFound,
+	ambiguous := func(_ string, _ int) (targetKind, *invoke.InvocationError) {
+		return 0, &invoke.InvocationError{
+			Code: invoke.ErrCodeRefNotFound,
 		}
 	}
 
@@ -302,13 +303,13 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		switch n := count(l.tools); {
 		case n == 1:
 			if l.requiredTaskTools[remainder] {
-				return 0, &openbindings.InvocationError{
-					Code: openbindings.ErrCodeInvalidRef,
+				return 0, &invoke.InvocationError{
+					Code: invoke.ErrCodeInvalidRef,
 				}
 			}
 			if bindingSpec == BindingSpec && !l.structuredTools[remainder] {
-				return 0, &openbindings.InvocationError{
-					Code: openbindings.ErrCodeInvalidRef,
+				return 0, &invoke.InvocationError{
+					Code: invoke.ErrCodeInvalidRef,
 				}
 			}
 			return targetTool, nil
@@ -318,7 +319,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("tool")
 	case "prompts":
 		if bindingSpec == BindingSpec {
-			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef}
+			return 0, &invoke.InvocationError{Code: invoke.ErrCodeInvalidRef}
 		}
 		switch n := count(l.prompts); {
 		case n == 1:
@@ -329,7 +330,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("prompt")
 	case "resources":
 		if bindingSpec == BindingSpec {
-			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef}
+			return 0, &invoke.InvocationError{Code: invoke.ErrCodeInvalidRef}
 		}
 		switch n := count(l.resources); {
 		case n == 1:
@@ -340,7 +341,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("resource")
 	case "resourceTemplates":
 		if bindingSpec == BindingSpec {
-			return 0, &openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef}
+			return 0, &invoke.InvocationError{Code: invoke.ErrCodeInvalidRef}
 		}
 		switch n := count(l.templates); {
 		case n == 1:
@@ -350,8 +351,8 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		}
 		return notFound("resource template")
 	default:
-		return 0, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeRefNotFound,
+		return 0, &invoke.InvocationError{
+			Code: invoke.ErrCodeRefNotFound,
 		}
 	}
 }

@@ -1,19 +1,6 @@
 package grpc
 
 import (
-	"bytes"
-	"context"
-	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/json"
-	"fmt"
-	openbindings "github.com/openbindings/openbindings-go"
-	"io"
-	"net"
-	"os"
-	"strings"
-
 	"github.com/bufbuild/protocompile"
 	"github.com/jhump/protoreflect/v2/grpcreflect"
 	"google.golang.org/grpc"
@@ -27,6 +14,19 @@ import (
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
+
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"fmt"
+	openbindings "github.com/openbindings/openbindings-go"
+	"io"
+	"net"
+	"os"
+	"strings"
 )
 
 type discovery struct {

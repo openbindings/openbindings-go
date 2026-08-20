@@ -24,8 +24,11 @@ import (
 	"testing"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/recolabs/gnata"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // ---------------------------------------------------------------------------
@@ -128,18 +131,18 @@ func (m *mockBindingInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: mockFormat}}
 }
 
-func (m *mockBindingInvoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+func (m *mockBindingInvoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
 	opKey := ""
 	if args.Binding != nil {
 		opKey = args.Binding.Operation
 	}
 	op, ok := m.ops[opKey]
 	if !ok {
-		return openbindings.NewErroredInvocation[any, any](&openbindings.InvocationError{
+		return invoke.NewErroredInvocation[any, any](&invoke.InvocationError{
 			Code: "ERR_NO_MOCK",
 		})
 	}
-	inv := openbindings.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx)
 	// The controlled no-input mock closes from below as part of invocation
 	// opening, before the caller can race a write (OG-EX-42).
 	if op.ClosesAfter != nil && *op.ClosesAfter == 0 {
@@ -149,7 +152,7 @@ func (m *mockBindingInvoker) InvokeBinding(ctx context.Context, args *openbindin
 	return inv
 }
 
-func (m *mockBindingInvoker) serve(ctx context.Context, handle openbindings.BindingHandle[any, any], op *mockOp, opKey string) {
+func (m *mockBindingInvoker) serve(ctx context.Context, handle invoke.BindingHandle[any, any], op *mockOp, opKey string) {
 	if op.OnOpen != nil {
 		if op.OnOpen.Emit != nil {
 			for _, v := range *op.OnOpen.Emit {
@@ -162,12 +165,12 @@ func (m *mockBindingInvoker) serve(ctx context.Context, handle openbindings.Bind
 			if len(op.OnOpen.FailData) > 0 {
 				var value any
 				if err := json.Unmarshal(op.OnOpen.FailData, &value); err != nil {
-					handle.FireError(openbindings.NewInvocationError(openbindings.ErrCodeRuntime))
+					handle.FireError(invoke.NewInvocationError(invoke.ErrCodeRuntime))
 					return
 				}
-				handle.FireError(openbindings.NewInvocationErrorWithData(*op.OnOpen.Fail, value))
+				handle.FireError(invoke.NewInvocationErrorWithData(*op.OnOpen.Fail, value))
 			} else {
-				handle.FireError(openbindings.NewInvocationError(*op.OnOpen.Fail))
+				handle.FireError(invoke.NewInvocationError(*op.OnOpen.Fail))
 			}
 			return
 		}
@@ -197,7 +200,7 @@ func (m *mockBindingInvoker) serve(ctx context.Context, handle openbindings.Bind
 
 	resp := matchMockResponse(op, writes)
 	if resp == nil {
-		handle.FireError(&openbindings.InvocationError{
+		handle.FireError(&invoke.InvocationError{
 			Code: "ERR_NO_MOCK",
 		})
 		return
@@ -217,12 +220,12 @@ func (m *mockBindingInvoker) serve(ctx context.Context, handle openbindings.Bind
 		if len(resp.FailData) > 0 {
 			var value any
 			if err := json.Unmarshal(resp.FailData, &value); err != nil {
-				handle.FireError(openbindings.NewInvocationError(openbindings.ErrCodeRuntime))
+				handle.FireError(invoke.NewInvocationError(invoke.ErrCodeRuntime))
 				return
 			}
-			handle.FireError(openbindings.NewInvocationErrorWithData(*resp.Fail, value))
+			handle.FireError(invoke.NewInvocationErrorWithData(*resp.Fail, value))
 		} else {
-			handle.FireError(openbindings.NewInvocationError(*resp.Fail))
+			handle.FireError(invoke.NewInvocationError(*resp.Fail))
 		}
 		return
 	}
@@ -287,7 +290,7 @@ func (j *jsonataEvaluator) EvaluateWithBindings(expression string, data any, bin
 	// non-nil sentinel. Map undefined to the SDK sentinel so the engine fails
 	// the node with TRANSFORM_UNDEFINED while null flows downstream.
 	if result == nil {
-		return nil, openbindings.ErrTransformUndefined
+		return nil, invoke.ErrTransformUndefined
 	}
 	return normalizeJSON(result), nil
 }
@@ -413,7 +416,7 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 		iface.Bindings[opKey+".mock"] = openbindings.BindingEntry{Operation: opKey, Source: "mock"}
 	}
 
-	opInvoker := openbindings.NewOperationInvoker(&mockBindingInvoker{ops: fx.Operations})
+	opInvoker := invoke.NewOperationInvoker(&mockBindingInvoker{ops: fx.Operations})
 	opInvoker.TransformEvaluator = &jsonataEvaluator{}
 	opInvoker.AddBindingInvoker(NewInvoker(opInvoker))
 
@@ -423,8 +426,8 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 	}
 	doc := map[string]any{"graphs": map[string]any{"g": graphValue}}
 
-	call := opInvoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:    openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+	call := opInvoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source:    invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:       "#/graphs/g",
 		Interface: iface,
 	})
@@ -485,7 +488,7 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 
 	// Collect outputs to EOF or terminal.
 	var outputs []any
-	var terminal *openbindings.InvocationError
+	var terminal *invoke.InvocationError
 	out := call.Outputs()
 	for {
 		v, err := out.Read(ctx)
@@ -496,7 +499,7 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 			if ctx.Err() != nil {
 				t.Fatalf("timed out collecting outputs (got %d so far: %s)", len(outputs), canon(outputs))
 			}
-			terminal = openbindings.AsInvocationError(err)
+			terminal = invoke.AsInvocationError(err)
 			break
 		}
 		outputs = append(outputs, v)
@@ -528,8 +531,8 @@ func runExecutionFixture(t *testing.T, fx *execFixture) {
 		} else {
 			// A graph-defined terminal (exit or unhandled per-event failure)
 			// carries the event as structured details.
-			if terminal.Code != openbindings.ErrCodeOperationGraphExit {
-				t.Fatalf("terminal error code = %q, want %q (err: %v)", terminal.Code, openbindings.ErrCodeOperationGraphExit, terminal)
+			if terminal.Code != invoke.ErrCodeOperationGraphExit {
+				t.Fatalf("terminal error code = %q, want %q (err: %v)", terminal.Code, invoke.ErrCodeOperationGraphExit, terminal)
 			}
 			if canon(terminal.Data) != canon(fx.Expected.ErrorDetail) {
 				t.Fatalf("exit error detail = %s, want %s", canon(terminal.Data), canon(fx.Expected.ErrorDetail))

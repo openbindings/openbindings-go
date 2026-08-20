@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
-	"github.com/openbindings/openbindings-go/processorscenarios"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -25,6 +26,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/anypb"
+
+	"github.com/openbindings/openbindings-go/processorscenarios"
 )
 
 func TestProcessorScenarios(t *testing.T) {
@@ -86,8 +89,8 @@ func runGRPCFidelityScenario(t *testing.T, scenario processorscenarios.Scenario)
 	location, _ := scenario.Given.Source["location"].(string)
 	ref, _ := scenario.Given.Binding["ref"].(string)
 	sourceContent := json.RawMessage(strconvQuote(content))
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: location, Content: sourceContent}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: location, Content: sourceContent}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -102,10 +105,10 @@ func runGRPCFidelityScenario(t *testing.T, scenario processorscenarios.Scenario)
 	if operation == "" {
 		t.Fatalf("synthesized gRPC interface has no binding for %q", ref)
 	}
-	op := openbindings.NewOperationInvoker(invoker)
-	call := openbindings.Invoke(
+	op := invoke.NewOperationInvoker(invoker)
+	call := invoke.Invoke(
 		context.Background(), op, iface,
-		openbindings.NewOperationSignature[any, any](operation),
+		invoke.NewOperationSignature[any, any](operation),
 	)
 	stream := call.Outputs()
 	outputs := []any{}
@@ -128,7 +131,7 @@ func runGRPCFidelityScenario(t *testing.T, scenario processorscenarios.Scenario)
 	}
 	_ = call.Close()
 
-	var terminal *openbindings.InvocationError
+	var terminal *invoke.InvocationError
 	for {
 		value, readErr := stream.Read(context.Background())
 		if readErr == nil {
@@ -136,7 +139,7 @@ func runGRPCFidelityScenario(t *testing.T, scenario processorscenarios.Scenario)
 			continue
 		}
 		if readErr != io.EOF {
-			terminal = openbindings.AsInvocationError(readErr)
+			terminal = invoke.AsInvocationError(readErr)
 		}
 		break
 	}
@@ -162,7 +165,7 @@ func runGRPCFidelityScenario(t *testing.T, scenario processorscenarios.Scenario)
 	}
 	data["error"] = normalizedInvocationError(t, terminal)
 	phase := "completion"
-	if terminal.Code == openbindings.ErrCodeOperationValidationFailed || terminal.Code == openbindings.ErrCodeValidationFailed {
+	if terminal.Code == invoke.ErrCodeOperationValidationFailed || terminal.Code == invoke.ErrCodeValidationFailed {
 		phase = "dispatch"
 	}
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
@@ -359,7 +362,7 @@ func grpcFidelityMetadata(t *testing.T, raw any) metadata.MD {
 	return md
 }
 
-func normalizedInvocationError(t *testing.T, err *openbindings.InvocationError) map[string]any {
+func normalizedInvocationError(t *testing.T, err *invoke.InvocationError) map[string]any {
 	t.Helper()
 	encoded, marshalErr := json.Marshal(err)
 	if marshalErr != nil {

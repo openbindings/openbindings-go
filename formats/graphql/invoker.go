@@ -19,6 +19,8 @@ import (
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 const BindingSpec = "openbindings.graphql@1"
@@ -109,57 +111,57 @@ func (e *Invoker) cachedIntrospect(ctx context.Context, endpointURL string, head
 	return schema, nil
 }
 
-var _ openbindings.BindingInvoker = (*Invoker)(nil)
-var _ openbindings.BindingPreparer = (*Invoker)(nil)
+var _ invoke.BindingInvoker = (*Invoker)(nil)
+var _ invoke.BindingPreparer = (*Invoker)(nil)
 
 // InvokeBinding invokes a GraphQL binding and returns the invocation handle
 // synchronously; the work runs on its own goroutine. Queries and mutations
 // yield one output; subscriptions yield one output per event. The variables
 // object flows through the handle's Write channel.
-func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
-	inv := openbindings.NewInvocationImpl[any, any](ctx)
+func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
+	inv := invoke.NewInvocationImpl[any, any](ctx)
 	go e.run(ctx, args, inv)
 	return inv
 }
 
-func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	// Bound all I/O to the invocation's lifetime.
-	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	bctx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 
 	rootType, fieldName, err := parseRef(args.Ref)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidRef})
 		return
 	}
 	if args.Source.BindingSpec != BindingSpec {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 		return
 	}
 	if args.Source.BindingSpec == BindingSpec && rootType == "subscription" {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidRef})
 		return
 	}
 
 	if err := validateHTTPLocation(args.Source.Location); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 		return
 	}
 
 	cfg, err := readConfiguration(args.Context)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 		return
 	}
 	if cfg.Document == nil {
-		inv.FireError(openbindings.NewContextRequiredError(
+		inv.FireError(invoke.NewContextRequiredError(
 
 			configurationRequirement(args.Source.Location, "document", "supply the exact GraphQL executable document and optional operationName"),
 		))
 		return
 	}
 	if rootType == "subscription" && cfg.SubscriptionTarget == "" {
-		inv.FireError(openbindings.NewContextRequiredError(
+		inv.FireError(invoke.NewContextRequiredError(
 
 			configurationRequirement(args.Source.Location, "subscriptionTarget", "supply an absolute ws or wss GraphQL subscription target"),
 		))
@@ -167,19 +169,19 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 	document, err := parseExecutableDocument(cfg.Document.Source)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 		return
 	}
 	httpHeaders, err := cfg.httpHeaders(args.Context)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 		return
 	}
 	var websocketHeaders http.Header
 	if rootType == "subscription" {
 		websocketHeaders, err = cfg.websocketHeaders(args.Context)
 		if err != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
+			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 			return
 		}
 	}
@@ -190,7 +192,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		return
 	}
 	if _, err := resolveField(schema, rootType, fieldName); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeRefNotFound})
 		return
 	}
 
@@ -202,12 +204,12 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		switch {
 		case errors.Is(rerr, io.EOF):
 		case rerr != nil:
-			inv.FireError(openbindings.AsInvocationError(rerr))
+			inv.FireError(invoke.AsInvocationError(rerr))
 			return
 		default:
 			object, ok := value.(map[string]any)
 			if !ok {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
+				inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeValidationFailed})
 				return
 			}
 			variables = object
@@ -217,7 +219,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	responseKey, err := document.responseKey(cfg.Document.OperationName, rootType, fieldName, variables, schema)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 		return
 	}
 
@@ -244,7 +246,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			inv.FireError(he.invocationError())
 			return
 		}
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeResponseError})
 		return
 	}
 
@@ -253,7 +255,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 // PrepareBinding reports required configuration without parsing a source,
 // reading caller input, introspecting, or dispatching.
-func (e *Invoker) PrepareBinding(_ context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+func (e *Invoker) PrepareBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	rootType, _, err := parseRef(args.Ref)
 	if err != nil {
 		return nil, nil
@@ -276,12 +278,12 @@ func (e *Invoker) PrepareBinding(_ context.Context, args *openbindings.BindingIn
 
 // resolveSchema returns the introspection schema for the binding, from inline
 // source content or via a (cached) network introspection.
-func (e *Invoker) resolveSchema(ctx context.Context, args *openbindings.BindingInvocationArgs, headers map[string]string) (*introspectionSchema, *openbindings.InvocationError) {
+func (e *Invoker) resolveSchema(ctx context.Context, args *invoke.BindingInvocationArgs, headers map[string]string) (*introspectionSchema, *invoke.InvocationError) {
 	if args.Source.Content != nil {
 		s, err := parseIntrospectionContent(args.Source.Content)
 		if err != nil {
-			return nil, &openbindings.InvocationError{
-				Code: openbindings.ErrCodeSourceLoadFailed,
+			return nil, &invoke.InvocationError{
+				Code: invoke.ErrCodeSourceLoadFailed,
 			}
 		}
 		return s, nil
@@ -292,11 +294,11 @@ func (e *Invoker) resolveSchema(ctx context.Context, args *openbindings.BindingI
 		if errors.As(err, &he) {
 			ierr := he.invocationError()
 			if he.StatusCode != 401 && he.StatusCode != 403 {
-				ierr.Code = openbindings.ErrCodeSourceLoadFailed
+				ierr.Code = invoke.ErrCodeSourceLoadFailed
 			}
 			return nil, ierr
 		}
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed}
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed}
 	}
 	return s, nil
 }
@@ -308,9 +310,9 @@ type Synthesizer struct{}
 func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
 
 var (
-	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
-	_ openbindings.CoverageSynthesizer  = (*Synthesizer)(nil)
-	_ openbindings.SourceInspector      = (*Synthesizer)(nil)
+	_ synthesize.InterfaceSynthesizer = (*Synthesizer)(nil)
+	_ synthesize.CoverageSynthesizer  = (*Synthesizer)(nil)
+	_ synthesize.SourceInspector      = (*Synthesizer)(nil)
 )
 
 // Formats returns the source formats supported by the GraphQL synthesizer.
@@ -321,35 +323,35 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 }
 
 // SynthesizeInterface introspects a GraphQL endpoint and converts to an OpenBindings interface.
-func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
 	iface, _, err := c.synthesizeObserved(ctx, in)
 	return iface, err
 }
 
 // SynthesizeInterfaceWithCoverage accounts for every non-introspection root
 // field in the same schema observation that produced the OBI.
-func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
 	iface, schema, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
 	}
 	if schema == nil {
-		return openbindings.NewSynthesisResult(iface, []openbindings.SynthesisCoverageEntry{}, true)
+		return synthesize.NewSynthesisResult(iface, []synthesize.SynthesisCoverageEntry{}, true)
 	}
-	return openbindings.NewSynthesisResult(iface, graphQLSynthesisCoverage(schema, iface, iface.Sources[DefaultSourceName].BindingSpec), true)
+	return synthesize.NewSynthesisResult(iface, graphQLSynthesisCoverage(schema, iface, iface.Sources[DefaultSourceName].BindingSpec), true)
 }
 
-func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, *introspectionSchema, error) {
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.SynthesizeInput) (*openbindings.Interface, *introspectionSchema, error) {
 	if in == nil || len(in.Sources) == 0 {
-		skeleton, err := openbindings.SynthesisSkeleton(in)
+		skeleton, err := synthesize.SynthesisSkeleton(in)
 		return &skeleton, nil, err
 	}
 	if len(in.Sources) == 0 {
-		skeleton, err := openbindings.SynthesisSkeleton(in)
+		skeleton, err := synthesize.SynthesisSkeleton(in)
 		return &skeleton, nil, err
 	}
 	if len(in.Sources) > 1 {
-		return nil, nil, openbindings.ErrMultipleSources
+		return nil, nil, synthesize.ErrMultipleSources
 	}
 	src := in.Sources[0]
 	if src.BindingSpec != BindingSpec {
@@ -389,13 +391,13 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		entry.Content = artifactContent
 		iface.Sources[DefaultSourceName] = entry
 	}
-	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, src.BindingSpec); err != nil {
+	if err := synthesize.FinalizeSynthesis(&iface, in, DefaultSourceName, src.BindingSpec); err != nil {
 		return nil, nil, err
 	}
 	return &iface, schema, nil
 }
 
-func graphQLSynthesisCoverage(schema *introspectionSchema, iface *openbindings.Interface, bindingSpec string) []openbindings.SynthesisCoverageEntry {
+func graphQLSynthesisCoverage(schema *introspectionSchema, iface *openbindings.Interface, bindingSpec string) []synthesize.SynthesisCoverageEntry {
 	type item struct {
 		key     string
 		binding openbindings.BindingEntry
@@ -407,17 +409,17 @@ func graphQLSynthesisCoverage(schema *introspectionSchema, iface *openbindings.I
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].binding.Ref < items[j].binding.Ref
 	})
-	entries := make([]openbindings.SynthesisCoverageEntry, 0, len(items))
+	entries := make([]synthesize.SynthesisCoverageEntry, 0, len(items))
 	for _, item := range items {
 		requirements := []string{"document"}
 		if strings.HasPrefix(item.binding.Ref, "subscription/") {
 			requirements = append(requirements, "subscriptionTarget")
 		}
-		entries = append(entries, openbindings.SynthesisCoverageEntry{
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
 			SourceIndex:  0,
 			SourceRef:    item.binding.Ref,
-			Scope:        openbindings.SynthesisCoverageTarget,
-			Status:       openbindings.SynthesisRepresented,
+			Scope:        synthesize.SynthesisCoverageTarget,
+			Status:       synthesize.SynthesisRepresented,
 			OperationKey: item.binding.Operation,
 			BindingKey:   item.key,
 			BindingRef:   item.binding.Ref,
@@ -434,9 +436,9 @@ func graphQLSynthesisCoverage(schema *introspectionSchema, iface *openbindings.I
 				if strings.HasPrefix(field.Name, "__") {
 					continue
 				}
-				entries = append(entries, openbindings.SynthesisCoverageEntry{
+				entries = append(entries, synthesize.SynthesisCoverageEntry{
 					SourceIndex: 0, SourceRef: "subscription/" + field.Name,
-					Scope: openbindings.SynthesisCoverageTarget, Status: openbindings.SynthesisExcluded,
+					Scope: synthesize.SynthesisCoverageTarget, Status: synthesize.SynthesisExcluded,
 					ReasonCode: "graphql.subscription_lifecycle_not_representable", Rule: "GQL-P-04",
 					Message: "subscription events may carry partial data and errors while the native stream continues; the first-revision candidate does not approximate that lifecycle",
 				})
@@ -447,7 +449,7 @@ func graphQLSynthesisCoverage(schema *introspectionSchema, iface *openbindings.I
 	return entries
 }
 
-func emitProjectedGraphQLResult(inv *openbindings.InvocationImpl[any, any], result *graphQLHTTPResult, responseKey string) {
+func emitProjectedGraphQLResult(inv *invoke.InvocationImpl[any, any], result *graphQLHTTPResult, responseKey string) {
 	data, _ := result.Body["data"].(map[string]any)
 	value, present := data[responseKey]
 	_, hasErrors := result.Body["errors"]
@@ -457,14 +459,14 @@ func emitProjectedGraphQLResult(inv *openbindings.InvocationImpl[any, any], resu
 		}
 	}
 	if hasErrors {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeExecutionFailed,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeExecutionFailed,
 		})
 		return
 	}
 	if !present {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeResponseError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeResponseError,
 		})
 		return
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // TestInvokeBinding_OperationNodeWithoutInterfaceRefused pins C3f / OG-V-11:
@@ -25,20 +26,20 @@ func TestInvokeBinding_OperationNodeWithoutInterfaceRefused(t *testing.T) {
 		"edges":[{"from":"in","to":"call"},{"from":"call","to":"out"}]
 	}}}`
 
-	inv := NewInvoker(openbindings.NewOperationInvoker()).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(graphDoc)},
+	inv := NewInvoker(invoke.NewOperationInvoker()).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(graphDoc)},
 		Ref:    "#/graphs/g",
 		// No Interface: a direct binding invocation supplies no operations map.
 	})
 	_ = inv.Write(context.Background(), map[string]any{})
 	_ = inv.Close()
 
-	_, err := openbindings.Single[any](context.Background(), inv.Outputs())
-	ierr := openbindings.AsInvocationError(err)
+	_, err := invoke.Single[any](context.Background(), inv.Outputs())
+	ierr := invoke.AsInvocationError(err)
 	if ierr == nil {
 		t.Fatalf("expected a pre-execution refusal, got %v", err)
 	}
-	if ierr.Code != openbindings.ErrCodeValidationFailed {
+	if ierr.Code != invoke.ErrCodeValidationFailed {
 		t.Fatalf("want ERR_VALIDATION_FAILED (OG-V-11), got %s: %s", ierr.Code, ierr.Error())
 	}
 }
@@ -53,15 +54,15 @@ func TestInvokeBinding_PureTransformGraphRunsWithoutInterface(t *testing.T) {
 		"nodes":{"in":{"type":"input"},"out":{"type":"output"}},
 		"edges":[{"from":"in","to":"out"}]
 	}}}`
-	inv := NewInvoker(openbindings.NewOperationInvoker()).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(graphDoc)},
+	inv := NewInvoker(invoke.NewOperationInvoker()).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(graphDoc)},
 		Ref:    "#/graphs/g",
 	})
 	if err := inv.Write(context.Background(), map[string]any{"ok": true}); err != nil {
 		t.Fatal(err)
 	}
 	_ = inv.Close()
-	v, err := openbindings.Single[any](context.Background(), inv.Outputs())
+	v, err := invoke.Single[any](context.Background(), inv.Outputs())
 	if err != nil {
 		t.Fatalf("pure pass-through graph must run without an interface, got %v", err)
 	}

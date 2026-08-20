@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/coder/websocket"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // TestDeliveryUnitBound_UnaryOverflowRefused verifies the consumer
@@ -30,8 +31,8 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:               openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeAsyncAPISpec(srv.URL))},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source:               invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeAsyncAPISpec(srv.URL))},
 		Ref:                  "#/operations/sendOpenMessage",
 		MaxDeliveryUnitBytes: 1024,
 	})
@@ -39,12 +40,12 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	var ie *openbindings.InvocationError
+	var ie *invoke.InvocationError
 	if !errors.As(err, &ie) {
 		t.Fatalf("expected *InvocationError, got %v", err)
 	}
-	if ie.Code != openbindings.ErrCodeResponseError {
-		t.Errorf("error code = %q, want %q", ie.Code, openbindings.ErrCodeResponseError)
+	if ie.Code != invoke.ErrCodeResponseError {
+		t.Errorf("error code = %q, want %q", ie.Code, invoke.ErrCodeResponseError)
 	}
 	if ie.HasData() {
 		t.Errorf("implementation-local bound evidence crossed as abstract data: %#v", ie.Data)
@@ -67,7 +68,7 @@ func TestDeliveryUnitBound_WSLargeMessagePassesAtDefault(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: wsSource(srv, nil),
 		Ref:    "#/operations/subscribe",
 	})
@@ -100,7 +101,7 @@ func TestDeliveryUnitBound_WSTinyBoundRefusesLoudly(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:               wsSource(srv, nil),
 		Ref:                  "#/operations/subscribe",
 		MaxDeliveryUnitBytes: 1024,
@@ -109,12 +110,12 @@ func TestDeliveryUnitBound_WSTinyBoundRefusesLoudly(t *testing.T) {
 	if len(outs) != 0 {
 		t.Fatalf("expected no outputs, got %d", len(outs))
 	}
-	var ie *openbindings.InvocationError
+	var ie *invoke.InvocationError
 	if !errors.As(err, &ie) {
 		t.Fatalf("expected *InvocationError, got %v", err)
 	}
-	if ie.Code != openbindings.ErrCodeStreamError {
-		t.Errorf("error code = %q, want %q", ie.Code, openbindings.ErrCodeStreamError)
+	if ie.Code != invoke.ErrCodeStreamError {
+		t.Errorf("error code = %q, want %q", ie.Code, invoke.ErrCodeStreamError)
 	}
 	if ie.HasData() {
 		t.Errorf("native read-limit evidence crossed as abstract data: %#v", ie.Data)

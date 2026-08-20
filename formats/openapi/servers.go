@@ -6,8 +6,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/getkin/kin-openapi/openapi3"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // This file implements §9.3 of openbindings.openapi@1 (OAPI-P-05): the
@@ -50,7 +51,7 @@ import (
 func resolveServer(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Operation, bindCtx map[string]any, sourceLocation string) (string, error) {
 	servers := effectiveServers(doc, pathItem, op)
 
-	if cfg := openbindings.ContextConfiguration(bindCtx); cfg != nil {
+	if cfg := invoke.ContextConfiguration(bindCtx); cfg != nil {
 		if raw, ok := cfg["server"]; ok && raw != nil {
 			resolved, err := resolveServerConfig(raw, servers)
 			if err != nil {
@@ -60,7 +61,7 @@ func resolveServer(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Op
 		}
 	}
 
-	if meta := openbindings.ContextMetadata(bindCtx); meta != nil {
+	if meta := invoke.ContextMetadata(bindCtx); meta != nil {
 		if base, ok := meta["baseURL"].(string); ok && base != "" {
 			return absolutizeServerURL(base, sourceLocation)
 		}

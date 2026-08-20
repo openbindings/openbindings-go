@@ -13,6 +13,7 @@ import (
 
 	asyncapiclient "github.com/openbindings/asyncapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // BindingSpec identifies the unreleased first AsyncAPI binding candidate.
@@ -21,9 +22,9 @@ const BindingSpec = "openbindings.asyncapi@1"
 // DefaultSourceName is the key used in the interface's Sources map for the AsyncAPI source.
 const DefaultSourceName = "asyncapi"
 
-func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeInput, doc *document) (*openbindings.Interface, error) {
+func synthesizeInterfaceWithDoc(_ context.Context, in *synthesize.SynthesizeInput, doc *document) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
-		return nil, openbindings.ErrNoSources
+		return nil, synthesize.ErrNoSources
 	}
 	src := in.Sources[0]
 
@@ -62,7 +63,7 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *openbindings.SynthesizeIn
 
 	for _, opID := range opIDs {
 		asyncOp := doc.Operations[opID]
-		opKey := openbindings.UniqueKey(openbindings.SanitizeKey(opID), usedKeys)
+		opKey := synthesize.UniqueKey(synthesize.SanitizeKey(opID), usedKeys)
 		usedKeys[opKey] = true
 
 		obiOp := openbindings.Operation{

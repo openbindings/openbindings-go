@@ -132,7 +132,7 @@ func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 		}
 		var inputSchema, outputSchema *jsonschema.Schema
 		if op.Input != nil && !defsExternal && !schemaHasExternalRef(op.Input) {
-			compiled, err := compileOperationSchema(&i, opKey, "input")
+			compiled, err := CompileOperationSchema(&i, opKey, "input")
 			if err != nil {
 				*errs = append(*errs, fmt.Sprintf("operations[%q].input: cannot compile schema: %v (OBI-D-11)", opKey, err))
 			} else {
@@ -140,7 +140,7 @@ func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 			}
 		}
 		if op.Output != nil && !defsExternal && !schemaHasExternalRef(op.Output) {
-			compiled, err := compileOperationSchema(&i, opKey, "output")
+			compiled, err := CompileOperationSchema(&i, opKey, "output")
 			if err != nil {
 				*errs = append(*errs, fmt.Sprintf("operations[%q].output: cannot compile schema: %v (OBI-D-11)", opKey, err))
 			} else {
@@ -216,7 +216,7 @@ func buildSchemaDefs(schemas map[string]JSONSchema) map[string]any {
 // schema, with a named schema map exposed under $defs, then compiles it. It
 // cannot preserve arbitrary references into an OBI document because it does
 // not receive that document; interface-aware callers use
-// compileOperationSchema instead.
+// CompileOperationSchema instead.
 func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema.Schema, error) {
 	var root any
 	switch v := opSchema.(type) {
@@ -253,11 +253,11 @@ func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema
 	return c.Compile(url)
 }
 
-// compileOperationSchema compiles an operation's input/output schema at its
+// CompileOperationSchema compiles an operation's input/output schema at its
 // canonical fragment inside the complete OBI document. The document, not an
 // extracted schema object, is the resolution root for same-document references
 // (OBI-D-16 / OBI-T-16).
-func compileOperationSchema(i *Interface, operationName, position string) (*jsonschema.Schema, error) {
+func CompileOperationSchema(i *Interface, operationName, position string) (*jsonschema.Schema, error) {
 	if i == nil {
 		return nil, fmt.Errorf("interface is nil")
 	}
@@ -475,14 +475,14 @@ func ValidateAgainstSchema(value any, schema JSONSchema, schemas map[string]JSON
 // ValidateOperationInput validates a value against an operation input schema
 // with the complete OBI document retained as the same-document `$ref` root.
 func ValidateOperationInput(value any, iface *Interface, operationName string) error {
-	compiled, err := compileOperationSchema(iface, operationName, "input")
+	compiled, err := CompileOperationSchema(iface, operationName, "input")
 	return validateCompiledSchema(value, compiled, err)
 }
 
 // ValidateOperationOutput validates a value against an operation output schema
 // with the complete OBI document retained as the same-document `$ref` root.
 func ValidateOperationOutput(value any, iface *Interface, operationName string) error {
-	compiled, err := compileOperationSchema(iface, operationName, "output")
+	compiled, err := CompileOperationSchema(iface, operationName, "output")
 	return validateCompiledSchema(value, compiled, err)
 }
 

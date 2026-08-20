@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 func deadEndServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
@@ -30,7 +30,7 @@ func mustContent(value any) json.RawMessage {
 	return raw
 }
 
-func pinArgs(url, ref string, pin any, bindContext map[string]any) *openbindings.BindingInvocationArgs {
+func pinArgs(url, ref string, pin any, bindContext map[string]any) *invoke.BindingInvocationArgs {
 	args := invocationArgs(url, ref, bindContext)
 	args.Source.Content = mustContent(pin)
 	return args
@@ -56,7 +56,7 @@ func TestPinGrammarRefusesInvalidContentBeforeIO(t *testing.T) {
 			server, requests := deadEndServer(t)
 			call := NewInvoker().InvokeBinding(bg(), pinArgs(server.URL, "tools/probe", pin, nil))
 			_, err := drainOutputs(t, call)
-			if codeOf(t, err) != openbindings.ErrCodeSourceLoadFailed {
+			if codeOf(t, err) != invoke.ErrCodeSourceLoadFailed {
 				t.Fatal(err)
 			}
 			if requests.Load() != 0 {
@@ -72,7 +72,7 @@ func TestPinDisplacesLiveListingButRetainsInvocationTarget(t *testing.T) {
 		"tools": []any{applicationTool("echo")},
 	}, nil))
 	_ = call.Write(bg(), map[string]any{"message": "hello"})
-	value, err := openbindings.Single(shortCtx(t), call.Outputs())
+	value, err := invoke.Single(shortCtx(t), call.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,12 +88,12 @@ func TestPinResolutionRefusalsAreOffline(t *testing.T) {
 		pin  any
 		code string
 	}{
-		{"missing", "tools/missing", map[string]any{"tools": []any{applicationTool("probe")}}, openbindings.ErrCodeRefNotFound},
-		{"ambiguous", "tools/probe", map[string]any{"tools": []any{applicationTool("probe"), applicationTool("probe")}}, openbindings.ErrCodeRefNotFound},
-		{"missing output schema", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe"}}}, openbindings.ErrCodeInvalidRef},
-		{"required task", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe", "outputSchema": map[string]any{}, "execution": map[string]any{"taskSupport": "required"}}}}, openbindings.ErrCodeInvalidRef},
-		{"resource", "resources/app://x", map[string]any{"resources": []any{map[string]any{"uri": "app://x"}}}, openbindings.ErrCodeInvalidRef},
-		{"prompt", "prompts/review", map[string]any{"prompts": []any{map[string]any{"name": "review"}}}, openbindings.ErrCodeInvalidRef},
+		{"missing", "tools/missing", map[string]any{"tools": []any{applicationTool("probe")}}, invoke.ErrCodeRefNotFound},
+		{"ambiguous", "tools/probe", map[string]any{"tools": []any{applicationTool("probe"), applicationTool("probe")}}, invoke.ErrCodeRefNotFound},
+		{"missing output schema", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe"}}}, invoke.ErrCodeInvalidRef},
+		{"required task", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe", "outputSchema": map[string]any{}, "execution": map[string]any{"taskSupport": "required"}}}}, invoke.ErrCodeInvalidRef},
+		{"resource", "resources/app://x", map[string]any{"resources": []any{map[string]any{"uri": "app://x"}}}, invoke.ErrCodeInvalidRef},
+		{"prompt", "prompts/review", map[string]any{"prompts": []any{map[string]any{"name": "review"}}}, invoke.ErrCodeInvalidRef},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server, requests := deadEndServer(t)
@@ -102,7 +102,7 @@ func TestPinResolutionRefusalsAreOffline(t *testing.T) {
 			if codeOf(t, err) != test.code {
 				t.Fatalf("error = %v", err)
 			}
-			if ie := openbindings.AsInvocationError(err); ie.HasData() {
+			if ie := invoke.AsInvocationError(err); ie.HasData() {
 				t.Fatalf("offline resolution diagnostics crossed as abstract data: %#v", ie.Data)
 			}
 			if requests.Load() != 0 {
@@ -118,7 +118,7 @@ func TestNonExactBindingIdentifierRefusesBeforeIO(t *testing.T) {
 	args.Source.BindingSpec = "openbindings.mcp@2"
 	call := NewInvoker().InvokeBinding(context.Background(), args)
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	if codeOf(t, err) != invoke.ErrCodeSourceConfigError {
 		t.Fatal(err)
 	}
 	if requests.Load() != 0 {

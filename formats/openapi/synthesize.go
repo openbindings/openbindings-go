@@ -15,7 +15,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"github.com/getkin/kin-openapi/openapi3"
+
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -42,11 +45,11 @@ type unrealizableTarget struct {
 // condition returns an error (strict mode: SynthesizeInterface), preserving
 // the convenient strict surface's guarantee that it never returns a
 // statically unbindable partial interface without evidence.
-func convertDocToInterface(doc *openapi3.T, location, bindingSpec string, warn func(openbindings.SynthesizerWarning), onUnrealizable func(unrealizableTarget)) (openbindings.Interface, error) {
+func convertDocToInterface(doc *openapi3.T, location, bindingSpec string, warn func(synthesize.SynthesizerWarning), onUnrealizable func(unrealizableTarget)) (openbindings.Interface, error) {
 	return convertDocToInterfaceWithOverlay(doc, location, bindingSpec, warn, onUnrealizable, nil, nil)
 }
 
-func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec string, warn func(openbindings.SynthesizerWarning), onUnrealizable func(unrealizableTarget), schemaOverlays *rawSchemaOverlayCollector, floor *acceptanceFloor) (openbindings.Interface, error) {
+func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec string, warn func(synthesize.SynthesizerWarning), onUnrealizable func(unrealizableTarget), schemaOverlays *rawSchemaOverlayCollector, floor *acceptanceFloor) (openbindings.Interface, error) {
 	// The schema-dialect translation keys off the artifact's own declared
 	// version (3.0 vs 3.1); the identifier stays exact and version-free.
 	formatVersion := majorMinor(doc.OpenAPI)
@@ -249,7 +252,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 					if planErr != nil {
 						reason = planErr.Error()
 					}
-					warn(openbindings.SynthesizerWarning{Code: code, Message: reason + "; optional body omitted from the synthesized contract", Path: fmt.Sprintf("operations.%s.input", opKey)})
+					warn(synthesize.SynthesizerWarning{Code: code, Message: reason + "; optional body omitted from the synthesized contract", Path: fmt.Sprintf("operations.%s.input", opKey)})
 				}
 			}
 			if formatVersion == "3.1" {
@@ -963,7 +966,7 @@ func checkAcceptedOpenAPIVersion(doc *openapi3.T) error {
 
 func deriveOperationKey(op *openapi3.Operation, path, method string, used map[string]bool) string {
 	if op.OperationID != "" {
-		key := openbindings.SanitizeKey(op.OperationID)
+		key := synthesize.SanitizeKey(op.OperationID)
 		if !used[key] {
 			return key
 		}
@@ -981,8 +984,8 @@ func deriveOperationKey(op *openapi3.Operation, path, method string, used map[st
 	}
 
 	key := strings.Join(parts, ".") + "." + strings.ToLower(method)
-	key = openbindings.SanitizeKey(key)
-	return openbindings.UniqueKey(key, used)
+	key = synthesize.SanitizeKey(key)
+	return synthesize.UniqueKey(key, used)
 }
 
 func operationDescription(op *openapi3.Operation) string {

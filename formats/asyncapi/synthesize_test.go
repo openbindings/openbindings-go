@@ -10,12 +10,13 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func TestSynthesizeInterface_PreservesObjectFormContent(t *testing.T) {
 	content := json.RawMessage(`{"asyncapi":"3.0.0","info":{"title":"T","version":"1"},"operations":{}}`)
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -45,8 +46,8 @@ func TestSynthesizeInterface_AppliesStandaloneTraitNormalization(t *testing.T) {
     "messageTraits":{"json":{"contentType":"application/json"}}
   }
 }`)
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,8 +71,8 @@ func TestSynthesizeInterface_FilePathEmitsInvocableFileURI(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: path, Embed: true}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: path, Embed: true}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -87,8 +88,8 @@ func TestSynthesizeInterface_FilePathEmitsInvocableFileURI(t *testing.T) {
 // helper wraps synthesizeInterfaceWithDoc for simpler test calls
 func testSynthesizeInterface(t *testing.T, doc *document, location string) openbindings.Interface {
 	t.Helper()
-	iface, err := synthesizeInterfaceWithDoc(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: location}},
+	iface, err := synthesizeInterfaceWithDoc(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: location}},
 	}, doc)
 	if err != nil {
 		t.Fatal(err)
@@ -245,8 +246,8 @@ func TestSynthesizeInterfaceWithCoverage_AccountsForMessagesAndProtocolCells(t *
 	    }
 	  }
 	}`)
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +264,7 @@ func TestSynthesizeInterfaceWithCoverage_AccountsForMessagesAndProtocolCells(t *
 	}
 	foundTarget := false
 	for _, entry := range result.Coverage.Entries {
-		if entry.SourceRef == "#/operations/publish" && entry.Status == openbindings.SynthesisRepresented {
+		if entry.SourceRef == "#/operations/publish" && entry.Status == synthesize.SynthesisRepresented {
 			foundTarget = true
 		}
 	}
@@ -276,7 +277,7 @@ func TestSynthesizeInterfaceWithCoverage_AccountsForMessagesAndProtocolCells(t *
 	} {
 		found := false
 		for _, entry := range result.Coverage.Entries {
-			if entry.SourceRef == sourceRef && entry.Status == openbindings.SynthesisRepresented {
+			if entry.SourceRef == sourceRef && entry.Status == synthesize.SynthesisRepresented {
 				found = true
 			}
 		}
@@ -305,8 +306,8 @@ func TestSynthesizeInterfaceWithCoverage_RepresentsBothDirectionsOfReplyBearingS
 	  }
 	}`)
 
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -354,8 +355,8 @@ func TestSynthesizeInterfaceWithCoverage_ResolvesReplyDeclaredByReference(t *tes
 	  }
 	}`)
 
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -390,8 +391,8 @@ func TestSynthesizeInterface_PreservesAsyncAPIV2NativeRefAndPerspective(t *testi
 	  "servers":{"broker":{"url":"mqtt://broker.example","protocol":"mqtt"}},
 	  "channels":{"events/{tenant}":{"publish":{"message":{"payload":{"type":"object","required":["id"]}}}}}
 	}`)
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -447,8 +448,8 @@ func TestSynthesizeInterface_BindingSpec(t *testing.T) {
 // dropping the content would emit neither).
 func TestSynthesizeInterface_ContentOnlyEmbedsSource(t *testing.T) {
 	content := `{"asyncapi":"3.0.0","info":{"title":"T","version":"1.0.0"},"operations":{}}`
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)

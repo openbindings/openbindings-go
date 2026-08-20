@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func dynamicBodySpec(openapiVersion, mediaType, schema string) string {
@@ -32,7 +34,7 @@ func dynamicRoutedInput(payload map[string]any) []any {
 	}}
 }
 
-func invokeRevision5Request(t *testing.T, spec string, input any, observe func(*http.Request)) *openbindings.InvocationError {
+func invokeRevision5Request(t *testing.T, spec string, input any, observe func(*http.Request)) *invoke.InvocationError {
 	t.Helper()
 	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		observe(req)
@@ -44,8 +46,8 @@ func invokeRevision5Request(t *testing.T, spec string, input any, observe func(*
 			Request:    req,
 		}, nil
 	})
-	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1items/post",
 	})
 	_, invocationErr := driveOutputs(context.Background(), call, input)
@@ -78,8 +80,8 @@ func TestRevision5AdditionalPropertiesFormPreservesIndependentNames(t *testing.T
 		t.Fatal(invocationErr)
 	}
 
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -135,8 +137,8 @@ func TestRevision5PatternPropertiesSelectsMultipartMemberSchema(t *testing.T) {
 
 func TestRevision5DoesNotTreatExplicitAdditionalPropertiesFalseAsDynamic(t *testing.T) {
 	spec := dynamicBodySpec("3.1.2", "application/json", `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`)
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 const DefaultSourceName = "usage"
@@ -87,8 +89,8 @@ func NewInvoker() *Invoker {
 	return &Invoker{}
 }
 
-var _ openbindings.BindingInvoker = (*Invoker)(nil)
-var _ openbindings.BuiltinHooksProvider = (*Invoker)(nil)
+var _ invoke.BindingInvoker = (*Invoker)(nil)
+var _ invoke.BuiltinHooksProvider = (*Invoker)(nil)
 
 // cachedLoadSpec loads and parses a bare usage artifact — inline content,
 // an ABSOLUTE file location, or an exec: locator (the emitted spec of a
@@ -303,8 +305,8 @@ func usageBindingSpecInfos() []openbindings.BindingSpecInfo {
 // process output is emitted as one output. Credentials/configuration travel
 // as environment variables in the binding context (the well-known
 // "environment" field), not as a separate security mechanism.
-func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
-	inv := openbindings.NewInvocationImpl[any, any](ctx)
+func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
+	inv := invoke.NewInvocationImpl[any, any](ctx)
 	go e.run(ctx, args, inv)
 	return inv
 }
@@ -316,9 +318,9 @@ type Synthesizer struct {
 	AuthorizeExec func(argv []string) bool
 }
 
-var _ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
-var _ openbindings.CoverageSynthesizer = (*Synthesizer)(nil)
-var _ openbindings.SourceInspector = (*Synthesizer)(nil)
+var _ synthesize.InterfaceSynthesizer = (*Synthesizer)(nil)
+var _ synthesize.CoverageSynthesizer = (*Synthesizer)(nil)
+var _ synthesize.SourceInspector = (*Synthesizer)(nil)
 
 // NewSynthesizer creates a new usage interface synthesizer.
 func NewSynthesizer() *Synthesizer {
@@ -337,7 +339,7 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // "string"} with an in-schema x-ob floor-stamp — the text assumption
 // always yields a string, so the derived contract never lies; the stamp
 // keys the diagnostics and self-clears when a real schema is elected).
-func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
 	observation, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
@@ -345,12 +347,12 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	return observation.iface, nil
 }
 
-func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
 	observation, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	return openbindings.NewSynthesisResult(
+	return synthesize.NewSynthesisResult(
 		observation.iface,
 		synthesisCoverage(observation.spec, observation.iface),
 		true,
@@ -362,16 +364,16 @@ type synthesisObservation struct {
 	spec  *Spec
 }
 
-func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*synthesisObservation, error) {
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesisObservation, error) {
 	if len(in.Sources) == 0 {
-		skeleton, err := openbindings.SynthesisSkeleton(in)
+		skeleton, err := synthesize.SynthesisSkeleton(in)
 		if err != nil {
 			return nil, err
 		}
 		return &synthesisObservation{iface: &skeleton}, nil
 	}
 	if len(in.Sources) > 1 {
-		return nil, openbindings.ErrMultipleSources
+		return nil, synthesize.ErrMultipleSources
 	}
 	src := in.Sources[0]
 	if src.BindingSpec != BindingSpec {
@@ -430,7 +432,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, err
 	}
 
-	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
+	if err := synthesize.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
 		return nil, err
 	}
 

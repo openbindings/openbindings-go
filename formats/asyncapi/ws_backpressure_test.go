@@ -9,9 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/coder/websocket"
+
 	asyncapiclient "github.com/openbindings/asyncapi-client/go"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // WS slow-consumer backpressure (spec/binding-specs/asyncapi/openbindings.asyncapi.md, "WS slow-consumer
@@ -78,7 +80,7 @@ func TestWSReceiveBackpressure_FrameCountOverflowFailsSubscription(t *testing.T)
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: wsSource(srv, nil),
 		Ref:    "#/operations/subscribe",
 	})
@@ -97,10 +99,10 @@ func TestWSReceiveBackpressure_FrameCountOverflowFailsSubscription(t *testing.T)
 	if err == nil {
 		t.Fatalf("expected a backpressure overflow, got a clean EOF with %d values", len(vals))
 	}
-	if codeOf(t, err) != openbindings.ErrCodeStreamError {
+	if codeOf(t, err) != invoke.ErrCodeStreamError {
 		t.Fatalf("expected ERR_STREAM_ERROR, got %v", err)
 	}
-	var ie *openbindings.InvocationError
+	var ie *invoke.InvocationError
 	if !errors.As(err, &ie) || ie.HasData() {
 		t.Fatalf("backpressure evidence must stay below the abstract boundary: %#v", err)
 	}
@@ -146,7 +148,7 @@ func TestWSReceiveBackpressure_ByteBudgetOverflowFailsSubscription(t *testing.T)
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: wsSource(srv, nil),
 		Ref:    "#/operations/subscribe",
 	})
@@ -161,10 +163,10 @@ func TestWSReceiveBackpressure_ByteBudgetOverflowFailsSubscription(t *testing.T)
 	if err == nil {
 		t.Fatalf("expected a byte-budget overflow, got a clean EOF with %d values", len(vals))
 	}
-	if codeOf(t, err) != openbindings.ErrCodeStreamError {
+	if codeOf(t, err) != invoke.ErrCodeStreamError {
 		t.Fatalf("expected ERR_STREAM_ERROR, got %v", err)
 	}
-	var ie *openbindings.InvocationError
+	var ie *invoke.InvocationError
 	if !errors.As(err, &ie) || ie.HasData() {
 		t.Fatalf("backpressure evidence must stay below the abstract boundary: %#v", err)
 	}
@@ -202,8 +204,8 @@ func TestWSReceiveBackpressure_OverflowIsolatesToOneSubscription(t *testing.T) {
 	defer binv.Close()
 	source := wsSource(srv, nil)
 
-	callA := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{Source: source, Ref: "#/operations/subscribe"})
-	callB := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{Source: source, Ref: "#/operations/subscribe"})
+	callA := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: source, Ref: "#/operations/subscribe"})
+	callB := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: source, Ref: "#/operations/subscribe"})
 	outB := callB.Outputs()
 
 	// Both subscribers must actually be registered on the ONE shared
@@ -239,10 +241,10 @@ func TestWSReceiveBackpressure_OverflowIsolatesToOneSubscription(t *testing.T) {
 		t.Fatal("server never finished flooding")
 	}
 	_, errA := drainOutputs(t, callA)
-	if codeOf(t, errA) != openbindings.ErrCodeStreamError {
+	if codeOf(t, errA) != invoke.ErrCodeStreamError {
 		t.Fatalf("subscriber A: expected ERR_STREAM_ERROR, got %v", errA)
 	}
-	var ie *openbindings.InvocationError
+	var ie *invoke.InvocationError
 	if !errors.As(errA, &ie) || ie.HasData() {
 		t.Fatalf("subscriber A exposed native overflow evidence: %#v", errA)
 	}
@@ -279,7 +281,7 @@ func TestWSReceiveBackpressure_NormalDrainNeverTrips(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: wsSource(srv, nil),
 		Ref:    "#/operations/subscribe",
 	})

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func TestInspectSourceExposesOnlyEligibleTools(t *testing.T) {
@@ -31,7 +32,7 @@ func TestInspectSourceExposesOnlyEligibleTools(t *testing.T) {
 func TestInspectSourceRefsMatchSynthesis(t *testing.T) {
 	server, _ := setupMCPServer(t)
 	synthesizer := NewSynthesizer()
-	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{
+	iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
 		BindingSpec: BindingSpec,
 		Location:    server.URL,
 	}}})

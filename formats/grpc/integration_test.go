@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -26,6 +28,8 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/durationpb"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // bufconnLocation is the conformant dial address (GRPC-D-02: explicit
@@ -347,7 +351,7 @@ func testCtx(t *testing.T) context.Context {
 
 // drainInvocation reads the output stream to completion, returning the
 // outputs and the terminal error (nil on clean io.EOF close).
-func drainInvocation(t *testing.T, inv openbindings.Invocation[any, any]) ([]any, *openbindings.InvocationError) {
+func drainInvocation(t *testing.T, inv invoke.Invocation[any, any]) ([]any, *invoke.InvocationError) {
 	t.Helper()
 	ctx := testCtx(t)
 	out := inv.Outputs()
@@ -358,7 +362,7 @@ func drainInvocation(t *testing.T, inv openbindings.Invocation[any, any]) ([]any
 			return vals, nil
 		}
 		if err != nil {
-			var ie *openbindings.InvocationError
+			var ie *invoke.InvocationError
 			if errors.As(err, &ie) {
 				return vals, ie
 			}
@@ -368,7 +372,7 @@ func drainInvocation(t *testing.T, inv openbindings.Invocation[any, any]) ([]any
 	}
 }
 
-func bufconnArgs(ref string, bindCtx map[string]any) *openbindings.BindingInvocationArgs {
+func bufconnArgs(ref string, bindCtx map[string]any) *invoke.BindingInvocationArgs {
 	if bindCtx == nil {
 		bindCtx = map[string]any{}
 	}
@@ -385,8 +389,8 @@ func bufconnArgs(ref string, bindCtx map[string]any) *openbindings.BindingInvoca
 		configurationCopy["transport"] = "plaintext"
 	}
 	copied["configuration"] = configurationCopy
-	return &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: bufconnLocation},
+	return &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: bufconnLocation},
 		Ref:     ref,
 		Context: copied,
 	}
@@ -468,8 +472,8 @@ service ItemService {
 `
 
 	synthesizer := NewSynthesizer()
-	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{
+	iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{
 			{BindingSpec: BindingSpec, Location: "localhost:50051", Content: openbindings.TextContent(proto)},
 		},
 	})
@@ -518,7 +522,7 @@ service ItemService {
 // interface-synthesizer contract's deterministic source-less scaffold.
 func TestIntegration_SynthesizeInterface_PublicAPI_NoSources(t *testing.T) {
 	synthesizer := NewSynthesizer()
-	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Name: "scaffold"})
+	iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Name: "scaffold"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +543,7 @@ func TestIntegration_InvokeUnary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v, err := openbindings.Single(ctx, inv.Outputs())
+	v, err := invoke.Single(ctx, inv.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +574,7 @@ func TestIntegration_UnaryHeaderTrailer(t *testing.T) {
 	if err := inv.Write(ctx, map[string]any{"id": "7"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openbindings.Single(ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single(ctx, inv.Outputs()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -620,7 +624,7 @@ func TestIntegration_ContextHeadersForwarded(t *testing.T) {
 	if err := inv.Write(ctx, map[string]any{"id": "1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openbindings.Single(ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single(ctx, inv.Outputs()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -645,7 +649,7 @@ func TestIntegration_Unauthenticated(t *testing.T) {
 	if len(vals) != 0 || terr == nil {
 		t.Fatalf("expected terminal error, got %d outputs terr=%v", len(vals), terr)
 	}
-	if terr.Code != openbindings.ErrCodeExecutionFailed {
+	if terr.Code != invoke.ErrCodeExecutionFailed {
 		t.Errorf("code = %q, want protocol-independent unsuccessful completion", terr.Code)
 	}
 	if terr.HasData() {
@@ -667,7 +671,7 @@ func TestIntegration_AbsentInputDispatchesEmptyMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v, err := openbindings.Single(ctx, inv.Outputs())
+	v, err := invoke.Single(ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("absent input must dispatch the empty request message: %v", err)
 	}
@@ -701,8 +705,8 @@ func TestIntegration_CancelMidStream(t *testing.T) {
 
 	inv.Cancel()
 	_, err = out.Read(ctx)
-	var ie *openbindings.InvocationError
-	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeCancelled {
+	var ie *invoke.InvocationError
+	if !errors.As(err, &ie) || ie.Code != invoke.ErrCodeCancelled {
 		t.Fatalf("expected ERR_CANCELLED, got %v", err)
 	}
 }
@@ -733,7 +737,7 @@ func TestIntegration_DeadlineMidStream(t *testing.T) {
 	}
 
 	_, err = out.Read(testCtx(t))
-	var terr *openbindings.InvocationError
+	var terr *invoke.InvocationError
 	if !errors.As(err, &terr) {
 		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
 	}
@@ -743,7 +747,7 @@ func TestIntegration_DeadlineMidStream(t *testing.T) {
 	// observable, it remains a protocol-native unsuccessful completion and is
 	// abstracted as ERR_EXECUTION_FAILED. Neither result exposes gRPC status on
 	// the caller-facing code lane.
-	if terr.Code != openbindings.ErrCodeCancelled && terr.Code != openbindings.ErrCodeExecutionFailed {
+	if terr.Code != invoke.ErrCodeCancelled && terr.Code != invoke.ErrCodeExecutionFailed {
 		t.Fatalf("code = %q, want ERR_CANCELLED or ERR_EXECUTION_FAILED", terr.Code)
 	}
 }
@@ -751,7 +755,7 @@ func TestIntegration_DeadlineMidStream(t *testing.T) {
 // readToTerminal drains an invocation to its terminal from a non-test
 // goroutine, returning the terminal error (nil on clean EOF). It never touches
 // *testing.T, so it is safe to run concurrently.
-func readToTerminal(ctx context.Context, inv openbindings.Invocation[any, any]) *openbindings.InvocationError {
+func readToTerminal(ctx context.Context, inv invoke.Invocation[any, any]) *invoke.InvocationError {
 	out := inv.Outputs()
 	for {
 		_, err := out.Read(ctx)
@@ -759,7 +763,7 @@ func readToTerminal(ctx context.Context, inv openbindings.Invocation[any, any]) 
 			return nil
 		}
 		if err != nil {
-			var ie *openbindings.InvocationError
+			var ie *invoke.InvocationError
 			errors.As(err, &ie)
 			return ie
 		}
@@ -781,7 +785,7 @@ func TestIntegration_DeadlineMidStream_Deterministic(t *testing.T) {
 	defer cancelRead()
 
 	const runs = 300
-	results := make(chan *openbindings.InvocationError, runs)
+	results := make(chan *invoke.InvocationError, runs)
 	var wg sync.WaitGroup
 	for i := 0; i < runs; i++ {
 		wg.Add(1)
@@ -804,7 +808,7 @@ func TestIntegration_DeadlineMidStream_Deterministic(t *testing.T) {
 		}
 		counts[terr.Code]++
 	}
-	if counts[openbindings.ErrCodeCancelled]+counts[openbindings.ErrCodeExecutionFailed] != runs {
+	if counts[invoke.ErrCodeCancelled]+counts[invoke.ErrCodeExecutionFailed] != runs {
 		t.Fatalf("expected only local cancellation or native unsuccessful completion across %d runs, got distribution %v", runs, counts)
 	}
 }
@@ -820,7 +824,7 @@ func TestIntegration_InvalidRef(t *testing.T) {
 	if len(vals) != 0 || terr == nil {
 		t.Fatal("expected a terminal error and no outputs")
 	}
-	if terr.Code != openbindings.ErrCodeInvalidRef {
+	if terr.Code != invoke.ErrCodeInvalidRef {
 		t.Errorf("code = %q, want ERR_INVALID_REF", terr.Code)
 	}
 }
@@ -833,7 +837,7 @@ func TestIntegration_RefNotFound_Method(t *testing.T) {
 	inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("testpkg.ItemService/NoSuchMethod", nil))
 
 	_, terr := drainInvocation(t, inv)
-	if terr == nil || terr.Code != openbindings.ErrCodeRefNotFound {
+	if terr == nil || terr.Code != invoke.ErrCodeRefNotFound {
 		t.Fatalf("expected ERR_REF_NOT_FOUND, got %v", terr)
 	}
 }
@@ -854,7 +858,7 @@ func TestIntegration_ClientStreaming(t *testing.T) {
 	if err := inv.Close(); err != nil {
 		t.Fatal(err)
 	}
-	value, err := openbindings.Single(ctx, inv.Outputs())
+	value, err := invoke.Single(ctx, inv.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -867,13 +871,13 @@ func TestIntegration_MissingLocation(t *testing.T) {
 	invoker := NewInvoker()
 	defer invoker.Close()
 
-	inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec},
+	inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec},
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 
 	_, terr := drainInvocation(t, inv)
-	if terr == nil || terr.Code != openbindings.ErrCodeSourceConfigError {
+	if terr == nil || terr.Code != invoke.ErrCodeSourceConfigError {
 		t.Fatalf("expected ERR_SOURCE_CONFIG_ERROR, got %v", terr)
 	}
 }
@@ -888,7 +892,7 @@ func TestIntegration_CtxCancelBeforeWrite(t *testing.T) {
 	cancel()
 
 	_, terr := drainInvocation(t, inv)
-	if terr == nil || terr.Code != openbindings.ErrCodeCancelled {
+	if terr == nil || terr.Code != invoke.ErrCodeCancelled {
 		t.Fatalf("expected ERR_CANCELLED, got %v", terr)
 	}
 }
@@ -910,7 +914,7 @@ func TestIntegration_NoInputConvention(t *testing.T) {
 
 	inv := invoker.InvokeBinding(ctx, args)
 	// No write, no close: the convention must dispatch an empty request.
-	if _, err := openbindings.Single(ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single(ctx, inv.Outputs()); err != nil {
 		t.Fatalf("no-input convention should dispatch without a write: %v", err)
 	}
 }
@@ -932,14 +936,14 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 	t.Cleanup(func() { _ = invoker.Close() })
 
 	ctx := testCtx(t)
-	inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
+	inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "i1"}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	out, err := openbindings.Single(ctx, inv.Outputs())
+	out, err := invoke.Single(ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("invoke through caller-configured transport failed: %v", err)
 	}
@@ -953,17 +957,17 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 	t.Cleanup(func() { _ = autoTLS.Close() })
 	ctl, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	inv2 := autoTLS.InvokeBinding(ctl, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
+	inv2 := autoTLS.InvokeBinding(ctl, &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 	_ = inv2.Write(ctl, map[string]any{"id": "i1"})
-	_, err = openbindings.Single(ctl, inv2.Outputs())
+	_, err = invoke.Single(ctl, inv2.Outputs())
 	if err == nil {
 		t.Fatal("bare target must require an explicit transport election")
 	}
-	ierr := openbindings.AsInvocationError(err)
-	if ierr.Code != openbindings.ErrCodeSourceConfigError || ierr.HasData() {
+	ierr := invoke.AsInvocationError(err)
+	if ierr.Code != invoke.ErrCodeSourceConfigError || ierr.HasData() {
 		t.Fatalf("bare target refusal = %#v, want code-only ERR_SOURCE_CONFIG_ERROR", ierr)
 	}
 }

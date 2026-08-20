@@ -6,8 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func setupDecodeServer(t *testing.T) *httptest.Server {
@@ -40,7 +41,7 @@ func TestDecodeProjectsStructuredApplicationValueOnly(t *testing.T) {
 	defer invoker.Close()
 	call := invoker.InvokeBinding(bg(), invocationArgs(server.URL, "tools/structured", nil))
 	_ = call.Write(bg(), map[string]any{})
-	value, err := openbindings.Single(shortCtx(t), call.Outputs())
+	value, err := invoke.Single(shortCtx(t), call.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestDecodeMissingOrInvalidStructuredContentFails(t *testing.T) {
 		call := invoker.InvokeBinding(bg(), invocationArgs(server.URL, "tools/"+name, nil))
 		_ = call.Write(bg(), map[string]any{})
 		values, err := drainOutputs(t, call)
-		if len(values) != 0 || codeOf(t, err) != openbindings.ErrCodeResponseError {
+		if len(values) != 0 || codeOf(t, err) != invoke.ErrCodeResponseError {
 			t.Fatalf("%s: values=%#v err=%v", name, values, err)
 		}
 	}

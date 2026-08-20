@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // This file honors declared protocol `bindings` objects, which are
@@ -46,7 +46,7 @@ type protocolFields struct {
 
 func protocolFieldValues(ctx map[string]any) (protocolFields, error) {
 	var out protocolFields
-	raw, present := openbindings.ContextConfiguration(ctx)["protocolFields"]
+	raw, present := invoke.ContextConfiguration(ctx)["protocolFields"]
 	if !present {
 		return out, nil
 	}

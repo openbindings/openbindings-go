@@ -5,7 +5,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"github.com/getkin/kin-openapi/openapi3"
+
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -19,9 +22,9 @@ import (
 // Incorporated parameter serialization, response selection, server
 // resolution, and security requirements are behavior of a represented target,
 // not independently addressable units.
-func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, unrealizable map[string]unrealizableTarget, floor *acceptanceFloor) []openbindings.SynthesisCoverageEntry {
+func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, unrealizable map[string]unrealizableTarget, floor *acceptanceFloor) []synthesize.SynthesisCoverageEntry {
 	if doc == nil || iface == nil {
-		return []openbindings.SynthesisCoverageEntry{}
+		return []synthesize.SynthesisCoverageEntry{}
 	}
 
 	type bindingIdentity struct {
@@ -60,7 +63,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 		}
 	}
 
-	var entries []openbindings.SynthesisCoverageEntry
+	var entries []synthesize.SynthesisCoverageEntry
 	{
 		pathKeys := make([]string, 0, len(pathSet))
 		for path := range pathSet {
@@ -86,11 +89,11 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					// A ladder-invalid target: one invalid target entry
 					// carrying the owning unit and its defects, then the
 					// operation's projection entries.
-					entries = append(entries, openbindings.SynthesisCoverageEntry{
+					entries = append(entries, synthesize.SynthesisCoverageEntry{
 						SourceIndex: 0,
 						SourceRef:   ref,
-						Scope:       openbindings.SynthesisCoverageTarget,
-						Status:      openbindings.SynthesisInvalid,
+						Scope:       synthesize.SynthesisCoverageTarget,
+						Status:      synthesize.SynthesisInvalid,
 						ReasonCode:  invalidUnitReasonCode,
 						Message:     floorInvalidTargetMessage(len(verdict.Defects)),
 						Details:     map[string]any{"defects": floorDefectDetails(verdict.Defects)},
@@ -112,11 +115,11 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					// genuinely missing remains an implementation invariant
 					// violation.
 					if skipped, recorded := unrealizable[ref]; recorded {
-						entries = append(entries, openbindings.SynthesisCoverageEntry{
+						entries = append(entries, synthesize.SynthesisCoverageEntry{
 							SourceIndex: 0,
 							SourceRef:   ref,
-							Scope:       openbindings.SynthesisCoverageTarget,
-							Status:      openbindings.SynthesisExcluded,
+							Scope:       synthesize.SynthesisCoverageTarget,
+							Status:      synthesize.SynthesisExcluded,
 							ReasonCode:  skipped.reasonCode,
 							Rule:        skipped.rule,
 							Message:     skipped.message,
@@ -128,11 +131,11 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 						entries = append(entries, floorProjectionEntries(verdict)...)
 						continue
 					}
-					entries = append(entries, openbindings.SynthesisCoverageEntry{
+					entries = append(entries, synthesize.SynthesisCoverageEntry{
 						SourceIndex: 0,
 						SourceRef:   ref,
-						Scope:       openbindings.SynthesisCoverageTarget,
-						Status:      openbindings.SynthesisImplementationUnsupported,
+						Scope:       synthesize.SynthesisCoverageTarget,
+						Status:      synthesize.SynthesisImplementationUnsupported,
 						ReasonCode:  "openapi.missing_emitted_binding",
 						Message:     "the synthesizer returned without emitting this admitted paths operation",
 					})
@@ -140,11 +143,11 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 				}
 				targetRequirements := openAPIServerRequirements(doc, pathItem, op, sourceLocation)
 				targetRequirements = append(targetRequirements, openAPIRequestMediaRequirements(doc, pathItem, op, bindingSpec)...)
-				entries = append(entries, openbindings.SynthesisCoverageEntry{
+				entries = append(entries, synthesize.SynthesisCoverageEntry{
 					SourceIndex:  0,
 					SourceRef:    ref,
-					Scope:        openbindings.SynthesisCoverageTarget,
-					Status:       openbindings.SynthesisRepresented,
+					Scope:        synthesize.SynthesisCoverageTarget,
+					Status:       synthesize.SynthesisRepresented,
 					OperationKey: identity.operationKey,
 					BindingRef:   identity.ref,
 					Requirements: targetRequirements,
@@ -200,7 +203,7 @@ func openAPIServerRequirements(
 func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathItem *openapi3.PathItem, identity struct {
 	operationKey string
 	ref          string
-}, bindingSpec string, verdict *floorOp) []openbindings.SynthesisCoverageEntry {
+}, bindingSpec string, verdict *floorOp) []synthesize.SynthesisCoverageEntry {
 	if op.RequestBody == nil || op.RequestBody.Value == nil || len(op.RequestBody.Value.Content) == 0 {
 		return nil
 	}
@@ -221,7 +224,7 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 		mediaKeys = append(mediaKeys, mediaKey)
 	}
 	sort.Strings(mediaKeys)
-	entries := make([]openbindings.SynthesisCoverageEntry, 0, len(mediaKeys))
+	entries := make([]synthesize.SynthesisCoverageEntry, 0, len(mediaKeys))
 	for _, mediaKey := range mediaKeys {
 		sourceRef := identity.ref + "/requestBody/content/" + escapeJSONPointerToken(mediaKey)
 		if verdict != nil {
@@ -229,11 +232,11 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 				// The ladder invalidates this alternative: `invalid`, not
 				// `excluded` -- the unit is malformed under its upstream
 				// authority, not declined by the revision.
-				entries = append(entries, openbindings.SynthesisCoverageEntry{
+				entries = append(entries, synthesize.SynthesisCoverageEntry{
 					SourceIndex: 0,
 					SourceRef:   sourceRef,
-					Scope:       openbindings.SynthesisCoverageAlternative,
-					Status:      openbindings.SynthesisInvalid,
+					Scope:       synthesize.SynthesisCoverageAlternative,
+					Status:      synthesize.SynthesisInvalid,
 					ReasonCode:  invalidUnitReasonCode,
 					Message:     floorInvalidAlternativeMessage(len(defects)),
 					Details: map[string]any{
@@ -249,11 +252,11 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 			if requiresRequestMedia[mediaKey] {
 				requirements = []string{"configuration.requestMedia"}
 			}
-			entries = append(entries, openbindings.SynthesisCoverageEntry{
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
 				SourceIndex:  0,
 				SourceRef:    sourceRef,
-				Scope:        openbindings.SynthesisCoverageAlternative,
-				Status:       openbindings.SynthesisRepresented,
+				Scope:        synthesize.SynthesisCoverageAlternative,
+				Status:       synthesize.SynthesisRepresented,
 				OperationKey: identity.operationKey,
 				BindingRef:   identity.ref,
 				Requirements: requirements,
@@ -270,11 +273,11 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 		} else if planErr != nil {
 			message = planErr.Error()
 		}
-		entries = append(entries, openbindings.SynthesisCoverageEntry{
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
 			SourceIndex: 0,
 			SourceRef:   sourceRef,
-			Scope:       openbindings.SynthesisCoverageAlternative,
-			Status:      openbindings.SynthesisExcluded,
+			Scope:       synthesize.SynthesisCoverageAlternative,
+			Status:      synthesize.SynthesisExcluded,
 			ReasonCode:  reasonCode,
 			Rule:        rule,
 			Message:     message,
@@ -286,7 +289,7 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 	return entries
 }
 
-func openAPICallbackCoverage(op *openapi3.Operation, parentRef string) []openbindings.SynthesisCoverageEntry {
+func openAPICallbackCoverage(op *openapi3.Operation, parentRef string) []synthesize.SynthesisCoverageEntry {
 	if len(op.Callbacks) == 0 {
 		return nil
 	}
@@ -295,7 +298,7 @@ func openAPICallbackCoverage(op *openapi3.Operation, parentRef string) []openbin
 		callbackNames = append(callbackNames, name)
 	}
 	sort.Strings(callbackNames)
-	var entries []openbindings.SynthesisCoverageEntry
+	var entries []synthesize.SynthesisCoverageEntry
 	for _, name := range callbackNames {
 		callbackRef := op.Callbacks[name]
 		if callbackRef == nil || callbackRef.Value == nil {
@@ -324,7 +327,7 @@ func openAPICallbackCoverage(op *openapi3.Operation, parentRef string) []openbin
 	return entries
 }
 
-func openAPIWebhookCoverage(doc *openapi3.T) []openbindings.SynthesisCoverageEntry {
+func openAPIWebhookCoverage(doc *openapi3.T) []synthesize.SynthesisCoverageEntry {
 	if len(doc.Webhooks) == 0 {
 		return nil
 	}
@@ -333,15 +336,15 @@ func openAPIWebhookCoverage(doc *openapi3.T) []openbindings.SynthesisCoverageEnt
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	var entries []openbindings.SynthesisCoverageEntry
+	var entries []synthesize.SynthesisCoverageEntry
 	for _, name := range names {
 		pathItem := doc.Webhooks[name]
 		if pathItem == nil {
-			entries = append(entries, openbindings.SynthesisCoverageEntry{
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
 				SourceIndex: 0,
 				SourceRef:   "#/webhooks/" + escapeJSONPointerToken(name),
-				Scope:       openbindings.SynthesisCoverageTarget,
-				Status:      openbindings.SynthesisInvalid,
+				Scope:       synthesize.SynthesisCoverageTarget,
+				Status:      synthesize.SynthesisInvalid,
 				ReasonCode:  "openapi.invalid_webhook",
 				Message:     "webhook path item is not an object",
 			})
@@ -359,12 +362,12 @@ func openAPIWebhookCoverage(doc *openapi3.T) []openbindings.SynthesisCoverageEnt
 	return entries
 }
 
-func excludedReverseOpenAPIInteraction(sourceRef string) openbindings.SynthesisCoverageEntry {
-	return openbindings.SynthesisCoverageEntry{
+func excludedReverseOpenAPIInteraction(sourceRef string) synthesize.SynthesisCoverageEntry {
+	return synthesize.SynthesisCoverageEntry{
 		SourceIndex: 0,
 		SourceRef:   sourceRef,
-		Scope:       openbindings.SynthesisCoverageTarget,
-		Status:      openbindings.SynthesisExcluded,
+		Scope:       synthesize.SynthesisCoverageTarget,
+		Status:      synthesize.SynthesisExcluded,
 		ReasonCode:  "openapi.reverse_direction",
 		Rule:        "OAPI-D-03",
 		Message:     "callbacks and webhooks describe service-to-consumer requests outside openbindings.openapi@1",
@@ -382,18 +385,18 @@ func formatCoverageRef(parts ...string) string {
 
 // floorInvalidAlternativeEntries renders a ladder-invalid operation's or an
 // excluded operation's invalid request media alternatives.
-func floorInvalidAlternativeEntries(verdict *floorOp) []openbindings.SynthesisCoverageEntry {
+func floorInvalidAlternativeEntries(verdict *floorOp) []synthesize.SynthesisCoverageEntry {
 	if verdict == nil || len(verdict.AltOrder) == 0 {
 		return nil
 	}
-	entries := make([]openbindings.SynthesisCoverageEntry, 0, len(verdict.AltOrder))
+	entries := make([]synthesize.SynthesisCoverageEntry, 0, len(verdict.AltOrder))
 	for _, altRef := range verdict.AltOrder {
 		defects := verdict.InvalidAlternatives[altRef]
-		entries = append(entries, openbindings.SynthesisCoverageEntry{
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
 			SourceIndex: 0,
 			SourceRef:   altRef,
-			Scope:       openbindings.SynthesisCoverageAlternative,
-			Status:      openbindings.SynthesisInvalid,
+			Scope:       synthesize.SynthesisCoverageAlternative,
+			Status:      synthesize.SynthesisInvalid,
 			ReasonCode:  invalidUnitReasonCode,
 			Message:     floorInvalidAlternativeMessage(len(defects)),
 			Details: map[string]any{
@@ -408,18 +411,18 @@ func floorInvalidAlternativeEntries(verdict *floorOp) []openbindings.SynthesisCo
 // floorProjectionEntries renders one projection-scope entry per unit whose
 // emitted closure reaches, or whose response rungs record, invalid positions
 // that cost it nothing.
-func floorProjectionEntries(verdict *floorOp) []openbindings.SynthesisCoverageEntry {
+func floorProjectionEntries(verdict *floorOp) []synthesize.SynthesisCoverageEntry {
 	if verdict == nil || len(verdict.ProjOrder) == 0 {
 		return nil
 	}
-	entries := make([]openbindings.SynthesisCoverageEntry, 0, len(verdict.ProjOrder))
+	entries := make([]synthesize.SynthesisCoverageEntry, 0, len(verdict.ProjOrder))
 	for _, unit := range verdict.ProjOrder {
 		defects := verdict.Projections[unit]
-		entries = append(entries, openbindings.SynthesisCoverageEntry{
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
 			SourceIndex: 0,
 			SourceRef:   unit,
-			Scope:       openbindings.SynthesisCoverageProjection,
-			Status:      openbindings.SynthesisInvalid,
+			Scope:       synthesize.SynthesisCoverageProjection,
+			Status:      synthesize.SynthesisInvalid,
 			ReasonCode:  invalidUnitReasonCode,
 			Message:     floorProjectionMessage(len(defects)),
 			Details:     map[string]any{"defects": floorDefectDetails(defects)},

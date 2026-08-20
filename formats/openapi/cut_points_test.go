@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // The cut-point case table is SHARED with the TypeScript engine:
@@ -87,9 +87,9 @@ func canonicalJSON(t *testing.T, value any) string {
 func TestCutPointCaseTable(t *testing.T) {
 	for _, testCase := range loadCutPointCases(t) {
 		t.Run(testCase.Name, func(t *testing.T) {
-			input := func() *openbindings.SynthesizeInput {
-				return &openbindings.SynthesizeInput{
-					Sources: []openbindings.SynthesizeSource{{
+			input := func() *synthesize.SynthesizeInput {
+				return &synthesize.SynthesizeInput{
+					Sources: []synthesize.SynthesizeSource{{
 						BindingSpec: BindingSpec,
 						Content:     json.RawMessage(testCase.Document),
 					}},

@@ -15,9 +15,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/dlclark/regexp2"
 	"github.com/getkin/kin-openapi/openapi3"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // This file implements §9.2 of openbindings.openapi@1 (OAPI-P-04): request
@@ -1588,7 +1589,7 @@ func configuredRequestPlans(plans []*bodyPlan, bindCtx map[string]any) []*bodyPl
 }
 
 func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []*bodyPlan, bindCtx map[string]any, bindingSpec string) ([]*bodyPlan, error) {
-	cfg := openbindings.ContextConfiguration(bindCtx)
+	cfg := invoke.ContextConfiguration(bindCtx)
 	raw, configured := cfg["requestMedia"]
 	if !configured || raw == nil {
 		if !hasMediaFidelity(bindingSpec) {
@@ -1756,7 +1757,7 @@ func mediaRangeBaseMatches(declarationBase, concreteBase string) bool {
 }
 
 func requestMediaUnconfigured(bindCtx map[string]any) bool {
-	raw, configured := openbindings.ContextConfiguration(bindCtx)["requestMedia"]
+	raw, configured := invoke.ContextConfiguration(bindCtx)["requestMedia"]
 	return !configured || raw == nil
 }
 

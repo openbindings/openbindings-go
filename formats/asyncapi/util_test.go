@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // TestParseRef_BareIDRefused pins ASYNC-D-03: the JSON Pointer
@@ -656,7 +656,7 @@ func TestRequiredContext_UnknownSchemeSurfaced(t *testing.T) {
 	}
 	// Unresolvable by the built-in satisfaction check (rule 10: no resolver
 	// at this layer invented for an unmapped family).
-	if openbindings.ContextSatisfies(map[string]any{"bearerToken": "t"}, got) {
+	if invoke.ContextSatisfies(map[string]any{"bearerToken": "t"}, got) {
 		t.Error("an unmapped requirement must never be satisfiable by the built-in check")
 	}
 }
@@ -1027,13 +1027,13 @@ func TestResolveInputCodec(t *testing.T) {
 // assertConfigValue narrows err to a config.value CONTEXT_REQUIRED challenge
 // (R1a) and checks its point and relative path. Returns the requirement for further
 // assertions (choices, durable).
-func assertConfigValue(t *testing.T, err error, point, path string) openbindings.ContextRequirement {
+func assertConfigValue(t *testing.T, err error, point, path string) invoke.ContextRequirement {
 	t.Helper()
-	var ie *openbindings.InvocationError
+	var ie *invoke.InvocationError
 	if !errors.As(err, &ie) {
 		t.Fatalf("expected *InvocationError, got %v", err)
 	}
-	details := openbindings.ContextRequiredFrom(ie)
+	details := invoke.ContextRequiredFrom(ie)
 	if details == nil {
 		t.Fatalf("expected a CONTEXT_REQUIRED challenge, got %v", err)
 	}

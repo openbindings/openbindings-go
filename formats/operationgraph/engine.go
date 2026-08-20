@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 const (
@@ -36,7 +36,7 @@ type event struct {
 	// fatal is a conduit-fatal terminal marker (not a data event). When set,
 	// the dispatcher fires it as the graph terminal — routed through the FIFO
 	// so the failing conduit's already-enqueued outputs drain first.
-	fatal *openbindings.InvocationError
+	fatal *invoke.InvocationError
 }
 
 func cloneEvent(ev *event) *event {
@@ -62,7 +62,7 @@ type conduitState struct {
 	mu        sync.Mutex
 	started   bool
 	accepting bool
-	call      openbindings.Invocation[any, any]
+	call      invoke.Invocation[any, any]
 	cancel    context.CancelFunc
 	timeout   bool // a deadline context was attached (timeout field present)
 	opCtx     context.Context
@@ -104,10 +104,10 @@ func (c *conduitState) merged() (map[string]int, int) {
 // engine runs a single operation graph invocation.
 type engine struct {
 	graph     *Graph
-	invoker   *openbindings.OperationInvoker
-	args      *openbindings.BindingInvocationArgs
-	transform openbindings.TransformEvaluator
-	handle    openbindings.BindingHandle[any, any]
+	invoker   *invoke.OperationInvoker
+	args      *invoke.BindingInvocationArgs
+	transform invoke.TransformEvaluator
+	handle    invoke.BindingHandle[any, any]
 	schemas   *schemaCache
 
 	outEdges map[string][]string
@@ -134,7 +134,7 @@ type engine struct {
 	completionSent map[string]map[string]bool
 }
 
-func newEngine(g *Graph, invoker *openbindings.OperationInvoker, args *openbindings.BindingInvocationArgs, te openbindings.TransformEvaluator, sc *schemaCache) *engine {
+func newEngine(g *Graph, invoker *invoke.OperationInvoker, args *invoke.BindingInvocationArgs, te invoke.TransformEvaluator, sc *schemaCache) *engine {
 	outE := make(map[string][]string)
 	inE := make(map[string][]string)
 	var inputKey string
@@ -251,7 +251,7 @@ func (eng *engine) rootValue(root int) (any, bool) {
 // a JSON-domain value. This preserves optional data, including explicit null,
 // without carrying the local error object into the graph.
 func errValue(err error) any {
-	if ie := openbindings.AsInvocationError(err); ie != nil {
+	if ie := invoke.AsInvocationError(err); ie != nil {
 		value := map[string]any{"code": ie.Code}
 		if ie.HasData() {
 			value["data"] = ie.Data
@@ -266,12 +266,12 @@ func errValue(err error) any {
 // handle's terminal (CloseOutput on completion; FireError on terminal
 // failure inside the engine). The graph is validated by the invoker before
 // execute is reached.
-func (eng *engine) execute(ctx context.Context, handle openbindings.BindingHandle[any, any]) {
+func (eng *engine) execute(ctx context.Context, handle invoke.BindingHandle[any, any]) {
 	eng.handle = handle
 
 	// runCtx tears down all workers when the invocation terminates (caller
 	// Cancel, abandoned output stream, or upstream ctx cancellation).
-	runCtx, stop := openbindings.DoneContext(ctx, handle.Done())
+	runCtx, stop := invoke.DoneContext(ctx, handle.Done())
 	defer stop()
 	eng.run(runCtx)
 
@@ -380,7 +380,7 @@ func (eng *engine) run(ctx context.Context) {
 	// deliberately NOT accompanied by exitFlag/cancel here: doing that would
 	// let the dispatcher halt at its exitFlag check and discard the conduit's
 	// own queued outputs (the bug this replaces).
-	sendFatal := func(ie *openbindings.InvocationError) {
+	sendFatal := func(ie *invoke.InvocationError) {
 		queue.push("", &event{fatal: ie})
 	}
 
@@ -392,8 +392,8 @@ func (eng *engine) run(ctx context.Context) {
 		errorEvent := map[string]any{"error": errVal, "event": ev.data}
 		if node.OnError == "" || ev.errorDepth >= maxErrorDepth {
 			eng.exitFlag.Store(true)
-			eng.handle.FireError(openbindings.NewInvocationErrorWithData(
-				openbindings.ErrCodeOperationGraphExit,
+			eng.handle.FireError(invoke.NewInvocationErrorWithData(
+				invoke.ErrCodeOperationGraphExit,
 				errorEvent,
 			))
 			cancel()
@@ -451,9 +451,9 @@ func (eng *engine) run(ctx context.Context) {
 		// Graph data is always generic JSON (input pump, transform/map/filter
 		// results, sub-op outputs are all maps/slices/primitives), so the [any,
 		// any] handle's JSON normalization on Write is a no-op here.
-		call := openbindings.Invoke(opCtx, eng.invoker, eng.args.Interface,
-			openbindings.NewOperationSignature[any, any](node.Operation),
-			openbindings.WithContext(eng.args.Context))
+		call := invoke.Invoke(opCtx, eng.invoker, eng.args.Interface,
+			invoke.NewOperationSignature[any, any](node.Operation),
+			invoke.WithContext(eng.args.Context))
 		c.call = call
 		c.mu.Unlock()
 
@@ -490,12 +490,12 @@ func (eng *engine) run(ctx context.Context) {
 				if err != nil {
 					c.setNonAccepting()
 					backClosure()
-					ie := openbindings.AsInvocationError(err)
+					ie := invoke.AsInvocationError(err)
 					if c.timeout && opCtx.Err() == context.DeadlineExceeded {
-						ie = &openbindings.InvocationError{Code: TimeoutExceeded}
+						ie = &invoke.InvocationError{Code: TimeoutExceeded}
 						call.Cancel()
 					}
-					if ie.Code == openbindings.ErrCodeCancelled && ctx.Err() != nil {
+					if ie.Code == invoke.ErrCodeCancelled && ctx.Err() != nil {
 						return // the graph itself is tearing down
 					}
 					if node.OnError != "" {
@@ -732,8 +732,8 @@ func (eng *engine) processNode(
 	// Amplification backstop.
 	if eng.eventCount.Add(1) > maxEvents {
 		eng.exitFlag.Store(true)
-		eng.handle.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeEventLimitExceeded,
+		eng.handle.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeEventLimitExceeded,
 		})
 		cancel()
 		return
@@ -752,8 +752,8 @@ func (eng *engine) processNode(
 	case "exit":
 		eng.exitFlag.Store(true)
 		if node.Error != nil && *node.Error {
-			eng.handle.FireError(openbindings.NewInvocationErrorWithData(
-				openbindings.ErrCodeOperationGraphExit,
+			eng.handle.FireError(invoke.NewInvocationErrorWithData(
+				invoke.ErrCodeOperationGraphExit,
 				ev.data,
 			))
 		} else if err := eng.handle.EmitOutput(ev.data); err != nil {
@@ -804,8 +804,8 @@ func (eng *engine) processConduitEvent(
 	startConduit(key, node)
 	c.mergeEvent(ev)
 	if err := c.call.Write(c.opCtx, ev.data); err != nil {
-		ie := openbindings.AsInvocationError(err)
-		if ie.Code == openbindings.ErrCodeInputClosed {
+		ie := invoke.AsInvocationError(err)
+		if ie.Code == invoke.ErrCodeInputClosed {
 			// The write raced the inner binding closing its input from below.
 			c.setNonAccepting()
 			backClosure()
@@ -837,9 +837,9 @@ func (eng *engine) processEach(
 		defer opCancel()
 	}
 
-	call := openbindings.Invoke(opCtx, eng.invoker, eng.args.Interface,
-		openbindings.NewOperationSignature[any, any](node.Operation),
-		openbindings.WithContext(eng.args.Context))
+	call := invoke.Invoke(opCtx, eng.invoker, eng.args.Interface,
+		invoke.NewOperationSignature[any, any](node.Operation),
+		invoke.WithContext(eng.args.Context))
 	// One write, then close: each fixes the graph's contribution at one
 	// write per session. Write/Close failures surface via the read loop.
 	_ = call.Write(opCtx, ev.data)
@@ -852,12 +852,12 @@ func (eng *engine) processEach(
 			return
 		}
 		if err != nil {
-			ie := openbindings.AsInvocationError(err)
+			ie := invoke.AsInvocationError(err)
 			if hasTimeout && opCtx.Err() == context.DeadlineExceeded {
-				ie = &openbindings.InvocationError{Code: TimeoutExceeded}
+				ie = &invoke.InvocationError{Code: TimeoutExceeded}
 				call.Cancel()
 			}
-			if ie.Code == openbindings.ErrCodeCancelled && ctx.Err() != nil {
+			if ie.Code == invoke.ErrCodeCancelled && ctx.Err() != nil {
 				return // graph teardown, not a node failure
 			}
 			sendPerEventError(key, errValue(ie), ev, lineage)
@@ -944,7 +944,7 @@ func (eng *engine) evalOrFail(
 	}
 	var result any
 	var err error
-	if eb, ok := eng.transform.(openbindings.TransformEvaluatorWithBindings); ok {
+	if eb, ok := eng.transform.(invoke.TransformEvaluatorWithBindings); ok {
 		bindings := map[string]any{}
 		if rv, defined := eng.rootValue(ev.root); defined {
 			bindings["input"] = rv
@@ -954,7 +954,7 @@ func (eng *engine) evalOrFail(
 		result, err = eng.transform.Evaluate(expression, ev.data)
 	}
 	if err != nil {
-		if errors.Is(err, openbindings.ErrTransformUndefined) {
+		if errors.Is(err, invoke.ErrTransformUndefined) {
 			sendPerEventError(key, TransformUndefined, ev, ev.lineage)
 		} else {
 			sendPerEventError(key, ExpressionEvaluationFailed, ev, ev.lineage)

@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // Mirrors the TS SDK's cyclic-schema.test.ts (rev 2a): a recursive component
@@ -47,8 +49,8 @@ const recursiveDoc = `{
 
 func TestRecursiveComponentSynthesizesAsDefs(t *testing.T) {
 	synth := &Synthesizer{}
-	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(recursiveDoc)}},
+	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(recursiveDoc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -97,8 +99,8 @@ func TestRecursiveComponentBelowOutputUnionHoistsAtBranchRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -132,8 +134,8 @@ func TestSynthesisTreatsRefShapedSchemaDataAsOpaque(t *testing.T) {
     }
   }}
 }`
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -157,8 +159,8 @@ func TestSynthesisTreatsRefShapedSchemaDataAsOpaque(t *testing.T) {
 
 func TestRecursiveComponentSynthesizesAndInvokesThroughCoreDocumentRoot(t *testing.T) {
 	doc := strings.Replace(recursiveDoc, `"paths":`, `"servers": [{"url": "https://api.example.test"}], "paths":`, 1)
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -180,13 +182,13 @@ func TestRecursiveComponentSynthesizesAndInvokesThroughCoreDocumentRoot(t *testi
 			Body:       io.NopCloser(strings.NewReader(string(body))),
 		}, nil
 	})}
-	invoker := openbindings.NewOperationInvoker(NewInvokerWithClient(client))
+	invoker := invoke.NewOperationInvoker(NewInvokerWithClient(client))
 	invoker.TransformEvaluator = openAPIJSONataEvaluator{}
-	call := openbindings.Invoke(
+	call := invoke.Invoke(
 		context.Background(),
 		invoker,
 		result.Interface,
-		openbindings.NewOperationSignature[any, any]("createTree"),
+		invoke.NewOperationSignature[any, any]("createTree"),
 	)
 	if err := call.Write(context.Background(), tree); err != nil {
 		t.Fatalf("write recursive input: %v", err)
@@ -194,7 +196,7 @@ func TestRecursiveComponentSynthesizesAndInvokesThroughCoreDocumentRoot(t *testi
 	if err := call.Close(); err != nil {
 		t.Fatalf("close input: %v", err)
 	}
-	output, err := openbindings.Single(context.Background(), call.Outputs())
+	output, err := invoke.Single(context.Background(), call.Outputs())
 	if err != nil {
 		t.Fatalf("read recursive output: %v", err)
 	}
@@ -231,8 +233,8 @@ func TestRecursiveComponentReachedThroughArrayItemsValidatesThroughCoreDocumentR
     }
   }}}
 }`
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -294,8 +296,8 @@ func TestResolvedParameterSchemaRefDoesNotEscapeIntoOBI(t *testing.T) {
   }}
 }`
 
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)

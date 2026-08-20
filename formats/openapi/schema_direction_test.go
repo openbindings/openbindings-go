@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func TestProjectOpenAPISchemaProjectsContentSchema(t *testing.T) {
@@ -122,8 +122,8 @@ func TestSynthesisProjectsDirectionalSchemas(t *testing.T) {
 			  }}}
 			}`, version)
 
-			result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+			result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
 			})
 			if err != nil {
 				t.Fatalf("synthesize: %v", err)

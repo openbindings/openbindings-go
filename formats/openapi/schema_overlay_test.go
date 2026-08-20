@@ -12,12 +12,13 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func synthesizeOverlayFixture(t *testing.T, synthesizer *Synthesizer, location, document string) openbindings.Interface {
 	t.Helper()
-	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Location:    location,
 			Content:     openbindings.TextContent(document),
@@ -286,8 +287,8 @@ func TestSynthesisOverlayOwnershipIsConcurrentAndCollisionSafe(t *testing.T) {
 			// raw value.
 			authored := fmt.Sprintf("schema-%d", index+1)
 			document := fmt.Sprintf(`{"openapi":"3.1.2","info":{"title":"Race","version":"1"},"paths":{"/value":{"get":{"operationId":"value","responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"string","default":null,%q:%q}}}}}}}}}`, schemaOverlayMarker, authored)
-			iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(document)}},
+			iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(document)}},
 			})
 			if err != nil {
 				errors <- err

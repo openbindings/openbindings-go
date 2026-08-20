@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // The exec channel vocabulary: the value space of a FieldRouter for this
@@ -65,7 +66,7 @@ type routedInput struct {
 //
 // A routed field absent from the input, or present as JSON null, is a
 // no-op.
-func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, cmd *Command, inherited []Flag, input any) (*routedInput, *openbindings.InvocationError) {
+func routeFields(site invoke.InvokeSite, hooks *invoke.InvokeHooks, cmd *Command, inherited []Flag, input any) (*routedInput, *invoke.InvocationError) {
 	noop := func() {}
 	out := &routedInput{cleanup: noop, record: map[string]string{}}
 	if input == nil {
@@ -79,8 +80,8 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		// dropped. Leaving out.fields nil here would let the bare command
 		// run with the payload discarded: the typed-nil map slips past
 		// buildCLIArgs's object guard (input != nil, ToStringAnyMap ok).
-		return nil, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeValidationFailed,
+		return nil, &invoke.InvocationError{
+			Code: invoke.ErrCodeValidationFailed,
 		}
 	}
 
@@ -93,7 +94,7 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 	var tmpDir string
 	usedNames := map[string]bool{}
 	stdinField := ""
-	fail := func(ie *openbindings.InvocationError) (*routedInput, *openbindings.InvocationError) {
+	fail := func(ie *invoke.InvocationError) (*routedInput, *invoke.InvocationError) {
 		out.cleanup()
 		return nil, ie
 	}
@@ -101,7 +102,7 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 	for field, value := range inputMap {
 		route, rerr := hooks.RouteField(site, field, value)
 		if rerr != nil {
-			return fail(openbindings.AsInvocationError(rerr))
+			return fail(invoke.AsInvocationError(rerr))
 		}
 		if route == "" {
 			out.record[field] = "assumption/" + RouteArgv
@@ -115,8 +116,8 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		case RouteStdinDash, RouteStdin, RouteFile:
 		default:
 			// A typo'd token must never quietly put a value on argv.
-			return fail(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeValidationFailed,
+			return fail(&invoke.InvocationError{
+				Code: invoke.ErrCodeValidationFailed,
 			})
 		}
 
@@ -126,26 +127,26 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		switch route {
 		case RouteStdinDash, RouteFile:
 			if kind == slotNone {
-				return fail(&openbindings.InvocationError{
-					Code: openbindings.ErrCodeValidationFailed,
+				return fail(&invoke.InvocationError{
+					Code: invoke.ErrCodeValidationFailed,
 				})
 			}
 			if kind == slotBoolFlag {
-				return fail(&openbindings.InvocationError{
-					Code: openbindings.ErrCodeValidationFailed,
+				return fail(&invoke.InvocationError{
+					Code: invoke.ErrCodeValidationFailed,
 				})
 			}
 			if route == RouteStdinDash {
 				if cs := slotChoices(slot); len(cs) > 0 && !containsString(cs, "-") {
-					return fail(&openbindings.InvocationError{
-						Code: openbindings.ErrCodeValidationFailed,
+					return fail(&invoke.InvocationError{
+						Code: invoke.ErrCodeValidationFailed,
 					})
 				}
 			}
 		case RouteStdin:
 			if kind != slotNone {
-				return fail(&openbindings.InvocationError{
-					Code: openbindings.ErrCodeValidationFailed,
+				return fail(&invoke.InvocationError{
+					Code: invoke.ErrCodeValidationFailed,
 				})
 			}
 		}
@@ -158,16 +159,16 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 		}
 		data, isString := routeBytes(value)
 		if len(data) > maxRouteBytes {
-			return fail(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeValidationFailed,
+			return fail(&invoke.InvocationError{
+				Code: invoke.ErrCodeValidationFailed,
 			})
 		}
 
 		switch route {
 		case RouteStdinDash, RouteStdin:
 			if stdinField != "" {
-				return fail(&openbindings.InvocationError{
-					Code: openbindings.ErrCodeValidationFailed,
+				return fail(&invoke.InvocationError{
+					Code: invoke.ErrCodeValidationFailed,
 				})
 			}
 			stdinField = field
@@ -181,8 +182,8 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 			if tmpDir == "" {
 				dir, err := os.MkdirTemp("", "usage-route-*")
 				if err != nil {
-					return fail(&openbindings.InvocationError{
-						Code: openbindings.ErrCodeExecutionFailed,
+					return fail(&invoke.InvocationError{
+						Code: invoke.ErrCodeExecutionFailed,
 					})
 				}
 				tmpDir = dir
@@ -195,8 +196,8 @@ func routeFields(site openbindings.InvokeSite, hooks *openbindings.InvokeHooks, 
 			usedNames[name] = true
 			path := filepath.Join(tmpDir, name)
 			if err := os.WriteFile(path, data, 0o600); err != nil {
-				return fail(&openbindings.InvocationError{
-					Code: openbindings.ErrCodeExecutionFailed,
+				return fail(&invoke.InvocationError{
+					Code: invoke.ErrCodeExecutionFailed,
 				})
 			}
 			fields[field] = path

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // convertToInterface inventories every declared root field. The operation
@@ -68,8 +69,8 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string, bind
 			}
 
 			ref := rt.label + "/" + f.Name
-			opKey := openbindings.SanitizeKey(f.Name)
-			opKey = openbindings.ResolveKeyCollision(opKey, strings.ToLower(rt.label), usedKeys)
+			opKey := synthesize.SanitizeKey(f.Name)
+			opKey = synthesize.ResolveKeyCollision(opKey, strings.ToLower(rt.label), usedKeys)
 			usedKeys[opKey] = ref
 
 			op := openbindings.Operation{}

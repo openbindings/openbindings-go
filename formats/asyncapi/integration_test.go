@@ -14,7 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/coder/websocket"
+
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -58,7 +61,7 @@ func shortCtx(t *testing.T) context.Context {
 
 func codeOf(t *testing.T, err error) string {
 	t.Helper()
-	var ie *openbindings.InvocationError
+	var ie *invoke.InvocationError
 	if !errors.As(err, &ie) {
 		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
 	}
@@ -82,7 +85,7 @@ func wsTextContext(bindCtx map[string]any) map[string]any {
 }
 
 // drainOutputs reads the invocation's outputs to EOF or terminal error.
-func drainOutputs(t *testing.T, call openbindings.Invocation[any, any]) ([]any, error) {
+func drainOutputs(t *testing.T, call invoke.Invocation[any, any]) ([]any, error) {
 	t.Helper()
 	out := call.Outputs()
 	var vals []any
@@ -221,8 +224,8 @@ func newHTTPFixture(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	return srv, &requests
 }
 
-func httpSource(srv *httptest.Server) openbindings.InvocationSource {
-	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeAsyncAPISpec(srv.URL))}
+func httpSource(srv *httptest.Server) invoke.InvocationSource {
+	return invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeAsyncAPISpec(srv.URL))}
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +238,7 @@ func TestContextRequiredBeforeAnyIO(t *testing.T) {
 	defer binv.Close()
 
 	before := requests.Load()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: httpSource(srv),
 		Ref:    "#/operations/sendMessage",
 	})
@@ -244,11 +247,11 @@ func TestContextRequiredBeforeAnyIO(t *testing.T) {
 	}
 	_, err := drainOutputs(t, call)
 
-	var ie *openbindings.InvocationError
+	var ie *invoke.InvocationError
 	if !errors.As(err, &ie) {
 		t.Fatalf("expected *InvocationError, got %v", err)
 	}
-	details := openbindings.ContextRequiredFrom(ie)
+	details := invoke.ContextRequiredFrom(ie)
 	if details == nil {
 		t.Fatalf("expected CONTEXT_REQUIRED with details, got %v", err)
 	}
@@ -269,12 +272,12 @@ func TestExcludedHTTPSubscriptionPrecedesCredentialNegotiation(t *testing.T) {
 	defer binv.Close()
 
 	before := requests.Load()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: httpSource(srv),
 		Ref:    "#/operations/receiveEvents",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected standalone HTTP send exclusion, got %v", err)
 	}
 	if got := requests.Load(); got != before {
@@ -321,8 +324,8 @@ func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
 
 	for _, opRef := range []string{"#/operations/refScheme", "#/operations/inlineScheme"} {
 		t.Run(opRef, func(t *testing.T) {
-			details, err := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
-				Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
+			details, err := binv.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+				Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
 				Ref:    opRef,
 			})
 			if err != nil {
@@ -339,8 +342,8 @@ func TestRealAsyncAPI30SecurityListParsesAndChallenges(t *testing.T) {
 			}
 
 			// A bearer token in context satisfies the challenge.
-			ok, err := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
-				Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
+			ok, err := binv.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+				Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
 				Ref:     opRef,
 				Context: map[string]any{"bearerToken": "t"},
 			})
@@ -387,8 +390,8 @@ func TestChannelWithoutAddressIsRefusedPreDispatch(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
 		Ref:    "#/operations/notifyOp",
 	})
 	if err := call.Write(bg(), map[string]any{}); err != nil {
@@ -411,8 +414,8 @@ func TestChannelWithoutAddressIsRefusedPreDispatch(t *testing.T) {
 
 	// The consumer may supply the concrete address at the configuration
 	// point; the publish then dispatches to exactly that address.
-	call = binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
+	call = binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(docJSON)},
 		Ref:     "#/operations/notifyOp",
 		Context: map[string]any{"configuration": map[string]any{"address": "/inbox"}},
 	})
@@ -439,7 +442,7 @@ func TestUnarySendAppliesBearerAndYieldsResponse(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  httpSource(srv),
 		Ref:     "#/operations/sendMessage",
 		Context: map[string]any{"bearerToken": testSecret},
@@ -448,7 +451,7 @@ func TestUnarySendAppliesBearerAndYieldsResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v, err := openbindings.Single(shortCtx(t), call.Outputs())
+	v, err := invoke.Single(shortCtx(t), call.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +469,7 @@ func TestServer401IsStructuralAndProtocolBlind(t *testing.T) {
 
 	// sendOpenMessage declares no security, so the request dispatches and the
 	// server's 401 surfaces operationally.
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: httpSource(srv),
 		Ref:    "#/operations/sendOpenMessage",
 	})
@@ -474,8 +477,8 @@ func TestServer401IsStructuralAndProtocolBlind(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	var ie *openbindings.InvocationError
-	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeExecutionFailed {
+	var ie *invoke.InvocationError
+	if !errors.As(err, &ie) || ie.Code != invoke.ErrCodeExecutionFailed {
 		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", err)
 	}
 	if ie.HasData() {
@@ -488,7 +491,7 @@ func TestMissingInputOnSend(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: httpSource(srv),
 		Ref:    "#/operations/sendOpenMessage",
 	})
@@ -496,7 +499,7 @@ func TestMissingInputOnSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_REFUSED, got %v", err)
 	}
 }
@@ -512,14 +515,14 @@ func TestNoInputOperationRefused_HTTPPublish(t *testing.T) {
 	defer binv.Close()
 
 	before := requests.Load()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  httpSource(srv),
 		Ref:     "#/operations/sendAck",
 		Binding: &openbindings.BindingEntry{Operation: "sendAck", Source: DefaultSourceName, Ref: "#/operations/sendAck"},
 		// InputSchema nil → no-input operation; publish has no empty message.
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_REFUSED for a no-input publish (pre-dispatch), got %v", err)
 	}
 	if got := requests.Load(); got != before {
@@ -539,14 +542,14 @@ func TestNoInputOperationRefused_WSPublish(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  wsSource(srv, nil),
 		Ref:     "#/operations/publish",
 		Binding: &openbindings.BindingEntry{Operation: "publish", Source: DefaultSourceName, Ref: "#/operations/publish"},
 		Context: wsTextContext(nil),
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_REFUSED for a no-input ws publish (pre-dial), got %v", err)
 	}
 	if c := upgrades.Load(); c != 0 {
@@ -565,7 +568,7 @@ func TestWSPublishZeroMessagesRefused(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  wsSource(srv, nil),
 		Ref:     "#/operations/publish",
 		Context: wsTextContext(nil),
@@ -574,7 +577,7 @@ func TestWSPublishZeroMessagesRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_REFUSED for a zero-message publish (pre-send), got %v", err)
 	}
 }
@@ -584,7 +587,7 @@ func TestSendAckYieldsZeroOutputs(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: httpSource(srv),
 		Ref:    "#/operations/sendAck",
 	})
@@ -626,12 +629,12 @@ func TestHTTPSubscriptionDoesNotInferSSE(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
 		Ref:    "#/operations/receiveCaps",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected standalone HTTP send exclusion, got %v", err)
 	}
 	if requests.Load() != 0 {
@@ -650,19 +653,19 @@ func TestWiringErrors(t *testing.T) {
 
 	cases := []struct {
 		name string
-		args *openbindings.BindingInvocationArgs
+		args *invoke.BindingInvocationArgs
 		code string
 	}{
-		{"unknown operation", &openbindings.BindingInvocationArgs{
+		{"unknown operation", &invoke.BindingInvocationArgs{
 			Source: httpSource(srv), Ref: "#/operations/nope",
-		}, openbindings.ErrCodeRefNotFound},
-		{"empty ref", &openbindings.BindingInvocationArgs{
+		}, invoke.ErrCodeRefNotFound},
+		{"empty ref", &invoke.BindingInvocationArgs{
 			Source: httpSource(srv), Ref: "",
-		}, openbindings.ErrCodeInvalidRef},
-		{"unparsable source", &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent("not asyncapi")},
+		}, invoke.ErrCodeInvalidRef},
+		{"unparsable source", &invoke.BindingInvocationArgs{
+			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent("not asyncapi")},
 			Ref:    "#/operations/sendMessage",
-		}, openbindings.ErrCodeSourceLoadFailed},
+		}, invoke.ErrCodeSourceLoadFailed},
 	}
 	before := requests.Load()
 	for _, tc := range cases {
@@ -689,7 +692,7 @@ func TestPrepareBindingReportsBearerRequirement(t *testing.T) {
 	defer binv.Close()
 
 	before := requests.Load()
-	details, err := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
+	details, err := binv.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: httpSource(srv),
 		Ref:    "#/operations/sendMessage",
 	})
@@ -715,7 +718,7 @@ func TestPrepareBindingNilWhenSatisfiedOrUndeclared(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	if d, _ := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
+	if d, _ := binv.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  httpSource(srv),
 		Ref:     "#/operations/sendMessage",
 		Context: map[string]any{"bearerToken": testSecret},
@@ -723,7 +726,7 @@ func TestPrepareBindingNilWhenSatisfiedOrUndeclared(t *testing.T) {
 		t.Errorf("satisfied context: expected nil, got %+v", d)
 	}
 
-	if d, _ := binv.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
+	if d, _ := binv.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: httpSource(srv),
 		Ref:    "#/operations/sendOpenMessage",
 	}); d != nil {
@@ -739,8 +742,8 @@ func TestPrepareBindingNeverFetches(t *testing.T) {
 	cold := NewInvoker()
 	defer cold.Close()
 	before := requests.Load()
-	if d, err := cold.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
+	if d, err := cold.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
 		Ref:    "#/operations/sendMessage",
 	}); err != nil || d != nil {
 		t.Fatalf("cold cache: expected (nil, nil), got (%+v, %v)", d, err)
@@ -750,21 +753,21 @@ func TestPrepareBindingNeverFetches(t *testing.T) {
 	}
 
 	// Warm the cache through a real invocation, then preflight answers.
-	call := cold.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
+	call := cold.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
 		Ref:     "#/operations/sendMessage",
 		Context: map[string]any{"bearerToken": testSecret},
 	})
 	if err := call.Write(bg(), map[string]any{"text": "warm"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openbindings.Single(shortCtx(t), call.Outputs()); err != nil {
+	if _, err := invoke.Single(shortCtx(t), call.Outputs()); err != nil {
 		t.Fatal(err)
 	}
 
 	warmBefore := requests.Load()
-	d, err := cold.PrepareBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
+	d, err := cold.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
 		Ref:    "#/operations/sendMessage",
 	})
 	if err != nil || d == nil {
@@ -790,8 +793,8 @@ func TestOperationInvokerResolvesChallengeFromStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	op := openbindings.NewOperationInvoker(binv)
-	op.ContextResolver = openbindings.StoreContextResolver(store)
+	op := invoke.NewOperationInvoker(binv)
+	op.ContextResolver = invoke.StoreContextResolver(store)
 
 	iface := &openbindings.Interface{
 		OpenBindings: "0.2.0",
@@ -810,12 +813,12 @@ func TestOperationInvokerResolvesChallengeFromStore(t *testing.T) {
 		},
 	}
 
-	call := openbindings.Invoke(bg(), op, iface,
-		openbindings.NewOperationSignature[any, any]("sendMessage"))
+	call := invoke.Invoke(bg(), op, iface,
+		invoke.NewOperationSignature[any, any]("sendMessage"))
 	if err := call.Write(bg(), map[string]any{"text": "negotiated"}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := openbindings.Single(shortCtx(t), call.Outputs())
+	v, err := invoke.Single(shortCtx(t), call.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -909,8 +912,8 @@ func writeWSJSON(ctx context.Context, conn *websocket.Conn, msg any) error {
 	return conn.Write(writeCtx, websocket.MessageText, raw)
 }
 
-func wsSource(srv *httptest.Server, scheme *securityScheme) openbindings.InvocationSource {
-	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeWSAsyncAPISpec(srv.URL, scheme))}
+func wsSource(srv *httptest.Server, scheme *securityScheme) invoke.InvocationSource {
+	return invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeWSAsyncAPISpec(srv.URL, scheme))}
 }
 
 func TestOpenBindingsBridgePreservesWebSocketReplyValues(t *testing.T) {
@@ -947,8 +950,8 @@ func TestOpenBindingsBridgePreservesWebSocketReplyValues(t *testing.T) {
 	}
 	invoker := NewInvoker()
 	defer invoker.Close()
-	call := invoker.InvokeBinding(shortCtx(t), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(document)},
+	call := invoker.InvokeBinding(shortCtx(t), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(document)},
 		Ref:    "#/operations/submit", Context: wsTextContext(nil),
 	})
 	if err := call.Write(shortCtx(t), map[string]any{"id": 91}); err != nil {
@@ -984,7 +987,7 @@ func TestWebSocketBearerRidesUpgradeRequest(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "test-bearer-xyz"},
@@ -1022,7 +1025,7 @@ func TestWebSocketNoInBandAuthWithoutDeclaredScheme(t *testing.T) {
 	defer binv.Close()
 
 	// No declared security (wsSource scheme nil) + bearerToken in context.
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  wsSource(srv, nil),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "secret-tok"},
@@ -1061,7 +1064,7 @@ func TestWebSocketQueryParamApiKey(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  wsSource(srv, &securityScheme{Type: "apiKey", In: "query", Name: "api_key"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"apiKey": "secret-key-abc"},
@@ -1099,7 +1102,7 @@ func TestWebSocketQueryParamApiKey_NamedViaApiKeysMap(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  wsSource(srv, &securityScheme{Type: "apiKey", In: "query", Name: "api_key"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"apiKeys": map[string]any{"auth": "named-secret-xyz"}},
@@ -1133,7 +1136,7 @@ func TestWebSocketStreamingMultipleEvents(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "tok"},
@@ -1163,7 +1166,7 @@ func TestWebSocketStopCancelsSubscription(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "tok"},
@@ -1174,7 +1177,7 @@ func TestWebSocketStopCancelsSubscription(t *testing.T) {
 	}
 	out.Stop()
 	_, err := out.Read(shortCtx(t))
-	if codeOf(t, err) != openbindings.ErrCodeCancelled {
+	if codeOf(t, err) != invoke.ErrCodeCancelled {
 		t.Fatalf("expected ERR_CANCELLED, got %v", err)
 	}
 }
@@ -1194,14 +1197,14 @@ func TestWebSocketServerErrorFrame(t *testing.T) {
 	// unification): a consumer whose stream speaks it attaches an
 	// OutputDecoder — a returned error is terminal, which IS the override
 	// channel for error-frame conventions.
-	conventionDecoder := func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+	conventionDecoder := func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 		var parsed map[string]any
 		if err := json.Unmarshal(raw.Body, &parsed); err != nil {
 			return nil, err
 		}
 		if errVal, has := parsed["error"]; has && errVal != nil {
-			return nil, openbindings.NewInvocationErrorWithData(
-				openbindings.ErrCodeStreamError,
+			return nil, invoke.NewInvocationErrorWithData(
+				invoke.ErrCodeStreamError,
 				map[string]any{"error": errVal},
 			)
 		}
@@ -1210,14 +1213,14 @@ func TestWebSocketServerErrorFrame(t *testing.T) {
 		}
 		return parsed, nil
 	}
-	args := &openbindings.BindingInvocationArgs{
+	args := &invoke.BindingInvocationArgs{
 		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/subscribe",
 		Context: map[string]any{"bearerToken": "tok"},
 	}
 	// Hooks ride the args on the binding-layer path (what the operation
 	// invoker's fill does for embedders).
-	hooked := openbindings.NewOperationInvoker(binv)
+	hooked := invoke.NewOperationInvoker(binv)
 	hooked.OutputDecoder = conventionDecoder
 	call := hooked.InvokeBinding(bg(), args)
 	vals, err := drainOutputs(t, call)
@@ -1227,8 +1230,8 @@ func TestWebSocketServerErrorFrame(t *testing.T) {
 	if vals[0].(map[string]any)["ok"] != true {
 		t.Fatalf("data frame must unwrap to its payload, got %v", vals[0])
 	}
-	var ie *openbindings.InvocationError
-	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeStreamError {
+	var ie *invoke.InvocationError
+	if !errors.As(err, &ie) || ie.Code != invoke.ErrCodeStreamError {
 		t.Fatalf("expected ERR_STREAM_ERROR, got %v", err)
 	}
 	if !ie.HasData() || !reflect.DeepEqual(ie.Data, map[string]any{"error": map[string]any{"message": "boom"}}) {
@@ -1247,7 +1250,7 @@ func TestWebSocketSubscriptionHasNoInput(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: wsSource(srv, nil),
 		Ref:    "#/operations/subscribe",
 	})
@@ -1282,8 +1285,8 @@ func TestNewInvokerWithClient(t *testing.T) {
 	binv := NewInvokerWithClient(custom)
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeAsyncAPISpec("http://example.test"))},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(makeAsyncAPISpec("http://example.test"))},
 		Ref:    "#/operations/sendOpenMessage",
 	})
 	if err := call.Write(bg(), map[string]any{"text": "hi"}); err != nil {

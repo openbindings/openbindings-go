@@ -5,8 +5,11 @@ import (
 	"sort"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // Source discovery (embedded content per CONN-D-01, .proto files on disk
@@ -14,7 +17,7 @@ import (
 
 // convertToInterface converts protobuf service descriptors to an OpenBindings
 // interface with Connect format bindings.
-func convertToInterface(disc *discovery, sourceLocation string, onWarning func(openbindings.SynthesizerWarning)) (openbindings.Interface, error) {
+func convertToInterface(disc *discovery, sourceLocation string, onWarning func(synthesize.SynthesizerWarning)) (openbindings.Interface, error) {
 	if disc == nil {
 		return openbindings.Interface{}, fmt.Errorf("nil discovery result")
 	}
@@ -52,8 +55,8 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(o
 				continue
 			}
 			fqn := string(svc.FullName()) + "/" + string(method.Name())
-			opKey := openbindings.SanitizeKey(string(method.Name()))
-			opKey = openbindings.ResolveKeyCollision(opKey, string(svc.Name()), usedKeys)
+			opKey := synthesize.SanitizeKey(string(method.Name()))
+			opKey = synthesize.ResolveKeyCollision(opKey, string(svc.Name()), usedKeys)
 			usedKeys[opKey] = fqn
 
 			op := openbindings.Operation{
@@ -149,11 +152,11 @@ type schemaWalker struct {
 	defs      map[string]any
 	building  map[string]bool
 	baseID    string
-	onWarning func(openbindings.SynthesizerWarning)
+	onWarning func(synthesize.SynthesizerWarning)
 	path      string
 }
 
-func newSchemaWalker(direction schemaDirection, onWarning func(openbindings.SynthesizerWarning), path string) *schemaWalker {
+func newSchemaWalker(direction schemaDirection, onWarning func(synthesize.SynthesizerWarning), path string) *schemaWalker {
 	return &schemaWalker{
 		direction: direction,
 		defs:      make(map[string]any),
@@ -168,7 +171,7 @@ func (w *schemaWalker) warn(code, message string, details map[string]any) {
 	if w.onWarning == nil {
 		return
 	}
-	w.onWarning(openbindings.SynthesizerWarning{
+	w.onWarning(synthesize.SynthesizerWarning{
 		Code:    code,
 		Message: message,
 		Path:    w.path,

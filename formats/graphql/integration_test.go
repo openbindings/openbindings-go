@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 func invocationSchema() *introspectionSchema {
@@ -23,16 +23,16 @@ func invocationSchema() *introspectionSchema {
 	return schema
 }
 
-func pinnedInvocationSource(t *testing.T, location string) openbindings.InvocationSource {
+func pinnedInvocationSource(t *testing.T, location string) invoke.InvocationSource {
 	t.Helper()
 	content, err := json.Marshal(map[string]any{"data": map[string]any{"__schema": invocationSchema()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return openbindings.InvocationSource{BindingSpec: BindingSpec, Location: location, Content: content}
+	return invoke.InvocationSource{BindingSpec: BindingSpec, Location: location, Content: content}
 }
 
-func collectInvocation(ctx context.Context, call openbindings.Invocation[any, any], input any, inputPresent bool) ([]any, *openbindings.InvocationError) {
+func collectInvocation(ctx context.Context, call invoke.Invocation[any, any], input any, inputPresent bool) ([]any, *invoke.InvocationError) {
 	if inputPresent {
 		_ = call.Write(ctx, input)
 	}
@@ -45,7 +45,7 @@ func collectInvocation(ctx context.Context, call openbindings.Invocation[any, an
 			return outputs, nil
 		}
 		if err != nil {
-			var invocationErr *openbindings.InvocationError
+			var invocationErr *invoke.InvocationError
 			_ = errors.As(err, &invocationErr)
 			return outputs, invocationErr
 		}
@@ -76,7 +76,7 @@ func TestHTTPInvocationPreservesDocumentVariablesAndPartialApplicationValue(t *t
 		"source":        "query Viewer($id: ID!) { viewer(id: $id) }",
 		"operationName": "Viewer",
 	}
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:      pinnedInvocationSource(t, srv.URL),
 		Ref:         "query/viewer",
 		InputSchema: map[string]any{"type": "object"},
@@ -84,7 +84,7 @@ func TestHTTPInvocationPreservesDocumentVariablesAndPartialApplicationValue(t *t
 	})
 	input := map[string]any{"id": "u-1", "unused": 7, "_query": "ordinary variable"}
 	outputs, invocationErr := collectInvocation(context.Background(), call, input, true)
-	if len(outputs) != 1 || outputs[0] != nil || invocationErr == nil || invocationErr.Code != openbindings.ErrCodeExecutionFailed {
+	if len(outputs) != 1 || outputs[0] != nil || invocationErr == nil || invocationErr.Code != invoke.ErrCodeExecutionFailed {
 		t.Fatalf("outputs = %#v, err = %v", outputs, invocationErr)
 	}
 	request := <-requests
@@ -107,7 +107,7 @@ func TestHTTPInvocationOmitsAbsentVariables(t *testing.T) {
 		_, _ = w.Write([]byte(`{"data":{"health":"ok"}}`))
 	}))
 	defer srv.Close()
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:  pinnedInvocationSource(t, srv.URL),
 		Ref:     "query/health",
 		Context: graphqlContext("query { health }"),
@@ -138,7 +138,7 @@ func TestHTTPMediaClassification(t *testing.T) {
 				_, _ = w.Write([]byte(`{"errors":[{"message":"request rejected"}]}`))
 			}))
 			defer srv.Close()
-			call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 				Source:  pinnedInvocationSource(t, srv.URL),
 				Ref:     "query/viewer",
 				Context: graphqlContext("query { viewer }"),
@@ -159,30 +159,30 @@ func TestPreDispatchChallengesAndRefusalsHaveNoIO(t *testing.T) {
 	defer srv.Close()
 	invoker := NewInvoker()
 
-	details, err := invoker.PrepareBinding(context.Background(), &openbindings.BindingInvocationArgs{
+	details, err := invoker.PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source: pinnedInvocationSource(t, srv.URL), Ref: "query/viewer",
 	})
 	if err != nil || details == nil || details.Alternatives[0].Requirements[0].Extra["point"] != "document" {
 		t.Fatalf("prepare = %#v, %v", details, err)
 	}
-	missing := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+	missing := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source: pinnedInvocationSource(t, srv.URL), Ref: "query/viewer",
 	})
 	_, missingErr := collectInvocation(context.Background(), missing, nil, false)
-	if missingErr == nil || missingErr.Code != openbindings.ErrCodeContextRequired {
+	if missingErr == nil || missingErr.Code != invoke.ErrCodeContextRequired {
 		t.Fatalf("missing document = %v", missingErr)
 	}
 
-	mismatch := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+	mismatch := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source: pinnedInvocationSource(t, srv.URL), Ref: "query/viewer",
 		Context: graphqlContext("query { health }"),
 	})
 	_, mismatchErr := collectInvocation(context.Background(), mismatch, nil, false)
-	if mismatchErr == nil || mismatchErr.Code != openbindings.ErrCodeSourceConfigError {
+	if mismatchErr == nil || mismatchErr.Code != invoke.ErrCodeSourceConfigError {
 		t.Fatalf("mismatch = %v", mismatchErr)
 	}
 
-	collision := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+	collision := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source: pinnedInvocationSource(t, srv.URL), Ref: "query/viewer",
 		Context: map[string]any{"configuration": map[string]any{
 			"document": "query { viewer }",
@@ -192,11 +192,11 @@ func TestPreDispatchChallengesAndRefusalsHaveNoIO(t *testing.T) {
 		}},
 	})
 	_, collisionErr := collectInvocation(context.Background(), collision, nil, false)
-	if collisionErr == nil || collisionErr.Code != openbindings.ErrCodeSourceConfigError {
+	if collisionErr == nil || collisionErr.Code != invoke.ErrCodeSourceConfigError {
 		t.Fatalf("collision = %v", collisionErr)
 	}
 
-	unnamedCredential := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
+	unnamedCredential := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source: pinnedInvocationSource(t, srv.URL), Ref: "query/viewer",
 		Context: map[string]any{
 			"bearerToken": "ambiguous",
@@ -206,7 +206,7 @@ func TestPreDispatchChallengesAndRefusalsHaveNoIO(t *testing.T) {
 		},
 	})
 	_, credentialErr := collectInvocation(context.Background(), unnamedCredential, nil, false)
-	if credentialErr == nil || credentialErr.Code != openbindings.ErrCodeSourceConfigError {
+	if credentialErr == nil || credentialErr.Code != invoke.ErrCodeSourceConfigError {
 		t.Fatalf("unnamed credential = %v", credentialErr)
 	}
 	if requests.Load() != 0 {

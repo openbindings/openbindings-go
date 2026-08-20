@@ -19,6 +19,8 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // BindingSpec identifies the unreleased first MCP binding candidate. It
@@ -47,7 +49,7 @@ type Invoker struct {
 	solicitProgress *bool
 }
 
-var _ openbindings.BindingInvoker = (*Invoker)(nil)
+var _ invoke.BindingInvoker = (*Invoker)(nil)
 
 // InvokerOption configures an Invoker.
 type InvokerOption func(*Invoker)
@@ -149,8 +151,8 @@ func mcpBindingSpecInfos() []openbindings.BindingSpecInfo {
 // Credentials are applied from args.Context (bearerToken, apiKey, basic,
 // headers, cookies) as HTTP headers; an HTTP 401 from the server surfaces as
 // a terminal ERR_AUTH_REQUIRED.
-func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
-	inv := openbindings.NewInvocationImpl[any, any](ctx)
+func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
+	inv := invoke.NewInvocationImpl[any, any](ctx)
 	go e.run(ctx, args, inv)
 	return inv
 }
@@ -161,9 +163,9 @@ type Synthesizer struct {
 	httpClient    *http.Client
 }
 
-var _ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
-var _ openbindings.CoverageSynthesizer = (*Synthesizer)(nil)
-var _ openbindings.SourceInspector = (*Synthesizer)(nil)
+var _ synthesize.InterfaceSynthesizer = (*Synthesizer)(nil)
+var _ synthesize.CoverageSynthesizer = (*Synthesizer)(nil)
+var _ synthesize.SourceInspector = (*Synthesizer)(nil)
 
 // SynthesizerOption configures a Synthesizer.
 type SynthesizerOption func(*Synthesizer)
@@ -208,7 +210,7 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // offline, and the server is never dialed — MCP-D-02 still requires the
 // location (content does not waive it), and an invalid pin is refused
 // loudly before any I/O. Without content, discovery connects live.
-func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
 	observation, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
@@ -216,12 +218,12 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	return observation.iface, nil
 }
 
-func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
 	observation, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	return openbindings.NewSynthesisResult(
+	return synthesize.NewSynthesisResult(
 		observation.iface,
 		synthesisCoverage(observation.disc, observation.iface),
 		true,
@@ -233,16 +235,16 @@ type synthesisObservation struct {
 	disc  *discovery
 }
 
-func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*synthesisObservation, error) {
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesisObservation, error) {
 	if len(in.Sources) == 0 {
-		skeleton, err := openbindings.SynthesisSkeleton(in)
+		skeleton, err := synthesize.SynthesisSkeleton(in)
 		if err != nil {
 			return nil, err
 		}
 		return &synthesisObservation{iface: &skeleton}, nil
 	}
 	if len(in.Sources) > 1 {
-		return nil, openbindings.ErrMultipleSources
+		return nil, synthesize.ErrMultipleSources
 	}
 	src := in.Sources[0]
 	if src.BindingSpec != BindingSpec {
@@ -288,7 +290,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		entry.Content = disc.PinnedListing
 		iface.Sources[DefaultSourceName] = entry
 	}
-	if err := openbindings.FinalizeSynthesis(iface, in, DefaultSourceName, src.BindingSpec); err != nil {
+	if err := synthesize.FinalizeSynthesis(iface, in, DefaultSourceName, src.BindingSpec); err != nil {
 		return nil, err
 	}
 
@@ -301,13 +303,13 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 func buildHTTPHeaders(bindCtx map[string]any) map[string]string {
 	headers := map[string]string{}
 
-	if token := openbindings.ContextBearerToken(bindCtx); token != "" {
+	if token := invoke.ContextBearerToken(bindCtx); token != "" {
 		headers["Authorization"] = "Bearer " + token
 	}
-	for k, v := range openbindings.ContextHeaders(bindCtx) {
+	for k, v := range invoke.ContextHeaders(bindCtx) {
 		headers[k] = v
 	}
-	if cookies := openbindings.ContextCookies(bindCtx); len(cookies) > 0 {
+	if cookies := invoke.ContextCookies(bindCtx); len(cookies) > 0 {
 		var parts []string
 		for name, value := range cookies {
 			parts = append(parts, name+"="+value)

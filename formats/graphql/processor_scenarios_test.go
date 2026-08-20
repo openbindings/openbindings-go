@@ -14,7 +14,9 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/processorscenarios"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func TestProcessorScenarios(t *testing.T) {
@@ -129,7 +131,7 @@ func (t *graphqlScenarioTransport) observed() map[string]any {
 
 func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scenario) processorscenarios.Observation {
 	t.Helper()
-	source := openbindings.InvocationSource{BindingSpec: BindingSpec}
+	source := invoke.InvocationSource{BindingSpec: BindingSpec}
 	if location, ok := scenario.Given.Source["location"].(string); ok {
 		source.Location = location
 	}
@@ -152,7 +154,7 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	transport := &graphqlScenarioTransport{peer: peer}
 	invoker := NewInvokerWithClient(&http.Client{Transport: transport})
 
-	args := &openbindings.BindingInvocationArgs{
+	args := &invoke.BindingInvocationArgs{
 		Source:  source,
 		Ref:     ref,
 		Context: contextValue,
@@ -162,19 +164,19 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		args.InputSchema = map[string]any{"type": "object"}
 	}
 	joined := strings.HasPrefix(scenario.ID, "GQL-FI-")
-	var call openbindings.Invocation[any, any]
+	var call invoke.Invocation[any, any]
 	if joined {
-		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-			Sources: []openbindings.SynthesizeSource{{BindingSpec: source.BindingSpec, Location: source.Location, Content: source.Content}},
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+			Sources: []synthesize.SynthesizeSource{{BindingSpec: source.BindingSpec, Location: source.Location, Content: source.Content}},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		op := openbindings.NewOperationInvoker(invoker)
-		call = openbindings.Invoke(
+		op := invoke.NewOperationInvoker(invoker)
+		call = invoke.Invoke(
 			context.Background(), op, iface,
-			openbindings.NewOperationSignature[any, any](graphQLOperationForRef(t, iface, ref)),
-			openbindings.WithContext(contextValue),
+			invoke.NewOperationSignature[any, any](graphQLOperationForRef(t, iface, ref)),
+			invoke.WithContext(contextValue),
 		)
 	} else {
 		call = invoker.InvokeBinding(context.Background(), args)
@@ -200,7 +202,7 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	if dispatch != nil {
 		data["dispatch"] = dispatch
 	}
-	if terminal != nil && terminal.Code == openbindings.ErrCodeContextRequired {
+	if terminal != nil && terminal.Code == invoke.ErrCodeContextRequired {
 		data["context"] = normalizeScenarioValue(terminal.Data)
 		return processorscenarios.Observation{Disposition: "context-required", Phase: "pre-dispatch", Data: data}
 	}

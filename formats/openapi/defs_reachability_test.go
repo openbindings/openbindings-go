@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // Twin of openbindings-ts/packages/openapi/src/defs-reachability.test.ts.
@@ -153,8 +154,8 @@ func TestAuthorialDefsSurviveReachabilityClosure(t *testing.T) {
   }
 }`
 	synth := &Synthesizer{}
-	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -172,8 +173,8 @@ func TestAuthorialDefsSurviveReachabilityClosure(t *testing.T) {
 func synthesizeDefsReachabilityDoc(t *testing.T) *openbindings.Interface {
 	t.Helper()
 	synth := &Synthesizer{}
-	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(defsReachabilityDoc)}},
+	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(defsReachabilityDoc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)

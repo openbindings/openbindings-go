@@ -11,12 +11,13 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
-func synthesizeWithCoverage(t *testing.T, content string) *openbindings.SynthesizeResult {
+func synthesizeWithCoverage(t *testing.T, content string) *synthesize.SynthesizeResult {
 	t.Helper()
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
 	})
 	if err != nil {
 		t.Fatalf("SynthesizeInterfaceWithCoverage: %v", err)
@@ -59,10 +60,10 @@ func TestAcceptanceFloor_InvalidTargetEntriedSiblingsSynthesize(t *testing.T) {
 	if _, ok := result.Interface.Operations["getBad"]; ok {
 		t.Fatalf("ladder-invalid operation must not synthesize")
 	}
-	var invalid *openbindings.SynthesisCoverageEntry
+	var invalid *synthesize.SynthesisCoverageEntry
 	for i := range result.Coverage.Entries {
 		e := &result.Coverage.Entries[i]
-		if e.Status == openbindings.SynthesisInvalid {
+		if e.Status == synthesize.SynthesisInvalid {
 			invalid = e
 		}
 	}
@@ -72,7 +73,7 @@ func TestAcceptanceFloor_InvalidTargetEntriedSiblingsSynthesize(t *testing.T) {
 	if invalid.SourceRef != "#/paths/~1bad/get" {
 		t.Errorf("invalid entry sourceRef %q, want the owning unit #/paths/~1bad/get", invalid.SourceRef)
 	}
-	if invalid.Scope != openbindings.SynthesisCoverageTarget {
+	if invalid.Scope != synthesize.SynthesisCoverageTarget {
 		t.Errorf("invalid entry scope %q, want target", invalid.Scope)
 	}
 	if invalid.ReasonCode != "openapi.invalid_unit" {
@@ -112,8 +113,8 @@ func TestAcceptanceFloor_WholeSourceRefusalZeroSurvivors(t *testing.T) {
 	    }
 	  }
 	}`
-	_, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
+	_, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
 	})
 	if err == nil {
 		t.Fatal("expected the §3 part-2 whole-source refusal: the sole declared target's success response omits REQUIRED description and declares a body")
@@ -166,13 +167,13 @@ func TestAcceptanceFloor_ExcludedTargetCountsAsAddressed(t *testing.T) {
 	if len(result.Interface.Operations) != 0 {
 		t.Fatalf("the operation's required body has no faithful carriage; expected exclusion, got %v", result.Interface.Operations)
 	}
-	var excluded, invalidAlt *openbindings.SynthesisCoverageEntry
+	var excluded, invalidAlt *synthesize.SynthesisCoverageEntry
 	for i := range result.Coverage.Entries {
 		e := &result.Coverage.Entries[i]
 		switch {
-		case e.Status == openbindings.SynthesisExcluded && e.Scope == openbindings.SynthesisCoverageTarget:
+		case e.Status == synthesize.SynthesisExcluded && e.Scope == synthesize.SynthesisCoverageTarget:
 			excluded = e
-		case e.Status == openbindings.SynthesisInvalid && e.Scope == openbindings.SynthesisCoverageAlternative:
+		case e.Status == synthesize.SynthesisInvalid && e.Scope == synthesize.SynthesisCoverageAlternative:
 			invalidAlt = e
 		}
 	}
@@ -221,10 +222,10 @@ func TestAcceptanceFloor_ReachingUnitProjectionEntry(t *testing.T) {
 	if _, ok := result.Interface.Operations["getA"]; !ok {
 		t.Fatalf("the reaching unit survives: %v", result.Interface.Operations)
 	}
-	var projection *openbindings.SynthesisCoverageEntry
+	var projection *synthesize.SynthesisCoverageEntry
 	for i := range result.Coverage.Entries {
 		e := &result.Coverage.Entries[i]
-		if e.Scope == openbindings.SynthesisCoverageProjection && e.Status == openbindings.SynthesisInvalid {
+		if e.Scope == synthesize.SynthesisCoverageProjection && e.Status == synthesize.SynthesisInvalid {
 			projection = e
 		}
 	}

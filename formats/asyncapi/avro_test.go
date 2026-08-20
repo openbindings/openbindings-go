@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // A record that declares a named enum inline and reuses it by name. The
@@ -85,8 +85,8 @@ func TestSynthesizeAvroNamedTypeReuseRebasesAllRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iface, err := (&Synthesizer{}).SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+	iface, err := (&Synthesizer{}).SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)

@@ -7,8 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func TestListingCapturePreservesEntitiesWithoutPaginationCarriage(t *testing.T) {
@@ -101,15 +102,15 @@ func TestSynthesisCoverageMakesEveryExclusionVisible(t *testing.T) {
 	if len(entries) != 5 {
 		t.Fatalf("coverage = %#v", entries)
 	}
-	statuses := map[string]openbindings.SynthesisCoverageStatus{}
+	statuses := map[string]synthesize.SynthesisCoverageStatus{}
 	for _, entry := range entries {
 		statuses[entry.SourceRef] = entry.Status
 	}
-	if statuses["tools/ok"] != openbindings.SynthesisRepresented ||
-		statuses["tools/missing"] != openbindings.SynthesisExcluded ||
-		statuses["tools/task"] != openbindings.SynthesisExcluded ||
-		statuses["resources/app://x"] != openbindings.SynthesisExcluded ||
-		statuses["prompts/prompt"] != openbindings.SynthesisExcluded {
+	if statuses["tools/ok"] != synthesize.SynthesisRepresented ||
+		statuses["tools/missing"] != synthesize.SynthesisExcluded ||
+		statuses["tools/task"] != synthesize.SynthesisExcluded ||
+		statuses["resources/app://x"] != synthesize.SynthesisExcluded ||
+		statuses["prompts/prompt"] != synthesize.SynthesisExcluded {
 		t.Fatalf("coverage statuses = %#v", statuses)
 	}
 }

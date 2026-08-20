@@ -13,6 +13,8 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // testBinary is the path to the compiled test CLI binary.
@@ -90,8 +92,8 @@ cmd "prose" {
 }
 
 // testSource is the bare-kdl fixture source: the artifact IS the source.
-func testSource() openbindings.InvocationSource {
-	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(testSpecKDL())}
+func testSource() invoke.InvocationSource {
+	return invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(testSpecKDL())}
 }
 
 // driver abstracts the two entry points tests exercise: the format
@@ -99,13 +101,13 @@ func testSource() openbindings.InvocationSource {
 // (the embedder pattern — invoker-level hooks reach the binding-layer
 // path via fillBindingArgs).
 type driver interface {
-	InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any]
+	InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any]
 }
 
 // hooked wraps the fixture invoker with invoker-level hooks — the
 // consumer configuration that replaced wrapper-unit elections.
-func hooked(configure func(op *openbindings.OperationInvoker)) driver {
-	op := openbindings.NewOperationInvoker(NewInvoker())
+func hooked(configure func(op *invoke.OperationInvoker)) driver {
+	op := invoke.NewOperationInvoker(NewInvoker())
 	if configure != nil {
 		configure(op)
 	}
@@ -114,8 +116,8 @@ func hooked(configure func(op *openbindings.OperationInvoker)) driver {
 
 // jsonHooked is the machine-lane consumer: decode stdout as strict JSON.
 func jsonHooked() driver {
-	return hooked(func(op *openbindings.OperationInvoker) {
-		op.OutputDecoder = func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+	return hooked(func(op *invoke.OperationInvoker) {
+		op.OutputDecoder = func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 			var v any
 			if len(raw.Body) == 0 {
 				return nil, nil
@@ -132,13 +134,13 @@ func jsonHooked() driver {
 // non-nil), closes the input side, and returns the single output or the
 // terminal error. The binding is unary, so exactly one output (or one
 // terminal) is expected.
-func invokeUsage(t *testing.T, invoker driver, args *openbindings.BindingInvocationArgs, input any) (any, *openbindings.InvocationError) {
+func invokeUsage(t *testing.T, invoker driver, args *invoke.BindingInvocationArgs, input any) (any, *invoke.InvocationError) {
 	t.Helper()
 	out, _, ierr := invokeUsageWithTrailer(t, invoker, args, input)
 	return out, ierr
 }
 
-func invokeUsageWithTrailer(t *testing.T, invoker driver, args *openbindings.BindingInvocationArgs, input any) (any, openbindings.Metadata, *openbindings.InvocationError) {
+func invokeUsageWithTrailer(t *testing.T, invoker driver, args *invoke.BindingInvocationArgs, input any) (any, invoke.Metadata, *invoke.InvocationError) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -157,7 +159,7 @@ func invokeUsageWithTrailer(t *testing.T, invoker driver, args *openbindings.Bin
 		return nil, nil, nil
 	}
 	if err != nil {
-		var ie *openbindings.InvocationError
+		var ie *invoke.InvocationError
 		if !errors.As(err, &ie) {
 			t.Fatalf("expected *InvocationError, got %T: %v", err, err)
 		}
@@ -170,7 +172,7 @@ func invokeUsageWithTrailer(t *testing.T, invoker driver, args *openbindings.Bin
 }
 
 func TestIntegration_JSONOutput(t *testing.T) {
-	out, ierr := invokeUsage(t, jsonHooked(), &openbindings.BindingInvocationArgs{
+	out, ierr := invokeUsage(t, jsonHooked(), &invoke.BindingInvocationArgs{
 		Source: testSource(),
 		Ref:    "json",
 	}, map[string]any{"pairs": []any{"name=alice", "role=admin"}})
@@ -192,7 +194,7 @@ func TestIntegration_JSONOutput(t *testing.T) {
 
 func TestIntegration_NonZeroExitCode(t *testing.T) {
 	invoker := NewInvoker()
-	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+	out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
 		Source: testSource(),
 		Ref:    "fail",
 	}, map[string]any{"message": []any{"something went wrong"}})
@@ -201,7 +203,7 @@ func TestIntegration_NonZeroExitCode(t *testing.T) {
 	if out != nil {
 		t.Fatalf("expected no output on non-ok exit, got %v", out)
 	}
-	if ierr == nil || ierr.Code != openbindings.ErrCodeExecutionFailed {
+	if ierr == nil || ierr.Code != invoke.ErrCodeExecutionFailed {
 		t.Fatalf("expected ERR_EXECUTION_FAILED, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -214,7 +216,7 @@ func TestIntegration_MixedOutput(t *testing.T) {
 	// stdout with the trailing newline stripped; stderr is diagnostics and
 	// rides the x-stderr trailer, never the output value.
 	invoker := NewInvoker()
-	out, _, ierr := invokeUsageWithTrailer(t, invoker, &openbindings.BindingInvocationArgs{
+	out, _, ierr := invokeUsageWithTrailer(t, invoker, &invoke.BindingInvocationArgs{
 		Source: testSource(),
 		Ref:    "mixed",
 	}, nil)
@@ -228,7 +230,7 @@ func TestIntegration_MixedOutput(t *testing.T) {
 
 func TestIntegration_EchoCommand(t *testing.T) {
 	invoker := NewInvoker()
-	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+	out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
 		Source: testSource(),
 		Ref:    "echo",
 	}, map[string]any{"words": []any{"hello", "world"}})
@@ -264,8 +266,8 @@ cmd "config" subcommand_required=#true {
 }
 `
 	synthesizer := NewSynthesizer()
-	iface, err := synthesizer.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Content:     openbindings.TextContent(spec),
 		}},
@@ -388,8 +390,8 @@ flag "-v --verbose" help="Verbose output"
 arg "<words>..." help="Words to echo"
 `
 	invoker := NewInvoker()
-	out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rootKDL)},
+	out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rootKDL)},
 		Ref:    "",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
@@ -403,14 +405,14 @@ arg "<words>..." help="Words to echo"
 func TestIntegration_InvalidRef(t *testing.T) {
 	invoker := NewInvoker()
 	for _, ref := range []string{"nonexistent", "no such command", "json bogus"} {
-		out, ierr := invokeUsage(t, invoker, &openbindings.BindingInvocationArgs{
+		out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
 			Source: testSource(),
 			Ref:    ref,
 		}, nil)
 		if out != nil {
 			t.Fatalf("ref %q: expected no output, got %v", ref, out)
 		}
-		if ierr == nil || ierr.Code != openbindings.ErrCodeRefNotFound {
+		if ierr == nil || ierr.Code != invoke.ErrCodeRefNotFound {
 			t.Fatalf("ref %q: expected ERR_REF_NOT_FOUND, got %v", ref, ierr)
 		}
 	}
@@ -422,14 +424,14 @@ func TestIntegration_InvalidRef(t *testing.T) {
 func TestIntegration_NoInputOperationConvention(t *testing.T) {
 	invoker := NewInvoker()
 	ctx := context.Background()
-	call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+	call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:  testSource(),
 		Ref:     "mixed",
 		Binding: &openbindings.BindingEntry{Operation: "mixed", Source: "s", Ref: "mixed"},
 		// InputSchema nil → no-input operation; the binding closes input itself.
 	})
 	// The caller writes nothing and does not close; the binding must still run.
-	out, err := openbindings.Single(ctx, call.Outputs())
+	out, err := invoke.Single(ctx, call.Outputs())
 	if err != nil {
 		t.Fatalf("no-input convention failed: %v", err)
 	}
@@ -444,8 +446,8 @@ func TestIntegration_Cancellation(t *testing.T) {
 	// run `sleep 10` (no wrapper is loaded on that path).
 	invoker := NewInvoker()
 	ctx, cancel := context.WithCancel(context.Background())
-	call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec},
+	call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec},
 		Ref:     "10",
 		Context: map[string]any{"metadata": map[string]any{"binary": "sleep"}},
 	})
@@ -455,8 +457,8 @@ func TestIntegration_Cancellation(t *testing.T) {
 		cancel()
 	}()
 	_, err := call.Outputs().Read(context.Background())
-	var ie *openbindings.InvocationError
-	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeCancelled {
+	var ie *invoke.InvocationError
+	if !errors.As(err, &ie) || ie.Code != invoke.ErrCodeCancelled {
 		t.Fatalf("expected ERR_CANCELLED, got %v", err)
 	}
 }

@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/yosida95/uritemplate/v3"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 const DefaultSourceName = "mcpServer"
@@ -53,8 +56,8 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 	sort.Slice(disc.Prompts, func(i, j int) bool { return disc.Prompts[i].Name < disc.Prompts[j].Name })
 
 	for _, tool := range disc.Tools {
-		opKey := openbindings.SanitizeKey(tool.Name)
-		opKey = openbindings.ResolveKeyCollision(opKey, "tool", usedKeys)
+		opKey := synthesize.SanitizeKey(tool.Name)
+		opKey = synthesize.ResolveKeyCollision(opKey, "tool", usedKeys)
 		usedKeys[opKey] = "tool"
 
 		desc := tool.Description
@@ -87,8 +90,8 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 	}
 
 	for _, resource := range disc.Resources {
-		opKey := openbindings.SanitizeKey(resource.Name)
-		opKey = openbindings.ResolveKeyCollision(opKey, "resource", usedKeys)
+		opKey := synthesize.SanitizeKey(resource.Name)
+		opKey = synthesize.ResolveKeyCollision(opKey, "resource", usedKeys)
 		usedKeys[opKey] = "resource"
 
 		desc := resource.Description
@@ -115,8 +118,8 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 	}
 
 	for _, tmpl := range disc.ResourceTemplates {
-		opKey := openbindings.SanitizeKey(tmpl.Name)
-		opKey = openbindings.ResolveKeyCollision(opKey, "resource_template", usedKeys)
+		opKey := synthesize.SanitizeKey(tmpl.Name)
+		opKey = synthesize.ResolveKeyCollision(opKey, "resource_template", usedKeys)
 		usedKeys[opKey] = "resource_template"
 
 		desc := tmpl.Description
@@ -143,8 +146,8 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 	}
 
 	for _, prompt := range disc.Prompts {
-		opKey := openbindings.SanitizeKey(prompt.Name)
-		opKey = openbindings.ResolveKeyCollision(opKey, "prompt", usedKeys)
+		opKey := synthesize.SanitizeKey(prompt.Name)
+		opKey = synthesize.ResolveKeyCollision(opKey, "prompt", usedKeys)
 		usedKeys[opKey] = "prompt"
 
 		desc := prompt.Description

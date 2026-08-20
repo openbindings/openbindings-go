@@ -5,7 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -73,8 +74,8 @@ func TestGRPCError_StatusIsDiagnosticNotPortableClassification(t *testing.T) {
 		codes.Internal, codes.NotFound,
 	} {
 		t.Run(grpcCode.String(), func(t *testing.T) {
-			ie := grpcError(status.Error(grpcCode, "boom"), openbindings.ErrCodeExecutionFailed)
-			if ie.Code != openbindings.ErrCodeExecutionFailed {
+			ie := grpcError(status.Error(grpcCode, "boom"), invoke.ErrCodeExecutionFailed)
+			if ie.Code != invoke.ErrCodeExecutionFailed {
 				t.Errorf("code = %q, want protocol-independent unsuccessful completion", ie.Code)
 			}
 			if ie.HasData() {
@@ -86,17 +87,17 @@ func TestGRPCError_StatusIsDiagnosticNotPortableClassification(t *testing.T) {
 
 func TestGRPCError_StatusOverridesStreamFallback(t *testing.T) {
 	err := status.Error(codes.Internal, "mid-stream")
-	if ie := grpcError(err, openbindings.ErrCodeStreamError); ie.Code != "ERR_EXECUTION_FAILED" {
+	if ie := grpcError(err, invoke.ErrCodeStreamError); ie.Code != "ERR_EXECUTION_FAILED" {
 		t.Errorf("code = %q, want ERR_EXECUTION_FAILED", ie.Code)
 	}
 }
 
 func TestGRPCError_NonStatusError(t *testing.T) {
-	ie := grpcError(errors.New("plain failure"), openbindings.ErrCodeExecutionFailed)
+	ie := grpcError(errors.New("plain failure"), invoke.ErrCodeExecutionFailed)
 	if ie.Code != "ERR_EXECUTION_FAILED" {
 		t.Errorf("code = %q, want ERR_EXECUTION_FAILED", ie.Code)
 	}
-	if ie.Error() != openbindings.ErrCodeExecutionFailed {
+	if ie.Error() != invoke.ErrCodeExecutionFailed {
 		t.Errorf("error text = %q", ie.Error())
 	}
 }
@@ -106,7 +107,7 @@ func TestGRPCError_StatusDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ie := grpcError(st.Err(), openbindings.ErrCodeExecutionFailed)
+	ie := grpcError(st.Err(), invoke.ErrCodeExecutionFailed)
 	if ie.HasData() {
 		t.Fatalf("native status details leaked as abstract data: %v", ie.Data)
 	}
@@ -115,8 +116,8 @@ func TestGRPCError_StatusDetails(t *testing.T) {
 func TestRefResolveError_TransportVsNotFound(t *testing.T) {
 	// A reflection-time transport status is unsuccessful completion, not a
 	// missing ref; its native gRPC status remains diagnostic only.
-	if ie := refResolveError("pkg.Svc", status.Error(codes.Unavailable, "down")); ie.Code != openbindings.ErrCodeExecutionFailed {
-		t.Errorf("unavailable: code = %q, want %s", ie.Code, openbindings.ErrCodeExecutionFailed)
+	if ie := refResolveError("pkg.Svc", status.Error(codes.Unavailable, "down")); ie.Code != invoke.ErrCodeExecutionFailed {
+		t.Errorf("unavailable: code = %q, want %s", ie.Code, invoke.ErrCodeExecutionFailed)
 	}
 	if ie := refResolveError("pkg.Svc", errors.New("symbol not found")); ie.Code != "ERR_REF_NOT_FOUND" {
 		t.Errorf("not found: code = %q, want ERR_REF_NOT_FOUND", ie.Code)

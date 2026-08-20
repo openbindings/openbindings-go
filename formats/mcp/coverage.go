@@ -3,16 +3,19 @@ package mcp
 import (
 	"fmt"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"github.com/yosida95/uritemplate/v3"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // synthesisCoverage accounts for every entity in the pagination-exhausted
 // listing observed by synthesis. The four MCP list families are already the
 // binding specification's interaction inventory.
-func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []openbindings.SynthesisCoverageEntry {
+func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []synthesize.SynthesisCoverageEntry {
 	if disc == nil || iface == nil {
-		return []openbindings.SynthesisCoverageEntry{}
+		return []synthesize.SynthesisCoverageEntry{}
 	}
 	type identity struct {
 		operation string
@@ -52,39 +55,39 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []openbin
 		}
 	}
 
-	var entries []openbindings.SynthesisCoverageEntry
+	var entries []synthesize.SynthesisCoverageEntry
 	add := func(family, value string, index, count int, invalid string, excludedCode, excludedRule, excludedMessage string) {
 		sourceRef := family + "/" + value
 		if count > 1 || value == "" {
 			sourceRef = fmt.Sprintf("%s#listing-index=%d", sourceRef, index)
 		}
 		if invalid != "" {
-			entries = append(entries, openbindings.SynthesisCoverageEntry{
-				SourceIndex: 0, SourceRef: sourceRef, Scope: openbindings.SynthesisCoverageTarget,
-				Status: openbindings.SynthesisInvalid, ReasonCode: "mcp.invalid_entity", Message: invalid,
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: sourceRef, Scope: synthesize.SynthesisCoverageTarget,
+				Status: synthesize.SynthesisInvalid, ReasonCode: "mcp.invalid_entity", Message: invalid,
 			})
 			return
 		}
 		if excludedCode != "" {
-			entries = append(entries, openbindings.SynthesisCoverageEntry{
-				SourceIndex: 0, SourceRef: sourceRef, Scope: openbindings.SynthesisCoverageTarget,
-				Status: openbindings.SynthesisExcluded, ReasonCode: excludedCode, Rule: excludedRule, Message: excludedMessage,
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: sourceRef, Scope: synthesize.SynthesisCoverageTarget,
+				Status: synthesize.SynthesisExcluded, ReasonCode: excludedCode, Rule: excludedRule, Message: excludedMessage,
 			})
 			return
 		}
 		ref := family + "/" + value
 		id, ok := represented[ref]
 		if !ok {
-			entries = append(entries, openbindings.SynthesisCoverageEntry{
-				SourceIndex: 0, SourceRef: sourceRef, Scope: openbindings.SynthesisCoverageTarget,
-				Status: openbindings.SynthesisImplementationUnsupported, ReasonCode: "mcp.missing_emitted_binding",
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: sourceRef, Scope: synthesize.SynthesisCoverageTarget,
+				Status: synthesize.SynthesisImplementationUnsupported, ReasonCode: "mcp.missing_emitted_binding",
 				Message: "the synthesizer returned without emitting this resolvable listed entity",
 			})
 			return
 		}
-		entries = append(entries, openbindings.SynthesisCoverageEntry{
-			SourceIndex: 0, SourceRef: sourceRef, Scope: openbindings.SynthesisCoverageTarget,
-			Status: openbindings.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
+			SourceIndex: 0, SourceRef: sourceRef, Scope: synthesize.SynthesisCoverageTarget,
+			Status: synthesize.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
 		})
 	}
 

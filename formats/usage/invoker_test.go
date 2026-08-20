@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func TestBindingSpecs(t *testing.T) {
@@ -38,7 +39,7 @@ func TestVersionGate_ToolMajors(t *testing.T) {
 
 func TestSynthesizer_NoSources(t *testing.T) {
 	c := NewSynthesizer()
-	iface, err := c.SynthesizeInterface(nil, &openbindings.SynthesizeInput{Name: "scaffold"})
+	iface, err := c.SynthesizeInterface(nil, &synthesize.SynthesizeInput{Name: "scaffold"})
 	if err != nil {
 		t.Fatal(err)
 	}

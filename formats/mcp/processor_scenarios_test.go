@@ -13,7 +13,9 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/processorscenarios"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func TestProcessorScenarios(t *testing.T) {
@@ -165,9 +167,9 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 	if content, present := scenario.Given.Source["content"]; present {
 		args.Source.Content = mustContent(content)
 	}
-	var call openbindings.Invocation[any, any]
-	iface, err := NewSynthesizer().SynthesizeInterface(bg(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	var call invoke.Invocation[any, any]
+	iface, err := NewSynthesizer().SynthesizeInterface(bg(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Location:    args.Source.Location,
 			Content:     args.Source.Content,
@@ -176,10 +178,10 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	op := openbindings.NewOperationInvoker(invoker)
-	call = openbindings.Invoke(
+	op := invoke.NewOperationInvoker(invoker)
+	call = invoke.Invoke(
 		bg(), op, iface,
-		openbindings.NewOperationSignature[any, any](mcpOperationForRef(t, iface, ref)),
+		invoke.NewOperationSignature[any, any](mcpOperationForRef(t, iface, ref)),
 	)
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		if err := call.Write(shortCtx(t), scenario.Given.Invocation["input"]); err != nil {
@@ -196,7 +198,7 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 	if terminalErr == nil {
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
-	var terminal *openbindings.InvocationError
+	var terminal *invoke.InvocationError
 	if !errors.As(terminalErr, &terminal) {
 		t.Fatalf("terminal = %T, want *InvocationError", terminalErr)
 	}

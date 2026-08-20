@@ -15,7 +15,8 @@ import (
 	"testing"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
@@ -28,6 +29,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/durationpb"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // ---------------------------------------------------------------------------
@@ -105,12 +108,12 @@ func TestConformance_D02_NonConformantLocationRefusedPreDial(t *testing.T) {
 	defer invoker.Close()
 
 	for _, location := range []string{"https://api.example.com:443", "api.example.com:443/v1"} {
-		inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: location},
+		inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
+			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: location},
 			Ref:    "testpkg.ItemService/GetItem",
 		})
 		_, terr := drainInvocation(t, inv)
-		if terr == nil || terr.Code != openbindings.ErrCodeSourceConfigError {
+		if terr == nil || terr.Code != invoke.ErrCodeSourceConfigError {
 			t.Fatalf("location %q: expected ERR_SOURCE_CONFIG_ERROR, got %v", location, terr)
 		}
 	}
@@ -185,8 +188,8 @@ func TestConformance_D01_DescriptorSetJSON_InvokesEndToEnd(t *testing.T) {
 	defer invoker.Close()
 
 	ctx := testCtx(t)
-	inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{
+	inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{
 			BindingSpec: BindingSpec,
 			Location:    bufconnLocation,
 			Content:     mustContent(descriptorSetJSON(t, durationFDP(), testItemsFDP())),
@@ -197,7 +200,7 @@ func TestConformance_D01_DescriptorSetJSON_InvokesEndToEnd(t *testing.T) {
 	if err := inv.Write(ctx, map[string]any{"id": "fds"}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := openbindings.Single(ctx, inv.Outputs())
+	v, err := invoke.Single(ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("FileDescriptorSet-in-JSON content must be a valid schema carrier (GRPC-D-01): %v", err)
 	}
@@ -302,14 +305,14 @@ message PingMsg { string msg = 1; }
 	defer invoker.Close()
 
 	for _, ref := range []string{"tiny.Tiny/ping", "tiny.tiny/Ping", "TINY.Tiny/Ping"} {
-		inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
+		inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
 			// The location is a valid form but unreachable: the refusal must
 			// fire from offline resolution, never a dial.
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
+			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
 			Ref:    ref,
 		})
 		_, terr := drainInvocation(t, inv)
-		if terr == nil || terr.Code != openbindings.ErrCodeRefNotFound {
+		if terr == nil || terr.Code != invoke.ErrCodeRefNotFound {
 			t.Fatalf("ref %q: byte-exact matching must refuse with ERR_REF_NOT_FOUND, got %v", ref, terr)
 		}
 	}
@@ -395,15 +398,15 @@ func TestConformance_P02_TransportOverrideBeatsExplicitScheme(t *testing.T) {
 	defer invoker.Close()
 
 	ctx := testCtx(t)
-	inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://127.0.0.1:443"},
+	inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://127.0.0.1:443"},
 		Ref:     "testpkg.ItemService/GetItem",
 		Context: map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "p"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openbindings.Single(ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single(ctx, inv.Outputs()); err != nil {
 		t.Fatalf("configuration.transport=plaintext must beat the explicit grpcs:// scheme (GRPC-P-02): %v", err)
 	}
 
@@ -411,12 +414,12 @@ func TestConformance_P02_TransportOverrideBeatsExplicitScheme(t *testing.T) {
 	// determination stands and fails against the plaintext server.
 	ctl, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	inv2 := invoker.InvokeBinding(ctl, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://127.0.0.1:443"},
+	inv2 := invoker.InvokeBinding(ctl, &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://127.0.0.1:443"},
 		Ref:    "testpkg.ItemService/GetItem",
 	})
 	_ = inv2.Write(ctl, map[string]any{"id": "p"})
-	if _, err := openbindings.Single(ctl, inv2.Outputs()); err == nil {
+	if _, err := invoke.Single(ctl, inv2.Outputs()); err == nil {
 		t.Fatal("grpcs:// against the plaintext server should fail; the negative control is vacuous")
 	}
 }
@@ -431,13 +434,13 @@ func TestConformance_P02_MalformedTransportConfigRefused(t *testing.T) {
 		42.0, // not a defined shape
 	}
 	for _, transport := range cases {
-		inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:50051"},
+		inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
+			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:50051"},
 			Ref:     "testpkg.ItemService/GetItem",
 			Context: map[string]any{"configuration": map[string]any{"transport": transport}},
 		})
 		_, terr := drainInvocation(t, inv)
-		if terr == nil || terr.Code != openbindings.ErrCodeSourceConfigError {
+		if terr == nil || terr.Code != invoke.ErrCodeSourceConfigError {
 			t.Fatalf("transport %v: expected ERR_SOURCE_CONFIG_ERROR, got %v", transport, terr)
 		}
 	}
@@ -452,18 +455,18 @@ func TestConformance_TargetPointReplacesLocation(t *testing.T) {
 	defer invoker.Close()
 
 	ctx := testCtx(t)
-	inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
+	inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		// The location explicitly elects TLS and would fail against the
 		// plaintext server; the configured target explicitly elects plaintext. Success
 		// proves the replacement.
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://203.0.113.9:443"},
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://203.0.113.9:443"},
 		Ref:     "testpkg.ItemService/GetItem",
 		Context: map[string]any{"configuration": map[string]any{"target": "grpc://127.0.0.1:50051"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "t"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openbindings.Single(ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single(ctx, inv.Outputs()); err != nil {
 		t.Fatalf("configuration.target must replace the location (§9.3): %v", err)
 	}
 }
@@ -488,7 +491,7 @@ func TestConformance_P03_UnknownInputFieldRefusedPreDispatch(t *testing.T) {
 	if len(vals) != 0 || terr == nil {
 		t.Fatalf("unknown input field must refuse pre-dispatch, got %d outputs, terr=%v", len(vals), terr)
 	}
-	if terr.Code != openbindings.ErrCodeValidationFailed {
+	if terr.Code != invoke.ErrCodeValidationFailed {
 		t.Errorf("code = %q, want ERR_VALIDATION_FAILED", terr.Code)
 	}
 	if terr.HasData() {
@@ -511,7 +514,7 @@ func TestConformance_P03_WellKnownTypeCanonicalFormRequest(t *testing.T) {
 	if err := inv.Write(ctx, "3.5s"); err != nil {
 		t.Fatal(err)
 	}
-	v, err := openbindings.Single(ctx, inv.Outputs())
+	v, err := invoke.Single(ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("a Duration-typed request must accept its canonical JSON string form (GRPC-P-03): %v", err)
 	}
@@ -685,12 +688,12 @@ service S { rpc Do(Req) returns (Resp); }
 	invoker := NewInvoker()
 	defer invoker.Close()
 
-	inv := invoker.InvokeBinding(testCtx(t), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
+	inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
 		Ref:    "p2.S/Do",
 	})
 	_, terr := drainInvocation(t, inv)
-	if terr == nil || terr.Code != openbindings.ErrCodeSourceLoadFailed {
+	if terr == nil || terr.Code != invoke.ErrCodeSourceLoadFailed {
 		t.Fatalf("expected ERR_SOURCE_LOAD_FAILED, got %v", terr)
 	}
 	if terr.HasData() {
@@ -720,8 +723,8 @@ func TestConformance_SchemaRange_InertCarriageNotRefused(t *testing.T) {
 	}
 
 	ctx := testCtx(t)
-	inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{
+	inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{
 			BindingSpec: BindingSpec,
 			Location:    bufconnLocation,
 			Content:     mustContent(descriptorSetJSON(t, durationFDP(), testItemsFDP(), dirty)),
@@ -732,7 +735,7 @@ func TestConformance_SchemaRange_InertCarriageNotRefused(t *testing.T) {
 	if err := inv.Write(ctx, map[string]any{"id": "inert"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openbindings.Single(ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single(ctx, inv.Outputs()); err != nil {
 		t.Fatalf("a proto2 file outside the bound closure is inert carriage, never grounds for refusal (§3): %v", err)
 	}
 }
@@ -820,7 +823,7 @@ func TestConformance_P07_UnplaceableMetadataKeysSurfaced(t *testing.T) {
 		inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("testpkg.ItemService/GetItem",
 			map[string]any{"headers": map[string]any{tc.key: "v"}}))
 		_, terr := drainInvocation(t, inv)
-		if terr == nil || terr.Code != openbindings.ErrCodeSourceConfigError {
+		if terr == nil || terr.Code != invoke.ErrCodeSourceConfigError {
 			t.Fatalf("key %q: expected ERR_SOURCE_CONFIG_ERROR, got %v", tc.key, terr)
 		}
 		if terr.HasData() {

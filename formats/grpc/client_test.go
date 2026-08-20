@@ -10,6 +10,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // A grpc location naming a local FILE (a compiled binary FileDescriptorSet,
@@ -48,16 +49,16 @@ message PingMsg { string msg = 1; }
 	defer func() { _ = inv.Close() }()
 
 	// No location, no configuration.target: refuse, naming both remedies.
-	h := inv.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
+	h := inv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
 		Ref:    "tiny.Tiny/Ping",
 	})
-	_, err := openbindings.Single(context.Background(), h.Outputs())
+	_, err := invoke.Single(context.Background(), h.Outputs())
 	if err == nil {
 		t.Fatal("embedded schema with no address must refuse")
 	}
-	var ie *openbindings.InvocationError
-	if !errors.As(err, &ie) || ie.Code != openbindings.ErrCodeSourceConfigError {
+	var ie *invoke.InvocationError
+	if !errors.As(err, &ie) || ie.Code != invoke.ErrCodeSourceConfigError {
 		t.Fatalf("want ERR_SOURCE_CONFIG_ERROR, got %v", err)
 	}
 	if ie.HasData() {
@@ -69,18 +70,18 @@ message PingMsg { string msg = 1; }
 	// endpoint, not at configuration).
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	h2 := inv.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
+	h2 := inv.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
 		Ref:     "tiny.Tiny/Ping",
 		Context: map[string]any{"configuration": map[string]any{"target": "grpc://127.0.0.1:1"}},
 	})
 	_ = h2.Write(ctx, map[string]any{"msg": "hi"})
-	_, err2 := openbindings.Single(ctx, h2.Outputs())
+	_, err2 := invoke.Single(ctx, h2.Outputs())
 	if err2 == nil {
 		t.Fatal("dial of an unreachable address must fail")
 	}
-	var ie2 *openbindings.InvocationError
-	if errors.As(err2, &ie2) && ie2.Code == openbindings.ErrCodeSourceConfigError {
+	var ie2 *invoke.InvocationError
+	if errors.As(err2, &ie2) && ie2.Code == invoke.ErrCodeSourceConfigError {
 		t.Fatalf("configuration.target must satisfy the address gate; still got config error")
 	}
 }

@@ -18,7 +18,11 @@ import (
 	"net/url"
 	"os"
 
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"github.com/getkin/kin-openapi/openapi3"
+
 	openapiclient "github.com/openbindings/openapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -115,8 +119,8 @@ type RuntimeInvocationArgs struct {
 	Source               RuntimeSource
 	Ref                  string
 	Context              map[string]any
-	Hooks                *openbindings.InvokeHooks
-	Site                 *openbindings.InvokeSite
+	Hooks                *invoke.InvokeHooks
+	Site                 *invoke.InvokeSite
 	MaxDeliveryUnitBytes int64
 }
 
@@ -128,8 +132,8 @@ type Invoker struct {
 }
 
 var (
-	_ openbindings.BindingInvoker  = (*Invoker)(nil)
-	_ openbindings.BindingPreparer = (*Invoker)(nil)
+	_ invoke.BindingInvoker  = (*Invoker)(nil)
+	_ invoke.BindingPreparer = (*Invoker)(nil)
 )
 
 // NewRuntime creates the compatibility runtime with the binding's default
@@ -199,17 +203,17 @@ func (e *Runtime) BindingSpecs() []openbindings.BindingSpecInfo {
 
 // Invoke runs a directly selected OpenAPI operation without requiring an OBI
 // document or OpenBindings operation-selection machinery.
-func (e *Runtime) Invoke(ctx context.Context, args *RuntimeInvocationArgs) openbindings.Invocation[any, any] {
+func (e *Runtime) Invoke(ctx context.Context, args *RuntimeInvocationArgs) invoke.Invocation[any, any] {
 	return e.invokeBinding(ctx, runtimeBindingArgs(args))
 }
 
 // Prepare inspects a directly selected operation's runtime prerequisites
 // without network I/O.
-func (e *Runtime) Prepare(ctx context.Context, args *RuntimeInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+func (e *Runtime) Prepare(ctx context.Context, args *RuntimeInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	return e.prepareBinding(ctx, runtimeBindingArgs(args))
 }
 
-func runtimeBindingArgs(args *RuntimeInvocationArgs) *openbindings.BindingInvocationArgs {
+func runtimeBindingArgs(args *RuntimeInvocationArgs) *invoke.BindingInvocationArgs {
 	if args == nil {
 		args = &RuntimeInvocationArgs{}
 	}
@@ -217,8 +221,8 @@ func runtimeBindingArgs(args *RuntimeInvocationArgs) *openbindings.BindingInvoca
 	if bindingSpec == "" {
 		bindingSpec = BindingSpec
 	}
-	return &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{
+	return &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{
 			BindingSpec: bindingSpec,
 			Location:    args.Source.Location,
 			Content:     args.Source.Content,
@@ -231,9 +235,9 @@ func runtimeBindingArgs(args *RuntimeInvocationArgs) *openbindings.BindingInvoca
 	}
 }
 
-func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http.Client, securityHandlers map[string]SecurityHandler) (openapiclient.PrepareOptions, error) {
+func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Client, securityHandlers map[string]SecurityHandler) (openapiclient.PrepareOptions, error) {
 	if args == nil {
-		return openapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+		return openapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 	}
 	bindingSpec := args.Source.BindingSpec
 	if bindingSpec == "" {
@@ -241,7 +245,7 @@ func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http
 	}
 	profile, ok := engineProfile(bindingSpec)
 	if !ok {
-		return openapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+		return openapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 	}
 	profile = openapiclient.WithInputRouteEnvelope(profile, "$openbindings", bindingSpec)
 	var content []byte
@@ -249,7 +253,7 @@ func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http
 	if args.Source.Content != nil {
 		content, err = openbindings.ContentToBytes(args.Source.Content)
 		if err != nil {
-			return openapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed}
+			return openapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed}
 		}
 	}
 	return openapiclient.PrepareOptions{
@@ -267,14 +271,14 @@ func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 	return openapiclient.Profile{}, false
 }
 
-func bridgeHooks(args *openbindings.BindingInvocationArgs, bindingSpec string) *openapiclient.Hooks {
+func bridgeHooks(args *invoke.BindingInvocationArgs, bindingSpec string) *openapiclient.Hooks {
 	if args.Hooks == nil {
 		return nil
 	}
 	return &openapiclient.Hooks{
 		Decode: func(site openapiclient.HookSite, raw openapiclient.RawResult) (any, bool, error) {
 			coreSite := coreHookSite(args, bindingSpec, site.Target)
-			coreRaw := openbindings.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
+			coreRaw := invoke.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
 			contentType := ""
 			if values := raw.Meta["Content-Type"]; len(values) > 0 {
 				contentType = values[0]
@@ -284,15 +288,15 @@ func bridgeHooks(args *openbindings.BindingInvocationArgs, bindingSpec string) *
 		},
 		Classify: func(site openapiclient.HookSite, raw openapiclient.RawResult) (bool, bool, error) {
 			coreSite := coreHookSite(args, bindingSpec, site.Target)
-			coreRaw := openbindings.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
+			coreRaw := invoke.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
 			value, err := args.Hooks.Classify(coreSite, coreRaw, BuiltinClassify)
 			return value, true, err
 		},
 	}
 }
 
-func coreHookSite(args *openbindings.BindingInvocationArgs, bindingSpec, target string) openbindings.InvokeSite {
-	var site openbindings.InvokeSite
+func coreHookSite(args *invoke.BindingInvocationArgs, bindingSpec, target string) invoke.InvokeSite {
+	var site invoke.InvokeSite
 	if args.Site != nil {
 		site = *args.Site
 	} else {
@@ -305,8 +309,8 @@ func coreHookSite(args *openbindings.BindingInvocationArgs, bindingSpec, target 
 	return site
 }
 
-func toCoreMetadata(metadata openapiclient.Metadata) openbindings.Metadata {
-	result := make(openbindings.Metadata, len(metadata))
+func toCoreMetadata(metadata openapiclient.Metadata) invoke.Metadata {
+	result := make(invoke.Metadata, len(metadata))
 	for name, values := range metadata {
 		result[name] = append([]string(nil), values...)
 	}
@@ -314,7 +318,7 @@ func toCoreMetadata(metadata openapiclient.Metadata) openbindings.Metadata {
 }
 
 func bridgeExecutionError(err error) error {
-	var invocation *openbindings.InvocationError
+	var invocation *invoke.InvocationError
 	if errors.As(err, &invocation) && invocation != nil {
 		return invocation
 	}
@@ -323,50 +327,50 @@ func bridgeExecutionError(err error) error {
 		if err == nil {
 			return nil
 		}
-		return &openbindings.InvocationError{
-			Code: openbindings.ErrCodeRuntime,
+		return &invoke.InvocationError{
+			Code: invoke.ErrCodeRuntime,
 		}
 	}
 	details := execution.Details
 	if prerequisites, ok := details.(*openapiclient.Prerequisites); ok {
-		return openbindings.NewInvocationErrorWithData(
+		return invoke.NewInvocationErrorWithData(
 			normalizedAdapterErrorCode(execution.Code),
 			toCorePrerequisites(prerequisites),
 		)
 	}
 	code := normalizedAdapterErrorCode(execution.Code)
 	if execution.DetailsPresent {
-		return openbindings.NewInvocationErrorWithData(code, details)
+		return invoke.NewInvocationErrorWithData(code, details)
 	}
-	return openbindings.NewInvocationError(code)
+	return invoke.NewInvocationError(code)
 }
 
 func normalizedAdapterErrorCode(code string) string {
 	switch code {
 	case "SOURCE_LOAD_FAILED":
-		return openbindings.ErrCodeSourceLoadFailed
+		return invoke.ErrCodeSourceLoadFailed
 	case "INVALID_OPERATION_REF":
-		return openbindings.ErrCodeInvalidRef
+		return invoke.ErrCodeInvalidRef
 	case "OPERATION_NOT_FOUND":
-		return openbindings.ErrCodeRefNotFound
+		return invoke.ErrCodeRefNotFound
 	case "INVALID_DOCUMENT":
-		return openbindings.ErrCodeSourceConfigError
+		return invoke.ErrCodeSourceConfigError
 	case "RUNTIME_ERROR", "EXECUTION_COMPLETED_BEFORE_READY":
-		return openbindings.ErrCodeRuntime
+		return invoke.ErrCodeRuntime
 	default:
 		return code
 	}
 }
 
-func toCorePrerequisites(value *openapiclient.Prerequisites) *openbindings.ContextRequiredDetails {
+func toCorePrerequisites(value *openapiclient.Prerequisites) *invoke.ContextRequiredDetails {
 	if value == nil {
 		return nil
 	}
-	result := &openbindings.ContextRequiredDetails{Target: value.Target, Alternatives: make([]openbindings.ContextAlternative, len(value.Alternatives))}
+	result := &invoke.ContextRequiredDetails{Target: value.Target, Alternatives: make([]invoke.ContextAlternative, len(value.Alternatives))}
 	for alternativeIndex, alternative := range value.Alternatives {
-		result.Alternatives[alternativeIndex].Requirements = make([]openbindings.ContextRequirement, len(alternative.Requirements))
+		result.Alternatives[alternativeIndex].Requirements = make([]invoke.ContextRequirement, len(alternative.Requirements))
 		for requirementIndex, requirement := range alternative.Requirements {
-			result.Alternatives[alternativeIndex].Requirements[requirementIndex] = openbindings.ContextRequirement{
+			result.Alternatives[alternativeIndex].Requirements[requirementIndex] = invoke.ContextRequirement{
 				Type: requirement.Type, Name: requirement.Name, Durable: requirement.Durable,
 				Description: requirement.Description, Extra: requirement.Extra,
 			}
@@ -376,7 +380,7 @@ func toCorePrerequisites(value *openapiclient.Prerequisites) *openbindings.Conte
 }
 
 // InvokeBinding adapts the SDK binding invocation to the artifact runtime.
-func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
+func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
 	return e.Runtime.invokeBinding(ctx, args)
 }
 
@@ -386,17 +390,17 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 // the handle's Write channel. All pre-dispatch failures (bad ref, missing
 // server URL, unresolvable operation, missing context) terminate the handle
 // BEFORE any network side effect.
-func (e *Runtime) invokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
-	inv := openbindings.NewInvocationImpl[any, any](ctx)
+func (e *Runtime) invokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
+	inv := invoke.NewInvocationImpl[any, any](ctx)
 	go func() {
 		if err := e.run(ctx, args, inv); err != nil {
-			inv.FireError(openbindings.AsInvocationError(err))
+			inv.FireError(invoke.AsInvocationError(err))
 		}
 	}()
 	return inv
 }
 
-func (e *Runtime) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) error {
+func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) error {
 	options, err := enginePrepareOptions(args, e.client, e.securityHandlers)
 	if err != nil {
 		return bridgeExecutionError(err)
@@ -405,7 +409,7 @@ func (e *Runtime) run(ctx context.Context, args *openbindings.BindingInvocationA
 	if err != nil {
 		return bridgeExecutionError(err)
 	}
-	bridgeCtx, stop := openbindings.DoneContext(ctx, inv.Done())
+	bridgeCtx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 	execution, err := prepared.Start(bridgeCtx)
 	if err != nil {
@@ -452,7 +456,7 @@ func (e *Runtime) run(ctx context.Context, args *openbindings.BindingInvocationA
 }
 
 // PrepareBinding adapts the SDK binding preflight to the artifact runtime.
-func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	return e.Runtime.prepareBinding(ctx, args)
 }
 
@@ -466,7 +470,7 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.Binding
 // fetches. When the document would have to be fetched to learn its security
 // schemes, it reports no requirement and lets the invocation raise the
 // challenge instead.
-func (e *Runtime) prepareBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	options, err := enginePrepareOptions(args, e.client, e.securityHandlers)
 	if err != nil {
 		return nil, nil
@@ -536,9 +540,9 @@ type Synthesizer struct {
 }
 
 var (
-	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
-	_ openbindings.CoverageSynthesizer  = (*Synthesizer)(nil)
-	_ openbindings.SourceInspector      = (*Synthesizer)(nil)
+	_ synthesize.InterfaceSynthesizer = (*Synthesizer)(nil)
+	_ synthesize.CoverageSynthesizer  = (*Synthesizer)(nil)
+	_ synthesize.SourceInspector      = (*Synthesizer)(nil)
 )
 
 // NewSynthesizer creates a new OpenAPI interface synthesizer.
@@ -572,7 +576,7 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 }
 
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.
-func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
 	iface, _, _, err := c.synthesizeObserved(ctx, in, nil)
 	return iface, err
 }
@@ -587,7 +591,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 // every omission evidenced, never a whole-document refusal
 // (interface-synthesizer contract; core §10 posture). Strict synthesis
 // (SynthesizeInterface) is unchanged.
-func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
 	unrealizable := map[string]unrealizableTarget{}
 	iface, doc, floor, err := c.synthesizeObserved(ctx, in, func(target unrealizableTarget) {
 		unrealizable[target.ref] = target
@@ -596,16 +600,16 @@ func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *o
 		return nil, err
 	}
 	entries := openAPISynthesisCoverage(doc, iface, unrealizable, floor)
-	return openbindings.NewSynthesisResult(iface, entries, true)
+	return synthesize.NewSynthesisResult(iface, entries, true)
 }
 
-func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput, onUnrealizable func(unrealizableTarget)) (*openbindings.Interface, *openapi3.T, *acceptanceFloor, error) {
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.SynthesizeInput, onUnrealizable func(unrealizableTarget)) (*openbindings.Interface, *openapi3.T, *acceptanceFloor, error) {
 	if len(in.Sources) == 0 {
-		skeleton, err := openbindings.SynthesisSkeleton(in)
+		skeleton, err := synthesize.SynthesisSkeleton(in)
 		return &skeleton, nil, nil, err
 	}
 	if len(in.Sources) > 1 {
-		return nil, nil, nil, openbindings.ErrMultipleSources
+		return nil, nil, nil, synthesize.ErrMultipleSources
 	}
 	src := in.Sources[0]
 	if src.BindingSpec != BindingSpec {
@@ -652,7 +656,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 	// existing self-contained-schema pass can materialize every reachable
 	// schema without exposing artifact reference semantics in the OBI.
 	schemaOverlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
-	warn := func(w openbindings.SynthesizerWarning) {
+	warn := func(w synthesize.SynthesizerWarning) {
 		if in.OnWarning != nil {
 			in.OnWarning(w)
 		}
@@ -670,7 +674,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 			iface.Sources[DefaultSourceName] = entry
 		}
 	}
-	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, src.BindingSpec); err != nil {
+	if err := synthesize.FinalizeSynthesis(&iface, in, DefaultSourceName, src.BindingSpec); err != nil {
 		return nil, nil, nil, err
 	}
 	return &iface, doc, floor, nil
@@ -746,12 +750,12 @@ func readAuthoringArtifact(ctx context.Context, client *http.Client, location st
 }
 
 // BuiltinHooks exposes the openapi builtins to the consultation seam's
-// cross-format dispatch (openbindings.BuiltinDecode/BuiltinClassify): the
+// cross-format dispatch (invoke.BuiltinDecode/BuiltinClassify): the
 // decoder follows the delivery unit's declared Content-Type header (read
 // from raw.Meta — wire framing, never payload sniffing); the classifier
 // is the 2xx convention floor.
-func (e *Runtime) BuiltinHooks() (openbindings.OutputDecoder, openbindings.ResultClassifier) {
-	decode := func(site openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+func (e *Runtime) BuiltinHooks() (invoke.OutputDecoder, invoke.ResultClassifier) {
+	decode := func(site invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 		ct := ""
 		if vs := raw.Meta["Content-Type"]; len(vs) > 0 {
 			ct = vs[0]

@@ -15,9 +15,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
+	"github.com/recolabs/gnata"
+
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/processorscenarios"
-	"github.com/recolabs/gnata"
 )
 
 // TestOpenAPINativeDifferential is the independent-client gate for the first
@@ -100,8 +104,8 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 				t.Fatalf("read native response: %v", err)
 			}
 
-			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{
+			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+				Sources: []synthesize.SynthesizeSource{{
 					BindingSpec: file.BindingSpec,
 					Content:     content,
 				}},
@@ -109,14 +113,14 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 			if err != nil {
 				t.Fatalf("synthesis failed: %v", err)
 			}
-			opInvoker := openbindings.NewOperationInvoker(NewInvokerWithClient(server.Client()))
+			opInvoker := invoke.NewOperationInvoker(NewInvokerWithClient(server.Client()))
 			opInvoker.TransformEvaluator = openAPIJSONataEvaluator{}
-			call := openbindings.Invoke(
+			call := invoke.Invoke(
 				context.Background(),
 				opInvoker,
 				iface,
-				openbindings.NewOperationSignature[any, any](openAPIFidelityOperationID(scenario.ID)),
-				openbindings.WithContext(scenarioContext(scenario)),
+				invoke.NewOperationSignature[any, any](openAPIFidelityOperationID(scenario.ID)),
+				invoke.WithContext(scenarioContext(scenario)),
 			)
 			if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 				_ = call.Write(context.Background(), scenario.Given.Invocation["input"])
@@ -158,8 +162,8 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 			if len(outputs) != 0 {
 				t.Fatalf("failure emitted operation outputs: %#v", outputs)
 			}
-			terminalError := openbindings.AsInvocationError(terminal)
-			if terminalError.Code != openbindings.ErrCodeExecutionFailed {
+			terminalError := invoke.AsInvocationError(terminal)
+			if terminalError.Code != invoke.ErrCodeExecutionFailed {
 				t.Fatalf("native unsuccessful completion mapped to %q", terminalError.Code)
 			}
 		})
@@ -232,8 +236,8 @@ func TestOpenAPIV2CollisionDifferential(t *testing.T) {
 	    }
 	  }}}
 	}`, server.URL)
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatalf("revision-2 synthesis failed: %v", err)
@@ -249,13 +253,13 @@ func TestOpenAPIV2CollisionDifferential(t *testing.T) {
 		}
 	}
 
-	opInvoker := openbindings.NewOperationInvoker(NewInvokerWithClient(server.Client()))
+	opInvoker := invoke.NewOperationInvoker(NewInvokerWithClient(server.Client()))
 	opInvoker.TransformEvaluator = openAPIJSONataEvaluator{}
-	call := openbindings.Invoke(
+	call := invoke.Invoke(
 		context.Background(),
 		opInvoker,
 		iface,
-		openbindings.NewOperationSignature[any, any]("createItem"),
+		invoke.NewOperationSignature[any, any]("createItem"),
 	)
 	if err := call.Write(context.Background(), map[string]any{
 		"id": "path-value", "id_2": "query-value", "id_3": "body-value", "name": "widget",
@@ -332,8 +336,8 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 	    "responses":{"204":{"description":"done"}}
 	  }}}
 	}`, server.URL)
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -352,11 +356,11 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 		t.Fatalf("synthesized input invented a body wrapper: %#v", properties)
 	}
 
-	call := openbindings.Invoke(
+	call := invoke.Invoke(
 		context.Background(),
-		openbindings.NewOperationInvoker(NewInvokerWithClient(server.Client())),
+		invoke.NewOperationInvoker(NewInvokerWithClient(server.Client())),
 		iface,
-		openbindings.NewOperationSignature[any, any]("uploadAllOf"),
+		invoke.NewOperationSignature[any, any]("uploadAllOf"),
 	)
 	if err := call.Write(context.Background(), map[string]any{
 		"transaction": "tx-1", "fileName": "a.bin", "file": "AQID",
@@ -394,7 +398,7 @@ func (openAPIJSONataEvaluator) Evaluate(expression string, data any) (any, error
 		return nil, err
 	}
 	if result == nil {
-		return nil, openbindings.ErrTransformUndefined
+		return nil, invoke.ErrTransformUndefined
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {
@@ -464,7 +468,7 @@ func differentialPeerHeaders(peer map[string]any) map[string]any {
 	return headers
 }
 
-func differentialOutputs(call openbindings.Invocation[any, any]) ([]any, error) {
+func differentialOutputs(call invoke.Invocation[any, any]) ([]any, error) {
 	outputs := []any{}
 	stream := call.Outputs()
 	for {

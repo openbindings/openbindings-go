@@ -3,11 +3,13 @@ package asyncapi
 import (
 	"context"
 	"fmt"
+
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // InspectSource returns all bindable targets (operation IDs) from an AsyncAPI document.
-func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	// Authoring convenience: a bare filesystem path loads as its file://
 	// spelling (the strict loader refuses bare paths, ASYNC-D-02).
 	loadLocation, err := absolutizeArtifactLocation(source.Location)
@@ -19,7 +21,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		return nil, fmt.Errorf("load AsyncAPI document: %w", err)
 	}
 
-	var targets []openbindings.BindableTarget
+	var targets []synthesize.BindableTarget
 
 	bindingSpec := source.BindingSpec
 	if bindingSpec != BindingSpec {
@@ -34,18 +36,18 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	for _, opID := range opIDs {
 		asyncOp := doc.Operations[opID]
 		ref := operationRef(opID)
-		opKey := openbindings.UniqueKey(openbindings.SanitizeKey(opID), usedKeys)
+		opKey := synthesize.UniqueKey(synthesize.SanitizeKey(opID), usedKeys)
 		usedKeys[opKey] = true
 		desc := operationDescription(asyncOp)
 
 		targets = append(targets, bindableTarget(ref, opKey, desc))
 	}
 
-	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
+func bindableTarget(ref, operationKey, description string) synthesize.BindableTarget {
+	target := synthesize.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

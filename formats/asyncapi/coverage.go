@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 type observedMessage struct {
@@ -16,9 +17,9 @@ type observedMessage struct {
 // selectable message and declared-server alternatives that govern it. An
 // operation entry answers whether the target exists in the OBI; alternative
 // entries answer whether every artifact choice survived that projection.
-func synthesisCoverage(doc *document, iface *openbindings.Interface) []openbindings.SynthesisCoverageEntry {
+func synthesisCoverage(doc *document, iface *openbindings.Interface) []synthesize.SynthesisCoverageEntry {
 	if doc == nil || iface == nil {
-		return []openbindings.SynthesisCoverageEntry{}
+		return []synthesize.SynthesisCoverageEntry{}
 	}
 	bindingSpec := BindingSpec
 	if source, ok := iface.Sources[DefaultSourceName]; ok && source.BindingSpec != "" {
@@ -39,25 +40,25 @@ func synthesisCoverage(doc *document, iface *openbindings.Interface) []openbindi
 	}
 	sort.Strings(operationIDs)
 
-	var entries []openbindings.SynthesisCoverageEntry
+	var entries []synthesize.SynthesisCoverageEntry
 	for _, operationID := range operationIDs {
 		op := doc.Operations[operationID]
 		ref := operationRef(operationID)
 		id, emitted := represented[ref]
 		exclusion := operationExclusion(doc, &op, bindingSpec)
 		if exclusion != nil {
-			entries = append(entries, coverageExclusion(ref, openbindings.SynthesisCoverageTarget, exclusion))
+			entries = append(entries, coverageExclusion(ref, synthesize.SynthesisCoverageTarget, exclusion))
 		} else if !emitted {
-			entries = append(entries, openbindings.SynthesisCoverageEntry{
-				SourceIndex: 0, SourceRef: ref, Scope: openbindings.SynthesisCoverageTarget,
-				Status: openbindings.SynthesisImplementationUnsupported, ReasonCode: "asyncapi.missing_emitted_binding",
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: ref, Scope: synthesize.SynthesisCoverageTarget,
+				Status: synthesize.SynthesisImplementationUnsupported, ReasonCode: "asyncapi.missing_emitted_binding",
 				Message: "the synthesizer returned without emitting this bindable operation",
 			})
 		} else {
 			requirements := operationRequirements(doc, &op)
-			entries = append(entries, openbindings.SynthesisCoverageEntry{
-				SourceIndex: 0, SourceRef: ref, Scope: openbindings.SynthesisCoverageTarget,
-				Status: openbindings.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: ref, Scope: synthesize.SynthesisCoverageTarget,
+				Status: synthesize.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
 				Requirements: requirements,
 			})
 		}
@@ -78,14 +79,14 @@ func synthesisCoverage(doc *document, iface *openbindings.Interface) []openbindi
 		for index, member := range effectiveServers(doc, &ch) {
 			sourceRef := fmt.Sprintf("%s#server[%d]=%s", ref, index, member.Name)
 			if emitted {
-				entries = append(entries, openbindings.SynthesisCoverageEntry{
-					SourceIndex: 0, SourceRef: sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-					Status: openbindings.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
+				entries = append(entries, synthesize.SynthesisCoverageEntry{
+					SourceIndex: 0, SourceRef: sourceRef, Scope: synthesize.SynthesisCoverageAlternative,
+					Status: synthesize.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
 				})
 			} else {
-				entries = append(entries, openbindings.SynthesisCoverageEntry{
-					SourceIndex: 0, SourceRef: sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-					Status: openbindings.SynthesisExcluded, ReasonCode: "asyncapi.parent_target_excluded",
+				entries = append(entries, synthesize.SynthesisCoverageEntry{
+					SourceIndex: 0, SourceRef: sourceRef, Scope: synthesize.SynthesisCoverageAlternative,
+					Status: synthesize.SynthesisExcluded, ReasonCode: "asyncapi.parent_target_excluded",
 					Rule: "ASYNC-P-02", Message: "the governing operation has no faithfully representable target",
 				})
 			}
@@ -94,15 +95,15 @@ func synthesisCoverage(doc *document, iface *openbindings.Interface) []openbindi
 	return entries
 }
 
-func coverageExclusion(sourceRef string, scope openbindings.SynthesisCoverageScope, exclusion *authoringExclusion) openbindings.SynthesisCoverageEntry {
-	status := openbindings.SynthesisExcluded
+func coverageExclusion(sourceRef string, scope synthesize.SynthesisCoverageScope, exclusion *authoringExclusion) synthesize.SynthesisCoverageEntry {
+	status := synthesize.SynthesisExcluded
 	if exclusion.status == "invalid" {
-		status = openbindings.SynthesisInvalid
+		status = synthesize.SynthesisInvalid
 	}
 	if exclusion.status == "implementation-unsupported" {
-		status = openbindings.SynthesisImplementationUnsupported
+		status = synthesize.SynthesisImplementationUnsupported
 	}
-	return openbindings.SynthesisCoverageEntry{
+	return synthesize.SynthesisCoverageEntry{
 		SourceIndex: 0, SourceRef: sourceRef, Scope: scope, Status: status,
 		ReasonCode: exclusion.code, Rule: exclusion.rule, Message: exclusion.message,
 	}
@@ -184,18 +185,18 @@ func replyMessageInventory(doc *document, op *asyncOperation, prefix string) []o
 func messageCoverage(doc *document, candidate observedMessage, id struct {
 	operation string
 	ref       string
-}, emitted bool, parentExclusion *authoringExclusion) openbindings.SynthesisCoverageEntry {
+}, emitted bool, parentExclusion *authoringExclusion) synthesize.SynthesisCoverageEntry {
 	if candidate.message == nil {
-		return openbindings.SynthesisCoverageEntry{
-			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-			Status: openbindings.SynthesisInvalid, ReasonCode: "asyncapi.dangling_message_ref",
+		return synthesize.SynthesisCoverageEntry{
+			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: synthesize.SynthesisCoverageAlternative,
+			Status: synthesize.SynthesisInvalid, ReasonCode: "asyncapi.dangling_message_ref",
 			Rule: "ASYNC-D-03", Message: "the message reference does not resolve",
 		}
 	}
 	if candidate.message.Ref != "" || candidate.message.UnresolvedTrait != "" {
-		return openbindings.SynthesisCoverageEntry{
-			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-			Status: openbindings.SynthesisExcluded, ReasonCode: "asyncapi.message_unresolvable",
+		return synthesize.SynthesisCoverageEntry{
+			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: synthesize.SynthesisCoverageAlternative,
+			Status: synthesize.SynthesisExcluded, ReasonCode: "asyncapi.message_unresolvable",
 			Rule: "ASYNC-P-03", Message: "the message declaration does not resolve faithfully",
 		}
 	}
@@ -209,9 +210,9 @@ func messageCoverage(doc *document, candidate observedMessage, id struct {
 		case "asyncapi.schema_format_not_convertible":
 			// Language loss: values still ride JSON, invocation works, the
 			// contract is degraded — lossy.
-			return openbindings.SynthesisCoverageEntry{
-				SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-				Status: openbindings.SynthesisLossy, OperationKey: id.operation, BindingRef: id.ref,
+			return synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: synthesize.SynthesisCoverageAlternative,
+				Status: synthesize.SynthesisLossy, OperationKey: id.operation, BindingRef: id.ref,
 				ReasonCode: "asyncapi.schema_format_not_convertible", Rule: "ASYNC-P-05",
 				Message: "the declared schema format has no faithful JSON Schema conversion; the direction is represented by the unconstrained schema",
 			}
@@ -220,16 +221,16 @@ func messageCoverage(doc *document, candidate observedMessage, id struct {
 			// canonical Base64 boundary, but the author-declared payload
 			// contract is not expressible at that boundary — lossy, with
 			// consumer codec hooks as the enrichment path to logical values.
-			return openbindings.SynthesisCoverageEntry{
-				SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-				Status: openbindings.SynthesisLossy, OperationKey: id.operation, BindingRef: id.ref,
+			return synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: synthesize.SynthesisCoverageAlternative,
+				Status: synthesize.SynthesisLossy, OperationKey: id.operation, BindingRef: id.ref,
 				ReasonCode: "asyncapi.payload_byte_carriage", Rule: "ASYNC-P-05",
 				Message: "the declared media carries bytes; the direction is represented by the canonical Base64 boundary schema, and the declared payload contract is not expressible at that boundary",
 			}
 		}
-		return openbindings.SynthesisCoverageEntry{
-			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-			Status: openbindings.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
+		return synthesize.SynthesisCoverageEntry{
+			SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: synthesize.SynthesisCoverageAlternative,
+			Status: synthesize.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
 		}
 	}
 	message := "the governing operation has no faithfully representable target"
@@ -238,9 +239,9 @@ func messageCoverage(doc *document, candidate observedMessage, id struct {
 		message = parentExclusion.message
 		rule = parentExclusion.rule
 	}
-	return openbindings.SynthesisCoverageEntry{
-		SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: openbindings.SynthesisCoverageAlternative,
-		Status: openbindings.SynthesisExcluded, ReasonCode: "asyncapi.parent_target_excluded",
+	return synthesize.SynthesisCoverageEntry{
+		SourceIndex: 0, SourceRef: candidate.sourceRef, Scope: synthesize.SynthesisCoverageAlternative,
+		Status: synthesize.SynthesisExcluded, ReasonCode: "asyncapi.parent_target_excluded",
 		Rule: rule, Message: message,
 	}
 }

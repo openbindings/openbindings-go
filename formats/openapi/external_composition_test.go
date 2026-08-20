@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // externalCompositionCasesDigest pins the frozen twin case table. The identical
@@ -108,7 +108,7 @@ func TestExternalCompositionIsPointerScoped(t *testing.T) {
 
 			iface, err := NewSynthesizerWithClient(client).SynthesizeInterface(
 				context.Background(),
-				&openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{
+				&synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
 					BindingSpec: BindingSpec,
 					Location:    testCase.Entry,
 				}}},

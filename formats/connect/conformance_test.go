@@ -18,12 +18,15 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/durationpb"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // ---------------------------------------------------------------------------
@@ -79,7 +82,7 @@ func TestConformance_D02_NonConformantLocationRefusedPreDispatch(t *testing.T) {
 	ctx := testContext(t)
 	for _, location := range []string{"https://api.example.com/", "https://api.example.com?x=1", "grpcs://api.example.com"} {
 		inv := NewInvoker().InvokeBinding(ctx, unaryArgs(location, testProto, "testpkg.TestService/GetItem"))
-		ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
+		ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeSourceConfigError)
 		if ierr.HasData() {
 			t.Errorf("location %q: implementation evidence crossed as abstract data: %#v", location, ierr.Data)
 		}
@@ -102,7 +105,7 @@ func TestConformance_D02_PathPrefixPreservedByConcatenation(t *testing.T) {
 
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL+"/api/v2", testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "p"})
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("Single: %v", err)
 	}
 	if gotPath != "/api/v2/testpkg.TestService/GetItem" {
@@ -198,7 +201,7 @@ func TestConformance_D01_DescriptorSetJSON_InvokesEndToEnd(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(),
 		unaryArgs(srv.URL, descriptorSetJSON(t, protoFDP(t, testProto)), "testpkg.TestService/GetItem"),
 		map[string]any{"id": "fds"})
-	v, err := openbindings.Single[any](ctx, inv.Outputs())
+	v, err := invoke.Single[any](ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("FileDescriptorSet-in-JSON content must be a valid schema carrier (CONN-D-01): %v", err)
 	}
@@ -273,7 +276,7 @@ func TestConformance_D03_ByteExactMatching(t *testing.T) {
 	for _, ref := range []string{"testpkg.TestService/getItem", "testpkg.testservice/GetItem", "TESTPKG.TestService/GetItem"} {
 		inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, testProto, ref))
 		outputs, terr := collectOutputs(t, ctx, inv)
-		if len(outputs) != 0 || terr == nil || terr.Code != openbindings.ErrCodeRefNotFound {
+		if len(outputs) != 0 || terr == nil || terr.Code != invoke.ErrCodeRefNotFound {
 			t.Fatalf("ref %q: byte-exact matching must refuse with ERR_REF_NOT_FOUND (CONN-D-03), got %v", ref, terr)
 		}
 	}
@@ -299,7 +302,7 @@ message Menu { string items = 1; }
 
 	// MenuRequest has no fields: a bare handle (no write) dispatches.
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, packagelessProto, "CoffeeShop/GetMenu"))
-	v, err := openbindings.Single[any](ctx, inv.Outputs())
+	v, err := invoke.Single[any](ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("a packageless ref must resolve against the bare service name (CONN-D-03): %v", err)
 	}
@@ -326,7 +329,7 @@ func TestConformance_P01_ModeDiscriminatedByContentPresence(t *testing.T) {
 	// Schema mode: refused pre-dispatch.
 	schemaSrv := unreachableServer(t)
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(schemaSrv.URL, testProto, "testpkg.TestService/GetItem"), input)
-	mustTerminalError(t, ctx, inv, openbindings.ErrCodeValidationFailed)
+	mustTerminalError(t, ctx, inv, invoke.ErrCodeValidationFailed)
 
 	// Descriptorless mode: the identical value rides verbatim.
 	var gotBody string
@@ -340,7 +343,7 @@ func TestConformance_P01_ModeDiscriminatedByContentPresence(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	inv2 := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, nil, "testpkg.TestService/GetItem"), input)
-	if _, err := openbindings.Single[any](ctx, inv2.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv2.Outputs()); err != nil {
 		t.Fatalf("descriptorless mode must dispatch the value verbatim (CONN-P-01/CONN-P-03): %v", err)
 	}
 	if !strings.Contains(gotBody, "bogus") {
@@ -365,7 +368,7 @@ func TestConformance_P02_UnknownInputFieldRefusedPreDispatch(t *testing.T) {
 	if len(outputs) != 0 || terr == nil {
 		t.Fatalf("unknown input field must refuse pre-dispatch (CONN-P-02), got %d outputs, terr=%v", len(outputs), terr)
 	}
-	if terr.Code != openbindings.ErrCodeValidationFailed {
+	if terr.Code != invoke.ErrCodeValidationFailed {
 		t.Errorf("code = %q, want ERR_VALIDATION_FAILED", terr.Code)
 	}
 	if terr.HasData() {
@@ -394,7 +397,7 @@ service Clock { rpc Wait(google.protobuf.Duration) returns (WaitReply); }
 	t.Cleanup(srv.Close)
 
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, durationReqProto, "wkt.Clock/Wait"), "3.5s")
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("a Duration-typed request must accept its canonical JSON string form (CONN-P-02 via GRPC-P-03): %v", err)
 	}
 	var sent any
@@ -424,7 +427,7 @@ func TestConformance_P02_UndecodableResponseIsLoudFailure(t *testing.T) {
 
 			inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 				map[string]any{"id": "x"})
-			ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
+			ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeResponseError)
 			if ierr.HasData() {
 				t.Errorf("native decode evidence crossed as abstract data: %#v", ierr.Data)
 			}
@@ -441,7 +444,7 @@ func TestConformance_P02_UnknownResponseMemberRefused(t *testing.T) {
 
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "a"})
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeResponseError)
 	if ierr.HasData() {
 		t.Errorf("native response mismatch crossed as abstract data: %#v", ierr.Data)
 	}
@@ -596,7 +599,7 @@ service S { rpc Do(Req) returns (Resp); }
 	srv := unreachableServer(t)
 
 	inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, proto, "p2.S/Do"))
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceLoadFailed)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeSourceLoadFailed)
 	if ierr.HasData() {
 		t.Errorf("schema-loader diagnostics crossed as abstract data: %#v", ierr.Data)
 	}
@@ -625,7 +628,7 @@ func TestConformance_SchemaRange_InertCarriageNotRefused(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(),
 		unaryArgs(srv.URL, descriptorSetJSON(t, protoFDP(t, testProto), dirty), "testpkg.TestService/GetItem"),
 		map[string]any{"id": "inert"})
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("a proto2 file outside the bound closure is inert carriage, never grounds for refusal (openbindings.grpc@1 §3, via CONN-D-01): %v", err)
 	}
 }
@@ -646,14 +649,14 @@ func TestConformance_P03_DescriptorlessVerbatimValues(t *testing.T) {
 		_, _ = io.WriteString(w, respBody)
 	}))
 	t.Cleanup(srv.Close)
-	args := func() *openbindings.BindingInvocationArgs {
+	args := func() *invoke.BindingInvocationArgs {
 		return unaryArgs(srv.URL, nil, "testpkg.TestService/GetItem")
 	}
 
 	// ANY JSON value rides verbatim: an array input, an array output.
 	respBody = `[{"x":1},2]`
 	inv := invokeWith(t, ctx, NewInvoker(), args(), []any{1.0, 2.0, 3.0})
-	v, err := openbindings.Single[any](ctx, inv.Outputs())
+	v, err := invoke.Single[any](ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("descriptorless values are verbatim JSON (CONN-P-03): %v", err)
 	}
@@ -667,14 +670,14 @@ func TestConformance_P03_DescriptorlessVerbatimValues(t *testing.T) {
 	// An ABSENT input cannot acquire a request shape in descriptorless mode.
 	respBody = `{"ok":true}`
 	inv = invokeWith(t, ctx, NewInvoker(), args())
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeValidationFailed)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeValidationFailed)
 	if ierr.HasData() {
 		t.Errorf("validation diagnostics crossed as abstract data: %#v", ierr.Data)
 	}
 
 	// An explicit JSON null is a VALUE, not absence, and rides as `null`.
 	inv = invokeWith(t, ctx, NewInvoker(), args(), nil)
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("null input: %v", err)
 	}
 	if gotBody != `null` {
@@ -685,7 +688,7 @@ func TestConformance_P03_DescriptorlessVerbatimValues(t *testing.T) {
 	respBody = ``
 	inv = invokeWith(t, ctx, NewInvoker(), args(), map[string]any{"q": 1})
 	outputs, terr := collectOutputs(t, ctx, inv)
-	if len(outputs) != 0 || terr == nil || terr.Code != openbindings.ErrCodeResponseError {
+	if len(outputs) != 0 || terr == nil || terr.Code != invoke.ErrCodeResponseError {
 		t.Fatalf("empty body must fail without invented output (CONN-P-03): outputs=%v error=%v", outputs, terr)
 	}
 }
@@ -698,7 +701,7 @@ func TestConformance_P03_ParseFailureIsLoudNeverAString(t *testing.T) {
 
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, nil, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "x"})
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeResponseError)
 	if ierr.HasData() {
 		t.Errorf("native parse evidence crossed as abstract data: %#v", ierr.Data)
 	}
@@ -717,7 +720,7 @@ func TestConformance_P03_NonJSONContentTypeIsLoud(t *testing.T) {
 
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, nil, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "x"})
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeResponseError)
 	if ierr.HasData() {
 		t.Errorf("native media evidence crossed as abstract data: %#v", ierr.Data)
 	}
@@ -744,7 +747,7 @@ service ChatService { rpc Chat(stream ChatMsg) returns (stream ChatMsg); }
 	if len(outputs) != 0 || terr == nil {
 		t.Fatal("bidi must refuse pre-dispatch (CONN-P-04)")
 	}
-	if terr.Code != openbindings.ErrCodeExecutionFailed || terr.HasData() {
+	if terr.Code != invoke.ErrCodeExecutionFailed || terr.HasData() {
 		t.Errorf("bidi refusal = %#v, want code-only ERR_EXECUTION_FAILED", terr)
 	}
 }
@@ -781,13 +784,13 @@ func TestConformance_P05_EveryDispatchIsPOSTWithProtocolVersion(t *testing.T) {
 	// Schema-mode unary.
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "a"})
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("schema unary: %v", err)
 	}
 	// Descriptorless unary.
 	inv = invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, nil, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "a"})
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("descriptorless unary: %v", err)
 	}
 	// Server-streaming.
@@ -856,7 +859,7 @@ func TestConformance_P05_MissingEndStreamIsLoudFailure(t *testing.T) {
 	if len(outputs) != 2 {
 		t.Fatalf("the two values emitted before the truncation must stand, got %d", len(outputs))
 	}
-	if terr == nil || terr.Code != openbindings.ErrCodeStreamError {
+	if terr == nil || terr.Code != invoke.ErrCodeStreamError {
 		t.Fatalf("a stream ending without END_STREAM must fail loudly (CONN-P-05/CONN-P-06), got %v", terr)
 	}
 	if terr.HasData() {
@@ -924,7 +927,7 @@ func TestConformance_P06_EmittedValuesStandOnEndStreamError(t *testing.T) {
 	if outputs[0].(map[string]any)["message"] != "kept" {
 		t.Errorf("emitted value = %v", outputs[0])
 	}
-	if terr == nil || terr.Code != openbindings.ErrCodeExecutionFailed {
+	if terr == nil || terr.Code != invoke.ErrCodeExecutionFailed {
 		t.Fatalf("the END_STREAM error must classify the invocation as a failure, got %v", terr)
 	}
 	if terr.HasData() {
@@ -956,7 +959,7 @@ func TestConformance_P07_CredentialsRideRequestHeaders(t *testing.T) {
 		"cookies":     map[string]any{"session": "s1"},
 	}
 	inv := invokeWith(t, ctx, NewInvoker(), args, map[string]any{"id": "a"})
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("Single: %v", err)
 	}
 	if gotAuth != "Bearer tok-1" {
@@ -993,7 +996,7 @@ func TestConformance_P07_APIKeyRidesConsumerNamedHeaderCoexistsWithBearer(t *tes
 		"headers":     map[string]any{"X-API-Key": "k-9"},
 	}
 	inv := invokeWith(t, ctx, NewInvoker(), args, map[string]any{"id": "a"})
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("Single: %v", err)
 	}
 	if gotAuth != "Bearer tok-1" {
@@ -1022,11 +1025,11 @@ func TestConformance_P07_BareAPIKeyFieldSurfacedLoudly(t *testing.T) {
 	args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
 	args.Context = map[string]any{"apiKey": "k-secret"}
 	inv := NewInvoker().InvokeBinding(ctx, args)
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeContextRequired)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeContextRequired)
 	if hit {
 		t.Error("server was contacted; an inexpressible apiKey must be surfaced BEFORE dispatch (§9.6)")
 	}
-	details := openbindings.ContextRequiredFrom(ierr)
+	details := invoke.ContextRequiredFrom(ierr)
 	if details == nil || len(details.Alternatives) == 0 {
 		t.Fatalf("inexpressible credential must produce a structural context challenge: %#v", ierr.Data)
 	}
@@ -1053,7 +1056,7 @@ func TestConformance_P07_BearerDoesNotSilentlyDropAPIKeyField(t *testing.T) {
 	args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
 	args.Context = map[string]any{"bearerToken": "tok-1", "apiKey": "k-secret"}
 	inv := NewInvoker().InvokeBinding(ctx, args)
-	_ = mustTerminalError(t, ctx, inv, openbindings.ErrCodeContextRequired)
+	_ = mustTerminalError(t, ctx, inv, invoke.ErrCodeContextRequired)
 	if hit {
 		t.Error("server was contacted; a bearer must not let a bare apiKey be silently dropped — the apiKey is surfaced pre-dispatch (§9.6)")
 	}
@@ -1085,7 +1088,7 @@ func TestConformance_P06_StreamingErrorBodyReadWholeAtCapBoundary(t *testing.T) 
 
 	args := streamingArgs(srv.URL)
 	inv := invokeWith(t, ctx, NewInvoker(), args, map[string]any{"source": "s"})
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeExecutionFailed)
 	if ierr.HasData() {
 		t.Fatalf("Connect-native error evidence leaked as abstract data: %+v", ierr.Data)
 	}

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func TestOperationRequirementSynthesizedOpenAPI(t *testing.T) {
@@ -83,8 +85,8 @@ func TestOperationRequirementSynthesizedOpenAPI(t *testing.T) {
 	}
 	candidate, err := NewSynthesizer().SynthesizeInterface(
 		context.Background(),
-		&openbindings.SynthesizeInput{
-			Sources: []openbindings.SynthesizeSource{{
+		&synthesize.SynthesizeInput{
+			Sources: []synthesize.SynthesizeSource{{
 				BindingSpec: BindingSpec,
 				Content:     specContent,
 			}},
@@ -94,24 +96,24 @@ func TestOperationRequirementSynthesizedOpenAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signature := openbindings.NewOperationSignature[map[string]any, map[string]any]("example.tasks.create")
-	requirement, err := openbindings.NewOperationRequirement(required, signature)
+	signature := invoke.NewOperationSignature[map[string]any, map[string]any]("example.tasks.create")
+	requirement, err := invoke.NewOperationRequirement(required, signature)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolution, err := openbindings.ResolveOperationRequirement(
+	resolution, err := invoke.ResolveOperationRequirement(
 		context.Background(),
 		requirement,
-		[]openbindings.OperationImplementation{{
+		[]invoke.OperationImplementation{{
 			Interface: candidate,
-			Invoker:   openbindings.NewOperationInvoker(NewInvoker()),
+			Invoker:   invoke.NewOperationInvoker(NewInvoker()),
 			Label:     "tasks-api",
 		}},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolution.Status != openbindings.OperationRequirementAvailable {
+	if resolution.Status != invoke.OperationRequirementAvailable {
 		t.Fatalf("resolution = %#v", resolution)
 	}
 
@@ -121,7 +123,7 @@ func TestOperationRequirementSynthesizedOpenAPI(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	output, err := openbindings.Single(context.Background(), call.Outputs())
+	output, err := invoke.Single(context.Background(), call.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // BindingSpec identifies this package as an operation graph handler.
@@ -24,7 +25,7 @@ const BindingSpec = "openbindings.operation-graph@1"
 // instances per tenant to bound growth and avoid cross-tenant
 // contamination in multi-tenant servers.
 type Invoker struct {
-	invoker  *openbindings.OperationInvoker
+	invoker  *invoke.OperationInvoker
 	mu       sync.RWMutex
 	docCache map[string]any
 	schemas  *schemaCache
@@ -38,9 +39,9 @@ type Invoker struct {
 // mutual reference is inherent to the format (graphs recurse through the
 // operation invoker), so wiring is two-phase:
 //
-//	opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
+//	opInv := invoke.NewOperationInvoker(openapi.NewInvoker())
 //	opInv.AddBindingInvoker(operationgraph.NewInvoker(opInv))
-func NewInvoker(invoker *openbindings.OperationInvoker) *Invoker {
+func NewInvoker(invoker *invoke.OperationInvoker) *Invoker {
 	return NewInvokerWithClient(invoker, nil)
 }
 
@@ -50,7 +51,7 @@ func NewInvoker(invoker *openbindings.OperationInvoker) *Invoker {
 // transport, and any other client-level behavior. No overall request
 // timeout should be set on the client because the caller controls
 // cancellation via context.
-func NewInvokerWithClient(invoker *openbindings.OperationInvoker, client *http.Client) *Invoker {
+func NewInvokerWithClient(invoker *invoke.OperationInvoker, client *http.Client) *Invoker {
 	if client == nil {
 		client = &http.Client{
 			CheckRedirect: func(_ *http.Request, via []*http.Request) error {
@@ -92,8 +93,8 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 // handle without consuming any caller input. Creation is inert: the handle
 // returns synchronously and the document load (a potential network fetch)
 // happens on the driving goroutine, per the core invocation contract.
-func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
-	inv := openbindings.NewInvocationImpl[any, any](ctx)
+func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
+	inv := invoke.NewInvocationImpl[any, any](ctx)
 	// Cross-graph nesting bound (spec: Security considerations). A
 	// graph-bound operation can invoke operations bound to further graphs,
 	// including mutually recursive ones; per-graph budgets reset at each
@@ -101,8 +102,8 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 	// invocations and terminates the invocation when exhausted.
 	depth := nestingDepth(ctx)
 	if depth >= maxNestingDepth {
-		go inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeExecutionFailed,
+		go inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeExecutionFailed,
 		})
 		return inv
 	}
@@ -131,11 +132,11 @@ func nestingDepth(ctx context.Context) int {
 // drive performs the preflight (load, resolve, version-check, validate) and
 // runs the engine, firing preflight failures as terminal errors on the
 // handle.
-func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+func (e *Invoker) drive(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	doc, err := e.loadDocument(ctx, args.Source.Location, args.Source.Content)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceLoadFailed,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeSourceLoadFailed,
 		})
 		return
 	}
@@ -144,20 +145,20 @@ func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocatio
 	// definition within the (otherwise unconstrained) host document.
 	target, err := resolveRef(doc, args.Ref)
 	if err != nil {
-		code := openbindings.ErrCodeRefNotFound
+		code := invoke.ErrCodeRefNotFound
 		var re *refError
 		if errors.As(err, &re) && re.invalid {
-			code = openbindings.ErrCodeInvalidRef
+			code = invoke.ErrCodeInvalidRef
 		}
-		inv.FireError(&openbindings.InvocationError{
+		inv.FireError(&invoke.InvocationError{
 			Code: code,
 		})
 		return
 	}
 	graph, err := graphFromValue(target)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeValidationFailed,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeValidationFailed,
 		})
 		return
 	}
@@ -167,8 +168,8 @@ func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocatio
 	// token is advisory).
 	if graph.Version != "" && semverRe.MatchString(graph.Version) {
 		if err := checkVersion(graph.Version); err != nil {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeUnsupportedFormatVersion,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeUnsupportedFormatVersion,
 			})
 			return
 		}
@@ -190,8 +191,8 @@ func (e *Invoker) drive(ctx context.Context, args *openbindings.BindingInvocatio
 		}
 	}
 	if err := Validate(graph, opKeys); err != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeValidationFailed,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeValidationFailed,
 		})
 		return
 	}

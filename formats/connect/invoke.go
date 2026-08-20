@@ -12,7 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
@@ -105,7 +106,7 @@ func connectURL(baseURL, svcName, methodName string) string {
 // discovered embedded schema (schema mode). Matching is byte-exact, no
 // case folding (CONN-D-03, incorporating GRPC-D-03's grammar); a ref
 // matching no service or method makes the binding unresolvable.
-func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.MethodDescriptor, *openbindings.InvocationError) {
+func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.MethodDescriptor, *invoke.InvocationError) {
 	var svcDesc protoreflect.ServiceDescriptor
 	for _, svc := range disc.services {
 		if string(svc.FullName()) == svcName {
@@ -114,14 +115,14 @@ func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.Me
 		}
 	}
 	if svcDesc == nil {
-		return nil, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeRefNotFound,
+		return nil, &invoke.InvocationError{
+			Code: invoke.ErrCodeRefNotFound,
 		}
 	}
 	m := svcDesc.Methods().ByName(protoreflect.Name(methodName))
 	if m == nil {
-		return nil, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeRefNotFound,
+		return nil, &invoke.InvocationError{
+			Code: invoke.ErrCodeRefNotFound,
 		}
 	}
 	return m, nil
@@ -138,24 +139,24 @@ func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.Me
 // loudly, never silently discarded — and every refusal fires before
 // dispatch. A nil input is the absent input value and marshals as the
 // empty request message.
-func buildSchemaModeBody(mi *methodInfo, input any) ([]byte, *openbindings.InvocationError) {
+func buildSchemaModeBody(mi *methodInfo, input any) ([]byte, *invoke.InvocationError) {
 	msg := dynamicpb.NewMessage(mi.method.Input())
 	if input != nil {
 		jsonBytes, err := json.Marshal(input)
 		if err != nil {
-			return nil, &openbindings.InvocationError{
-				Code: openbindings.ErrCodeValidationFailed,
+			return nil, &invoke.InvocationError{
+				Code: invoke.ErrCodeValidationFailed,
 			}
 		}
 		if err := protojson.Unmarshal(jsonBytes, msg); err != nil {
-			return nil, &openbindings.InvocationError{
-				Code: openbindings.ErrCodeValidationFailed,
+			return nil, &invoke.InvocationError{
+				Code: invoke.ErrCodeValidationFailed,
 			}
 		}
 	}
 	body, err := protojson.Marshal(msg)
 	if err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 	}
 	return body, nil
 }
@@ -166,13 +167,13 @@ func buildSchemaModeBody(mi *methodInfo, input any) ([]byte, *openbindings.Invoc
 // the empty message's canonical form. An explicit JSON null is a value,
 // not absence, and rides as `null`. No field semantics exist in this mode,
 // and no unknown-field posture is implied.
-func buildDescriptorlessBody(input any, gotInput bool) ([]byte, *openbindings.InvocationError) {
+func buildDescriptorlessBody(input any, gotInput bool) ([]byte, *invoke.InvocationError) {
 	if !gotInput {
 		return []byte("{}"), nil
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 	}
 	return body, nil
 }
@@ -189,20 +190,20 @@ func buildDescriptorlessBody(input any, gotInput bool) ([]byte, *openbindings.In
 // unknown response fields, and §9.2's loud unknown-field posture is the
 // INPUT rule. The pin stays authoritative for interpretation (§6), so a
 // drifted-but-compatible server keeps answering.
-func decodeSchemaModeOutput(mi *methodInfo, payload []byte) (any, *openbindings.InvocationError) {
+func decodeSchemaModeOutput(mi *methodInfo, payload []byte) (any, *invoke.InvocationError) {
 	msg := dynamicpb.NewMessage(mi.method.Output())
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(payload, msg); err != nil {
-		return nil, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeResponseError,
+		return nil, &invoke.InvocationError{
+			Code: invoke.ErrCodeResponseError,
 		}
 	}
 	rendered, err := protojson.Marshal(msg)
 	if err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError}
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeResponseError}
 	}
 	var out any
 	if err := json.Unmarshal(rendered, &out); err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeResponseError}
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeResponseError}
 	}
 	return out, nil
 }
@@ -214,8 +215,8 @@ func isJSONContentType(ct string) bool {
 	return ct == "application/json" || strings.HasPrefix(ct, "application/json;")
 }
 
-func connectHTTPError(resp *http.Response, _ []byte, _ bool) *openbindings.InvocationError {
-	return openbindings.HTTPError(resp.StatusCode, resp.Status)
+func connectHTTPError(resp *http.Response, _ []byte, _ bool) *invoke.InvocationError {
+	return invoke.HTTPError(resp.StatusCode, resp.Status)
 }
 
 // runUnary sends one unary dispatch — a POST with a plain JSON body
@@ -229,10 +230,10 @@ func connectHTTPError(resp *http.Response, _ []byte, _ bool) *openbindings.Invoc
 // (CONN-P-06): a unary invocation succeeds IFF the final response status,
 // after any redirects, is 200 — the protocol makes every unary error
 // non-200, so this is Connect's own rule, not a 2xx heuristic.
-func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, body []byte, headers map[string]string, mi *methodInfo, maxUnit int64) {
+func (e *Invoker) runUnary(ctx context.Context, inv invoke.BindingHandle[any, any], reqURL string, body []byte, headers map[string]string, mi *methodInfo, maxUnit int64) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeExecutionFailed})
 		return
 	}
 
@@ -253,7 +254,7 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 		if ctx.Err() != nil {
 			return // cancelled; the handle is already terminal
 		}
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeConnectFailed})
 		return
 	}
 	defer resp.Body.Close()
@@ -266,12 +267,12 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 		if ctx.Err() != nil {
 			return
 		}
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeResponseError})
 		return
 	}
 	if int64(len(respBody)) > maxUnit {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeResponseError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeResponseError,
 		})
 		return
 	}
@@ -288,8 +289,8 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 	// a loud protocol error, never a passed-through value (§9.3; unary
 	// framing is the codec's plain JSON body, CONN-P-05).
 	if ct := resp.Header.Get("Content-Type"); !isJSONContentType(ct) {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeResponseError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeResponseError,
 		})
 		return
 	}
@@ -312,12 +313,12 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 		// body that fails to parse as JSON is a loud protocol-error
 		// failure outcome, never a string.
 		if len(respBody) == 0 {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
+			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeResponseError})
 			return
 		}
 		if err := json.Unmarshal(respBody, &output); err != nil {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeResponseError,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeResponseError,
 			})
 			return
 		}
@@ -352,8 +353,8 @@ func (e *Invoker) runUnary(ctx context.Context, inv openbindings.BindingHandle[a
 func buildHTTPHeaders(bindCtx map[string]any) (map[string]string, error) {
 	headers := map[string]string{}
 
-	token := openbindings.ContextBearerToken(bindCtx)
-	user, password, hasBasic := openbindings.ContextBasicAuth(bindCtx)
+	token := invoke.ContextBearerToken(bindCtx)
+	user, password, hasBasic := invoke.ContextBasicAuth(bindCtx)
 	if token != "" && hasBasic {
 		return nil, fmt.Errorf("bearer and basic credentials both target Authorization")
 	}
@@ -370,7 +371,7 @@ func buildHTTPHeaders(bindCtx map[string]any) (map[string]string, error) {
 
 	reserved := map[string]bool{"host": true, "content-length": true, "content-type": true}
 	seen := map[string]string{}
-	for k, v := range openbindings.ContextHeaders(bindCtx) {
+	for k, v := range invoke.ContextHeaders(bindCtx) {
 		lower := strings.ToLower(k)
 		if strings.HasPrefix(lower, "connect-") || reserved[lower] {
 			return nil, fmt.Errorf("metadata field %q is protocol-reserved or processor-owned", k)
@@ -384,7 +385,7 @@ func buildHTTPHeaders(bindCtx map[string]any) (map[string]string, error) {
 		seen[lower] = k
 		headers[k] = v
 	}
-	if cookies := openbindings.ContextCookies(bindCtx); len(cookies) > 0 {
+	if cookies := invoke.ContextCookies(bindCtx); len(cookies) > 0 {
 		if _, ok := seen["cookie"]; ok {
 			return nil, fmt.Errorf("configured Cookie header collides with structured cookie credentials")
 		}
@@ -410,7 +411,7 @@ func (e *unplacedCredentialError) Error() string { return e.message }
 // under §9.6 it is inexpressible without a consumer-named header and must be
 // surfaced rather than placed on an invented `Authorization: ApiKey`.
 func apiKeyPresent(bindCtx map[string]any) bool {
-	if openbindings.ContextAPIKey(bindCtx) != "" {
+	if invoke.ContextAPIKey(bindCtx) != "" {
 		return true
 	}
 	if m, ok := bindCtx["apiKeys"].(map[string]any); ok {

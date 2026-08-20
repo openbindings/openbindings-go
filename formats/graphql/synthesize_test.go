@@ -7,7 +7,7 @@ import (
 	"sort"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func synthesisSchema() *introspectionSchema {
@@ -85,8 +85,8 @@ func containsJSONText(raw []byte, value string) bool {
 
 func TestSynthesisCoverageIsExhaustive(t *testing.T) {
 	content, _ := json.Marshal(map[string]any{"data": map[string]any{"__schema": synthesisSchema()}})
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Location:    "https://api.example.test/graphql",
 			Content:     content,
@@ -100,12 +100,12 @@ func TestSynthesisCoverageIsExhaustive(t *testing.T) {
 	}
 	for _, entry := range result.Coverage.Entries {
 		if entry.SourceRef == "subscription/status" {
-			if entry.Status != openbindings.SynthesisExcluded || entry.ReasonCode != "graphql.subscription_lifecycle_not_representable" || entry.Rule != "GQL-P-04" || len(entry.Requirements) != 0 {
+			if entry.Status != synthesize.SynthesisExcluded || entry.ReasonCode != "graphql.subscription_lifecycle_not_representable" || entry.Rule != "GQL-P-04" || len(entry.Requirements) != 0 {
 				t.Fatalf("subscription coverage = %#v", entry)
 			}
 			continue
 		}
-		if entry.Status != openbindings.SynthesisRepresented || !reflect.DeepEqual(entry.Requirements, []string{"document"}) {
+		if entry.Status != synthesize.SynthesisRepresented || !reflect.DeepEqual(entry.Requirements, []string{"document"}) {
 			t.Fatalf("represented coverage = %#v", entry)
 		}
 	}

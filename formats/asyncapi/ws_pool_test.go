@@ -10,15 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/coder/websocket"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // sendOnce drives one ws publish invocation: write one message, close input,
 // and assert the fire-and-forget completion (zero outputs, clean EOF).
-func sendOnce(t *testing.T, binv *Invoker, source openbindings.InvocationSource, bindCtx map[string]any, msg map[string]any) {
+func sendOnce(t *testing.T, binv *Invoker, source invoke.InvocationSource, bindCtx map[string]any, msg map[string]any) {
 	t.Helper()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  source,
 		Ref:     "#/operations/publish",
 		Context: wsTextContext(bindCtx),
@@ -116,7 +117,7 @@ func TestWSPool_ConcurrentSendsShareOneConnection(t *testing.T) {
 		wg.Add(1)
 		go func(seq int) {
 			defer wg.Done()
-			call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+			call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 				Source:  source,
 				Ref:     "#/operations/publish",
 				Context: wsTextContext(map[string]any{"bearerToken": "tok"}),
@@ -172,7 +173,7 @@ func TestWSPool_ClientStreamingFrames(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
 		Ref:     "#/operations/publish",
 		Context: wsTextContext(map[string]any{"bearerToken": "tok"}),
@@ -259,7 +260,7 @@ func TestWSPool_SendAndReceiveShareConnection(t *testing.T) {
 	defer binv.Close()
 	source := wsSource(srv, nil)
 
-	sub := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	sub := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: source,
 		Ref:    "#/operations/subscribe",
 	})

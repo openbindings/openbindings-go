@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // InspectSource introspects a GraphQL endpoint and returns all bindable
 // refs. The first candidate lists query and mutation fields and excludes
 // subscriptions rather than approximating their lifecycle.
-func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	endpoint := source.Location
 	if err := validateHTTPLocation(endpoint); err != nil {
 		return nil, err
@@ -33,7 +34,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		return nil, fmt.Errorf("GraphQL introspection: %w", err)
 	}
 
-	var targets []openbindings.BindableTarget
+	var targets []synthesize.BindableTarget
 	tm := schema.typeMap()
 
 	rootTypes := []struct {
@@ -76,17 +77,17 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 				continue
 			}
 			ref := rt.label + "/" + f.Name
-			opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(f.Name), strings.ToLower(rt.label), usedKeys)
+			opKey := synthesize.ResolveKeyCollision(synthesize.SanitizeKey(f.Name), strings.ToLower(rt.label), usedKeys)
 			usedKeys[opKey] = ref
 			targets = append(targets, bindableTarget(ref, opKey, f.Description))
 		}
 	}
 
-	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
+func bindableTarget(ref, operationKey, description string) synthesize.BindableTarget {
+	target := synthesize.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

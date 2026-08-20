@@ -1,14 +1,16 @@
 // Package openbindings is the core OpenBindings SDK for Go: the OBI
-// document model with lossless JSON handling, validation and compatibility
-// checking, and the runtime invocation stack — operation invokers, the
-// cardinality-agnostic Invocation handle, interface discovery, and the
-// seams (binding invokers, transform evaluators, consumer hooks) that
-// concrete formats and consuming tools plug into.
+// document model with lossless JSON handling, document validation,
+// operation resolution, schema validation at invocation boundaries, and
+// the spec-defined constants (versions, media type, well-known path).
 //
-// The package is dependency-light and format-agnostic: binding formats
-// (openapi, asyncapi, graphql, grpc, mcp, usage, ...) live in formats/*
-// submodules and contribute BindingInvoker / InterfaceSynthesizer
-// implementations to this package's seams.
+// The package is dependency-light and format-agnostic, and covers exactly
+// what the OpenBindings specification defines. The layers above it are
+// separate sub-packages mirroring the published interface family: invoke
+// (binding-invoker / operation-invoker runtime), synthesize
+// (interface-synthesizer / source-inspector), and compare
+// (schema-comparison). Binding formats (openapi, asyncapi, graphql, grpc,
+// mcp, usage, ...) live in formats/* submodules and plug into those
+// sub-packages' seams.
 //
 // # Documents
 //
@@ -27,28 +29,6 @@
 // preserves structure but does not capture non-object schema roots. Every
 // OBI declares its target spec version via the top-level openbindings
 // field, checked against [MinSupportedVersion] through [MaxTestedVersion].
-//
-// # Invocation
-//
-// An OperationInvoker dispatches operations through registered binding
-// invokers. Every operation returns a cardinality-agnostic Invocation[I, O]
-// handle — one shape for unary, server-streaming, client-streaming, and
-// bidirectional bindings. Creation is inert (no I/O until the handle is
-// driven), wiring failures surface as already-errored handles rather than
-// panics, and missing credentials surface as CONTEXT_REQUIRED terminal
-// errors raised before any side effect:
-//
-//	opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
-//	call := openbindings.Invoke(ctx, opInv, iface,
-//	    openbindings.NewOperationSignature[any, any]("listItems"))
-//	_ = call.Write(ctx, map[string]any{"limit": 10})
-//	out, err := openbindings.Single(ctx, call.Outputs())
-//
-// FetchInterface resolves an OBI from a base URL (well-known discovery,
-// with synthesis from a raw spec as the fallback). InvokeHooks is the
-// consumer seam for wire questions a source artifact leaves open;
-// TransformEvaluator is the seam for JSONata binding transforms (the SDK
-// bundles no JSONata runtime; the README carries the adapter recipe).
 //
 // # Lossless JSON (Forward Compatibility)
 //
@@ -78,6 +58,12 @@
 //
 // # Subpackages
 //
+//   - invoke: the invocation runtime — operation invokers, the
+//     cardinality-agnostic Invocation handle, context resolution, and the
+//     seams (binding invokers, transform evaluators, consumer hooks)
+//   - synthesize: interface synthesis and source inspection, plus
+//     interface discovery (FetchInterface)
+//   - compare: interface and operation compatibility checking
 //   - canonicaljson: RFC 8785 (JCS) deterministic JSON serialization
 //   - schemaprofile: OpenBindings Schema Compatibility Profile v0.1
 package openbindings

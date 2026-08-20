@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/coder/websocket"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // Conformance tests for the openbindings.asyncapi@1 remainder: the server
@@ -89,8 +90,8 @@ func TestAddressParameterExpansion(t *testing.T) {
 	defer binv.Close()
 
 	publish := func(bindCtx map[string]any) error {
-		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(paramDoc(srv))},
+		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(paramDoc(srv))},
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
@@ -154,8 +155,8 @@ func TestAddressParameterEnumIsAuthoritative(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/post",
 		Context: map[string]any{"configuration": map[string]any{
 			"address": map[string]any{"parameters": map[string]any{"roomId": "backstage"}},
@@ -167,7 +168,7 @@ func TestAddressParameterEnumIsAuthoritative(t *testing.T) {
 	if err := call.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := drainOutputs(t, call); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	if _, err := drainOutputs(t, call); codeOf(t, err) != invoke.ErrCodeSourceConfigError {
 		t.Fatalf("an out-of-enum address parameter value must be refused: %v", err)
 	}
 	if requests.Load() != 0 {
@@ -217,8 +218,8 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	publish := func(bindCtx map[string]any) error {
-		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
@@ -258,7 +259,7 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	beforeEnum := requests.Load()
 	if err := publish(map[string]any{"configuration": map[string]any{
 		"server": map[string]any{"key": "test", "variables": map[string]any{"version": "v9"}},
-	}}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	}}); codeOf(t, err) != invoke.ErrCodeSourceConfigError {
 		t.Fatalf("an out-of-enum supplied value must be refused: %v", err)
 	}
 	if requests.Load() != beforeEnum {
@@ -274,8 +275,8 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 				"version": {Default: "v9", Enum: []string{"v1", "v2"}},
 			}},
 	}
-	callBad := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docBadDefault)},
+	callBad := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docBadDefault)},
 		Ref:    "#/operations/post",
 	})
 	if err := callBad.Write(bg(), map[string]any{"m": 1}); err != nil {
@@ -284,7 +285,7 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	if err := callBad.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := drainOutputs(t, callBad); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	if _, err := drainOutputs(t, callBad); codeOf(t, err) != invoke.ErrCodeSourceConfigError {
 		t.Fatalf("an out-of-enum declared default must be refused: %v", err)
 	}
 
@@ -295,8 +296,8 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 			Variables: map[string]serverVariable{"version": {}}},
 	}
 	before := requests.Load()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docNoDefault)},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docNoDefault)},
 		Ref:    "#/operations/post",
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
@@ -318,8 +319,8 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	// declares Server Variable defaults OPTIONAL, so consumer supply is the
 	// only way to satisfy it (the carriage §9.2's assembly rule
 	// presupposes).
-	callSupplied := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docNoDefault)},
+	callSupplied := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docNoDefault)},
 		Ref:    "#/operations/post",
 		Context: map[string]any{"configuration": map[string]any{
 			"server": map[string]any{"key": "test", "variables": map[string]any{"version": "v7"}},
@@ -384,8 +385,8 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	publish := func(doc *document, bindCtx map[string]any) error {
-		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
@@ -403,7 +404,7 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 	}
 
 	subset := mkDoc([]serverRef{{Ref: "#/servers/zHTTP"}, {Ref: "#/servers/bHTTP"}})
-	if err := publish(subset, nil); codeOf(t, err) != openbindings.ErrCodeContextRequired {
+	if err := publish(subset, nil); codeOf(t, err) != invoke.ErrCodeContextRequired {
 		t.Fatalf("several subset members must require selection, got %v", err)
 	}
 	if err := publish(subset, map[string]any{"configuration": map[string]any{
@@ -416,7 +417,7 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 	}
 
 	all := mkDoc(nil)
-	if err := publish(all, nil); codeOf(t, err) != openbindings.ErrCodeContextRequired {
+	if err := publish(all, nil); codeOf(t, err) != invoke.ErrCodeContextRequired {
 		t.Fatalf("several document members must require selection, got %v", err)
 	}
 	if err := publish(all, map[string]any{"configuration": map[string]any{
@@ -431,7 +432,7 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 	// A key outside the effective set is a refusal.
 	if err := publish(mkDoc([]serverRef{{Ref: "#/servers/zHTTP"}}), map[string]any{"configuration": map[string]any{
 		"server": map[string]any{"key": "bHTTP"},
-	}}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	}}); codeOf(t, err) != invoke.ErrCodeSourceConfigError {
 		t.Fatalf("expected refusal selecting a server outside the channel's effective set, got %v", err)
 	}
 }
@@ -459,8 +460,8 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	publish := func(serverCfg any) error {
-		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 			Ref:     "#/operations/post",
 			Context: map[string]any{"configuration": map[string]any{"server": serverCfg}},
 		})
@@ -488,7 +489,7 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 	for _, tc := range refused {
 		before := requests.Load()
 		err := publish(tc.cfg)
-		if codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+		if codeOf(t, err) != invoke.ErrCodeSourceConfigError {
 			t.Fatalf("%s: expected ERR_SOURCE_CONFIG_ERROR, got %v", tc.name, err)
 		}
 		if got := requests.Load(); got != before {
@@ -525,8 +526,8 @@ func TestOnlyUnboundProtocolServersIsRefused(t *testing.T) {
 	}
 	binv := NewInvoker()
 	defer binv.Close()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/post",
 	})
 	_, err := drainOutputs(t, call)
@@ -564,8 +565,8 @@ func TestFullURLOverride(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	publish := func(bindCtx map[string]any) error {
-		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 			Ref:     "#/operations/post",
 			Context: bindCtx,
 		})
@@ -585,7 +586,7 @@ func TestFullURLOverride(t *testing.T) {
 	// A scheme incompatible with the selected server: refused pre-dispatch.
 	if err := publish(map[string]any{"configuration": map[string]any{
 		"server": map[string]any{"url": "ftp://files.example.com"},
-	}}); codeOf(t, err) != openbindings.ErrCodeSourceConfigError {
+	}}); codeOf(t, err) != invoke.ErrCodeSourceConfigError {
 		t.Fatalf("expected refusal of an out-of-revision scheme, got %v", err)
 	}
 
@@ -595,7 +596,7 @@ func TestFullURLOverride(t *testing.T) {
 	err := publish(map[string]any{"configuration": map[string]any{
 		"server": map[string]any{"url": srv.URL},
 	}})
-	if codeOf(t, err) != openbindings.ErrCodeContextRequired {
+	if codeOf(t, err) != invoke.ErrCodeContextRequired {
 		t.Fatalf("expected CONTEXT_REQUIRED under a full-URL replacement, got %v", err)
 	}
 	if got := requests.Load(); got != before {
@@ -655,8 +656,8 @@ func TestHTTPBindingMethodOverride(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/post",
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
@@ -672,11 +673,11 @@ func TestHTTPBindingMethodOverride(t *testing.T) {
 		t.Errorf("publish method = %v, want the binding-declared PUT", got)
 	}
 
-	sub := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+	sub := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/sub",
 	})
-	if _, err := drainOutputs(t, sub); codeOf(t, err) != openbindings.ErrCodeRefused {
+	if _, err := drainOutputs(t, sub); codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("standalone HTTP send must be refused, got %v", err)
 	}
 	if got := sseMethod.Load(); got != nil {
@@ -751,8 +752,8 @@ func TestWSBindingQueryAndHeadersGovernUpgrade(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	publish := func(bindCtx map[string]any) error {
-		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsBindingDoc(srv))},
+		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsBindingDoc(srv))},
 			Ref:     "#/operations/publish",
 			Context: wsTextContext(bindCtx),
 		})
@@ -805,14 +806,14 @@ func TestWSBindingQueryAndHeadersGovernUpgrade(t *testing.T) {
 		"configuration": map[string]any{"protocolFields": map[string]any{
 			"webSocketHeaders": map[string]any{"X-Trace": "trace-2"},
 		}},
-	}); codeOf(t, err) != openbindings.ErrCodeRefused {
+	}); codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected refusal for the missing required query property, got %v", err)
 	}
 	if err := publish(map[string]any{
 		"configuration": map[string]any{"protocolFields": map[string]any{
 			"webSocketQuery": map[string]any{"token": "qtok"},
 		}},
-	}); codeOf(t, err) != openbindings.ErrCodeRefused {
+	}); codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected refusal for the missing required header, got %v", err)
 	}
 	if got := upgrades.Load(); got != before {
@@ -837,8 +838,8 @@ func TestWSBindingNonGETMethodRefused(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:     "#/operations/publish",
 		Context: wsTextContext(nil),
 	})
@@ -849,7 +850,7 @@ func TestWSBindingNonGETMethodRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected refusal of a POST upgrade method, got %v", err)
 	}
 	if c := upgrades.Load(); c != 0 {
@@ -871,12 +872,12 @@ func TestStandaloneHTTPSendIsExcluded(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
 		Ref:    "#/operations/receiveCaps",
 	})
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected revision-1 exclusion for standalone HTTP send, got %v", err)
 	}
 	if requests.Load() != 0 {
@@ -932,8 +933,8 @@ func TestInputTextLane(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	publish := func(v any) error {
-		call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(laneDoc(srv, "http", "text/plain"))},
+		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(laneDoc(srv, "http", "text/plain"))},
 			Ref:    "#/operations/post",
 		})
 		if err := call.Write(bg(), v); err != nil {
@@ -958,7 +959,7 @@ func TestInputTextLane(t *testing.T) {
 
 	before := requests.Load()
 	err := publish(map[string]any{"not": "a string"})
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_REFUSED for a non-string value on the text lane (pre-dispatch), got %v", err)
 	}
 	if got := requests.Load(); got != before {
@@ -980,8 +981,8 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 
 	binv := NewInvoker()
 	defer binv.Close()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(laneDoc(srv, "http", "avro/binary"))},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(laneDoc(srv, "http", "avro/binary"))},
 		Ref:    "#/operations/post",
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
@@ -991,7 +992,7 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_REFUSED for a non-string value on the byte boundary (pre-dispatch), got %v", err)
 	}
 	if got := requests.Load(); got != 0 {
@@ -1008,8 +1009,8 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 	c := wsDoc.Channels["c"]
 	c.Address = "/ws"
 	wsDoc.Channels["c"] = c
-	wsCall := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsDoc)},
+	wsCall := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsDoc)},
 		Ref:    "#/operations/post",
 	})
 	if err := wsCall.Write(bg(), map[string]any{"m": 1}); err != nil {
@@ -1019,7 +1020,7 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = drainOutputs(t, wsCall)
-	if codeOf(t, err) != openbindings.ErrCodeRefused {
+	if codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_REFUSED for an excluded family on the ws cell (pre-dial), got %v", err)
 	}
 	if c := upgrades.Load(); c != 0 {
@@ -1044,8 +1045,8 @@ func TestDecodeTextLaneAndReplyDirection(t *testing.T) {
 	doc := laneDoc(srv, "http", "text/plain")
 	binv := NewInvoker()
 	defer binv.Close()
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
 		Ref:    "#/operations/post",
 	})
 	if err := call.Write(bg(), "ping"); err != nil {

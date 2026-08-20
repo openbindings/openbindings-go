@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // Connect streaming wire format constants.
@@ -128,13 +128,13 @@ type connectEndStream struct {
 // unary-only by definition (CONN-P-04), so mi is always non-nil here. ctx
 // is already bound to the invocation's lifetime (DoneContext), so caller
 // Cancel() tears down the in-flight request.
-func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, msgBytes []byte, headers map[string]string, mi *methodInfo, maxUnit int64) {
+func (e *Invoker) runStreaming(ctx context.Context, inv invoke.BindingHandle[any, any], reqURL string, msgBytes []byte, headers map[string]string, mi *methodInfo, maxUnit int64) {
 	// Build the framed request body: a single envelope with flags=0 carrying
 	// the request message, immediately followed by EOF (no end-stream envelope
 	// is required from the client side for server-streaming RPCs).
 	var body bytes.Buffer
 	if err := writeConnectEnvelope(&body, 0, msgBytes); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeExecutionFailed})
 		return
 	}
 	e.runStreamingBody(ctx, inv, reqURL, &body, headers, mi, maxUnit)
@@ -144,7 +144,7 @@ func (e *Invoker) runStreaming(ctx context.Context, inv openbindings.BindingHand
 // bidirectional shape. Request messages are encoded as they arrive and the
 // HTTP exchange begins immediately; response envelopes are consumed
 // concurrently, so bidirectional outputs may arrive while input remains open.
-func (e *Invoker) runClientStreaming(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, headers map[string]string, mi *methodInfo, maxUnit int64) {
+func (e *Invoker) runClientStreaming(ctx context.Context, inv invoke.BindingHandle[any, any], reqURL string, headers map[string]string, mi *methodInfo, maxUnit int64) {
 	reader, writer := io.Pipe()
 	go func() {
 		defer func() { _ = writer.Close() }()
@@ -152,7 +152,7 @@ func (e *Invoker) runClientStreaming(ctx context.Context, inv openbindings.Bindi
 			value, err := inv.ReadInput(ctx)
 			if err == io.EOF {
 				if werr := writeConnectEnvelope(writer, connectFlagEndStream, []byte("{}")); werr != nil && ctx.Err() == nil {
-					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
+					inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeStreamError})
 				}
 				return
 			}
@@ -168,7 +168,7 @@ func (e *Invoker) runClientStreaming(ctx context.Context, inv openbindings.Bindi
 			}
 			if err := writeConnectEnvelope(writer, 0, payload); err != nil {
 				if ctx.Err() == nil {
-					inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
+					inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeStreamError})
 				}
 				return
 			}
@@ -182,11 +182,11 @@ func (e *Invoker) runClientStreaming(ctx context.Context, inv openbindings.Bindi
 // runStreamingBody performs one Connect streaming exchange over an already
 // prepared request body. body may be a live pipe for client/bidirectional
 // streaming or a finite buffer for server streaming.
-func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.BindingHandle[any, any], reqURL string, body io.Reader, headers map[string]string, mi *methodInfo, maxUnit int64) {
+func (e *Invoker) runStreamingBody(ctx context.Context, inv invoke.BindingHandle[any, any], reqURL string, body io.Reader, headers map[string]string, mi *methodInfo, maxUnit int64) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, body)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeExecutionFailed})
 		return
 	}
 	// Connect protocol headers. Connect-Protocol-Version: 1 rides EVERY
@@ -205,7 +205,7 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 		if ctx.Err() != nil {
 			return // cancelled; the handle is already terminal
 		}
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeConnectFailed})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeConnectFailed})
 		return
 	}
 	defer resp.Body.Close()
@@ -241,8 +241,8 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 	// (CONN-P-05); anything else is a loud protocol error.
 	if gotCT := resp.Header.Get("Content-Type"); !isStreamingJSONContentType(gotCT) {
 
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeResponseError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeResponseError,
 		})
 		return
 	}
@@ -261,8 +261,8 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 			// (CONN-P-05); success requires an error-free END_STREAM
 			// (CONN-P-06), so a stream that ends without one cannot be
 			// classified a success. Loud failure; emitted values stand.
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeStreamError,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeStreamError,
 			})
 			return
 		}
@@ -270,7 +270,7 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 			if ctx.Err() != nil {
 				return // cancelled; the handle is already terminal
 			}
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeStreamError})
+			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeStreamError})
 			return
 		}
 		if flags&connectFlagEndStream != 0 {
@@ -285,8 +285,8 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 				if uerr := json.Unmarshal(payload, &endStream); uerr != nil {
 					// Loud, never a silent drop: an unreadable END_STREAM
 					// cannot prove the stream error-free (CONN-P-06).
-					inv.FireError(&openbindings.InvocationError{
-						Code: openbindings.ErrCodeStreamError,
+					inv.FireError(&invoke.InvocationError{
+						Code: invoke.ErrCodeStreamError,
 					})
 					return
 				}
@@ -294,8 +294,8 @@ func (e *Invoker) runStreamingBody(ctx context.Context, inv openbindings.Binding
 			// Streaming trailing metadata rides the END_STREAM envelope but
 			// has no representation on the abstract invocation.
 			if endStream.Error != nil {
-				inv.FireError(&openbindings.InvocationError{
-					Code: openbindings.ErrCodeExecutionFailed,
+				inv.FireError(&invoke.InvocationError{
+					Code: invoke.ErrCodeExecutionFailed,
 				})
 				return
 			}

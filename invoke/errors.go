@@ -1,0 +1,38 @@
+package invoke
+
+import "errors"
+
+var (
+	// ErrNoInvoker is returned when no invoker matches the requested format.
+	ErrNoInvoker = errors.New("openbindings: no invoker for format")
+
+	// ErrBindingNotFound is returned when no binding is available for the requested operation.
+	ErrBindingNotFound = errors.New("openbindings: no binding for operation")
+
+	// ErrBindingSelectionRequired is returned when an operation has several
+	// invocable bindings and the caller supplied no effective choice.
+	ErrBindingSelectionRequired = errors.New("openbindings: binding selection required")
+
+	// ErrNilInterface is returned when a nil interface is passed to an operation that requires one.
+	ErrNilInterface = errors.New("openbindings: nil interface")
+
+	// ErrUnknownSource is returned when a binding references a source not present in the interface.
+	ErrUnknownSource = errors.New("openbindings: unknown source")
+
+	// ErrNoTransformEvaluator is returned when a binding has a transform but no evaluator is configured.
+	ErrNoTransformEvaluator = errors.New("openbindings: transform evaluator required but not configured")
+
+	// ErrTransformRefNotFound is returned when a transform reference cannot be resolved.
+	ErrTransformRefNotFound = errors.New("openbindings: transform reference not found")
+
+	// ErrEmptyTransformExpression is returned when a transform has no expression to evaluate.
+	ErrEmptyTransformExpression = errors.New("openbindings: transform expression is empty")
+
+	// ErrContextInsufficient is returned when an invoker cannot proceed
+	// because required context (credentials, configuration) is missing.
+	ErrContextInsufficient = errors.New("openbindings: context insufficient for this binding")
+
+	// ErrResolutionUnavailable is returned when context is insufficient and
+	// no platform callbacks are available to resolve it interactively.
+	ErrResolutionUnavailable = errors.New("openbindings: interactive context resolution not available")
+)

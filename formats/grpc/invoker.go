@@ -17,11 +17,15 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"github.com/jhump/protoreflect/v2/grpcdynamic"
-	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 const BindingSpec = "openbindings.grpc@1"
@@ -58,10 +62,10 @@ func WithDialOptions(opts ...grpc.DialOption) InvokerOption {
 }
 
 var (
-	_ openbindings.BindingInvoker       = (*Invoker)(nil)
-	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
-	_ openbindings.CoverageSynthesizer  = (*Synthesizer)(nil)
-	_ openbindings.SourceInspector      = (*Synthesizer)(nil)
+	_ invoke.BindingInvoker           = (*Invoker)(nil)
+	_ synthesize.InterfaceSynthesizer = (*Synthesizer)(nil)
+	_ synthesize.CoverageSynthesizer  = (*Synthesizer)(nil)
+	_ synthesize.SourceInspector      = (*Synthesizer)(nil)
 )
 
 // NewInvoker creates a new gRPC binding invoker.
@@ -117,8 +121,8 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 // the binding goroutine. Unary methods read one input and emit one output;
 // server-streaming methods read one input and emit per received message.
 // Native gRPC metadata stays below the abstract invocation boundary.
-func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
-	inv := openbindings.NewInvocationImpl[any, any](ctx)
+func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
+	inv := invoke.NewInvocationImpl[any, any](ctx)
 	go e.run(ctx, args, inv)
 	return inv
 }
@@ -129,21 +133,21 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingI
 // failures, schema-range and kind-coverage refusals) fire BEFORE any RPC
 // is sent; with embedded content, resolution also precedes the dial (§7:
 // a processor does not dial blind on the ref name).
-func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	// bctx bounds all gRPC I/O to the invocation's lifetime: caller Cancel()
 	// (or upstream ctx cancellation) tears down reflection and RPC streams.
-	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	bctx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 
 	svcName, methodName, err := parseRef(args.Ref)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeInvalidRef,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeInvalidRef,
 		})
 		return
 	}
 
-	cfg := openbindings.ContextConfiguration(args.Context)
+	cfg := invoke.ContextConfiguration(args.Context)
 
 	// Target configuration point (§9.3): the default is the source's
 	// location; per-invocation/consumer configuration (context
@@ -153,23 +157,23 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	if raw, ok := cfg["target"]; ok && raw != nil {
 		s, isStr := raw.(string)
 		if !isStr || strings.TrimSpace(s) == "" {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeSourceConfigError,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeSourceConfigError,
 			})
 			return
 		}
 		target = strings.TrimSpace(s)
 	}
 	if target == "" {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceConfigError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeSourceConfigError,
 		})
 		return
 	}
 	addr, err := parseDialAddress(target)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceConfigError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeSourceConfigError,
 		})
 		return
 	}
@@ -178,25 +182,25 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// invoker-level credentials → the §4 address-form determination.
 	creds, transportTag, err := resolveTransport(cfg, e.dialCfg.creds, addr)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceConfigError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeSourceConfigError,
 		})
 		return
 	}
 
 	// Credentials ride outgoing gRPC metadata (§9.5, GRPC-P-07); an
 	// unplaceable key is surfaced here, pre-dispatch.
-	_, _, hasBasic := openbindings.ContextBasicAuth(args.Context)
-	if openbindings.ContextAPIKey(args.Context) != "" || openbindings.ContextBearerToken(args.Context) != "" || hasBasic {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeContextRequired,
+	_, _, hasBasic := invoke.ContextBasicAuth(args.Context)
+	if invoke.ContextAPIKey(args.Context) != "" || invoke.ContextBearerToken(args.Context) != "" || hasBasic {
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeContextRequired,
 		})
 		return
 	}
 	rpcCtx, mdErr := applyGRPCContext(bctx, args.Context)
 	if mdErr != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceConfigError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeSourceConfigError,
 		})
 		return
 	}
@@ -211,8 +215,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	if args.Source.Content != nil {
 		disc, parseErr := discoverFromContent(bctx, args.Source.Content)
 		if parseErr != nil {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeSourceLoadFailed,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeSourceLoadFailed,
 			})
 			return
 		}
@@ -230,8 +234,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	conn, err := e.getConn(addr, creds, transportTag)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeConnectFailed,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeConnectFailed,
 		})
 		return
 	}
@@ -246,8 +250,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		}
 		methodDesc = svcDesc.Methods().ByName(protoreflect.Name(methodName))
 		if methodDesc == nil {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeRefNotFound,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeRefNotFound,
 			})
 			return
 		}
@@ -283,10 +287,10 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 // resolution: §3's accepted schema range over the bound method's
 // transitive closure (GRPC-P-03). All four protobuf interaction kinds are
 // covered; the artifact's method declaration remains authoritative.
-func preflightMethod(methodDesc protoreflect.MethodDescriptor) *openbindings.InvocationError {
+func preflightMethod(methodDesc protoreflect.MethodDescriptor) *invoke.InvocationError {
 	if err := validateBoundClosure(methodDesc); err != nil {
-		return &openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceLoadFailed,
+		return &invoke.InvocationError{
+			Code: invoke.ErrCodeSourceLoadFailed,
 		}
 	}
 	return nil
@@ -330,7 +334,7 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 // SynthesizeInterface discovers gRPC services and converts to an OpenBindings interface.
 // Supports the binding specification's two discovery modes: embedded
 // protobuf content, or live server reflection when content is absent.
-func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
 	observation, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
@@ -341,12 +345,12 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 // SynthesizeInterfaceWithCoverage returns the creation-time-sound OBI and a
 // durable disposition for every protobuf method and lossy projection observed
 // by the same descriptor load.
-func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
 	observation, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	return openbindings.NewSynthesisResult(
+	return synthesize.NewSynthesisResult(
 		observation.iface,
 		synthesisCoverage(observation.disc, observation.iface, observation.warnings),
 		true,
@@ -356,19 +360,19 @@ func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *o
 type synthesisObservation struct {
 	iface    *openbindings.Interface
 	disc     *discovery
-	warnings []openbindings.SynthesizerWarning
+	warnings []synthesize.SynthesizerWarning
 }
 
-func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*synthesisObservation, error) {
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesisObservation, error) {
 	if len(in.Sources) == 0 {
-		skeleton, err := openbindings.SynthesisSkeleton(in)
+		skeleton, err := synthesize.SynthesisSkeleton(in)
 		if err != nil {
 			return nil, err
 		}
 		return &synthesisObservation{iface: &skeleton}, nil
 	}
 	if len(in.Sources) > 1 {
-		return nil, openbindings.ErrMultipleSources
+		return nil, synthesize.ErrMultipleSources
 	}
 	src := in.Sources[0]
 	if src.BindingSpec != BindingSpec {
@@ -415,8 +419,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		sourceLocation = addr
 	}
 
-	var warnings []openbindings.SynthesizerWarning
-	observeWarning := func(warning openbindings.SynthesizerWarning) {
+	var warnings []synthesize.SynthesizerWarning
+	observeWarning := func(warning synthesize.SynthesizerWarning) {
 		warnings = append(warnings, warning)
 		if in.OnWarning != nil {
 			in.OnWarning(warning)
@@ -431,7 +435,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		entry.Content = src.Content
 		iface.Sources[DefaultSourceName] = entry
 	}
-	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
+	if err := synthesize.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
 		return nil, err
 	}
 	return &synthesisObservation{iface: &iface, disc: disc, warnings: warnings}, nil

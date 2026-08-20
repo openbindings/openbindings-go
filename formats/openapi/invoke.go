@@ -11,11 +11,12 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/getkin/kin-openapi/openapi3"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindingSpec string, bindCtx map[string]any) (*openbindings.ContextRequiredDetails, error) {
+func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindingSpec string, bindCtx map[string]any) (*invoke.ContextRequiredDetails, error) {
 	if !hasMediaFidelity(bindingSpec) || op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
 		return nil, nil
 	}
@@ -31,20 +32,20 @@ func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindin
 		return nil, nil
 	}
 	durable := true
-	requirement := openbindings.NewConfigValueRequirement(
+	requirement := invoke.NewConfigValueRequirement(
 		"requestMedia", "",
 		"select a concrete request media type admitted by the OpenAPI declaration",
 		nil, &durable,
 	)
-	return &openbindings.ContextRequiredDetails{
-		Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{requirement}}},
+	return &invoke.ContextRequiredDetails{
+		Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{requirement}}},
 	}, nil
 }
 
 // mergeContextRequirements combines two independent context needs. Each
 // details value is an OR of alternatives; satisfying the operation requires
 // one alternative from each, so the merged value is their Cartesian product.
-func mergeContextRequirements(left, right *openbindings.ContextRequiredDetails) *openbindings.ContextRequiredDetails {
+func mergeContextRequirements(left, right *invoke.ContextRequiredDetails) *invoke.ContextRequiredDetails {
 	if left == nil {
 		return right
 	}
@@ -55,12 +56,12 @@ func mergeContextRequirements(left, right *openbindings.ContextRequiredDetails) 
 	if target == "" {
 		target = right.Target
 	}
-	merged := &openbindings.ContextRequiredDetails{Target: target}
+	merged := &invoke.ContextRequiredDetails{Target: target}
 	for _, a := range left.Alternatives {
 		for _, b := range right.Alternatives {
-			requirements := append([]openbindings.ContextRequirement(nil), a.Requirements...)
+			requirements := append([]invoke.ContextRequirement(nil), a.Requirements...)
 			requirements = append(requirements, b.Requirements...)
-			merged.Alternatives = append(merged.Alternatives, openbindings.ContextAlternative{Requirements: requirements})
+			merged.Alternatives = append(merged.Alternatives, invoke.ContextAlternative{Requirements: requirements})
 		}
 	}
 	return merged
@@ -69,7 +70,7 @@ func mergeContextRequirements(left, right *openbindings.ContextRequiredDetails) 
 // BuiltinClassify is the openapi builtin result classifier (OAPI-P-08):
 // success iff the final HTTP status is 2xx (declared responses refine
 // application failure DATA only, never classification).
-func BuiltinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (bool, error) {
+func BuiltinClassify(_ invoke.InvokeSite, raw invoke.RawResult) (bool, error) {
 	return raw.Status != nil && *raw.Status >= 200 && *raw.Status < 300, nil
 }
 
@@ -80,21 +81,21 @@ func BuiltinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (boo
 // bytes become a string per the header's charset parameter, defaulting to
 // UTF-8, with invalid sequences a loud decode error. An empty body (204
 // included) yields null.
-func decodeByContentType(contentType string) openbindings.OutputDecoder {
+func decodeByContentType(contentType string) invoke.OutputDecoder {
 	return decodeByContentTypeFor(contentType, BindingSpec)
 }
 
-func decodeByContentTypeFor(contentType, bindingSpec string) openbindings.OutputDecoder {
+func decodeByContentTypeFor(contentType, bindingSpec string) invoke.OutputDecoder {
 	isJSON := isJSONContentTypeFor(contentType, bindingSpec)
-	return func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+	return func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 		if len(raw.Body) == 0 {
 			return nil, nil
 		}
 		if isJSON {
 			var parsed any
 			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
-				return nil, &openbindings.InvocationError{
-					Code: openbindings.ErrCodeResponseError,
+				return nil, &invoke.InvocationError{
+					Code: invoke.ErrCodeResponseError,
 				}
 			}
 			return parsed, nil
@@ -130,16 +131,16 @@ func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any
 	switch strings.ToLower(charset) {
 	case "utf-8", "utf8":
 		if !utf8.Valid(body) {
-			return nil, &openbindings.InvocationError{
-				Code: openbindings.ErrCodeResponseError,
+			return nil, &invoke.InvocationError{
+				Code: invoke.ErrCodeResponseError,
 			}
 		}
 		return string(body), nil
 	case "us-ascii", "ascii":
 		for i := 0; i < len(body); i++ {
 			if body[i] >= 0x80 {
-				return nil, &openbindings.InvocationError{
-					Code: openbindings.ErrCodeResponseError,
+				return nil, &invoke.InvocationError{
+					Code: invoke.ErrCodeResponseError,
 				}
 			}
 		}
@@ -151,8 +152,8 @@ func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any
 		}
 		return string(runes), nil
 	default:
-		return nil, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeResponseError,
+		return nil, &invoke.InvocationError{
+			Code: invoke.ErrCodeResponseError,
 		}
 	}
 }
@@ -182,12 +183,12 @@ func isJSONContentTypeFor(contentType, bindingSpec string) bool {
 // OpenAPI `security` is a disjunction (OR) of requirement objects, each a
 // conjunction (AND) of scheme names — exactly the alternatives/requirements
 // shape of ContextRequiredDetails.
-func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters) *openbindings.ContextRequiredDetails {
+func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters) *invoke.ContextRequiredDetails {
 	plans := viableSecurityPlans(doc, op, baseURL, params)
 	if len(plans) == 0 {
 		return nil
 	}
-	alternatives := make([]openbindings.ContextAlternative, 0, len(plans))
+	alternatives := make([]invoke.ContextAlternative, 0, len(plans))
 	for _, plan := range plans {
 		if len(plan.context.Requirements) == 0 {
 			// An empty requirement object means anonymous access is allowed;
@@ -197,12 +198,12 @@ func requiredContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string
 		alternatives = append(alternatives, plan.context)
 	}
 
-	details := &openbindings.ContextRequiredDetails{
+	details := &invoke.ContextRequiredDetails{
 		Target:       baseURL,
 		Alternatives: alternatives,
 	}
 	// Already satisfiable from the supplied context: no challenge needed.
-	if openbindings.ContextSatisfies(bindCtx, details) {
+	if invoke.ContextSatisfies(bindCtx, details) {
 		return nil
 	}
 	return details
@@ -224,7 +225,7 @@ type namedSecurityScheme struct {
 }
 
 type securityPlan struct {
-	context openbindings.ContextAlternative
+	context invoke.ContextAlternative
 	schemes []namedSecurityScheme
 }
 
@@ -313,12 +314,12 @@ func securityPlans(doc *openapi3.T, op *openapi3.Operation, baseURL string) []se
 					if ref.Value.Description != "" {
 						option.Description = ref.Value.Description
 					}
-					reqs := append([]openbindings.ContextRequirement(nil), plan.context.Requirements...)
+					reqs := append([]invoke.ContextRequirement(nil), plan.context.Requirements...)
 					reqs = append(reqs, option)
 					schemes := append([]namedSecurityScheme(nil), plan.schemes...)
 					schemes = append(schemes, namedSecurityScheme{name: schemeName, scheme: ref.Value})
 					next = append(next, securityPlan{
-						context: openbindings.ContextAlternative{Requirements: reqs},
+						context: invoke.ContextAlternative{Requirements: reqs},
 						schemes: schemes,
 					})
 				}
@@ -378,10 +379,10 @@ func securityAlternativesCollision(doc *openapi3.T, op *openapi3.Operation, base
 // than silently vanishing into an unauthenticated dispatch. Every switch arm
 // now returns true; the bool is kept for signature stability (and as a hook
 // for a genuinely inexpressible future case) rather than removed.
-func schemeToRequirement(s *openapi3.SecurityScheme, baseURL string) (openbindings.ContextRequirement, bool) {
+func schemeToRequirement(s *openapi3.SecurityScheme, baseURL string) (invoke.ContextRequirement, bool) {
 	options := schemeRequirements(s, baseURL, nil)
 	if len(options) == 0 {
-		return openbindings.ContextRequirement{}, false
+		return invoke.ContextRequirement{}, false
 	}
 	return options[0], true
 }
@@ -390,26 +391,26 @@ func schemeToRequirement(s *openapi3.SecurityScheme, baseURL string) (openbindin
 // choices. Only OAuth2 expands: every declared flow capable of granting the
 // Security Requirement Object's authoritative scope array becomes a distinct
 // alternative. Other schemes contribute exactly one requirement.
-func schemeRequirements(s *openapi3.SecurityScheme, baseURL string, requiredScopes []string) []openbindings.ContextRequirement {
+func schemeRequirements(s *openapi3.SecurityScheme, baseURL string, requiredScopes []string) []invoke.ContextRequirement {
 	switch s.Type {
 	case "http":
 		switch strings.ToLower(s.Scheme) {
 		case "basic":
-			return []openbindings.ContextRequirement{{Type: "auth.basic"}}
+			return []invoke.ContextRequirement{{Type: "auth.basic"}}
 		case "bearer":
-			return []openbindings.ContextRequirement{{Type: "auth.bearer"}}
+			return []invoke.ContextRequirement{{Type: "auth.bearer"}}
 		default:
 			// digest, negotiate, etc.: not a family this SDK resolves
 			// itself, but SURFACED (R2.c ruling), not dropped. A missing
 			// scheme value degrades to the bare family, never a trailing
 			// dot (TS parity).
-			return []openbindings.ContextRequirement{{
+			return []invoke.ContextRequirement{{
 				Type:        httpRequirementType(s.Scheme),
 				Description: s.Description,
 			}}
 		}
 	case "apiKey":
-		return []openbindings.ContextRequirement{{Type: "auth.apiKey"}}
+		return []invoke.ContextRequirement{{Type: "auth.apiKey"}}
 	case "oauth2":
 		return oauth2Requirements(s, baseURL, requiredScopes)
 	case "openIdConnect":
@@ -417,17 +418,17 @@ func schemeRequirements(s *openapi3.SecurityScheme, baseURL string, requiredScop
 		// lets a resolver fetch the authorize/token endpoints. No flow is
 		// selected here (openIdConnect has no `flows` object), so this
 		// requirement carries no grantType (R2.b ruling).
-		req := openbindings.ContextRequirement{Type: "auth.oauth2", Extra: map[string]any{
+		req := invoke.ContextRequirement{Type: "auth.oauth2", Extra: map[string]any{
 			"scopes": append([]string{}, requiredScopes...),
 		}}
 		if s.OpenIdConnectUrl != "" {
 			req.Extra["openIdConnectUrl"] = absolutizeURL(s.OpenIdConnectUrl, baseURL)
 		}
-		return []openbindings.ContextRequirement{req}
+		return []invoke.ContextRequirement{req}
 	default:
 		// Any other artifact type this SDK doesn't itself resolve (e.g.
 		// "mutualTLS"): surfaced verbatim (R2.c ruling) rather than dropped.
-		return []openbindings.ContextRequirement{{
+		return []invoke.ContextRequirement{{
 			Type:        "auth." + s.Type,
 			Description: s.Description,
 		}}
@@ -451,7 +452,7 @@ func httpRequirementType(scheme string) string {
 // order is deterministic only; it does not invent a preference. When no
 // declared flow can grant the required scopes, a bare scoped requirement
 // remains discoverable so an already-acquired token may still satisfy it.
-func oauth2Requirements(s *openapi3.SecurityScheme, baseURL string, requiredScopes []string) []openbindings.ContextRequirement {
+func oauth2Requirements(s *openapi3.SecurityScheme, baseURL string, requiredScopes []string) []invoke.ContextRequirement {
 	type candidate struct {
 		grantType string
 		flow      *openapi3.OAuthFlow
@@ -469,7 +470,7 @@ func oauth2Requirements(s *openapi3.SecurityScheme, baseURL string, requiredScop
 			{grantType: "client_credentials", flow: flows.ClientCredentials},
 		}
 	}
-	var requirements []openbindings.ContextRequirement
+	var requirements []invoke.ContextRequirement
 	for _, candidate := range candidates {
 		if candidate.flow == nil || !oauthFlowUsable(candidate.grantType, candidate.flow, requiredScopes) {
 			continue
@@ -484,10 +485,10 @@ func oauth2Requirements(s *openapi3.SecurityScheme, baseURL string, requiredScop
 		if candidate.flow.TokenURL != "" {
 			extra["tokenUrl"] = absolutizeURL(candidate.flow.TokenURL, baseURL)
 		}
-		requirements = append(requirements, openbindings.ContextRequirement{Type: "auth.oauth2", Extra: extra})
+		requirements = append(requirements, invoke.ContextRequirement{Type: "auth.oauth2", Extra: extra})
 	}
 	if len(requirements) == 0 {
-		return []openbindings.ContextRequirement{{
+		return []invoke.ContextRequirement{{
 			Type:  "auth.oauth2",
 			Extra: map[string]any{"scopes": append([]string{}, requiredScopes...)},
 		}}
@@ -660,8 +661,8 @@ func selectCredentialPlacements(doc *openapi3.T, op *openapi3.Operation, bindCtx
 		if len(plan.context.Requirements) == 0 {
 			return nil, nil // this complete alternative explicitly allows anonymous access
 		}
-		if !openbindings.ContextSatisfies(bindCtx, &openbindings.ContextRequiredDetails{
-			Alternatives: []openbindings.ContextAlternative{plan.context},
+		if !invoke.ContextSatisfies(bindCtx, &invoke.ContextRequiredDetails{
+			Alternatives: []invoke.ContextAlternative{plan.context},
 		}) {
 			continue
 		}
@@ -686,7 +687,7 @@ func credentialValues(plan securityPlan, bindCtx map[string]any) []credentialPla
 		s := named.scheme
 		switch s.Type {
 		case "apiKey":
-			val := openbindings.ContextAPIKeyFor(bindCtx, named.name)
+			val := invoke.ContextAPIKeyFor(bindCtx, named.name)
 			if val == "" {
 				continue
 			}
@@ -697,18 +698,18 @@ func credentialValues(plan securityPlan, bindCtx map[string]any) []credentialPla
 		case "http":
 			switch strings.ToLower(s.Scheme) {
 			case "bearer":
-				if token := openbindings.ContextBearerTokenFor(bindCtx, named.name); token != "" {
+				if token := invoke.ContextBearerTokenFor(bindCtx, named.name); token != "" {
 					placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Bearer " + token})
 				}
 			case "basic":
-				if u, p, ok := openbindings.ContextBasicAuthFor(bindCtx, named.name); ok {
+				if u, p, ok := invoke.ContextBasicAuthFor(bindCtx, named.name); ok {
 					placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Basic " + base64.StdEncoding.EncodeToString([]byte(u+":"+p))})
 				}
 			}
 		case "oauth2", "openIdConnect":
-			token := openbindings.ContextAccessTokenFor(bindCtx, named.name)
+			token := invoke.ContextAccessTokenFor(bindCtx, named.name)
 			if token == "" {
-				token = openbindings.ContextBearerToken(bindCtx)
+				token = invoke.ContextBearerToken(bindCtx)
 			}
 			if token != "" {
 				placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Bearer " + token})
@@ -809,14 +810,14 @@ func checkCredentialCollisions(placements []credentialPlacement, params openapi3
 // `cookies`); ambiguous ownership is refused before dispatch.
 func contextChannelCollision(bindCtx map[string]any, params openapi3.Parameters, placements []credentialPlacement) error {
 	rawContextCookie := false
-	for name := range openbindings.ContextHeaders(bindCtx) {
+	for name := range invoke.ContextHeaders(bindCtx) {
 		if http.CanonicalHeaderKey(name) == "Cookie" {
 			rawContextCookie = true
 			break
 		}
 	}
 	hasRawCookieOwner := false
-	hasStructuredCookie := len(openbindings.ContextCookies(bindCtx)) > 0
+	hasStructuredCookie := len(invoke.ContextCookies(bindCtx)) > 0
 	for _, ref := range params {
 		if ref == nil || ref.Value == nil {
 			continue
@@ -839,7 +840,7 @@ func contextChannelCollision(bindCtx map[string]any, params openapi3.Parameters,
 	if rawContextCookie && (hasRawCookieOwner || hasStructuredCookie) {
 		return fmt.Errorf("raw Cookie context header collides with another raw or structured cookie source (OAPI-P-10: refused before dispatch, never a silent overwrite)")
 	}
-	if hasRawCookieOwner && len(openbindings.ContextCookies(bindCtx)) > 0 {
+	if hasRawCookieOwner && len(invoke.ContextCookies(bindCtx)) > 0 {
 		return fmt.Errorf("raw Cookie header source collides with structured context cookies (OAPI-P-10: refused before dispatch, never a silent overwrite)")
 	}
 	return nil

@@ -13,10 +13,13 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/yosida95/uritemplate/v3"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 const (
@@ -39,46 +42,46 @@ var nextProgressToken atomic.Int64
 // single arguments object from the handle's input channel; static resource
 // reads take no input, and resource templates read their variables object
 // once resolution has decided the ref names a template.
-func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	// --- Pre-dispatch validation: no network I/O has happened yet. ---
 	if args.Source.BindingSpec != BindingSpec {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceConfigError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeSourceConfigError,
 		})
 		return
 	}
 	entityType, name, err := parseRef(args.Ref)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeInvalidRef,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeInvalidRef,
 		})
 		return
 	}
 
 	location := strings.TrimSpace(args.Source.Location)
 	if err := validateEndpoint(location); err != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceConfigError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeSourceConfigError,
 		})
 		return
 	}
-	_, _, hasBasic := openbindings.ContextBasicAuth(args.Context)
-	if openbindings.ContextAPIKey(args.Context) != "" || hasBasic {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeContextRequired,
+	_, _, hasBasic := invoke.ContextBasicAuth(args.Context)
+	if invoke.ContextAPIKey(args.Context) != "" || hasBasic {
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeContextRequired,
 		})
 		return
 	}
-	for name := range openbindings.ContextHeaders(args.Context) {
-		if openbindings.ContextBearerToken(args.Context) != "" && strings.EqualFold(name, "Authorization") {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeValidationFailed,
+	for name := range invoke.ContextHeaders(args.Context) {
+		if invoke.ContextBearerToken(args.Context) != "" && strings.EqualFold(name, "Authorization") {
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeValidationFailed,
 			})
 			return
 		}
 		if strings.EqualFold(name, "MCP-Session-Id") || strings.EqualFold(name, "MCP-Protocol-Version") {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeValidationFailed,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeValidationFailed,
 			})
 			return
 		}
@@ -91,8 +94,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	if args.Source.Content != nil {
 		p, perr := parsePinnedListing(args.Source.Content)
 		if perr != nil {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeSourceLoadFailed,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeSourceLoadFailed,
 			})
 			return
 		}
@@ -102,7 +105,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// bctx bounds the underlying MCP I/O to the invocation's lifetime:
 	// caller Cancel() (or upstream ctx cancellation) tears down in-flight
 	// JSON-RPC calls.
-	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	bctx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 
 	// --- Resolution before dispatch (§7, MCP-P-02). ---
@@ -161,8 +164,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 					// A supplied input MUST be a JSON object (§9.1,
 					// MCP-P-03); null included — absent means "never
 					// written", not "written as null".
-					inv.FireError(&openbindings.InvocationError{
-						Code: openbindings.ErrCodeValidationFailed,
+					inv.FireError(&invoke.InvocationError{
+						Code: invoke.ErrCodeValidationFailed,
 					})
 					return
 				}
@@ -194,13 +197,13 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	session, err := e.pool.acquire(callCtx, e.clientVersion, location, headers)
 	if err != nil {
-		inv.FireError(mapMCPError(err, hc, openbindings.ErrCodeConnectFailed))
+		inv.FireError(mapMCPError(err, hc, invoke.ErrCodeConnectFailed))
 		return
 	}
 	defer session.release()
 	if init := session.session.InitializeResult(); init == nil || init.ProtocolVersion != "2025-11-25" {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceLoadFailed,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeSourceLoadFailed,
 		})
 		return
 	}
@@ -215,7 +218,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 			if sessionSuspect(lerr) {
 				e.pool.invalidate(session)
 			}
-			inv.FireError(mapMCPError(lerr, hc, openbindings.ErrCodeSourceLoadFailed))
+			inv.FireError(mapMCPError(lerr, hc, invoke.ErrCodeSourceLoadFailed))
 			return
 		}
 		k, rerr := resolveRef(l, entityType, name, args.Source.BindingSpec)
@@ -257,7 +260,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	site := siteFor(args, location)
 	rawResult := &rawResultCapture{}
 	operationCtx := context.WithValue(callCtx, rawResultCaptureKey{}, rawResult)
-	var derr *openbindings.InvocationError
+	var derr *invoke.InvocationError
 	var suspect bool
 	switch kind {
 	case targetTool:
@@ -333,7 +336,7 @@ func serverJSONRPCError(err error) *jsonrpc.Error {
 // binding's observable stream realization-neutral: no progressToken rides
 // the call, and the output stream is the result value alone (§9.2).
 func resolveSolicit(bindCtx map[string]any, consumer *bool) bool {
-	if cfg := openbindings.ContextConfiguration(bindCtx); cfg != nil {
+	if cfg := invoke.ContextConfiguration(bindCtx); cfg != nil {
 		if v, ok := cfg["solicit"].(bool); ok {
 			return v
 		}
@@ -355,12 +358,12 @@ func runTool(
 	solicit bool,
 	bindingSpec string,
 	applicationOutputSchema any,
-	inv *openbindings.InvocationImpl[any, any],
+	inv *invoke.InvocationImpl[any, any],
 	hc *headerCapture,
-	site openbindings.InvokeSite,
-	hooks *openbindings.InvokeHooks,
+	site invoke.InvokeSite,
+	hooks *invoke.InvokeHooks,
 	rawResult *rawResultCapture,
-) (*openbindings.InvocationError, bool) {
+) (*invoke.InvocationError, bool) {
 	params := &gomcp.CallToolParams{Name: toolName}
 	if toolArgs != nil {
 		// A supplied input maps whole and verbatim (§9.1).
@@ -378,7 +381,7 @@ func runTool(
 		// and the stream is exactly the result value (§9.2, MCP-P-05).
 		result, callErr := session.session.CallTool(ctx, params)
 		if callErr != nil {
-			return mapMCPError(callErr, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(callErr)
+			return mapMCPError(callErr, hc, invoke.ErrCodeExecutionFailed), sessionSuspect(callErr)
 		}
 		return emitToolResult(result, toolName, bindingSpec, applicationOutputSchema, inv, site, hooks, rawResult)
 	}
@@ -447,7 +450,7 @@ func runTool(
 	defer emitMu.Unlock()
 
 	if callErr != nil {
-		return mapMCPError(callErr, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(callErr)
+		return mapMCPError(callErr, hc, invoke.ErrCodeExecutionFailed), sessionSuspect(callErr)
 	}
 	return emitToolResult(result, toolName, bindingSpec, applicationOutputSchema, inv, site, hooks, rawResult)
 }
@@ -460,11 +463,11 @@ func emitToolResult(
 	toolName string,
 	bindingSpec string,
 	applicationOutputSchema any,
-	inv *openbindings.InvocationImpl[any, any],
-	site openbindings.InvokeSite,
-	hooks *openbindings.InvokeHooks,
+	inv *invoke.InvocationImpl[any, any],
+	site invoke.InvokeSite,
+	hooks *invoke.InvokeHooks,
 	rawResult *rawResultCapture,
-) (*openbindings.InvocationError, bool) {
+) (*invoke.InvocationError, bool) {
 	if result.IsError {
 		// Application-level tool failure (CallToolResult.isError). The
 		// session is healthy: the server replied normally. A present
@@ -472,10 +475,10 @@ func emitToolResult(
 		// use the raw capture so explicit null remains distinct from absence.
 		if raw, ok := completeMCPResult(rawResult, result).(map[string]any); ok {
 			if data, present := raw["structuredContent"]; present {
-				return openbindings.NewInvocationErrorWithData(openbindings.ErrCodeExecutionFailed, data), false
+				return invoke.NewInvocationErrorWithData(invoke.ErrCodeExecutionFailed, data), false
 			}
 		}
-		return openbindings.NewInvocationError(openbindings.ErrCodeExecutionFailed), false
+		return invoke.NewInvocationError(invoke.ErrCodeExecutionFailed), false
 	}
 
 	value := completeMCPResult(rawResult, result)
@@ -483,13 +486,13 @@ func emitToolResult(
 		var ok bool
 		value, ok = structuredContentValue(result.StructuredContent)
 		if !ok {
-			return &openbindings.InvocationError{
-				Code: openbindings.ErrCodeResponseError,
+			return &invoke.InvocationError{
+				Code: invoke.ErrCodeResponseError,
 			}, false
 		}
 		if err := openbindings.ValidateAgainstSchema(value, applicationOutputSchema, nil); err != nil {
-			return &openbindings.InvocationError{
-				Code: openbindings.ErrCodeResponseError,
+			return &invoke.InvocationError{
+				Code: invoke.ErrCodeResponseError,
 			}, false
 		}
 	}
@@ -522,15 +525,15 @@ func runResource(
 	ctx context.Context,
 	session *mcpSession,
 	uri string,
-	inv *openbindings.InvocationImpl[any, any],
+	inv *invoke.InvocationImpl[any, any],
 	hc *headerCapture,
-	site openbindings.InvokeSite,
-	hooks *openbindings.InvokeHooks,
+	site invoke.InvokeSite,
+	hooks *invoke.InvokeHooks,
 	rawResult *rawResultCapture,
-) (*openbindings.InvocationError, bool) {
+) (*invoke.InvocationError, bool) {
 	result, err := session.session.ReadResource(ctx, &gomcp.ReadResourceParams{URI: uri})
 	if err != nil {
-		return mapMCPError(err, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(err)
+		return mapMCPError(err, hc, invoke.ErrCodeExecutionFailed), sessionSuspect(err)
 	}
 
 	value := completeMCPResult(rawResult, result)
@@ -547,16 +550,16 @@ func runPrompt(
 	session *mcpSession,
 	promptName string,
 	promptArgs map[string]string,
-	inv *openbindings.InvocationImpl[any, any],
+	inv *invoke.InvocationImpl[any, any],
 	hc *headerCapture,
 	rawResult *rawResultCapture,
-) (*openbindings.InvocationError, bool) {
+) (*invoke.InvocationError, bool) {
 	result, err := session.session.GetPrompt(ctx, &gomcp.GetPromptParams{
 		Name:      promptName,
 		Arguments: promptArgs,
 	})
 	if err != nil {
-		return mapMCPError(err, hc, openbindings.ErrCodeExecutionFailed), sessionSuspect(err)
+		return mapMCPError(err, hc, invoke.ErrCodeExecutionFailed), sessionSuspect(err)
 	}
 
 	if err := inv.EmitOutput(completeMCPResult(rawResult, result)); err != nil {
@@ -576,14 +579,14 @@ func runPrompt(
 // the invocation already terminated while reading input (nothing to fire).
 func expandTemplateInput(
 	ctx context.Context,
-	inv *openbindings.InvocationImpl[any, any],
+	inv *invoke.InvocationImpl[any, any],
 	template string,
 	noInput bool,
-) (uri string, ierr *openbindings.InvocationError, settled bool) {
+) (uri string, ierr *invoke.InvocationError, settled bool) {
 	tmpl, terr := uritemplate.New(template)
 	if terr != nil {
-		return "", &openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceLoadFailed,
+		return "", &invoke.InvocationError{
+			Code: invoke.ErrCodeSourceLoadFailed,
 		}, false
 	}
 
@@ -606,8 +609,8 @@ func expandTemplateInput(
 	if supplied {
 		m, ok := openbindings.ToStringAnyMap(first)
 		if !ok {
-			return "", &openbindings.InvocationError{
-				Code: openbindings.ErrCodeValidationFailed,
+			return "", &invoke.InvocationError{
+				Code: invoke.ErrCodeValidationFailed,
 			}, false
 		}
 		declared := map[string]bool{}
@@ -616,8 +619,8 @@ func expandTemplateInput(
 		}
 		for k, v := range m {
 			if !declared[k] {
-				return "", &openbindings.InvocationError{
-					Code: openbindings.ErrCodeValidationFailed,
+				return "", &invoke.InvocationError{
+					Code: invoke.ErrCodeValidationFailed,
 				}, false
 			}
 			switch value := v.(type) {
@@ -630,7 +633,7 @@ func expandTemplateInput(
 				for i, item := range value {
 					text, ok := item.(string)
 					if !ok {
-						return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}, false
+						return "", &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}, false
 					}
 					items[i] = text
 				}
@@ -656,14 +659,14 @@ func expandTemplateInput(
 				for _, name := range keys {
 					text, ok := value[name].(string)
 					if !ok {
-						return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}, false
+						return "", &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}, false
 					}
 					pairs = append(pairs, name, text)
 				}
 				values[k] = uritemplate.KV(pairs...)
 			default:
-				return "", &openbindings.InvocationError{
-					Code: openbindings.ErrCodeValidationFailed,
+				return "", &invoke.InvocationError{
+					Code: invoke.ErrCodeValidationFailed,
 				}, false
 			}
 		}
@@ -671,8 +674,8 @@ func expandTemplateInput(
 
 	expanded, xerr := tmpl.Expand(values)
 	if xerr != nil {
-		return "", &openbindings.InvocationError{
-			Code: openbindings.ErrCodeValidationFailed,
+		return "", &invoke.InvocationError{
+			Code: invoke.ErrCodeValidationFailed,
 		}, false
 	}
 	return expanded, nil, false
@@ -682,19 +685,19 @@ func expandTemplateInput(
 // MUST be a JSON object, and MCP prompt arguments are string-typed, so every
 // member value MUST be a string — a non-object input or a non-string member
 // is refused loudly before prompts/get is dispatched, never coerced.
-func promptArguments(v any) (map[string]string, *openbindings.InvocationError) {
+func promptArguments(v any) (map[string]string, *invoke.InvocationError) {
 	m, ok := openbindings.ToStringAnyMap(v)
 	if !ok {
-		return nil, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeValidationFailed,
+		return nil, &invoke.InvocationError{
+			Code: invoke.ErrCodeValidationFailed,
 		}
 	}
 	out := make(map[string]string, len(m))
 	for k, val := range m {
 		s, ok := val.(string)
 		if !ok {
-			return nil, &openbindings.InvocationError{
-				Code: openbindings.ErrCodeValidationFailed,
+			return nil, &invoke.InvocationError{
+				Code: invoke.ErrCodeValidationFailed,
 			}
 		}
 		out[k] = s
@@ -765,8 +768,8 @@ func validateEndpoint(location string) error {
 // cancellation maps to ERR_CANCELLED; anything else falls back to the
 // phase's code (ERR_CONNECT_FAILED during the initialize handshake,
 // ERR_EXECUTION_FAILED during dispatch).
-func mapMCPError(err error, hc *headerCapture, fallback string) *openbindings.InvocationError {
-	var ie *openbindings.InvocationError
+func mapMCPError(err error, hc *headerCapture, fallback string) *invoke.InvocationError {
+	var ie *invoke.InvocationError
 	if errors.As(err, &ie) {
 		return ie
 	}
@@ -776,34 +779,34 @@ func mapMCPError(err error, hc *headerCapture, fallback string) *openbindings.In
 		if len(werr.Data) > 0 {
 			var data any
 			if json.Unmarshal(werr.Data, &data) == nil {
-				return openbindings.NewInvocationErrorWithData(openbindings.ErrCodeExecutionFailed, data)
+				return invoke.NewInvocationErrorWithData(invoke.ErrCodeExecutionFailed, data)
 			}
 		}
-		return &openbindings.InvocationError{
-			Code: openbindings.ErrCodeExecutionFailed,
+		return &invoke.InvocationError{
+			Code: invoke.ErrCodeExecutionFailed,
 		}
 	}
 
 	// HTTP error response: the capture saw the failing POST's status.
 	if status, statusText := hc.lastStatus(); status >= 400 {
-		return openbindings.HTTPError(status, statusText)
+		return invoke.HTTPError(status, statusText)
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
 		// A caller-supplied invocation lifetime deadline is a cancellation of
 		// that invocation at the abstract boundary. Keep the native deadline
 		// distinction below the bridge.
-		return &openbindings.InvocationError{
-			Code: openbindings.ErrCodeCancelled,
+		return &invoke.InvocationError{
+			Code: invoke.ErrCodeCancelled,
 		}
 	}
 	if errors.Is(err, context.Canceled) {
-		return &openbindings.InvocationError{
-			Code: openbindings.ErrCodeCancelled,
+		return &invoke.InvocationError{
+			Code: invoke.ErrCodeCancelled,
 		}
 	}
 
-	return &openbindings.InvocationError{Code: fallback}
+	return &invoke.InvocationError{Code: fallback}
 }
 
 // ---------------------------------------------------------------------------
@@ -823,13 +826,13 @@ type headerCapture struct {
 	statusCode int
 	status     string
 	url        string
-	header     openbindings.Metadata
+	header     invoke.Metadata
 	body       []byte
 	bodySeen   bool
 }
 
 func (hc *headerCapture) record(resp *http.Response) {
-	md := make(openbindings.Metadata, len(resp.Header))
+	md := make(invoke.Metadata, len(resp.Header))
 	for k, vs := range resp.Header {
 		md[k] = append([]string(nil), vs...)
 	}
@@ -852,11 +855,11 @@ func (hc *headerCapture) recordBody(body []byte) {
 	hc.mu.Unlock()
 }
 
-func (hc *headerCapture) snapshot() openbindings.Metadata {
+func (hc *headerCapture) snapshot() invoke.Metadata {
 	hc.mu.Lock()
 	defer hc.mu.Unlock()
 	if hc.header == nil {
-		return openbindings.Metadata{}
+		return invoke.Metadata{}
 	}
 	return hc.header
 }
@@ -916,8 +919,8 @@ func completeMCPResult(capture *rawResultCapture, typed any) any {
 }
 
 // siteFor builds the hook-consultation site for an MCP binding.
-func siteFor(args *openbindings.BindingInvocationArgs, target string) openbindings.InvokeSite {
-	var site openbindings.InvokeSite
+func siteFor(args *invoke.BindingInvocationArgs, target string) invoke.InvokeSite {
+	var site invoke.InvokeSite
 	if args.Site != nil {
 		site = *args.Site
 	} else {
@@ -939,7 +942,7 @@ func siteFor(args *openbindings.BindingInvocationArgs, target string) openbindin
 // is a consumer choice, opted into through the decode seam, never a
 // payload sniff. Other content shapes are protocol-structured and pass
 // through as generic values.
-func toolResultValue(result *gomcp.CallToolResult, site openbindings.InvokeSite, hooks *openbindings.InvokeHooks) (any, string, *openbindings.InvocationError) {
+func toolResultValue(result *gomcp.CallToolResult, site invoke.InvokeSite, hooks *invoke.InvokeHooks) (any, string, *invoke.InvocationError) {
 	if result.StructuredContent != nil {
 		switch sc := result.StructuredContent.(type) {
 		case json.RawMessage:
@@ -953,9 +956,9 @@ func toolResultValue(result *gomcp.CallToolResult, site openbindings.InvokeSite,
 	}
 	if len(result.Content) == 1 {
 		if tc, ok := result.Content[0].(*gomcp.TextContent); ok {
-			out, err := hooks.DecodeOutput(site, openbindings.RawResult{Body: []byte(tc.Text)}, builtinTextDecode)
+			out, err := hooks.DecodeOutput(site, invoke.RawResult{Body: []byte(tc.Text)}, builtinTextDecode)
 			if err != nil {
-				return nil, "", openbindings.AsInvocationError(err)
+				return nil, "", invoke.AsInvocationError(err)
 			}
 			return out, decodeStampFor(hooks, "text"), nil
 		}
@@ -966,13 +969,13 @@ func toolResultValue(result *gomcp.CallToolResult, site openbindings.InvokeSite,
 // builtinTextDecode is the MCP text builtin: the value is the text,
 // verbatim. Content-independent per the conventions record; JSON-in-text
 // consumers opt in with a decode hook.
-func builtinTextDecode(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+func builtinTextDecode(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 	return string(raw.Body), nil
 }
 
 // decodeStampFor names the decode lane for the x-ob-decode provenance
 // stamp: the builtin's token, or "hook" when a hook decided.
-func decodeStampFor(hooks *openbindings.InvokeHooks, builtin string) string {
+func decodeStampFor(hooks *invoke.InvokeHooks, builtin string) string {
 	if hooks.DecodeDecidedBy() == "hook" {
 		return "hook"
 	}
@@ -990,7 +993,7 @@ func decodeStampFor(hooks *openbindings.InvokeHooks, builtin string) string {
 // parses strictly (a parse failure is a loud error, never a silent
 // fall-through), anything else is text, and the payload's shape never picks
 // the lane.
-func resourceValue(result *gomcp.ReadResourceResult, site openbindings.InvokeSite, hooks *openbindings.InvokeHooks) (any, string, *openbindings.InvocationError) {
+func resourceValue(result *gomcp.ReadResourceResult, site invoke.InvokeSite, hooks *invoke.InvokeHooks) (any, string, *invoke.InvocationError) {
 	items := make([]any, 0, len(result.Contents))
 	for _, c := range result.Contents {
 		if c == nil {
@@ -1003,9 +1006,9 @@ func resourceValue(result *gomcp.ReadResourceResult, site openbindings.InvokeSit
 			items = append(items, base64.StdEncoding.EncodeToString(c.Blob))
 			continue
 		}
-		out, err := hooks.DecodeOutput(site, openbindings.RawResult{Body: []byte(c.Text)}, builtinMIMEDecode(c.MIMEType))
+		out, err := hooks.DecodeOutput(site, invoke.RawResult{Body: []byte(c.Text)}, builtinMIMEDecode(c.MIMEType))
 		if err != nil {
-			return nil, "", openbindings.AsInvocationError(err)
+			return nil, "", invoke.AsInvocationError(err)
 		}
 		items = append(items, out)
 	}
@@ -1015,13 +1018,13 @@ func resourceValue(result *gomcp.ReadResourceResult, site openbindings.InvokeSit
 // builtinMIMEDecode is the resource builtin: the declared mimeType decides
 // the lane. application/json and +json parse strictly; a declared-JSON
 // body that does not parse is a loud invocation error.
-func builtinMIMEDecode(mimeType string) openbindings.OutputDecoder {
-	return func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+func builtinMIMEDecode(mimeType string) invoke.OutputDecoder {
+	return func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 		if isJSONMIME(mimeType) {
 			var parsed any
 			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
-				return nil, &openbindings.InvocationError{
-					Code: openbindings.ErrCodeExecutionFailed,
+				return nil, &invoke.InvocationError{
+					Code: invoke.ErrCodeExecutionFailed,
 				}
 			}
 			return parsed, nil

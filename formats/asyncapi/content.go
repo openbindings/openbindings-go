@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // This file resolves the governing content-type declarations of
@@ -78,7 +78,7 @@ func selectedInputMessages(doc *document, op *asyncOperation, ch *channel, bindC
 	}
 	selected := candidates[0]
 	if len(candidates) > 1 {
-		choice, _ := openbindings.ContextConfiguration(bindCtx)["message"].(string)
+		choice, _ := invoke.ContextConfiguration(bindCtx)["message"].(string)
 		if choice == "" {
 			return nil, fmt.Errorf("publish operation declares several messages; configuration.message must select one artifact-declared member")
 		}
@@ -297,7 +297,7 @@ func supportedMessageContentType(contentType string) error {
 }
 
 func requiredCodecLane(bindCtx map[string]any, point string) (inputCodec, error) {
-	value, _ := openbindings.ContextConfiguration(bindCtx)[point].(string)
+	value, _ := invoke.ContextConfiguration(bindCtx)[point].(string)
 	switch value {
 	case "json":
 		return inputCodec{JSON: true, ContentType: "application/json"}, nil
