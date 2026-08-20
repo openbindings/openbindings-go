@@ -124,20 +124,19 @@ func (r *ContextRequirement) UnmarshalJSON(b []byte) error {
 // channel address a service generates at runtime). point names the
 // binding-specification configuration point the value belongs to ("server",
 // "address", …); path is a JSON Pointer relative to that point (the empty
-// pointer addresses the whole point); choices carries the
-// artifact's declared choices when it enumerates them (the governing binding
-// specification decides whether that list is closed or advisory). durable
+// pointer addresses the whole point); schema is the engine-asserted JSON
+// Schema for the value at (point, path) — artifact-derived where the
+// artifact speaks, engine-known where the binding specification pins a
+// shape, nil where neither does (absent = unconstrained). An `enum` member
+// is a closed admissible set (satisfaction validates against it);
+// `examples` are advisory. durable
 // defaults to false; pass a *bool of true only when reuse is permitted. The
 // /variables/region addresses configuration[point].variables.region, while
 // /value addresses a member literally named "value".
-func NewConfigValueRequirement(point, path, description string, choices []string, durable *bool) ContextRequirement {
+func NewConfigValueRequirement(point, path, description string, schema map[string]any, durable *bool) ContextRequirement {
 	extra := map[string]any{"point": point, "path": path}
-	if len(choices) > 0 {
-		c := make([]any, len(choices))
-		for i, v := range choices {
-			c[i] = v
-		}
-		extra["choices"] = c
+	if schema != nil {
+		extra["schema"] = schema
 	}
 	return ContextRequirement{
 		Type:        "config.value",
@@ -232,16 +231,14 @@ func ValidContextRequiredDetails(details *ContextRequiredDetails) bool {
 				if point == "" || !pathPresent || !validConfigurationPointer(path) {
 					return false
 				}
-				if choices, present := requirement.Extra["choices"]; present {
-					switch values := choices.(type) {
-					case []any:
-						for _, value := range values {
-							if _, ok := value.(string); !ok {
-								return false
-							}
-						}
-					case []string:
-					default:
+				// A present schema member must be a JSON object (the
+				// engine-asserted JSON Schema for the value at point/path).
+				// Its content is not metaschema-validated here: whether the
+				// schema itself is well-formed is the emitting engine's
+				// responsibility; this gate only refuses a carriage shape no
+				// consumer could evaluate.
+				if schema, present := requirement.Extra["schema"]; present {
+					if _, ok := schema.(map[string]any); !ok {
 						return false
 					}
 				}

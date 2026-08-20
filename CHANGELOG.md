@@ -6,6 +6,30 @@
 
 ### Changed
 
+- **config.value requirements carry an engine-asserted `schema` instead of
+  `choices`** (breaking; the 2026-08-20 working-draft amendment of the
+  binding-invoker contract — one mechanism, no sugar).
+  `invoke.NewConfigValueRequirement` takes a `map[string]any` JSON Schema
+  (nil = absent = unconstrained); a present `schema` member must be a JSON
+  object (not metaschema-validated) or the challenge is invalid; satisfaction
+  validates the selected configuration value against the schema when one is
+  carried (an `enum` member is a closed admissible set). Engines emit
+  `{"enum": […]}` exactly where they previously emitted `choices` — where the
+  admissible set is already computed at the emission site — and stay absent
+  otherwise.
+
+- **`invoke.StoreContextResolver` keys config-only alternatives by the exact
+  asserted target** (the 2026-08-19 context-scope model): an alternative
+  consisting solely of config.value requirements fetches under the verbatim
+  challenge target — the engine-asserted artifact-bound scope — while any
+  credential-bearing alternative keeps the endpoint-normalized
+  (`NormalizeEndpoint`) convention. Endpoint normalization would conflate a
+  canonicalized source URL with its origin, letting one artifact's
+  configuration answers resolve a same-host sibling's challenge. The asyncapi
+  engine's challenge target accordingly falls back resolved server URL →
+  artifact host hint → canonicalized source location (empty for a
+  content-only source, which asserts nothing).
+
 - **The SDK is layered into core plus `invoke`, `synthesize`, and `compare`
   sub-packages** (breaking; import-path changes only, no renames or behavior
   changes). Placement follows the authority source: what `openbindings.md`

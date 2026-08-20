@@ -3,6 +3,8 @@ package invoke
 import (
 	"context"
 	"strings"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // ---------------------------------------------------------------------------
@@ -147,7 +149,24 @@ func requirementSatisfied(ctx map[string]any, req ContextRequirement, allowFlatN
 			return false
 		}
 		selected, selectedPresent := configurationValueAt(v, path)
-		return selectedPresent && selected != nil && selected != ""
+		if !selectedPresent || selected == nil || selected == "" {
+			return false
+		}
+		// When the requirement carries an engine-asserted schema, presence is
+		// not enough: the selected value must validate against it (an `enum`
+		// member is a closed admissible set). A schema that is present but
+		// not an object is an invalid carriage (ValidContextRequiredDetails
+		// refuses it); treat it conservatively as unsatisfiable here.
+		if schemaRaw, schemaPresent := req.Extra["schema"]; schemaPresent {
+			schema, ok := schemaRaw.(map[string]any)
+			if !ok {
+				return false
+			}
+			if openbindings.ValidateAgainstSchema(selected, schema, nil) != nil {
+				return false
+			}
+		}
+		return true
 	}
 	field, mapped := requirementFields[req.Type]
 	if !mapped {
@@ -402,13 +421,25 @@ func mergeConfigurationFragment(left, right map[string]any) {
 // ContextStore: it resolves the binding-invoker contract's CONTEXT_REQUIRED
 // challenges from stored BindingContext entries (the well-known fields live
 // in that contract, interfaces/binding-invoker).
-// It derives the store key from the challenge's target by normalizing
-// it (NormalizeEndpoint), returns the least-privilege subset of the stored
-// context (ScopeContext) when it satisfies one of the challenge's alternatives,
+// It derives the store key from the challenge's target per alternative
+// (see the keying rule below), returns the least-privilege subset of the
+// stored context (ScopeContext) when it satisfies one of the challenge's
+// alternatives,
 // and declines otherwise — at which point the challenge surfaces to the caller
 // unchanged. A CONTEXT_REQUIRED challenge is a scope, not a hint: the resolver
 // returns only the context fields the satisfied alternative names. It does
 // not classify or forward arbitrary stored fields.
+//
+// Keying rule (context-scope model, ratified 2026-08-19): the target is an
+// engine-asserted, opaque scope, and the requirement family decides how it
+// keys the store. An alternative consisting solely of config.value
+// requirements is artifact-bound configuration: it fetches under the EXACT
+// asserted target string, verbatim. Endpoint normalization would conflate a
+// canonicalized source URL with its origin — many artifacts can live on one
+// host, and one artifact's configuration answers must not resolve another's
+// challenge. An alternative carrying any credential-family requirement keeps
+// the endpoint-normalized convention (NormalizeEndpoint): a credential's
+// natural scope is the destination origin.
 //
 // A stored entry that does NOT satisfy the challenge (wrong field name,
 // empty value) is a decline like any other: the challenge surfaces with its
@@ -447,20 +478,63 @@ func StoreContextResolver(store ContextStore) ContextResolver {
 		if len(reusable.Alternatives) == 0 {
 			return nil, nil
 		}
-		key := NormalizeEndpoint(details.Target)
-		if key == "" {
-			// An empty or unkeyable target cannot safely select reusable
-			// stored context. Interactive or application-specific resolvers
-			// may still satisfy the challenge.
-			return nil, nil
+		// Group the reusable alternatives by the store key their requirement
+		// families assert (the keying rule in this function's doc comment):
+		// config.value-only alternatives under the exact target string,
+		// credential-bearing alternatives under the normalized endpoint.
+		// Groups are tried in first-appearance order so the challenge's own
+		// alternative preference is preserved.
+		type keyedGroup struct {
+			key     string
+			details *ContextRequiredDetails
 		}
-		stored, err := store.Get(ctx, key)
-		if err != nil || stored == nil {
-			return nil, err
+		var groups []*keyedGroup
+		byKey := map[string]*keyedGroup{}
+		for _, alt := range reusable.Alternatives {
+			key := NormalizeEndpoint(details.Target)
+			if configValueOnlyAlternative(alt) {
+				key = details.Target
+			}
+			if key == "" {
+				// An empty or unkeyable target cannot safely select reusable
+				// stored context. Interactive or application-specific
+				// resolvers may still satisfy the challenge.
+				continue
+			}
+			group := byKey[key]
+			if group == nil {
+				group = &keyedGroup{key: key, details: &ContextRequiredDetails{Target: details.Target}}
+				byKey[key] = group
+				groups = append(groups, group)
+			}
+			group.details.Alternatives = append(group.details.Alternatives, alt)
 		}
-		if !ContextSatisfies(stored, reusable) {
-			return nil, nil
+		for _, group := range groups {
+			stored, err := store.Get(ctx, group.key)
+			if err != nil {
+				return nil, err
+			}
+			if stored == nil || !ContextSatisfies(stored, group.details) {
+				continue
+			}
+			return ScopeContext(stored, group.details), nil
 		}
-		return ScopeContext(stored, reusable), nil
+		return nil, nil
 	}
+}
+
+// configValueOnlyAlternative reports whether every requirement of the
+// alternative is config.value — an artifact-bound configuration alternative,
+// which the keying rule files and fetches under the exact asserted target
+// rather than the normalized endpoint.
+func configValueOnlyAlternative(alt ContextAlternative) bool {
+	if len(alt.Requirements) == 0 {
+		return false
+	}
+	for _, req := range alt.Requirements {
+		if req.Type != "config.value" {
+			return false
+		}
+	}
+	return true
 }

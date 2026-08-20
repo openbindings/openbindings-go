@@ -198,8 +198,8 @@ func TestResolveServer_ConfigRequired(t *testing.T) {
 	if cr.point != "server" || cr.path != "/variables/env" {
 		t.Errorf("configRequired = {point:%q path:%q}, want {server /variables/env}", cr.point, cr.path)
 	}
-	if len(cr.choices) != 2 {
-		t.Errorf("choices = %v, want the declared enum", cr.choices)
+	if members, _ := cr.schema["enum"].([]any); len(members) != 2 {
+		t.Errorf("schema = %v, want {\"enum\": <the declared enum>}", cr.schema)
 	}
 
 	// Relative server URL with no absolute base → config.value at /url.

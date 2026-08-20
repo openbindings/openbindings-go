@@ -192,7 +192,7 @@ func substituteServerVariables(srv *openapi3.Server, supplied map[string]string)
 				point:       "server",
 				path:        "/variables/" + escapeJSONPointerSegment(name),
 				description: fmt.Sprintf("server %q: variable %q has no supplied value and no declared default", srv.URL, name),
-				choices:     v.Enum,
+				schema:      enumSchema(v.Enum),
 			}
 		}
 		if len(v.Enum) > 0 {
@@ -263,8 +263,25 @@ type configRequired struct {
 	point       string
 	path        string
 	description string
-	choices     []string
-	durable     *bool
+	// schema is the engine-asserted JSON Schema for the missing value --
+	// artifact-derived where the artifact speaks (a declared enum becomes
+	// {"enum": [...]}), nil where it does not (absent = unconstrained).
+	schema  map[string]any
+	durable *bool
 }
 
 func (c *configRequired) Error() string { return c.description }
+
+// enumSchema lifts an artifact-declared closed value set into the
+// engine-asserted schema shape ({"enum": [...]}); an empty set asserts
+// nothing (nil = absent = unconstrained).
+func enumSchema(values []string) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	members := make([]any, len(values))
+	for index, value := range values {
+		members[index] = value
+	}
+	return map[string]any{"enum": members}
+}

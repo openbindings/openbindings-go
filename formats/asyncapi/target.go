@@ -50,12 +50,29 @@ type configRequired struct {
 	point       string
 	path        string
 	description string
-	choices     []string
-	durable     *bool
-	hostHint    string
+	// schema is the engine-asserted JSON Schema for the missing value —
+	// artifact-derived where the artifact speaks (a declared enum becomes
+	// {"enum": […]}), nil where it does not (absent = unconstrained).
+	schema   map[string]any
+	durable  *bool
+	hostHint string
 }
 
 func (c *configRequired) Error() string { return c.description }
+
+// enumSchema lifts an artifact-declared closed value set into the
+// engine-asserted schema shape ({"enum": […]}); an empty set asserts
+// nothing (nil = absent = unconstrained).
+func enumSchema(values []string) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	members := make([]any, len(values))
+	for index, value := range values {
+		members[index] = value
+	}
+	return map[string]any{"enum": members}
+}
 
 func escapeContextPointerToken(value string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(value, "~", "~0"), "/", "~1")
@@ -182,7 +199,7 @@ func resolveTarget(doc *document, ch *channel, bindCtx map[string]any) (resolved
 				return resolvedTarget{}, &configRequired{
 					point: "server", path: "/key",
 					description: "configuration.server.key must select one artifact server before metadata.baseURL can replace its target",
-					choices:     names, durable: boolPointer(true),
+					schema:      enumSchema(names), durable: boolPointer(true),
 				}
 			}
 			return fullURLOverride(base, def)
@@ -211,7 +228,7 @@ func resolveTarget(doc *document, ch *channel, bindCtx map[string]any) (resolved
 			point:       "server",
 			path:        "/key",
 			description: "the effective server set declares several bindable servers; configuration.server.key must select one artifact member",
-			choices:     names,
+			schema:      enumSchema(names),
 			durable:     boolPointer(true),
 		}
 	}
@@ -325,7 +342,7 @@ func resolveServerConfig(raw any, candidates []namedServer, def *namedServer) (r
 		return resolvedTarget{}, &configRequired{
 			point: "server", path: "/key",
 			description: "configuration.server.key must select one artifact server before variables or a URL replacement can be applied",
-			choices:     names, durable: boolPointer(true),
+			schema:      enumSchema(names), durable: boolPointer(true),
 		}
 	}
 	if err := validateSuppliedServerVariables(member, supplied); err != nil {
@@ -485,15 +502,15 @@ func substituteServerVariables(member *namedServer, template string, supplied ma
 			if v, declared := member.Server.Variables[name]; declared && v.Default != "" {
 				val = v.Default
 			} else {
-				var choices []string
+				var schema map[string]any
 				if v, declared := member.Server.Variables[name]; declared {
-					choices = v.Enum
+					schema = enumSchema(v.Enum)
 				}
 				return "", &configRequired{
 					point:       "server",
 					path:        "/variables/" + escapeContextPointerToken(name),
 					description: fmt.Sprintf("server %q: variable %q has no supplied value and no declared default (supply one at the server configuration point's \"variables\" member)", member.Name, name),
-					choices:     choices,
+					schema:      schema,
 					hostHint:    member.Server.Host,
 				}
 			}
@@ -657,15 +674,15 @@ func expandAddress(ch *channel, channelName string, supplied map[string]string, 
 			if p, exists := ch.Parameters[name]; exists && p.Default != "" {
 				val = p.Default
 			} else {
-				var choices []string
+				var schema map[string]any
 				if p, declared := ch.Parameters[name]; declared {
-					choices = p.Enum
+					schema = enumSchema(p.Enum)
 				}
 				return "", &configRequired{
 					point:       "address",
 					path:        "/parameters/" + escapeContextPointerToken(name),
 					description: fmt.Sprintf("channel %q: address parameter %q has no supplied value and no declared default", channelName, name),
-					choices:     choices,
+					schema:      schema,
 				}
 			}
 		}
