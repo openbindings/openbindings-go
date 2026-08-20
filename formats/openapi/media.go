@@ -391,6 +391,93 @@ type degenerateMediaError struct{ msg string }
 
 func (e *degenerateMediaError) Error() string { return e.msg }
 
+// normalizedMediaCollisions inventories ONE OAS content map and returns the
+// keys that denote a parsed media identity another key of the SAME map also
+// denotes, each mapped to a stable rendering of the identity they collide on.
+//
+// §9.2: two keys in one content map denoting the same parsed media type are a
+// normalized collision, and the defect CONFINES to that colliding parsed
+// identity -- the smallest unit that owns it. No first-key rule is invented:
+// every caller skips exactly the keys named here, so no request selection
+// lands on the colliding identity, no response match is governed by it, and
+// it is never advertised as an available response representation -- while the
+// map's non-colliding entries remain usable alternatives. The inventory never
+// spans two content maps, because a content map is the unit the rule names.
+func normalizedMediaCollisions(content openapi3.Content, bindingSpec string) map[string]string {
+	if len(content) < 2 {
+		return nil
+	}
+	members := map[string][]string{}
+	rendering := map[string]string{}
+	for key := range content {
+		var parsed parsedMediaType
+		var err error
+		if hasMediaFidelity(bindingSpec) {
+			parsed, err = parseMediaDeclaration(key)
+		} else {
+			parsed, err = parseMediaType(key)
+		}
+		if err != nil {
+			// An unparseable key denotes no identity, so it collides with
+			// nothing. Whether it is itself a defect is its owner's question.
+			continue
+		}
+		identity := parsed.identity
+		if hasMediaFidelity(bindingSpec) {
+			identity = parsed.semanticIdentity
+		}
+		members[identity] = append(members[identity], key)
+		if existing, seen := rendering[identity]; !seen || parsed.canonical < existing {
+			rendering[identity] = parsed.canonical
+		}
+	}
+	var colliding map[string]string
+	for identity, keys := range members {
+		if len(keys) < 2 {
+			continue
+		}
+		if colliding == nil {
+			colliding = map[string]string{}
+		}
+		for _, key := range keys {
+			colliding[key] = rendering[identity]
+		}
+	}
+	return colliding
+}
+
+// collidesWithNormalizedIdentity reports whether a concrete media type denotes
+// one of the parsed identities a content map's keys collide on.
+func collidesWithNormalizedIdentity(colliding map[string]string, parsed parsedMediaType, bindingSpec string) bool {
+	if len(colliding) == 0 {
+		return false
+	}
+	identity := parsed.identity
+	if hasMediaFidelity(bindingSpec) {
+		identity = parsed.semanticIdentity
+	}
+	for key := range colliding {
+		var declared parsedMediaType
+		var err error
+		if hasMediaFidelity(bindingSpec) {
+			declared, err = parseMediaDeclaration(key)
+		} else {
+			declared, err = parseMediaType(key)
+		}
+		if err != nil {
+			continue
+		}
+		declaredIdentity := declared.identity
+		if hasMediaFidelity(bindingSpec) {
+			declaredIdentity = declared.semanticIdentity
+		}
+		if declaredIdentity == identity {
+			return true
+		}
+	}
+	return false
+}
+
 // planRequestBody returns the reference SDK's first declaration-sorted
 // candidate. Runtime invocation uses planRequestBodies and applies
 // candidate-specific admissibility after reading the caller value.
@@ -435,7 +522,9 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 	var candidates []candidate
 	var declared []string
 	var rejected []string
-	identities := map[string]string{}
+	collided := map[string]bool{}
+	nonColliding := 0
+	colliding := normalizedMediaCollisions(rb.Content, bindingSpec)
 	for key := range rb.Content {
 		var parsed parsedMediaType
 		var err error
@@ -449,14 +538,15 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 			continue
 		}
 		declared = append(declared, parsed.canonical)
-		identity := parsed.identity
-		if hasMediaFidelity(bindingSpec) {
-			identity = parsed.semanticIdentity
+		if identity, collides := colliding[key]; collides {
+			// §9.2 normalized collision, confined: no request selection may
+			// land on this parsed identity, so the key contributes no
+			// candidate and its alternative is an accounted exclusion. The
+			// map's non-colliding entries are unaffected (OAPI-P-04).
+			collided[identity] = true
+			continue
 		}
-		if previous, exists := identities[identity]; exists {
-			return nil, fmt.Errorf("request content declarations %q and %q denote the same parsed media type (OAPI-P-04 normalized collision)", previous, key)
-		}
-		identities[identity] = key
+		nonColliding++
 		media := rb.Content[key]
 		if parsed.rangeSpecificity < 2 {
 			family := representativeRangeFamily(parsed)
@@ -477,6 +567,14 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 	if len(candidates) == 0 {
 		if len(rejected) > 0 {
 			return nil, &degenerateMediaError{msg: strings.Join(rejected, "; ")}
+		}
+		if len(collided) > 0 && nonColliding == 0 {
+			identities := make([]string, 0, len(collided))
+			for identity := range collided {
+				identities = append(identities, identity)
+			}
+			sort.Strings(identities)
+			return nil, fmt.Errorf("every request content declaration denotes a normalized-colliding parsed media identity, so no selection may land on one (colliding: %s)", strings.Join(identities, ", "))
 		}
 		sort.Strings(declared)
 		return nil, fmt.Errorf("request body declares no media type whose declaration selects a request carriage lane openbindings.openapi@1 defines (declared: %s)", strings.Join(declared, ", "))
@@ -1683,7 +1781,15 @@ func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans [
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	// §9.2 normalized collision, confined: a colliding parsed identity is not
+	// a selectable declaration, so a configured media type that would land on
+	// one matches nothing here rather than "ambiguously matching" the two
+	// spellings of one identity. Non-colliding declarations are untouched.
+	colliding := normalizedMediaCollisions(op.RequestBody.Value.Content, bindingSpec)
 	for _, key := range keys {
+		if _, collides := colliding[key]; collides {
+			continue
+		}
 		declaration, err := parseMediaDeclaration(key)
 		if err != nil || !requestMediaDeclarationMatches(declaration, wanted) {
 			continue
@@ -3051,7 +3157,7 @@ func governingResponseMediaMatchFor(response *openapi3.Response, actual, binding
 	if err != nil {
 		return governingResponseMediaMatch{}, fmt.Errorf("response Content-Type: %w", err)
 	}
-	identities := map[string]string{}
+	colliding := normalizedMediaCollisions(response.Content, bindingSpec)
 	var declarations []governingResponseMediaMatch
 	for key, media := range response.Content {
 		var declared parsedMediaType
@@ -3067,14 +3173,14 @@ func governingResponseMediaMatchFor(response *openapi3.Response, actual, binding
 			}
 			continue
 		}
-		identity := declared.identity
-		if hasMediaFidelity(bindingSpec) {
-			identity = declared.semanticIdentity
+		if _, collides := colliding[key]; collides {
+			// §9.2 normalized collision, confined: no response match may be
+			// governed by this parsed identity, so the declaration competes
+			// for nothing. A concrete response that DOES denote the colliding
+			// identity then matches nothing and is loud below; a response
+			// denoting a non-colliding sibling decodes unaffected.
+			continue
 		}
-		if previous, exists := identities[identity]; exists {
-			return governingResponseMediaMatch{}, fmt.Errorf("response content declarations %q and %q denote the same parsed media type or range declaration", previous, key)
-		}
-		identities[identity] = key
 		if declared.rangeSpecificity < 2 && !hasResponseFidelity(bindingSpec) {
 			// Range identities participate in collision inventory, but response
 			// ranges do not compete with a concrete match and cannot authorize
@@ -3115,6 +3221,9 @@ func governingResponseMediaMatchFor(response *openapi3.Response, actual, binding
 		}
 	}
 	if len(matches) == 0 {
+		if collidesWithNormalizedIdentity(colliding, parsedActual, bindingSpec) {
+			return governingResponseMediaMatch{}, fmt.Errorf("response Content-Type %q denotes a parsed media identity more than one content-map key declares (normalized collision), so no response match may be governed by it", actual)
+		}
 		return governingResponseMediaMatch{}, fmt.Errorf("response Content-Type %q matches no media in the governing response", actual)
 	}
 	if len(matches) != 1 {
@@ -3135,7 +3244,11 @@ func successMediaTypesFor(op *openapi3.Operation, bindingSpec string) []string {
 		return nil
 	}
 	seen := map[string]bool{}
-	identities := map[string]bool{}
+	// Identity -> the advertised spelling. Two SUCCESS RESPONSES may declare
+	// one identity in different spellings; that is not a collision (§9.2's
+	// unit is one content map), so the set carries the identity once and the
+	// smallest spelling is chosen rather than whichever key iterated first.
+	advertised := map[string]string{}
 	responses := op.Responses.Map()
 	_, hasRange := responses["2XX"]
 	exactSuccesses := 0
@@ -3149,6 +3262,7 @@ func successMediaTypesFor(op *openapi3.Operation, bindingSpec string) []string {
 		if !(isSuccessResponseKey(key) || defaultCanGovernSuccess) || ref == nil || ref.Value == nil {
 			continue
 		}
+		colliding := normalizedMediaCollisions(ref.Value.Content, bindingSpec)
 		for mt := range ref.Value.Content {
 			var parsed parsedMediaType
 			var err error
@@ -3160,16 +3274,25 @@ func successMediaTypesFor(op *openapi3.Operation, bindingSpec string) []string {
 			if err != nil || (parsed.rangeSpecificity < 2 && !hasResponseFidelity(bindingSpec)) {
 				continue
 			}
+			if _, collides := colliding[mt]; collides {
+				// §9.2 normalized collision, confined: no response match may
+				// be governed by this parsed identity, so it is not an
+				// available representation and is not advertised. Advertising
+				// it would invite exactly the response the decode lane must
+				// refuse. Non-colliding siblings in the map still advertise.
+				continue
+			}
 			identity := parsed.identity
 			if hasMediaFidelity(bindingSpec) {
 				identity = parsed.semanticIdentity
 			}
-			if identities[identity] {
-				continue
+			if existing, present := advertised[identity]; !present || parsed.canonical < existing {
+				advertised[identity] = parsed.canonical
 			}
-			identities[identity] = true
-			seen[parsed.canonical] = true
 		}
+	}
+	for _, spelling := range advertised {
+		seen[spelling] = true
 	}
 	if len(seen) == 0 {
 		return nil

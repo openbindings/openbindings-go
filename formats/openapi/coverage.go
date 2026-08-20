@@ -209,6 +209,10 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 	}
 	params := effectiveParameters(pathItem, op)
 	plans, planErr := planRequestBodiesFor(doc, op, bindingSpec)
+	// §9.2's normalized collision confines to the colliding parsed identity:
+	// the colliding keys are excluded alternatives naming that identity, and
+	// the map's non-colliding siblings stay represented beside them.
+	colliding := normalizedMediaCollisions(op.RequestBody.Value.Content, bindingSpec)
 	planned := make(map[string]bool, len(plans))
 	represented := make(map[string]bool, len(plans))
 	requiresRequestMedia := make(map[string]bool, len(plans))
@@ -270,6 +274,8 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 			reasonCode = "openapi.flattening_collision"
 			message = "request media alternative collides with an independently declared parameter in the candidate's application boundary"
 			rule = "OAPI-P-03"
+		} else if identity, collides := colliding[mediaKey]; collides {
+			message = fmt.Sprintf("request media alternative denotes the parsed media identity %s, which another declaration in this content map also denotes; no selection may land on a normalized-colliding identity", identity)
 		} else if planErr != nil {
 			message = planErr.Error()
 		}
