@@ -19,7 +19,7 @@ import (
 // openapi-client/typescript, and by openbindings-ts/packages/openapi against
 // that package's BUILT dist; changing it in one engine without the others
 // fails here.
-const partDefaultTypeAbsentCasesDigest = "0750e5d5ed6bf8ca8bdb06d35b23e88145dc70ceaf2abedcd157e0750c792b69"
+const partDefaultTypeAbsentCasesDigest = "2d871e381018d76ff8e4cce4c8cf4c70aa3e32278a2b003291aaef104ed07d75"
 
 type partDefaultTypeAbsentTable struct {
 	Comment string                      `json:"$comment"`
@@ -172,25 +172,29 @@ func TestPartDefaultTypeAbsentCaseTable(t *testing.T) {
 	}
 }
 
-// TestTypeAbsentPartRefusesExactlyOnThe31Line states the claim the table
+// TestTypeAbsentPartRefusesOnEveryAcceptedEdition states the claim the table
 // exists for as a claim in its own right, rather than leaving it implicit in
-// 128 cells: a form part whose resolved schema declares no `type` is admitted
-// on every accepted 3.0 edition and refused on every accepted 3.1 one, while a
-// part that declares a type is admitted on all eight.
-func TestTypeAbsentPartRefusesExactlyOnThe31Line(t *testing.T) {
+// 128 cells: a form part whose resolved schema declares no `type` refuses on
+// EVERY accepted edition — the 3.1 editions state a default this revision
+// defines no boundary to cross, the 3.0 editions state no row at all and this
+// revision authors none — while a part that declares a type is admitted on all
+// eight. It replaces TestTypeAbsentPartRefusesExactlyOnThe31Line, whose
+// predicate was the deleted 3.0-line value-keyed convention as an executed
+// assertion (escalation M2, ruled 2026-08-20).
+func TestTypeAbsentPartRefusesOnEveryAcceptedEdition(t *testing.T) {
 	// EXECUTED, not read off the table's own expectations: the claim is about
 	// the engine, so a revert of the implementation has to turn this red too.
 	checked := 0
 	for _, c := range loadPartDefaultTypeAbsentTable(t) {
 		got := partDefaultTypeAbsentDecision(t, c)
 		admitted := strings.HasPrefix(got, "admitted;")
-		want := c.DeclaresType || strings.HasPrefix(c.OpenAPI, "3.0")
+		want := c.DeclaresType
 		if admitted != want {
 			t.Errorf("%s: admitted = %v, want %v (decision %q)\nbasis: %s", c.Name, admitted, want, got, c.Basis)
 		}
 		checked++
 	}
-	if checked != 112 {
-		t.Fatalf("checked %d cells, want 112", checked)
+	if checked != 128 {
+		t.Fatalf("checked %d cells, want 128", checked)
 	}
 }

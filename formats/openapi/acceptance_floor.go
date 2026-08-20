@@ -595,8 +595,8 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 		// nearest rung containing the Schema Object owns it, and P1/P2 decide
 		// whether it climbs. Edition-scoped where the two lines differ: a
 		// boolean `exclusiveMinimum` is the 3.0 line's own correct draft-4
-		// spelling and is not this class there. A boolean-valued schema
-		// position on the 3.0 line is REFERRED, not classified -- see
+		// spelling and is not this class there, while a boolean-valued schema
+		// position IS this class there and is not on the 3.1 line -- see
 		// isFloorSchemaValued. Independent of `type`, which is why these run
 		// before the type gate below.
 		if value, declared := node["required"]; declared {
@@ -614,7 +614,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 		}
 		if properties, isMap := node["properties"].(map[string]any); isMap {
 			for _, key := range floorKeys(properties) {
-				if isFloorSchemaValued(properties[key]) {
+				if isFloorSchemaValued(properties[key], line) {
 					continue
 				}
 				addDefect(defect(floorD15, ptr+"/properties/"+floorEsc(key)))
@@ -626,7 +626,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 					addDefect(defect(floorD15, ptr+"/"+keyword))
 				}
 			}
-			if value, declared := node["contains"]; declared && !isFloorSchemaValued(value) {
+			if value, declared := node["contains"]; declared && !isFloorSchemaValued(value, line) {
 				addDefect(defect(floorD15, ptr+"/contains"))
 			}
 		}
@@ -1204,23 +1204,34 @@ func refString(v any) string {
 	return s
 }
 
-// isFloorSchemaValued reports whether a value is spelled as a schema at all:
-// an object, or a boolean. This asks only the JSON type the position declares,
+// isFloorSchemaValued reports whether a value is spelled as a schema at all
+// under the governing edition line: an object on either line, and a boolean
+// on the 3.1 line only. This asks only the JSON type the position declares,
 // never whether the schema is otherwise well-formed.
 //
-// The 3.1 line admits the boolean schemas outright (2020-12). On the 3.0 line
-// a boolean is NOT a Schema Object -- but that spelling is REFERRED rather
-// than classified here, the same device D1n/D1a use: `openbindings.openapi@1`
-// §9.2 already ascribes a part interpretation to a boolean-valued multipart
-// part on the 3.0 line, and whether Schema-Object-hood or that part rule
-// governs the position is a candidate-versus-authority question one level up.
-// Zero corpus incidence either way.
-func isFloorSchemaValued(v any) bool {
+// The 3.1 line admits the boolean schemas outright: its Schema Object IS a
+// JSON Schema 2020-12 schema, and that dialect's own meta-schema is
+// `{"$dynamicAnchor": "meta", "type": ["object", "boolean"]}`. The 3.0 line's
+// Schema Object is the Wright Draft 00 subset, where every Schema Object is
+// an object and the boolean-literal schemas are not in the dialect, so a
+// boolean at a schema position there violates the dialect's declared JSON
+// type for it -- D15, exactly as any other keyword whose value is of the
+// wrong JSON type, owned by the nearest rung containing the Schema Object.
+//
+// This REFERRED the 3.0 spelling until 2026-08-20 (F-O1-13), on the ground
+// that §9.2 ascribed a part interpretation to a boolean-valued multipart part
+// there, so whether Schema-Object-hood or that part rule governed was a
+// candidate-versus-authority question one level up. Escalation M2 deleted the
+// interpretation that referral rested on -- a typeless part now refuses on
+// every accepted edition -- and the ruled outcome is that the spelling
+// confines as an accounted `invalid` at the smallest owning unit rather than
+// refusing the whole source.
+func isFloorSchemaValued(v any, line string) bool {
 	if _, isObject := v.(map[string]any); isObject {
 		return true
 	}
 	if _, isBool := v.(bool); isBool {
-		return true
+		return line == "3.1"
 	}
 	return false
 }

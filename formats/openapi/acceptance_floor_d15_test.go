@@ -86,49 +86,42 @@ var floorD15Cases = []floorD15Case{
 	},
 	{
 		// The 3.0 line's Schema Object is not the 2020-12 dialect and a
-		// boolean is not a Schema Object there. The spelling is REFERRED
-		// rather than classified, the same device D1n/D1a use, and it is
-		// referred BECAUSE `openbindings.openapi@1` §9.2 ascribes an
-		// interpretation to a boolean-valued schema on this line -- "A Media
-		// Type Object whose `schema` is the JSON Schema boolean `true` … is
-		// the same declaration as an omitted `schema` … UNDER EITHER EDITION".
+		// boolean is not a Schema Object there, so a boolean `properties`
+		// member IS this class -- and the defect confines to the smallest unit
+		// that owns it (F-O1-13, ruled 2026-08-20; here a response schema, so
+		// P2 climbs it to the operation, exactly as the string member below).
 		//
-		// TWO CORRECTIONS TO THE SENTENCE THAT USED TO STAND HERE, both
-		// verified rather than inherited (record 114 part C).
+		// This case read "is REFERRED, not this class" until then, and the
+		// comment it carried is the record of why the referral fell. It rested
+		// on `openbindings.openapi@1` §9.2 ascribing an interpretation to a
+		// boolean-valued schema on this line -- "A Media Type Object whose
+		// `schema` is the JSON Schema boolean `true` … is the same declaration
+		// as an omitted `schema` … UNDER EITHER EDITION" -- and that clause
+		// says of itself that it "governs a **Media Type Object's** own
+		// `schema` and does not descend to a form part", so it never reached a
+		// `properties` member at all. Against it stood a pinned authority on
+		// the other side: JSON Schema draft-wright-json-schema-00 §4.4, "A
+		// JSON schema MUST be an object"; its validation companion §5.16, the
+		// value of `properties` "MUST be an object. Each value of this object
+		// MUST be an object, and each object MUST be a valid JSON Schema"; and
+		// OAS 3.0.4 §4.7.24, "properties - Property definitions MUST be a
+		// Schema Object and not a standard JSON Schema", with "Additional
+		// keywords … not mentioned here are strictly unsupported" and
+		// `additionalProperties` the ONLY position the 3.0 line grants a
+		// boolean.
 		//
-		//  1. It cited §9.2 as ascribing a part interpretation to a
-		//     boolean-valued MULTIPART PART on this line. §9.2 states the
-		//     OPPOSITE in terms: that reading "governs a **Media Type
-		//     Object's** own `schema` and does not descend to a form part".
-		//     The referral's real basis is the Media Type Object clause, one
-		//     position up, and this comment now names it.
-		//  2. The referral now has a PINNED counter-authority on the other
-		//     side, which it did not have when it was written. JSON Schema
-		//     draft-wright-json-schema-00 §4.4: "A JSON schema MUST be an
-		//     object"; its validation companion §5.16: the value of
-		//     `properties` "MUST be an object. Each value of this object MUST
-		//     be an object, and each object MUST be a valid JSON Schema"; and
-		//     OAS 3.0.4 §4.7.24: "properties - Property definitions MUST be a
-		//     Schema Object and not a standard JSON Schema", with "Additional
-		//     keywords … not mentioned here are strictly unsupported" and
-		//     `additionalProperties` the ONLY position the 3.0 line grants a
-		//     boolean. So the authority says this IS a defect on the 3.0 line,
-		//     and the referral is now a conflict between this floor and
-		//     `openbindings.openapi@1` §9.2's own "under either edition",
-		//     not a gap. It is filed as a defect report against §9.2 rather
-		//     than corrected here, because the correction starts in the
-		//     binding specification and not in an engine.
-		//
-		// Zero corpus incidence, re-derived at the artifacts' bytes over all
-		// 260: the only two boolean `properties` members on the 3.0 line are
-		// inside `example` payloads (`MITK/MITK`), which are not Schema Object
-		// positions and which this walk never reaches.
-		name: "a boolean properties member on the 3.0 line is REFERRED, not this class",
+		// What the ruling settles is the DISPOSITION, not the classification:
+		// the spelling is a defect, and it confines to the owning unit as an
+		// accounted `invalid` rather than refusing the whole source. The Go
+		// loaders reach that outcome through a scoped representation lift --
+		// see rawBooleanLiftState -- which admits the document exactly far
+		// enough for this verdict to be the one a consumer sees.
+		name: "a boolean properties member on the 3.0 line is this class",
 		document: `{"openapi":"3.0.0","paths":{"/a":{"get":{"responses":{"200":{"description":"ok",
 		  "content":{"application/json":{"schema":{"type":"object","properties":{"f":true}}}}}}}}}}`,
-		wantPositions:   nil,
+		wantPositions:   []string{"#/paths/~1a/get/responses/200/content/application~1json/schema/properties/f"},
 		wantMethod:      "get",
-		wantDisposition: "represented",
+		wantDisposition: "invalid",
 	},
 	{
 		// The clause that DOES fire at a `properties` member on the 3.0 line:
