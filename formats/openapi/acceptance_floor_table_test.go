@@ -1,7 +1,7 @@
 package openapi
 
 // Executes the shared acceptance-floor case table (block 8d-1): the 8 policy
-// mechanism fixtures (block 8b, record 72 §3) and the 66-cell OAS shape
+// mechanism fixtures (block 8b, record 72 §3) and the 68-cell OAS shape
 // table, with expectations computed by the reviewed corpus-lab census
 // instrument (censusOne + projectLadder restricted to the rostered classes,
 // with the shipped §3 part-2 decision applied over its projection). The same
@@ -20,7 +20,7 @@ import (
 // generated from. A change to any of these is a change to the shared answer
 // and must land in every engine simultaneously.
 const (
-	acceptanceFloorCaseTableSHA256 = "415c14f8da03fbb0979909c6390592a216cc17a69c1d2a9adf177d8d0636eae1"
+	acceptanceFloorCaseTableSHA256 = "3eebb54e2d035a11c3b8373fd5cdf55c0712c7985c6a451bc345d028aa0de61e"
 	oasShapeTableSHA256            = "4e8f5393e48868e2a9468d7232921e1c2f3b33efd941f605b9e328b23191d456"
 )
 
@@ -143,8 +143,8 @@ func TestAcceptanceFloorMechanismFixtures(t *testing.T) {
 
 func TestAcceptanceFloorShapeTable(t *testing.T) {
 	table := loadFloorCaseTable(t)
-	if len(table.ShapeCells) != 66 {
-		t.Fatalf("shape cells: %d, expected 66", len(table.ShapeCells))
+	if len(table.ShapeCells) != 68 {
+		t.Fatalf("shape cells: %d, expected 68", len(table.ShapeCells))
 	}
 	for _, c := range table.ShapeCells {
 		assertFloorCase(t, c.ID, c.Doc, c.Expect)

@@ -19,7 +19,7 @@ import (
 // openapi-client/typescript, and by openbindings-ts/packages/openapi against
 // that package's BUILT dist; changing it in one engine without the others
 // fails here.
-const partDefaultTypeAbsentCasesDigest = "93ceb6c3ad8fb64c974feefe13e1651ff2b0a9bac99f60d34aa2ea678310fe76"
+const partDefaultTypeAbsentCasesDigest = "2d871e381018d76ff8e4cce4c8cf4c70aa3e32278a2b003291aaef104ed07d75"
 
 type partDefaultTypeAbsentTable struct {
 	Comment string                      `json:"$comment"`
@@ -194,7 +194,7 @@ func TestTypeAbsentPartRefusesOnEveryAcceptedEdition(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 112 {
-		t.Fatalf("checked %d cells, want 112", checked)
+	if checked != 128 {
+		t.Fatalf("checked %d cells, want 128", checked)
 	}
 }

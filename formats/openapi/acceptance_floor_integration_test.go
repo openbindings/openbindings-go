@@ -194,6 +194,64 @@ func TestAcceptanceFloor_ExcludedTargetCountsAsAddressed(t *testing.T) {
 	}
 }
 
+// F-O1-13, the ruled outcome: a boolean-literal part schema on the 3.0 line is
+// not a Schema Object there (that line's Wright Draft 00 subset grants a
+// boolean only at `additionalProperties`), so it is a defect that confines to
+// the request media alternative owning it — an `invalid` alternative entry
+// under openapi.invalid_unit — while the operation stays represented on its
+// healthy sibling alternative and the SOURCE IS ACCEPTED. The Go engines used
+// to refuse the whole source here, because kin-openapi cannot hold a boolean
+// SchemaRef and the boolean-schema lift was gated to the 3.1 line; the lift is
+// now scoped to exactly the positions this instrument classifies.
+func TestAcceptanceFloor_BooleanPartSchemaOn30ConfinesToItsAlternative(t *testing.T) {
+	content := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "T", "version": "1"},
+	  "paths": {
+	    "/uploads": {
+	      "post": {
+	        "operationId": "upload",
+	        "requestBody": {
+	          "required": true,
+	          "content": {
+	            "multipart/form-data": {"schema": {"type": "object", "properties": {"note": true, "label": {"type": "string"}}}},
+	            "application/json": {"schema": {"type": "object"}}
+	          }
+	        },
+	        "responses": {"204": {"description": "stored"}}
+	      }
+	    }
+	  }
+	}`
+	result := synthesizeWithCoverage(t, content)
+	if _, ok := result.Interface.Operations["upload"]; !ok {
+		t.Fatalf("the operation must survive on its sibling alternative: %v", result.Interface.Operations)
+	}
+	var invalidAlt *synthesize.SynthesisCoverageEntry
+	represented := 0
+	for i := range result.Coverage.Entries {
+		e := &result.Coverage.Entries[i]
+		if e.Status == synthesize.SynthesisInvalid && e.Scope == synthesize.SynthesisCoverageAlternative {
+			invalidAlt = e
+		}
+		if e.Status == synthesize.SynthesisRepresented && e.Scope == synthesize.SynthesisCoverageAlternative {
+			represented++
+		}
+	}
+	if invalidAlt == nil {
+		t.Fatalf("expected an invalid alternative entry; entries: %+v", result.Coverage.Entries)
+	}
+	if invalidAlt.SourceRef != "#/paths/~1uploads/post/requestBody/content/multipart~1form-data" {
+		t.Errorf("invalid alternative sourceRef %q", invalidAlt.SourceRef)
+	}
+	if invalidAlt.ReasonCode != "openapi.invalid_unit" {
+		t.Errorf("invalid alternative reasonCode %q, want openapi.invalid_unit", invalidAlt.ReasonCode)
+	}
+	if represented != 1 {
+		t.Errorf("represented alternatives = %d, want 1 (the healthy JSON sibling)", represented)
+	}
+}
+
 // A projection-class defect (D11: a component key violating the grammar)
 // reached by a surviving unit's closure yields a projection-scope invalid
 // entry on that unit, and the unit survives. (The D6 shape exercises the

@@ -107,10 +107,20 @@ func (n *rawRefSiblingNormalizer) normalizeResourceAt(data []byte, requested, re
 		}
 	}
 	changed := false
-	if semantics == rawRefSemanticsCompose {
+	// The boolean-schema lift is a kin-openapi REPRESENTATION bridge, and it
+	// runs on both accepted lines for different reasons. On the 3.1 line
+	// boolean schemas are the dialect's own, so every Schema Object position
+	// is lifted. On the 3.0 line they are not in the dialect at all: the lift
+	// is scoped to the positions the acceptance floor classifies as a
+	// dialect JSON-type violation (a `properties` member, D15), so the source
+	// loads far enough for that instrument's per-unit verdict to reach the
+	// consumer instead of the whole artifact being refused over one defective
+	// unit (F-O1-13, ruled 2026-08-20). Every other boolean spelling on that
+	// line keeps the loader's own refusal.
+	if semantics == rawRefSemanticsCompose || semantics == rawRefSemanticsIgnore {
 		var lifted bool
 		var err error
-		root, lifted, err = n.liftBooleanSchemas(root, requested, retrieval)
+		root, lifted, err = n.liftBooleanSchemas(root, requested, retrieval, semantics == rawRefSemanticsIgnore)
 		if err != nil {
 			return nil, err
 		}
@@ -230,7 +240,20 @@ func (n *rawRefSiblingNormalizer) normalizeResourceAt(data []byte, requested, re
 	return encoded, nil
 }
 
-type rawBooleanLiftState struct{}
+// rawBooleanLiftState carries the lift's SCOPE. On the 3.1 line every Schema
+// Object position may hold a boolean, so every one is lifted. On the 3.0 line
+// a boolean is not a Schema Object at all, and the lift there is a LOAD BRIDGE
+// for a defect the acceptance floor already owns rather than an
+// accommodation: it runs at exactly the positions that instrument classifies
+// (a `properties` member, D15 -- see isFloorSchemaValued), so the source loads
+// far enough for the unit's verdict to be what a consumer sees. A boolean
+// anywhere else on that line keeps kin-openapi's own whole-source refusal,
+// which is the honest answer while nothing classifies it: silently admitting
+// an unclassified invalid spelling is the failure this scope exists to avoid.
+type rawBooleanLiftState struct {
+	// propertiesOnly restricts lifting to `properties` members (the 3.0 line).
+	propertiesOnly bool
+}
 
 // liftBooleanSchemas bridges a kin-openapi representation gap. OAS 3.1 uses
 // full JSON Schema, including literal true/false schemas, while kin-openapi's
@@ -238,11 +261,11 @@ type rawBooleanLiftState struct{}
 // Schema Object positions with an internal object sentinel. The typed engine
 // can then resolve and route the artifact normally; synthesis restores the
 // literal boolean before the schema crosses the OpenBindings boundary.
-func (n *rawRefSiblingNormalizer) liftBooleanSchemas(root any, requested, retrieval *url.URL) (any, bool, error) {
-	state := &rawBooleanLiftState{}
+func (n *rawRefSiblingNormalizer) liftBooleanSchemas(root any, requested, retrieval *url.URL, propertiesOnly bool) (any, bool, error) {
+	state := &rawBooleanLiftState{propertiesOnly: propertiesOnly}
 	changed := false
 	apply := func(schema any, pointer string) error {
-		lifted, didChange, err := state.schema(schema)
+		lifted, didChange, err := state.schema(schema, false)
 		if err != nil {
 			return err
 		}
@@ -300,8 +323,14 @@ func (n *rawRefSiblingNormalizer) liftBooleanSchemas(root any, requested, retrie
 	return root, changed, nil
 }
 
-func (s *rawBooleanLiftState) schema(value any) (any, bool, error) {
+// schema lifts boolean schemas within one Schema Object. atPropertiesMember
+// says whether `value` is a member of a `properties` map, which is the only
+// position the 3.0-line scope lifts at.
+func (s *rawBooleanLiftState) schema(value any, atPropertiesMember bool) (any, bool, error) {
 	if literal, ok := value.(bool); ok {
+		if s.propertiesOnly && !atPropertiesMember {
+			return value, false, nil
+		}
 		// Use ordinary, semantics-equivalent JSON Schema rather than a private
 		// extension sentinel: anyOf[true,false] is true; allOf[true,false] is
 		// false. An author who writes the same structure gets the same meaning,
@@ -323,7 +352,7 @@ func (s *rawBooleanLiftState) schema(value any) (any, bool, error) {
 		case rawSchemaMapKeywords[key]:
 			children, _ := child.(map[string]any)
 			for name, nested := range children {
-				lifted, didChange, err := s.schema(nested)
+				lifted, didChange, err := s.schema(nested, key == "properties")
 				if err != nil {
 					return nil, false, err
 				}
@@ -335,7 +364,7 @@ func (s *rawBooleanLiftState) schema(value any) (any, bool, error) {
 		case rawSchemaArrayKeywords[key]:
 			children, _ := child.([]any)
 			for index, nested := range children {
-				lifted, didChange, err := s.schema(nested)
+				lifted, didChange, err := s.schema(nested, false)
 				if err != nil {
 					return nil, false, err
 				}
@@ -345,7 +374,7 @@ func (s *rawBooleanLiftState) schema(value any) (any, bool, error) {
 				}
 			}
 		case rawSchemaSingleKeywords[key]:
-			lifted, didChange, err := s.schema(child)
+			lifted, didChange, err := s.schema(child, false)
 			if err != nil {
 				return nil, false, err
 			}
