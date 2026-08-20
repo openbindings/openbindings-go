@@ -3,7 +3,13 @@ package openbindings
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 )
+
+// IsHTTPURL reports whether s starts with http:// or https://.
+func IsHTTPURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
 
 // ContentToBytes converts a source content value (raw JSON, presence-aware —
 // see Source.Content) to artifact bytes: a JSON string yields its text

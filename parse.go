@@ -178,3 +178,14 @@ func scanJSONValue(dec *json.Decoder) error {
 	}
 	return nil
 }
+
+// IsOBInterface returns true if the given map looks like a valid OpenBindings
+// interface document (has "openbindings" string and "operations" map).
+func IsOBInterface(v map[string]any) bool {
+	if v == nil {
+		return false
+	}
+	_, hasOB := v["openbindings"].(string)
+	_, hasOps := v["operations"].(map[string]any)
+	return hasOB && hasOps
+}

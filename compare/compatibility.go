@@ -1,0 +1,264 @@
+package compare
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+
+	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/schemaprofile"
+)
+
+// CompatibilityIssueKind classifies a compatibility issue.
+type CompatibilityIssueKind string
+
+const (
+	CompatibilityMissing            CompatibilityIssueKind = "missing"
+	CompatibilityOutputIncompatible CompatibilityIssueKind = "output_incompatible"
+	CompatibilityInputIncompatible  CompatibilityIssueKind = "input_incompatible"
+)
+
+// CompatibilityIssue describes a single incompatibility between a required
+// and provided interface.
+type CompatibilityIssue struct {
+	Operation string
+	Kind      CompatibilityIssueKind
+	Detail    string
+}
+
+type requiredOperationEntry struct {
+	name      string
+	operation openbindings.Operation
+}
+
+// CheckInterfaceCompatibility checks whether a provided interface is
+// compatible with a required interface. This is a tooling convention, not a
+// spec requirement: the spec leaves matching, comparison, and
+// selection to tools (see openbindings.md §2 Scope principle and the
+// schemaprofile package docstring). The algorithm below is the openbindings
+// reference tooling's matching convention; third-party tools may use
+// different strategies.
+//
+// For each operation the required interface declares by key, the provided
+// interface is searched by that name against its flat key+aliases namespace
+// (OBI-T-12): a provided operation matches if its key equals the required key
+// or one of its aliases does. Carrying the required contract's operation name
+// asserts correspondence; the schema checks below separately evaluate
+// structural compatibility.
+//
+// For each matched pair, schemas are checked:
+//   - Output schemas must be compatible (provided output satisfies required output).
+//   - Input schemas must be compatible (required input satisfies provided input).
+//
+// Returns an empty slice when the provided interface is fully compatible.
+// Issues appear in sorted required-operation-key order (never map or
+// document order), with the output issue before the input issue within an
+// operation — the same order the TypeScript SDK's
+// checkInterfaceCompatibility emits.
+func CheckInterfaceCompatibility(required, provided *openbindings.Interface) []CompatibilityIssue {
+	if required == nil {
+		return nil
+	}
+
+	opKeys := make([]string, 0, len(required.Operations))
+	for k := range required.Operations {
+		opKeys = append(opKeys, k)
+	}
+	sort.Strings(opKeys)
+	entries := make([]requiredOperationEntry, 0, len(opKeys))
+	for _, opKey := range opKeys {
+		entries = append(entries, requiredOperationEntry{
+			name:      opKey,
+			operation: required.Operations[opKey],
+		})
+	}
+	return checkCompatibility(required, entries, provided)
+}
+
+// CheckOperationCompatibility checks one operation requirement against a
+// provided interface. operation is resolved against the required interface's
+// flat key+aliases namespace, then that exact identifier is matched against
+// the provided interface. Unrelated required operations neither help nor
+// prevent the result. Each side still normalizes schemas against its complete
+// containing document, preserving local $ref meaning.
+//
+// It returns ErrOperationNotFound when operation is not an identifier carried
+// by required.
+func CheckOperationCompatibility(required *openbindings.Interface, operation string, provided *openbindings.Interface) ([]CompatibilityIssue, error) {
+	if required == nil {
+		return nil, fmt.Errorf("%w: %s", openbindings.ErrOperationNotFound, operation)
+	}
+	_, requiredOperation, ok := openbindings.ResolveOperation(required, operation)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", openbindings.ErrOperationNotFound, operation)
+	}
+	return checkCompatibility(required, []requiredOperationEntry{{
+		name:      operation,
+		operation: requiredOperation,
+	}}, provided), nil
+}
+
+func checkCompatibility(required *openbindings.Interface, requiredOperations []requiredOperationEntry, provided *openbindings.Interface) []CompatibilityIssue {
+	if provided == nil {
+		issues := make([]CompatibilityIssue, 0, len(requiredOperations))
+		for _, entry := range requiredOperations {
+			issues = append(issues, CompatibilityIssue{
+				Operation: entry.name,
+				Kind:      CompatibilityMissing,
+			})
+		}
+		return issues
+	}
+
+	var issues []CompatibilityIssue
+
+	// Each side's schemas resolve $ref pointers (e.g. "#/schemas/Foo")
+	// against their OWN containing document, so a required and a provided
+	// interface that both use the schemas section compare correctly. One
+	// shared normalizer would resolve both sides' refs against a single
+	// root — wrong document for one side, RefError for both when unrooted.
+	reqNorm := &schemaprofile.Normalizer{Root: interfaceDocView(required)}
+	provNorm := &schemaprofile.Normalizer{Root: interfaceDocView(provided)}
+
+	for _, entry := range requiredOperations {
+		opKey := entry.name
+		reqOp := entry.operation
+		_, provOp, ok := openbindings.ResolveOperation(provided, opKey)
+		if !ok {
+			issues = append(issues, CompatibilityIssue{
+				Operation: opKey,
+				Kind:      CompatibilityMissing,
+			})
+			continue
+		}
+
+		// Per spec: absent/null schemas are "unspecified" (skip in compatibility).
+		// Empty {} schemas are "accepts anything" (must be checked).
+		// Use != nil to distinguish: nil = unspecified, non-nil (including empty) = specified.
+		// `true` is identical to {} and flows through the normal check via
+		// SchemaObjectForm. `false` — the spec's spelling for "carries no
+		// input" / "emits no output" — is a call-convention fact, not a value
+		// set the profile can express (its object spelling is {"not": {}},
+		// outside the profile), so it short-circuits: compatible exactly with
+		// itself.
+		if reqOp.Output != nil && provOp.Output != nil {
+			if isFalseSchema(reqOp.Output) || isFalseSchema(provOp.Output) {
+				if !(isFalseSchema(reqOp.Output) && isFalseSchema(provOp.Output)) {
+					issues = append(issues, CompatibilityIssue{
+						Operation: opKey,
+						Kind:      CompatibilityOutputIncompatible,
+						Detail:    "output schema `false` (emits no output) is compatible only with `false`",
+					})
+				}
+			} else if reqOut, provOut, bothOK := schemaObjectForms(reqOp.Output, provOp.Output); !bothOK {
+				issues = append(issues, CompatibilityIssue{
+					Operation: opKey,
+					Kind:      CompatibilityOutputIncompatible,
+					Detail:    "output schema check failed: schema is not a JSON Schema object or boolean",
+				})
+			} else if compatible, reason, err := normalizedCompatible(reqNorm, provNorm, reqOut, provOut, false); err != nil {
+				issues = append(issues, CompatibilityIssue{
+					Operation: opKey,
+					Kind:      CompatibilityOutputIncompatible,
+					Detail:    fmt.Sprintf("output schema check failed: %v", err),
+				})
+			} else if !compatible {
+				detail := "provided output does not satisfy the required output schema"
+				if reason != "" {
+					detail = "provided output does not satisfy the required output schema: " + reason
+				}
+				issues = append(issues, CompatibilityIssue{
+					Operation: opKey,
+					Kind:      CompatibilityOutputIncompatible,
+					Detail:    detail,
+				})
+			}
+		}
+
+		if reqOp.Input != nil && provOp.Input != nil {
+			if isFalseSchema(reqOp.Input) || isFalseSchema(provOp.Input) {
+				if !(isFalseSchema(reqOp.Input) && isFalseSchema(provOp.Input)) {
+					issues = append(issues, CompatibilityIssue{
+						Operation: opKey,
+						Kind:      CompatibilityInputIncompatible,
+						Detail:    "input schema `false` (carries no input) is compatible only with `false`",
+					})
+				}
+			} else if reqIn, provIn, bothOK := schemaObjectForms(reqOp.Input, provOp.Input); !bothOK {
+				issues = append(issues, CompatibilityIssue{
+					Operation: opKey,
+					Kind:      CompatibilityInputIncompatible,
+					Detail:    "input schema check failed: schema is not a JSON Schema object or boolean",
+				})
+			} else if compatible, reason, err := normalizedCompatible(reqNorm, provNorm, reqIn, provIn, true); err != nil {
+				issues = append(issues, CompatibilityIssue{
+					Operation: opKey,
+					Kind:      CompatibilityInputIncompatible,
+					Detail:    fmt.Sprintf("input schema check failed: %v", err),
+				})
+			} else if !compatible {
+				detail := "provided input is not compatible with the required input schema"
+				if reason != "" {
+					detail = "provided input is not compatible with the required input schema: " + reason
+				}
+				issues = append(issues, CompatibilityIssue{
+					Operation: opKey,
+					Kind:      CompatibilityInputIncompatible,
+					Detail:    detail,
+				})
+			}
+		}
+	}
+
+	return issues
+}
+
+// isFalseSchema reports whether v is the boolean JSON Schema `false` — the
+// spec's spelling for "carries no input" / "emits no output".
+func isFalseSchema(v openbindings.JSONSchema) bool {
+	b, ok := v.(bool)
+	return ok && !b
+}
+
+// schemaObjectForms returns both schemas' object forms, or ok=false when
+// either is not a JSON Schema object or boolean.
+func schemaObjectForms(a, b openbindings.JSONSchema) (ma, mb map[string]any, ok bool) {
+	ma, aOK := openbindings.SchemaObjectForm(a)
+	mb, bOK := openbindings.SchemaObjectForm(b)
+	return ma, mb, aOK && bOK
+}
+
+// normalizedCompatible normalizes each schema against its own side's rooted
+// normalizer, then runs the directional check on the results (the TypeScript
+// SDK's checkInterfaceCompatibility dance). Normalization errors surface as
+// the check's error.
+func normalizedCompatible(reqNorm, provNorm *schemaprofile.Normalizer, req, prov map[string]any, isInput bool) (bool, string, error) {
+	reqN, err := reqNorm.Normalize(req)
+	if err != nil {
+		return false, "", err
+	}
+	provN, err := provNorm.Normalize(prov)
+	if err != nil {
+		return false, "", err
+	}
+	if isInput {
+		return schemaprofile.InputCompatible(reqN, provN)
+	}
+	return schemaprofile.OutputCompatible(reqN, provN)
+}
+
+// interfaceDocView renders an Interface as its plain decoded-JSON document
+// view (the shape JSON Pointer fragments resolve against). Returns nil when
+// the interface cannot round-trip, leaving fragment refs unresolvable —
+// which then surfaces as the schema check's RefError.
+func interfaceDocView(i *openbindings.Interface) any {
+	data, err := json.Marshal(i)
+	if err != nil {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return nil
+	}
+	return v
+}
