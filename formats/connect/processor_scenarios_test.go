@@ -13,7 +13,9 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/processorscenarios"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 type connectScenarioTransport struct {
@@ -176,7 +178,7 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		}
 	}
 	invoker := NewInvokerWithClient(client).WithFullDuplexTransport(fullDuplex)
-	source := openbindings.InvocationSource{BindingSpec: BindingSpec}
+	source := invoke.InvocationSource{BindingSpec: BindingSpec}
 	if location, ok := scenario.Given.Source["location"].(string); ok {
 		source.Location = location
 	}
@@ -197,22 +199,22 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	}
 	ref, _ := scenario.Given.Binding["ref"].(string)
 	joined := strings.HasPrefix(scenario.ID, "CONN-FI-")
-	var call openbindings.Invocation[any, any]
+	var call invoke.Invocation[any, any]
 	if joined {
-		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-			Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: source.Location, Content: source.Content}},
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+			Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: source.Location, Content: source.Content}},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		op := openbindings.NewOperationInvoker(invoker)
-		call = openbindings.Invoke(
+		op := invoke.NewOperationInvoker(invoker)
+		call = invoke.Invoke(
 			context.Background(), op, iface,
-			openbindings.NewOperationSignature[any, any](connectOperationForRef(t, iface, ref)),
-			openbindings.WithContext(ctx),
+			invoke.NewOperationSignature[any, any](connectOperationForRef(t, iface, ref)),
+			invoke.WithContext(ctx),
 		)
 	} else {
-		call = invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{Source: source, Ref: ref, Context: ctx})
+		call = invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{Source: source, Ref: ref, Context: ctx})
 	}
 	if writes, ok := scenario.Given.Invocation["writes"].([]any); ok {
 		for _, value := range writes {
@@ -225,7 +227,7 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 
 	outputs := []any{}
 	stream := call.Outputs()
-	var terminal *openbindings.InvocationError
+	var terminal *invoke.InvocationError
 	for {
 		value, err := stream.Read(context.Background())
 		if err == nil {
@@ -233,7 +235,7 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			continue
 		}
 		if err != io.EOF {
-			terminal = openbindings.AsInvocationError(err)
+			terminal = invoke.AsInvocationError(err)
 		}
 		break
 	}
@@ -254,7 +256,7 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
 	data["error"] = normalizedConnectInvocationError(t, terminal)
-	if terminal.Code == openbindings.ErrCodeContextRequired {
+	if terminal.Code == invoke.ErrCodeContextRequired {
 		return processorscenarios.Observation{Disposition: "context-required", Phase: "pre-dispatch", Data: data}
 	}
 	if len(transport.dispatches) == 0 {
@@ -281,7 +283,7 @@ func connectOperationForRef(t *testing.T, iface *openbindings.Interface, ref str
 	return ""
 }
 
-func normalizedConnectInvocationError(t *testing.T, err *openbindings.InvocationError) map[string]any {
+func normalizedConnectInvocationError(t *testing.T, err *invoke.InvocationError) map[string]any {
 	t.Helper()
 	encoded, marshalErr := json.Marshal(err)
 	if marshalErr != nil {

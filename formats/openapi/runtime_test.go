@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 func TestRuntimeInvokesArtifactWithoutOBI(t *testing.T) {
@@ -43,7 +44,7 @@ func TestRuntimeInvokesArtifactWithoutOBI(t *testing.T) {
 	if err := call.Close(); err != nil {
 		t.Fatal(err)
 	}
-	output, err := openbindings.Single(context.Background(), call.Outputs())
+	output, err := invoke.Single(context.Background(), call.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}

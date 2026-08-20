@@ -26,8 +26,12 @@ import (
 	"net/http"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 const BindingSpec = "openbindings.connect@1"
@@ -91,7 +95,7 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Connect (Buf) via HTTP"}}
 }
 
-var _ openbindings.BindingInvoker = (*Invoker)(nil)
+var _ invoke.BindingInvoker = (*Invoker)(nil)
 
 // InvokeBinding invokes a Connect binding and returns the invocation
 // handle synchronously; the HTTP work runs on its own goroutine. The
@@ -114,17 +118,17 @@ var _ openbindings.BindingInvoker = (*Invoker)(nil)
 // All pre-dispatch failures (bad ref, missing or non-conformant base URL,
 // schema load failures, schema-range and kind-coverage refusals, input
 // validation) terminate the handle before any network side effect.
-func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
-	inv := openbindings.NewInvocationImpl[any, any](ctx)
+func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
+	inv := invoke.NewInvocationImpl[any, any](ctx)
 	go e.run(ctx, args, inv)
 	return inv
 }
 
-func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	// Bound all I/O to the invocation's lifetime: caller Cancel(), an
 	// abandoned output stream, or upstream ctx cancellation tears down any
 	// in-flight HTTP request.
-	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	bctx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 
 	// ----- Pre-side-effect failures: fire before any input is consumed and
@@ -132,7 +136,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 
 	svcName, methodName, err := parseRef(args.Ref)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeInvalidRef})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidRef})
 		return
 	}
 
@@ -142,26 +146,26 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// context.configuration by the operation invoker) → the default, the
 	// source's location. A configured target replaces the location
 	// entirely, in the same §4 form. Nothing else is configurable.
-	cfg := openbindings.ContextConfiguration(args.Context)
+	cfg := invoke.ContextConfiguration(args.Context)
 	target := strings.TrimSpace(args.Source.Location)
 	if raw, ok := cfg["target"]; ok && raw != nil {
 		s, isStr := raw.(string)
 		if !isStr || strings.TrimSpace(s) == "" {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeSourceConfigError,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeSourceConfigError,
 			})
 			return
 		}
 		target = strings.TrimSpace(s)
 	}
 	if target == "" {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceConfigError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeSourceConfigError,
 		})
 		return
 	}
 	if err := validateBaseURL(target); err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 		return
 	}
 
@@ -179,7 +183,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	if args.Source.Content != nil {
 		disc, parseErr := discoverFromContent(bctx, args.Source.Content)
 		if parseErr != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed})
+			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed})
 			return
 		}
 		m, ie := resolveMethod(disc, svcName, methodName)
@@ -201,16 +205,16 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	headers, hdrErr := buildHTTPHeaders(args.Context)
 	if hdrErr != nil {
 		if _, ok := hdrErr.(*unplacedCredentialError); ok {
-			inv.FireError(openbindings.NewContextRequiredError(&openbindings.ContextRequiredDetails{
+			inv.FireError(invoke.NewContextRequiredError(&invoke.ContextRequiredDetails{
 				Target: target,
-				Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{{
+				Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{{
 					Type: "auth.apiKey", Description: "supply the credential through an explicitly named Connect metadata field",
 				}}}},
 			}))
 			return
 		}
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceConfigError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeSourceConfigError,
 		})
 		return
 	}
@@ -228,13 +232,13 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 
 	var body []byte
-	var ierr *openbindings.InvocationError
+	var ierr *invoke.InvocationError
 	if mi != nil {
 		body, ierr = buildSchemaModeBody(mi, input)
 	} else {
 		if !gotInput {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeValidationFailed,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeValidationFailed,
 			})
 			return
 		}
@@ -265,7 +269,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 // value — schema mode marshals it as the empty request message (§9.2 via
 // GRPC-P-03), descriptorless mode sends {} (§9.3). ok=false means the
 // invocation is already terminal.
-func readRequestValue(ctx context.Context, inv openbindings.BindingHandle[any, any], args *openbindings.BindingInvocationArgs, mi *methodInfo) (input any, gotInput bool, ok bool) {
+func readRequestValue(ctx context.Context, inv invoke.BindingHandle[any, any], args *invoke.BindingInvocationArgs, mi *methodInfo) (input any, gotInput bool, ok bool) {
 	noInput := args.Binding != nil && args.InputSchema == nil
 	if noInput || (mi != nil && mi.method.Input().Fields().Len() == 0) {
 		_ = inv.CloseInput()
@@ -278,7 +282,7 @@ func readRequestValue(ctx context.Context, inv openbindings.BindingHandle[any, a
 	if err != nil {
 		// Terminal (cancelled) or ctx error; FireError is an idempotent
 		// no-op when the invocation already terminated.
-		inv.FireError(openbindings.AsInvocationError(err))
+		inv.FireError(invoke.AsInvocationError(err))
 		return nil, false, false
 	}
 	_ = inv.CloseInput() // one request message: close after the first read
@@ -292,15 +296,15 @@ func readRequestValue(ctx context.Context, inv openbindings.BindingHandle[any, a
 // bidirectional methods are refused before dispatch as this
 // implementation's declared limitation — a coverage declaration, never a
 // reinterpretation of the shape.
-func preflightMethod(methodDesc protoreflect.MethodDescriptor, fullDuplex bool) *openbindings.InvocationError {
+func preflightMethod(methodDesc protoreflect.MethodDescriptor, fullDuplex bool) *invoke.InvocationError {
 	if err := validateBoundClosure(methodDesc); err != nil {
-		return &openbindings.InvocationError{
-			Code: openbindings.ErrCodeSourceLoadFailed,
+		return &invoke.InvocationError{
+			Code: invoke.ErrCodeSourceLoadFailed,
 		}
 	}
 	if methodDesc.IsStreamingClient() && !fullDuplex {
-		return &openbindings.InvocationError{
-			Code: openbindings.ErrCodeExecutionFailed,
+		return &invoke.InvocationError{
+			Code: invoke.ErrCodeExecutionFailed,
 		}
 	}
 	return nil
@@ -309,9 +313,9 @@ func preflightMethod(methodDesc protoreflect.MethodDescriptor, fullDuplex bool) 
 // Synthesizer handles interface synthesis from protobuf definitions for the Connect format.
 type Synthesizer struct{}
 
-var _ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
-var _ openbindings.CoverageSynthesizer = (*Synthesizer)(nil)
-var _ openbindings.SourceInspector = (*Synthesizer)(nil)
+var _ synthesize.InterfaceSynthesizer = (*Synthesizer)(nil)
+var _ synthesize.CoverageSynthesizer = (*Synthesizer)(nil)
+var _ synthesize.SourceInspector = (*Synthesizer)(nil)
 
 // NewSynthesizer creates a new Connect interface synthesizer.
 func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
@@ -324,7 +328,7 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 
 // SynthesizeInterface parses a .proto file or inline content and converts to an
 // OpenBindings interface with Connect bindings.
-func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
 	observation, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
@@ -335,12 +339,12 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 // SynthesizeInterfaceWithCoverage returns the schema-mode OBI and a durable
 // disposition for every protobuf method and lossy projection observed by the
 // same schema load.
-func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
 	observation, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	return openbindings.NewSynthesisResult(
+	return synthesize.NewSynthesisResult(
 		observation.iface,
 		synthesisCoverage(observation.disc, observation.iface, observation.warnings),
 		true,
@@ -350,19 +354,19 @@ func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *o
 type synthesisObservation struct {
 	iface    *openbindings.Interface
 	disc     *discovery
-	warnings []openbindings.SynthesizerWarning
+	warnings []synthesize.SynthesizerWarning
 }
 
-func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*synthesisObservation, error) {
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesisObservation, error) {
 	if len(in.Sources) == 0 {
-		skeleton, err := openbindings.SynthesisSkeleton(in)
+		skeleton, err := synthesize.SynthesisSkeleton(in)
 		if err != nil {
 			return nil, err
 		}
 		return &synthesisObservation{iface: &skeleton}, nil
 	}
 	if len(in.Sources) > 1 {
-		return nil, openbindings.ErrMultipleSources
+		return nil, synthesize.ErrMultipleSources
 	}
 	src := in.Sources[0]
 	if src.BindingSpec != BindingSpec {
@@ -385,8 +389,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, fmt.Errorf("Connect proto parse: %w", err)
 	}
 
-	var warnings []openbindings.SynthesizerWarning
-	observeWarning := func(warning openbindings.SynthesizerWarning) {
+	var warnings []synthesize.SynthesizerWarning
+	observeWarning := func(warning synthesize.SynthesizerWarning) {
 		warnings = append(warnings, warning)
 		if in.OnWarning != nil {
 			in.OnWarning(warning)
@@ -399,7 +403,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 	entry := iface.Sources[DefaultSourceName]
 	entry.Content = src.Content
 	iface.Sources[DefaultSourceName] = entry
-	if err := openbindings.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
+	if err := synthesize.FinalizeSynthesis(&iface, in, DefaultSourceName, BindingSpec); err != nil {
 		return nil, err
 	}
 	return &synthesisObservation{iface: &iface, disc: disc, warnings: warnings}, nil

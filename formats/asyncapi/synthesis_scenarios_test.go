@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/openbindings/openbindings-go/synthesisscenarios"
+	"github.com/openbindings/openbindings-go/synthesize/synthesisscenarios"
 )
 
 // synthesisFactory is the factory this family's runner uses. Its corpus

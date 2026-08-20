@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // run drives the invocation handle: it reads the single flag/arg object the
@@ -26,18 +27,18 @@ import (
 // terminate the handle before the process is spawned. A non-zero exit is a
 // terminal ERR_EXECUTION_FAILED carrying the exit code and captured output in
 // Details; a missing binary is ERR_SOURCE_CONFIG_ERROR.
-func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) {
+func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	// Bound the process to the invocation's lifetime: caller Cancel(), an
 	// abandoned output stream, or upstream ctx cancellation kills it.
-	bctx, stop := openbindings.DoneContext(ctx, inv.Done())
+	bctx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 
 	if usageGenericCredentialPresent(args.Context) {
-		inv.FireError(openbindings.NewContextRequiredError(
+		inv.FireError(invoke.NewContextRequiredError(
 
-			&openbindings.ContextRequiredDetails{
+			&invoke.ContextRequiredDetails{
 				Target: args.Source.Location,
-				Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{{
+				Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{{
 					Type: "auth.apiKey", Description: "supply an explicitly named process-environment mapping",
 				}}}},
 			},
@@ -58,7 +59,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		case rerr == io.EOF:
 			input = nil
 		case rerr != nil:
-			inv.FireError(openbindings.AsInvocationError(rerr))
+			inv.FireError(invoke.AsInvocationError(rerr))
 			return
 		default:
 			input = v
@@ -79,7 +80,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// check kept.
 	spec, lerr := e.cachedLoadSpec(bctx, args.Source.Location, args.Source.Content)
 	if lerr != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed})
 		return
 	}
 
@@ -99,7 +100,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	} else {
 		found, ferr := findCommand(spec, args.Ref)
 		if ferr != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeRefNotFound})
+			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeRefNotFound})
 			return
 		}
 		cmd = found.cmd
@@ -110,13 +111,13 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	meta := spec.Meta()
 	binName := meta.Bin
 	if binName == "" {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 		return
 	}
-	if target, present := openbindings.ContextConfiguration(args.Context)["target"]; present {
+	if target, present := invoke.ContextConfiguration(args.Context)["target"]; present {
 		text, ok := target.(string)
 		if !ok || strings.TrimSpace(text) == "" {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError})
+			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 			return
 		}
 		binName = text
@@ -143,7 +144,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	defer routed.cleanup()
 	if configured.stdin != nil {
 		if routed.stdin != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
+			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeValidationFailed})
 			return
 		}
 		routed.stdin = configured.stdin
@@ -155,7 +156,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	}
 	cmdArgs, aerr := buildCLIArgs(cmdPath, cmd, inherited, argvInput)
 	if aerr != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeValidationFailed})
 		return
 	}
 
@@ -174,11 +175,11 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 		// Consultation preconditions: spawn failure, cap overflow, and
 		// cancellation never consult classify/decode (no completed
 		// transport exchange). A missing binary is a configuration error.
-		code := openbindings.ErrCodeExecutionFailed
+		code := invoke.ErrCodeExecutionFailed
 		if errors.Is(runErr, exec.ErrNotFound) {
-			code = openbindings.ErrCodeSourceConfigError
+			code = invoke.ErrCodeSourceConfigError
 		}
-		inv.FireError(&openbindings.InvocationError{Code: code})
+		inv.FireError(&invoke.InvocationError{Code: code})
 		return
 	}
 
@@ -186,7 +187,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// stderr capture (tail-capping applies only to the trailer) and the
 	// per-field routing record (x-ob-route provenance).
 	exitCode := res.exitCode
-	raw := openbindings.RawResult{
+	raw := invoke.RawResult{
 		Status: &exitCode,
 		Body:   []byte(res.stdout),
 		Meta:   resultMeta(res, routed.record),
@@ -197,22 +198,22 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	// (grep-class, via a decode hook).
 	ok, cerr := args.Hooks.Classify(site, raw, builtinClassify)
 	if cerr != nil {
-		inv.FireError(openbindings.AsInvocationError(cerr))
+		inv.FireError(invoke.AsInvocationError(cerr))
 		return
 	}
 	if !ok {
 		// The format's NATIVE failure: hooks change the verdict, never the
 		// error vocabulary. Provenance: the deciding layer is named on the
 		// error's decidedBy stamp.
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeExecutionFailed,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeExecutionFailed,
 		})
 		return
 	}
 
 	output, derr := args.Hooks.DecodeOutput(site, raw, builtinDecodeText)
 	if derr != nil {
-		inv.FireError(openbindings.AsInvocationError(derr))
+		inv.FireError(invoke.AsInvocationError(derr))
 		return
 	}
 
@@ -222,8 +223,8 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 // siteFor completes the core-stamped site with the format-known Target
 // (the artifact's binary name). A nil args.Site (direct format-package
 // call) gets a minimal site whose Builtin* dispatch stays loud.
-func siteFor(args *openbindings.BindingInvocationArgs, binName string) openbindings.InvokeSite {
-	var site openbindings.InvokeSite
+func siteFor(args *invoke.BindingInvocationArgs, binName string) invoke.InvokeSite {
+	var site invoke.InvokeSite
 	if args.Site != nil {
 		site = *args.Site
 	} else {
@@ -238,7 +239,7 @@ func siteFor(args *openbindings.BindingInvocationArgs, binName string) openbindi
 
 // builtinClassify is the exec builtin: success iff exit 0 (the
 // documented assumption; the artifact cannot declare exit meanings).
-func builtinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (bool, error) {
+func builtinClassify(_ invoke.InvokeSite, raw invoke.RawResult) (bool, error) {
 	return raw.Status != nil && *raw.Status == 0, nil
 }
 
@@ -247,7 +248,7 @@ func builtinClassify(_ openbindings.InvokeSite, raw openbindings.RawResult) (boo
 // reads a command's text output — content-independent, lossless,
 // recoverable. Machine lanes are a consumer decode hook (or a future
 // artifact-native declaration).
-func builtinDecodeText(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+func builtinDecodeText(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 	if !utf8.Valid(raw.Body) {
 		return nil, fmt.Errorf("Invocation result could not be decoded")
 	}
@@ -256,8 +257,8 @@ func builtinDecodeText(_ openbindings.InvokeSite, raw openbindings.RawResult) (a
 
 // resultMeta assembles binding-interpretation evidence for the hook seam. It
 // stays below the abstract invocation handle.
-func resultMeta(res *cliResult, record map[string]string) openbindings.Metadata {
-	meta := openbindings.Metadata{
+func resultMeta(res *cliResult, record map[string]string) invoke.Metadata {
+	meta := invoke.Metadata{
 		"x-exit-code": {fmt.Sprintf("%d", res.exitCode)},
 	}
 	if res.stderr != "" {
@@ -273,14 +274,14 @@ func resultMeta(res *cliResult, record map[string]string) openbindings.Metadata 
 // dispatch: text decode and exit-0 classification (both documented
 // assumptions — usage is a surface grammar with no invocation-contract
 // vocabulary; the assumptions shrink if jdx grows one).
-func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.ResultClassifier) {
+func (e *Invoker) BuiltinHooks() (invoke.OutputDecoder, invoke.ResultClassifier) {
 	return builtinDecodeText, builtinClassify
 }
 
 // emitOutput closes a successful abstract invocation after its one value.
 // Native process evidence has already served the below-bridge hook seam and
 // is intentionally not copied onto the handle.
-func emitOutput(inv *openbindings.InvocationImpl[any, any], output any) {
+func emitOutput(inv *invoke.InvocationImpl[any, any], output any) {
 	if err := inv.EmitOutput(output); err != nil {
 		return
 	}
@@ -290,10 +291,10 @@ func emitOutput(inv *openbindings.InvocationImpl[any, any], output any) {
 // runDirect is the direct-binary dispatch path (SDK-only feature, outside
 // the format conventions): the ref is split as a command path (USAGE-D-03), every input
 // field rides argv as a flag, output decodes under the default text mode.
-func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any], binary string, input any) {
+func (e *Invoker) runDirect(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any], binary string, input any) {
 	cmdArgs, err := buildDirectArgsFromRef(args.Ref, input)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeValidationFailed})
 		return
 	}
 	res, runErr := runCLI(ctx, binary, cmdArgs, args.Context, nil, args.DeliveryUnitLimit())
@@ -303,23 +304,23 @@ func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvoc
 		return
 	}
 	if runErr != nil {
-		code := openbindings.ErrCodeExecutionFailed
+		code := invoke.ErrCodeExecutionFailed
 		if errors.Is(runErr, exec.ErrNotFound) {
-			code = openbindings.ErrCodeSourceConfigError
+			code = invoke.ErrCodeSourceConfigError
 		}
-		inv.FireError(&openbindings.InvocationError{Code: code})
+		inv.FireError(&invoke.InvocationError{Code: code})
 		return
 	}
 	if res.exitCode != 0 {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeExecutionFailed,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeExecutionFailed,
 		})
 		return
 	}
-	output, decodeErr := builtinDecodeText(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte(res.stdout)})
+	output, decodeErr := builtinDecodeText(invoke.InvokeSite{}, invoke.RawResult{Body: []byte(res.stdout)})
 	if decodeErr != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeRuntime,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeRuntime,
 		})
 		return
 	}
@@ -330,7 +331,7 @@ func (e *Invoker) runDirect(ctx context.Context, args *openbindings.BindingInvoc
 
 // metadataBinary extracts the "binary" hint from context metadata.
 func metadataBinary(ctx map[string]any) string {
-	meta := openbindings.ContextMetadata(ctx)
+	meta := invoke.ContextMetadata(ctx)
 	if meta == nil {
 		return ""
 	}
@@ -341,7 +342,7 @@ func metadataBinary(ctx map[string]any) string {
 }
 
 func usageGenericCredentialPresent(ctx map[string]any) bool {
-	if openbindings.ContextAPIKey(ctx) != "" {
+	if invoke.ContextAPIKey(ctx) != "" {
 		return true
 	}
 	if values, ok := ctx["apiKeys"].(map[string]any); ok {
@@ -362,14 +363,14 @@ type usageConfiguredInput struct {
 
 // applyUsageConfiguration closes only invocation-time choices the artifact
 // leaves open. It never invents field destinations or token encodings.
-func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx map[string]any, encoders map[string]TokenEncoder) (*usageConfiguredInput, *openbindings.InvocationError) {
+func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx map[string]any, encoders map[string]TokenEncoder) (*usageConfiguredInput, *invoke.InvocationError) {
 	out := &usageConfiguredInput{fields: input, environment: map[string]string{}}
 	inputMap := map[string]any{}
 	if input != nil {
 		var ok bool
 		inputMap, ok = openbindings.ToStringAnyMap(input)
 		if !ok {
-			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+			return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 		}
 	}
 	fields := make(map[string]any, len(inputMap))
@@ -382,31 +383,31 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 		out.fields = fields
 	}
 
-	configuration := openbindings.ContextConfiguration(bindCtx)
+	configuration := invoke.ContextConfiguration(bindCtx)
 	encodeConfig := map[string]any{}
 	if raw, present := configuration["encode"]; present {
 		var ok bool
 		encodeConfig, ok = raw.(map[string]any)
 		if !ok {
-			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+			return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 		}
 	}
 	if rawRoutes, present := configuration["route"]; present {
 		routes, ok := rawRoutes.(map[string]any)
 		if !ok {
-			return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+			return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 		}
 		stdinField := ""
 		for field, raw := range routes {
 			entry, ok := raw.(map[string]any)
 			if !ok {
-				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+				return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 			}
 			kind, _ := entry["kind"].(string)
 			value, supplied := fields[field]
 			slot, slotKind := findSlot(cmd, inherited, field)
 			if slotKind == slotNone {
-				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+				return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 			}
 			if !supplied || value == nil {
 				continue
@@ -419,16 +420,16 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 				case Flag:
 					envName = definition.effectiveEnv()
 					if definition.Count || definition.Var || definition.valueVariadic() {
-						return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+						return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 					}
 				case Arg:
 					envName = definition.Env
 					if definition.IsVariadic() {
-						return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+						return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 					}
 				}
 				if envName == "" {
-					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+					return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 				}
 				text, ok := value.(string)
 				if !ok {
@@ -440,20 +441,20 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 					}
 				}
 				if !ok {
-					var ierr *openbindings.InvocationError
+					var ierr *invoke.InvocationError
 					text, ierr = configuredUsageEncoding(field, value, encodeConfig, encoders)
 					if ierr != nil {
 						return nil, ierr
 					}
 				}
-				if configured, present := openbindings.ContextEnvironment(bindCtx)[envName]; present && configured != text {
-					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+				if configured, present := invoke.ContextEnvironment(bindCtx)[envName]; present && configured != text {
+					return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 				}
 				out.environment[envName] = text
 				delete(fields, field)
 			case "stdin":
 				if stdinField != "" {
-					return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+					return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 				}
 				stdinField = field
 				out.stdin, _ = routeBytes(value)
@@ -464,26 +465,26 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 					delete(fields, field)
 				}
 			default:
-				return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+				return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 			}
 		}
 	}
 
 	effectiveEnvironment := map[string]string{}
-	for name, value := range openbindings.ContextEnvironment(bindCtx) {
+	for name, value := range invoke.ContextEnvironment(bindCtx) {
 		effectiveEnvironment[name] = value
 	}
 	for name, value := range out.environment {
 		effectiveEnvironment[name] = value
 	}
 	if err := validateUsageOverrides(cmd, inherited, suppliedFields); err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 	}
 	if err := validateUsageRequirements(cmd, inherited, suppliedFields, effectiveEnvironment); err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 	}
 	if err := validateUsageChoices(cmd, inherited, suppliedFields, effectiveEnvironment); err != nil {
-		return nil, &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 	}
 
 	for field, value := range fields {
@@ -500,18 +501,18 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 	return out, nil
 }
 
-func configuredUsageEncoding(field string, value any, encodeConfig map[string]any, encoders map[string]TokenEncoder) (string, *openbindings.InvocationError) {
+func configuredUsageEncoding(field string, value any, encodeConfig map[string]any, encoders map[string]TokenEncoder) (string, *invoke.InvocationError) {
 	encoderName, configured := encodeConfig[field].(string)
 	if !configured || encoderName == "" {
-		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+		return "", &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 	}
 	encoder := encoders[encoderName]
 	if encoder == nil {
-		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+		return "", &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 	}
 	token, err := encoder(value)
 	if err != nil {
-		return "", &openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed}
+		return "", &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 	}
 	return token, nil
 }
@@ -750,7 +751,7 @@ func validateUsageChoices(cmd *Command, inherited []Flag, fields map[string]any,
 
 func (e *Invoker) executeProcess(ctx context.Context, binary string, args []string, bindCtx map[string]any, configuredEnvironment map[string]string, stdin []byte, maxStdout int64) (*cliResult, error) {
 	environment := map[string]string{}
-	for name, value := range openbindings.ContextEnvironment(bindCtx) {
+	for name, value := range invoke.ContextEnvironment(bindCtx) {
 		environment[name] = value
 	}
 	for name, value := range configuredEnvironment {
@@ -1102,7 +1103,7 @@ func runCLI(ctx context.Context, binName string, args []string, bindCtx map[stri
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
 
-	if env := openbindings.ContextEnvironment(bindCtx); len(env) > 0 {
+	if env := invoke.ContextEnvironment(bindCtx); len(env) > 0 {
 		cmd.Env = os.Environ()
 		for k, v := range env {
 			cmd.Env = append(cmd.Env, k+"="+v)

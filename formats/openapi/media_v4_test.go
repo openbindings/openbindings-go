@@ -9,7 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"github.com/getkin/kin-openapi/openapi3"
+
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -22,7 +26,7 @@ func quoteJSON(value string) string {
 	return string(encoded)
 }
 
-func invokeRevision4Response(t *testing.T, spec, bindingSpec, contentType string, body []byte) ([]any, *openbindings.InvocationError) {
+func invokeRevision4Response(t *testing.T, spec, bindingSpec, contentType string, body []byte) ([]any, *invoke.InvocationError) {
 	t.Helper()
 	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -33,8 +37,8 @@ func invokeRevision4Response(t *testing.T, spec, bindingSpec, contentType string
 			Request:    req,
 		}, nil
 	})
-	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1payload/get",
 	})
 	return driveOutputs(context.Background(), call, nil)
@@ -46,8 +50,8 @@ func TestRevision4RawResponseAndSynthesisBoundary(t *testing.T) {
 	if invocationErr != nil || !reflect.DeepEqual(outputs, []any{"AAH+/w=="}) {
 		t.Fatalf("binary outputs = %#v, %v", outputs, invocationErr)
 	}
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 type coverageIdentity struct {
@@ -19,10 +20,10 @@ type coverageIdentity struct {
 func synthesisCoverage(
 	disc *discovery,
 	iface *openbindings.Interface,
-	warnings []openbindings.SynthesizerWarning,
-) []openbindings.SynthesisCoverageEntry {
+	warnings []synthesize.SynthesizerWarning,
+) []synthesize.SynthesisCoverageEntry {
 	if disc == nil || iface == nil {
-		return []openbindings.SynthesisCoverageEntry{}
+		return []synthesize.SynthesisCoverageEntry{}
 	}
 
 	byRef := make(map[string]coverageIdentity, len(iface.Bindings))
@@ -36,16 +37,16 @@ func synthesisCoverage(
 	sort.Slice(disc.services, func(i, j int) bool {
 		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
 	})
-	var entries []openbindings.SynthesisCoverageEntry
+	var entries []synthesize.SynthesisCoverageEntry
 	for _, svc := range disc.services {
 		for _, method := range serviceMethodsSorted(svc) {
 			ref := string(svc.FullName()) + "/" + string(method.Name())
 			if err := validateBoundClosure(method); err != nil {
-				entries = append(entries, openbindings.SynthesisCoverageEntry{
+				entries = append(entries, synthesize.SynthesisCoverageEntry{
 					SourceIndex: 0,
 					SourceRef:   ref,
-					Scope:       openbindings.SynthesisCoverageTarget,
-					Status:      openbindings.SynthesisExcluded,
+					Scope:       synthesize.SynthesisCoverageTarget,
+					Status:      synthesize.SynthesisExcluded,
 					ReasonCode:  "connect.schema_range",
 					Rule:        "CONN-P-02",
 					Message:     err.Error(),
@@ -54,21 +55,21 @@ func synthesisCoverage(
 			}
 			id, ok := byRef[ref]
 			if !ok {
-				entries = append(entries, openbindings.SynthesisCoverageEntry{
+				entries = append(entries, synthesize.SynthesisCoverageEntry{
 					SourceIndex: 0,
 					SourceRef:   ref,
-					Scope:       openbindings.SynthesisCoverageTarget,
-					Status:      openbindings.SynthesisImplementationUnsupported,
+					Scope:       synthesize.SynthesisCoverageTarget,
+					Status:      synthesize.SynthesisImplementationUnsupported,
 					ReasonCode:  "connect.missing_emitted_binding",
 					Message:     "the synthesizer returned without emitting this admitted protobuf RPC method",
 				})
 				continue
 			}
-			entries = append(entries, openbindings.SynthesisCoverageEntry{
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
 				SourceIndex:  0,
 				SourceRef:    ref,
-				Scope:        openbindings.SynthesisCoverageTarget,
-				Status:       openbindings.SynthesisRepresented,
+				Scope:        synthesize.SynthesisCoverageTarget,
+				Status:       synthesize.SynthesisRepresented,
 				OperationKey: id.operationKey,
 				BindingRef:   id.bindingRef,
 			})
@@ -80,11 +81,11 @@ func synthesisCoverage(
 		if !ok {
 			continue
 		}
-		entries = append(entries, openbindings.SynthesisCoverageEntry{
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
 			SourceIndex:  0,
 			SourceRef:    fmt.Sprintf("%s::projection::%s::%s::%d", id.bindingRef, warning.Path, warning.Code, index),
-			Scope:        openbindings.SynthesisCoverageProjection,
-			Status:       openbindings.SynthesisLossy,
+			Scope:        synthesize.SynthesisCoverageProjection,
+			Status:       synthesize.SynthesisLossy,
 			OperationKey: id.operationKey,
 			BindingRef:   id.bindingRef,
 			ReasonCode:   warning.Code,

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // A declared example crosses into the OBI as the value the artifact wrote.
@@ -138,8 +138,8 @@ paths:
 	if err != nil {
 		t.Fatalf("marshal content: %v", err)
 	}
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: "openbindings.openapi@1",
 			Location:    "https://scalars.example/openapi.yaml",
 			Content:     content,

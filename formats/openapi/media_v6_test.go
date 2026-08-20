@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func wholeJSONSpec(mediaType string) string {
@@ -20,8 +22,8 @@ func wholeJSONSpecForSchema(mediaType, schema string) string {
 
 func TestRevision6CarriesCombinatorialJSONAsOneApplicationValue(t *testing.T) {
 	spec := wholeJSONSpec("application/json")
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -50,8 +52,8 @@ func TestRevision6CarriesCombinatorialJSONAsOneApplicationValue(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 204, Status: "204 No Content", Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
-	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1items/post",
 	})
 	inputValue := []any{map[string]any{
@@ -70,8 +72,8 @@ func TestRevision6CarriesCombinatorialJSONAsOneApplicationValue(t *testing.T) {
 }
 
 func TestRevision6DoesNotInventCombinatorialFormSerialization(t *testing.T) {
-	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(wholeJSONSpec("application/x-www-form-urlencoded"))}},
+	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(wholeJSONSpec("application/x-www-form-urlencoded"))}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "conditional/combinatorial request schema") {
 		t.Fatalf("revision 6 form result = %v", err)
@@ -91,8 +93,8 @@ func TestRevision6WholeJSONDeclarationTriggers(t *testing.T) {
 	}
 	for name, schema := range tests {
 		t.Run(name, func(t *testing.T) {
-			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(wholeJSONSpecForSchema("application/json", schema))}},
+			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(wholeJSONSpecForSchema("application/json", schema))}},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -117,8 +119,8 @@ func TestRevision6DoesNotPromoteInertOrNestedDeclarations(t *testing.T) {
 	}
 	for name, schema := range tests {
 		t.Run(name, func(t *testing.T) {
-			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(wholeJSONSpecForSchema("application/json", schema))}},
+			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(wholeJSONSpecForSchema("application/json", schema))}},
 			})
 			if err != nil {
 				t.Fatal(err)

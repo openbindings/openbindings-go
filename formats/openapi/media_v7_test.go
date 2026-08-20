@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 const revision7ByteSpec = `{"openapi":"3.0.4","info":{"title":"schema-omitted bytes","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/archive":{"post":{"operationId":"storeArchive","requestBody":{"required":true,"content":{"application/octet-stream":{}}},"responses":{"200":{"description":"stored","content":{"application/octet-stream":{}}}}}}}}`
@@ -30,8 +32,8 @@ func TestRevision7SchemaOmittedOAS30BytesRoundTripAndSynthesis(t *testing.T) {
 			Request:    req,
 		}, nil
 	})
-	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(revision7ByteSpec)},
+	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(revision7ByteSpec)},
 		Ref:    "#/paths/~1archive/post",
 	})
 	outputs, invocationErr := driveOutputs(context.Background(), call, map[string]any{"body": "AAH+/w=="})
@@ -39,8 +41,8 @@ func TestRevision7SchemaOmittedOAS30BytesRoundTripAndSynthesis(t *testing.T) {
 		t.Fatalf("outputs = %#v, %v", outputs, invocationErr)
 	}
 
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(revision7ByteSpec)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(revision7ByteSpec)}},
 	})
 	if err != nil {
 		t.Fatal(err)

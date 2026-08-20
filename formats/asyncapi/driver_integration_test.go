@@ -15,6 +15,7 @@ import (
 	kafkadriver "github.com/openbindings/asyncapi-client/go/kafka"
 	mqttdriver "github.com/openbindings/asyncapi-client/go/mqtt"
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 type bridgeTestDriver struct{ seen []any }
@@ -51,8 +52,8 @@ func TestOpenBindingsAdapterDelegatesArbitraryProtocolDriver(t *testing.T) {
   "channels":{"commands":{"address":"commands","messages":{"command":{"payload":{"type":"object"}}}}},
   "operations":{"publish":{"action":"receive","channel":{"$ref":"#/channels/commands"},"messages":[{"$ref":"#/channels/commands/messages/command"}]}}
 }`)
-	call := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
+	call := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
 		Ref:    "#/operations/publish",
 	})
 	if err := call.Write(context.Background(), map[string]any{"id": float64(7)}); err != nil {
@@ -94,9 +95,9 @@ func TestLiveOpenBindingsAdapterUsesMQTTDriver(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = invoker.Close() }()
-	args := func(ref string) *openbindings.BindingInvocationArgs {
-		return &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
+	args := func(ref string) *invoke.BindingInvocationArgs {
+		return &invoke.BindingInvocationArgs{
+			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
 			Ref:     ref,
 			Context: map[string]any{"basic": map[string]any{"username": "sensor", "password": "secret"}},
 		}
@@ -143,8 +144,8 @@ func TestLiveOpenBindingsAdapterPreservesMQTTOutputBeforeConnectionLoss(t *testi
 		t.Fatal(err)
 	}
 	defer func() { _ = invoker.Close() }()
-	call := invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
+	call := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
 		Ref:     "#/operations/observe",
 		Context: map[string]any{"basic": map[string]any{"username": "sensor", "password": "secret"}},
 	})
@@ -184,9 +185,9 @@ func TestLiveOpenBindingsAdapterUsesKafkaDriver(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = invoker.Close() }()
-	args := func(ref string) *openbindings.BindingInvocationArgs {
-		return &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
+	args := func(ref string) *invoke.BindingInvocationArgs {
+		return &invoke.BindingInvocationArgs{
+			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
 			Ref:    ref,
 		}
 	}
@@ -231,9 +232,9 @@ func TestLiveOpenBindingsAdapterUsesKafkaSCRAMWithoutProtocolFields(t *testing.T
 		t.Fatal(err)
 	}
 	defer func() { _ = invoker.Close() }()
-	args := func(ref string) *openbindings.BindingInvocationArgs {
-		return &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
+	args := func(ref string) *invoke.BindingInvocationArgs {
+		return &invoke.BindingInvocationArgs{
+			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
 			Ref:     ref,
 			Context: map[string]any{"basic": map[string]any{"username": "orders", "password": "secret-password"}},
 		}

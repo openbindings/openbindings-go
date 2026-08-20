@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 type documentConfiguration struct {
@@ -35,7 +35,7 @@ func readConfiguration(ctx map[string]any) (*bindingConfiguration, error) {
 	if hasUnnamedCredential(ctx) {
 		return nil, fmt.Errorf("GraphQL does not infer protocol placement for generic credential context; supply the artifact's explicitly named header, cookie, or connection-init field through configuration.protocolFields")
 	}
-	raw := openbindings.ContextConfiguration(ctx)
+	raw := invoke.ContextConfiguration(ctx)
 	if raw == nil {
 		return cfg, nil
 	}
@@ -69,10 +69,10 @@ func readConfiguration(ctx map[string]any) (*bindingConfiguration, error) {
 }
 
 func hasUnnamedCredential(ctx map[string]any) bool {
-	if openbindings.ContextBearerToken(ctx) != "" || openbindings.ContextAPIKey(ctx) != "" || openbindings.ContextString(ctx, "accessToken") != "" {
+	if invoke.ContextBearerToken(ctx) != "" || invoke.ContextAPIKey(ctx) != "" || invoke.ContextString(ctx, "accessToken") != "" {
 		return true
 	}
-	if _, _, ok := openbindings.ContextBasicAuth(ctx); ok {
+	if _, _, ok := invoke.ContextBasicAuth(ctx); ok {
 		return true
 	}
 	if keys, ok := ctx["apiKeys"].(map[string]any); ok && len(keys) > 0 {
@@ -249,7 +249,7 @@ func effectiveHeaders(explicit, contextual, cookies, contextualCookies map[strin
 }
 
 func (c *bindingConfiguration) httpHeaders(ctx map[string]any) (map[string]string, error) {
-	return effectiveHeaders(c.Protocol.HTTPHeaders, openbindings.ContextHeaders(ctx), c.Protocol.HTTPCookies, openbindings.ContextCookies(ctx), httpOwnedHeaders)
+	return effectiveHeaders(c.Protocol.HTTPHeaders, invoke.ContextHeaders(ctx), c.Protocol.HTTPCookies, invoke.ContextCookies(ctx), httpOwnedHeaders)
 }
 
 func (c *bindingConfiguration) websocketHeaders(ctx map[string]any) (http.Header, error) {
@@ -272,12 +272,12 @@ func validateHTTPLocation(location string) error {
 	return nil
 }
 
-func configurationRequirement(target, point, description string) *openbindings.ContextRequiredDetails {
+func configurationRequirement(target, point, description string) *invoke.ContextRequiredDetails {
 	durable := true
-	return &openbindings.ContextRequiredDetails{
+	return &invoke.ContextRequiredDetails{
 		Target: target,
-		Alternatives: []openbindings.ContextAlternative{{Requirements: []openbindings.ContextRequirement{
-			openbindings.NewConfigValueRequirement(point, "", description, nil, &durable),
+		Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{
+			invoke.NewConfigValueRequirement(point, "", description, nil, &durable),
 		}}},
 	}
 }

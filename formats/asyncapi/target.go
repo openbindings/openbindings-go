@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // This file implements the server and address configuration points of
@@ -162,13 +163,13 @@ func resolveTarget(doc *document, ch *channel, bindCtx map[string]any) (resolved
 	candidates := effectiveServers(doc, ch)
 	def := defaultServer(candidates)
 
-	if cfg := openbindings.ContextConfiguration(bindCtx); cfg != nil {
+	if cfg := invoke.ContextConfiguration(bindCtx); cfg != nil {
 		if raw, ok := cfg["server"]; ok && raw != nil {
 			return resolveServerConfig(raw, candidates, def)
 		}
 	}
 
-	if meta := openbindings.ContextMetadata(bindCtx); meta != nil {
+	if meta := invoke.ContextMetadata(bindCtx); meta != nil {
 		if base, ok := meta["baseURL"].(string); ok && base != "" {
 			if def == nil {
 				if len(candidates) == 0 {
@@ -544,7 +545,7 @@ type addressConfig struct {
 // malformed value is a loud error, never ignored.
 func addressConfiguration(bindCtx map[string]any) (addressConfig, error) {
 	var out addressConfig
-	cfg := openbindings.ContextConfiguration(bindCtx)
+	cfg := invoke.ContextConfiguration(bindCtx)
 	if cfg == nil {
 		return out, nil
 	}

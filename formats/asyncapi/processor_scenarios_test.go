@@ -11,7 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"github.com/coder/websocket"
+
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/processorscenarios"
 )
@@ -168,7 +172,7 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 			}
 		}
 	}
-	source := openbindings.InvocationSource{BindingSpec: BindingSpec}
+	source := invoke.InvocationSource{BindingSpec: BindingSpec}
 	if location, ok := scenario.Given.Source["location"].(string); ok {
 		source.Location = location
 	}
@@ -176,21 +180,21 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 		source.Content, _ = json.Marshal(sourceContent)
 	}
 	ref, _ := scenario.Given.Binding["ref"].(string)
-	args := &openbindings.BindingInvocationArgs{Source: source, Ref: ref, Context: ctx}
+	args := &invoke.BindingInvocationArgs{Source: source, Ref: ref, Context: ctx}
 	joined := strings.HasPrefix(scenario.ID, "ASYNC-FI-")
-	var call openbindings.Invocation[any, any]
+	var call invoke.Invocation[any, any]
 	if joined {
-		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-			Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: source.Location, Content: source.Content}},
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+			Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: source.Location, Content: source.Content}},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		op := openbindings.NewOperationInvoker(invoker)
-		call = openbindings.Invoke(
+		op := invoke.NewOperationInvoker(invoker)
+		call = invoke.Invoke(
 			context.Background(), op, iface,
-			openbindings.NewOperationSignature[any, any](asyncOperationForRef(t, iface, ref)),
-			openbindings.WithContext(ctx),
+			invoke.NewOperationSignature[any, any](asyncOperationForRef(t, iface, ref)),
+			invoke.WithContext(ctx),
 		)
 	} else {
 		call = invoker.InvokeBinding(context.Background(), args)
@@ -200,7 +204,7 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	}
 	_ = call.Close()
 	outputs := []any{}
-	var terminal *openbindings.InvocationError
+	var terminal *invoke.InvocationError
 	stream := call.Outputs()
 	for {
 		value, err := stream.Read(context.Background())
@@ -209,7 +213,7 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 			continue
 		}
 		if err != io.EOF {
-			terminal = openbindings.AsInvocationError(err)
+			terminal = invoke.AsInvocationError(err)
 		}
 		break
 	}
@@ -245,7 +249,7 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 		disposition = "error"
 		phase = "response"
 	}
-	if terminal.Code == openbindings.ErrCodeContextRequired {
+	if terminal.Code == invoke.ErrCodeContextRequired {
 		disposition = "context-required"
 	}
 	return processorscenarios.Observation{Disposition: disposition, Phase: phase, Data: data}
@@ -262,7 +266,7 @@ func asyncOperationForRef(t *testing.T, iface *openbindings.Interface, ref strin
 	return ""
 }
 
-func metadataAny(metadata openbindings.Metadata) map[string]any {
+func metadataAny(metadata invoke.Metadata) map[string]any {
 	result := make(map[string]any, len(metadata))
 	for name, values := range metadata {
 		result[name] = values

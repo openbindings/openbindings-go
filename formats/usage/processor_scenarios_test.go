@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/processorscenarios"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func TestProcessorScenarios(t *testing.T) {
@@ -110,7 +112,7 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 		},
 	}
 
-	source := openbindings.InvocationSource{BindingSpec: BindingSpec}
+	source := invoke.InvocationSource{BindingSpec: BindingSpec}
 	if location, ok := scenario.Given.Source["location"].(string); ok {
 		source.Location = location
 	}
@@ -131,22 +133,22 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	}
 	ref, _ := scenario.Given.Binding["ref"].(string)
 	joined := len(scenario.ID) >= len("USAGE-FI-") && scenario.ID[:len("USAGE-FI-")] == "USAGE-FI-"
-	var call openbindings.Invocation[any, any]
+	var call invoke.Invocation[any, any]
 	if joined {
-		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-			Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: source.Location, Content: source.Content}},
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+			Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: source.Location, Content: source.Content}},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		op := openbindings.NewOperationInvoker(invoker)
-		call = openbindings.Invoke(
+		op := invoke.NewOperationInvoker(invoker)
+		call = invoke.Invoke(
 			context.Background(), op, iface,
-			openbindings.NewOperationSignature[any, any](usageOperationForRef(t, iface, ref)),
-			openbindings.WithContext(bindCtx),
+			invoke.NewOperationSignature[any, any](usageOperationForRef(t, iface, ref)),
+			invoke.WithContext(bindCtx),
 		)
 	} else {
-		call = invoker.InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{Source: source, Ref: ref, Context: bindCtx})
+		call = invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{Source: source, Ref: ref, Context: bindCtx})
 	}
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		_ = call.Write(context.Background(), scenario.Given.Invocation["input"])
@@ -154,7 +156,7 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	_ = call.Close()
 	outputs := []any{}
 	stream := call.Outputs()
-	var terminal *openbindings.InvocationError
+	var terminal *invoke.InvocationError
 	for {
 		value, err := stream.Read(context.Background())
 		if err == nil {
@@ -162,7 +164,7 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 			continue
 		}
 		if err != io.EOF {
-			terminal = openbindings.AsInvocationError(err)
+			terminal = invoke.AsInvocationError(err)
 		}
 		break
 	}
@@ -183,7 +185,7 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	if terminal == nil {
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
-	if terminal.Code == openbindings.ErrCodeContextRequired {
+	if terminal.Code == invoke.ErrCodeContextRequired {
 		return processorscenarios.Observation{Disposition: "context-required", Phase: "pre-dispatch", Data: data}
 	}
 	if joined {

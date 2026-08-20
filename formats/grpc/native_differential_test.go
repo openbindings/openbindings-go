@@ -8,7 +8,9 @@ import (
 	"reflect"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	grpcgo "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -39,8 +41,8 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 	iface, err := NewSynthesizer(
 		WithSynthesizerTransportCredentials(insecure.NewCredentials()),
 		WithSynthesizerDialOptions(grpcgo.WithContextDialer(dialer)),
-	).SynthesizeInterface(testCtx(t), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: differentialLocation}},
+	).SynthesizeInterface(testCtx(t), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: differentialLocation}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize reflected server: %v", err)
@@ -53,7 +55,7 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 		}
 		return binding.Ref
 	}
-	argsFor := func(ref string) *openbindings.BindingInvocationArgs {
+	argsFor := func(ref string) *invoke.BindingInvocationArgs {
 		args := bufconnArgs(ref, nil)
 		args.Source.Location = differentialLocation
 		return args
@@ -125,7 +127,7 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 		if !reflect.DeepEqual(values, nativeValues) {
 			t.Fatalf("OpenBindings partial values = %#v, native partial values = %#v", values, nativeValues)
 		}
-		if terminal == nil || terminal.Code != openbindings.ErrCodeExecutionFailed {
+		if terminal == nil || terminal.Code != invoke.ErrCodeExecutionFailed {
 			t.Fatalf("OpenBindings terminal = %v, want protocol-independent unsuccessful completion", terminal)
 		}
 		if terminal.HasData() {
@@ -167,8 +169,8 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 		}
 		inv.Cancel()
 		_, err = outputs.Read(testCtx(t))
-		var terminal *openbindings.InvocationError
-		if !errors.As(err, &terminal) || terminal.Code != openbindings.ErrCodeCancelled {
+		var terminal *invoke.InvocationError
+		if !errors.As(err, &terminal) || terminal.Code != invoke.ErrCodeCancelled {
 			t.Fatalf("OpenBindings cancellation terminal = %v", err)
 		}
 	})

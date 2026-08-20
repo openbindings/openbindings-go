@@ -3,7 +3,7 @@ package mcp
 import (
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // TestLiveListing_PaginationBoundRefuses pins C7f: MCP-P-02 mandates
@@ -24,11 +24,11 @@ func TestLiveListing_PaginationBoundRefuses(t *testing.T) {
 	defer func() { maxListItems = orig }()
 
 	_, err := invokeAndRead(t, inv, ts.URL, "tools/jsonAsText", nil)
-	ie := openbindings.AsInvocationError(err)
+	ie := invoke.AsInvocationError(err)
 	if ie == nil {
 		t.Fatalf("expected a pagination refusal, got %v", err)
 	}
-	if ie.Code != openbindings.ErrCodeProtocol {
+	if ie.Code != invoke.ErrCodeProtocol {
 		t.Fatalf("want ERR_PROTOCOL, got %s: %s", ie.Code, ie.Error())
 	}
 	if ie.HasData() {

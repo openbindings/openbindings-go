@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 const (
@@ -147,7 +148,7 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 		if len(refs) == 0 {
 			return nil
 		}
-		opKey := openbindings.UniqueKey(openbindings.SanitizeKey(name), usedOperationKeys)
+		opKey := synthesize.UniqueKey(synthesize.SanitizeKey(name), usedOperationKeys)
 		usedOperationKeys[opKey] = true
 		op := openbindings.Operation{Description: help}
 		if len(path) > 1 {

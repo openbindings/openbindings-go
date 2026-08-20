@@ -7,8 +7,9 @@ import (
 	"io"
 	"strings"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/jhump/protoreflect/v2/grpcdynamic"
-	openbindings "github.com/openbindings/openbindings-go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -33,7 +34,7 @@ import (
 //
 // The bool result reports whether dispatch should proceed; on false the
 // invocation is already terminal.
-func readRequest(ctx context.Context, inv openbindings.BindingHandle[any, any], methodDesc protoreflect.MethodDescriptor, noInput bool) (proto.Message, bool) {
+func readRequest(ctx context.Context, inv invoke.BindingHandle[any, any], methodDesc protoreflect.MethodDescriptor, noInput bool) (proto.Message, bool) {
 	if noInput || methodDesc.Input().Fields().Len() == 0 {
 		_ = inv.CloseInput()
 		return dynamicpb.NewMessage(methodDesc.Input()), true
@@ -51,8 +52,8 @@ func readRequest(ctx context.Context, inv openbindings.BindingHandle[any, any], 
 
 	reqMsg, buildErr := buildRequest(methodDesc, raw)
 	if buildErr != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeValidationFailed,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeValidationFailed,
 		})
 		return nil, false
 	}
@@ -60,18 +61,18 @@ func readRequest(ctx context.Context, inv openbindings.BindingHandle[any, any], 
 }
 
 // runUnary dispatches a unary RPC and emits its single response.
-func runUnary(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, reqMsg proto.Message) {
+func runUnary(rpcCtx context.Context, inv invoke.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, reqMsg proto.Message) {
 	resp, err := stub.InvokeRpc(rpcCtx, methodDesc, reqMsg)
 
 	if err != nil {
-		inv.FireError(grpcError(err, openbindings.ErrCodeExecutionFailed))
+		inv.FireError(grpcError(err, invoke.ErrCodeExecutionFailed))
 		return
 	}
 
 	output, jerr := responseToJSON(resp)
 	if jerr != nil {
-		inv.FireError(&openbindings.InvocationError{
-			Code: openbindings.ErrCodeResponseError,
+		inv.FireError(&invoke.InvocationError{
+			Code: invoke.ErrCodeResponseError,
 		})
 		return
 	}
@@ -85,10 +86,10 @@ func runUnary(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], 
 // message. EmitOutput's parking is the backpressure: a slow caller flow-
 // controls the stream via gRPC windowing, and a terminal while parked stops
 // the loop. Stream teardown on caller cancel rides rpcCtx (DoneContext).
-func runServerStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, reqMsg proto.Message) {
+func runServerStream(rpcCtx context.Context, inv invoke.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, reqMsg proto.Message) {
 	stream, err := stub.InvokeRpcServerStream(rpcCtx, methodDesc, reqMsg)
 	if err != nil {
-		inv.FireError(grpcError(err, openbindings.ErrCodeExecutionFailed))
+		inv.FireError(grpcError(err, invoke.ErrCodeExecutionFailed))
 		return
 	}
 
@@ -110,14 +111,14 @@ func runServerStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 			if rpcCtx.Err() != nil {
 				return
 			}
-			inv.FireError(grpcError(rerr, openbindings.ErrCodeStreamError))
+			inv.FireError(grpcError(rerr, invoke.ErrCodeStreamError))
 			return
 		}
 
 		output, jerr := responseToJSON(resp)
 		if jerr != nil {
-			inv.FireError(&openbindings.InvocationError{
-				Code: openbindings.ErrCodeResponseError,
+			inv.FireError(&invoke.InvocationError{
+				Code: invoke.ErrCodeResponseError,
 			})
 			return
 		}
@@ -131,10 +132,10 @@ func runServerStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 // its values, sends each canonical ProtoJSON request message, then closes the
 // request side and emits the method's one response. A later invalid value is
 // terminal and the invocation-owned context cancels the already-open RPC.
-func runClientStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, noInput bool) {
+func runClientStream(rpcCtx context.Context, inv invoke.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, noInput bool) {
 	stream, err := stub.InvokeRpcClientStream(rpcCtx, methodDesc)
 	if err != nil {
-		inv.FireError(grpcError(err, openbindings.ErrCodeExecutionFailed))
+		inv.FireError(grpcError(err, invoke.ErrCodeExecutionFailed))
 		return
 	}
 	if noInput {
@@ -150,11 +151,11 @@ func runClientStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 			}
 			msg, buildErr := buildRequest(methodDesc, raw)
 			if buildErr != nil {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
+				inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeValidationFailed})
 				return
 			}
 			if sendErr := stream.SendMsg(msg); sendErr != nil {
-				inv.FireError(grpcError(sendErr, openbindings.ErrCodeStreamError))
+				inv.FireError(grpcError(sendErr, invoke.ErrCodeStreamError))
 				return
 			}
 		}
@@ -162,7 +163,7 @@ func runClientStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 	resp, recvErr := stream.CloseAndReceive()
 	if recvErr != nil {
 		if rpcCtx.Err() == nil {
-			inv.FireError(grpcError(recvErr, openbindings.ErrCodeStreamError))
+			inv.FireError(grpcError(recvErr, invoke.ErrCodeStreamError))
 		}
 		return
 	}
@@ -173,10 +174,10 @@ func runClientStream(rpcCtx context.Context, inv openbindings.BindingHandle[any,
 // emitted while the caller's input side remains open. Either direction's
 // failure terminates the invocation and cancels the other through rpcCtx;
 // values emitted before a later status or local validation failure stand.
-func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, noInput bool) {
+func runBidiStream(rpcCtx context.Context, inv invoke.BindingHandle[any, any], stub *grpcdynamic.Stub, methodDesc protoreflect.MethodDescriptor, noInput bool) {
 	stream, err := stub.InvokeRpcBidiStream(rpcCtx, methodDesc)
 	if err != nil {
-		inv.FireError(grpcError(err, openbindings.ErrCodeExecutionFailed))
+		inv.FireError(grpcError(err, invoke.ErrCodeExecutionFailed))
 		return
 	}
 
@@ -184,7 +185,7 @@ func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, a
 		if noInput {
 			_ = inv.CloseInput()
 			if closeErr := stream.CloseSend(); closeErr != nil && rpcCtx.Err() == nil {
-				inv.FireError(grpcError(closeErr, openbindings.ErrCodeStreamError))
+				inv.FireError(grpcError(closeErr, invoke.ErrCodeStreamError))
 			}
 			return
 		}
@@ -192,7 +193,7 @@ func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, a
 			raw, readErr := inv.ReadInput(rpcCtx)
 			if readErr == io.EOF {
 				if closeErr := stream.CloseSend(); closeErr != nil && rpcCtx.Err() == nil {
-					inv.FireError(grpcError(closeErr, openbindings.ErrCodeStreamError))
+					inv.FireError(grpcError(closeErr, invoke.ErrCodeStreamError))
 				}
 				return
 			}
@@ -201,12 +202,12 @@ func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, a
 			}
 			msg, buildErr := buildRequest(methodDesc, raw)
 			if buildErr != nil {
-				inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeValidationFailed})
+				inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeValidationFailed})
 				return
 			}
 			if sendErr := stream.SendMsg(msg); sendErr != nil {
 				if rpcCtx.Err() == nil {
-					inv.FireError(grpcError(sendErr, openbindings.ErrCodeStreamError))
+					inv.FireError(grpcError(sendErr, invoke.ErrCodeStreamError))
 				}
 				return
 			}
@@ -221,13 +222,13 @@ func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, a
 				return
 			}
 			if rpcCtx.Err() == nil {
-				inv.FireError(grpcError(recvErr, openbindings.ErrCodeStreamError))
+				inv.FireError(grpcError(recvErr, invoke.ErrCodeStreamError))
 			}
 			return
 		}
 		output, jsonErr := responseToJSON(resp)
 		if jsonErr != nil {
-			inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
+			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeResponseError})
 			return
 		}
 		if emitErr := inv.EmitOutput(output); emitErr != nil {
@@ -236,10 +237,10 @@ func runBidiStream(rpcCtx context.Context, inv openbindings.BindingHandle[any, a
 	}
 }
 
-func emitUnaryResponse(inv openbindings.BindingHandle[any, any], resp proto.Message) {
+func emitUnaryResponse(inv invoke.BindingHandle[any, any], resp proto.Message) {
 	output, err := responseToJSON(resp)
 	if err != nil {
-		inv.FireError(&openbindings.InvocationError{Code: openbindings.ErrCodeResponseError})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeResponseError})
 		return
 	}
 	if err := inv.EmitOutput(output); err != nil {
@@ -259,7 +260,7 @@ func emitUnaryResponse(inv openbindings.BindingHandle[any, any], resp proto.Mess
 func applyGRPCContext(ctx context.Context, bindCtx map[string]any) (context.Context, error) {
 	md := metadata.MD{}
 
-	for k, v := range openbindings.ContextHeaders(bindCtx) {
+	for k, v := range invoke.ContextHeaders(bindCtx) {
 		if err := checkMetadataKey(k); err != nil {
 			return nil, err
 		}
@@ -313,7 +314,7 @@ func parseRef(ref string) (string, string, error) {
 // discovered embedded schema. Matching against the schema's declared
 // services is byte-exact, no case folding (GRPC-D-03); a ref matching no
 // service or method makes the binding unresolvable.
-func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.MethodDescriptor, *openbindings.InvocationError) {
+func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.MethodDescriptor, *invoke.InvocationError) {
 	var svcDesc protoreflect.ServiceDescriptor
 	for _, svc := range disc.services {
 		if string(svc.FullName()) == svcName {
@@ -322,14 +323,14 @@ func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.Me
 		}
 	}
 	if svcDesc == nil {
-		return nil, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeRefNotFound,
+		return nil, &invoke.InvocationError{
+			Code: invoke.ErrCodeRefNotFound,
 		}
 	}
 	m := svcDesc.Methods().ByName(protoreflect.Name(methodName))
 	if m == nil {
-		return nil, &openbindings.InvocationError{
-			Code: openbindings.ErrCodeRefNotFound,
+		return nil, &invoke.InvocationError{
+			Code: invoke.ErrCodeRefNotFound,
 		}
 	}
 	return m, nil
@@ -377,27 +378,27 @@ func responseToJSON(resp proto.Message) (any, error) {
 // space into a portable error taxonomy. The complete native status is retained
 // only on the explicit diagnostic lane. A non-status local error uses the
 // caller-supplied SDK code.
-func grpcError(err error, fallbackCode string) *openbindings.InvocationError {
+func grpcError(err error, fallbackCode string) *invoke.InvocationError {
 	_, ok := status.FromError(err)
 	if !ok {
-		return &openbindings.InvocationError{Code: fallbackCode}
+		return &invoke.InvocationError{Code: fallbackCode}
 	}
 
-	return &openbindings.InvocationError{Code: openbindings.ErrCodeExecutionFailed}
+	return &invoke.InvocationError{Code: invoke.ErrCodeExecutionFailed}
 }
 
 // refResolveError maps a reflection-resolution failure. Transport-level
 // statuses surface as structural unsuccessful completion rather than a
 // missing ref; anything else means the symbol didn't resolve. Native status
 // distinctions remain below the OpenBindings bridge.
-func refResolveError(svcName string, err error) *openbindings.InvocationError {
+func refResolveError(svcName string, err error) *invoke.InvocationError {
 	if s, ok := status.FromError(err); ok {
 		switch s.Code() {
 		case codes.Unavailable, codes.DeadlineExceeded, codes.Unauthenticated, codes.PermissionDenied:
-			return grpcError(err, openbindings.ErrCodeConnectFailed)
+			return grpcError(err, invoke.ErrCodeConnectFailed)
 		}
 	}
-	return &openbindings.InvocationError{
-		Code: openbindings.ErrCodeRefNotFound,
+	return &invoke.InvocationError{
+		Code: invoke.ErrCodeRefNotFound,
 	}
 }

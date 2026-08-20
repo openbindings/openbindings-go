@@ -5,16 +5,19 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func TestSynthesizeInterface_RefusesLossyReflectionEmbed(t *testing.T) {
-	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: "grpc://127.0.0.1:50051", Embed: true}},
+	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: "grpc://127.0.0.1:50051", Embed: true}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "complete reflected descriptor closure") {
 		t.Fatalf("expected pre-discovery embed refusal, got %v", err)
@@ -28,8 +31,8 @@ service Offline { rpc Ping(Request) returns (Reply); }
 message Request {}
 message Reply {}
 `
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Content:     openbindings.TextContent(proto),
 		}},
@@ -739,9 +742,9 @@ func TestConvertToInterface_OneofMultipleGroupsFallsBackToProperties(t *testing.
 		},
 	}
 
-	var warnings []openbindings.SynthesizerWarning
+	var warnings []synthesize.SynthesizerWarning
 	disc := buildTestDiscovery(t, file)
-	iface, err := convertToInterface(disc, "localhost:50051", func(w openbindings.SynthesizerWarning) {
+	iface, err := convertToInterface(disc, "localhost:50051", func(w synthesize.SynthesizerWarning) {
 		warnings = append(warnings, w)
 	})
 	if err != nil {
@@ -972,8 +975,8 @@ service TestService {
   rpc Accepted(Good) returns (Good);
   rpc Excluded(Bad) returns (Good);
 }`
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Location:    "grpc://127.0.0.1:50051",
 			Content:     openbindings.TextContent(proto),
@@ -991,10 +994,10 @@ service TestService {
 	if got := len(result.Coverage.Entries); got != 2 {
 		t.Fatalf("coverage entries = %d, want 2: %+v", got, result.Coverage.Entries)
 	}
-	if entry := result.Coverage.Entries[0]; entry.SourceRef != "testpkg.TestService/Accepted" || entry.Status != openbindings.SynthesisRepresented {
+	if entry := result.Coverage.Entries[0]; entry.SourceRef != "testpkg.TestService/Accepted" || entry.Status != synthesize.SynthesisRepresented {
 		t.Fatalf("accepted entry = %+v", entry)
 	}
-	if entry := result.Coverage.Entries[1]; entry.SourceRef != "testpkg.TestService/Excluded" || entry.Status != openbindings.SynthesisExcluded || entry.ReasonCode != "grpc.schema_range" || entry.Rule != "GRPC-P-03" {
+	if entry := result.Coverage.Entries[1]; entry.SourceRef != "testpkg.TestService/Excluded" || entry.Status != synthesize.SynthesisExcluded || entry.ReasonCode != "grpc.schema_range" || entry.Rule != "GRPC-P-03" {
 		t.Fatalf("excluded entry = %+v", entry)
 	}
 }
@@ -1009,8 +1012,8 @@ service Health {
   rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
   rpc Watch(HealthCheckRequest) returns (stream HealthCheckResponse);
 }`
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Location:    "grpc://127.0.0.1:1",
 			Content:     openbindings.TextContent(proto),

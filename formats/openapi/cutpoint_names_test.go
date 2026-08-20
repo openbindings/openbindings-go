@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // Cut-point naming, twinned in openapi-client/typescript/src/util.ts and
@@ -52,8 +53,8 @@ func writeCutPointArtifact(t *testing.T, files map[string]string) string {
 
 func synthesizeCutPointArtifact(t *testing.T, location string) openbindings.Interface {
 	t.Helper()
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: location}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: location}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)

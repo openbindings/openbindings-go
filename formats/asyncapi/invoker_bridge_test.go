@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	asyncapiclient "github.com/openbindings/asyncapi-client/go"
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 func TestBridgeExecutionErrorPreservesAbsentAndExplicitNullData(t *testing.T) {
@@ -41,7 +41,7 @@ func TestBridgeExecutionErrorPreservesAbsentAndExplicitNullData(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := bridgeExecutionError(tt.execution)
-			var invocation *openbindings.InvocationError
+			var invocation *invoke.InvocationError
 			if !errors.As(got, &invocation) {
 				t.Fatalf("bridge result = %T, want *InvocationError", got)
 			}

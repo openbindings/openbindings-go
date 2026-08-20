@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func mustParse(t *testing.T, kdl string) *Spec {
@@ -416,8 +417,8 @@ func TestSynthesizeInterface_FilePathEmitsEmbeddedContent(t *testing.T) {
 			if name == "relative" {
 				t.Chdir(dir)
 			}
-			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: location}},
+			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: location}},
 			})
 			if err != nil {
 				t.Fatalf("synthesize: %v", err)
@@ -455,8 +456,8 @@ func TestSynthesizeInterface_SpacelessExecLocatorEmitsLocation(t *testing.T) {
 	locator := "exec:" + writeEmitterScript(t)
 	synth := NewSynthesizer()
 	synth.AuthorizeExec = func([]string) bool { return true }
-	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: locator}},
+	iface, err := synth.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: locator}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
@@ -481,8 +482,8 @@ func TestSynthesizeInterface_SpacedExecLocatorEmitsLocation(t *testing.T) {
 	locator := "exec:" + writeEmitterScript(t) + " --spec"
 	synth := NewSynthesizer()
 	synth.AuthorizeExec = func([]string) bool { return true }
-	iface, err := synth.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: locator}},
+	iface, err := synth.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: locator}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
@@ -664,8 +665,8 @@ cmd "database" {
   }
 }
 `
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Content:     openbindings.TextContent(content),
 		}},
@@ -703,8 +704,8 @@ cmd "beta" {
   alias "x"
 }
 `
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Content:     openbindings.TextContent(content),
 		}},
@@ -724,12 +725,12 @@ cmd "beta" {
 		t.Fatal("ambiguous source spelling must make coverage not fully represented")
 	}
 	wantEntries := map[string]struct {
-		scope  openbindings.SynthesisCoverageScope
-		status openbindings.SynthesisCoverageStatus
+		scope  synthesize.SynthesisCoverageScope
+		status synthesize.SynthesisCoverageStatus
 		reason string
 	}{
-		"ambiguous-ref:x": {openbindings.SynthesisCoverageAlternative, openbindings.SynthesisExcluded, "usage.ambiguous_command_spelling"},
-		"command:x":       {openbindings.SynthesisCoverageTarget, openbindings.SynthesisExcluded, "usage.no_unique_command_ref"},
+		"ambiguous-ref:x": {synthesize.SynthesisCoverageAlternative, synthesize.SynthesisExcluded, "usage.ambiguous_command_spelling"},
+		"command:x":       {synthesize.SynthesisCoverageTarget, synthesize.SynthesisExcluded, "usage.no_unique_command_ref"},
 	}
 	for _, entry := range result.Coverage.Entries {
 		want, ok := wantEntries[entry.SourceRef]

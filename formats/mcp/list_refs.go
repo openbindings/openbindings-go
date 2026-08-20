@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // InspectSource returns all bindable targets (tools, resources, resource
@@ -14,7 +15,7 @@ import (
 // server is never dialed — MCP-D-02 still requires the location, and an
 // invalid pin is refused loudly before any I/O. Without content, discovery
 // connects live.
-func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	var disc *discovery
 	if source.Content != nil {
 		if err := validateEndpoint(source.Location); err != nil {
@@ -36,7 +37,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		disc = d
 	}
 
-	var targets []openbindings.BindableTarget
+	var targets []synthesize.BindableTarget
 	disc = bindableDiscovery(disc, source.BindingSpec)
 
 	// Suggest the same operation keys SynthesizeInterface assigns (synthesize.go: a
@@ -51,7 +52,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		if desc == "" {
 			desc = tool.Title
 		}
-		opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(tool.Name), "tool", usedKeys)
+		opKey := synthesize.ResolveKeyCollision(synthesize.SanitizeKey(tool.Name), "tool", usedKeys)
 		usedKeys[opKey] = "tool"
 		targets = append(targets, bindableTarget(refPrefixTools+tool.Name, opKey, desc))
 	}
@@ -62,7 +63,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		if desc == "" {
 			desc = resource.Title
 		}
-		opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(resource.Name), "resource", usedKeys)
+		opKey := synthesize.ResolveKeyCollision(synthesize.SanitizeKey(resource.Name), "resource", usedKeys)
 		usedKeys[opKey] = "resource"
 		targets = append(targets, bindableTarget(refPrefixResources+resource.URI, opKey, desc))
 	}
@@ -73,7 +74,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		if desc == "" {
 			desc = tmpl.Title
 		}
-		opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(tmpl.Name), "resource_template", usedKeys)
+		opKey := synthesize.ResolveKeyCollision(synthesize.SanitizeKey(tmpl.Name), "resource_template", usedKeys)
 		usedKeys[opKey] = "resource_template"
 		targets = append(targets, bindableTarget(refPrefixResourceTemplates+tmpl.URITemplate, opKey, desc))
 	}
@@ -84,16 +85,16 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		if desc == "" {
 			desc = prompt.Title
 		}
-		opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(prompt.Name), "prompt", usedKeys)
+		opKey := synthesize.ResolveKeyCollision(synthesize.SanitizeKey(prompt.Name), "prompt", usedKeys)
 		usedKeys[opKey] = "prompt"
 		targets = append(targets, bindableTarget(refPrefixPrompts+prompt.Name, opKey, desc))
 	}
 
-	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
+func bindableTarget(ref, operationKey, description string) synthesize.BindableTarget {
+	target := synthesize.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

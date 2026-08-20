@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // serverTargetBaseCasesDigest pins the frozen twin case table. The identical
@@ -156,8 +157,8 @@ func TestServerTargetBaseEmittedRequirements(t *testing.T) {
 	for _, c := range loadServerTargetBaseTable(t).ResolutionCase {
 		c := c
 		t.Run(c.Name, func(t *testing.T) {
-			result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{
+			result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+				Sources: []synthesize.SynthesizeSource{{
 					BindingSpec: BindingSpec,
 					Content:     openbindings.TextContent(string(serverTargetBaseDocument(t, c))),
 				}},
@@ -168,7 +169,7 @@ func TestServerTargetBaseEmittedRequirements(t *testing.T) {
 			var got []string
 			found := false
 			for _, entry := range result.Coverage.Entries {
-				if entry.SourceRef == "#/paths/~1things/get" && entry.Scope == openbindings.SynthesisCoverageTarget {
+				if entry.SourceRef == "#/paths/~1things/get" && entry.Scope == synthesize.SynthesisCoverageTarget {
 					got, found = entry.Requirements, true
 					break
 				}

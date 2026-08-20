@@ -8,7 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/getkin/kin-openapi/openapi3"
+
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -48,10 +51,10 @@ func TestRuntimeRefusesUnaddressablePathTemplateVariableBeforeDispatch(t *testin
 		Ref: "#/paths/~1api~1v2~1storefront~1policies~1{policy_slug}/get",
 	})
 	_ = call.Close()
-	if _, err := openbindings.Single(context.Background(), call.Outputs()); err == nil {
+	if _, err := invoke.Single(context.Background(), call.Outputs()); err == nil {
 		t.Fatal("invocation succeeded, want a pre-dispatch refusal")
-	} else if code := openbindings.AsInvocationError(err); code == nil || code.Code != openbindings.ErrCodeRefused {
-		t.Fatalf("error = %v, want %s", err, openbindings.ErrCodeRefused)
+	} else if code := invoke.AsInvocationError(err); code == nil || code.Code != invoke.ErrCodeRefused {
+		t.Fatalf("error = %v, want %s", err, invoke.ErrCodeRefused)
 	}
 	if dispatched != "" {
 		t.Fatalf("refused invocation still put %q on the wire", dispatched)

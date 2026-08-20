@@ -12,21 +12,23 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // Integration tests driving the current invoker against local httptest
 // servers. Historical development-profile cases are not published binding
 // specification revisions.
 
-func invokeWith(t *testing.T, spec, ref string, input any) (any, *openbindings.InvocationError) {
+func invokeWith(t *testing.T, spec, ref string, input any) (any, *invoke.InvocationError) {
 	return invokeWithBindingSpec(t, BindingSpec, spec, ref, input)
 }
 
-func invokeWithBindingSpec(t *testing.T, bindingSpec, spec, ref string, input any) (any, *openbindings.InvocationError) {
+func invokeWithBindingSpec(t *testing.T, bindingSpec, spec, ref string, input any) (any, *invoke.InvocationError) {
 	t.Helper()
 	spec = withDeclaredJSONResponses(t, spec)
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    ref,
 	})
 	return driveSingle(t, call, input)
@@ -81,7 +83,7 @@ func withDeclaredJSONResponses(t *testing.T, spec string) string {
 func TestInvoke_UppercaseRefMethodRefused(t *testing.T) {
 	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	_, ierr := invokeWith(t, widgetSpec(srv.URL), "#/paths/~1session/GET", nil)
-	if ierr == nil || ierr.Code != openbindings.ErrCodeInvalidRef {
+	if ierr == nil || ierr.Code != invoke.ErrCodeInvalidRef {
 		t.Fatalf("expected ERR_INVALID_REF for an uppercase method, got %v", ierr)
 	}
 	if requests.Load() != 0 {
@@ -191,7 +193,7 @@ func TestInvoke_CaseFoldingHeaderCollisionRefused(t *testing.T) {
 	  }}}
 	}`, srv.URL)
 	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1items/get", map[string]any{})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected the unflattenable refusal, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -209,7 +211,7 @@ func TestInvoke_UnmatchedFieldsRefusedWithoutBody(t *testing.T) {
 	_, ierr := invokeWith(t, widgetSpec(srv.URL), "#/paths/~1session/get", map[string]any{
 		"session_id": "s", "bogus": 1,
 	})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -254,7 +256,7 @@ func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
 			  }}}
 			}`, srv.URL, tc.content)
 			_, ierr := invokeWith(t, spec, "#/paths/~1echo/post", map[string]any{"body": "x", "stray": 1})
-			if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+			if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 				t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 			}
 			if ierr.HasData() {
@@ -440,7 +442,7 @@ func TestInvoke_UndeclaredMultipartMembersRefused(t *testing.T) {
 	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1upload/post", map[string]any{
 		"description": "d", "note": "urgent", "meta": map[string]any{"k": "v"},
 	})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected declaration-defined multipart refusal, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -466,7 +468,7 @@ func TestInvoke_UndeclaredURLEncodedMembersRefused(t *testing.T) {
 	  }}}
 	}`, srv.URL)
 	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1form/post", map[string]any{"name": "a b", "extra": "y"})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected declaration-defined urlencoded refusal, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -492,7 +494,7 @@ func TestInvoke_SuppliedInputMissingPathParamRefuses(t *testing.T) {
 	  }}}
 	}`, srv.URL)
 	_, ierr := invokeWith(t, spec, "#/paths/~1w~1{id}/post", map[string]any{"name": "x"})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_MISSING_INPUT for the unfilled path template, got %v", ierr)
 	}
 	if requests.Load() != 0 {
@@ -698,7 +700,7 @@ func TestInvoke_DegenerateMediaSchemaCombinationRefused(t *testing.T) {
 			  }}}
 			}`, srv.URL, tc.content)
 			_, ierr := invokeWith(t, spec, "#/paths/~1op/post", tc.input)
-			if ierr == nil || ierr.Code != openbindings.ErrCodeSourceConfigError {
+			if ierr == nil || ierr.Code != invoke.ErrCodeSourceConfigError {
 				t.Fatalf("expected the degenerate-combination refusal, got %v", ierr)
 			}
 			if ierr.HasData() {
@@ -854,7 +856,7 @@ func TestInvoke_TextPlainBody(t *testing.T) {
 
 	// The selection condition: a non-string body value refuses pre-dispatch.
 	_, ierr = invokeWith(t, spec, "#/paths/~1echo/post", map[string]any{"body": float64(1)})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected the text/plain condition refusal, got %v", ierr)
 	}
 }
@@ -903,8 +905,8 @@ func TestInvoke_AcceptHeaderMembership(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv2.URL)
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(noMediaSpec)},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(noMediaSpec)},
 		Ref:    "#/paths/~1session/get",
 	})
 	outputs, ierr := driveOutputs(context.Background(), call, nil)
@@ -931,7 +933,7 @@ func TestInvoke_UndeclaredSSEIsProtocolError(t *testing.T) {
 	defer srv.Close()
 
 	_, ierr := invokeWith(t, widgetSpec(srv.URL), "#/paths/~1session/get", nil)
-	if ierr == nil || ierr.Code != openbindings.ErrCodeProtocol {
+	if ierr == nil || ierr.Code != invoke.ErrCodeProtocol {
 		t.Fatalf("expected ERR_PROTOCOL for an undeclared event-stream response, got %v", ierr)
 	}
 }
@@ -960,8 +962,8 @@ func TestInvoke_DeclaredBothShapesSelectByFraming(t *testing.T) {
 		_, _ = io.WriteString(w, "data: one\n\ndata: two\n\n")
 	}))
 	defer sseSrv.Close()
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(dualSpec(sseSrv.URL))},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(dualSpec(sseSrv.URL))},
 		Ref:    "#/paths/~1dual/get",
 	})
 	events, ierr := driveOutputs(context.Background(), call, nil)
@@ -1036,27 +1038,27 @@ func TestInvoke_SSECarriageReturnLineEndings(t *testing.T) {
 func TestDecode_CharsetHandling(t *testing.T) {
 	// latin-1 declared: bytes transcode.
 	dec := decodeByContentType("text/plain; charset=iso-8859-1")
-	out, err := dec(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte{0xe9}})
+	out, err := dec(invoke.InvokeSite{}, invoke.RawResult{Body: []byte{0xe9}})
 	if err != nil || out != "é" {
 		t.Errorf("latin-1 = (%v, %v), want é", out, err)
 	}
 
 	// Invalid UTF-8 under the default charset is a loud decode error.
 	dec = decodeByContentType("text/plain")
-	if _, err := dec(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte{0xff, 0xfe}}); err == nil {
+	if _, err := dec(invoke.InvokeSite{}, invoke.RawResult{Body: []byte{0xff, 0xfe}}); err == nil {
 		t.Error("invalid UTF-8 must be a loud decode error, never mojibake")
 	}
 
 	// An undecodable declared charset is loud (override at the decode point).
 	dec = decodeByContentType("text/plain; charset=shift_jis")
-	if _, err := dec(openbindings.InvokeSite{}, openbindings.RawResult{Body: []byte("x")}); err == nil {
+	if _, err := dec(invoke.InvokeSite{}, invoke.RawResult{Body: []byte("x")}); err == nil {
 		t.Error("an unsupported charset must be a loud decode error")
 	}
 
 	// The builtin decoder returns nil for absent bytes; the invocation layer
 	// interprets that as zero output values rather than a JSON null result.
 	dec = decodeByContentType("application/json")
-	out, err = dec(openbindings.InvokeSite{}, openbindings.RawResult{Body: nil})
+	out, err = dec(invoke.InvokeSite{}, invoke.RawResult{Body: nil})
 	if err != nil || out != nil {
 		t.Errorf("empty body = (%v, %v), want null", out, err)
 	}
@@ -1092,8 +1094,8 @@ func TestInvoke_CookieChannelAssembly(t *testing.T) {
 	  }}
 	}`, srv.URL)
 
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:     "#/paths/~1sess/get",
 		Context: map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 	})
@@ -1136,13 +1138,13 @@ func TestInvoke_CredentialCollisionRefused(t *testing.T) {
 			  }}
 			}`, srv.URL, tc.param, tc.in, tc.in, tc.param)
 
-			call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-				Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+				Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 				Ref:     "#/paths/~1x/get",
 				Context: map[string]any{"apiKey": "cred"},
 			})
 			_, ierr := driveSingle(t, call, map[string]any{tc.param: "caller-value"})
-			if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+			if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 				t.Fatalf("expected the OAPI-P-10 collision refusal, got %v", ierr)
 			}
 			if ierr.HasData() {
@@ -1181,8 +1183,8 @@ func TestInvoke_SecurityORSelectsOneCompleteAlternative(t *testing.T) {
 	  }}
 	}`, srv.URL)
 
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1x/get",
 		Context: map[string]any{"apiKeys": map[string]any{
 			"headerKey": "header-secret",
@@ -1228,8 +1230,8 @@ func TestInvoke_SecurityORDoesNotCombineIncompleteAlternativeFragments(t *testin
 	  }}
 	}`, srv.URL)
 
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1x/get",
 		Context: map[string]any{"apiKeys": map[string]any{
 			"firstHeader": "incomplete-fragment",
@@ -1265,8 +1267,8 @@ func TestInvoke_NoDeclaredSecurityDoesNotSendContextCredentials(t *testing.T) {
 	  }}}
 	}`, srv.URL)
 
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1x/get",
 		Context: map[string]any{
 			"bearerToken": "unrelated-bearer",
@@ -1297,12 +1299,12 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 		    "responses": {"200": {"description": "ok"}}
 		  }}}
 		}`, srv.URL)
-		call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 			Ref:    "#/paths/~1x/get",
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
-		if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+		if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 			t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
 		}
 		if ierr.HasData() {
@@ -1328,13 +1330,13 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 		    "cookieKey": {"type": "apiKey", "in": "cookie", "name": "auth_token"}
 		  }}
 		}`, srv.URL)
-		call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-			Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 			Ref:     "#/paths/~1x/get",
 			Context: map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
-		if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+		if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 			t.Fatalf("expected validation OAPI-P-10 refusal, got %v", ierr)
 		}
 		if ierr.HasData() {
@@ -1363,8 +1365,8 @@ func TestPrepareBinding_FiltersCollidingSecurityAlternative(t *testing.T) {
 	  }}
 	}`, srv.URL)
 
-	details, err := NewInvoker().PrepareBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	details, err := NewInvoker().PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1x/get",
 	})
 	if err != nil {
@@ -1393,12 +1395,12 @@ func TestInvoke_AllMissingSecurityAlternativesRefuseBeforeDispatch(t *testing.T)
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1x/get",
 	})
 	_, ierr := driveSingle(t, call, nil)
-	if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected closed security-configuration refusal, got %v", ierr)
 	}
 	if ierr.HasData() {
@@ -1424,8 +1426,8 @@ func TestSchemaFreeCustomDocumentDialectRemainsInvocableAndSynthesizable(t *test
 	    "responses": {"200": {"description": "ok", "content": {"application/json": {}}}}
 	  }}}
 	}`, srv.URL)
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1x/get",
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
@@ -1434,8 +1436,8 @@ func TestSchemaFreeCustomDocumentDialectRemainsInvocableAndSynthesizable(t *test
 	if requests.Load() != 1 {
 		t.Fatalf("invocation requests = %d, want 1", requests.Load())
 	}
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatalf("schema-free portable synthesis should not interpret the custom dialect: %v", err)
@@ -1453,8 +1455,8 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 		  "servers": [{"url": %q}],
 		  "paths": {"/x": {"get": {"operationId": "x", "responses": {"200": {"description": "ok"}}}}}
 		}`, srv.URL)
-		call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 			Ref:    "#/paths/~1x/get",
 			Context: map[string]any{
 				"headers": map[string]any{"Cookie": "raw=1"},
@@ -1462,7 +1464,7 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 			},
 		})
 		_, ierr := driveSingle(t, call, nil)
-		if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+		if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 			t.Fatalf("expected Cookie context collision, got %v", ierr)
 		}
 		if ierr.HasData() {
@@ -1484,8 +1486,8 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 		  }}},
 		  "components": {"securitySchemes": {"cookieKey": {"type": "apiKey", "in": "cookie", "name": "session"}}}
 		}`, srv.URL)
-		call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 			Ref:    "#/paths/~1x/get",
 			Context: map[string]any{
 				"headers": map[string]any{"cookie": "raw=1"},
@@ -1493,7 +1495,7 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 			},
 		})
 		_, ierr := driveSingle(t, call, nil)
-		if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+		if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 			t.Fatalf("expected Cookie credential/context collision, got %v", ierr)
 		}
 		if ierr.HasData() {
@@ -1519,8 +1521,8 @@ func TestPrepareBindingReturnsNoChallengeForOwnershipConflict(t *testing.T) {
 	  }}},
 	  "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}}
 	}`
-	details, err := NewInvoker().PrepareBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	details, err := NewInvoker().PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1x/get",
 	})
 	if err != nil {
@@ -1544,12 +1546,12 @@ func TestInvoke_ProcessorOwnedHeaderParametersRefused(t *testing.T) {
 			    "responses": {"200": {"description": "ok"}}
 			  }}}
 			}`, srv.URL, name)
-			call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-				Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+				Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 				Ref:    "#/paths/~1x/get",
 			})
 			_, ierr := driveSingle(t, call, map[string]any{})
-			if ierr == nil || ierr.Code != openbindings.ErrCodeRefused {
+			if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 				t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
 			}
 			if ierr.HasData() {
@@ -1585,8 +1587,8 @@ func TestInvoke_ServerConfigurationPoint(t *testing.T) {
 	    "description": "ok", "content": {"application/json": {"schema": {}}}
 	  }}}}}
 	}`
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:     "#/paths/~1ping/get",
 		Context: map[string]any{"configuration": map[string]any{"server": map[string]any{"baseUrl": srv.URL}}},
 	})

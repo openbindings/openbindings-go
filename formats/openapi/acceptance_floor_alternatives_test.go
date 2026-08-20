@@ -19,7 +19,7 @@ package openapi
 import (
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func alternativesDocument(required bool) string {
@@ -52,13 +52,13 @@ func TestAcceptanceFloor_InvalidAlternativeIsNotCarried(t *testing.T) {
 			}
 		}
 	}
-	var alternative *openbindings.SynthesisCoverageEntry
+	var alternative *synthesize.SynthesisCoverageEntry
 	for i := range result.Coverage.Entries {
-		if result.Coverage.Entries[i].Scope == openbindings.SynthesisCoverageAlternative {
+		if result.Coverage.Entries[i].Scope == synthesize.SynthesisCoverageAlternative {
 			alternative = &result.Coverage.Entries[i]
 		}
 	}
-	if alternative == nil || alternative.Status != openbindings.SynthesisInvalid || alternative.ReasonCode != invalidUnitReasonCode {
+	if alternative == nil || alternative.Status != synthesize.SynthesisInvalid || alternative.ReasonCode != invalidUnitReasonCode {
 		t.Fatalf("the alternative must still be accounted as invalid: %+v", result.Coverage.Entries)
 	}
 	if alternative.SourceRef != "#/paths/~1a/post/requestBody/content/application~1json" {
@@ -71,17 +71,17 @@ func TestAcceptanceFloor_RequiredBodyWithOnlyInvalidAlternativesIsExcluded(t *te
 	if _, ok := result.Interface.Operations["postA"]; ok {
 		t.Fatalf("a REQUIRED body with no surviving alternative must exclude the operation")
 	}
-	var target *openbindings.SynthesisCoverageEntry
+	var target *synthesize.SynthesisCoverageEntry
 	for i := range result.Coverage.Entries {
 		entry := &result.Coverage.Entries[i]
-		if entry.Scope == openbindings.SynthesisCoverageTarget && entry.SourceRef == "#/paths/~1a/post" {
+		if entry.Scope == synthesize.SynthesisCoverageTarget && entry.SourceRef == "#/paths/~1a/post" {
 			target = entry
 		}
 	}
 	if target == nil {
 		t.Fatalf("the excluded target must be entried: %+v", result.Coverage.Entries)
 	}
-	if target.Status != openbindings.SynthesisExcluded || target.ReasonCode != "openapi.unresolvable_request_body" {
+	if target.Status != synthesize.SynthesisExcluded || target.ReasonCode != "openapi.unresolvable_request_body" {
 		t.Errorf("target entry %q/%q, want excluded / openapi.unresolvable_request_body", target.Status, target.ReasonCode)
 	}
 	if result.Coverage.FullyRepresented {

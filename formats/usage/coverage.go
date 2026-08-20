@@ -5,14 +5,15 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // synthesisCoverage inventories the root command plus every exact primary or
 // alias command path admitted by the descriptor. Command-local
 // unresolvability is reported without hiding otherwise bindable siblings.
-func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []openbindings.SynthesisCoverageEntry {
+func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []synthesize.SynthesisCoverageEntry {
 	if spec == nil || iface == nil {
-		return []openbindings.SynthesisCoverageEntry{}
+		return []synthesize.SynthesisCoverageEntry{}
 	}
 	type identity struct {
 		operation string
@@ -22,8 +23,8 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []openbindings
 	for _, binding := range iface.Bindings {
 		represented[binding.Ref] = identity{operation: binding.Operation, ref: binding.Ref}
 	}
-	var entries []openbindings.SynthesisCoverageEntry
-	add := func(sourceRef, bindingRef string, scope openbindings.SynthesisCoverageScope, exclusion *openbindings.SynthesisCoverageEntry) {
+	var entries []synthesize.SynthesisCoverageEntry
+	add := func(sourceRef, bindingRef string, scope synthesize.SynthesisCoverageScope, exclusion *synthesize.SynthesisCoverageEntry) {
 		if exclusion != nil {
 			exclusion.Scope = scope
 			entries = append(entries, *exclusion)
@@ -31,22 +32,22 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []openbindings
 		}
 		id, ok := represented[bindingRef]
 		if !ok {
-			entries = append(entries, openbindings.SynthesisCoverageEntry{
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
 				SourceIndex: 0, SourceRef: sourceRef, Scope: scope,
-				Status: openbindings.SynthesisImplementationUnsupported, ReasonCode: "usage.missing_emitted_binding",
+				Status: synthesize.SynthesisImplementationUnsupported, ReasonCode: "usage.missing_emitted_binding",
 				Message: "the synthesizer returned without emitting this resolvable command path",
 			})
 			return
 		}
-		entries = append(entries, openbindings.SynthesisCoverageEntry{
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
 			SourceIndex: 0, SourceRef: sourceRef, Scope: scope,
-			Status: openbindings.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
+			Status: synthesize.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
 		})
 	}
-	excluded := func(sourceRef, reasonCode, rule, message string) *openbindings.SynthesisCoverageEntry {
-		return &openbindings.SynthesisCoverageEntry{
+	excluded := func(sourceRef, reasonCode, rule, message string) *synthesize.SynthesisCoverageEntry {
+		return &synthesize.SynthesisCoverageEntry{
 			SourceIndex: 0, SourceRef: sourceRef,
-			Status: openbindings.SynthesisExcluded, ReasonCode: reasonCode, Rule: rule, Message: message,
+			Status: synthesize.SynthesisExcluded, ReasonCode: reasonCode, Rule: rule, Message: message,
 		}
 	}
 
@@ -59,11 +60,11 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []openbindings
 	_, rootErr := generateInputSchema(*rc, nil)
 	switch {
 	case missingBin:
-		add("<root>", "", openbindings.SynthesisCoverageTarget, excluded("<root>", "usage.missing_target_identity", "USAGE-P-03", "the descriptor has no non-empty bin target identity"))
+		add("<root>", "", synthesize.SynthesisCoverageTarget, excluded("<root>", "usage.missing_target_identity", "USAGE-P-03", "the descriptor has no non-empty bin target identity"))
 	case rootErr != nil:
-		add("<root>", "", openbindings.SynthesisCoverageTarget, excluded("<root>", "usage.unresolvable_surface", "USAGE-P-04", rootErr.Error()))
+		add("<root>", "", synthesize.SynthesisCoverageTarget, excluded("<root>", "usage.unresolvable_surface", "USAGE-P-04", rootErr.Error()))
 	default:
-		add("<root>", "", openbindings.SynthesisCoverageTarget, nil)
+		add("<root>", "", synthesize.SynthesisCoverageTarget, nil)
 	}
 
 	ambiguousReported := map[string]bool{}
@@ -83,7 +84,7 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []openbindings
 				if !ambiguousReported[ref] {
 					ambiguousReported[ref] = true
 					sourceRef := "ambiguous-ref:" + ref
-					add(sourceRef, "", openbindings.SynthesisCoverageAlternative, excluded(
+					add(sourceRef, "", synthesize.SynthesisCoverageAlternative, excluded(
 						sourceRef,
 						"usage.ambiguous_command_spelling",
 						"USAGE-D-03",
@@ -98,7 +99,7 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []openbindings
 		}
 		if len(refs) == 0 {
 			sourceRef := "command:" + commandRef(path)
-			add(sourceRef, "", openbindings.SynthesisCoverageTarget, excluded(
+			add(sourceRef, "", synthesize.SynthesisCoverageTarget, excluded(
 				sourceRef,
 				"usage.no_unique_command_ref",
 				"USAGE-D-03",
@@ -108,18 +109,18 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []openbindings
 		}
 		if missingBin {
 			for _, ref := range refs {
-				add(ref, ref, openbindings.SynthesisCoverageTarget, excluded(ref, "usage.missing_target_identity", "USAGE-P-03", "the descriptor has no non-empty bin target identity"))
+				add(ref, ref, synthesize.SynthesisCoverageTarget, excluded(ref, "usage.missing_target_identity", "USAGE-P-03", "the descriptor has no non-empty bin target identity"))
 			}
 			return
 		}
 		if _, err := generateInputSchema(cmd, inherited); err != nil {
 			for _, ref := range refs {
-				add(ref, ref, openbindings.SynthesisCoverageTarget, excluded(ref, "usage.unresolvable_surface", "USAGE-P-04", err.Error()))
+				add(ref, ref, synthesize.SynthesisCoverageTarget, excluded(ref, "usage.unresolvable_surface", "USAGE-P-04", err.Error()))
 			}
 			return
 		}
 		for _, ref := range refs {
-			add(ref, ref, openbindings.SynthesisCoverageTarget, nil)
+			add(ref, ref, synthesize.SynthesisCoverageTarget, nil)
 		}
 	})
 	return entries

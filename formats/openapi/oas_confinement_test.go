@@ -56,13 +56,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"github.com/getkin/kin-openapi/openapi3"
+
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func synthesizeRaw(content string) (*openbindings.SynthesizeResult, error) {
-	return NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
+func synthesizeRaw(content string) (*synthesize.SynthesizeResult, error) {
+	return NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
 	})
 }
 
@@ -104,9 +107,9 @@ func TestConfinement_ExcludedOperationPositionNothingReadsIsAdmitted(t *testing.
 	if len(result.Interface.Operations) != 1 {
 		t.Fatalf("the authored position must contribute no operation: %v", result.Interface.Operations)
 	}
-	var invalid *openbindings.SynthesisCoverageEntry
+	var invalid *synthesize.SynthesisCoverageEntry
 	for i := range result.Coverage.Entries {
-		if result.Coverage.Entries[i].Status == openbindings.SynthesisInvalid {
+		if result.Coverage.Entries[i].Status == synthesize.SynthesisInvalid {
 			invalid = &result.Coverage.Entries[i]
 		}
 	}
@@ -499,9 +502,9 @@ func TestConfinement_D15SchemaKeywordConfinesAndReachIsAttributed(t *testing.T) 
 	if _, ok := result.Interface.Operations["getReaching"]; ok {
 		t.Fatalf("the reaching operation must not synthesize: %v", result.Interface.Operations)
 	}
-	var invalid *openbindings.SynthesisCoverageEntry
+	var invalid *synthesize.SynthesisCoverageEntry
 	for i := range result.Coverage.Entries {
-		if result.Coverage.Entries[i].Status == openbindings.SynthesisInvalid {
+		if result.Coverage.Entries[i].Status == synthesize.SynthesisInvalid {
 			invalid = &result.Coverage.Entries[i]
 		}
 	}
@@ -556,7 +559,7 @@ func TestConfinement_SeamCSchemaPositionInlinesTheDenotedValue(t *testing.T) {
 	// D6 attaches one projection entry to the reaching unit.
 	projections := 0
 	for _, e := range result.Coverage.Entries {
-		if e.Scope == openbindings.SynthesisCoverageProjection && e.Status == openbindings.SynthesisInvalid {
+		if e.Scope == synthesize.SynthesisCoverageProjection && e.Status == synthesize.SynthesisInvalid {
 			projections++
 		}
 	}
@@ -744,9 +747,9 @@ func TestConfinement_URefClimbingSchemaPositionConfines(t *testing.T) {
 	if _, ok := result.Interface.Operations["getReaching"]; ok {
 		t.Fatalf("the operation whose closure holds the dangling reference must not synthesize: %v", result.Interface.Operations)
 	}
-	var invalid *openbindings.SynthesisCoverageEntry
+	var invalid *synthesize.SynthesisCoverageEntry
 	for i := range result.Coverage.Entries {
-		if result.Coverage.Entries[i].Status == openbindings.SynthesisInvalid {
+		if result.Coverage.Entries[i].Status == synthesize.SynthesisInvalid {
 			invalid = &result.Coverage.Entries[i]
 		}
 	}
@@ -1199,9 +1202,9 @@ func TestConfinement_OracleWalkOutsideEmittedContentIsAdmitted(t *testing.T) {
 	if _, ok := result.Interface.Operations["getClimb"]; ok {
 		t.Fatalf("the climbing unit must not synthesize: %v", result.Interface.Operations)
 	}
-	var invalid *openbindings.SynthesisCoverageEntry
+	var invalid *synthesize.SynthesisCoverageEntry
 	for i := range result.Coverage.Entries {
-		if result.Coverage.Entries[i].Status == openbindings.SynthesisInvalid {
+		if result.Coverage.Entries[i].Status == synthesize.SynthesisInvalid {
 			invalid = &result.Coverage.Entries[i]
 		}
 	}

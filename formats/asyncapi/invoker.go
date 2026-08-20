@@ -19,6 +19,8 @@ import (
 
 	asyncapiclient "github.com/openbindings/asyncapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // maxRedirects bounds redirect chains for artifact fetches and HTTP publishes.
@@ -44,8 +46,8 @@ type Invoker struct {
 }
 
 var (
-	_ openbindings.BindingInvoker  = (*Invoker)(nil)
-	_ openbindings.BindingPreparer = (*Invoker)(nil)
+	_ invoke.BindingInvoker  = (*Invoker)(nil)
+	_ invoke.BindingPreparer = (*Invoker)(nil)
 )
 
 // NewInvoker creates a new AsyncAPI binding invoker with a default HTTP
@@ -115,17 +117,17 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 //   - receive/send + ws/wss reply: full-duplex standalone-runtime session;
 //     the adapter forwards application values and lifecycle without adding
 //     WebSocket-shaped fields to Core frames
-func (e *Invoker) InvokeBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) openbindings.Invocation[any, any] {
-	inv := openbindings.NewInvocationImpl[any, any](ctx)
+func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
+	inv := invoke.NewInvocationImpl[any, any](ctx)
 	go func() {
 		if err := e.run(ctx, args, inv); err != nil {
-			inv.FireError(openbindings.AsInvocationError(err))
+			inv.FireError(invoke.AsInvocationError(err))
 		}
 	}()
 	return inv
 }
 
-func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationArgs, inv *openbindings.InvocationImpl[any, any]) error {
+func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) error {
 	options, err := enginePrepareOptions(args, e.httpClient)
 	if err != nil {
 		return err
@@ -134,7 +136,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 	if err != nil {
 		return bridgeExecutionError(err)
 	}
-	bridgeCtx, stop := openbindings.DoneContext(ctx, inv.Done())
+	bridgeCtx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 	execution, err := prepared.Start(bridgeCtx)
 	if err != nil {
@@ -197,7 +199,7 @@ func (e *Invoker) run(ctx context.Context, args *openbindings.BindingInvocationA
 // this binding would require, or nil when the binding can proceed (or the
 // answer is not knowable without network I/O). Only inline source content
 // and the warm doc cache are consulted; nothing is fetched.
-func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.BindingInvocationArgs) (*openbindings.ContextRequiredDetails, error) {
+func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	options, err := enginePrepareOptions(args, e.httpClient)
 	if err != nil {
 		return nil, nil
@@ -212,20 +214,20 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *openbindings.Binding
 	return toCorePrerequisites(prepared.Prerequisites()), nil
 }
 
-func enginePrepareOptions(args *openbindings.BindingInvocationArgs, client *http.Client) (asyncapiclient.PrepareOptions, error) {
+func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Client) (asyncapiclient.PrepareOptions, error) {
 	if args == nil {
-		return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+		return asyncapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 	}
 	profile, ok := engineProfile(args.Source.BindingSpec)
 	if !ok {
-		return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceConfigError}
+		return asyncapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 	}
 	var content []byte
 	var err error
 	if args.Source.Content != nil {
 		content, err = openbindings.ContentToBytes(args.Source.Content)
 		if err != nil {
-			return asyncapiclient.PrepareOptions{}, &openbindings.InvocationError{Code: openbindings.ErrCodeSourceLoadFailed}
+			return asyncapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed}
 		}
 	}
 	var acceptsInput *bool
@@ -247,20 +249,20 @@ func engineProfile(bindingSpec string) (asyncapiclient.Profile, bool) {
 	return "", false
 }
 
-func bridgeHooks(args *openbindings.BindingInvocationArgs) *asyncapiclient.Hooks {
+func bridgeHooks(args *invoke.BindingInvocationArgs) *asyncapiclient.Hooks {
 	if args == nil || args.Hooks == nil {
 		return nil
 	}
 	return &asyncapiclient.Hooks{Decode: func(site asyncapiclient.HookSite, raw asyncapiclient.RawResult) (any, bool, error) {
 		coreSite := coreHookSite(args, site.Target)
-		coreRaw := openbindings.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
+		coreRaw := invoke.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
 		contentType := ""
 		if values := raw.Meta["Content-Type"]; len(values) > 0 {
 			contentType = values[0]
 		}
 		value, err := args.Hooks.DecodeOutput(coreSite, coreRaw, builtinDecodeFor(contentType))
 		if err != nil {
-			invocation := openbindings.AsInvocationError(err)
+			invocation := invoke.AsInvocationError(err)
 			execution := &asyncapiclient.ExecutionError{Code: invocation.Code, Message: err.Error(), Cause: err}
 			if invocation.HasData() {
 				execution.Details = invocation.Data
@@ -272,8 +274,8 @@ func bridgeHooks(args *openbindings.BindingInvocationArgs) *asyncapiclient.Hooks
 	}}
 }
 
-func coreHookSite(args *openbindings.BindingInvocationArgs, target string) openbindings.InvokeSite {
-	var site openbindings.InvokeSite
+func coreHookSite(args *invoke.BindingInvocationArgs, target string) invoke.InvokeSite {
+	var site invoke.InvokeSite
 	if args.Site != nil {
 		site = *args.Site
 	} else {
@@ -286,8 +288,8 @@ func coreHookSite(args *openbindings.BindingInvocationArgs, target string) openb
 	return site
 }
 
-func toCoreMetadata(metadata asyncapiclient.Metadata) openbindings.Metadata {
-	result := make(openbindings.Metadata, len(metadata))
+func toCoreMetadata(metadata asyncapiclient.Metadata) invoke.Metadata {
+	result := make(invoke.Metadata, len(metadata))
 	for name, values := range metadata {
 		result[name] = append([]string(nil), values...)
 	}
@@ -307,20 +309,20 @@ func bridgeExecutionError(err error) error {
 		details = toCorePrerequisites(prerequisites)
 	}
 	if execution.DetailsPresent {
-		return openbindings.NewInvocationErrorWithData(execution.Code, details)
+		return invoke.NewInvocationErrorWithData(execution.Code, details)
 	}
-	return openbindings.NewInvocationError(execution.Code)
+	return invoke.NewInvocationError(execution.Code)
 }
 
-func toCorePrerequisites(value *asyncapiclient.Prerequisites) *openbindings.ContextRequiredDetails {
+func toCorePrerequisites(value *asyncapiclient.Prerequisites) *invoke.ContextRequiredDetails {
 	if value == nil {
 		return nil
 	}
-	result := &openbindings.ContextRequiredDetails{Target: value.Target, Alternatives: make([]openbindings.ContextAlternative, len(value.Alternatives))}
+	result := &invoke.ContextRequiredDetails{Target: value.Target, Alternatives: make([]invoke.ContextAlternative, len(value.Alternatives))}
 	for alternativeIndex, alternative := range value.Alternatives {
-		result.Alternatives[alternativeIndex].Requirements = make([]openbindings.ContextRequirement, len(alternative.Requirements))
+		result.Alternatives[alternativeIndex].Requirements = make([]invoke.ContextRequirement, len(alternative.Requirements))
 		for requirementIndex, requirement := range alternative.Requirements {
-			result.Alternatives[alternativeIndex].Requirements[requirementIndex] = openbindings.ContextRequirement{
+			result.Alternatives[alternativeIndex].Requirements[requirementIndex] = invoke.ContextRequirement{
 				Type: requirement.Type, Name: requirement.Name, Durable: requirement.Durable,
 				Description: requirement.Description, Extra: requirement.Extra,
 			}
@@ -335,9 +337,9 @@ type Synthesizer struct {
 }
 
 var (
-	_ openbindings.InterfaceSynthesizer = (*Synthesizer)(nil)
-	_ openbindings.CoverageSynthesizer  = (*Synthesizer)(nil)
-	_ openbindings.SourceInspector      = (*Synthesizer)(nil)
+	_ synthesize.InterfaceSynthesizer = (*Synthesizer)(nil)
+	_ synthesize.CoverageSynthesizer  = (*Synthesizer)(nil)
+	_ synthesize.SourceInspector      = (*Synthesizer)(nil)
 )
 
 // NewSynthesizer creates a new AsyncAPI interface synthesizer.
@@ -355,7 +357,7 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 }
 
 // SynthesizeInterface converts an AsyncAPI document to an OpenBindings interface.
-func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.Interface, error) {
+func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
 	observation, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
@@ -363,12 +365,12 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *openbindings.
 	return observation.iface, nil
 }
 
-func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *openbindings.SynthesizeInput) (*openbindings.SynthesizeResult, error) {
+func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
 	observation, err := c.synthesizeObserved(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	return openbindings.NewSynthesisResult(
+	return synthesize.NewSynthesisResult(
 		observation.iface,
 		synthesisCoverage(observation.doc, observation.iface),
 		true,
@@ -380,13 +382,13 @@ type synthesisObservation struct {
 	doc   *document
 }
 
-func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.SynthesizeInput) (*synthesisObservation, error) {
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesisObservation, error) {
 	if len(in.Sources) == 0 {
-		skeleton, err := openbindings.SynthesisSkeleton(in)
+		skeleton, err := synthesize.SynthesisSkeleton(in)
 		return &synthesisObservation{iface: &skeleton}, err
 	}
 	if len(in.Sources) > 1 {
-		return nil, openbindings.ErrMultipleSources
+		return nil, synthesize.ErrMultipleSources
 	}
 	src := in.Sources[0]
 	if src.BindingSpec != BindingSpec {
@@ -418,7 +420,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 		return nil, err
 	}
 	normalizedInput := *in
-	normalizedInput.Sources = append([]openbindings.SynthesizeSource(nil), in.Sources...)
+	normalizedInput.Sources = append([]synthesize.SynthesizeSource(nil), in.Sources...)
 	normalizedInput.Sources[0].Location = loadLocation
 	iface, err := synthesizeInterfaceWithDoc(ctx, &normalizedInput, doc)
 	if err != nil {
@@ -433,7 +435,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 			iface.Sources[DefaultSourceName] = entry
 		}
 	}
-	if err := openbindings.FinalizeSynthesis(iface, in, DefaultSourceName, src.BindingSpec); err != nil {
+	if err := synthesize.FinalizeSynthesis(iface, in, DefaultSourceName, src.BindingSpec); err != nil {
 		return nil, err
 	}
 	return &synthesisObservation{iface: iface, doc: doc}, nil
@@ -443,13 +445,13 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *openbindings.S
 // cross-format dispatch. Per the consultation matrix, asyncapi consults
 // the DECODE axis only (per delivery unit; a WS frame has no scalar
 // completion status, so the classifier is never consulted and none is
-// exposed — openbindings.BuiltinClassify on this format is loud).
+// exposed — invoke.BuiltinClassify on this format is loud).
 // The dispatch decoder resolves the declared message contentType from the
 // per-unit Meta's content-type where present, else text — hook bodies
 // wanting the document-declared type should decline to the builtin the
 // in-flow lane supplies.
-func (e *Invoker) BuiltinHooks() (openbindings.OutputDecoder, openbindings.ResultClassifier) {
-	decode := func(site openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+func (e *Invoker) BuiltinHooks() (invoke.OutputDecoder, invoke.ResultClassifier) {
+	decode := func(site invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 		ct := ""
 		if vs := raw.Meta["content-type"]; len(vs) > 0 {
 			ct = vs[0]

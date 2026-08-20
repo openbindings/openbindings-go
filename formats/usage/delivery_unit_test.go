@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // TestDeliveryUnitBound_StdoutOverflowRefused verifies the consumer
@@ -16,7 +16,7 @@ func TestDeliveryUnitBound_StdoutOverflowRefused(t *testing.T) {
 	for i := range words {
 		words[i] = strings.Repeat("a", 8)
 	}
-	_, ierr := invokeUsage(t, NewInvoker(), &openbindings.BindingInvocationArgs{
+	_, ierr := invokeUsage(t, NewInvoker(), &invoke.BindingInvocationArgs{
 		Source:               testSource(),
 		Ref:                  "echo",
 		MaxDeliveryUnitBytes: 1024,
@@ -24,8 +24,8 @@ func TestDeliveryUnitBound_StdoutOverflowRefused(t *testing.T) {
 	if ierr == nil {
 		t.Fatal("expected an overflow error, got none")
 	}
-	if ierr.Code != openbindings.ErrCodeExecutionFailed {
-		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeExecutionFailed)
+	if ierr.Code != invoke.ErrCodeExecutionFailed {
+		t.Errorf("error code = %q, want %q", ierr.Code, invoke.ErrCodeExecutionFailed)
 	}
 	if ierr.HasData() {
 		t.Errorf("native process-size evidence crossed as abstract data: %#v", ierr.Data)

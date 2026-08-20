@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
-	"github.com/openbindings/openbindings-go/synthesisscenarios"
+	"github.com/openbindings/openbindings-go/synthesize"
+	"github.com/openbindings/openbindings-go/synthesize/synthesisscenarios"
 )
 
 // synthesisResourceClient serves a scenario's declared companion documents and
@@ -50,7 +50,7 @@ func synthesisResourceClient(resources map[string]any) *http.Client {
 // synthesisFactory is the factory this family's runner uses. Unlike the six
 // self-contained families it does serve companion documents, through the
 // NewSynthesizerWithClient seam the package already exports.
-func synthesisFactory(scenario synthesisscenarios.Scenario) (openbindings.CoverageSynthesizer, error) {
+func synthesisFactory(scenario synthesisscenarios.Scenario) (synthesize.CoverageSynthesizer, error) {
 	if len(scenario.Resources) == 0 {
 		return NewSynthesizer(), nil
 	}

@@ -4,10 +4,13 @@ import (
 	"context"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
+
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func protoSchemaVariant(t *testing.T, value any, schemaType string) map[string]any {
@@ -482,8 +485,8 @@ service TestService {
 		t.Fatal(err)
 	}
 
-	var warnings []openbindings.SynthesizerWarning
-	iface, err := convertToInterface(disc, "http://localhost:8080", func(w openbindings.SynthesizerWarning) {
+	var warnings []synthesize.SynthesizerWarning
+	iface, err := convertToInterface(disc, "http://localhost:8080", func(w synthesize.SynthesizerWarning) {
 		warnings = append(warnings, w)
 	})
 	if err != nil {
@@ -536,11 +539,11 @@ service TestService {
   rpc GetItem(Request) returns (Response);
 }
 `
-	var warnings []openbindings.SynthesizerWarning
+	var warnings []synthesize.SynthesizerWarning
 	c := NewSynthesizer()
-	_, err := c.SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Location: "https://connect.example.test", Content: openbindings.TextContent(proto)}},
-		OnWarning: func(w openbindings.SynthesizerWarning) {
+	_, err := c.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: "https://connect.example.test", Content: openbindings.TextContent(proto)}},
+		OnWarning: func(w synthesize.SynthesizerWarning) {
 			warnings = append(warnings, w)
 		},
 	})
@@ -562,8 +565,8 @@ service TestService {
   rpc Accepted(Good) returns (Good);
   rpc Excluded(Bad) returns (Good);
 }`
-	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Location:    "https://connect.example.test",
 			Content:     openbindings.TextContent(proto),
@@ -581,10 +584,10 @@ service TestService {
 	if got := len(result.Coverage.Entries); got != 2 {
 		t.Fatalf("coverage entries = %d, want 2: %+v", got, result.Coverage.Entries)
 	}
-	if entry := result.Coverage.Entries[0]; entry.SourceRef != "testpkg.TestService/Accepted" || entry.Status != openbindings.SynthesisRepresented {
+	if entry := result.Coverage.Entries[0]; entry.SourceRef != "testpkg.TestService/Accepted" || entry.Status != synthesize.SynthesisRepresented {
 		t.Fatalf("accepted entry = %+v", entry)
 	}
-	if entry := result.Coverage.Entries[1]; entry.SourceRef != "testpkg.TestService/Excluded" || entry.Status != openbindings.SynthesisExcluded || entry.ReasonCode != "connect.schema_range" || entry.Rule != "CONN-P-02" {
+	if entry := result.Coverage.Entries[1]; entry.SourceRef != "testpkg.TestService/Excluded" || entry.Status != synthesize.SynthesisExcluded || entry.ReasonCode != "connect.schema_range" || entry.Rule != "CONN-P-02" {
 		t.Fatalf("excluded entry = %+v", entry)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // TestDeliveryUnitBound_UnaryOverflowRefused verifies the consumer
@@ -21,7 +21,7 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	args.MaxDeliveryUnitBytes = 1024
 	inv := invokeWith(t, ctx, NewInvoker(), args, map[string]any{"id": "abc"})
 
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeResponseError)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeResponseError)
 	if ierr.HasData() {
 		t.Errorf("native size-limit evidence crossed as abstract data: %#v", ierr.Data)
 	}

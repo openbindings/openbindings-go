@@ -6,11 +6,12 @@ import (
 	"sort"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // InspectSource returns all bindable targets (package.Service/Method) from a
 // gRPC source. Supports both proto file parsing and live server reflection.
-func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*openbindings.SourceInspection, error) {
+func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	var disc *discovery
 	var err error
 
@@ -30,7 +31,7 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		}
 	}
 
-	var targets []openbindings.BindableTarget
+	var targets []synthesize.BindableTarget
 
 	sort.Slice(disc.services, func(i, j int) bool {
 		return string(disc.services[i].FullName()) < string(disc.services[j].FullName())
@@ -47,18 +48,18 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 				continue
 			}
 			fqn := string(svc.FullName()) + "/" + string(method.Name())
-			opKey := openbindings.ResolveKeyCollision(openbindings.SanitizeKey(string(method.Name())), string(svc.Name()), usedKeys)
+			opKey := synthesize.ResolveKeyCollision(synthesize.SanitizeKey(string(method.Name())), string(svc.Name()), usedKeys)
 			usedKeys[opKey] = fqn
 			desc := commentToDescription(method)
 			targets = append(targets, bindableTarget(fqn, opKey, desc))
 		}
 	}
 
-	return &openbindings.SourceInspection{Targets: targets, Exhaustive: true}, nil
+	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, operationKey, description string) openbindings.BindableTarget {
-	target := openbindings.BindableTarget{Ref: ref, OperationKey: operationKey}
+func bindableTarget(ref, operationKey, description string) synthesize.BindableTarget {
+	target := synthesize.BindableTarget{Ref: ref, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

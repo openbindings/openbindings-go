@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 type testState struct {
@@ -76,15 +78,15 @@ func shortCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-func invocationArgs(url, ref string, bindCtx map[string]any) *openbindings.BindingInvocationArgs {
-	return &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Location: url},
+func invocationArgs(url, ref string, bindCtx map[string]any) *invoke.BindingInvocationArgs {
+	return &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: url},
 		Ref:     ref,
 		Context: bindCtx,
 	}
 }
 
-func invokeAndRead(t *testing.T, invoker *Invoker, url, ref string, _ ...*openbindings.InvokeHooks) (any, error) {
+func invokeAndRead(t *testing.T, invoker *Invoker, url, ref string, _ ...*invoke.InvokeHooks) (any, error) {
 	t.Helper()
 	call := invoker.InvokeBinding(bg(), invocationArgs(url, ref, nil))
 	if len(ref) >= len("tools/") && ref[:len("tools/")] == "tools/" {
@@ -92,10 +94,10 @@ func invokeAndRead(t *testing.T, invoker *Invoker, url, ref string, _ ...*openbi
 			return nil, err
 		}
 	}
-	return openbindings.Single(shortCtx(t), call.Outputs())
+	return invoke.Single(shortCtx(t), call.Outputs())
 }
 
-func drainOutputs(t *testing.T, call openbindings.Invocation[any, any]) ([]any, error) {
+func drainOutputs(t *testing.T, call invoke.Invocation[any, any]) ([]any, error) {
 	t.Helper()
 	reader := call.Outputs()
 	var values []any
@@ -116,7 +118,7 @@ func codeOf(t *testing.T, err error) string {
 	if err == nil {
 		t.Fatal("expected a terminal error")
 	}
-	var invocationErr *openbindings.InvocationError
+	var invocationErr *invoke.InvocationError
 	if !errors.As(err, &invocationErr) {
 		t.Fatalf("expected InvocationError, got %T: %v", err, err)
 	}
@@ -125,7 +127,7 @@ func codeOf(t *testing.T, err error) string {
 
 func TestIntegrationSynthesisExposesOnlyApplicationContractTools(t *testing.T) {
 	testServer, _ := setupMCPServer(t)
-	iface, err := NewSynthesizer().SynthesizeInterface(bg(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{
+	iface, err := NewSynthesizer().SynthesizeInterface(bg(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
 		BindingSpec: BindingSpec,
 		Location:    testServer.URL,
 	}}})
@@ -150,7 +152,7 @@ func TestIntegrationToolInvocationEmitsStructuredApplicationValue(t *testing.T) 
 	if err := call.Write(bg(), map[string]any{"message": "hello"}); err != nil {
 		t.Fatal(err)
 	}
-	value, err := openbindings.Single(shortCtx(t), call.Outputs())
+	value, err := invoke.Single(shortCtx(t), call.Outputs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +172,7 @@ func TestIntegrationExplicitBearerCredential(t *testing.T) {
 	args := invocationArgs(testServer.URL, "tools/echo", map[string]any{"bearerToken": "secret"})
 	call := invoker.InvokeBinding(bg(), args)
 	_ = call.Write(bg(), map[string]any{"message": "hello"})
-	if _, err := openbindings.Single(shortCtx(t), call.Outputs()); err != nil {
+	if _, err := invoke.Single(shortCtx(t), call.Outputs()); err != nil {
 		t.Fatal(err)
 	}
 	if state.lastAuth != "Bearer secret" {
@@ -185,7 +187,7 @@ func TestIntegrationToolFailureIsNotAnOutput(t *testing.T) {
 	call := invoker.InvokeBinding(bg(), invocationArgs(testServer.URL, "tools/alwaysFails", nil))
 	_ = call.Write(bg(), map[string]any{})
 	values, err := drainOutputs(t, call)
-	if len(values) != 0 || codeOf(t, err) != openbindings.ErrCodeExecutionFailed {
+	if len(values) != 0 || codeOf(t, err) != invoke.ErrCodeExecutionFailed {
 		t.Fatalf("values = %#v, err = %v", values, err)
 	}
 }
@@ -198,7 +200,7 @@ func TestIntegrationExcludedInventoryCannotDispatch(t *testing.T) {
 		call := invoker.InvokeBinding(bg(), invocationArgs(testServer.URL, ref, nil))
 		_ = call.Close()
 		_, err := drainOutputs(t, call)
-		if codeOf(t, err) != openbindings.ErrCodeInvalidRef {
+		if codeOf(t, err) != invoke.ErrCodeInvalidRef {
 			t.Fatalf("%s: %v", ref, err)
 		}
 	}
@@ -211,7 +213,7 @@ func TestIntegrationNonObjectInputRefusesBeforeDispatch(t *testing.T) {
 	call := invoker.InvokeBinding(bg(), invocationArgs(testServer.URL, "tools/echo", nil))
 	_ = call.Write(bg(), "not an object")
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeValidationFailed {
+	if codeOf(t, err) != invoke.ErrCodeValidationFailed {
 		t.Fatal(err)
 	}
 }
@@ -224,7 +226,7 @@ func TestIntegrationCancel(t *testing.T) {
 	_ = call.Write(bg(), map[string]any{})
 	time.AfterFunc(100*time.Millisecond, call.Cancel)
 	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != openbindings.ErrCodeCancelled {
+	if codeOf(t, err) != invoke.ErrCodeCancelled {
 		t.Fatal(err)
 	}
 }

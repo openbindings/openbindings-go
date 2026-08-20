@@ -12,7 +12,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/synthesize"
+
 	"github.com/getkin/kin-openapi/openapi3"
+
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -200,8 +204,8 @@ func TestRevision3SchemaOmittedJSONUsesConservativeWholeBody(t *testing.T) {
 	}
 
 	spec := `{"openapi":"3.1.2","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/value":{"post":{"operationId":"putValue","requestBody":{"required":true,"content":{"application/json":{}}},"responses":{"204":{"description":"ok"}}}}}}`
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -375,8 +379,8 @@ func TestRevision3RawSynthesisProjectsBase64WithoutReplacingSchema(t *testing.T)
 				mediaObject = "{" + tc.schema + "}"
 			}
 			spec := `{"openapi":"` + tc.version + `","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/asset":{"post":{"operationId":"putAsset","requestBody":{"required":true,"content":{"` + tc.media + `":` + mediaObject + `}},"responses":{"200":{"description":"ok"}}}}}}`
-			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-				Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -433,7 +437,7 @@ func TestRevision3RangeSynthesisIsConservativeAcrossConcreteLanes(t *testing.T) 
 				mediaObject = "{" + tc.schema + "}"
 			}
 			spec := `{"openapi":"` + tc.version + `","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"post":{"operationId":"put","requestBody":{"required":true,"content":{"` + tc.media + `":` + mediaObject + `}},"responses":{"204":{"description":"ok"}}}}}}`
-			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
+			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -446,11 +450,11 @@ func TestRevision3RangeSynthesisIsConservativeAcrossConcreteLanes(t *testing.T) 
 }
 
 func TestRevision3RangeCoverageRequiresRequestMediaAtCorrectScopes(t *testing.T) {
-	resultFor := func(content string) *openbindings.SynthesizeResult {
+	resultFor := func(content string) *synthesize.SynthesizeResult {
 		t.Helper()
 		spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/items":{"post":{"operationId":"putItems","requestBody":{"required":true,"content":` + content + `},"responses":{"200":{"description":"ok"}}}}}}`
-		result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-			Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+			Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -458,12 +462,12 @@ func TestRevision3RangeCoverageRequiresRequestMediaAtCorrectScopes(t *testing.T)
 		return result
 	}
 
-	assertRequirements := func(result *openbindings.SynthesizeResult, wantTarget bool) {
+	assertRequirements := func(result *synthesize.SynthesizeResult, wantTarget bool) {
 		t.Helper()
 		var target, rangeAlternative []string
 		for _, entry := range result.Coverage.Entries {
 			switch {
-			case entry.SourceRef == "#/paths/~1items/post" && entry.Scope == openbindings.SynthesisCoverageTarget:
+			case entry.SourceRef == "#/paths/~1items/post" && entry.Scope == synthesize.SynthesisCoverageTarget:
 				target = entry.Requirements
 			case strings.Contains(entry.SourceRef, "application~1*"):
 				rangeAlternative = entry.Requirements
@@ -482,8 +486,8 @@ func TestRevision3RangeCoverageRequiresRequestMediaAtCorrectScopes(t *testing.T)
 
 func TestRevision3PrepareBindingChallengesForRequiredRange(t *testing.T) {
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://api.example.test"}],"paths":{"/x":{"post":{"operationId":"put","requestBody":{"required":true,"content":{"application/*":{"schema":{"type":"object"}}}},"responses":{"204":{"description":"ok"}}}}}}`
-	args := &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	args := &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1x/post",
 	}
 	details, err := NewInvoker().PrepareBinding(context.Background(), args)
@@ -563,7 +567,7 @@ func TestRevision3MultipartOAS30UsesCanonicalBoundaryBase64(t *testing.T) {
 
 func TestRevision3MultipartSynthesisDecoratesNestedBinaryValues(t *testing.T) {
 	spec := `{"openapi":"3.0.3","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/assets":{"post":{"operationId":"putAssets","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","properties":{"files":{"type":"array","items":{"type":"string","format":"binary"}},"profile":{"type":"object","properties":{"avatar":{"type":"string","format":"binary"}}}}}}}},"responses":{"204":{"description":"ok"}}}}}}`
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -709,7 +713,7 @@ func TestRevision3UnconstrainedSchemaIsAnOmittedRawShape(t *testing.T) {
 func TestRevision3BooleanSchemasSurviveRequestParameterAndOutputSynthesis(t *testing.T) {
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/json":{"post":{"operationId":"json","requestBody":{"required":true,"content":{"application/json":{"schema":true}}},"responses":{"200":{"description":"ok","content":{"application/json":{"schema":false}}}}}},"/parameter":{"get":{"operationId":"parameter","parameters":[{"name":"q","in":"query","description":"query false","schema":false},{"name":"c","in":"query","description":"content true","content":{"application/json":{"schema":true}}}],"responses":{"200":{"description":"ok","content":{"application/json":{"schema":true}}}}}}}}`
 	t.Run(BindingSpec, func(t *testing.T) {
-		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -736,7 +740,7 @@ func TestRevision3ExternalBooleanSchemaSurvivesSynthesis(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("false")), Request: req}, nil
 	})}
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"post":{"operationId":"put","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"./schema.json"}}}},"responses":{"204":{"description":"ok"}}}}}}`
-	iface, err := NewSynthesizerWithClient(client).SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{
+	iface, err := NewSynthesizerWithClient(client).SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
 		BindingSpec: BindingSpec, Location: "https://description.example/openapi.json", Content: openbindings.TextContent(spec),
 	}}})
 	if err != nil {
@@ -1425,7 +1429,7 @@ func TestRevision3ParameterContentCharsetAndEscaping(t *testing.T) {
 
 func TestRevision3PrivateLookingAuthorExtensionsDoNotCollide(t *testing.T) {
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"get":{"operationId":"x","parameters":[{"name":"q","in":"query","schema":{"type":"string","x-openbindings-internal-boolean-schema":true}}],"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"string","x-openbindings-internal-encoding-allow-reserved-present":true}}}}}}}}}`
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}}})
 	if err != nil {
 		t.Fatalf("authored extension collision: %v", err)
 	}
@@ -1454,8 +1458,8 @@ func TestRevision3SSEUsesWHATWGUTF8AndEmptySuccessSkipsMedia(t *testing.T) {
 		body = append(body, []byte("\n\n")...)
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"text/event-stream; charset=iso-8859-1"}}, Body: io.NopCloser(strings.NewReader(string(body))), Request: req}, nil
 	})
-	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1events/get",
+	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1events/get",
 	})
 	outputs, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr != nil || !reflect.DeepEqual(outputs, []any{"café", "�", "��", "�"}) {
@@ -1466,8 +1470,8 @@ func TestRevision3SSEUsesWHATWGUTF8AndEmptySuccessSkipsMedia(t *testing.T) {
 	emptyTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
-	call = NewInvokerWithClient(&http.Client{Transport: emptyTransport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(emptySpec)}, Ref: "#/paths/~1events/get",
+	call = NewInvokerWithClient(&http.Client{Transport: emptyTransport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(emptySpec)}, Ref: "#/paths/~1events/get",
 	})
 	outputs, ierr = driveOutputs(context.Background(), call, nil)
 	if ierr != nil || len(outputs) != 0 {
@@ -1480,18 +1484,18 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"application/json", "text/plain"}}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: req}, nil
 	})
-	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
-	if ierr == nil || ierr.Code != openbindings.ErrCodeProtocol {
+	if ierr == nil || ierr.Code != invoke.ErrCodeProtocol {
 		t.Fatalf("duplicate Content-Type error = %v", ierr)
 	}
 	emptyTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"garbage", "also-garbage"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
-	call = NewInvokerWithClient(&http.Client{Transport: emptyTransport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+	call = NewInvokerWithClient(&http.Client{Transport: emptyTransport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	outputs, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr != nil || len(outputs) != 0 {
@@ -1500,18 +1504,18 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 	failureTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 500, Status: "500 Broken", Header: http.Header{"Content-Type": {"garbage", "also-garbage"}}, Body: io.NopCloser(strings.NewReader("failure")), Request: req}, nil
 	})
-	call = NewInvokerWithClient(&http.Client{Transport: failureTransport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+	call = NewInvokerWithClient(&http.Client{Transport: failureTransport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	_, ierr = driveOutputs(context.Background(), call, nil)
-	if ierr == nil || ierr.Code == openbindings.ErrCodeProtocol || ierr.HasData() {
+	if ierr == nil || ierr.Code == invoke.ErrCodeProtocol || ierr.HasData() {
 		t.Fatalf("non-2xx native failure was preempted by Content-Type: %v", ierr)
 	}
 	emptyFailureTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 500, Status: "500 Empty", Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
-	call = NewInvokerWithClient(&http.Client{Transport: emptyFailureTransport}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+	call = NewInvokerWithClient(&http.Client{Transport: emptyFailureTransport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
 	})
 	_, ierr = driveOutputs(context.Background(), call, nil)
 	if ierr == nil || ierr.HasData() {
@@ -1541,8 +1545,8 @@ func (c *revision3CaptureTransport) RoundTrip(req *http.Request) (*http.Response
 func TestRevision3InvokerCarriesRawBytesAndRequiresRangeConfiguration(t *testing.T) {
 	spec := `{"openapi":"3.0.3","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/asset":{"post":{"operationId":"putAsset","requestBody":{"required":true,"content":{"image/png":{"schema":{"type":"string","format":"binary"}}}},"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"object"}}}}}}}}}`
 	capture := &revision3CaptureTransport{}
-	call := NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1asset/post",
 	})
 	_, ierr := driveSingle(t, call, map[string]any{"body": "AP8BAg=="})
@@ -1555,33 +1559,33 @@ func TestRevision3InvokerCarriesRawBytesAndRequiresRangeConfiguration(t *testing
 
 	rangeSpec := strings.Replace(spec, `"image/png":{"schema":{"type":"string","format":"binary"}}`, `"application/*":{"schema":{"type":"object"}}`, 1)
 	capture = &revision3CaptureTransport{}
-	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
+	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
 		Ref:    "#/paths/~1asset/post",
 	})
 	_, ierr = driveSingle(t, call, map[string]any{"name": "pixel"})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeContextRequired || capture.requests != 0 {
+	if ierr == nil || ierr.Code != invoke.ErrCodeContextRequired || capture.requests != 0 {
 		t.Fatalf("missing range configuration = %v after %d requests", ierr, capture.requests)
 	}
-	details := openbindings.ContextRequiredFrom(ierr)
+	details := invoke.ContextRequiredFrom(ierr)
 	if details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 || details.Alternatives[0].Requirements[0].Type != "config.value" {
 		t.Fatalf("range context details = %#v", details)
 	}
 
 	capture = &revision3CaptureTransport{}
-	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
+	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
 		Ref:     "#/paths/~1asset/post",
 		Context: map[string]any{"configuration": map[string]any{"requestMedia": ""}},
 	})
 	_, ierr = driveSingle(t, call, map[string]any{"name": "pixel"})
-	if ierr == nil || ierr.Code == openbindings.ErrCodeContextRequired || capture.requests != 0 {
+	if ierr == nil || ierr.Code == invoke.ErrCodeContextRequired || capture.requests != 0 {
 		t.Fatalf("empty requestMedia invocation = %v after %d requests", ierr, capture.requests)
 	}
 
 	capture = &revision3CaptureTransport{}
-	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
+	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
 		Ref:    "#/paths/~1asset/post",
 		Context: map[string]any{"configuration": map[string]any{
 			"requestMedia": "application/problem+json; profile=asset",
@@ -1600,12 +1604,12 @@ func TestRevision3InvokerRejectsNoncanonicalRawBase64BeforeDispatch(t *testing.T
 	spec := `{"openapi":"3.0.3","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/asset":{"post":{"operationId":"putAsset","requestBody":{"required":true,"content":{"image/png":{"schema":{"type":"string","format":"binary"}}}},"responses":{"204":{"description":"ok"}}}}}}`
 	for _, value := range []string{"YQ", "AB=="} {
 		capture := &revision3CaptureTransport{}
-		call := NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-			Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		call := NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 			Ref:    "#/paths/~1asset/post",
 		})
 		_, ierr := driveSingle(t, call, map[string]any{"body": value})
-		if ierr == nil || ierr.Code != openbindings.ErrCodeRefused || capture.requests != 0 {
+		if ierr == nil || ierr.Code != invoke.ErrCodeRefused || capture.requests != 0 {
 			t.Errorf("noncanonical %q = %v after %d requests", value, ierr, capture.requests)
 		}
 	}

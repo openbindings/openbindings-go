@@ -10,6 +10,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // Creation is inert: InvokeBinding returns the handle synchronously and
@@ -17,20 +18,20 @@ import (
 // error THROUGH the handle, never as a synchronous load before the handle
 // exists (the load may be a network fetch).
 func TestInvokeBinding_PreflightErrorsThroughHandle(t *testing.T) {
-	inv := NewInvoker(openbindings.NewOperationInvoker()).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: filepath.Join(t.TempDir(), "missing.json")},
+	inv := NewInvoker(invoke.NewOperationInvoker()).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: filepath.Join(t.TempDir(), "missing.json")},
 		Ref:    "#/graphs/g",
 	})
 	if inv == nil {
 		t.Fatal("expected a handle")
 	}
-	_, err := openbindings.Single[any](context.Background(), inv.Outputs())
+	_, err := invoke.Single[any](context.Background(), inv.Outputs())
 	if err == nil {
 		t.Fatal("expected the preflight failure as a terminal error")
 	}
-	ierr := openbindings.AsInvocationError(err)
-	if ierr == nil || ierr.Code != openbindings.ErrCodeSourceLoadFailed {
-		t.Fatalf("want %s through the handle, got %v", openbindings.ErrCodeSourceLoadFailed, err)
+	ierr := invoke.AsInvocationError(err)
+	if ierr == nil || ierr.Code != invoke.ErrCodeSourceLoadFailed {
+		t.Fatalf("want %s through the handle, got %v", invoke.ErrCodeSourceLoadFailed, err)
 	}
 }
 
@@ -56,15 +57,15 @@ func TestNewInvokerWithClient(t *testing.T) {
 	})}
 
 	ctx := context.Background()
-	inv := NewInvokerWithClient(openbindings.NewOperationInvoker(), custom).InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Location: "http://example.test/graph.json"},
+	inv := NewInvokerWithClient(invoke.NewOperationInvoker(), custom).InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "http://example.test/graph.json"},
 		Ref:    "#/graphs/g",
 	})
 	if err := inv.Write(ctx, map[string]any{"n": 1}); err != nil {
 		t.Fatal(err)
 	}
 	_ = inv.Close()
-	out, err := openbindings.Single[any](ctx, inv.Outputs())
+	out, err := invoke.Single[any](ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("Single: %v", err)
 	}
@@ -115,12 +116,12 @@ func TestInvokeBinding_CrossGraphRecursionBounded(t *testing.T) {
 		},
 	}
 
-	opInvoker := openbindings.NewOperationInvoker()
+	opInvoker := invoke.NewOperationInvoker()
 	opInvoker.TransformEvaluator = &jsonataEvaluator{}
 	opInvoker.AddBindingInvoker(NewInvoker(opInvoker))
 
-	call := opInvoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source:    openbindings.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(graphDoc)},
+	call := opInvoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source:    invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(graphDoc)},
 		Ref:       "#/graphs/loop",
 		Interface: iface,
 	})
@@ -133,11 +134,11 @@ func TestInvokeBinding_CrossGraphRecursionBounded(t *testing.T) {
 	for {
 		_, err := out.Read(ctx)
 		if err != nil {
-			ie := openbindings.AsInvocationError(err)
+			ie := invoke.AsInvocationError(err)
 			if ie == nil {
 				t.Fatalf("expected InvocationError terminal, got %v", err)
 			}
-			if ie.Code != openbindings.ErrCodeExecutionFailed {
+			if ie.Code != invoke.ErrCodeExecutionFailed {
 				t.Fatalf("expected execution refusal, got %v", ie)
 			}
 			return

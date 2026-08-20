@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // HookTable is the data-shaped consumer configuration for exec bindings —
@@ -41,40 +41,40 @@ type HookTable struct {
 // Hooks compiles the table into the three generic hooks, suitable for
 // invoker-level attachment (inv.OutputDecoder, inv.ResultClassifier,
 // inv.FieldRouter) or per-invocation options.
-func (t HookTable) Hooks() (openbindings.OutputDecoder, openbindings.ResultClassifier, openbindings.FieldRouter) {
+func (t HookTable) Hooks() (invoke.OutputDecoder, invoke.ResultClassifier, invoke.FieldRouter) {
 	decodeJSON := make(map[string]bool, len(t.DecodeJSON))
 	for _, op := range t.DecodeJSON {
 		decodeJSON[op] = true
 	}
 
-	decoder := func(site openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+	decoder := func(site invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 		if site.FamilyName() != "usage" || !decodeJSON[site.Operation] {
-			return nil, openbindings.ErrUseDefault
+			return nil, invoke.ErrUseDefault
 		}
 		if len(raw.Body) == 0 {
 			return nil, nil
 		}
 		var v any
 		if err := json.Unmarshal(raw.Body, &v); err != nil {
-			return nil, &openbindings.InvocationError{
-				Code: openbindings.ErrCodeResponseError,
+			return nil, &invoke.InvocationError{
+				Code: invoke.ErrCodeResponseError,
 			}
 		}
 		return v, nil
 	}
 
-	classifier := func(site openbindings.InvokeSite, raw openbindings.RawResult) (bool, error) {
+	classifier := func(site invoke.InvokeSite, raw invoke.RawResult) (bool, error) {
 		if site.FamilyName() != "usage" || raw.Status == nil {
-			return false, openbindings.ErrUseDefault
+			return false, invoke.ErrUseDefault
 		}
 		oks, has := t.OKExits[site.Operation]
 		if !has {
-			return false, openbindings.ErrUseDefault
+			return false, invoke.ErrUseDefault
 		}
 		return slices.Contains(oks, *raw.Status), nil
 	}
 
-	router := func(site openbindings.InvokeSite, field string, _ any) string {
+	router := func(site invoke.InvokeSite, field string, _ any) string {
 		if site.FamilyName() != "usage" {
 			return ""
 		}
@@ -89,6 +89,6 @@ func (t HookTable) Hooks() (openbindings.OutputDecoder, openbindings.ResultClass
 }
 
 // Install attaches the table's compiled hooks at invoker level.
-func (t HookTable) Install(inv *openbindings.OperationInvoker) {
+func (t HookTable) Install(inv *invoke.OperationInvoker) {
 	inv.OutputDecoder, inv.ResultClassifier, inv.FieldRouter = t.Hooks()
 }

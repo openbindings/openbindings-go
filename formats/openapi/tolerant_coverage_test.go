@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 // A document with one clean operation and two operations genuinely
@@ -43,9 +44,9 @@ const mixedDoc = `{
   }
 }`
 
-func mixedInput() *openbindings.SynthesizeInput {
-	return &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{
+func mixedInput() *synthesize.SynthesizeInput {
+	return &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Content:     json.RawMessage(mixedDoc),
 		}},
@@ -77,23 +78,23 @@ func TestCoverageSynthesisReturnsSoundPartialOBI(t *testing.T) {
 		t.Fatalf("missing getGood; got %v", result.Interface.Operations)
 	}
 
-	targets := map[string]openbindings.SynthesisCoverageEntry{}
+	targets := map[string]synthesize.SynthesisCoverageEntry{}
 	for _, entry := range result.Coverage.Entries {
-		if entry.Scope == openbindings.SynthesisCoverageTarget {
+		if entry.Scope == synthesize.SynthesisCoverageTarget {
 			targets[entry.SourceRef] = entry
-			if entry.Status == openbindings.SynthesisImplementationUnsupported {
+			if entry.Status == synthesize.SynthesisImplementationUnsupported {
 				t.Fatalf("implementation-unsupported target %q; every omission must be spec-governed", entry.SourceRef)
 			}
 		}
 	}
 
 	good, ok := targets["#/paths/~1good/get"]
-	if !ok || good.Status != openbindings.SynthesisRepresented {
+	if !ok || good.Status != synthesize.SynthesisRepresented {
 		t.Fatalf("good target = %+v; want represented", good)
 	}
 
 	conditional, ok := targets["#/paths/~1conditional/post"]
-	if !ok || conditional.Status != openbindings.SynthesisExcluded {
+	if !ok || conditional.Status != synthesize.SynthesisExcluded {
 		t.Fatalf("conditional target = %+v; want excluded", conditional)
 	}
 	if conditional.ReasonCode != "openapi.unresolvable_request_body" && conditional.ReasonCode != "openapi.media_schema_mismatch" {
@@ -104,7 +105,7 @@ func TestCoverageSynthesisReturnsSoundPartialOBI(t *testing.T) {
 	}
 
 	collide, ok := targets["#/paths/~1collide/get"]
-	if !ok || collide.Status != openbindings.SynthesisExcluded {
+	if !ok || collide.Status != synthesize.SynthesisExcluded {
 		t.Fatalf("collide target = %+v; want excluded", collide)
 	}
 	if collide.ReasonCode != "openapi.flattening_collision" || collide.Rule != "OAPI-P-03" {
@@ -154,8 +155,8 @@ func TestAllUnrepresentableYieldsEmptySoundOBI(t *testing.T) {
 	  }
 	}`
 	synth := &Synthesizer{}
-	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &openbindings.SynthesizeInput{
-		Sources: []openbindings.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("coverage synthesis failed: %v", err)
@@ -165,9 +166,9 @@ func TestAllUnrepresentableYieldsEmptySoundOBI(t *testing.T) {
 	}
 	var targetCount int
 	for _, entry := range result.Coverage.Entries {
-		if entry.Scope == openbindings.SynthesisCoverageTarget {
+		if entry.Scope == synthesize.SynthesisCoverageTarget {
 			targetCount++
-			if entry.Status != openbindings.SynthesisExcluded {
+			if entry.Status != synthesize.SynthesisExcluded {
 				t.Fatalf("target status = %q; want excluded", entry.Status)
 			}
 		}

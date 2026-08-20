@@ -12,6 +12,7 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 const testProto = `
@@ -47,7 +48,7 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
-func unaryArgs(location string, content any, ref string) *openbindings.BindingInvocationArgs {
+func unaryArgs(location string, content any, ref string) *invoke.BindingInvocationArgs {
 	// nil means ABSENT content (descriptorless mode), never a present null;
 	// a string is .proto source text (the family's string carriage).
 	var raw json.RawMessage
@@ -60,8 +61,8 @@ func unaryArgs(location string, content any, ref string) *openbindings.BindingIn
 	default:
 		raw = mustContent(content)
 	}
-	return &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{
+	return &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{
 			BindingSpec: BindingSpec,
 			Location:    location,
 			Content:     raw,
@@ -72,7 +73,7 @@ func unaryArgs(location string, content any, ref string) *openbindings.BindingIn
 
 // invokeWith starts an invocation, writes the given inputs through the
 // handle, and closes the input side.
-func invokeWith(t *testing.T, ctx context.Context, invoker *Invoker, args *openbindings.BindingInvocationArgs, inputs ...any) openbindings.Invocation[any, any] {
+func invokeWith(t *testing.T, ctx context.Context, invoker *Invoker, args *invoke.BindingInvocationArgs, inputs ...any) invoke.Invocation[any, any] {
 	t.Helper()
 	inv := invoker.InvokeBinding(ctx, args)
 	for _, in := range inputs {
@@ -88,7 +89,7 @@ func invokeWith(t *testing.T, ctx context.Context, invoker *Invoker, args *openb
 
 // collectOutputs reads the output stream to its end and returns the outputs
 // plus the terminal error (nil on clean io.EOF close).
-func collectOutputs(t *testing.T, ctx context.Context, inv openbindings.Invocation[any, any]) ([]any, *openbindings.InvocationError) {
+func collectOutputs(t *testing.T, ctx context.Context, inv invoke.Invocation[any, any]) ([]any, *invoke.InvocationError) {
 	t.Helper()
 	out := inv.Outputs()
 	var outputs []any
@@ -98,7 +99,7 @@ func collectOutputs(t *testing.T, ctx context.Context, inv openbindings.Invocati
 			return outputs, nil
 		}
 		if err != nil {
-			ierr, ok := err.(*openbindings.InvocationError)
+			ierr, ok := err.(*invoke.InvocationError)
 			if !ok {
 				t.Fatalf("Read returned a non-InvocationError: %v", err)
 			}
@@ -110,7 +111,7 @@ func collectOutputs(t *testing.T, ctx context.Context, inv openbindings.Invocati
 
 // mustTerminalError drains the stream expecting zero outputs and a terminal
 // error with the given code.
-func mustTerminalError(t *testing.T, ctx context.Context, inv openbindings.Invocation[any, any], wantCode string) *openbindings.InvocationError {
+func mustTerminalError(t *testing.T, ctx context.Context, inv invoke.Invocation[any, any], wantCode string) *invoke.InvocationError {
 	t.Helper()
 	outputs, ierr := collectOutputs(t, ctx, inv)
 	if len(outputs) != 0 {
@@ -168,7 +169,7 @@ func TestInvokeBinding_UnarySuccess(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
 
-	got, err := openbindings.Single[any](ctx, inv.Outputs())
+	got, err := invoke.Single[any](ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("Single: %v", err)
 	}
@@ -196,7 +197,7 @@ func TestInvokeBinding_UnaryTrailer(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
 
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("Single: %v", err)
 	}
 
@@ -209,7 +210,7 @@ func TestInvokeBinding_HTTPError(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
 
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeExecutionFailed)
 	if ierr.HasData() {
 		t.Errorf("native Connect failure crossed as abstract data: %#v", ierr.Data)
 	}
@@ -238,7 +239,7 @@ func TestInvokeBinding_ConnectErrorsStayNativeDiagnostics(t *testing.T) {
 
 			inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 				map[string]any{"id": "abc"})
-			ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
+			ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeExecutionFailed)
 			if ierr.Data != nil {
 				t.Fatalf("native Connect evidence leaked into portable details: %#v", ierr.Data)
 			}
@@ -256,7 +257,7 @@ func TestInvokeBinding_UnauthenticatedMessageAndEvidence(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
 
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeExecutionFailed)
 	if ierr.HasData() {
 		t.Errorf("native unauthenticated evidence crossed as abstract data: %#v", ierr.Data)
 	}
@@ -277,7 +278,7 @@ func TestInvokeBinding_BearerTokenSent(t *testing.T) {
 	args.Context = map[string]any{"bearerToken": "secret-123"}
 	inv := invokeWith(t, ctx, NewInvoker(), args, map[string]any{"id": "abc"})
 
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("Single: %v", err)
 	}
 	if gotAuth != "Bearer secret-123" {
@@ -292,13 +293,13 @@ func TestInvokeBinding_InvalidRef(t *testing.T) {
 	// No input is written: a malformed ref must terminate the invocation
 	// before any input is consumed and before any network I/O.
 	inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, testProto, "not-a-valid-ref"))
-	mustTerminalError(t, ctx, inv, openbindings.ErrCodeInvalidRef)
+	mustTerminalError(t, ctx, inv, invoke.ErrCodeInvalidRef)
 }
 
 func TestInvokeBinding_MissingBaseURL(t *testing.T) {
 	ctx := testContext(t)
 	inv := NewInvoker().InvokeBinding(ctx, unaryArgs("", testProto, "testpkg.TestService/GetItem"))
-	mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
+	mustTerminalError(t, ctx, inv, invoke.ErrCodeSourceConfigError)
 }
 
 // An embed-mode Connect source carries the SCHEMA as content; the base URL
@@ -318,11 +319,11 @@ message PingMsg { string msg = 1; }
 	// No location, no configured target: refuse, naming both remedies. The
 	// message must be the embedded-content-aware variant, distinct from the
 	// no-content-at-all message.
-	h := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
+	h := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
 		Ref:    "tiny.Tiny/Ping",
 	})
-	ierr := mustTerminalError(t, ctx, h, openbindings.ErrCodeSourceConfigError)
+	ierr := mustTerminalError(t, ctx, h, invoke.ErrCodeSourceConfigError)
 	if ierr.HasData() {
 		t.Errorf("configuration diagnostics crossed as abstract data: %#v", ierr.Data)
 	}
@@ -330,8 +331,8 @@ message PingMsg { string msg = 1; }
 	// configuration.target supplies the base URL: the invocation proceeds
 	// past the config gate (failing later at the unreachable endpoint, not
 	// at configuration).
-	h2 := invokeWith(t, ctx, invoker, &openbindings.BindingInvocationArgs{
-		Source:  openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
+	h2 := invokeWith(t, ctx, invoker, &invoke.BindingInvocationArgs{
+		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
 		Ref:     "tiny.Tiny/Ping",
 		Context: map[string]any{"configuration": map[string]any{"target": "http://127.0.0.1:1"}},
 	}, map[string]any{"msg": "hi"})
@@ -340,7 +341,7 @@ message PingMsg { string msg = 1; }
 	if ierr2 == nil {
 		t.Fatal("dial of an unreachable base URL must fail")
 	}
-	if ierr2.Code == openbindings.ErrCodeSourceConfigError {
+	if ierr2.Code == invoke.ErrCodeSourceConfigError {
 		t.Fatalf("configuration.target must satisfy the config gate; still got config error")
 	}
 }
@@ -351,7 +352,7 @@ message PingMsg { string msg = 1; }
 func TestInvokeBinding_MissingBaseURL_NoContentMessage(t *testing.T) {
 	ctx := testContext(t)
 	inv := NewInvoker().InvokeBinding(ctx, unaryArgs("", nil, "testpkg.TestService/GetItem"))
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceConfigError)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeSourceConfigError)
 	if ierr.HasData() {
 		t.Errorf("configuration diagnostics crossed as abstract data: %#v", ierr.Data)
 	}
@@ -362,7 +363,7 @@ func TestInvokeBinding_BadProtoContent(t *testing.T) {
 	srv := unreachableServer(t)
 
 	inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, "this is not proto {", "testpkg.TestService/GetItem"))
-	mustTerminalError(t, ctx, inv, openbindings.ErrCodeSourceLoadFailed)
+	mustTerminalError(t, ctx, inv, invoke.ErrCodeSourceLoadFailed)
 }
 
 // clientStreamingProto declares a client-streaming method alongside a
@@ -391,7 +392,7 @@ func TestInvokeBinding_ClientStreamingRefused(t *testing.T) {
 
 	inv := NewInvoker().WithFullDuplexTransport(false).InvokeBinding(ctx, unaryArgs(srv.URL, clientStreamingProto, "testpkg.UploadService/Upload"))
 
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeExecutionFailed)
 	if ierr.HasData() {
 		t.Errorf("native cardinality evidence crossed as abstract data: %#v", ierr.Data)
 	}
@@ -414,7 +415,7 @@ func TestInvokeBinding_AbsentInputDispatchesEmptyMessage(t *testing.T) {
 	// type. This module no longer produces ERR_MISSING_INPUT.
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"))
 
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("absent input must dispatch the empty request message (CONN-P-02): %v", err)
 	}
 	if gotBody != "{}" {
@@ -437,7 +438,7 @@ func TestInvokeBinding_EmptyRequestMessage(t *testing.T) {
 	// Empty request message: a bare input close is acceptable and dispatches {}.
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, emptyRequestProto, "testpkg.PingService/Ping"))
 
-	got, err := openbindings.Single[any](ctx, inv.Outputs())
+	got, err := invoke.Single[any](ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("Single: %v", err)
 	}
@@ -458,7 +459,7 @@ func TestInvokeBinding_NonCanonicalInput(t *testing.T) {
 	// the request type's canonical JSON form).
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		"just a string")
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeValidationFailed)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeValidationFailed)
 	if ierr.HasData() {
 		t.Errorf("native validation evidence crossed as abstract data: %#v", ierr.Data)
 	}
@@ -478,7 +479,7 @@ func TestInvokeBinding_RequestBodyMatchesInput(t *testing.T) {
 
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "xyz"})
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("Single: %v", err)
 	}
 
@@ -507,7 +508,7 @@ func TestInvokeBinding_NoProtoContent_GenericJSON(t *testing.T) {
 	// (CONN-P-01): unary by definition, verbatim JSON values (§9.3).
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, nil, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
-	if _, err := openbindings.Single[any](ctx, inv.Outputs()); err != nil {
+	if _, err := invoke.Single[any](ctx, inv.Outputs()); err != nil {
 		t.Fatalf("Single: %v", err)
 	}
 
@@ -526,7 +527,7 @@ func TestInvokeBinding_ConnectFailed(t *testing.T) {
 	// connections on most systems.
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs("http://127.0.0.1:1", testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
-	mustTerminalError(t, ctx, inv, openbindings.ErrCodeConnectFailed)
+	mustTerminalError(t, ctx, inv, invoke.ErrCodeConnectFailed)
 }
 
 func TestInvokeBinding_RedirectLimit(t *testing.T) {
@@ -541,7 +542,7 @@ func TestInvokeBinding_RedirectLimit(t *testing.T) {
 
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeConnectFailed)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeConnectFailed)
 	if ierr.HasData() {
 		t.Errorf("native redirect evidence crossed as abstract data: %#v", ierr.Data)
 	}
@@ -553,7 +554,7 @@ func TestInvokeBinding_CancelledContext(t *testing.T) {
 	srv := unreachableServer(t)
 
 	inv := NewInvoker().InvokeBinding(cancelled, unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem"))
-	mustTerminalError(t, testContext(t), inv, openbindings.ErrCodeCancelled)
+	mustTerminalError(t, testContext(t), inv, invoke.ErrCodeCancelled)
 }
 
 // streamingProto declares a server-streaming method so the invoker takes the
@@ -570,7 +571,7 @@ service LogsService {
 }
 `
 
-func streamingArgs(location string) *openbindings.BindingInvocationArgs {
+func streamingArgs(location string) *invoke.BindingInvocationArgs {
 	return unaryArgs(location, streamingProto, "testpkg.LogsService/TailLogs")
 }
 
@@ -687,10 +688,10 @@ func TestInvokeBinding_ServerStreaming_EndStreamError(t *testing.T) {
 	if ierr == nil {
 		t.Fatal("expected a terminal error from the end-stream envelope")
 	}
-	if ierr.Code != openbindings.ErrCodeExecutionFailed {
-		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeExecutionFailed)
+	if ierr.Code != invoke.ErrCodeExecutionFailed {
+		t.Errorf("error code = %q, want %q", ierr.Code, invoke.ErrCodeExecutionFailed)
 	}
-	if ierr.Error() != openbindings.ErrCodeExecutionFailed {
+	if ierr.Error() != invoke.ErrCodeExecutionFailed {
 		t.Errorf("error text = %q", ierr.Error())
 	}
 }
@@ -701,7 +702,7 @@ func TestInvokeBinding_ServerStreaming_EndStreamErrorIsDiagnostic(t *testing.T) 
 		`{"error":{"code":"unauthenticated","message":"token expired"}}`)
 
 	inv := invokeWith(t, ctx, NewInvoker(), streamingArgs(srv.URL), map[string]any{"source": "test"})
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeExecutionFailed)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeExecutionFailed)
 	if ierr.HasData() {
 		t.Fatalf("END_STREAM native evidence leaked as abstract data: %+v", ierr.Data)
 	}
@@ -760,8 +761,8 @@ func TestInvokeBinding_ServerStreaming_Stop(t *testing.T) {
 	// Abandoning the stream cancels the invocation and tears down the
 	// in-flight HTTP request.
 	out.Stop()
-	if _, err := out.Read(ctx); err == nil || openbindings.AsInvocationError(err).Code != openbindings.ErrCodeCancelled {
-		t.Fatalf("Read after Stop = %v, want %s", err, openbindings.ErrCodeCancelled)
+	if _, err := out.Read(ctx); err == nil || invoke.AsInvocationError(err).Code != invoke.ErrCodeCancelled {
+		t.Fatalf("Read after Stop = %v, want %s", err, invoke.ErrCodeCancelled)
 	}
 
 	select {
@@ -863,7 +864,7 @@ func TestServerStreamingCompressedFrameRejected(t *testing.T) {
 
 	inv := invokeWith(t, ctx, NewInvoker(), streamingArgs(srv.URL), map[string]any{"source": "test"})
 
-	ierr := mustTerminalError(t, ctx, inv, openbindings.ErrCodeStreamError)
+	ierr := mustTerminalError(t, ctx, inv, invoke.ErrCodeStreamError)
 	if ierr.HasData() {
 		t.Errorf("native compression evidence crossed as abstract data: %#v", ierr.Data)
 	}
@@ -882,7 +883,7 @@ func TestInvokeBinding_NoInputConvention(t *testing.T) {
 	// InputSchema deliberately nil → no-input operation.
 
 	inv := NewInvoker().InvokeBinding(ctx, args)
-	got, err := openbindings.Single[any](ctx, inv.Outputs())
+	got, err := invoke.Single[any](ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("no-input convention should dispatch without a write: %v", err)
 	}
@@ -909,7 +910,7 @@ func TestNewInvokerWithClient(t *testing.T) {
 	inv := invokeWith(t, ctx, NewInvokerWithClient(custom),
 		unaryArgs("http://example.test", testProto, "testpkg.TestService/GetItem"),
 		map[string]any{"id": "abc"})
-	got, err := openbindings.Single[any](ctx, inv.Outputs())
+	got, err := invoke.Single[any](ctx, inv.Outputs())
 	if err != nil {
 		t.Fatalf("Single: %v", err)
 	}

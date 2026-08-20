@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // TestUnaryPublish3xxIsFailure pins ASYNC-P-06 / §9.4: a unary publish
@@ -28,7 +28,7 @@ func TestUnaryPublish3xxIsFailure(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 
-	call := binv.InvokeBinding(bg(), &openbindings.BindingInvocationArgs{
+	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
 		Source: httpSource(srv),
 		Ref:    "#/operations/sendOpenMessage",
 	})
@@ -37,11 +37,11 @@ func TestUnaryPublish3xxIsFailure(t *testing.T) {
 	}
 	_, err := drainOutputs(t, call)
 
-	var ie *openbindings.InvocationError
+	var ie *invoke.InvocationError
 	if !errors.As(err, &ie) {
 		t.Fatalf("a 3xx-final unary publish must FAIL (ASYNC-P-06 §9.4), got success (%v)", err)
 	}
-	if ie.Code != openbindings.ErrCodeExecutionFailed {
+	if ie.Code != invoke.ErrCodeExecutionFailed {
 		t.Fatalf("3xx classifies via the SSE path's status table to ERR_EXECUTION_FAILED, got %s: %s", ie.Code, ie.Error())
 	}
 	if ie.HasData() {

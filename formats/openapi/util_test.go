@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/invoke"
+
 	"github.com/getkin/kin-openapi/openapi3"
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // ---------------------------------------------------------------------------
@@ -149,7 +150,7 @@ func contextKey(doc *openapi3.T, location string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return openbindings.NormalizeContextKey(base), nil
+	return invoke.NormalizeContextKey(base), nil
 }
 
 func TestContextKey_AbsoluteURL(t *testing.T) {
@@ -680,7 +681,7 @@ func TestRequiredContext_DigestOnlyAlternativeSurfaced(t *testing.T) {
 	// The surfaced-but-unresolvable requirement is unselectable by the
 	// built-in satisfaction check (rule 10: no resolver at this layer) —
 	// no context can satisfy it.
-	if openbindings.ContextSatisfies(map[string]any{"bearerToken": "t"}, d) {
+	if invoke.ContextSatisfies(map[string]any{"bearerToken": "t"}, d) {
 		t.Error("an unmapped requirement must never be satisfiable by the built-in check")
 	}
 }

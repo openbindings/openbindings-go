@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // This file activates the exec routing subsystem and the HookTable, which
@@ -28,14 +29,14 @@ import (
 // payload discarded.
 func TestRouting_NonObjectInputRefused(t *testing.T) {
 	for _, in := range []any{"not-an-object", []any{"a", "b"}, float64(3)} {
-		_, ierr := invokeUsage(t, NewInvoker(), &openbindings.BindingInvocationArgs{
+		_, ierr := invokeUsage(t, NewInvoker(), &invoke.BindingInvocationArgs{
 			Source: testSource(),
 			Ref:    "echo",
 		}, in)
 		if ierr == nil {
 			t.Fatalf("input %v (%T): expected a loud refusal (USAGE-P-04 §9.1), got success", in, in)
 		}
-		if ierr.Code != openbindings.ErrCodeValidationFailed {
+		if ierr.Code != invoke.ErrCodeValidationFailed {
 			t.Fatalf("input %v: expected ERR_VALIDATION_FAILED, got %s: %s", in, ierr.Code, ierr.Error())
 		}
 		if ierr.HasData() {
@@ -70,15 +71,15 @@ func TestRouting_DirectLaneNonObjectRefused(t *testing.T) {
 // optionally, a strict-JSON output decoder), the consumer-configuration shape
 // that elects exec channels.
 func routerDriver(routes map[string]string, decodeJSON bool) driver {
-	return hooked(func(op *openbindings.OperationInvoker) {
-		op.FieldRouter = func(site openbindings.InvokeSite, field string, _ any) string {
+	return hooked(func(op *invoke.OperationInvoker) {
+		op.FieldRouter = func(site invoke.InvokeSite, field string, _ any) string {
 			if site.FamilyName() != "usage" {
 				return ""
 			}
 			return routes[field]
 		}
 		if decodeJSON {
-			op.OutputDecoder = func(_ openbindings.InvokeSite, raw openbindings.RawResult) (any, error) {
+			op.OutputDecoder = func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 				if len(raw.Body) == 0 {
 					return nil, nil
 				}
@@ -95,7 +96,7 @@ func routerDriver(routes map[string]string, decodeJSON bool) driver {
 func TestRouting_StdinDash(t *testing.T) {
 	// The `doc` field rides stdin, with `-` in its positional slot (the
 	// filter lane's majority route). slurp echoes stdin + argv as JSON.
-	out, ierr := invokeUsage(t, routerDriver(map[string]string{"doc": RouteStdinDash}, true), &openbindings.BindingInvocationArgs{
+	out, ierr := invokeUsage(t, routerDriver(map[string]string{"doc": RouteStdinDash}, true), &invoke.BindingInvocationArgs{
 		Source: testSource(),
 		Ref:    "slurp",
 	}, map[string]any{"doc": "piped payload"})
@@ -117,7 +118,7 @@ func TestRouting_StdinDash(t *testing.T) {
 func TestRouting_SlotlessStdin(t *testing.T) {
 	// `payload` maps to no slot on drink; the slotless pure channel delivers
 	// its bytes to stdin with nothing on argv.
-	out, ierr := invokeUsage(t, routerDriver(map[string]string{"payload": RouteStdin}, true), &openbindings.BindingInvocationArgs{
+	out, ierr := invokeUsage(t, routerDriver(map[string]string{"payload": RouteStdin}, true), &invoke.BindingInvocationArgs{
 		Source: testSource(),
 		Ref:    "drink",
 	}, map[string]any{"payload": "slotless bytes"})
@@ -140,7 +141,7 @@ func TestRouting_FileMaterialization(t *testing.T) {
 	// `doc` materializes into a temp file whose PATH substitutes into the
 	// slot; statfile reads it back and reports its mode — asserting both the
 	// round-trip and the 0600 the routing lane creates it with.
-	out, ierr := invokeUsage(t, routerDriver(map[string]string{"doc": RouteFile}, true), &openbindings.BindingInvocationArgs{
+	out, ierr := invokeUsage(t, routerDriver(map[string]string{"doc": RouteFile}, true), &invoke.BindingInvocationArgs{
 		Source: testSource(),
 		Ref:    "statfile",
 	}, map[string]any{"doc": "materialized contents"})
@@ -161,7 +162,7 @@ func TestRouting_FileMaterialization(t *testing.T) {
 
 func TestRouting_JSONLaneAndTextLane(t *testing.T) {
 	// num: a bare number under a declared JSON lane parses to a number.
-	out, ierr := invokeUsage(t, routerDriver(nil, true), &openbindings.BindingInvocationArgs{
+	out, ierr := invokeUsage(t, routerDriver(nil, true), &invoke.BindingInvocationArgs{
 		Source: testSource(), Ref: "num",
 	}, nil)
 	if ierr != nil {
@@ -171,7 +172,7 @@ func TestRouting_JSONLaneAndTextLane(t *testing.T) {
 		t.Errorf("num JSON lane = %v, want 42", out)
 	}
 	// prose: human text under the default text lane is the raw stdout string.
-	out, ierr = invokeUsage(t, NewInvoker(), &openbindings.BindingInvocationArgs{
+	out, ierr = invokeUsage(t, NewInvoker(), &invoke.BindingInvocationArgs{
 		Source: testSource(), Ref: "prose",
 	}, nil)
 	if ierr != nil {
@@ -186,9 +187,9 @@ func TestRouting_JSONLaneAndTextLane(t *testing.T) {
 // Impossible-routing refusals — all before spawn.
 // ---------------------------------------------------------------------------
 
-func refusalCode(t *testing.T, d driver, ref string, routes map[string]string, input any) *openbindings.InvocationError {
+func refusalCode(t *testing.T, d driver, ref string, routes map[string]string, input any) *invoke.InvocationError {
 	t.Helper()
-	_, ierr := invokeUsage(t, d, &openbindings.BindingInvocationArgs{Source: testSource(), Ref: ref}, input)
+	_, ierr := invokeUsage(t, d, &invoke.BindingInvocationArgs{Source: testSource(), Ref: ref}, input)
 	if ierr == nil {
 		t.Fatalf("%s: expected a pre-spawn refusal, got success", ref)
 	}
@@ -199,7 +200,7 @@ func TestRouting_TwoFieldsToStdinRefused(t *testing.T) {
 	// Two slotless fields both route to stdin: at most one may ride it.
 	d := routerDriver(map[string]string{"a": RouteStdin, "b": RouteStdin}, false)
 	ierr := refusalCode(t, d, "drink", nil, map[string]any{"a": "x", "b": "y"})
-	if ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
+	if ierr.Code != invoke.ErrCodeValidationFailed || ierr.HasData() {
 		t.Fatalf("want code-only ERR_VALIDATION_FAILED, got %#v", ierr)
 	}
 }
@@ -209,7 +210,7 @@ func TestRouting_StdinOnSlottedFieldRefused(t *testing.T) {
 	// maps to --tag, so it is refused with the stdin-dash teaching hint.
 	d := routerDriver(map[string]string{"tag": RouteStdin}, false)
 	ierr := refusalCode(t, d, "slurp", nil, map[string]any{"tag": "x", "doc": "input"})
-	if ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
+	if ierr.Code != invoke.ErrCodeValidationFailed || ierr.HasData() {
 		t.Fatalf("want code-only ERR_VALIDATION_FAILED, got %#v", ierr)
 	}
 }
@@ -217,7 +218,7 @@ func TestRouting_StdinOnSlottedFieldRefused(t *testing.T) {
 func TestRouting_UnknownChannelTokenRefused(t *testing.T) {
 	d := routerDriver(map[string]string{"doc": "teleport"}, false)
 	ierr := refusalCode(t, d, "slurp", nil, map[string]any{"doc": "x"})
-	if ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
+	if ierr.Code != invoke.ErrCodeValidationFailed || ierr.HasData() {
 		t.Fatalf("want code-only ERR_VALIDATION_FAILED, got %#v", ierr)
 	}
 }
@@ -226,14 +227,14 @@ func TestRouting_ByteCapRefused(t *testing.T) {
 	big := strings.Repeat("x", maxRouteBytes+1)
 	d := routerDriver(map[string]string{"payload": RouteStdin}, false)
 	ierr := refusalCode(t, d, "drink", nil, map[string]any{"payload": big})
-	if ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
+	if ierr.Code != invoke.ErrCodeValidationFailed || ierr.HasData() {
 		t.Fatalf("want code-only ERR_VALIDATION_FAILED, got %#v", ierr)
 	}
 }
 
 // sourceKDL builds a bare-kdl fixture source from inline KDL text.
-func sourceKDL(kdl string) openbindings.InvocationSource {
-	return openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(kdl)}
+func sourceKDL(kdl string) invoke.InvocationSource {
+	return invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(kdl)}
 }
 
 func TestRouting_BoolFlagSlotRefused(t *testing.T) {
@@ -243,8 +244,8 @@ cmd "toggle" {
 }
 `
 	d := routerDriver(map[string]string{"on": RouteStdinDash}, false)
-	_, ierr := invokeUsage(t, d, &openbindings.BindingInvocationArgs{Source: sourceKDL(kdl), Ref: "toggle"}, map[string]any{"on": true})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
+	_, ierr := invokeUsage(t, d, &invoke.BindingInvocationArgs{Source: sourceKDL(kdl), Ref: "toggle"}, map[string]any{"on": true})
+	if ierr == nil || ierr.Code != invoke.ErrCodeValidationFailed || ierr.HasData() {
 		t.Fatalf("want ERR_VALIDATION_FAILED for a bool-flag slot, got %v", ierr)
 	}
 }
@@ -258,8 +259,8 @@ cmd "pick" {
 }
 `
 	d := routerDriver(map[string]string{"mode": RouteStdinDash}, false)
-	_, ierr := invokeUsage(t, d, &openbindings.BindingInvocationArgs{Source: sourceKDL(kdl), Ref: "pick"}, map[string]any{"mode": "trace"})
-	if ierr == nil || ierr.Code != openbindings.ErrCodeValidationFailed || ierr.HasData() {
+	_, ierr := invokeUsage(t, d, &invoke.BindingInvocationArgs{Source: sourceKDL(kdl), Ref: "pick"}, map[string]any{"mode": "trace"})
+	if ierr == nil || ierr.Code != invoke.ErrCodeValidationFailed || ierr.HasData() {
 		t.Fatalf("want ERR_VALIDATION_FAILED for choices excluding \"-\", got %v", ierr)
 	}
 }
@@ -346,19 +347,19 @@ func TestHookTable_Hooks(t *testing.T) {
 	}
 	decoder, classifier, router := table.Hooks()
 
-	usageSite := func(op string) openbindings.InvokeSite {
-		return openbindings.InvokeSite{BindingSpec: BindingSpec, Operation: op}
+	usageSite := func(op string) invoke.InvokeSite {
+		return invoke.InvokeSite{BindingSpec: BindingSpec, Operation: op}
 	}
 
 	// Decoder: a JSON-lane op parses; a non-JSON body is a loud error; an
 	// empty body is nil; an op without a row declines.
-	if v, err := decoder(usageSite("emit"), openbindings.RawResult{Body: []byte(`{"n":1}`)}); err != nil || v.(map[string]any)["n"] != float64(1) {
+	if v, err := decoder(usageSite("emit"), invoke.RawResult{Body: []byte(`{"n":1}`)}); err != nil || v.(map[string]any)["n"] != float64(1) {
 		t.Errorf("decoder JSON: got (%v, %v)", v, err)
 	}
-	if _, err := decoder(usageSite("emit"), openbindings.RawResult{Body: []byte("not json")}); err == nil {
+	if _, err := decoder(usageSite("emit"), invoke.RawResult{Body: []byte("not json")}); err == nil {
 		t.Error("decoder: expected a loud error on a non-JSON machine lane")
 	} else {
-		var invocationError *openbindings.InvocationError
+		var invocationError *invoke.InvocationError
 		if !errors.As(err, &invocationError) {
 			t.Fatalf("decoder: error = %T, want InvocationError", err)
 		}
@@ -366,28 +367,28 @@ func TestHookTable_Hooks(t *testing.T) {
 			t.Fatalf("decoder: process evidence leaked into data: %#v", invocationError.Data)
 		}
 	}
-	if v, err := decoder(usageSite("emit"), openbindings.RawResult{Body: nil}); err != nil || v != nil {
+	if v, err := decoder(usageSite("emit"), invoke.RawResult{Body: nil}); err != nil || v != nil {
 		t.Errorf("decoder empty: got (%v, %v), want (nil, nil)", v, err)
 	}
-	if _, err := decoder(usageSite("other"), openbindings.RawResult{Body: []byte("x")}); !errors.Is(err, openbindings.ErrUseDefault) {
+	if _, err := decoder(usageSite("other"), invoke.RawResult{Body: []byte("x")}); !errors.Is(err, invoke.ErrUseDefault) {
 		t.Error("decoder: an op without a JSON row must decline to the default")
 	}
-	if _, err := decoder(openbindings.InvokeSite{BindingSpec: "openbindings.openapi@1", Operation: "emit"}, openbindings.RawResult{Body: []byte("x")}); !errors.Is(err, openbindings.ErrUseDefault) {
+	if _, err := decoder(invoke.InvokeSite{BindingSpec: "openbindings.openapi@1", Operation: "emit"}, invoke.RawResult{Body: []byte("x")}); !errors.Is(err, invoke.ErrUseDefault) {
 		t.Error("decoder: a non-usage site must decline")
 	}
 
 	// Classifier: an OK exit is success; an exit outside the list is not; an
 	// op without a row, or a statusless unit, declines.
-	if ok, err := classifier(usageSite("compare"), openbindings.RawResult{Status: routeIntPtr(1)}); err != nil || !ok {
+	if ok, err := classifier(usageSite("compare"), invoke.RawResult{Status: routeIntPtr(1)}); err != nil || !ok {
 		t.Errorf("classifier exit 1: got (%v, %v), want success", ok, err)
 	}
-	if ok, err := classifier(usageSite("compare"), openbindings.RawResult{Status: routeIntPtr(2)}); err != nil || ok {
+	if ok, err := classifier(usageSite("compare"), invoke.RawResult{Status: routeIntPtr(2)}); err != nil || ok {
 		t.Errorf("classifier exit 2: got (%v, %v), want failure", ok, err)
 	}
-	if _, err := classifier(usageSite("compare"), openbindings.RawResult{Status: nil}); !errors.Is(err, openbindings.ErrUseDefault) {
+	if _, err := classifier(usageSite("compare"), invoke.RawResult{Status: nil}); !errors.Is(err, invoke.ErrUseDefault) {
 		t.Error("classifier: a statusless unit must decline")
 	}
-	if _, err := classifier(usageSite("other"), openbindings.RawResult{Status: routeIntPtr(0)}); !errors.Is(err, openbindings.ErrUseDefault) {
+	if _, err := classifier(usageSite("other"), invoke.RawResult{Status: routeIntPtr(0)}); !errors.Is(err, invoke.ErrUseDefault) {
 		t.Error("classifier: an op without a row must decline")
 	}
 
@@ -401,13 +402,13 @@ func TestHookTable_Hooks(t *testing.T) {
 	if got := router(usageSite("nope"), "locator", nil); got != "" {
 		t.Errorf("router: an op without a row must decline, got %q", got)
 	}
-	if got := router(openbindings.InvokeSite{BindingSpec: "openbindings.grpc@1"}, "locator", nil); got != "" {
+	if got := router(invoke.InvokeSite{BindingSpec: "openbindings.grpc@1"}, "locator", nil); got != "" {
 		t.Errorf("router: a non-usage site must decline, got %q", got)
 	}
 }
 
 func TestHookTable_Install(t *testing.T) {
-	op := openbindings.NewOperationInvoker(NewInvoker())
+	op := invoke.NewOperationInvoker(NewInvoker())
 	HookTable{DecodeJSON: []string{"emit"}}.Install(op)
 	if op.OutputDecoder == nil || op.ResultClassifier == nil || op.FieldRouter == nil {
 		t.Fatal("Install must attach all three compiled hooks")

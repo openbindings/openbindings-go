@@ -11,8 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/processorscenarios"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 type scenarioRoundTripper struct {
@@ -147,7 +148,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			return http.ErrUseLastResponse
 		},
 	}
-	source := openbindings.InvocationSource{BindingSpec: bindingSpec}
+	source := invoke.InvocationSource{BindingSpec: bindingSpec}
 	if location, ok := scenario.Given.Source["location"].(string); ok {
 		source.Location = location
 	}
@@ -159,28 +160,28 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		source.Content = raw
 	}
 	ref, _ := scenario.Given.Binding["ref"].(string)
-	args := &openbindings.BindingInvocationArgs{
+	args := &invoke.BindingInvocationArgs{
 		Source:  source,
 		Ref:     ref,
 		Context: scenarioContext(scenario),
 	}
 	joined := strings.HasPrefix(scenario.ID, "OAPI-FI-")
-	var call openbindings.Invocation[any, any]
+	var call invoke.Invocation[any, any]
 	if joined {
-		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &openbindings.SynthesizeInput{
-			Sources: []openbindings.SynthesizeSource{{
+		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+			Sources: []synthesize.SynthesizeSource{{
 				BindingSpec: bindingSpec, Location: source.Location, Content: source.Content,
 			}},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		op := openbindings.NewOperationInvoker(NewInvokerWithClient(client))
+		op := invoke.NewOperationInvoker(NewInvokerWithClient(client))
 		op.TransformEvaluator = openAPIJSONataEvaluator{}
-		call = openbindings.Invoke(
+		call = invoke.Invoke(
 			context.Background(), op, iface,
-			openbindings.NewOperationSignature[any, any](openAPIFidelityOperationID(scenario.ID)),
-			openbindings.WithContext(scenarioContext(scenario)),
+			invoke.NewOperationSignature[any, any](openAPIFidelityOperationID(scenario.ID)),
+			invoke.WithContext(scenarioContext(scenario)),
 		)
 	} else {
 		call = NewInvokerWithClient(client).InvokeBinding(context.Background(), args)
@@ -194,7 +195,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 
 	outputs := []any{}
 	stream := call.Outputs()
-	var terminal *openbindings.InvocationError
+	var terminal *invoke.InvocationError
 	for {
 		value, err := stream.Read(context.Background())
 		if err == nil {
@@ -202,7 +203,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			continue
 		}
 		if err != io.EOF {
-			terminal = openbindings.AsInvocationError(err)
+			terminal = invoke.AsInvocationError(err)
 		}
 		break
 	}
@@ -221,7 +222,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 
 	disposition := "refusal"
 	normalizedError := normalizedInvocationError(t, terminal)
-	if terminal.Code == openbindings.ErrCodeContextRequired {
+	if terminal.Code == invoke.ErrCodeContextRequired {
 		disposition = "context-required"
 		data["context"] = normalizedError["data"]
 	} else if len(roundTripper.dispatches) > 0 {
@@ -249,7 +250,7 @@ func openAPIFidelityOperationID(scenarioID string) string {
 	}[scenarioID]
 }
 
-func normalizedInvocationError(t *testing.T, terminal *openbindings.InvocationError) map[string]any {
+func normalizedInvocationError(t *testing.T, terminal *invoke.InvocationError) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(terminal)
 	if err != nil {
@@ -273,14 +274,14 @@ func scenarioContext(scenario processorscenarios.Scenario) map[string]any {
 	return ctx
 }
 
-func openAPIErrorPhase(err *openbindings.InvocationError, dispatched bool, scenarioID string) string {
+func openAPIErrorPhase(err *invoke.InvocationError, dispatched bool, scenarioID string) string {
 	if dispatched {
 		return "response"
 	}
-	if err.Code == openbindings.ErrCodeSourceLoadFailed {
+	if err.Code == invoke.ErrCodeSourceLoadFailed {
 		return "load"
 	}
-	if err.Code == openbindings.ErrCodeInvalidRef || err.Code == openbindings.ErrCodeRefNotFound {
+	if err.Code == invoke.ErrCodeInvalidRef || err.Code == invoke.ErrCodeRefNotFound {
 		return "resolution"
 	}
 	// These corpus cases are declaration-normalization collisions discovered

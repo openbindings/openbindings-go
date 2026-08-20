@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 func TestAdapterErrorBoundary_NetworkFailureIsCodeOnly(t *testing.T) {
@@ -17,16 +18,16 @@ func TestAdapterErrorBoundary_NetworkFailureIsCodeOnly(t *testing.T) {
 		return nil, fmt.Errorf("dial tcp: connection refused")
 	})}
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":{}}}}}}}}`
-	call := NewInvokerWithClient(client).InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+	call := NewInvokerWithClient(client).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Ref:    "#/paths/~1x/get",
 	})
 	_, ierr := driveSingle(t, call, nil)
 	if ierr == nil {
 		t.Fatal("expected connection failure")
 	}
-	if ierr.Code != openbindings.ErrCodeConnectFailed {
-		t.Fatalf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeConnectFailed)
+	if ierr.Code != invoke.ErrCodeConnectFailed {
+		t.Fatalf("error code = %q, want %q", ierr.Code, invoke.ErrCodeConnectFailed)
 	}
 	if ierr.HasData() {
 		t.Fatalf("native network evidence crossed as abstract data: %#v", ierr.Data)
@@ -59,8 +60,8 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	}
 	specBytes, _ := json.Marshal(spec)
 
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:               openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(specBytes))},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source:               invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(specBytes))},
 		Ref:                  "#/paths/~1big/get",
 		MaxDeliveryUnitBytes: 1024,
 	})
@@ -68,8 +69,8 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	if ierr == nil {
 		t.Fatal("expected an overflow error, got none")
 	}
-	if ierr.Code != openbindings.ErrCodeResponseError {
-		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeResponseError)
+	if ierr.Code != invoke.ErrCodeResponseError {
+		t.Errorf("error code = %q, want %q", ierr.Code, invoke.ErrCodeResponseError)
 	}
 	if ierr.HasData() {
 		t.Errorf("native size-limit evidence crossed as abstract data: %#v", ierr.Data)
@@ -94,8 +95,8 @@ func TestDeliveryUnitBound_SSEPerEventNotCumulative(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source: openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
 		Ref:    "#/paths/~1events/get",
 	})
 	vals, ierr := driveOutputs(context.Background(), call, nil)
@@ -120,8 +121,8 @@ func TestDeliveryUnitBound_SSETinyBoundRefusesLoudly(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	call := NewInvoker().InvokeBinding(context.Background(), &openbindings.BindingInvocationArgs{
-		Source:               openbindings.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source:               invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
 		Ref:                  "#/paths/~1events/get",
 		MaxDeliveryUnitBytes: 1024,
 	})
@@ -132,10 +133,10 @@ func TestDeliveryUnitBound_SSETinyBoundRefusesLoudly(t *testing.T) {
 	if ierr == nil {
 		t.Fatal("expected an overflow error, got none")
 	}
-	if ierr.Code != openbindings.ErrCodeResponseError {
-		t.Errorf("error code = %q, want %q", ierr.Code, openbindings.ErrCodeResponseError)
+	if ierr.Code != invoke.ErrCodeResponseError {
+		t.Errorf("error code = %q, want %q", ierr.Code, invoke.ErrCodeResponseError)
 	}
-	if ierr.Error() != openbindings.ErrCodeResponseError {
+	if ierr.Error() != invoke.ErrCodeResponseError {
 		t.Errorf("error text = %q, want the abstract code", ierr.Error())
 	}
 }
