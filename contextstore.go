@@ -35,7 +35,14 @@ var requirementFamilyFields = map[string][]string{
 	"auth.bearer": {"bearerToken"},
 	"auth.apiKey": {"apiKey"},
 	"auth.basic":  {"basic"},
-	"auth.oauth2": {"accessToken", "refreshToken", "clientSecret"},
+	// `bearerToken` belongs here because requirementSatisfied's oauth2 arm
+	// accepts one. Without it the two rules in this file contradicted each
+	// other: the challenge validated against a stored bearer token and then
+	// ScopeContext admitted nothing, so the caller supplied exactly what the
+	// error asked for, the scope gate dropped it, and the invoker re-challenged
+	// forever. A rule that says a value satisfies a requirement has to let that
+	// value through.
+	"auth.oauth2": {"accessToken", "bearerToken", "refreshToken", "clientSecret"},
 }
 
 // credentialFieldNames are the BindingContext fields RedactContext always
@@ -117,7 +124,19 @@ func requirementSatisfied(ctx map[string]any, req ContextRequirement, allowFlatN
 				return true
 			}
 		}
-		return allowFlatNamedCredential && ContextString(ctx, "accessToken") != ""
+		if !allowFlatNamedCredential {
+			return false
+		}
+		// A flat bearer token counts here because an OAuth2 access token
+		// reaches the wire AS a Bearer credential, and the placement side
+		// already knows it: credentialValues falls back to the flat bearer
+		// token when no accessToken is present. Until these two agreed, an
+		// artifact declaring oauth2 was a dead end -- the challenge asked for
+		// context, the remedy it printed stored a bearerToken, and the next
+		// attempt challenged identically because only `accessToken` counted.
+		// OAuth2 is among the most common schemes in real documents, so that
+		// disagreement closed off a large share of them.
+		return ContextString(ctx, "accessToken") != "" || ContextBearerToken(ctx) != ""
 	}
 	if req.Type == "config.value" {
 		point, _ := req.Extra["point"].(string)
