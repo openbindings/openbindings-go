@@ -164,9 +164,9 @@ func floorAuthority(class, line string) string {
 		return "OAS, Paths Object: each patterned field key begins with a forward slash and is appended to the Server Object's url to construct the target URL"
 	case floorD15:
 		if is30 {
-			return "OAS 3.0 line, Schema Object: a keyword's value carries the JSON type the governing dialect declares for it -- `items` Value MUST be an object and not an array; `properties` definitions MUST be a Schema Object; `required` and `enum` are taken directly from JSON Schema, where each is an array"
+			return "OAS 3.0 line, Schema Object: a keyword's value carries the JSON type the governing dialect declares for it -- `items` Value MUST be an object and not an array; `properties` definitions MUST be a Schema Object; `required` and `enum` are taken directly from JSON Schema, where `required` is an array of unique elements and `enum` is an array"
 		}
-		return "OAS 3.1 line via JSON Schema 2020-12: a keyword's value carries the JSON type the dialect declares for it -- `required` (Validation §6.5.3) and `enum` (§6.1.2) are arrays; `properties` members and `items` and `contains` are schemas, which on this line may be objects or booleans; `exclusiveMinimum` (§6.2.5) and `exclusiveMaximum` (§6.2.3) are numbers"
+		return "OAS 3.1 line, §4.8.24.1: absent `jsonSchemaDialect` the OAS dialect schema id MUST be used for Schema Objects, and the value fails that dialect (https://spec.openapis.org/oas/3.1/dialect/base)"
 	case floorURef:
 		if is30 {
 			return "OAS 3.0 line, Reference Object: $ref follows JSON Reference; its fragment is a JSON Pointer (RFC 6901) and identifies no location in the entry document"
@@ -590,72 +590,43 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 	// schemas plus operation schema roots. D1n/D1a (the two 3.1-shaped null
 	// spellings on the 3.0 line) are referred and deliberately NOT emitted.
 	visitSchema := func(node map[string]any, ptr string) {
-		// D15 -- a Schema Object keyword whose value violates the governing
-		// dialect's declared JSON type for it. Same derivation as D1/D1s: the
-		// nearest rung containing the Schema Object owns it, and P1/P2 decide
-		// whether it climbs. Edition-scoped where the two lines differ: a
-		// boolean `exclusiveMinimum` is the 3.0 line's own correct draft-4
-		// spelling and is not this class there, while a boolean-valued schema
-		// position IS this class there and is not on the 3.1 line -- see
-		// isFloorSchemaValued. Independent of `type`, which is why these run
-		// before the type gate below.
-		if value, declared := node["required"]; declared {
-			if _, isList := value.([]any); !isList {
-				addDefect(defect(floorD15, ptr+"/required"))
-			}
-		}
-		if value, declared := node["enum"]; declared {
-			if _, isList := value.([]any); !isList {
-				addDefect(defect(floorD15, ptr+"/enum"))
-			}
-		}
-		if _, isList := node["items"].([]any); isList {
-			addDefect(defect(floorD15, ptr+"/items"))
-		}
-		if properties, isMap := node["properties"].(map[string]any); isMap {
-			for _, key := range floorKeys(properties) {
-				if isFloorSchemaValued(properties[key], line) {
-					continue
+		// D1 / D1s -- the `type` gate. It runs FIRST so that `type` keeps its
+		// own class and its own citation: a position already carrying a defect
+		// keeps the class that reached it (addDefect is first-wins), and D15's
+		// dialect verdict below reaches `/type` too on the 3.1 line.
+		if t, typeDeclared := node["type"]; typeDeclared {
+			switch typed := t.(type) {
+			case string:
+				// D1n (the 3.0 line's `type: "null"`) is referred.
+				if !(line == "3.0" && typed == "null") && !types[typed] {
+					addDefect(defect(floorD1, ptr+"/type"))
 				}
-				addDefect(defect(floorD15, ptr+"/properties/"+floorEsc(key)))
-			}
-		}
-		if line == "3.1" {
-			for _, keyword := range []string{"exclusiveMaximum", "exclusiveMinimum"} {
-				if value, declared := node[keyword]; declared && !isFloorNumber(value) {
-					addDefect(defect(floorD15, ptr+"/"+keyword))
+			case []any:
+				// D1a (the 3.0 line's array-valued `type`) is referred.
+				if line != "3.0" {
+					for _, member := range typed {
+						s, isS := member.(string)
+						if !isS || !types[s] {
+							addDefect(defect(floorD1, ptr+"/type"))
+							break
+						}
+					}
 				}
-			}
-			if value, declared := node["contains"]; declared && !isFloorSchemaValued(value, line) {
-				addDefect(defect(floorD15, ptr+"/contains"))
+			default:
+				addDefect(defect(floorD1s, ptr+"/type"))
 			}
 		}
 
-		t, typeDeclared := node["type"]
-		if !typeDeclared {
-			return
-		}
-		switch typed := t.(type) {
-		case string:
-			if line == "3.0" && typed == "null" {
-				return // D1n, referred
-			}
-			if !types[typed] {
-				addDefect(defect(floorD1, ptr+"/type"))
-			}
-		case []any:
-			if line == "3.0" {
-				return // D1a, referred
-			}
-			for _, member := range typed {
-				s, isS := member.(string)
-				if !isS || !types[s] {
-					addDefect(defect(floorD1, ptr+"/type"))
-					break
-				}
-			}
-		default:
-			addDefect(defect(floorD1s, ptr+"/type"))
+		// D15 -- a Schema Object keyword whose value violates the governing
+		// dialect's declared JSON type for it. Same derivation as D1/D1s: the
+		// nearest rung containing the Schema Object owns it, and P1/P2 decide
+		// whether it climbs. The verdict itself is not decided here: on the
+		// 3.1 line it is delegated to the OAS dialect's own published artifact
+		// and on the 3.0 line it is a labeled, guarded transcription of that
+		// edition's own sentences, because that line's dialect published no
+		// meta-schema to point at. See schema_dialect.go.
+		for _, position := range floorSchemaObjectDefects(node, line) {
+			addDefect(defect(floorD15, ptr+position))
 		}
 	}
 	type schemaRoot struct {
@@ -1232,17 +1203,6 @@ func isFloorSchemaValued(v any, line string) bool {
 	}
 	if _, isBool := v.(bool); isBool {
 		return line == "3.1"
-	}
-	return false
-}
-
-// isFloorNumber reports whether a raw value carries a JSON number. The raw
-// tree comes from a YAML decode, so an integral scalar may arrive under any of
-// Go's integer kinds rather than as a float.
-func isFloorNumber(v any) bool {
-	switch v.(type) {
-	case float64, float32, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		return true
 	}
 	return false
 }

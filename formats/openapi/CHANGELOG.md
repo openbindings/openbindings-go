@@ -98,6 +98,29 @@
 
 ### Fixed
 
+- **The acceptance floor's Schema Object verdict is now the governing
+  dialect's, not a keyword table's** (via the standalone engine). On the OAS
+  3.1 line each Schema Object is validated against
+  `https://spec.openapis.org/oas/3.1/dialect/base` — the dialect every
+  accepted 3.1 edition names when a document sets no `jsonSchemaDialect` —
+  vendored verbatim rather than paraphrased. The previous hand-enumerated
+  table checked that `required` was a list but never that its entries were
+  unique, and had no `$recursiveAnchor` case at all; both classes escaped
+  the floor's per-unit confinement, reached the whole-document rule
+  OBI-D-17, and failed the entire synthesis. **Observable change:** documents
+  carrying either class now deliver every operation that does not reach the
+  defect, with each defective unit accounted `invalid` under
+  `openapi.invalid_unit`, instead of yielding nothing. On OpenAI's published
+  3 MB description this is 0 delivered targets before and 257 after, with 27
+  confined. Further Schema Object shapes the vocabulary states and no
+  enumeration carried — a negative `minItems`, a non-string `pattern`, a
+  zero `multipleOf`, a duplicated `type` member, a `discriminator` missing
+  its `propertyName` — are now confined for the same reason. The OAS 3.0
+  line keeps its own dialect: a boolean `exclusiveMinimum` remains that
+  line's correct spelling, and its four transcribed cells gain `required`
+  entry uniqueness, which the edition's own "taken directly from the JSON
+  Schema definition" sentence already carried.
+
 - **A lone empty SSE `data:` line now dispatches an event whose value is the
   empty string** (via the standalone engine), at its position in the output
   sequence. The WHATWG dispatch steps check the data buffer for emptiness

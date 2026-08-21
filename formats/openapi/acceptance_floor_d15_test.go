@@ -193,8 +193,8 @@ func TestAcceptanceFloor_D15KeywordJSONTypes(t *testing.T) {
 // engine, so it is pinned here rather than left to drift.
 func TestAcceptanceFloor_D15Authority(t *testing.T) {
 	for line, want := range map[string]string{
-		"3.0": "OAS 3.0 line, Schema Object: a keyword's value carries the JSON type the governing dialect declares for it -- `items` Value MUST be an object and not an array; `properties` definitions MUST be a Schema Object; `required` and `enum` are taken directly from JSON Schema, where each is an array",
-		"3.1": "OAS 3.1 line via JSON Schema 2020-12: a keyword's value carries the JSON type the dialect declares for it -- `required` (Validation §6.5.3) and `enum` (§6.1.2) are arrays; `properties` members and `items` and `contains` are schemas, which on this line may be objects or booleans; `exclusiveMinimum` (§6.2.5) and `exclusiveMaximum` (§6.2.3) are numbers",
+		"3.0": "OAS 3.0 line, Schema Object: a keyword's value carries the JSON type the governing dialect declares for it -- `items` Value MUST be an object and not an array; `properties` definitions MUST be a Schema Object; `required` and `enum` are taken directly from JSON Schema, where `required` is an array of unique elements and `enum` is an array",
+		"3.1": "OAS 3.1 line, §4.8.24.1: absent `jsonSchemaDialect` the OAS dialect schema id MUST be used for Schema Objects, and the value fails that dialect (https://spec.openapis.org/oas/3.1/dialect/base)",
 	} {
 		if got := floorAuthority(floorD15, line); got != want {
 			t.Errorf("floorAuthority(D15, %s) = %q", line, got)
@@ -202,5 +202,10 @@ func TestAcceptanceFloor_D15Authority(t *testing.T) {
 	}
 	if !strings.Contains(floorAuthority(floorD15, "3.0"), "not an array") {
 		t.Errorf("the 3.0 citation must carry the line's own items rule")
+	}
+	// The 3.1 citation NAMES the artifact rather than restating its contents:
+	// the verdict is the dialect's, so the citation points at it.
+	if !strings.Contains(floorAuthority(floorD15, "3.1"), oas31DialectURI) {
+		t.Errorf("the 3.1 citation must name the dialect it delegates to")
 	}
 }
