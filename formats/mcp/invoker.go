@@ -125,6 +125,10 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return mcpBindingSpecInfos()
 }
 
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, mcpBindingSpecInfos())
+}
+
 func mcpBindingSpecInfos() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
 		{BindingSpec: BindingSpec, Description: "Model Context Protocol application-contract tools"},
@@ -202,6 +206,10 @@ func NewSynthesizer(opts ...SynthesizerOption) *Synthesizer {
 // BindingSpecs returns the binding-spec identifiers supported by the MCP synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return mcpBindingSpecInfos()
+}
+
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, mcpBindingSpecInfos())
 }
 
 // SynthesizeInterface converts an MCP server's capabilities to an

@@ -151,12 +151,35 @@ func (e *OperationInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return e.invoker.BindingSpecs()
 }
 
-func (e *OperationInvoker) availableBindingSpecs() map[string]bool {
-	m := make(map[string]bool)
-	for _, f := range e.invoker.BindingSpecs() {
-		m[f.BindingSpec] = true
+// CheckBindingSpecs authoritatively checks exact binding-specification
+// identifiers against the registered binding invokers.
+func (e *OperationInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return e.invoker.CheckBindingSpecs(bindingSpecs)
+}
+
+func (e *OperationInvoker) availableBindingSpecs(iface *openbindings.Interface, opKey string) map[string]bool {
+	set := make(map[string]struct{})
+	for _, binding := range iface.Bindings {
+		if binding.Operation != opKey {
+			continue
+		}
+		if source, ok := iface.Sources[binding.Source]; ok {
+			set[source.BindingSpec] = struct{}{}
+		}
 	}
-	return m
+	bindingSpecs := make([]string, 0, len(set))
+	for bindingSpec := range set {
+		bindingSpecs = append(bindingSpecs, bindingSpec)
+	}
+	sort.Strings(bindingSpecs)
+
+	available := make(map[string]bool, len(bindingSpecs))
+	for _, verdict := range e.invoker.CheckBindingSpecs(bindingSpecs) {
+		if verdict.Supported {
+			available[verdict.BindingSpec] = true
+		}
+	}
+	return available
 }
 
 // InvokeBinding routes a binding invocation directly to the matching
@@ -252,6 +275,7 @@ func (e *OperationInvoker) resolveBinding(obi *openbindings.Interface, operation
 		}
 	}
 	op = &opVal
+	availableSpecs := e.availableBindingSpecs(obi, opKey)
 
 	// A pinned bindingKey narrows selection to one binding OF the resolved
 	// operation; it never replaces the operation. Addressing a binding *without*
@@ -277,7 +301,7 @@ func (e *OperationInvoker) resolveBinding(obi *openbindings.Interface, operation
 		}
 		bindingKey = pinnedBindingKey
 		binding = &b
-	} else if k, b, ok := selectionOverride(obi, opKey, contextSelectionOverride(callerContext), e.availableBindingSpecs()); ok {
+	} else if k, b, ok := selectionOverride(obi, opKey, contextSelectionOverride(callerContext), availableSpecs); ok {
 		// The operation-invoker contract's consumer override
 		// (context.configuration.selection): an ordered list of binding
 		// keys, the first invocable entry winning. It displaces whatever
@@ -289,7 +313,7 @@ func (e *OperationInvoker) resolveBinding(obi *openbindings.Interface, operation
 		selector := e.BindingSelector
 		if selector == nil {
 			selector = func(iface *openbindings.Interface, opKey string) (string, *openbindings.BindingEntry, error) {
-				return selectBinding(iface, opKey, e.availableBindingSpecs())
+				return selectBinding(iface, opKey, availableSpecs)
 			}
 		}
 		var err error

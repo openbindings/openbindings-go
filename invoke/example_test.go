@@ -20,6 +20,10 @@ func (echoInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: "echo@1.0", Description: "example echo format"}}
 }
 
+func (e echoInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, e.BindingSpecs())
+}
+
 func (echoInvoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
 	inv := invoke.NewInvocationImpl[any, any](ctx)
 	go func() {

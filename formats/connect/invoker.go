@@ -92,6 +92,14 @@ func (e *Invoker) WithFullDuplexTransport(enabled bool) *Invoker {
 // BindingSpecs returns the binding specifications supported by the
 // Connect invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return connectBindingSpecInfos()
+}
+
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, connectBindingSpecInfos())
+}
+
+func connectBindingSpecInfos() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Connect (Buf) via HTTP"}}
 }
 
@@ -323,7 +331,11 @@ func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
 // BindingSpecs returns the binding specifications supported by the
 // Connect synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Connect (Buf) via HTTP"}}
+	return connectBindingSpecInfos()
+}
+
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, connectBindingSpecInfos())
 }
 
 // SynthesizeInterface parses a .proto file or inline content and converts to an

@@ -68,6 +68,10 @@ func (m *mockBindingInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: tok}}
 }
 
+func (m *mockBindingInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, m.BindingSpecs())
+}
+
 func (m *mockBindingInvoker) snapshot() (attempts, prepares int, reads [][]any, contexts []map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"reflect"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -20,6 +21,19 @@ func TestBindingSpecs(t *testing.T) {
 	specs = c.BindingSpecs()
 	if len(specs) != 1 || specs[0].BindingSpec != BindingSpec {
 		t.Errorf("Synthesizer.BindingSpecs() = %v, want [%s]", specs, BindingSpec)
+	}
+
+	input := []string{BindingSpec, "openbindings.usage", BindingSpec, BindingSpec + "0"}
+	want := []openbindings.BindingSpecVerdict{
+		{BindingSpec: BindingSpec, Supported: true},
+		{BindingSpec: "openbindings.usage", Supported: false},
+		{BindingSpec: BindingSpec + "0", Supported: false},
+	}
+	if got := e.CheckBindingSpecs(input); !reflect.DeepEqual(got, want) {
+		t.Errorf("Invoker.CheckBindingSpecs() = %#v, want %#v", got, want)
+	}
+	if got := c.CheckBindingSpecs(input); !reflect.DeepEqual(got, want) {
+		t.Errorf("Synthesizer.CheckBindingSpecs() = %#v, want %#v", got, want)
 	}
 }
 

@@ -196,9 +196,15 @@ func NewInvokerWithOptions(options RuntimeOptions) *Invoker {
 
 // BindingSpecs returns the binding-spec identifiers this invoker supports.
 func (e *Runtime) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"},
-	}
+	return openAPIBindingSpecInfos()
+}
+
+func (e *Runtime) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, openAPIBindingSpecInfos())
+}
+
+func openAPIBindingSpecInfos() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"}}
 }
 
 // Invoke runs a directly selected OpenAPI operation without requiring an OBI
@@ -573,9 +579,11 @@ func (c *Synthesizer) resolverClient() *http.Client {
 
 // BindingSpecs returns the binding-spec identifiers this synthesizer supports.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"},
-	}
+	return openAPIBindingSpecInfos()
+}
+
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, openAPIBindingSpecInfos())
 }
 
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.

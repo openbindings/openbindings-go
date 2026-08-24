@@ -13,6 +13,7 @@ import (
 // to invokers (authoring wants freshness).
 type InterfaceSynthesizer interface {
 	BindingSpecs() []openbindings.BindingSpecInfo
+	CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict
 	SynthesizeInterface(ctx context.Context, in *SynthesizeInput) (*openbindings.Interface, error)
 }
 

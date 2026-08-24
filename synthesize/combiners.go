@@ -16,6 +16,7 @@ import (
 func CombineSynthesizers(synthesizers ...InterfaceSynthesizer) InterfaceSynthesizer {
 	c := &combinedSynthesizer{}
 	for _, cr := range synthesizers {
+		c.synthesizers = append(c.synthesizers, cr)
 		for _, info := range cr.BindingSpecs() {
 			if _, taken := c.bySpec[info.BindingSpec]; taken {
 				continue
@@ -34,8 +35,9 @@ var _ SourceInspector = (*combinedSynthesizer)(nil)
 var _ CoverageSynthesizer = (*combinedSynthesizer)(nil)
 
 type combinedSynthesizer struct {
-	bySpec map[string]InterfaceSynthesizer // exact identifier -> synthesizer
-	specs  []openbindings.BindingSpecInfo
+	synthesizers []InterfaceSynthesizer
+	bySpec       map[string]InterfaceSynthesizer // exact listed identifier -> synthesizer
+	specs        []openbindings.BindingSpecInfo
 }
 
 func (c *combinedSynthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
@@ -44,12 +46,31 @@ func (c *combinedSynthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return cp
 }
 
+func (c *combinedSynthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	verdicts := openbindings.CheckBindingSpecs(bindingSpecs, nil)
+	unique := make([]string, len(verdicts))
+	index := make(map[string]int, len(verdicts))
+	for i, verdict := range verdicts {
+		unique[i] = verdict.BindingSpec
+		index[verdict.BindingSpec] = i
+	}
+	for _, synthesizer := range c.synthesizers {
+		for _, verdict := range synthesizer.CheckBindingSpecs(unique) {
+			i, requested := index[verdict.BindingSpec]
+			if requested && verdict.Supported {
+				verdicts[i].Supported = true
+			}
+		}
+	}
+	return verdicts
+}
+
 func (c *combinedSynthesizer) SynthesizeInterface(ctx context.Context, in *SynthesizeInput) (*openbindings.Interface, error) {
 	if len(in.Sources) == 0 {
 		skeleton, err := SynthesisSkeleton(in)
 		return &skeleton, err
 	}
-	cr := c.bySpec[in.Sources[0].BindingSpec]
+	cr := c.findSynthesizer(in.Sources[0].BindingSpec)
 	if cr == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNoSynthesizer, in.Sources[0].BindingSpec)
 	}
@@ -67,7 +88,7 @@ func (c *combinedSynthesizer) SynthesizeInterfaceWithCoverage(ctx context.Contex
 		}
 		return NewSynthesisResult(&skeleton, nil, true)
 	}
-	cr := c.bySpec[in.Sources[0].BindingSpec]
+	cr := c.findSynthesizer(in.Sources[0].BindingSpec)
 	if cr == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNoSynthesizer, in.Sources[0].BindingSpec)
 	}
@@ -85,7 +106,7 @@ func (c *combinedSynthesizer) InspectSource(ctx context.Context, source *openbin
 	if source == nil {
 		return nil, ErrNoSources
 	}
-	cr := c.bySpec[source.BindingSpec]
+	cr := c.findSynthesizer(source.BindingSpec)
 	if cr == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNoSynthesizer, source.BindingSpec)
 	}
@@ -101,4 +122,15 @@ func (c *combinedSynthesizer) InspectSource(ctx context.Context, source *openbin
 		inspection.Targets = []BindableTarget{}
 	}
 	return inspection, err
+}
+
+func (c *combinedSynthesizer) findSynthesizer(bindingSpec string) InterfaceSynthesizer {
+	for _, synthesizer := range c.synthesizers {
+		for _, verdict := range synthesizer.CheckBindingSpecs([]string{bindingSpec}) {
+			if verdict.BindingSpec == bindingSpec && verdict.Supported {
+				return synthesizer
+			}
+		}
+	}
+	return nil
 }

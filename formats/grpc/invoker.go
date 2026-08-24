@@ -113,6 +113,14 @@ func (e *Invoker) Close() error {
 
 // BindingSpecs returns the binding-spec identifiers supported by the gRPC invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return grpcBindingSpecInfos()
+}
+
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, grpcBindingSpecInfos())
+}
+
+func grpcBindingSpecInfos() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "gRPC via server reflection or .proto files"}}
 }
 
@@ -328,7 +336,11 @@ func NewSynthesizer(opts ...SynthesizerOption) *Synthesizer {
 
 // BindingSpecs returns the binding-spec identifiers supported by the gRPC synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "gRPC via server reflection or .proto files"}}
+	return grpcBindingSpecInfos()
+}
+
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, grpcBindingSpecInfos())
 }
 
 // SynthesizeInterface discovers gRPC services and converts to an OpenBindings interface.

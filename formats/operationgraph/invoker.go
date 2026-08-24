@@ -79,6 +79,14 @@ const maxGraphDocBytes = 8 << 20 // 8 MiB
 
 // Formats returns the binding format tokens this invoker supports.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+	return operationGraphBindingSpecInfos()
+}
+
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, operationGraphBindingSpecInfos())
+}
+
+func operationGraphBindingSpecInfos() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenBindings operation graphs"}}
 }
 

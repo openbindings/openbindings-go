@@ -146,6 +146,10 @@ func (failingSynthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: "fake@1.0"}}
 }
 
+func (s failingSynthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
+}
+
 func (failingSynthesizer) SynthesizeInterface(context.Context, *SynthesizeInput) (*openbindings.Interface, error) {
 	return nil, fmt.Errorf("invalid character '<' looking for beginning of value")
 }
@@ -154,6 +158,10 @@ type coverageFetchSynthesizer struct{}
 
 func (coverageFetchSynthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: "fake.coverage@1"}}
+}
+
+func (s coverageFetchSynthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
 }
 
 func (coverageFetchSynthesizer) SynthesizeInterface(ctx context.Context, input *SynthesizeInput) (*openbindings.Interface, error) {

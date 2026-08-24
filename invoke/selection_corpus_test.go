@@ -86,6 +86,10 @@ func (s *selectionSpecStub) BindingSpecs() []openbindings.BindingSpecInfo {
 	return infos
 }
 
+func (s *selectionSpecStub) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
+}
+
 func (s *selectionSpecStub) InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any] {
 	s.mu.Lock()
 	s.lastSite = args.Site

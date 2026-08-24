@@ -80,9 +80,15 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 
 // Formats returns the source formats supported by the GraphQL invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpec, Description: "GraphQL query and mutation application values"},
-	}
+	return graphQLBindingSpecInfos()
+}
+
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, graphQLBindingSpecInfos())
+}
+
+func graphQLBindingSpecInfos() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "GraphQL query and mutation application values"}}
 }
 
 // cachedIntrospect returns a cached introspection result or performs a fresh
@@ -317,9 +323,11 @@ var (
 
 // Formats returns the source formats supported by the GraphQL synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpec, Description: "GraphQL query and mutation application values"},
-	}
+	return graphQLBindingSpecInfos()
+}
+
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, graphQLBindingSpecInfos())
 }
 
 // SynthesizeInterface introspects a GraphQL endpoint and converts to an OpenBindings interface.

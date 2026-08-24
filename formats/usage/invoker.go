@@ -295,6 +295,10 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return usageBindingSpecInfos()
 }
 
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, usageBindingSpecInfos())
+}
+
 func usageBindingSpecInfos() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "CLI tools described by jdx usage specs"}}
 }
@@ -331,6 +335,10 @@ func NewSynthesizer() *Synthesizer {
 // bare jdx usage-spec artifacts.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 	return usageBindingSpecInfos()
+}
+
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, usageBindingSpecInfos())
 }
 
 // SynthesizeInterface converts a bare jdx usage source to an OpenBindings

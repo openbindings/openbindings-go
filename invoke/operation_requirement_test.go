@@ -80,6 +80,10 @@ func (b *operationRequirementBinding) BindingSpecs() []openbindings.BindingSpecI
 	return []openbindings.BindingSpecInfo{{BindingSpec: b.bindingSpec}}
 }
 
+func (b *operationRequirementBinding) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, b.BindingSpecs())
+}
+
 func (b *operationRequirementBinding) PrepareBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	return b.requirement, nil
 }

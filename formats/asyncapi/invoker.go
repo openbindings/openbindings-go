@@ -96,9 +96,15 @@ func (e *Invoker) Close() error {
 
 // BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI invoker.
 func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpec, Description: "AsyncAPI event-driven APIs"},
-	}
+	return asyncAPIBindingSpecInfos()
+}
+
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, asyncAPIBindingSpecInfos())
+}
+
+func asyncAPIBindingSpecInfos() []openbindings.BindingSpecInfo {
+	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "AsyncAPI event-driven APIs"}}
 }
 
 // InvokeBinding invokes an AsyncAPI binding, returning the invocation handle
@@ -367,9 +373,11 @@ func NewSynthesizer() *Synthesizer {
 
 // BindingSpecs returns the binding-spec identifiers supported by the AsyncAPI synthesizer.
 func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{
-		{BindingSpec: BindingSpec, Description: "AsyncAPI event-driven APIs"},
-	}
+	return asyncAPIBindingSpecInfos()
+}
+
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, asyncAPIBindingSpecInfos())
 }
 
 // SynthesizeInterface converts an AsyncAPI document to an OpenBindings interface.

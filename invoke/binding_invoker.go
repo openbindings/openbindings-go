@@ -22,6 +22,7 @@ import (
 // or BindingPreparer; check via type assertion.
 type BindingInvoker interface {
 	BindingSpecs() []openbindings.BindingSpecInfo
+	CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict
 	InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any]
 }
 

@@ -131,6 +131,10 @@ func (m *mockBindingInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: mockFormat}}
 }
 
+func (m *mockBindingInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, m.BindingSpecs())
+}
+
 func (m *mockBindingInvoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
 	opKey := ""
 	if args.Binding != nil {

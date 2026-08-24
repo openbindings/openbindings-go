@@ -21,11 +21,13 @@ func CombineInvokers(invokers ...BindingInvoker) BindingInvoker {
 }
 
 type combinedInvoker struct {
-	bySpec map[string]BindingInvoker // exact identifier -> invoker
-	specs  []openbindings.BindingSpecInfo
+	invokers []BindingInvoker
+	bySpec   map[string]BindingInvoker // exact listed identifier -> invoker
+	specs    []openbindings.BindingSpecInfo
 }
 
 func (c *combinedInvoker) add(iv BindingInvoker) {
+	c.invokers = append(c.invokers, iv)
 	for _, info := range iv.BindingSpecs() {
 		if _, taken := c.bySpec[info.BindingSpec]; taken {
 			continue // first registration wins
@@ -42,6 +44,25 @@ func (c *combinedInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	cp := make([]openbindings.BindingSpecInfo, len(c.specs))
 	copy(cp, c.specs)
 	return cp
+}
+
+func (c *combinedInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	verdicts := openbindings.CheckBindingSpecs(bindingSpecs, nil)
+	unique := make([]string, len(verdicts))
+	index := make(map[string]int, len(verdicts))
+	for i, verdict := range verdicts {
+		unique[i] = verdict.BindingSpec
+		index[verdict.BindingSpec] = i
+	}
+	for _, invoker := range c.invokers {
+		for _, verdict := range invoker.CheckBindingSpecs(unique) {
+			i, requested := index[verdict.BindingSpec]
+			if requested && verdict.Supported {
+				verdicts[i].Supported = true
+			}
+		}
+	}
+	return verdicts
 }
 
 func (c *combinedInvoker) InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any] {
@@ -68,5 +89,12 @@ func (c *combinedInvoker) prepareBinding(ctx context.Context, args *BindingInvoc
 }
 
 func (c *combinedInvoker) findInvoker(bindingSpec string) BindingInvoker {
-	return c.bySpec[bindingSpec]
+	for _, invoker := range c.invokers {
+		for _, verdict := range invoker.CheckBindingSpecs([]string{bindingSpec}) {
+			if verdict.BindingSpec == bindingSpec && verdict.Supported {
+				return invoker
+			}
+		}
+	}
+	return nil
 }
