@@ -2,8 +2,8 @@ package mcp
 
 import "testing"
 
-func TestParseRef_Tool(t *testing.T) {
-	entityType, name, err := parseRef("tools/get_weather")
+func TestParseSelector_Tool(t *testing.T) {
+	entityType, name, err := parseSelector("tools/get_weather")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -15,8 +15,8 @@ func TestParseRef_Tool(t *testing.T) {
 	}
 }
 
-func TestParseRef_Resource(t *testing.T) {
-	entityType, name, err := parseRef("resources/file:///src/main.rs")
+func TestParseSelector_Resource(t *testing.T) {
+	entityType, name, err := parseSelector("resources/file:///src/main.rs")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,8 +28,8 @@ func TestParseRef_Resource(t *testing.T) {
 	}
 }
 
-func TestParseRef_Prompt(t *testing.T) {
-	entityType, name, err := parseRef("prompts/code_review")
+func TestParseSelector_Prompt(t *testing.T) {
+	entityType, name, err := parseSelector("prompts/code_review")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,22 +41,22 @@ func TestParseRef_Prompt(t *testing.T) {
 	}
 }
 
-func TestParseRef_Empty(t *testing.T) {
-	_, _, err := parseRef("")
+func TestParseSelector_Empty(t *testing.T) {
+	_, _, err := parseSelector("")
 	if err == nil {
-		t.Error("expected error for empty ref")
+		t.Error("expected error for empty selector")
 	}
 }
 
-func TestParseRef_NoPrefix(t *testing.T) {
-	_, _, err := parseRef("get_weather")
+func TestParseSelector_NoPrefix(t *testing.T) {
+	_, _, err := parseSelector("get_weather")
 	if err == nil {
-		t.Error("expected error for ref without prefix")
+		t.Error("expected error for selector without prefix")
 	}
 }
 
-func TestParseRef_EmptyName(t *testing.T) {
-	_, _, err := parseRef("tools/")
+func TestParseSelector_EmptyName(t *testing.T) {
+	_, _, err := parseSelector("tools/")
 	if err == nil {
 		t.Error("expected error for empty name")
 	}

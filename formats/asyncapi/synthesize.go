@@ -92,12 +92,12 @@ func synthesizeInterfaceWithDoc(_ context.Context, in *synthesize.SynthesizeInpu
 
 		iface.Operations[opKey] = obiOp
 
-		ref := operationRef(opID)
+		selector := operationSelector(opID)
 		bindingKey := opKey + "." + DefaultSourceName
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Ref:       ref,
+			Selector:  selector,
 		}
 	}
 

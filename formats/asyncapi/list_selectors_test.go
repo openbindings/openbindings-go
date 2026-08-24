@@ -40,7 +40,7 @@ func TestInspectSource_BasicRefs(t *testing.T) {
 	}
 
 	if len(result.Targets) != 2 {
-		t.Fatalf("expected 2 refs, got %d", len(result.Targets))
+		t.Fatalf("expected 2 selectors, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")
@@ -76,18 +76,18 @@ func TestInspectSource_RefFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantRefs := map[string]bool{
+	wantSelectors := map[string]bool{
 		"#/operations/alpha": false,
 		"#/operations/beta":  false,
 	}
-	for _, ref := range result.Targets {
-		if _, ok := wantRefs[ref.Ref]; ok {
-			wantRefs[ref.Ref] = true
+	for _, selector := range result.Targets {
+		if _, ok := wantSelectors[selector.Selector]; ok {
+			wantSelectors[selector.Selector] = true
 		}
 	}
-	for ref, found := range wantRefs {
+	for selector, found := range wantSelectors {
 		if !found {
-			t.Errorf("expected ref %q not found", ref)
+			t.Errorf("expected selector %q not found", selector)
 		}
 	}
 }
@@ -104,9 +104,9 @@ func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 	}
 
 	iface := testSynthesizeInterface(t, doc, "")
-	createRefs := map[string]bool{}
+	createSelectors := map[string]bool{}
 	for _, b := range iface.Bindings {
-		createRefs[b.Ref] = true
+		createSelectors[b.Selector] = true
 	}
 
 	content := `{
@@ -128,13 +128,13 @@ func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, ref := range result.Targets {
-		if !createRefs[ref.Ref] {
-			t.Errorf("InspectSource ref %q not in SynthesizeInterface bindings", ref.Ref)
+	for _, selector := range result.Targets {
+		if !createSelectors[selector.Selector] {
+			t.Errorf("InspectSource selector %q not in SynthesizeInterface bindings", selector.Selector)
 		}
 	}
-	if len(result.Targets) != len(createRefs) {
-		t.Errorf("ref count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createRefs))
+	if len(result.Targets) != len(createSelectors) {
+		t.Errorf("selector count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createSelectors))
 	}
 }
 
@@ -168,18 +168,18 @@ func TestInspectSource_Description(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	descByRef := map[string]string{}
-	for _, ref := range result.Targets {
-		if ref.Operation != nil {
-			descByRef[ref.Ref] = ref.Operation.Description
+	descBySelector := map[string]string{}
+	for _, selector := range result.Targets {
+		if selector.Operation != nil {
+			descBySelector[selector.Selector] = selector.Operation.Description
 		}
 	}
 
-	if descByRef["#/operations/withDesc"] != "Full description" {
-		t.Errorf("withDesc description = %q, want %q", descByRef["#/operations/withDesc"], "Full description")
+	if descBySelector["#/operations/withDesc"] != "Full description" {
+		t.Errorf("withDesc description = %q, want %q", descBySelector["#/operations/withDesc"], "Full description")
 	}
-	if descByRef["#/operations/summaryOnly"] != "Only summary" {
-		t.Errorf("summaryOnly description = %q, want %q", descByRef["#/operations/summaryOnly"], "Only summary")
+	if descBySelector["#/operations/summaryOnly"] != "Only summary" {
+		t.Errorf("summaryOnly description = %q, want %q", descBySelector["#/operations/summaryOnly"], "Only summary")
 	}
 }
 
@@ -199,7 +199,7 @@ func TestInspectSource_NoOperations(t *testing.T) {
 	}
 
 	if len(result.Targets) != 0 {
-		t.Errorf("expected 0 refs, got %d", len(result.Targets))
+		t.Errorf("expected 0 selectors, got %d", len(result.Targets))
 	}
 }
 
@@ -225,16 +225,16 @@ func TestInspectSource_AlphabeticallySorted(t *testing.T) {
 	}
 
 	if len(result.Targets) != 3 {
-		t.Fatalf("expected 3 refs, got %d", len(result.Targets))
+		t.Fatalf("expected 3 selectors, got %d", len(result.Targets))
 	}
-	if result.Targets[0].Ref != "#/operations/alpha" {
-		t.Errorf("first ref = %q, want #/operations/alpha", result.Targets[0].Ref)
+	if result.Targets[0].Selector != "#/operations/alpha" {
+		t.Errorf("first selector = %q, want #/operations/alpha", result.Targets[0].Selector)
 	}
-	if result.Targets[1].Ref != "#/operations/mike" {
-		t.Errorf("second ref = %q, want #/operations/mike", result.Targets[1].Ref)
+	if result.Targets[1].Selector != "#/operations/mike" {
+		t.Errorf("second selector = %q, want #/operations/mike", result.Targets[1].Selector)
 	}
-	if result.Targets[2].Ref != "#/operations/zeta" {
-		t.Errorf("third ref = %q, want #/operations/zeta", result.Targets[2].Ref)
+	if result.Targets[2].Selector != "#/operations/zeta" {
+		t.Errorf("third selector = %q, want #/operations/zeta", result.Targets[2].Selector)
 	}
 }
 

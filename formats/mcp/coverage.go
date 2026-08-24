@@ -19,11 +19,11 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []synthes
 	}
 	type identity struct {
 		operation string
-		ref       string
+		selector  string
 	}
 	represented := make(map[string]identity, len(iface.Bindings))
 	for _, binding := range iface.Bindings {
-		represented[binding.Ref] = identity{operation: binding.Operation, ref: binding.Ref}
+		represented[binding.Selector] = identity{operation: binding.Operation, selector: binding.Selector}
 	}
 	bindingSpec := BindingSpec
 	if source, ok := iface.Sources[DefaultSourceName]; ok && source.BindingSpec != "" {
@@ -75,8 +75,8 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []synthes
 			})
 			return
 		}
-		ref := family + "/" + value
-		id, ok := represented[ref]
+		selector := family + "/" + value
+		id, ok := represented[selector]
 		if !ok {
 			entries = append(entries, synthesize.SynthesisCoverageEntry{
 				SourceIndex: 0, SourceRef: sourceRef, Scope: synthesize.SynthesisCoverageTarget,
@@ -87,7 +87,7 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []synthes
 		}
 		entries = append(entries, synthesize.SynthesisCoverageEntry{
 			SourceIndex: 0, SourceRef: sourceRef, Scope: synthesize.SynthesisCoverageTarget,
-			Status: synthesize.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
+			Status: synthesize.SynthesisRepresented, OperationKey: id.operation, BindingSelector: id.selector,
 		})
 	}
 
@@ -101,7 +101,7 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []synthes
 			continue
 		}
 		if toolCounts[entity.Name] > 1 {
-			add("tools", entity.Name, index, toolCounts[entity.Name], "", "mcp.ambiguous_identity", "MCP-P-02", "more than one listed tool has this ref identity")
+			add("tools", entity.Name, index, toolCounts[entity.Name], "", "mcp.ambiguous_identity", "MCP-P-02", "more than one listed tool has this selector identity")
 			continue
 		}
 		if disc.RequiredTaskTools[entity.Name] {
@@ -120,7 +120,7 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []synthes
 			continue
 		}
 		if resourceCounts[entity.URI] > 1 {
-			add("resources", entity.URI, index, resourceCounts[entity.URI], "", "mcp.ambiguous_identity", "MCP-P-02", "more than one listed resource has this ref identity")
+			add("resources", entity.URI, index, resourceCounts[entity.URI], "", "mcp.ambiguous_identity", "MCP-P-02", "more than one listed resource has this selector identity")
 			continue
 		}
 		if bindingSpec == BindingSpec {
@@ -135,7 +135,7 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []synthes
 			continue
 		}
 		if templateCounts[entity.URITemplate] > 1 {
-			add("resourceTemplates", entity.URITemplate, index, templateCounts[entity.URITemplate], "", "mcp.ambiguous_identity", "MCP-P-02", "more than one listed resource template has this ref identity")
+			add("resourceTemplates", entity.URITemplate, index, templateCounts[entity.URITemplate], "", "mcp.ambiguous_identity", "MCP-P-02", "more than one listed resource template has this selector identity")
 			continue
 		}
 		if _, err := uritemplate.New(entity.URITemplate); err != nil {
@@ -154,7 +154,7 @@ func synthesisCoverage(disc *discovery, iface *openbindings.Interface) []synthes
 			continue
 		}
 		if promptCounts[entity.Name] > 1 {
-			add("prompts", entity.Name, index, promptCounts[entity.Name], "", "mcp.ambiguous_identity", "MCP-P-02", "more than one listed prompt has this ref identity")
+			add("prompts", entity.Name, index, promptCounts[entity.Name], "", "mcp.ambiguous_identity", "MCP-P-02", "more than one listed prompt has this selector identity")
 			continue
 		}
 		if bindingSpec == BindingSpec {

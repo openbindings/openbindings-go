@@ -16,7 +16,7 @@ func synthesisCoverageTestInterface() *openbindings.Interface {
 			"api": {BindingSpec: "openbindings.example@1", Location: "https://example.com/spec"},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"getUser.api": {Operation: "getUser", Source: "api", Ref: "#/getUser"},
+			"getUser.api": {Operation: "getUser", Source: "api", Selector: "#/getUser"},
 		},
 	}
 }
@@ -24,12 +24,12 @@ func synthesisCoverageTestInterface() *openbindings.Interface {
 func TestNewSynthesisResultDerivesCoverage(t *testing.T) {
 	result, err := NewSynthesisResult(synthesisCoverageTestInterface(), []SynthesisCoverageEntry{
 		{
-			SourceIndex:  0,
-			SourceRef:    "#/getUser",
-			Scope:        SynthesisCoverageTarget,
-			Status:       SynthesisRepresented,
-			OperationKey: "getUser",
-			BindingRef:   "#/getUser",
+			SourceIndex:     0,
+			SourceRef:       "#/getUser",
+			Scope:           SynthesisCoverageTarget,
+			Status:          SynthesisRepresented,
+			OperationKey:    "getUser",
+			BindingSelector: "#/getUser",
 		},
 		{
 			SourceIndex: 0,
@@ -64,12 +64,12 @@ func TestNewSynthesisResultDerivesCoverage(t *testing.T) {
 func TestNewSynthesisResultInvalidEntryClearsFullyRepresented(t *testing.T) {
 	result, err := NewSynthesisResult(synthesisCoverageTestInterface(), []SynthesisCoverageEntry{
 		{
-			SourceIndex:  0,
-			SourceRef:    "#/getUser",
-			Scope:        SynthesisCoverageTarget,
-			Status:       SynthesisRepresented,
-			OperationKey: "getUser",
-			BindingRef:   "#/getUser",
+			SourceIndex:     0,
+			SourceRef:       "#/getUser",
+			Scope:           SynthesisCoverageTarget,
+			Status:          SynthesisRepresented,
+			OperationKey:    "getUser",
+			BindingSelector: "#/getUser",
 		},
 		{
 			SourceIndex: 0,
@@ -92,12 +92,12 @@ func TestNewSynthesisResultInvalidEntryClearsFullyRepresented(t *testing.T) {
 func TestNewSynthesisResultRejectsUnbackedRepresentation(t *testing.T) {
 	_, err := NewSynthesisResult(synthesisCoverageTestInterface(), []SynthesisCoverageEntry{
 		{
-			SourceIndex:  0,
-			SourceRef:    "#/missing",
-			Scope:        SynthesisCoverageTarget,
-			Status:       SynthesisRepresented,
-			OperationKey: "getUser",
-			BindingRef:   "#/missing",
+			SourceIndex:     0,
+			SourceRef:       "#/missing",
+			Scope:           SynthesisCoverageTarget,
+			Status:          SynthesisRepresented,
+			OperationKey:    "getUser",
+			BindingSelector: "#/missing",
 		},
 	}, true)
 	if err == nil {

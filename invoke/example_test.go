@@ -47,7 +47,7 @@ func ExampleInvoke() {
 		Name:         "Echo",
 		Operations:   map[string]openbindings.Operation{"echo": {}},
 		Sources:      map[string]openbindings.Source{"echo": {BindingSpec: "echo@1.0", Location: "mem://echo"}},
-		Bindings:     map[string]openbindings.BindingEntry{"echo.main": {Operation: "echo", Source: "echo", Ref: "echo"}},
+		Bindings:     map[string]openbindings.BindingEntry{"echo.main": {Operation: "echo", Source: "echo", Selector: "echo"}},
 	}
 
 	opInv := invoke.NewOperationInvoker(echoInvoker{})

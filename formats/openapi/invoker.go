@@ -117,7 +117,7 @@ type RuntimeSource struct {
 // values flow through the returned cardinality-agnostic Invocation handle.
 type RuntimeInvocationArgs struct {
 	Source               RuntimeSource
-	Ref                  string
+	Selector             string
 	Context              map[string]any
 	Hooks                *invoke.InvokeHooks
 	Site                 *invoke.InvokeSite
@@ -227,7 +227,7 @@ func runtimeBindingArgs(args *RuntimeInvocationArgs) *invoke.BindingInvocationAr
 			Location:    args.Source.Location,
 			Content:     args.Source.Content,
 		},
-		Ref:                  args.Ref,
+		Selector:             args.Selector,
 		Context:              args.Context,
 		Hooks:                args.Hooks,
 		Site:                 args.Site,
@@ -258,7 +258,7 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 	}
 	return openapiclient.PrepareOptions{
 		Source: openapiclient.Source{Location: args.Source.Location, Content: content},
-		Ref:    args.Ref, Profile: profile, Context: args.Context, HTTPClient: client,
+		Ref:    args.Selector, Profile: profile, Context: args.Context, HTTPClient: client,
 		Hooks: bridgeHooks(args, bindingSpec), MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes,
 		SecurityHandlers: securityHandlers,
 	}, nil
@@ -301,7 +301,7 @@ func coreHookSite(args *invoke.BindingInvocationArgs, bindingSpec, target string
 		site = *args.Site
 	} else {
 		site.BindingSpec = bindingSpec
-		site.Ref = args.Ref
+		site.Selector = args.Selector
 	}
 	if site.Target == "" {
 		site.Target = target
@@ -349,10 +349,13 @@ func normalizedAdapterErrorCode(code string) string {
 	switch code {
 	case "SOURCE_LOAD_FAILED":
 		return invoke.ErrCodeSourceLoadFailed
-	case "INVALID_OPERATION_REF":
-		return invoke.ErrCodeInvalidRef
-	case "OPERATION_NOT_FOUND":
-		return invoke.ErrCodeRefNotFound
+	// The adapter's vocabulary is the openapi-client's own: it still says
+	// "ref" where the OpenBindings surface says "selector", so its ref-flavored
+	// codes normalize to the selector-flavored SDK codes here.
+	case "INVALID_OPERATION_REF", "ERR_INVALID_REF":
+		return invoke.ErrCodeInvalidSelector
+	case "OPERATION_NOT_FOUND", "ERR_REF_NOT_FOUND":
+		return invoke.ErrCodeSelectorNotFound
 	case "INVALID_DOCUMENT":
 		return invoke.ErrCodeSourceConfigError
 	case "RUNTIME_ERROR", "EXECUTION_COMPLETED_BEFORE_READY":
@@ -387,7 +390,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 // invokeBinding invokes an HTTP request based on an OpenAPI binding. The
 // Invocation handle is returned synchronously; creation is inert and the
 // HTTP work is scheduled on its own goroutine. Input messages flow through
-// the handle's Write channel. All pre-dispatch failures (bad ref, missing
+// the handle's Write channel. All pre-dispatch failures (bad selector, missing
 // server URL, unresolvable operation, missing context) terminate the handle
 // BEFORE any network side effect.
 func (e *Runtime) invokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
@@ -594,7 +597,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.Sy
 func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
 	unrealizable := map[string]unrealizableTarget{}
 	iface, doc, floor, err := c.synthesizeObserved(ctx, in, func(target unrealizableTarget) {
-		unrealizable[target.ref] = target
+		unrealizable[target.selector] = target
 	})
 	if err != nil {
 		return nil, err

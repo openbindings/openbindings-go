@@ -8,7 +8,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestInspectSource_BasicRefs(t *testing.T) {
+func TestInspectSource_BasicSelectors(t *testing.T) {
 	content := `{
   "openapi": "3.0.3",
   "info": {"title": "Test API", "version": "1.0.0"},
@@ -49,7 +49,7 @@ func TestInspectSource_BasicRefs(t *testing.T) {
 	}
 
 	if len(result.Targets) != 4 {
-		t.Fatalf("expected 4 refs, got %d", len(result.Targets))
+		t.Fatalf("expected 4 selectors, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")
@@ -84,19 +84,19 @@ func TestInspectSource_JSONPointerFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantRefs := map[string]bool{
+	wantSelectors := map[string]bool{
 		"#/paths/~1users/get":       false,
 		"#/paths/~1users~1{id}/put": false,
 	}
 
-	for _, ref := range result.Targets {
-		if _, ok := wantRefs[ref.Ref]; ok {
-			wantRefs[ref.Ref] = true
+	for _, selector := range result.Targets {
+		if _, ok := wantSelectors[selector.Selector]; ok {
+			wantSelectors[selector.Selector] = true
 		}
 	}
-	for ref, found := range wantRefs {
+	for selector, found := range wantSelectors {
 		if !found {
-			t.Errorf("expected ref %q not found in results", ref)
+			t.Errorf("expected selector %q not found in results", selector)
 		}
 	}
 }
@@ -127,34 +127,34 @@ func TestInspectSource_DescriptionFromSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	descByRef := map[string]string{}
-	for _, ref := range result.Targets {
-		if ref.Operation != nil {
-			descByRef[ref.Ref] = ref.Operation.Description
+	descBySelector := map[string]string{}
+	for _, selector := range result.Targets {
+		if selector.Operation != nil {
+			descBySelector[selector.Selector] = selector.Operation.Description
 		}
 	}
 
 	// Summary is used when description is absent.
-	if descByRef["#/paths/~1pets/get"] != "List pets" {
-		t.Errorf("get description = %q, want %q", descByRef["#/paths/~1pets/get"], "List pets")
+	if descBySelector["#/paths/~1pets/get"] != "List pets" {
+		t.Errorf("get description = %q, want %q", descBySelector["#/paths/~1pets/get"], "List pets")
 	}
 	// Description takes precedence over summary.
-	if descByRef["#/paths/~1pets/post"] != "Create a new pet" {
-		t.Errorf("post description = %q, want %q", descByRef["#/paths/~1pets/post"], "Create a new pet")
+	if descBySelector["#/paths/~1pets/post"] != "Create a new pet" {
+		t.Errorf("post description = %q, want %q", descBySelector["#/paths/~1pets/post"], "Create a new pet")
 	}
 }
 
-func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
+func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
 	doc := minimalDoc()
 	iface := mustConvertDocToInterface(t, doc, "")
 
-	// Collect binding refs from SynthesizeInterface.
-	createRefs := map[string]bool{}
+	// Collect binding selectors from SynthesizeInterface.
+	createSelectors := map[string]bool{}
 	for _, b := range iface.Bindings {
-		createRefs[b.Ref] = true
+		createSelectors[b.Selector] = true
 	}
 
-	// InspectSource should produce the same refs.
+	// InspectSource should produce the same selectors.
 	content := `{
   "openapi": "3.0.3",
   "info": {"title": "Test API", "version": "2.0.0"},
@@ -182,19 +182,19 @@ func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, ref := range result.Targets {
-		if !createRefs[ref.Ref] {
-			t.Errorf("InspectSource ref %q not found in SynthesizeInterface bindings", ref.Ref)
+	for _, selector := range result.Targets {
+		if !createSelectors[selector.Selector] {
+			t.Errorf("InspectSource selector %q not found in SynthesizeInterface bindings", selector.Selector)
 		}
 	}
-	if len(result.Targets) != len(createRefs) {
-		t.Errorf("ref count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createRefs))
+	if len(result.Targets) != len(createSelectors) {
+		t.Errorf("selector count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createSelectors))
 	}
 }
 
 func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 	// Inspect and create from the same content, so each suggested
-	// operationKey must equal the key create actually assigns for that ref.
+	// operationKey must equal the key create actually assigns for that selector.
 	// /health has no operationId, exercising the path-derived key path.
 	content := `{
   "openapi": "3.0.3",
@@ -216,10 +216,10 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 	}
 	iface := mustConvertDocToInterface(t, doc, "")
 
-	// Map each ref to the operation key SynthesizeInterface assigned it.
-	createKeyByRef := map[string]string{}
+	// Map each selector to the operation key SynthesizeInterface assigned it.
+	createKeyBySelector := map[string]string{}
 	for _, b := range iface.Bindings {
-		createKeyByRef[b.Ref] = b.Operation
+		createKeyBySelector[b.Selector] = b.Operation
 	}
 
 	result, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{Content: openbindings.TextContent(content)})
@@ -229,11 +229,11 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 
 	for _, target := range result.Targets {
 		if target.OperationKey == "" {
-			t.Errorf("InspectSource target %q has no suggested operationKey", target.Ref)
+			t.Errorf("InspectSource target %q has no suggested operationKey", target.Selector)
 			continue
 		}
-		if want := createKeyByRef[target.Ref]; target.OperationKey != want {
-			t.Errorf("InspectSource operationKey for ref %q = %q, want %q (SynthesizeInterface's key)", target.Ref, target.OperationKey, want)
+		if want := createKeyBySelector[target.Selector]; target.OperationKey != want {
+			t.Errorf("InspectSource operationKey for selector %q = %q, want %q (SynthesizeInterface's key)", target.Selector, target.OperationKey, want)
 		}
 	}
 }
@@ -273,7 +273,7 @@ func TestInspectSource_NoPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(result.Targets) != 0 {
-		t.Errorf("expected 0 refs, got %d", len(result.Targets))
+		t.Errorf("expected 0 selectors, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")

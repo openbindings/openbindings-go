@@ -138,7 +138,7 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	if content, present := scenario.Given.Source["content"]; present {
 		source.Content, _ = json.Marshal(content)
 	}
-	ref, _ := scenario.Given.Binding["ref"].(string)
+	selector, _ := scenario.Given.Binding["selector"].(string)
 	configuration := cloneMap(scenario.Given.Configuration)
 	contextValue := map[string]any{}
 	if configuration != nil {
@@ -155,9 +155,9 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	invoker := NewInvokerWithClient(&http.Client{Transport: transport})
 
 	args := &invoke.BindingInvocationArgs{
-		Source:  source,
-		Ref:     ref,
-		Context: contextValue,
+		Source:   source,
+		Selector: selector,
+		Context:  contextValue,
 	}
 	inputPresent, _ := scenario.Given.Invocation["inputPresent"].(bool)
 	if inputPresent {
@@ -175,7 +175,7 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		op := invoke.NewOperationInvoker(invoker)
 		call = invoke.Invoke(
 			context.Background(), op, iface,
-			invoke.NewOperationSignature[any, any](graphQLOperationForRef(t, iface, ref)),
+			invoke.NewOperationSignature[any, any](graphQLOperationForSelector(t, iface, selector)),
 			invoke.WithContext(contextValue),
 		)
 	} else {
@@ -220,14 +220,14 @@ func runGraphQLProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
 }
 
-func graphQLOperationForRef(t *testing.T, iface *openbindings.Interface, ref string) string {
+func graphQLOperationForSelector(t *testing.T, iface *openbindings.Interface, selector string) string {
 	t.Helper()
 	for _, binding := range iface.Bindings {
-		if binding.Ref == ref {
+		if binding.Selector == selector {
 			return binding.Operation
 		}
 	}
-	t.Fatalf("synthesized GraphQL interface has no binding for %q", ref)
+	t.Fatalf("synthesized GraphQL interface has no binding for %q", selector)
 	return ""
 }
 

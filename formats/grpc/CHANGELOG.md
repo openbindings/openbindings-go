@@ -6,6 +6,12 @@
 
 ### Changed
 
+- **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
+  `bindings[*].selector`): bindings ride
+  `invoke.BindingInvocationArgs.Selector`, and refusals use
+  `ERR_INVALID_SELECTOR` / `ERR_SELECTOR_NOT_FOUND`. Schema `$ref`
+  generation and server reflection are untouched.
+
 - **Synthesizer: a type reused in sibling positions synthesizes in full**
   (delete-on-unwind visited tracking); true cycles keep their placeholder.
 

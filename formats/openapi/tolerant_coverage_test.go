@@ -129,7 +129,7 @@ func TestInspectSourceFiltersUnrepresentableTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspection failed: %v", err)
 	}
-	if len(inspection.Targets) != 1 || inspection.Targets[0].Ref != "#/paths/~1good/get" {
+	if len(inspection.Targets) != 1 || inspection.Targets[0].Selector != "#/paths/~1good/get" {
 		t.Fatalf("targets = %+v; want exactly #/paths/~1good/get", inspection.Targets)
 	}
 	if !inspection.Exhaustive {

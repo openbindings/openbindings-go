@@ -55,7 +55,7 @@ func TestConvertToInterfaceProjectsOnlyEligibleToolApplicationContracts(t *testi
 	if len(iface.Operations) != 1 || !reflect.DeepEqual(iface.Operations["calc"].Output, outputSchema) {
 		t.Fatalf("operations = %#v", iface.Operations)
 	}
-	if binding := iface.Bindings["calc."+DefaultSourceName]; binding.Ref != "tools/calc" {
+	if binding := iface.Bindings["calc."+DefaultSourceName]; binding.Selector != "tools/calc" {
 		t.Fatalf("binding = %#v", binding)
 	}
 	if source := iface.Sources[DefaultSourceName]; source.BindingSpec != BindingSpec || source.Location != "https://mcp.example.test" {

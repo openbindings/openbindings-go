@@ -112,12 +112,12 @@ func floorOutputSchema() openbindings.JSONSchema {
 // per command tree, identifier-safe).
 func operationName(path []string) string { return strings.Join(path, ".") }
 
-// commandRef derives the binding ref for a command path: the format's own
+// commandSelector derives the binding selector for a command path: the format's own
 // grammar, space-separated ("" = the root command).
-func commandRef(path []string) string { return strings.Join(path, " ") }
+func commandSelector(path []string) string { return strings.Join(path, " ") }
 
 // buildInterfaceFromSpec synthesizes an interface from a bare artifact:
-// one operation per bindable command, bound by command-path ref.
+// one operation per bindable command, bound by command-path selector.
 func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbindings.Interface, error) {
 	if err := validateAcceptedUsageArtifact(spec); err != nil {
 		return openbindings.Interface{}, err
@@ -141,11 +141,11 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 	usedOperationKeys := map[string]bool{}
 
 	addOp := func(name, help string, path []string, cmd *Command, inherited []Flag) error {
-		refs := uniquelyResolvableCommandRefs(spec, path)
+		selectors := uniquelyResolvableCommandSelectors(spec, path)
 		if len(path) == 0 {
-			refs = []string{""}
+			selectors = []string{""}
 		}
-		if len(refs) == 0 {
+		if len(selectors) == 0 {
 			return nil
 		}
 		opKey := synthesize.UniqueKey(synthesize.SanitizeKey(name), usedOperationKeys)
@@ -174,7 +174,7 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 		op.Output = floorOutputSchema()
 
 		iface.Operations[opKey] = op
-		for index, ref := range refs {
+		for index, selector := range selectors {
 			bindingKey := opKey + "." + DefaultSourceName
 			if index > 0 {
 				bindingKey = fmt.Sprintf("%s.%s.alias%d", opKey, DefaultSourceName, index)
@@ -182,7 +182,7 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 			iface.Bindings[bindingKey] = openbindings.BindingEntry{
 				Operation: opKey,
 				Source:    DefaultSourceName,
-				Ref:       ref,
+				Selector:  selector,
 			}
 		}
 		return nil
@@ -193,7 +193,7 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 		rc = &Command{}
 	}
 	// The descriptor's binary is itself a callable root command even when it
-	// declares no top-level fields. An omitted ref selects it under USAGE-D-03.
+	// declares no top-level fields. An omitted selector selects it under USAGE-D-03.
 	// A command-local unresolvable surface is omitted here and receives an
 	// explicit exclusion on the coverage surface.
 	_ = addOp(meta.Bin, meta.About, nil, rc, nil)
@@ -208,11 +208,11 @@ func buildInterfaceFromSpec(spec *Spec, sourceEntry openbindings.Source) (openbi
 	return iface, nil
 }
 
-// commandRefAlternatives returns the Cartesian product of every declared
+// commandSelectorAlternatives returns the Cartesian product of every declared
 // command spelling along a canonical command path. Aliases remain binding
 // alternatives (their exact spelling rides argv); they are never copied into
 // Operation.Aliases, whose meaning is cross-interface satisfaction.
-func commandRefAlternatives(spec *Spec, path []string) []string {
+func commandSelectorAlternatives(spec *Spec, path []string) []string {
 	if len(path) == 0 {
 		return []string{""}
 	}
@@ -243,26 +243,26 @@ func commandRefAlternatives(spec *Spec, path []string) []string {
 		prefixes = next
 		commands = matched.Commands
 	}
-	refs := make([]string, 0, len(prefixes))
+	selectors := make([]string, 0, len(prefixes))
 	for _, path := range prefixes {
-		refs = append(refs, commandRef(path))
+		selectors = append(selectors, commandSelector(path))
 	}
-	return refs
+	return selectors
 }
 
-// uniquelyResolvableCommandRefs keeps only artifact spellings that resolve to
+// uniquelyResolvableCommandSelectors keeps only artifact spellings that resolve to
 // exactly one command at every segment and arrive at the requested canonical
 // command path. A descriptor may declare colliding sibling aliases; declaration
 // order is not target identity, so synthesis refuses those spellings.
-func uniquelyResolvableCommandRefs(spec *Spec, path []string) []string {
-	var refs []string
-	for _, ref := range commandRefAlternatives(spec, path) {
-		resolved, err := findCommand(spec, ref)
+func uniquelyResolvableCommandSelectors(spec *Spec, path []string) []string {
+	var selectors []string
+	for _, selector := range commandSelectorAlternatives(spec, path) {
+		resolved, err := findCommand(spec, selector)
 		if err == nil && strings.Join(resolved.canonicalPath, "\x00") == strings.Join(path, "\x00") {
-			refs = append(refs, ref)
+			selectors = append(selectors, selector)
 		}
 	}
-	return refs
+	return selectors
 }
 
 func walkWithGlobals(spec *Spec, fn func(path []string, cmd Command, inheritedGlobals []Flag)) {

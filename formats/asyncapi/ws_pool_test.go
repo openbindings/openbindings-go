@@ -20,9 +20,9 @@ import (
 func sendOnce(t *testing.T, binv *Invoker, source invoke.InvocationSource, bindCtx map[string]any, msg map[string]any) {
 	t.Helper()
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source:  source,
-		Ref:     "#/operations/publish",
-		Context: wsTextContext(bindCtx),
+		Source:   source,
+		Selector: "#/operations/publish",
+		Context:  wsTextContext(bindCtx),
 	})
 	if err := call.Write(bg(), msg); err != nil {
 		t.Fatal(err)
@@ -118,9 +118,9 @@ func TestWSPool_ConcurrentSendsShareOneConnection(t *testing.T) {
 		go func(seq int) {
 			defer wg.Done()
 			call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-				Source:  source,
-				Ref:     "#/operations/publish",
-				Context: wsTextContext(map[string]any{"bearerToken": "tok"}),
+				Source:   source,
+				Selector: "#/operations/publish",
+				Context:  wsTextContext(map[string]any{"bearerToken": "tok"}),
 			})
 			if err := call.Write(bg(), map[string]any{"seq": seq}); err != nil {
 				errs <- err
@@ -174,9 +174,9 @@ func TestWSPool_ClientStreamingFrames(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source:  wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
-		Ref:     "#/operations/publish",
-		Context: wsTextContext(map[string]any{"bearerToken": "tok"}),
+		Source:   wsSource(srv, &securityScheme{Type: "http", Scheme: "bearer"}),
+		Selector: "#/operations/publish",
+		Context:  wsTextContext(map[string]any{"bearerToken": "tok"}),
 	})
 	for i := 1; i <= 3; i++ {
 		if err := call.Write(bg(), map[string]any{"chunk": i}); err != nil {
@@ -261,8 +261,8 @@ func TestWSPool_SendAndReceiveShareConnection(t *testing.T) {
 	source := wsSource(srv, nil)
 
 	sub := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: source,
-		Ref:    "#/operations/subscribe",
+		Source:   source,
+		Selector: "#/operations/subscribe",
 	})
 	out := sub.Outputs()
 

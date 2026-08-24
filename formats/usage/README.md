@@ -4,7 +4,7 @@ Binding invoker, interface synthesizer, and usage-spec parser for bare [jdx usag
 
 The artifact is the source: an OBI source governed by the exact identifier
 `openbindings.usage@1` carries or addresses a pristine usage v3.5.6 KDL
-descriptor. The binding's `ref` is the descriptor's own space-separated
+descriptor. The binding's `selector` is the descriptor's own space-separated
 command-path grammar. Questions the descriptor cannot answer—stdout decoding,
 exit classification, or alternate field carriage—remain explicit named
 configuration points. The artifact stays pristine and the OBI stays abstract:
@@ -44,7 +44,7 @@ call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
         BindingSpec: usage.BindingSpec,
         Location:    "file:///abs/path/mycli.usage.kdl", // or authorized exec:mycli, or inline Content
     },
-    Ref: "config set", // the format's own grammar: a command path; empty = root
+    Selector: "config set", // the format's own grammar: a command path; empty = root
 })
 _ = call.Write(ctx, map[string]any{"key": "theme", "value": "dark"})
 _ = call.Close()
@@ -102,7 +102,7 @@ iface, err := synthesizer.SynthesizeInterface(ctx, &openbindings.SynthesizeInput
 })
 // iface retains the pristine artifact as its source, one operation per
 // bindable command (dot-joined keys,
-// e.g. config.set), bindings ref'ing
+// e.g. config.set), bindings selecting
 // command paths, and FLOOR-TRUE output schemas: {"type":"string"} with an
 // in-schema x-ob floor-stamp (the text assumption always yields a string,
 // so the derived contract never lies; the stamp keys the diagnostics and
@@ -118,7 +118,7 @@ Input schemas derived from usage specs inherit the source format's thin value ty
 ### Invocation flow
 
 1. Loads and caches the bare usage artifact (inline content, an ABSOLUTE file location, or an `exec:` locator running the binary's own spec emission), checking `min_usage_version` against the supported range
-2. Resolves the binding ref — a space-separated command path — against the command tree (empty ref = the root command)
+2. Resolves the binding selector — a space-separated command path — against the command tree (empty selector = the root command)
 3. Consults the `FieldRouter` chain per input field and applies the channel mechanics (stdin piping, `-` operands, temp-file materialization) with loud slot-compatibility refusals, then builds argv from the remaining fields (flags by name, positionals in declared order)
 4. Executes the binary via `os/exec` with the constructed argv and routed stdin
 5. Classifies the exit through the seam (assumption: exit 0), decodes stdout through the seam (assumption: text), and emits the application value. Exit/stderr and decode/classify/route provenance remain below the abstract invocation boundary.
@@ -139,7 +139,7 @@ Converts a usage-spec KDL document into an OBI by:
 - Extracting metadata (name, version, about) from the spec
 - Walking all commands depth-first, skipping `subcommand_required` nodes
 - Generating JSON Schema input from flags (boolean, string, integer, array) and positional args
-- Using dot-separated paths as operation keys and space-separated paths as refs (e.g. `config.set` / `config set`)
+- Using dot-separated paths as operation keys and space-separated paths as selectors (e.g. `config.set` / `config set`)
 - Carrying the pristine artifact verbatim as the source: embedded `content` for inline and file-path intake (a local path is a relative reference under OBI-D-05, so it never rides the emitted `location`), and the binding-spec-defined `exec:` address verbatim for live descriptor generation. `exec:` is an absolute address under USAGE-D-02 even when its space-separated argv vector contains spaces; it is not forced into URI syntax.
 
 ## Parser SDK

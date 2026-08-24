@@ -157,7 +157,7 @@ func (d *executableDocument) responseKey(operationName, wantKind, wantField stri
 		selected = &d.operations[0]
 	}
 	if selected.kind != wantKind {
-		return "", fmt.Errorf("selected operation kind %q does not match binding ref kind %q", selected.kind, wantKind)
+		return "", fmt.Errorf("selected operation kind %q does not match binding selector kind %q", selected.kind, wantKind)
 	}
 
 	rootName := schema.rootTypeName(wantKind)
@@ -175,7 +175,7 @@ func (d *executableDocument) responseKey(operationName, wantKind, wantField stri
 	for responseKey, fields := range groups {
 		for _, field := range fields {
 			if field != wantField {
-				return "", fmt.Errorf("selected root field %q does not match binding ref field %q", field, wantField)
+				return "", fmt.Errorf("selected root field %q does not match binding selector field %q", field, wantField)
 			}
 		}
 		return responseKey, nil

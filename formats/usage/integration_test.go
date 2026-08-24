@@ -173,8 +173,8 @@ func invokeUsageWithTrailer(t *testing.T, invoker driver, args *invoke.BindingIn
 
 func TestIntegration_JSONOutput(t *testing.T) {
 	out, ierr := invokeUsage(t, jsonHooked(), &invoke.BindingInvocationArgs{
-		Source: testSource(),
-		Ref:    "json",
+		Source:   testSource(),
+		Selector: "json",
 	}, map[string]any{"pairs": []any{"name=alice", "role=admin"}})
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
@@ -195,8 +195,8 @@ func TestIntegration_JSONOutput(t *testing.T) {
 func TestIntegration_NonZeroExitCode(t *testing.T) {
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
-		Source: testSource(),
-		Ref:    "fail",
+		Source:   testSource(),
+		Selector: "fail",
 	}, map[string]any{"message": []any{"something went wrong"}})
 
 	// A non-ok exit is a protocol-independent unsuccessful completion.
@@ -217,8 +217,8 @@ func TestIntegration_MixedOutput(t *testing.T) {
 	// rides the x-stderr trailer, never the output value.
 	invoker := NewInvoker()
 	out, _, ierr := invokeUsageWithTrailer(t, invoker, &invoke.BindingInvocationArgs{
-		Source: testSource(),
-		Ref:    "mixed",
+		Source:   testSource(),
+		Selector: "mixed",
 	}, nil)
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s", ierr.Error())
@@ -231,8 +231,8 @@ func TestIntegration_MixedOutput(t *testing.T) {
 func TestIntegration_EchoCommand(t *testing.T) {
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
-		Source: testSource(),
-		Ref:    "echo",
+		Source:   testSource(),
+		Selector: "echo",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
 		t.Fatalf("error: %s: %s", ierr.Code, ierr.Error())
@@ -312,7 +312,7 @@ cmd "config" subcommand_required=#true {
 	}
 
 	// The emitted source is the PRISTINE bare artifact; bindings carry
-	// command-path refs (the format's own grammar).
+	// command-path selectors (the format's own grammar).
 	src := iface.Sources[DefaultSourceName]
 	if src.BindingSpec != BindingSpec {
 		t.Errorf("source format = %q, want the bare usage token", src.BindingSpec)
@@ -321,8 +321,8 @@ cmd "config" subcommand_required=#true {
 		t.Fatal("expected the pristine kdl text as embedded content")
 	}
 	binding := iface.Bindings["config.get."+DefaultSourceName]
-	if binding.Ref != "config get" {
-		t.Errorf("config.get ref = %q, want 'config get'", binding.Ref)
+	if binding.Selector != "config get" {
+		t.Errorf("config.get selector = %q, want 'config get'", binding.Selector)
 	}
 
 	// FLOOR-TRUE derived outputs: {"type":"string"} with the in-schema
@@ -335,10 +335,10 @@ cmd "config" subcommand_required=#true {
 		t.Fatalf("expected the x-ob floor-stamp, got %v", out["x-ob"])
 	}
 
-	// Synthesize-then-invoke coherence: the emitted ref resolves in the
+	// Synthesize-then-invoke coherence: the emitted selector resolves in the
 	// emitted artifact.
-	if _, err := findCommand(mustParse(t, spec), binding.Ref); err != nil {
-		t.Fatalf("emitted binding ref does not resolve: %v", err)
+	if _, err := findCommand(mustParse(t, spec), binding.Selector); err != nil {
+		t.Fatalf("emitted binding selector does not resolve: %v", err)
 	}
 }
 
@@ -364,7 +364,7 @@ cmd "configuration" {
 	if result.cmd.Name != "set" {
 		t.Errorf("cmd name = %q, want set", result.cmd.Name)
 	}
-	// The ref spelling is also the argv spelling; an artifact-declared alias
+	// The selector spelling is also the argv spelling; an artifact-declared alias
 	// is preserved rather than normalized to the primary command name.
 	if result.path[0] != "config" {
 		t.Errorf("path[0] = %q, want supplied alias config", result.path[0])
@@ -391,8 +391,8 @@ arg "<words>..." help="Words to echo"
 `
 	invoker := NewInvoker()
 	out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rootKDL)},
-		Ref:    "",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rootKDL)},
+		Selector: "",
 	}, map[string]any{"words": []any{"hello", "world"}})
 	if ierr != nil {
 		t.Fatalf("error: %s: %s", ierr.Code, ierr.Error())
@@ -402,18 +402,18 @@ arg "<words>..." help="Words to echo"
 	}
 }
 
-func TestIntegration_InvalidRef(t *testing.T) {
+func TestIntegration_InvalidSelector(t *testing.T) {
 	invoker := NewInvoker()
-	for _, ref := range []string{"nonexistent", "no such command", "json bogus"} {
+	for _, selector := range []string{"nonexistent", "no such command", "json bogus"} {
 		out, ierr := invokeUsage(t, invoker, &invoke.BindingInvocationArgs{
-			Source: testSource(),
-			Ref:    ref,
+			Source:   testSource(),
+			Selector: selector,
 		}, nil)
 		if out != nil {
-			t.Fatalf("ref %q: expected no output, got %v", ref, out)
+			t.Fatalf("selector %q: expected no output, got %v", selector, out)
 		}
-		if ierr == nil || ierr.Code != invoke.ErrCodeRefNotFound {
-			t.Fatalf("ref %q: expected ERR_REF_NOT_FOUND, got %v", ref, ierr)
+		if ierr == nil || ierr.Code != invoke.ErrCodeSelectorNotFound {
+			t.Fatalf("selector %q: expected ERR_SELECTOR_NOT_FOUND, got %v", selector, ierr)
 		}
 	}
 }
@@ -425,9 +425,9 @@ func TestIntegration_NoInputOperationConvention(t *testing.T) {
 	invoker := NewInvoker()
 	ctx := context.Background()
 	call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source:  testSource(),
-		Ref:     "mixed",
-		Binding: &openbindings.BindingEntry{Operation: "mixed", Source: "s", Ref: "mixed"},
+		Source:   testSource(),
+		Selector: "mixed",
+		Binding:  &openbindings.BindingEntry{Operation: "mixed", Source: "s", Selector: "mixed"},
 		// InputSchema nil → no-input operation; the binding closes input itself.
 	})
 	// The caller writes nothing and does not close; the binding must still run.
@@ -447,9 +447,9 @@ func TestIntegration_Cancellation(t *testing.T) {
 	invoker := NewInvoker()
 	ctx, cancel := context.WithCancel(context.Background())
 	call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec},
-		Ref:     "10",
-		Context: map[string]any{"metadata": map[string]any{"binary": "sleep"}},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec},
+		Selector: "10",
+		Context:  map[string]any{"metadata": map[string]any{"binary": "sleep"}},
 	})
 	_ = call.Close()
 	go func() {

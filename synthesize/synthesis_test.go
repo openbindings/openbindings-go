@@ -17,7 +17,7 @@ func TestFinalizeSynthesisAppliesSharedAuthoringDirectives(t *testing.T) {
 		OpenBindings: openbindings.MaxTestedVersion,
 		Operations:   map[string]openbindings.Operation{"run": {}},
 		Sources:      map[string]openbindings.Source{"default": {BindingSpec: "example.spec@1", Location: "https://old.example/spec"}},
-		Bindings:     map[string]openbindings.BindingEntry{"run.default": {Operation: "run", Source: "default", Ref: "run"}},
+		Bindings:     map[string]openbindings.BindingEntry{"run.default": {Operation: "run", Source: "default", Selector: "run"}},
 	}
 	in := &SynthesizeInput{
 		OpenBindingsVersion: openbindings.MaxTestedVersion,

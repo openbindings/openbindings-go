@@ -35,19 +35,19 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	usedKeys := map[string]bool{}
 	for _, opID := range opIDs {
 		asyncOp := doc.Operations[opID]
-		ref := operationRef(opID)
+		selector := operationSelector(opID)
 		opKey := synthesize.UniqueKey(synthesize.SanitizeKey(opID), usedKeys)
 		usedKeys[opKey] = true
 		desc := operationDescription(asyncOp)
 
-		targets = append(targets, bindableTarget(ref, opKey, desc))
+		targets = append(targets, bindableTarget(selector, opKey, desc))
 	}
 
 	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, operationKey, description string) synthesize.BindableTarget {
-	target := synthesize.BindableTarget{Ref: ref, OperationKey: operationKey}
+func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
+	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

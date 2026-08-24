@@ -18,7 +18,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Mock binding invoker (the design doc's reference mock, ref-dispatched)
+// Mock binding invoker (the design doc's reference mock, selector-dispatched)
 // ---------------------------------------------------------------------------
 
 var testDurable = true
@@ -108,7 +108,7 @@ func (m *mockBindingInvoker) run(ctx context.Context, args *BindingInvocationArg
 		return v, true, nil
 	}
 
-	switch args.Ref {
+	switch args.Selector {
 	case "ping":
 		_ = h.CloseInput()
 		if m.opts.nativeFailure {
@@ -343,20 +343,20 @@ func opTestInterface() *openbindings.Interface {
 			"mock": {BindingSpec: "mock@1.0", Location: "mem://mock"},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"ping.main":    {Operation: "ping", Source: "mock", Ref: "ping"},
-			"getUser.main": {Operation: "getUser", Source: "mock", Ref: "getUser", Preference: pf(99)},
-			"getUser.bad":  {Operation: "getUser", Source: "mock", Ref: "badUser", Preference: pf(1)},
+			"ping.main":    {Operation: "ping", Source: "mock", Selector: "ping"},
+			"getUser.main": {Operation: "getUser", Source: "mock", Selector: "getUser", Preference: pf(99)},
+			"getUser.bad":  {Operation: "getUser", Source: "mock", Selector: "badUser", Preference: pf(1)},
 			"echo.transformed": {
-				Operation: "echo", Source: "mock", Ref: "echoInput",
+				Operation: "echo", Source: "mock", Selector: "echoInput",
 				InputTransform: &openbindings.TransformOrRef{Inline: "idToUserId"},
 			},
-			"watchOrders.main": {Operation: "watchOrders", Source: "mock", Ref: "watchOrders", Preference: pf(99)},
+			"watchOrders.main": {Operation: "watchOrders", Source: "mock", Selector: "watchOrders", Preference: pf(99)},
 			"watchOrders.challenge": {
-				Operation: "watchOrders", Source: "mock", Ref: "watchThenChallenge", Preference: pf(1),
+				Operation: "watchOrders", Source: "mock", Selector: "watchThenChallenge", Preference: pf(1),
 			},
-			"watchTyped.main":   {Operation: "watchTyped", Source: "mock", Ref: "streamBadSecond"},
-			"chat.main":         {Operation: "chat", Source: "mock", Ref: "chat"},
-			"uploadChunks.main": {Operation: "uploadChunks", Source: "mock", Ref: "uploadChunks"},
+			"watchTyped.main":   {Operation: "watchTyped", Source: "mock", Selector: "streamBadSecond"},
+			"chat.main":         {Operation: "chat", Source: "mock", Selector: "chat"},
+			"uploadChunks.main": {Operation: "uploadChunks", Source: "mock", Selector: "uploadChunks"},
 		},
 	}
 }
@@ -1162,7 +1162,7 @@ func TestSelectBinding_FormatSkippedNamesTheGap(t *testing.T) {
 		OpenBindings: "0.2.0",
 		Operations:   map[string]openbindings.Operation{"listItems": {}},
 		Sources:      map[string]openbindings.Source{"api": {BindingSpec: "openapi@3.1.0", Location: "https://x.test/spec.json"}},
-		Bindings:     map[string]openbindings.BindingEntry{"listItems.api": {Operation: "listItems", Source: "api", Ref: "#/paths/~1items/get"}},
+		Bindings:     map[string]openbindings.BindingEntry{"listItems.api": {Operation: "listItems", Source: "api", Selector: "#/paths/~1items/get"}},
 	}
 	_, _, err := selectBinding(iface, "listItems", map[string]bool{"mock@1.0": true})
 	if !errors.Is(err, ErrBindingNotFound) {
@@ -1192,9 +1192,9 @@ func selectionTestInterface() *openbindings.Interface {
 			"b": {BindingSpec: "mock@1.0", Location: "https://b.test"},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"op.declared":    {Operation: "op", Source: "a", Ref: "r1", Preference: pf(-5)},
-			"op.undeclared":  {Operation: "op", Source: "b", Ref: "r2"},
-			"op.undeclared2": {Operation: "op", Source: "b", Ref: "r3"},
+			"op.declared":    {Operation: "op", Source: "a", Selector: "r1", Preference: pf(-5)},
+			"op.undeclared":  {Operation: "op", Source: "b", Selector: "r2"},
+			"op.undeclared2": {Operation: "op", Source: "b", Selector: "r3"},
 		},
 	}
 }
@@ -1229,8 +1229,8 @@ func TestSelectBinding_NoSourcePreferenceInheritance(t *testing.T) {
 			"b": {"bindingSpec": "mock@1.0", "location": "https://b.test", "preference": 100}
 		},
 		"bindings": {
-			"op.declared":   {"operation": "op", "source": "a", "ref": "r1", "preference": -5},
-			"op.undeclared": {"operation": "op", "source": "b", "ref": "r2"}
+			"op.declared":   {"operation": "op", "source": "a", "selector": "r1", "preference": -5},
+			"op.undeclared": {"operation": "op", "source": "b", "selector": "r2"}
 		}
 	}`
 	var iface openbindings.Interface
@@ -1277,7 +1277,7 @@ func TestInvoke_SelectionOverrideViaConfiguration(t *testing.T) {
 	mock := &mockBindingInvoker{}
 	op := newOpInvoker(mock, nil)
 	iface := opTestInterface()
-	iface.Bindings["ping.alt"] = openbindings.BindingEntry{Operation: "ping", Source: "mock", Ref: "ping", Preference: pf(-1)}
+	iface.Bindings["ping.alt"] = openbindings.BindingEntry{Operation: "ping", Source: "mock", Selector: "ping", Preference: pf(-1)}
 
 	op.BindingSelector = nil
 	if _, err := drainOutputs(t, Invoke(bg(), op, iface, NewOperationSignature[any, any]("ping"))); codeOf(t, err) != ErrCodeBindingSelectionRequired {

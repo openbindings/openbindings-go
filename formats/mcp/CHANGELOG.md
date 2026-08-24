@@ -13,6 +13,11 @@ This release tracks the spec 0.2.0 alignment of `openbindings-go`, including the
 
 ### Changed
 
+- **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
+  `bindings[*].selector`): bindings ride
+  `invoke.BindingInvocationArgs.Selector`, and refusals use
+  `ERR_INVALID_SELECTOR` / `ERR_SELECTOR_NOT_FOUND`.
+
 - **Multi-block tool content returns the verbatim content array (MCP-P-05)**
   instead of a `"\n"`-joined string — the value's type changes for multi-text
   results.

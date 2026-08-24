@@ -33,8 +33,8 @@ func TestRevision7SchemaOmittedOAS30BytesRoundTripAndSynthesis(t *testing.T) {
 		}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(revision7ByteSpec)},
-		Ref:    "#/paths/~1archive/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(revision7ByteSpec)},
+		Selector: "#/paths/~1archive/post",
 	})
 	outputs, invocationErr := driveOutputs(context.Background(), call, map[string]any{"body": "AAH+/w=="})
 	if invocationErr != nil || !reflect.DeepEqual(outputs, []any{"3q2+7w=="}) {

@@ -181,8 +181,8 @@ func TestIntegration_MultipartFormData(t *testing.T) {
 	specBytes, _ := json.Marshal(spec)
 
 	call := binv.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Ref:    "#/paths/~1upload/post",
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(specBytes))},
+		Selector: "#/paths/~1upload/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(specBytes))},
 	})
 	// OAPI-P-04: a binary-signaled part's bytes come from the caller's
 	// STRING value, Base64-decoded (3.0.x signals binary via format: binary
@@ -533,8 +533,8 @@ func TestIntegration_MissingRequiredInput_NoDispatch(t *testing.T) {
 	binv := NewInvoker()
 
 	cases := []struct {
-		name string
-		ref  string
+		name     string
+		selector string
 	}{
 		{"required path parameter", "#/paths/~1widgets~1{id}/get"},
 		{"required request body", "#/paths/~1widgets/post"},
@@ -543,8 +543,8 @@ func TestIntegration_MissingRequiredInput_NoDispatch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			before := requests.Load()
 			call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-				Source: source,
-				Ref:    tc.ref,
+				Source:   source,
+				Selector: tc.selector,
 			})
 			// Bare close: no input written.
 			_, ierr := driveOutputs(context.Background(), call, nil)
@@ -576,9 +576,9 @@ func TestIntegration_BareCloseDispatchesWhenArtifactPermits(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	call := binv.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv.URL))},
-		Ref:     "#/paths/~1session/get",
-		Binding: &openbindings.BindingEntry{Operation: "getSession", Source: "api", Ref: "#/paths/~1session/get"},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv.URL))},
+		Selector: "#/paths/~1session/get",
+		Binding:  &openbindings.BindingEntry{Operation: "getSession", Source: "api", Selector: "#/paths/~1session/get"},
 		// InputSchema nil — the document makes no claim at this boundary.
 	})
 	// The caller speaks: nothing to write, so it closes. Bounded by ctx so a
@@ -634,9 +634,9 @@ func TestIntegration_OAuth2CredentialsApplied(t *testing.T) {
 
 	binv := NewInvoker()
 	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(withDeclaredJSONResponses(t, string(specBytes)))},
-		Ref:     "#/paths/~1me/get",
-		Context: map[string]any{"accessToken": "at-123"},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(withDeclaredJSONResponses(t, string(specBytes)))},
+		Selector: "#/paths/~1me/get",
+		Context:  map[string]any{"accessToken": "at-123"},
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
 		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
@@ -689,8 +689,8 @@ func TestIntegration_TwoANDedAPIKeysDistinguishedByName(t *testing.T) {
 	// Preflight: the AND'd alternative challenges, each requirement carrying
 	// its own securitySchemes key as Name (R2.a ruling).
 	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: source,
-		Ref:    "#/paths/~1secure/get",
+		Source:   source,
+		Selector: "#/paths/~1secure/get",
 	})
 	_, ierr := driveSingle(t, call, nil)
 	if ierr == nil || ierr.Code != invoke.ErrCodeContextRequired {
@@ -711,8 +711,8 @@ func TestIntegration_TwoANDedAPIKeysDistinguishedByName(t *testing.T) {
 	// Resolve with scheme-scoped apiKeys: both credentials must reach their
 	// own declared wire location, distinguishably.
 	call2 := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: source,
-		Ref:    "#/paths/~1secure/get",
+		Source:   source,
+		Selector: "#/paths/~1secure/get",
 		Context: map[string]any{
 			"apiKeys": map[string]any{"headerKey": "hdr-secret", "queryKey": "qry-secret"},
 		},
@@ -739,8 +739,8 @@ func TestIntegration_ContextRequired_ZeroIO(t *testing.T) {
 
 	binv := NewInvoker()
 	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(spec))},
-		Ref:    "#/paths/~1items/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(spec))},
+		Selector: "#/paths/~1items/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr == nil || ierr.Code != invoke.ErrCodeContextRequired {
@@ -799,8 +799,8 @@ func sseSpec(serverURL string) string {
 
 func sseCall(srv *httptest.Server) invoke.Invocation[any, any] {
 	return NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Ref:    "#/paths/~1events/get",
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Selector: "#/paths/~1events/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
 	})
 }
 
@@ -834,8 +834,8 @@ func sseCallHooked(srv *httptest.Server) invoke.Invocation[any, any] {
 		return wrapped, nil
 	}
 	return op.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Ref:    "#/paths/~1events/get",
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Selector: "#/paths/~1events/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
 	})
 }
 
@@ -919,8 +919,8 @@ func TestIntegration_SSEResponse_MidStreamDeadlineIsCancelled(t *testing.T) {
 	lifeCtx, cancelLife := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancelLife()
 	call := NewInvoker().InvokeBinding(lifeCtx, &invoke.BindingInvocationArgs{
-		Ref:    "#/paths/~1events/get",
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Selector: "#/paths/~1events/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
 	})
 	_ = call.Close()
 
@@ -1067,8 +1067,8 @@ func TestNewInvokerWithClient(t *testing.T) {
 	invoker := NewInvokerWithClient(&http.Client{Transport: customTransport})
 
 	call := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Ref:    "#/paths/~1events/get",
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec("http://example.test"))},
+		Selector: "#/paths/~1events/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec("http://example.test"))},
 	})
 	out, ierr := driveSingle(t, call, nil)
 	if ierr != nil {
@@ -1107,8 +1107,8 @@ func TestIntegration_SSEResponse_Cancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	call := NewInvoker().InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Ref:    "#/paths/~1events/get",
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Selector: "#/paths/~1events/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
 	})
 
 	out := call.Outputs()
@@ -1200,9 +1200,9 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 
 	// The contract's shape goes onto the wire verbatim.
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(strings.ReplaceAll(spec, `"paths"`, `"servers": [{"url": "`+srv.URL+`"}], "paths"`))},
-		Ref:     "#/paths/~1pets/post",
-		Context: nil,
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(strings.ReplaceAll(spec, `"paths"`, `"servers": [{"url": "`+srv.URL+`"}], "paths"`))},
+		Selector: "#/paths/~1pets/post",
+		Context:  nil,
 	})
 	if _, ierr := driveSingle(t, call, map[string]any{"name": "rex"}); ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
@@ -1260,8 +1260,8 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1users~1{id}/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1users~1{id}/get",
 	})
 	if _, ierr := driveSingle(t, call, map[string]any{"id": "u1", "verbose": true}); ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
@@ -1290,8 +1290,8 @@ func TestPrepareBinding_UsesCachePrimedFromContent(t *testing.T) {
 	// Content+location invocation: no fetch happens (content is authoritative),
 	// but the parse must land in the location-keyed cache.
 	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: location, Content: openbindings.TextContent(string(spec))},
-		Ref:    "#/paths/~1items/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: location, Content: openbindings.TextContent(string(spec))},
+		Selector: "#/paths/~1items/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr == nil || ierr.Code != invoke.ErrCodeContextRequired {
@@ -1300,8 +1300,8 @@ func TestPrepareBinding_UsesCachePrimedFromContent(t *testing.T) {
 
 	// Location-only preflight: must be served from the warm cache.
 	details, err := binv.PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: location},
-		Ref:    "#/paths/~1items/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: location},
+		Selector: "#/paths/~1items/get",
 	})
 	if err != nil {
 		t.Fatalf("prepareBinding: %v", err)
@@ -1347,8 +1347,8 @@ func TestIntegration_CollisionRefusesBeforeDispatch(t *testing.T) {
 
 	inv := NewInvoker()
 	call := inv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1users~1{id}/put",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1users~1{id}/put",
 	})
 	if err := call.Write(context.Background(), map[string]any{"id": "u1", "name": "Ada"}); err != nil {
 		t.Fatal(err)
@@ -1398,9 +1398,9 @@ func TestConformance_G1_AbsentInputIsNotNoInput(t *testing.T) {
 	// createWidget declares `requestBody: {required: true}`. The OBI omits
 	// `input`: no portable contract, no cardinality claim.
 	call := NewInvoker().InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv.URL))},
-		Ref:     "#/paths/~1widgets/post",
-		Binding: &openbindings.BindingEntry{Operation: "createWidget", Source: "api", Ref: "#/paths/~1widgets/post"},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv.URL))},
+		Selector: "#/paths/~1widgets/post",
+		Binding:  &openbindings.BindingEntry{Operation: "createWidget", Source: "api", Selector: "#/paths/~1widgets/post"},
 		// InputSchema nil — the document makes no claim at this boundary.
 	})
 

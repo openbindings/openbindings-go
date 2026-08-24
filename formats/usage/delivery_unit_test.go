@@ -18,7 +18,7 @@ func TestDeliveryUnitBound_StdoutOverflowRefused(t *testing.T) {
 	}
 	_, ierr := invokeUsage(t, NewInvoker(), &invoke.BindingInvocationArgs{
 		Source:               testSource(),
-		Ref:                  "echo",
+		Selector:             "echo",
 		MaxDeliveryUnitBytes: 1024,
 	}, map[string]any{"words": words})
 	if ierr == nil {

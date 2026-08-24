@@ -161,8 +161,8 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 	t.Cleanup(func() { _ = invoker.Close() })
 
 	location, _ := scenario.Given.Source["location"].(string)
-	ref, _ := scenario.Given.Binding["ref"].(string)
-	args := invocationArgs(location, ref, nil)
+	selector, _ := scenario.Given.Binding["selector"].(string)
+	args := invocationArgs(location, selector, nil)
 	args.Source.BindingSpec = BindingSpec
 	if content, present := scenario.Given.Source["content"]; present {
 		args.Source.Content = mustContent(content)
@@ -181,7 +181,7 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 	op := invoke.NewOperationInvoker(invoker)
 	call = invoke.Invoke(
 		bg(), op, iface,
-		invoke.NewOperationSignature[any, any](mcpOperationForRef(t, iface, ref)),
+		invoke.NewOperationSignature[any, any](mcpOperationForSelector(t, iface, selector)),
 	)
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		if err := call.Write(shortCtx(t), scenario.Given.Invocation["input"]); err != nil {
@@ -215,14 +215,14 @@ func runMCPFidelityScenario(t *testing.T, scenario processorscenarios.Scenario) 
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
 }
 
-func mcpOperationForRef(t *testing.T, iface *openbindings.Interface, ref string) string {
+func mcpOperationForSelector(t *testing.T, iface *openbindings.Interface, selector string) string {
 	t.Helper()
 	for _, binding := range iface.Bindings {
-		if binding.Ref == ref {
+		if binding.Selector == selector {
 			return binding.Operation
 		}
 	}
-	t.Fatalf("synthesized MCP interface has no binding for %q", ref)
+	t.Fatalf("synthesized MCP interface has no binding for %q", selector)
 	return ""
 }
 
@@ -242,8 +242,8 @@ func runMCPProcessorScenario(t *testing.T, scenario processorscenarios.Scenario)
 	complete := func() processorscenarios.Observation {
 		return processorscenarios.Observation{Disposition: "complete", Phase: "completion", Data: data}
 	}
-	ref, _ := scenario.Given.Binding["ref"].(string)
-	entity, name, _ := parseRef(ref)
+	selector, _ := scenario.Given.Binding["selector"].(string)
+	entity, name, _ := parseSelector(selector)
 
 	var pin *listing
 	if content, ok := scenario.Given.Source["content"]; ok {
@@ -274,7 +274,7 @@ func runMCPProcessorScenario(t *testing.T, scenario processorscenarios.Scenario)
 				cursors = append(cursors, next)
 			}
 		}
-		if _, err := resolveRef(l, entity, name, BindingSpec); err != nil {
+		if _, err := resolveSelector(l, entity, name, BindingSpec); err != nil {
 			t.Fatal(err)
 		}
 		data["listingRequests"] = map[string]any{"tools": cursors}
@@ -283,7 +283,7 @@ func runMCPProcessorScenario(t *testing.T, scenario processorscenarios.Scenario)
 		data["outputs"] = []any{result["structuredContent"]}
 		return complete()
 	case "MCP-PS-03":
-		if _, err := resolveRef(pin, entity, name, BindingSpec); err != nil {
+		if _, err := resolveSelector(pin, entity, name, BindingSpec); err != nil {
 			t.Fatal(err)
 		}
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "pre-dispatch", Data: data}
@@ -301,14 +301,14 @@ func runMCPProcessorScenario(t *testing.T, scenario processorscenarios.Scenario)
 	case "MCP-PS-07":
 		return processorscenarios.Observation{Disposition: "context-required", Phase: "pre-dispatch", Data: data}
 	case "MCP-PS-08", "MCP-PS-09", "MCP-PS-12", "MCP-PS-13":
-		if _, err := resolveRef(pin, entity, name, BindingSpec); err == nil {
-			t.Fatal("expected unresolvable ref")
+		if _, err := resolveSelector(pin, entity, name, BindingSpec); err == nil {
+			t.Fatal("expected unresolvable selector")
 		}
 		return processorscenarios.Observation{Disposition: "refusal", Phase: "resolution", Data: data}
 	case "MCP-PS-10":
 		return processorscenarios.Observation{Disposition: "error", Phase: "response", Data: data}
 	case "MCP-PS-11":
-		if _, err := resolveRef(pin, entity, name, BindingSpec); err != nil {
+		if _, err := resolveSelector(pin, entity, name, BindingSpec); err != nil {
 			t.Fatal(err)
 		}
 		data["dispatch"] = map[string]any{"method": "tools/call"}

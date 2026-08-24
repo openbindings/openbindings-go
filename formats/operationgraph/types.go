@@ -35,7 +35,7 @@ const (
 )
 
 // Graph is one operation graph definition: the addressable unit of this
-// binding format (a binding's ref resolves to it via JSON Pointer). The JSON
+// binding format (a binding's selector resolves to it via JSON Pointer). The JSON
 // document hosting it is unconstrained and carries no type here.
 type Graph struct {
 	// Version is the graph's own format version declaration
@@ -151,12 +151,12 @@ func unknownFields(raw map[string]json.RawMessage, allowed map[string]bool) []st
 	return fields
 }
 
-// graphFromValue converts a JSON value (the target of a resolved ref) into a
+// graphFromValue converts a JSON value (the target of a resolved selector) into a
 // Graph. The value must be a JSON object; structural validity beyond that is
 // Validate's concern.
 func graphFromValue(v any) (*Graph, error) {
 	if _, ok := v.(map[string]any); !ok {
-		return nil, fmt.Errorf("resolved ref value is not a JSON object")
+		return nil, fmt.Errorf("resolved selector value is not a JSON object")
 	}
 	raw, err := json.Marshal(v)
 	if err != nil {

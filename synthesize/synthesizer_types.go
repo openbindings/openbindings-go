@@ -186,20 +186,20 @@ type SynthesisCoverageEntry struct {
 	// required for represented and lossy entries.
 	SourceKey string `json:"sourceKey,omitempty"`
 	// SourceRef is a stable source-local identifier. It need not be a conformant
-	// binding ref for an excluded or invalid unit.
+	// binding selector for an excluded or invalid unit.
 	SourceRef string `json:"sourceRef"`
 	// Scope distinguishes addressable targets from independently selectable
 	// alternatives of a target.
 	Scope SynthesisCoverageScope `json:"scope"`
 	// Status is the unit's durable disposition.
 	Status SynthesisCoverageStatus `json:"status"`
-	// OperationKey, BindingKey, and BindingRef are required for represented
-	// and lossy entries.
-	// BindingRef is serialized even when empty because some binding
-	// specifications identify a valid target by an omitted ref.
-	OperationKey string `json:"operationKey,omitempty"`
-	BindingKey   string `json:"bindingKey,omitempty"`
-	BindingRef   string `json:"bindingRef"`
+	// OperationKey, BindingKey, and BindingSelector are required for
+	// represented and lossy entries.
+	// BindingSelector is serialized even when empty because some binding
+	// specifications identify a valid target by an omitted selector.
+	OperationKey    string `json:"operationKey,omitempty"`
+	BindingKey      string `json:"bindingKey,omitempty"`
+	BindingSelector string `json:"bindingSelector"`
 	// ReasonCode and Message are required for every non-represented entry.
 	// ReasonCode is stable and family-namespaced; Message is diagnostic prose.
 	ReasonCode string `json:"reasonCode,omitempty"`
@@ -264,8 +264,8 @@ type InspectionLimitation struct {
 // BindableTarget describes a target within a source that can be framed as an
 // OpenBindings operation.
 type BindableTarget struct {
-	// Ref is the reference string to use in a binding entry.
-	Ref string `json:"ref"`
+	// Selector is the selector string to use in a binding entry.
+	Selector string `json:"selector"`
 	// OperationKey is an optional suggested operation key for this target.
 	OperationKey string `json:"operationKey,omitempty"`
 	// Operation is an optional OpenBindings operation framing for this target.

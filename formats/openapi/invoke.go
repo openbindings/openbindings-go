@@ -543,26 +543,26 @@ var validRefMethods = map[string]bool{
 	"options": true, "head": true, "patch": true, "trace": true,
 }
 
-// parseRef parses a binding ref per OAPI-D-03: a JSON Pointer of the exact
+// parseSelector parses a binding selector per OAPI-D-03: a JSON Pointer of the exact
 // form `#/paths/<escaped-path>/<method>` addressing an operation object. The
 // path segment carries RFC 6901 escaping ("/" → "~1", "~" → "~0"), and the
 // method is lowercase exactly as the artifact spells it — an uppercase
 // method is non-conformant and refused, never case-folded.
-func parseRef(ref string) (path string, method string, err error) {
+func parseSelector(selector string) (path string, method string, err error) {
 	const prefix = "#/paths/"
-	if !strings.HasPrefix(ref, prefix) {
-		return "", "", fmt.Errorf("ref %q must be a JSON Pointer of the form #/paths/<escaped-path>/<method> (OAPI-D-03)", ref)
+	if !strings.HasPrefix(selector, prefix) {
+		return "", "", fmt.Errorf("selector %q must be a JSON Pointer of the form #/paths/<escaped-path>/<method> (OAPI-D-03)", selector)
 	}
-	parts := strings.Split(ref[len(prefix):], "/")
+	parts := strings.Split(selector[len(prefix):], "/")
 	if len(parts) != 2 {
-		return "", "", fmt.Errorf("ref %q must be a JSON Pointer of the form #/paths/<escaped-path>/<method>: the path segment carries RFC 6901 escaping (\"/\" → \"~1\") (OAPI-D-03)", ref)
+		return "", "", fmt.Errorf("selector %q must be a JSON Pointer of the form #/paths/<escaped-path>/<method>: the path segment carries RFC 6901 escaping (\"/\" → \"~1\") (OAPI-D-03)", selector)
 	}
 	escapedPath, method := parts[0], parts[1]
 	if !validRefMethods[method] {
 		if validRefMethods[strings.ToLower(method)] {
-			return "", "", fmt.Errorf("ref %q: method %q must be lowercase exactly as the artifact spells it (OAPI-D-03)", ref, method)
+			return "", "", fmt.Errorf("selector %q: method %q must be lowercase exactly as the artifact spells it (OAPI-D-03)", selector, method)
 		}
-		return "", "", fmt.Errorf("invalid HTTP method %q in ref", method)
+		return "", "", fmt.Errorf("invalid HTTP method %q in selector", method)
 	}
 
 	// RFC 6901 unescaping, in order: ~1 first, then ~0.

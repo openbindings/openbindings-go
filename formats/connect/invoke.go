@@ -35,22 +35,22 @@ type methodInfo struct {
 	method protoreflect.MethodDescriptor
 }
 
-// parseRef splits a binding ref per CONN-D-03 (§7), which takes exactly
+// parseSelector splits a binding selector per CONN-D-03 (§7), which takes exactly
 // openbindings.grpc@1 §7's grammar (GRPC-D-03), incorporated:
 // <fully-qualified-service>/<method> — the service's package-qualified
 // name, or its bare name when its file declares no package, one '/', and
 // the unqualified RPC name. Matching downstream is byte-exact in schema
 // mode; in descriptorless mode the segments ride verbatim into the
 // request URL.
-func parseRef(ref string) (string, string, error) {
-	if ref == "" {
-		return "", "", fmt.Errorf("empty Connect ref")
+func parseSelector(selector string) (string, string, error) {
+	if selector == "" {
+		return "", "", fmt.Errorf("empty Connect selector")
 	}
-	idx := strings.Index(ref, "/")
-	if idx < 0 || idx != strings.LastIndex(ref, "/") || idx == 0 || idx == len(ref)-1 {
-		return "", "", fmt.Errorf("Connect ref %q must be <fully-qualified-service>/<method> (openbindings.connect@1 CONN-D-03)", ref)
+	idx := strings.Index(selector, "/")
+	if idx < 0 || idx != strings.LastIndex(selector, "/") || idx == 0 || idx == len(selector)-1 {
+		return "", "", fmt.Errorf("Connect selector %q must be <fully-qualified-service>/<method> (openbindings.connect@1 CONN-D-03)", selector)
 	}
-	return ref[:idx], ref[idx+1:], nil
+	return selector[:idx], selector[idx+1:], nil
 }
 
 // validateBaseURL checks a base URL against §4's grammar (CONN-D-02): an
@@ -95,7 +95,7 @@ func validateBaseURL(raw string) error {
 
 // connectURL builds the request URL per §4: the Connect protocol's
 // routing, incorporated — the base URL STRING-CONCATENATED with
-// /<fully-qualified-service>/<method> from the binding's ref.
+// /<fully-qualified-service>/<method> from the binding's selector.
 // Concatenation, not RFC 3986 resolution, so a path prefix is preserved;
 // CONN-D-02 guarantees the base carries no trailing '/'.
 func connectURL(baseURL, svcName, methodName string) string {
@@ -104,7 +104,7 @@ func connectURL(baseURL, svcName, methodName string) string {
 
 // resolveMethod resolves <fully-qualified-service>/<method> against a
 // discovered embedded schema (schema mode). Matching is byte-exact, no
-// case folding (CONN-D-03, incorporating GRPC-D-03's grammar); a ref
+// case folding (CONN-D-03, incorporating GRPC-D-03's grammar); a selector
 // matching no service or method makes the binding unresolvable.
 func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.MethodDescriptor, *invoke.InvocationError) {
 	var svcDesc protoreflect.ServiceDescriptor
@@ -116,13 +116,13 @@ func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.Me
 	}
 	if svcDesc == nil {
 		return nil, &invoke.InvocationError{
-			Code: invoke.ErrCodeRefNotFound,
+			Code: invoke.ErrCodeSelectorNotFound,
 		}
 	}
 	m := svcDesc.Methods().ByName(protoreflect.Name(methodName))
 	if m == nil {
 		return nil, &invoke.InvocationError{
-			Code: invoke.ErrCodeRefNotFound,
+			Code: invoke.ErrCodeSelectorNotFound,
 		}
 	}
 	return m, nil

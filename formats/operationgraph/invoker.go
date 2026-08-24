@@ -88,7 +88,7 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 // the graph's input node, rooting a lineage) and graph events stream out
 // through the output side.
 //
-// Pre-flight failures (source load, ref resolution, version refusal per
+// Pre-flight failures (source load, selector resolution, version refusal per
 // OG-T-02, validation per OG-T-01) surface as a terminal error through the
 // handle without consuming any caller input. Creation is inert: the handle
 // returns synchronously and the document load (a potential network fetch)
@@ -141,14 +141,14 @@ func (e *Invoker) drive(ctx context.Context, args *invoke.BindingInvocationArgs,
 		return
 	}
 
-	// The ref is a REQUIRED JSON Pointer fragment addressing the graph
+	// The selector is a REQUIRED JSON Pointer fragment addressing the graph
 	// definition within the (otherwise unconstrained) host document.
-	target, err := resolveRef(doc, args.Ref)
+	target, err := resolveSelector(doc, args.Selector)
 	if err != nil {
-		code := invoke.ErrCodeRefNotFound
-		var re *refError
+		code := invoke.ErrCodeSelectorNotFound
+		var re *selectorError
 		if errors.As(err, &re) && re.invalid {
-			code = invoke.ErrCodeInvalidRef
+			code = invoke.ErrCodeInvalidSelector
 		}
 		inv.FireError(&invoke.InvocationError{
 			Code: code,

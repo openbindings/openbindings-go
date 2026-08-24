@@ -107,9 +107,9 @@ type InvocationSource struct {
 // happens above the binding (see OperationInvoker.ContextResolver).
 type BindingInvocationArgs struct {
 	Source InvocationSource `json:"source"`
-	// Ref is the format-specific pointer into the source artifact. Empty
-	// when the format doesn't use refs.
-	Ref string `json:"ref"`
+	// Selector is the format-specific pointer into the source artifact.
+	// Empty when the format doesn't use selectors.
+	Selector string `json:"selector"`
 	// Binding is the selected binding entry. Populated by the operation
 	// invoker; optional for direct calls.
 	Binding *openbindings.BindingEntry `json:"-"`
@@ -128,7 +128,7 @@ type BindingInvocationArgs struct {
 	// when nil (the in-process binding-layer path).
 	Hooks *InvokeHooks `json:"-"`
 	// Site identifies this consultation site (canonical operation key,
-	// binding, format, ref), constructed and builtin-stamped by the
+	// binding, format, selector), constructed and builtin-stamped by the
 	// operation invoker; the FORMAT completes Target on its copy before
 	// consulting hooks. Process-local — never wire.
 	Site *InvokeSite `json:"-"`

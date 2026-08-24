@@ -38,8 +38,8 @@ func invokeRevision4Response(t *testing.T, spec, bindingSpec, contentType string
 		}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1payload/get",
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1payload/get",
 	})
 	return driveOutputs(context.Background(), call, nil)
 }

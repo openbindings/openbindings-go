@@ -30,8 +30,8 @@ func mustContent(value any) json.RawMessage {
 	return raw
 }
 
-func pinArgs(url, ref string, pin any, bindContext map[string]any) *invoke.BindingInvocationArgs {
-	args := invocationArgs(url, ref, bindContext)
+func pinArgs(url, selector string, pin any, bindContext map[string]any) *invoke.BindingInvocationArgs {
+	args := invocationArgs(url, selector, bindContext)
 	args.Source.Content = mustContent(pin)
 	return args
 }
@@ -83,21 +83,21 @@ func TestPinDisplacesLiveListingButRetainsInvocationTarget(t *testing.T) {
 
 func TestPinResolutionRefusalsAreOffline(t *testing.T) {
 	for _, test := range []struct {
-		name string
-		ref  string
-		pin  any
-		code string
+		name     string
+		selector string
+		pin      any
+		code     string
 	}{
-		{"missing", "tools/missing", map[string]any{"tools": []any{applicationTool("probe")}}, invoke.ErrCodeRefNotFound},
-		{"ambiguous", "tools/probe", map[string]any{"tools": []any{applicationTool("probe"), applicationTool("probe")}}, invoke.ErrCodeRefNotFound},
-		{"missing output schema", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe"}}}, invoke.ErrCodeInvalidRef},
-		{"required task", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe", "outputSchema": map[string]any{}, "execution": map[string]any{"taskSupport": "required"}}}}, invoke.ErrCodeInvalidRef},
-		{"resource", "resources/app://x", map[string]any{"resources": []any{map[string]any{"uri": "app://x"}}}, invoke.ErrCodeInvalidRef},
-		{"prompt", "prompts/review", map[string]any{"prompts": []any{map[string]any{"name": "review"}}}, invoke.ErrCodeInvalidRef},
+		{"missing", "tools/missing", map[string]any{"tools": []any{applicationTool("probe")}}, invoke.ErrCodeSelectorNotFound},
+		{"ambiguous", "tools/probe", map[string]any{"tools": []any{applicationTool("probe"), applicationTool("probe")}}, invoke.ErrCodeSelectorNotFound},
+		{"missing output schema", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe"}}}, invoke.ErrCodeInvalidSelector},
+		{"required task", "tools/probe", map[string]any{"tools": []any{map[string]any{"name": "probe", "outputSchema": map[string]any{}, "execution": map[string]any{"taskSupport": "required"}}}}, invoke.ErrCodeInvalidSelector},
+		{"resource", "resources/app://x", map[string]any{"resources": []any{map[string]any{"uri": "app://x"}}}, invoke.ErrCodeInvalidSelector},
+		{"prompt", "prompts/review", map[string]any{"prompts": []any{map[string]any{"name": "review"}}}, invoke.ErrCodeInvalidSelector},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server, requests := deadEndServer(t)
-			call := NewInvoker().InvokeBinding(bg(), pinArgs(server.URL, test.ref, test.pin, nil))
+			call := NewInvoker().InvokeBinding(bg(), pinArgs(server.URL, test.selector, test.pin, nil))
 			_, err := drainOutputs(t, call)
 			if codeOf(t, err) != test.code {
 				t.Fatalf("error = %v", err)

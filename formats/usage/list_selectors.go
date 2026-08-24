@@ -10,7 +10,7 @@ import (
 )
 
 // InspectSource returns all bindable targets from a bare usage source:
-// command-path refs (the format's own grammar), one per bindable command,
+// command-path selectors (the format's own grammar), one per bindable command,
 // exactly as synthesis would bind them.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	location, err := absolutizeArtifactLocation(source.Location, source.Content)
@@ -56,17 +56,17 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 		if _, err := generateInputSchema(cmd, inherited); err != nil {
 			return
 		}
-		for _, ref := range uniquelyResolvableCommandRefs(spec, path) {
-			targets = append(targets, bindableTarget(ref, opKey, cmd.Help))
+		for _, selector := range uniquelyResolvableCommandSelectors(spec, path) {
+			targets = append(targets, bindableTarget(selector, opKey, cmd.Help))
 		}
 	})
 
-	sort.Slice(targets, func(i, j int) bool { return targets[i].Ref < targets[j].Ref })
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Selector < targets[j].Selector })
 	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, operationKey, description string) synthesize.BindableTarget {
-	target := synthesize.BindableTarget{Ref: ref, OperationKey: operationKey}
+func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
+	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

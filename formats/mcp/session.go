@@ -114,7 +114,7 @@ func sessionKey(url string, headers map[string]string) string {
 }
 
 // acquire returns a pooled session for the given URL and headers, creating one
-// if none exists. The returned session has its ref count incremented; the
+// if none exists. The returned session has its selector count incremented; the
 // caller must call release() when done.
 //
 // If multiple goroutines call acquire for the same key concurrently, only one
@@ -331,7 +331,7 @@ func (s *mcpSession) popRawProgress(token string) map[string]any {
 	return q[0]
 }
 
-// release decrements the ref count and starts the idle timer if no streams
+// release decrements the selector count and starts the idle timer if no streams
 // remain active.
 func (s *mcpSession) release() {
 	s.pool.mu.Lock()

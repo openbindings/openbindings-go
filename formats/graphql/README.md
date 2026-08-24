@@ -31,7 +31,7 @@ call := graphqlbinding.NewInvoker().InvokeBinding(ctx,
             BindingSpec: graphqlbinding.BindingSpec,
             Location:    "https://api.example.com/graphql",
         },
-        Ref:         "query/viewer",
+        Selector: "query/viewer",
         InputSchema: map[string]any{"type": "object"},
         Context: map[string]any{
             "configuration": map[string]any{

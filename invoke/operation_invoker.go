@@ -208,7 +208,7 @@ func (e *OperationInvoker) fillBindingArgs(args *BindingInvocationArgs) {
 	if args.Site == nil {
 		site := &InvokeSite{
 			BindingSpec: args.Source.BindingSpec,
-			Ref:         args.Ref,
+			Selector:    args.Selector,
 		}
 		if args.Binding != nil {
 			site.Operation = args.Binding.Operation
@@ -338,7 +338,7 @@ func (e *OperationInvoker) PrepareOperation(ctx context.Context, obi *openbindin
 			Location:    source.Location,
 			Content:     source.Content,
 		},
-		Ref:         binding.Ref,
+		Selector:    binding.Selector,
 		Binding:     binding,
 		Context:     cfg.context,
 		Interface:   obi,
@@ -394,7 +394,7 @@ func (e *OperationInvoker) run(
 				Location:    source.Location,
 				Content:     source.Content,
 			},
-			Ref:         binding.Ref,
+			Selector:    binding.Selector,
 			Binding:     binding,
 			Context:     contextData,
 			Interface:   iface,
@@ -407,7 +407,7 @@ func (e *OperationInvoker) run(
 			InvokedAs:   invokedAs,
 			BindingKey:  bindingKey,
 			BindingSpec: source.BindingSpec,
-			Ref:         binding.Ref,
+			Selector:    binding.Selector,
 		}
 		if inv := e.invoker.findInvoker(source.BindingSpec); inv != nil {
 			stampSite(site, inv)

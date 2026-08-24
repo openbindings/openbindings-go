@@ -30,8 +30,8 @@ import (
 func TestRouting_NonObjectInputRefused(t *testing.T) {
 	for _, in := range []any{"not-an-object", []any{"a", "b"}, float64(3)} {
 		_, ierr := invokeUsage(t, NewInvoker(), &invoke.BindingInvocationArgs{
-			Source: testSource(),
-			Ref:    "echo",
+			Source:   testSource(),
+			Selector: "echo",
 		}, in)
 		if ierr == nil {
 			t.Fatalf("input %v (%T): expected a loud refusal (USAGE-P-04 §9.1), got success", in, in)
@@ -46,15 +46,15 @@ func TestRouting_NonObjectInputRefused(t *testing.T) {
 }
 
 // TestRouting_DirectLaneNonObjectRefused pins the same rule on the SDK-only
-// direct-binary lane (buildDirectArgsFromRef), which had the identical drop.
+// direct-binary lane (buildDirectArgsFromSelector), which had the identical drop.
 func TestRouting_DirectLaneNonObjectRefused(t *testing.T) {
-	if _, err := buildDirectArgsFromRef("echo", "not-an-object"); err == nil {
+	if _, err := buildDirectArgsFromSelector("echo", "not-an-object"); err == nil {
 		t.Fatal("direct lane must refuse a non-object input, got nil error")
 	}
-	if _, err := buildDirectArgsFromRef("echo", []any{"a", "b"}); err == nil {
+	if _, err := buildDirectArgsFromSelector("echo", []any{"a", "b"}); err == nil {
 		t.Fatal("direct lane must refuse an array input, got nil error")
 	}
-	args, err := buildDirectArgsFromRef("echo", map[string]any{"flag": "v"})
+	args, err := buildDirectArgsFromSelector("echo", map[string]any{"flag": "v"})
 	if err != nil {
 		t.Fatalf("object input must assemble, got %v", err)
 	}
@@ -97,8 +97,8 @@ func TestRouting_StdinDash(t *testing.T) {
 	// The `doc` field rides stdin, with `-` in its positional slot (the
 	// filter lane's majority route). slurp echoes stdin + argv as JSON.
 	out, ierr := invokeUsage(t, routerDriver(map[string]string{"doc": RouteStdinDash}, true), &invoke.BindingInvocationArgs{
-		Source: testSource(),
-		Ref:    "slurp",
+		Source:   testSource(),
+		Selector: "slurp",
 	}, map[string]any{"doc": "piped payload"})
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
@@ -119,8 +119,8 @@ func TestRouting_SlotlessStdin(t *testing.T) {
 	// `payload` maps to no slot on drink; the slotless pure channel delivers
 	// its bytes to stdin with nothing on argv.
 	out, ierr := invokeUsage(t, routerDriver(map[string]string{"payload": RouteStdin}, true), &invoke.BindingInvocationArgs{
-		Source: testSource(),
-		Ref:    "drink",
+		Source:   testSource(),
+		Selector: "drink",
 	}, map[string]any{"payload": "slotless bytes"})
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
@@ -142,8 +142,8 @@ func TestRouting_FileMaterialization(t *testing.T) {
 	// slot; statfile reads it back and reports its mode — asserting both the
 	// round-trip and the 0600 the routing lane creates it with.
 	out, ierr := invokeUsage(t, routerDriver(map[string]string{"doc": RouteFile}, true), &invoke.BindingInvocationArgs{
-		Source: testSource(),
-		Ref:    "statfile",
+		Source:   testSource(),
+		Selector: "statfile",
 	}, map[string]any{"doc": "materialized contents"})
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
@@ -163,7 +163,7 @@ func TestRouting_FileMaterialization(t *testing.T) {
 func TestRouting_JSONLaneAndTextLane(t *testing.T) {
 	// num: a bare number under a declared JSON lane parses to a number.
 	out, ierr := invokeUsage(t, routerDriver(nil, true), &invoke.BindingInvocationArgs{
-		Source: testSource(), Ref: "num",
+		Source: testSource(), Selector: "num",
 	}, nil)
 	if ierr != nil {
 		t.Fatalf("num: unexpected error: %s", ierr.Error())
@@ -173,7 +173,7 @@ func TestRouting_JSONLaneAndTextLane(t *testing.T) {
 	}
 	// prose: human text under the default text lane is the raw stdout string.
 	out, ierr = invokeUsage(t, NewInvoker(), &invoke.BindingInvocationArgs{
-		Source: testSource(), Ref: "prose",
+		Source: testSource(), Selector: "prose",
 	}, nil)
 	if ierr != nil {
 		t.Fatalf("prose: unexpected error: %s", ierr.Error())
@@ -187,11 +187,11 @@ func TestRouting_JSONLaneAndTextLane(t *testing.T) {
 // Impossible-routing refusals — all before spawn.
 // ---------------------------------------------------------------------------
 
-func refusalCode(t *testing.T, d driver, ref string, routes map[string]string, input any) *invoke.InvocationError {
+func refusalCode(t *testing.T, d driver, selector string, routes map[string]string, input any) *invoke.InvocationError {
 	t.Helper()
-	_, ierr := invokeUsage(t, d, &invoke.BindingInvocationArgs{Source: testSource(), Ref: ref}, input)
+	_, ierr := invokeUsage(t, d, &invoke.BindingInvocationArgs{Source: testSource(), Selector: selector}, input)
 	if ierr == nil {
-		t.Fatalf("%s: expected a pre-spawn refusal, got success", ref)
+		t.Fatalf("%s: expected a pre-spawn refusal, got success", selector)
 	}
 	return ierr
 }
@@ -244,7 +244,7 @@ cmd "toggle" {
 }
 `
 	d := routerDriver(map[string]string{"on": RouteStdinDash}, false)
-	_, ierr := invokeUsage(t, d, &invoke.BindingInvocationArgs{Source: sourceKDL(kdl), Ref: "toggle"}, map[string]any{"on": true})
+	_, ierr := invokeUsage(t, d, &invoke.BindingInvocationArgs{Source: sourceKDL(kdl), Selector: "toggle"}, map[string]any{"on": true})
 	if ierr == nil || ierr.Code != invoke.ErrCodeValidationFailed || ierr.HasData() {
 		t.Fatalf("want ERR_VALIDATION_FAILED for a bool-flag slot, got %v", ierr)
 	}
@@ -259,7 +259,7 @@ cmd "pick" {
 }
 `
 	d := routerDriver(map[string]string{"mode": RouteStdinDash}, false)
-	_, ierr := invokeUsage(t, d, &invoke.BindingInvocationArgs{Source: sourceKDL(kdl), Ref: "pick"}, map[string]any{"mode": "trace"})
+	_, ierr := invokeUsage(t, d, &invoke.BindingInvocationArgs{Source: sourceKDL(kdl), Selector: "pick"}, map[string]any{"mode": "trace"})
 	if ierr == nil || ierr.Code != invoke.ErrCodeValidationFailed || ierr.HasData() {
 		t.Fatalf("want ERR_VALIDATION_FAILED for choices excluding \"-\", got %v", ierr)
 	}

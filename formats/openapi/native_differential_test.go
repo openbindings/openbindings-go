@@ -435,14 +435,14 @@ func differentialArtifact(t *testing.T, scenario processorscenarios.Scenario, se
 
 func differentialNativeTarget(t *testing.T, scenario processorscenarios.Scenario) (string, string) {
 	t.Helper()
-	ref, _ := scenario.Given.Binding["ref"].(string)
+	selector, _ := scenario.Given.Binding["selector"].(string)
 	const prefix = "#/paths/"
-	if !strings.HasPrefix(ref, prefix) {
-		t.Fatalf("%s ref %q is outside the bounded paths-operation slice", scenario.ID, ref)
+	if !strings.HasPrefix(selector, prefix) {
+		t.Fatalf("%s selector %q is outside the bounded paths-operation slice", scenario.ID, selector)
 	}
-	parts := strings.Split(strings.TrimPrefix(ref, prefix), "/")
+	parts := strings.Split(strings.TrimPrefix(selector, prefix), "/")
 	if len(parts) != 2 {
-		t.Fatalf("%s ref %q does not identify one paths operation", scenario.ID, ref)
+		t.Fatalf("%s selector %q does not identify one paths operation", scenario.ID, selector)
 	}
 	path := strings.ReplaceAll(strings.ReplaceAll(parts[0], "~1", "/"), "~0", "~")
 	return strings.ToUpper(parts[1]), path

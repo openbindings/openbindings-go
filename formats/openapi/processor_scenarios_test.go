@@ -159,11 +159,11 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		}
 		source.Content = raw
 	}
-	ref, _ := scenario.Given.Binding["ref"].(string)
+	selector, _ := scenario.Given.Binding["selector"].(string)
 	args := &invoke.BindingInvocationArgs{
-		Source:  source,
-		Ref:     ref,
-		Context: scenarioContext(scenario),
+		Source:   source,
+		Selector: selector,
+		Context:  scenarioContext(scenario),
 	}
 	joined := strings.HasPrefix(scenario.ID, "OAPI-FI-")
 	var call invoke.Invocation[any, any]
@@ -281,7 +281,7 @@ func openAPIErrorPhase(err *invoke.InvocationError, dispatched bool, scenarioID 
 	if err.Code == invoke.ErrCodeSourceLoadFailed {
 		return "load"
 	}
-	if err.Code == invoke.ErrCodeInvalidRef || err.Code == invoke.ErrCodeRefNotFound {
+	if err.Code == invoke.ErrCodeInvalidSelector || err.Code == invoke.ErrCodeSelectorNotFound {
 		return "resolution"
 	}
 	// These corpus cases are declaration-normalization collisions discovered

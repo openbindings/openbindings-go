@@ -27,7 +27,7 @@ const DefaultSourceName = "usage"
 const BindingSpec = "openbindings.usage@1"
 
 // Invoker handles binding invocation for bare jdx usage artifacts
-// (usage.kdl): refs are space-separated command paths; the wire questions
+// (usage.kdl): selectors are space-separated command paths; the wire questions
 // the artifact cannot answer (routing, decode, classify) are answered by
 // documented assumptions overridable through the consumer hook seam.
 //
@@ -334,7 +334,7 @@ func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
 }
 
 // SynthesizeInterface converts a bare jdx usage source to an OpenBindings
-// interface: one operation per bindable command, command-path refs, input
+// interface: one operation per bindable command, command-path selectors, input
 // schemas from flags/args, and FLOOR-TRUE output schemas ({"type":
 // "string"} with an in-schema x-ob floor-stamp — the text assumption
 // always yields a string, so the derived contract never lies; the stamp

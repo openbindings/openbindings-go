@@ -8,26 +8,26 @@ import (
 
 var graphqlName = regexp.MustCompile(`^[_A-Za-z][_0-9A-Za-z]*$`)
 
-// parseRef parses the ref forms shared by the supported GraphQL revisions:
+// parseSelector parses the selector forms shared by the supported GraphQL revisions:
 // query/<field>, mutation/<field>, or subscription/<field>.
-func parseRef(ref string) (rootType string, fieldName string, err error) {
-	if ref == "" {
-		return "", "", fmt.Errorf("empty GraphQL ref")
+func parseSelector(selector string) (rootType string, fieldName string, err error) {
+	if selector == "" {
+		return "", "", fmt.Errorf("empty GraphQL selector")
 	}
-	idx := strings.Index(ref, "/")
-	if idx < 0 || idx == 0 || idx == len(ref)-1 || strings.Contains(ref[idx+1:], "/") {
-		return "", "", fmt.Errorf("GraphQL ref %q must be in the form query/fieldName, mutation/fieldName, or subscription/fieldName", ref)
+	idx := strings.Index(selector, "/")
+	if idx < 0 || idx == 0 || idx == len(selector)-1 || strings.Contains(selector[idx+1:], "/") {
+		return "", "", fmt.Errorf("GraphQL selector %q must be in the form query/fieldName, mutation/fieldName, or subscription/fieldName", selector)
 	}
-	rootType = ref[:idx]
-	fieldName = ref[idx+1:]
+	rootType = selector[:idx]
+	fieldName = selector[idx+1:]
 	switch rootType {
 	case "query", "mutation", "subscription":
 		if !graphqlName.MatchString(fieldName) {
-			return "", "", fmt.Errorf("GraphQL ref %q has invalid field name %q", ref, fieldName)
+			return "", "", fmt.Errorf("GraphQL selector %q has invalid field name %q", selector, fieldName)
 		}
 		return rootType, fieldName, nil
 	default:
-		return "", "", fmt.Errorf("GraphQL ref %q has invalid operation kind %q (must be query, mutation, or subscription)", ref, rootType)
+		return "", "", fmt.Errorf("GraphQL selector %q has invalid operation kind %q (must be query, mutation, or subscription)", selector, rootType)
 	}
 }
 

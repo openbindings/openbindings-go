@@ -6,6 +6,19 @@
 
 ### Changed
 
+- **The binding entry's target member is `selector`, not `ref`** (breaking;
+  the ratified pre-launch rename, executed with no aliases or deprecation
+  shims). The OBI member `bindings[*].ref` is now `bindings[*].selector`,
+  and every public symbol naming that concept follows: `BindingEntry.Selector`,
+  `invoke.BindingInvocationArgs.Selector`, `invoke.InvokeSite.Selector`,
+  `synthesize.BindableTarget.Selector` (wire `selector`),
+  `synthesize.SynthesisCoverageEntry.BindingSelector` (wire `bindingSelector`,
+  synthesis-scenario `bindingSelector` likewise), and the SDK implementation
+  error codes `invoke.ErrCodeInvalidSelector` (`ERR_INVALID_SELECTOR`) and
+  `invoke.ErrCodeSelectorNotFound` (`ERR_SELECTOR_NOT_FOUND`). JSON Schema
+  `$ref` handling is deliberately untouched everywhere: the rename covers the
+  binding-target-selector concept, never JSON References.
+
 - **config.value requirements carry an engine-asserted `schema` instead of
   `choices`** (breaking; the 2026-08-20 working-draft amendment of the
   binding-invoker contract — one mechanism, no sugar).

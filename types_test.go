@@ -244,7 +244,7 @@ func TestBindingEntry_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing
 	in := []byte(`{
   "operation": "logs.get",
   "source": "publicOpenapi",
-  "ref": "#/paths/~1logs~1{id}/get",
+  "selector": "#/paths/~1logs~1{id}/get",
   "x-extensionField": "extensionFieldValue",
   "unknownField": {"value": "unknownFieldValue"}
 }`)
@@ -259,8 +259,8 @@ func TestBindingEntry_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing
 	if outMap["source"] != "publicOpenapi" {
 		t.Fatalf("expected source preserved, got %#v", outMap["source"])
 	}
-	if outMap["ref"] != "#/paths/~1logs~1{id}/get" {
-		t.Fatalf("expected ref preserved, got %#v", outMap["ref"])
+	if outMap["selector"] != "#/paths/~1logs~1{id}/get" {
+		t.Fatalf("expected selector preserved, got %#v", outMap["selector"])
 	}
 }
 
@@ -268,13 +268,13 @@ func TestBindingEntry_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	be := BindingEntry{
 		Operation:   "typed.op",
 		Source:      "typedSource",
-		Ref:         "#/typed/ref",
+		Selector:    "#/typed/selector",
 		Description: "typed description",
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
 				"operation":   json.RawMessage(`"unknown.op"`),
 				"source":      json.RawMessage(`"unknownSource"`),
-				"ref":         json.RawMessage(`"#/unknown/ref"`),
+				"selector":    json.RawMessage(`"#/unknown/selector"`),
 				"description": json.RawMessage(`"unknown description"`),
 			},
 			Extensions: map[string]json.RawMessage{
@@ -292,8 +292,8 @@ func TestBindingEntry_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	if outMap["source"] != "typedSource" {
 		t.Fatalf("expected typed source to win, got %#v", outMap["source"])
 	}
-	if outMap["ref"] != "#/typed/ref" {
-		t.Fatalf("expected typed ref to win, got %#v", outMap["ref"])
+	if outMap["selector"] != "#/typed/selector" {
+		t.Fatalf("expected typed selector to win, got %#v", outMap["selector"])
 	}
 	if outMap["description"] != "typed description" {
 		t.Fatalf("expected typed description to win, got %#v", outMap["description"])
@@ -324,7 +324,7 @@ func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingFields(t *te
     "op.src": {
       "operation": "op",
       "source": "src",
-      "ref": "#/paths/~1op/get",
+      "selector": "#/paths/~1op/get",
       "x-extensionField": "extensionFieldValue",
       "unknownField": {"value": "unknownFieldValue"}
     }
@@ -594,7 +594,7 @@ func TestBindingEntry_WithTransforms(t *testing.T) {
 	in := []byte(`{
   "operation": "processPayment",
   "source": "paymentApi",
-  "ref": "POST /charges",
+  "selector": "POST /charges",
   "inputTransform": "{ charge_amount: amount }",
   "outputTransform": {
     "$ref": "#/transforms/fromApiOutput"
@@ -672,7 +672,7 @@ func TestInterface_WithTransforms(t *testing.T) {
     "processPayment.stripe": {
       "operation": "processPayment",
       "source": "stripe",
-      "ref": "POST /charges",
+      "selector": "POST /charges",
       "inputTransform": { "$ref": "#/transforms/toStripeInput" },
       "outputTransform": { "$ref": "#/transforms/fromStripeOutput" }
     }

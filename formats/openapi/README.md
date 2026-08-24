@@ -76,7 +76,7 @@ inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
         BindingSpec: openapi.BindingSpec, // "openbindings.openapi@1"
         Location:    "https://api.example.com/openapi.json",
     },
-    Ref:     "#/paths/~1users/get",
+    Selector: "#/paths/~1users/get",
     Context: map[string]any{"bearerToken": "tok_123"},
 })
 
@@ -128,7 +128,7 @@ assembly for qualification before publication.
 3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own
 `openapi` field.
 
-### Ref format
+### Selector format
 
 JSON Pointer into the OpenAPI document: `#/paths/<escaped-path>/<method>`
 
@@ -304,7 +304,7 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
 ### Invocation flow
 
 1. Loads and caches the OpenAPI document (JSON or YAML, local or remote), discriminating the exact accepted 3.0.0–3.0.4 and 3.1.0–3.1.2 editions
-2. Parses the ref as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)
+2. Parses the selector as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)
 3. Resolves the server (effective list + variables + the `server` configuration point)
 4. Routes application fields to their artifact declarations — using the binding-private routed representation when names collide — serializes parameters per OAS style/explode rules, and selects an artifact-declared request media candidate
 5. Selects one complete, satisfiable Security Requirement alternative and applies only that alternative's credentials with the artifact-declared placement, refusing channel collisions pre-dispatch
@@ -312,7 +312,7 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
 
 ### Interface synthesis
 
-Converts an OpenAPI 3.x document into an OBI: operations extracted from each path + method combination, input/output schemas from parameters, request bodies, and success responses, and a JSON Pointer ref per binding. The derivation conventions (key derivation, iteration order, media selection, schema translation) are specified under [Behavior → Interface synthesis](#interface-synthesis) above.
+Converts an OpenAPI 3.x document into an OBI: operations extracted from each path + method combination, input/output schemas from parameters, request bodies, and success responses, and a JSON Pointer selector per binding. The derivation conventions (key derivation, iteration order, media selection, schema translation) are specified under [Behavior → Interface synthesis](#interface-synthesis) above.
 
 ## Resource bounds
 

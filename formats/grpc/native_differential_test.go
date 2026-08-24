@@ -22,7 +22,7 @@ import (
 )
 
 // TestNativeDifferential_InvocationFidelity is the first gRPC native-oracle
-// slice: discover a brownfield server through reflection, invoke the refs in
+// slice: discover a brownfield server through reflection, invoke the selectors in
 // the synthesized OBI, and compare caller-visible values and lifecycle with
 // direct grpc-go calls against the same service. Concrete status evidence is
 // checked only through diagnostics; correct application behavior depends on
@@ -53,10 +53,10 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 		if !ok {
 			t.Fatalf("synthesized OBI has no binding for %s", operation)
 		}
-		return binding.Ref
+		return binding.Selector
 	}
-	argsFor := func(ref string) *invoke.BindingInvocationArgs {
-		args := bufconnArgs(ref, nil)
+	argsFor := func(selector string) *invoke.BindingInvocationArgs {
+		args := bufconnArgs(selector, nil)
 		args.Source.Location = differentialLocation
 		return args
 	}
@@ -73,15 +73,15 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 	}
 
 	t.Run("unary value and clean completion", func(t *testing.T) {
-		ref := refFor("GetItem")
+		selector := refFor("GetItem")
 		nativeReq := dynamicpb.NewMessage(request("GetItem"))
 		nativeReq.Set(request("GetItem").Fields().ByName("id"), protoreflect.ValueOfString("42"))
 		nativeResp := dynamicpb.NewMessage(response("GetItem"))
-		if err := nativeConn.Invoke(testCtx(t), "/"+ref, nativeReq, nativeResp); err != nil {
+		if err := nativeConn.Invoke(testCtx(t), "/"+selector, nativeReq, nativeResp); err != nil {
 			t.Fatalf("native invoke: %v", err)
 		}
 
-		inv := invoker.InvokeBinding(testCtx(t), argsFor(ref))
+		inv := invoker.InvokeBinding(testCtx(t), argsFor(selector))
 		if err := inv.Write(testCtx(t), map[string]any{"id": "42"}); err != nil {
 			t.Fatalf("OpenBindings write: %v", err)
 		}
@@ -95,15 +95,15 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 	})
 
 	t.Run("server stream ordering and cardinality", func(t *testing.T) {
-		ref := refFor("ListItems")
+		selector := refFor("ListItems")
 		nativeValues, nativeErr := nativeServerStream(
-			t, nativeConn, ref, request("ListItems"), response("ListItems"), nil,
+			t, nativeConn, selector, request("ListItems"), response("ListItems"), nil,
 		)
 		if nativeErr != nil {
 			t.Fatalf("native stream: %v", nativeErr)
 		}
 
-		inv := invoker.InvokeBinding(testCtx(t), argsFor(ref))
+		inv := invoker.InvokeBinding(testCtx(t), argsFor(selector))
 		values, terminal := drainInvocation(t, inv)
 		if terminal != nil {
 			t.Fatalf("OpenBindings stream terminal: %v", terminal)
@@ -114,15 +114,15 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 	})
 
 	t.Run("partial outputs survive unsuccessful completion", func(t *testing.T) {
-		ref := refFor("FailItems")
+		selector := refFor("FailItems")
 		nativeValues, nativeErr := nativeServerStream(
-			t, nativeConn, ref, request("FailItems"), response("FailItems"), nil,
+			t, nativeConn, selector, request("FailItems"), response("FailItems"), nil,
 		)
 		if status.Code(nativeErr) != codes.ResourceExhausted {
 			t.Fatalf("native terminal = %v, want ResourceExhausted", nativeErr)
 		}
 
-		inv := invoker.InvokeBinding(testCtx(t), argsFor(ref))
+		inv := invoker.InvokeBinding(testCtx(t), argsFor(selector))
 		values, terminal := drainInvocation(t, inv)
 		if !reflect.DeepEqual(values, nativeValues) {
 			t.Fatalf("OpenBindings partial values = %#v, native partial values = %#v", values, nativeValues)
@@ -136,9 +136,9 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 	})
 
 	t.Run("caller cancellation after a partial output", func(t *testing.T) {
-		ref := refFor("WatchItems")
+		selector := refFor("WatchItems")
 		nativeCtx, nativeCancel := context.WithCancel(testCtx(t))
-		nativeStream, err := nativeConn.NewStream(nativeCtx, &grpcgo.StreamDesc{ServerStreams: true}, "/"+ref)
+		nativeStream, err := nativeConn.NewStream(nativeCtx, &grpcgo.StreamDesc{ServerStreams: true}, "/"+selector)
 		if err != nil {
 			t.Fatalf("native stream: %v", err)
 		}
@@ -158,7 +158,7 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 			t.Fatalf("native cancellation terminal = %v", err)
 		}
 
-		inv := invoker.InvokeBinding(testCtx(t), argsFor(ref))
+		inv := invoker.InvokeBinding(testCtx(t), argsFor(selector))
 		outputs := inv.Outputs()
 		first, err := outputs.Read(testCtx(t))
 		if err != nil {
@@ -179,13 +179,13 @@ func TestNativeDifferential_InvocationFidelity(t *testing.T) {
 func nativeServerStream(
 	t *testing.T,
 	conn *grpcgo.ClientConn,
-	ref string,
+	selector string,
 	requestDesc protoreflect.MessageDescriptor,
 	responseDesc protoreflect.MessageDescriptor,
 	populate func(protoreflect.Message),
 ) ([]any, error) {
 	t.Helper()
-	stream, err := conn.NewStream(testCtx(t), &grpcgo.StreamDesc{ServerStreams: true}, "/"+ref)
+	stream, err := conn.NewStream(testCtx(t), &grpcgo.StreamDesc{ServerStreams: true}, "/"+selector)
 	if err != nil {
 		return nil, err
 	}

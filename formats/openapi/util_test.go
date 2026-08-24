@@ -12,11 +12,11 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// parseRef
+// parseSelector
 // ---------------------------------------------------------------------------
 
-func TestParseRef_StandardJSONPointer(t *testing.T) {
-	path, method, err := parseRef("#/paths/~1users/get")
+func TestParseSelector_StandardJSONPointer(t *testing.T) {
+	path, method, err := parseSelector("#/paths/~1users/get")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -28,28 +28,28 @@ func TestParseRef_StandardJSONPointer(t *testing.T) {
 	}
 }
 
-// OAPI-D-03: the ref MUST be a JSON Pointer of the exact form
+// OAPI-D-03: the selector MUST be a JSON Pointer of the exact form
 // #/paths/<escaped-path>/<method>. A prefix-less spelling was previously
 // accepted leniently; that acceptance was non-conformant.
-func TestParseRef_RefusesWithoutLeadingHashSlash(t *testing.T) {
-	_, _, err := parseRef("paths/~1users~1{id}/delete")
+func TestParseSelector_RefusesWithoutLeadingHashSlash(t *testing.T) {
+	_, _, err := parseSelector("paths/~1users~1{id}/delete")
 	if err == nil {
-		t.Fatal("expected refusal for a ref without the #/paths/ prefix (OAPI-D-03)")
+		t.Fatal("expected refusal for a selector without the #/paths/ prefix (OAPI-D-03)")
 	}
 }
 
-// OAPI-D-03: the path segment carries RFC 6901 escaping, so a conformant ref
+// OAPI-D-03: the path segment carries RFC 6901 escaping, so a conformant selector
 // has exactly one path token. Unescaped multi-token spellings were
 // previously accepted leniently; that acceptance was non-conformant.
-func TestParseRef_RefusesUnescapedPathTokens(t *testing.T) {
-	_, _, err := parseRef("#/paths/users/posts/get")
+func TestParseSelector_RefusesUnescapedPathTokens(t *testing.T) {
+	_, _, err := parseSelector("#/paths/users/posts/get")
 	if err == nil {
-		t.Fatal("expected refusal for a ref with unescaped path tokens (OAPI-D-03)")
+		t.Fatal("expected refusal for a selector with unescaped path tokens (OAPI-D-03)")
 	}
 }
 
-func TestParseRef_TildeEscaping(t *testing.T) {
-	path, method, err := parseRef("#/paths/~1a~0b~1c/post")
+func TestParseSelector_TildeEscaping(t *testing.T) {
+	path, method, err := parseSelector("#/paths/~1a~0b~1c/post")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,8 +64,8 @@ func TestParseRef_TildeEscaping(t *testing.T) {
 // OAPI-D-03: the method is lowercase exactly as the artifact spells it —
 // acceptance never case-folds. (This flips the previous lenient
 // upper-casing pin, which was non-conformant.)
-func TestParseRef_RefusesUppercaseMethod(t *testing.T) {
-	_, _, err := parseRef("#/paths/~1users/GET")
+func TestParseSelector_RefusesUppercaseMethod(t *testing.T) {
+	_, _, err := parseSelector("#/paths/~1users/GET")
 	if err == nil {
 		t.Fatal("expected refusal for an uppercase method (OAPI-D-03: no case folding)")
 	}
@@ -74,8 +74,8 @@ func TestParseRef_RefusesUppercaseMethod(t *testing.T) {
 	}
 }
 
-func TestParseRef_ErrorTooFewParts(t *testing.T) {
-	_, _, err := parseRef("#/paths")
+func TestParseSelector_ErrorTooFewParts(t *testing.T) {
+	_, _, err := parseSelector("#/paths")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -84,8 +84,8 @@ func TestParseRef_ErrorTooFewParts(t *testing.T) {
 	}
 }
 
-func TestParseRef_ErrorNonPathsPrefix(t *testing.T) {
-	_, _, err := parseRef("#/components/schemas/get")
+func TestParseSelector_ErrorNonPathsPrefix(t *testing.T) {
+	_, _, err := parseSelector("#/components/schemas/get")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -94,8 +94,8 @@ func TestParseRef_ErrorNonPathsPrefix(t *testing.T) {
 	}
 }
 
-func TestParseRef_ErrorInvalidMethod(t *testing.T) {
-	_, _, err := parseRef("#/paths/~1users/connect")
+func TestParseSelector_ErrorInvalidMethod(t *testing.T) {
+	_, _, err := parseSelector("#/paths/~1users/connect")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -105,31 +105,31 @@ func TestParseRef_ErrorInvalidMethod(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// buildJSONPointerRef
+// buildJSONPointerSelector
 // ---------------------------------------------------------------------------
 
-func TestBuildJSONPointerRef_Simple(t *testing.T) {
-	ref := buildJSONPointerRef("/users", "get")
-	if ref != "#/paths/~1users/get" {
-		t.Errorf("ref = %q, want %q", ref, "#/paths/~1users/get")
+func TestBuildJSONPointerSelector_Simple(t *testing.T) {
+	selector := buildJSONPointerSelector("/users", "get")
+	if selector != "#/paths/~1users/get" {
+		t.Errorf("selector = %q, want %q", selector, "#/paths/~1users/get")
 	}
 }
 
-func TestBuildJSONPointerRef_NestedPaths(t *testing.T) {
-	ref := buildJSONPointerRef("/users/{id}/posts", "post")
-	if ref != "#/paths/~1users~1{id}~1posts/post" {
-		t.Errorf("ref = %q, want %q", ref, "#/paths/~1users~1{id}~1posts/post")
+func TestBuildJSONPointerSelector_NestedPaths(t *testing.T) {
+	selector := buildJSONPointerSelector("/users/{id}/posts", "post")
+	if selector != "#/paths/~1users~1{id}~1posts/post" {
+		t.Errorf("selector = %q, want %q", selector, "#/paths/~1users~1{id}~1posts/post")
 	}
 }
 
-func TestBuildJSONPointerRef_RoundTrip(t *testing.T) {
+func TestBuildJSONPointerSelector_RoundTrip(t *testing.T) {
 	originalPath := "/users/{id}/posts"
 	originalMethod := "put"
 
-	ref := buildJSONPointerRef(originalPath, originalMethod)
-	path, method, err := parseRef(ref)
+	selector := buildJSONPointerSelector(originalPath, originalMethod)
+	path, method, err := parseSelector(selector)
 	if err != nil {
-		t.Fatalf("round-trip parseRef failed: %v", err)
+		t.Fatalf("round-trip parseSelector failed: %v", err)
 	}
 	if path != originalPath {
 		t.Errorf("round-trip path = %q, want %q", path, originalPath)

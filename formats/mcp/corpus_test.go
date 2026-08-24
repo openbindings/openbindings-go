@@ -3,7 +3,7 @@ package mcp
 // Binding-specification conformance corpus adapter: runs the spec
 // repository's binding-specs/mcp fixtures (MCP-D-01..03) through this
 // module's own offline lanes — pinned-listing validation, endpoint grammar,
-// and ref grammar/resolution — under the subcorpus README's verdict
+// and selector grammar/resolution — under the subcorpus README's verdict
 // semantics: valid:false means a conformant openbindings.mcp@1 processor
 // refuses the document's family-scoped material at or before bind time,
 // decidable offline with no network and no live source. Positive
@@ -58,7 +58,7 @@ type corpusTest struct {
 // corpusDocument is the raw view of a fixture's embedded OBI document,
 // preserving member PRESENCE where a typed view cannot: `content: null` is
 // a present member (the core §7 presence rule; json.RawMessage keeps it),
-// and an omitted binding ref is distinct from a present empty string.
+// and an omitted binding selector is distinct from a present empty string.
 type corpusDocument struct {
 	Sources  map[string]corpusSource  `json:"sources"`
 	Bindings map[string]corpusBinding `json:"bindings"`
@@ -71,8 +71,8 @@ type corpusSource struct {
 }
 
 type corpusBinding struct {
-	Source string  `json:"source"`
-	Ref    *string `json:"ref"`
+	Source   string  `json:"source"`
+	Selector *string `json:"selector"`
 }
 
 func TestBindingSpecCorpus(t *testing.T) {
@@ -152,7 +152,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 			return err
 		}
 
-		// Ref lane (MCP-D-03): ref is REQUIRED (an omitted ref reaches the
+		// Selector lane (MCP-D-03): selector is REQUIRED (an omitted selector reaches the
 		// invoker as the empty string and is refused by the same grammar);
 		// with a pin, resolution is offline — byte-exact and
 		// multiplicity-aware, exactly as run does before any connection.
@@ -160,19 +160,19 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 			if b.Source != name {
 				continue
 			}
-			ref := ""
-			if b.Ref != nil {
-				ref = *b.Ref
+			selector := ""
+			if b.Selector != nil {
+				selector = *b.Selector
 			}
-			entityType, remainder, err := parseRef(ref)
+			entityType, remainder, err := parseSelector(selector)
 			if err != nil {
 				return err
 			}
 			if entityType != "tools" {
-				return fmt.Errorf("openbindings.mcp@1 ref must use tools/<name>, got %q", ref)
+				return fmt.Errorf("openbindings.mcp@1 selector must use tools/<name>, got %q", selector)
 			}
 			if pin != nil {
-				if _, rerr := resolveRef(pin, entityType, remainder, BindingSpec); rerr != nil {
+				if _, rerr := resolveSelector(pin, entityType, remainder, BindingSpec); rerr != nil {
 					return rerr
 				}
 			}

@@ -96,6 +96,17 @@
   per-event bound at all, only the line-scanner guard). The SSE
   line-scanner guard stays fixed (parser internal, not a delivery unit).
 
+### Changed
+
+- **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
+  `bindings[*].selector`): bindings ride
+  `invoke.BindingInvocationArgs.Selector`, `RuntimeInvocationArgs.Selector`
+  replaces `RuntimeInvocationArgs.Ref`, and refusals use
+  `ERR_INVALID_SELECTOR` / `ERR_SELECTOR_NOT_FOUND` (the openapi-client
+  adapter's ref-flavored codes normalize to the selector-flavored SDK codes
+  at the bridge). OpenAPI `$ref` resolution, ref-sibling semantics, and the
+  external closure are untouched.
+
 ### Fixed
 
 - **The acceptance floor's Schema Object verdict is now the governing

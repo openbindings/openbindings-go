@@ -27,8 +27,8 @@ func TestInvokeBinding_OperationNodeWithoutInterfaceRefused(t *testing.T) {
 	}}}`
 
 	inv := NewInvoker(invoke.NewOperationInvoker()).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(graphDoc)},
-		Ref:    "#/graphs/g",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(graphDoc)},
+		Selector: "#/graphs/g",
 		// No Interface: a direct binding invocation supplies no operations map.
 	})
 	_ = inv.Write(context.Background(), map[string]any{})
@@ -55,8 +55,8 @@ func TestInvokeBinding_PureTransformGraphRunsWithoutInterface(t *testing.T) {
 		"edges":[{"from":"in","to":"out"}]
 	}}}`
 	inv := NewInvoker(invoke.NewOperationInvoker()).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(graphDoc)},
-		Ref:    "#/graphs/g",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(graphDoc)},
+		Selector: "#/graphs/g",
 	})
 	if err := inv.Write(context.Background(), map[string]any{"ok": true}); err != nil {
 		t.Fatal(err)

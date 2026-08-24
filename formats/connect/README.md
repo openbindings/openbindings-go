@@ -4,7 +4,7 @@ Connect (Buf) binding invoker and interface synthesizer for the [OpenBindings](h
 
 This package implements the unreleased first `openbindings.connect@1`
 candidate. It uses the Connect JSON protocol and incorporates the protobuf
-schema carriage, ref grammar, and canonical ProtoJSON correspondence proposed
+schema carriage, selector grammar, and canonical ProtoJSON correspondence proposed
 by the sibling `openbindings.grpc@1` candidate where the Connect document says
 to do so. Neither identifier has been published.
 
@@ -41,7 +41,7 @@ inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
         BindingSpec: connectbinding.BindingSpec,
         Location:    "https://api.example.com",
     },
-    Ref:     "mypackage.MyService/GetItem",
+    Selector: "mypackage.MyService/GetItem",
     Context: map[string]any{"headers": map[string]string{"authorization": "Bearer tok_123"}},
 })
 
@@ -97,14 +97,14 @@ normative for artifact, target, and operation-boundary behavior.
 
 `openbindings.connect@1` (exact and opaque).
 
-### Ref format
+### Selector format
 
 Same as gRPC: `{package.Service}/{Method}`
 
 - `mypackage.UserService/GetUser`
 - `blend.CoffeeShop/GetMenu`
 
-Both Connect and gRPC use protobuf service definitions, so the ref convention is identical.
+Both Connect and gRPC use protobuf service definitions, so the selector convention is identical.
 
 ### Source expectations
 

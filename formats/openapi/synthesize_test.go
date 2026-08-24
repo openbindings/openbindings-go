@@ -100,7 +100,7 @@ func TestConvertDocToInterface_CreatesOperations(t *testing.T) {
 	}
 }
 
-func TestConvertDocToInterface_CreatesBindingsWithRefs(t *testing.T) {
+func TestConvertDocToInterface_CreatesBindingsWithSelectors(t *testing.T) {
 	doc := minimalDoc()
 	iface := mustConvertDocToInterface(t, doc, "")
 
@@ -108,18 +108,18 @@ func TestConvertDocToInterface_CreatesBindingsWithRefs(t *testing.T) {
 		t.Fatalf("len(Bindings) = %d, want 2", len(iface.Bindings))
 	}
 
-	// Check that bindings have JSON pointer refs
+	// Check that bindings have JSON pointer selectors
 	for key, binding := range iface.Bindings {
-		if binding.Ref == "" {
-			t.Errorf("binding %q has empty ref", key)
+		if binding.Selector == "" {
+			t.Errorf("binding %q has empty selector", key)
 		}
 		if binding.Source != DefaultSourceName {
 			t.Errorf("binding %q source = %q, want %q", key, binding.Source, DefaultSourceName)
 		}
-		// The ref should be parseable
-		_, _, err := parseRef(binding.Ref)
+		// The selector should be parseable
+		_, _, err := parseSelector(binding.Selector)
 		if err != nil {
-			t.Errorf("binding %q ref %q is not parseable: %v", key, binding.Ref, err)
+			t.Errorf("binding %q selector %q is not parseable: %v", key, binding.Selector, err)
 		}
 	}
 }
@@ -705,25 +705,25 @@ func TestSynthesizeInterfaceWithCoverageAccountsForAlternativesAndReverseInterac
 	if result.Coverage.FullyRepresented {
 		t.Fatal("unsupported request media plus reverse interactions cannot be fully represented by revision 1")
 	}
-	statusByRef := map[string]synthesize.SynthesisCoverageStatus{}
-	reasonByRef := map[string]string{}
+	statusBySelector := map[string]synthesize.SynthesisCoverageStatus{}
+	reasonBySelector := map[string]string{}
 	for _, entry := range result.Coverage.Entries {
-		statusByRef[entry.SourceRef] = entry.Status
-		reasonByRef[entry.SourceRef] = entry.ReasonCode
+		statusBySelector[entry.SourceRef] = entry.Status
+		reasonBySelector[entry.SourceRef] = entry.ReasonCode
 	}
-	if got := statusByRef["#/paths/~1jobs/post"]; got != synthesize.SynthesisRepresented {
+	if got := statusBySelector["#/paths/~1jobs/post"]; got != synthesize.SynthesisRepresented {
 		t.Fatalf("paths operation status = %q", got)
 	}
-	if got := statusByRef["#/paths/~1jobs/post/requestBody/content/application~1json"]; got != synthesize.SynthesisRepresented {
+	if got := statusBySelector["#/paths/~1jobs/post/requestBody/content/application~1json"]; got != synthesize.SynthesisRepresented {
 		t.Fatalf("JSON media status = %q", got)
 	}
-	if got := statusByRef["#/paths/~1jobs/post/requestBody/content/application~1x-custom"]; got != synthesize.SynthesisExcluded {
+	if got := statusBySelector["#/paths/~1jobs/post/requestBody/content/application~1x-custom"]; got != synthesize.SynthesisExcluded {
 		t.Fatalf("custom media status = %q", got)
 	}
-	if got := reasonByRef["#/paths/~1jobs/post/requestBody/content/application~1x-custom"]; got != "openapi.request_media_excluded" {
+	if got := reasonBySelector["#/paths/~1jobs/post/requestBody/content/application~1x-custom"]; got != "openapi.request_media_excluded" {
 		t.Fatalf("custom media reason = %q, want openapi.request_media_excluded", got)
 	}
-	if got := statusByRef["#/webhooks/jobChanged/post"]; got != synthesize.SynthesisExcluded {
+	if got := statusBySelector["#/webhooks/jobChanged/post"]; got != synthesize.SynthesisExcluded {
 		t.Fatalf("webhook status = %q", got)
 	}
 }

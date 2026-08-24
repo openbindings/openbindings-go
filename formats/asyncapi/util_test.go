@@ -12,7 +12,7 @@ import (
 // `#/operations/<operation-key>` is the ONLY conformant spelling — a bare
 // operation key (the former documented lenience) is refused loudly.
 func TestParseRef_BareIDRefused(t *testing.T) {
-	_, err := parseRef("sendMessage")
+	_, err := parseSelector("sendMessage")
 	if err == nil {
 		t.Fatal("expected a refusal for a bare operation key (ASYNC-D-03)")
 	}
@@ -25,7 +25,7 @@ func TestParseRef_BareIDRefused(t *testing.T) {
 // unescaped `/` after the pointer prefix addresses a deeper path, not an
 // operations-map entry.
 func TestParseRef_UnescapedSlashRefused(t *testing.T) {
-	_, err := parseRef("#/operations/tasks/create")
+	_, err := parseSelector("#/operations/tasks/create")
 	if err == nil {
 		t.Fatal("expected a refusal for an unescaped / in the operation-key position (ASYNC-D-03)")
 	}
@@ -35,19 +35,19 @@ func TestParseRef_UnescapedSlashRefused(t *testing.T) {
 }
 
 func TestParseRef_HashOperations(t *testing.T) {
-	got, err := parseRef("#/operations/receiveEvents")
+	got, err := parseSelector("#/operations/receiveEvents")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "receiveEvents" {
-		t.Errorf("parseRef(%q) = %q, want %q", "#/operations/receiveEvents", got, "receiveEvents")
+		t.Errorf("parseSelector(%q) = %q, want %q", "#/operations/receiveEvents", got, "receiveEvents")
 	}
 }
 
 func TestParseRef_Empty(t *testing.T) {
-	_, err := parseRef("")
+	_, err := parseSelector("")
 	if err == nil {
-		t.Error("expected error for empty ref")
+		t.Error("expected error for empty selector")
 	}
 }
 
@@ -55,12 +55,12 @@ func TestParseRef_Empty(t *testing.T) {
 // containing `/` or `~` carry RFC 6901 escaping in the pointer (~1 → /,
 // ~0 → ~).
 func TestParseRef_RFC6901Escaping(t *testing.T) {
-	got, err := parseRef("#/operations/orders~1create~0v2")
+	got, err := parseSelector("#/operations/orders~1create~0v2")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "orders/create~v2" {
-		t.Errorf("parseRef = %q, want %q", got, "orders/create~v2")
+		t.Errorf("parseSelector = %q, want %q", got, "orders/create~v2")
 	}
 }
 

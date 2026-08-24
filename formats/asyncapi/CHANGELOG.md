@@ -4,6 +4,15 @@
 
 ### Changed
 
+- **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
+  `bindings[*].selector`) lands on this module's surface:
+  `Document.ResolveEndpoint` takes a `selector`, invocation rides
+  `invoke.BindingInvocationArgs.Selector`, and refusals use
+  `ERR_INVALID_SELECTOR` / `ERR_SELECTOR_NOT_FOUND` (the asyncapi-client
+  engine's ref-flavored codes normalize to the selector-flavored SDK codes
+  at the bridge). AsyncAPI Reference Objects and `$ref` resolution are
+  untouched.
+
 - **config.value challenges carry an engine-asserted `schema` instead of
   `choices`** (the 2026-08-20 working-draft amendment of the binding-invoker
   contract). Artifact-declared closed sets — bindable server keys, server

@@ -48,7 +48,7 @@ func TestRuntimeRefusesUnaddressablePathTemplateVariableBeforeDispatch(t *testin
 				"responses":{"200":{"description":"policy","content":{"application/json":{}}}}
 			}}}
 		}`)},
-		Ref: "#/paths/~1api~1v2~1storefront~1policies~1{policy_slug}/get",
+		Selector: "#/paths/~1api~1v2~1storefront~1policies~1{policy_slug}/get",
 	})
 	_ = call.Close()
 	if _, err := invoke.Single(context.Background(), call.Outputs()); err == nil {

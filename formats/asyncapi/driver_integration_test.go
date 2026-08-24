@@ -53,8 +53,8 @@ func TestOpenBindingsAdapterDelegatesArbitraryProtocolDriver(t *testing.T) {
   "operations":{"publish":{"action":"receive","channel":{"$ref":"#/channels/commands"},"messages":[{"$ref":"#/channels/commands/messages/command"}]}}
 }`)
 	call := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
-		Ref:    "#/operations/publish",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
+		Selector: "#/operations/publish",
 	})
 	if err := call.Write(context.Background(), map[string]any{"id": float64(7)}); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestOpenBindingsAdapterDelegatesArbitraryProtocolDriver(t *testing.T) {
 }
 
 // TestLiveOpenBindingsAdapterUsesMQTTDriver pins the complete abstraction
-// boundary against a real broker: the caller supplies only an operation ref,
+// boundary against a real broker: the caller supplies only an operation selector,
 // an application value, and portable context. MQTT topics, QoS, retain, and
 // authentication are interpreted below the OpenBindings invocation surface.
 func TestLiveOpenBindingsAdapterUsesMQTTDriver(t *testing.T) {
@@ -95,11 +95,11 @@ func TestLiveOpenBindingsAdapterUsesMQTTDriver(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = invoker.Close() }()
-	args := func(ref string) *invoke.BindingInvocationArgs {
+	args := func(selector string) *invoke.BindingInvocationArgs {
 		return &invoke.BindingInvocationArgs{
-			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
-			Ref:     ref,
-			Context: map[string]any{"basic": map[string]any{"username": "sensor", "password": "secret"}},
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
+			Selector: selector,
+			Context:  map[string]any{"basic": map[string]any{"username": "sensor", "password": "secret"}},
 		}
 	}
 
@@ -145,9 +145,9 @@ func TestLiveOpenBindingsAdapterPreservesMQTTOutputBeforeConnectionLoss(t *testi
 	}
 	defer func() { _ = invoker.Close() }()
 	call := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
-		Ref:     "#/operations/observe",
-		Context: map[string]any{"basic": map[string]any{"username": "sensor", "password": "secret"}},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
+		Selector: "#/operations/observe",
+		Context:  map[string]any{"basic": map[string]any{"username": "sensor", "password": "secret"}},
 	})
 	outputs := call.Outputs()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -166,7 +166,7 @@ func TestLiveOpenBindingsAdapterPreservesMQTTOutputBeforeConnectionLoss(t *testi
 }
 
 // TestLiveOpenBindingsAdapterUsesKafkaDriver pins the complete Kafka
-// abstraction boundary. The OpenBindings caller sees only an operation ref
+// abstraction boundary. The OpenBindings caller sees only an operation selector
 // and application values; topic, key, group, client identity, partitions,
 // and broker protocol remain below the adapter.
 func TestLiveOpenBindingsAdapterUsesKafkaDriver(t *testing.T) {
@@ -185,10 +185,10 @@ func TestLiveOpenBindingsAdapterUsesKafkaDriver(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = invoker.Close() }()
-	args := func(ref string) *invoke.BindingInvocationArgs {
+	args := func(selector string) *invoke.BindingInvocationArgs {
 		return &invoke.BindingInvocationArgs{
-			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
-			Ref:    ref,
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
+			Selector: selector,
 		}
 	}
 
@@ -232,11 +232,11 @@ func TestLiveOpenBindingsAdapterUsesKafkaSCRAMWithoutProtocolFields(t *testing.T
 		t.Fatal(err)
 	}
 	defer func() { _ = invoker.Close() }()
-	args := func(ref string) *invoke.BindingInvocationArgs {
+	args := func(selector string) *invoke.BindingInvocationArgs {
 		return &invoke.BindingInvocationArgs{
-			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
-			Ref:     ref,
-			Context: map[string]any{"basic": map[string]any{"username": "orders", "password": "secret-password"}},
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: artifact},
+			Selector: selector,
+			Context:  map[string]any{"basic": map[string]any{"username": "orders", "password": "secret-password"}},
 		}
 	}
 	publish := invoker.InvokeBinding(context.Background(), args("#/operations/publish"))
