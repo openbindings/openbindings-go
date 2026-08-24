@@ -58,7 +58,9 @@
   `IsOBInterface`, `IsHTTPURL`, and `BindingSpecInfo` are seated in core.
 
 - **The portable synthesis corpus runs at
-  `openbindings.binding-spec-synthesis-scenarios@3`.** `synthesisscenarios.Verify`
+  `openbindings.binding-spec-synthesis-scenarios@4`** (revved from @3 for the
+  binding-identity member rename `bindingRef` → `bindingSelector`; `sourceRef`
+  is unchanged). `synthesisscenarios.Verify`
   takes a `SynthesizerFactory` rather than one synthesizer, because a scenario
   may now declare companion documents that the family adapter has to serve
   through its own artifact-resolver seam. `synthesisscenarios.Fixed` adapts a

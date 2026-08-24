@@ -22,7 +22,7 @@ import (
 // implements. A file naming any other revision is refused rather than run:
 // a runner that silently skips what it does not understand reports green
 // having verified none of it.
-const Format = "openbindings.binding-spec-synthesis-scenarios@3"
+const Format = "openbindings.binding-spec-synthesis-scenarios@4"
 
 type File struct {
 	Format      string     `json:"format"`
