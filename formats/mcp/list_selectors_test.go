@@ -23,13 +23,13 @@ func TestInspectSourceExposesOnlyEligibleTools(t *testing.T) {
 		t.Fatalf("inspection = %#v", result)
 	}
 	for _, target := range result.Targets {
-		if !strings.HasPrefix(target.Ref, "tools/") || target.OperationKey == "" || target.Operation == nil {
+		if !strings.HasPrefix(target.Selector, "tools/") || target.OperationKey == "" || target.Operation == nil {
 			t.Fatalf("target = %#v", target)
 		}
 	}
 }
 
-func TestInspectSourceRefsMatchSynthesis(t *testing.T) {
+func TestInspectSourceSelectorsMatchSynthesis(t *testing.T) {
 	server, _ := setupMCPServer(t)
 	synthesizer := NewSynthesizer()
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
@@ -45,10 +45,10 @@ func TestInspectSourceRefsMatchSynthesis(t *testing.T) {
 	}
 	bindings := map[string]string{}
 	for _, binding := range iface.Bindings {
-		bindings[binding.Ref] = binding.Operation
+		bindings[binding.Selector] = binding.Operation
 	}
 	for _, target := range inspection.Targets {
-		if bindings[target.Ref] != target.OperationKey {
+		if bindings[target.Selector] != target.OperationKey {
 			t.Fatalf("target %#v does not match synthesized bindings %#v", target, bindings)
 		}
 	}
@@ -70,7 +70,7 @@ func TestInspectPinnedListingIsOfflineAndReportsExclusions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Targets) != 1 || result.Targets[0].Ref != "tools/echo" || result.Targets[0].OperationKey != "echo" {
+	if len(result.Targets) != 1 || result.Targets[0].Selector != "tools/echo" || result.Targets[0].OperationKey != "echo" {
 		t.Fatalf("targets = %#v", result.Targets)
 	}
 	if requests.Load() != 0 {

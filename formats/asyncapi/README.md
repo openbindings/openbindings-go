@@ -8,7 +8,7 @@ The package implements the unreleased first `openbindings.asyncapi@1`
 candidate. No AsyncAPI binding specification has been published, and there is
 no older compatibility meaning for `@1`.
 
-The adapter owns OBI source/ref validation, invocation-handle bridging,
+The adapter owns OBI source/selector validation, invocation-handle bridging,
 protocol-independent unsuccessful completion, synthesis, and coverage. The
 standalone runtime owns AsyncAPI loading, normalization, target and message
 resolution, security interpretation, and execution. Protocol drivers own the
@@ -37,7 +37,7 @@ It normalizes authored operations without rewriting the source artifact:
   `#/channels/<escaped-channel>/subscribe`;
 - v3 `receive` is caller-input/publish;
 - v3 `send` is caller-output/subscribe;
-- v3 refs use `#/operations/<escaped-operation-key>`.
+- v3 selectors use `#/operations/<escaped-operation-key>`.
 
 This complementary perspective follows AsyncAPI's description of the
 application: the invocation acts as its counterparty.
@@ -53,7 +53,7 @@ call := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
         BindingSpec: "openbindings.asyncapi@1",
         Location:    "https://api.example.com/asyncapi.yaml",
     },
-    Ref:     "#/operations/receiveOrder",
+    Selector: "#/operations/receiveOrder",
     Context: map[string]any{"bearerToken": "tok_123"},
 })
 
@@ -102,7 +102,7 @@ result, err := asyncapi.NewSynthesizer().SynthesizeInterfaceWithCoverage(ctx,
 ```
 
 Synthesis is deterministic and protocol-independent. It preserves the source
-artifact and exact native ref, derives schemas only from authored payload
+artifact and exact native selector, derives schemas only from authored payload
 contracts, and reports every target as represented, excluded, lossy, or
 failed. It does not write protocol names, channel addresses, headers, methods,
 status codes, or driver requirements into operation schemas.

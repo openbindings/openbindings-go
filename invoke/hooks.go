@@ -44,7 +44,7 @@ type InvokeSite struct {
 	InvokedAs   string
 	BindingKey  string
 	BindingSpec string
-	Ref         string
+	Selector    string
 	Target      string
 
 	builtinDecode   OutputDecoder

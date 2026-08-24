@@ -51,7 +51,7 @@ route-versus-aggregate semantics.
 
 Every family is checked at five boundaries. Its `corpus_test.go` adapter runs
 the shared D-rule fixtures from `spec/conformance/binding-specs/<family>/`
-through the module's own artifact, location, and ref lanes. Family authoring
+through the module's own artifact, location, and selector lanes. Family authoring
 tests then exercise artifact loading, inspection, synthesis, and
 synthesized-document validation. Both SDKs execute the same portable synthesis
 scenarios from `spec/conformance/binding-specs/synthesis/`, comparing exact
@@ -63,13 +63,13 @@ decoding. Passing only one boundary is not sufficient release evidence.
 
 | Family | Go authoring evidence | TypeScript authoring evidence | Shared synthesis evidence | Shared invocation evidence |
 |---|---|---|---|---|
-| OpenAPI | `formats/openapi/synthesize_test.go`, `list_refs_test.go` | `packages/openapi/src/synthesize.test.ts`, `invoker.test.ts` | `synthesis/openapi.json` | `processor/openapi.json` |
-| AsyncAPI | `formats/asyncapi/synthesize_test.go`, `list_refs_test.go` | `packages/asyncapi/src/invoker.test.ts`, `inspect-source.test.ts` | `synthesis/asyncapi.json` | `processor/asyncapi.json` |
-| MCP | `formats/mcp/synthesize_test.go`, `list_refs_test.go` | `packages/mcp/src/invoker.test.ts` | `synthesis/mcp.json` | `processor/mcp.json` |
-| gRPC | `formats/grpc/synthesize_test.go`, `list_refs_test.go` | `packages/grpc/src/authoring.test.ts` | `synthesis/grpc.json` | `processor/grpc.json` |
-| Connect | `formats/connect/synthesize_test.go`, `list_refs_test.go` | `packages/connect/src/authoring.test.ts` | `synthesis/connect.json` | `processor/connect.json` |
-| usage | `formats/usage/synthesize_interface_test.go`, `list_refs_test.go` | `packages/usage/src/authoring.test.ts` | `synthesis/usage.json` | `processor/usage.json` |
-| GraphQL | `formats/graphql/synthesize_test.go`, `list_refs_test.go` | `packages/graphql/src/synthesize.test.ts`, `invoker.test.ts` | `synthesis/graphql.json` | `processor/graphql.json` |
+| OpenAPI | `formats/openapi/synthesize_test.go`, `list_selectors_test.go` | `packages/openapi/src/synthesize.test.ts`, `invoker.test.ts` | `synthesis/openapi.json` | `processor/openapi.json` |
+| AsyncAPI | `formats/asyncapi/synthesize_test.go`, `list_selectors_test.go` | `packages/asyncapi/src/invoker.test.ts`, `inspect-source.test.ts` | `synthesis/asyncapi.json` | `processor/asyncapi.json` |
+| MCP | `formats/mcp/synthesize_test.go`, `list_selectors_test.go` | `packages/mcp/src/invoker.test.ts` | `synthesis/mcp.json` | `processor/mcp.json` |
+| gRPC | `formats/grpc/synthesize_test.go`, `list_selectors_test.go` | `packages/grpc/src/authoring.test.ts` | `synthesis/grpc.json` | `processor/grpc.json` |
+| Connect | `formats/connect/synthesize_test.go`, `list_selectors_test.go` | `packages/connect/src/authoring.test.ts` | `synthesis/connect.json` | `processor/connect.json` |
+| usage | `formats/usage/synthesize_interface_test.go`, `list_selectors_test.go` | `packages/usage/src/authoring.test.ts` | `synthesis/usage.json` | `processor/usage.json` |
+| GraphQL | `formats/graphql/synthesize_test.go`, `list_selectors_test.go` | `packages/graphql/src/synthesize.test.ts`, `invoker.test.ts` | `synthesis/graphql.json` | `processor/graphql.json` |
 
 The authoring invariant is creation-time soundness plus explicit completeness:
 inspection and synthesis apply the same target eligibility used by invocation;

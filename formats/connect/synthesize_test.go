@@ -75,7 +75,7 @@ service TestService {
 	}
 }
 
-func TestConvertToInterface_CreatesBindingsWithRefs(t *testing.T) {
+func TestConvertToInterface_CreatesBindingsWithSelectors(t *testing.T) {
 	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
 syntax = "proto3";
 package testpkg;
@@ -101,8 +101,8 @@ service TestService {
 	if !ok {
 		t.Fatalf("expected binding %q", key)
 	}
-	if binding.Ref != "testpkg.TestService/GetItem" {
-		t.Errorf("ref = %q, want %q", binding.Ref, "testpkg.TestService/GetItem")
+	if binding.Selector != "testpkg.TestService/GetItem" {
+		t.Errorf("selector = %q, want %q", binding.Selector, "testpkg.TestService/GetItem")
 	}
 	if binding.Operation != "GetItem" {
 		t.Errorf("operation = %q, want %q", binding.Operation, "GetItem")

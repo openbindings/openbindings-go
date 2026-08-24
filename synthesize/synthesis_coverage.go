@@ -89,7 +89,7 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 			}
 			if entry.BindingKey == "" {
 				for bindingKey, binding := range iface.Bindings {
-					if binding.Operation == entry.OperationKey && binding.Ref == entry.BindingRef {
+					if binding.Operation == entry.OperationKey && binding.Selector == entry.BindingSelector {
 						if entry.BindingKey != "" {
 							return nil, fmt.Errorf("%s synthesis coverage entry %d matches several bindings; bindingKey is required to disambiguate", entry.Status, index)
 						}
@@ -98,8 +98,8 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 				}
 			}
 			binding, ok := iface.Bindings[entry.BindingKey]
-			if !ok || binding.Operation != entry.OperationKey || binding.Ref != entry.BindingRef {
-				return nil, fmt.Errorf("%s synthesis coverage entry %d has no matching binding for operation %q and ref %q", entry.Status, index, entry.OperationKey, entry.BindingRef)
+			if !ok || binding.Operation != entry.OperationKey || binding.Selector != entry.BindingSelector {
+				return nil, fmt.Errorf("%s synthesis coverage entry %d has no matching binding for operation %q and selector %q", entry.Status, index, entry.OperationKey, entry.BindingSelector)
 			}
 			if entry.SourceKey == "" {
 				entry.SourceKey = binding.Source
@@ -160,14 +160,14 @@ func RepresentedCoverageEntries(iface *openbindings.Interface, sourceIndex int) 
 	for _, key := range bindingKeys {
 		binding := iface.Bindings[key]
 		entries = append(entries, SynthesisCoverageEntry{
-			SourceIndex:  sourceIndex,
-			SourceKey:    binding.Source,
-			SourceRef:    binding.Ref,
-			Scope:        SynthesisCoverageTarget,
-			Status:       SynthesisRepresented,
-			OperationKey: binding.Operation,
-			BindingKey:   key,
-			BindingRef:   binding.Ref,
+			SourceIndex:     sourceIndex,
+			SourceKey:       binding.Source,
+			SourceRef:       binding.Selector,
+			Scope:           SynthesisCoverageTarget,
+			Status:          SynthesisRepresented,
+			OperationKey:    binding.Operation,
+			BindingKey:      key,
+			BindingSelector: binding.Selector,
 		})
 	}
 	return entries

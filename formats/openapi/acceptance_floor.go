@@ -496,7 +496,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 				if !methodDeclared {
 					continue
 				}
-				ref := buildJSONPointerRef(pathKey, method)
+				ref := buildJSONPointerSelector(pathKey, method)
 				rawOps = append(rawOps, rawOpRow{path: pathKey, method: method, ref: ref, value: opValue, pathItem: pathItem, pathKeyBad: pathKeyBad})
 				opMap, opIsMap := opValue.(map[string]any)
 				if !opIsMap {

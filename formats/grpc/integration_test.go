@@ -372,7 +372,7 @@ func drainInvocation(t *testing.T, inv invoke.Invocation[any, any]) ([]any, *inv
 	}
 }
 
-func bufconnArgs(ref string, bindCtx map[string]any) *invoke.BindingInvocationArgs {
+func bufconnArgs(selector string, bindCtx map[string]any) *invoke.BindingInvocationArgs {
 	if bindCtx == nil {
 		bindCtx = map[string]any{}
 	}
@@ -390,9 +390,9 @@ func bufconnArgs(ref string, bindCtx map[string]any) *invoke.BindingInvocationAr
 	}
 	copied["configuration"] = configurationCopy
 	return &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: bufconnLocation},
-		Ref:     ref,
-		Context: copied,
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: bufconnLocation},
+		Selector: selector,
+		Context:  copied,
 	}
 }
 
@@ -504,14 +504,14 @@ service ItemService {
 		t.Errorf("source location = %q, want %q", src.Location, "localhost:50051")
 	}
 
-	// Bindings should resolve to package.Service/Method refs.
+	// Bindings should resolve to package.Service/Method selectors.
 	bindingKey := "GetItem." + DefaultSourceName
 	binding, ok := iface.Bindings[bindingKey]
 	if !ok {
 		t.Fatalf("expected binding %q", bindingKey)
 	}
-	if binding.Ref != "testpkg.ItemService/GetItem" {
-		t.Errorf("binding ref = %q, want %q", binding.Ref, "testpkg.ItemService/GetItem")
+	if binding.Selector != "testpkg.ItemService/GetItem" {
+		t.Errorf("binding selector = %q, want %q", binding.Selector, "testpkg.ItemService/GetItem")
 	}
 	if binding.Operation != "GetItem" {
 		t.Errorf("binding operation = %q, want %q", binding.Operation, "GetItem")
@@ -813,23 +813,23 @@ func TestIntegration_DeadlineMidStream_Deterministic(t *testing.T) {
 	}
 }
 
-func TestIntegration_InvalidRef(t *testing.T) {
+func TestIntegration_InvalidSelector(t *testing.T) {
 	dialer, _ := setupTestServer(t)
 	invoker := newTestInvoker(t, dialer)
 	defer invoker.Close()
 
-	inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("not-a-valid-ref", nil))
+	inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("not-a-valid-selector", nil))
 
 	vals, terr := drainInvocation(t, inv)
 	if len(vals) != 0 || terr == nil {
 		t.Fatal("expected a terminal error and no outputs")
 	}
-	if terr.Code != invoke.ErrCodeInvalidRef {
-		t.Errorf("code = %q, want ERR_INVALID_REF", terr.Code)
+	if terr.Code != invoke.ErrCodeInvalidSelector {
+		t.Errorf("code = %q, want ERR_INVALID_SELECTOR", terr.Code)
 	}
 }
 
-func TestIntegration_RefNotFound_Method(t *testing.T) {
+func TestIntegration_SelectorNotFound_Method(t *testing.T) {
 	dialer, _ := setupTestServer(t)
 	invoker := newTestInvoker(t, dialer)
 	defer invoker.Close()
@@ -837,8 +837,8 @@ func TestIntegration_RefNotFound_Method(t *testing.T) {
 	inv := invoker.InvokeBinding(testCtx(t), bufconnArgs("testpkg.ItemService/NoSuchMethod", nil))
 
 	_, terr := drainInvocation(t, inv)
-	if terr == nil || terr.Code != invoke.ErrCodeRefNotFound {
-		t.Fatalf("expected ERR_REF_NOT_FOUND, got %v", terr)
+	if terr == nil || terr.Code != invoke.ErrCodeSelectorNotFound {
+		t.Fatalf("expected ERR_SELECTOR_NOT_FOUND, got %v", terr)
 	}
 }
 
@@ -872,8 +872,8 @@ func TestIntegration_MissingLocation(t *testing.T) {
 	defer invoker.Close()
 
 	inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec},
-		Ref:    "testpkg.ItemService/GetItem",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec},
+		Selector: "testpkg.ItemService/GetItem",
 	})
 
 	_, terr := drainInvocation(t, inv)
@@ -909,7 +909,7 @@ func TestIntegration_NoInputConvention(t *testing.T) {
 
 	ctx := testCtx(t)
 	args := bufconnArgs("testpkg.ItemService/GetItem", nil)
-	args.Binding = &openbindings.BindingEntry{Operation: "getItem", Source: "s", Ref: "testpkg.ItemService/GetItem"}
+	args.Binding = &openbindings.BindingEntry{Operation: "getItem", Source: "s", Selector: "testpkg.ItemService/GetItem"}
 	// InputSchema deliberately nil → no-input operation.
 
 	inv := invoker.InvokeBinding(ctx, args)
@@ -937,8 +937,8 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 
 	ctx := testCtx(t)
 	inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
-		Ref:    "testpkg.ItemService/GetItem",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
+		Selector: "testpkg.ItemService/GetItem",
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "i1"}); err != nil {
 		t.Fatalf("write: %v", err)
@@ -958,8 +958,8 @@ func TestIntegration_InvokerOptions_RealDialPath(t *testing.T) {
 	ctl, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	inv2 := autoTLS.InvokeBinding(ctl, &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
-		Ref:    "testpkg.ItemService/GetItem",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:443"},
+		Selector: "testpkg.ItemService/GetItem",
 	})
 	_ = inv2.Write(ctl, map[string]any{"id": "i1"})
 	_, err = invoke.Single(ctl, inv2.Outputs())

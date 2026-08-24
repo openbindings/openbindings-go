@@ -103,7 +103,7 @@ func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 
 // InvokeBinding invokes an AsyncAPI binding, returning the invocation handle
 // synchronously. Creation is inert: the binding's work runs on its own
-// goroutine and every pre-dispatch failure (bad ref, missing server,
+// goroutine and every pre-dispatch failure (bad selector, missing server,
 // CONTEXT_REQUIRED) is raised before any observable side effect.
 //
 // Cell-to-handle mapping (complementary perspective, ASYNC-P-02: the
@@ -236,7 +236,7 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 		acceptsInput = &value
 	}
 	return asyncapiclient.PrepareOptions{
-		Source: asyncapiclient.Source{Location: args.Source.Location, Content: content}, Ref: args.Ref,
+		Source: asyncapiclient.Source{Location: args.Source.Location, Content: content}, Ref: args.Selector,
 		Profile: profile, Context: args.Context, HTTPClient: client, Hooks: bridgeHooks(args),
 		MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes, AcceptsInput: acceptsInput,
 	}, nil
@@ -280,7 +280,7 @@ func coreHookSite(args *invoke.BindingInvocationArgs, target string) invoke.Invo
 		site = *args.Site
 	} else {
 		site.BindingSpec = args.Source.BindingSpec
-		site.Ref = args.Ref
+		site.Selector = args.Selector
 	}
 	if site.Target == "" {
 		site.Target = target
@@ -308,10 +308,26 @@ func bridgeExecutionError(err error) error {
 	if prerequisites, ok := details.(*asyncapiclient.Prerequisites); ok {
 		details = toCorePrerequisites(prerequisites)
 	}
+	code := normalizedEngineErrorCode(execution.Code)
 	if execution.DetailsPresent {
-		return invoke.NewInvocationErrorWithData(execution.Code, details)
+		return invoke.NewInvocationErrorWithData(code, details)
 	}
-	return invoke.NewInvocationError(execution.Code)
+	return invoke.NewInvocationError(code)
+}
+
+// normalizedEngineErrorCode maps the asyncapi-client engine's vocabulary onto
+// the OpenBindings surface's: the engine still says "ref" where the SDK says
+// "selector", so its ref-flavored codes normalize to the selector-flavored
+// SDK codes here.
+func normalizedEngineErrorCode(code string) string {
+	switch code {
+	case asyncapiclient.ErrCodeInvalidRef:
+		return invoke.ErrCodeInvalidSelector
+	case asyncapiclient.ErrCodeRefNotFound:
+		return invoke.ErrCodeSelectorNotFound
+	default:
+		return code
+	}
 }
 
 func toCorePrerequisites(value *asyncapiclient.Prerequisites) *invoke.ContextRequiredDetails {

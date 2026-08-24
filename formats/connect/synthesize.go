@@ -76,7 +76,7 @@ func convertToInterface(disc *discovery, sourceLocation string, onWarning func(s
 			iface.Bindings[bindingKey] = openbindings.BindingEntry{
 				Operation: opKey,
 				Source:    DefaultSourceName,
-				Ref:       fqn,
+				Selector:  fqn,
 			}
 		}
 	}

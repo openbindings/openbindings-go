@@ -20,16 +20,16 @@ import (
 // servers. Historical development-profile cases are not published binding
 // specification revisions.
 
-func invokeWith(t *testing.T, spec, ref string, input any) (any, *invoke.InvocationError) {
-	return invokeWithBindingSpec(t, BindingSpec, spec, ref, input)
+func invokeWith(t *testing.T, spec, selector string, input any) (any, *invoke.InvocationError) {
+	return invokeWithBindingSpec(t, BindingSpec, spec, selector, input)
 }
 
-func invokeWithBindingSpec(t *testing.T, bindingSpec, spec, ref string, input any) (any, *invoke.InvocationError) {
+func invokeWithBindingSpec(t *testing.T, bindingSpec, spec, selector string, input any) (any, *invoke.InvocationError) {
 	t.Helper()
 	spec = withDeclaredJSONResponses(t, spec)
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    ref,
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: selector,
 	})
 	return driveSingle(t, call, input)
 }
@@ -75,16 +75,16 @@ func withDeclaredJSONResponses(t *testing.T, spec string) string {
 }
 
 // ---------------------------------------------------------------------------
-// OAPI-D-03 — ref shape at the invoke boundary
+// OAPI-D-03 — selector shape at the invoke boundary
 // ---------------------------------------------------------------------------
 
-// An uppercase ref method is non-conformant: refused with ERR_INVALID_REF,
+// An uppercase selector method is non-conformant: refused with ERR_INVALID_SELECTOR,
 // never case-folded to a match.
 func TestInvoke_UppercaseRefMethodRefused(t *testing.T) {
 	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	_, ierr := invokeWith(t, widgetSpec(srv.URL), "#/paths/~1session/GET", nil)
-	if ierr == nil || ierr.Code != invoke.ErrCodeInvalidRef {
-		t.Fatalf("expected ERR_INVALID_REF for an uppercase method, got %v", ierr)
+	if ierr == nil || ierr.Code != invoke.ErrCodeInvalidSelector {
+		t.Fatalf("expected ERR_INVALID_SELECTOR for an uppercase method, got %v", ierr)
 	}
 	if requests.Load() != 0 {
 		t.Error("refusal must precede dispatch")
@@ -94,7 +94,7 @@ func TestInvoke_UppercaseRefMethodRefused(t *testing.T) {
 // A path item that is a $ref (3.1 components.pathItems) resolves before the
 // method segment evaluates (OAPI-D-03: OAS reference resolution, not raw
 // JSON traversal).
-func TestInvoke_RefResolvesPathItemRef(t *testing.T) {
+func TestInvoke_SelectorResolvesPathItemRef(t *testing.T) {
 	var gotPath string
 	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -906,8 +906,8 @@ func TestInvoke_AcceptHeaderMembership(t *testing.T) {
 	  }}}
 	}`, srv2.URL)
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(noMediaSpec)},
-		Ref:    "#/paths/~1session/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(noMediaSpec)},
+		Selector: "#/paths/~1session/get",
 	})
 	outputs, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr != nil || len(outputs) != 0 {
@@ -963,8 +963,8 @@ func TestInvoke_DeclaredBothShapesSelectByFraming(t *testing.T) {
 	}))
 	defer sseSrv.Close()
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(dualSpec(sseSrv.URL))},
-		Ref:    "#/paths/~1dual/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(dualSpec(sseSrv.URL))},
+		Selector: "#/paths/~1dual/get",
 	})
 	events, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr != nil {
@@ -1100,9 +1100,9 @@ func TestInvoke_CookieChannelAssembly(t *testing.T) {
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:     "#/paths/~1sess/get",
-		Context: map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1sess/get",
+		Context:  map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 	})
 	if _, ierr := driveSingle(t, call, map[string]any{"zeta": "z", "alpha": "a"}); ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
@@ -1144,9 +1144,9 @@ func TestInvoke_CredentialCollisionRefused(t *testing.T) {
 			}`, srv.URL, tc.param, tc.in, tc.in, tc.param)
 
 			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-				Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-				Ref:     "#/paths/~1x/get",
-				Context: map[string]any{"apiKey": "cred"},
+				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+				Selector: "#/paths/~1x/get",
+				Context:  map[string]any{"apiKey": "cred"},
 			})
 			_, ierr := driveSingle(t, call, map[string]any{tc.param: "caller-value"})
 			if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
@@ -1189,8 +1189,8 @@ func TestInvoke_SecurityORSelectsOneCompleteAlternative(t *testing.T) {
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1x/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1x/get",
 		Context: map[string]any{"apiKeys": map[string]any{
 			"headerKey": "header-secret",
 			"queryKey":  "query-secret",
@@ -1236,8 +1236,8 @@ func TestInvoke_SecurityORDoesNotCombineIncompleteAlternativeFragments(t *testin
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1x/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1x/get",
 		Context: map[string]any{"apiKeys": map[string]any{
 			"firstHeader": "incomplete-fragment",
 			"queryKey":    "complete-alternative",
@@ -1273,8 +1273,8 @@ func TestInvoke_NoDeclaredSecurityDoesNotSendContextCredentials(t *testing.T) {
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1x/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1x/get",
 		Context: map[string]any{
 			"bearerToken": "unrelated-bearer",
 			"apiKey":      "unrelated-key",
@@ -1305,8 +1305,8 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 		  }}}
 		}`, srv.URL)
 		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-			Ref:    "#/paths/~1x/get",
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Selector: "#/paths/~1x/get",
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
 		if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
@@ -1336,9 +1336,9 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 		  }}
 		}`, srv.URL)
 		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-			Ref:     "#/paths/~1x/get",
-			Context: map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Selector: "#/paths/~1x/get",
+			Context:  map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
 		if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
@@ -1371,8 +1371,8 @@ func TestPrepareBinding_FiltersCollidingSecurityAlternative(t *testing.T) {
 	}`, srv.URL)
 
 	details, err := NewInvoker().PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1x/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1x/get",
 	})
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
@@ -1401,8 +1401,8 @@ func TestInvoke_AllMissingSecurityAlternativesRefuseBeforeDispatch(t *testing.T)
 	  }}}
 	}`, srv.URL)
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1x/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1x/get",
 	})
 	_, ierr := driveSingle(t, call, nil)
 	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
@@ -1432,8 +1432,8 @@ func TestSchemaFreeCustomDocumentDialectRemainsInvocableAndSynthesizable(t *test
 	  }}}
 	}`, srv.URL)
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1x/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1x/get",
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
 		t.Fatalf("schema-free artifact-native invocation failed: %s: %s", ierr.Code, ierr.Error())
@@ -1461,8 +1461,8 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 		  "paths": {"/x": {"get": {"operationId": "x", "responses": {"200": {"description": "ok"}}}}}
 		}`, srv.URL)
 		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-			Ref:    "#/paths/~1x/get",
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Selector: "#/paths/~1x/get",
 			Context: map[string]any{
 				"headers": map[string]any{"Cookie": "raw=1"},
 				"cookies": map[string]any{"session": "structured"},
@@ -1492,8 +1492,8 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 		  "components": {"securitySchemes": {"cookieKey": {"type": "apiKey", "in": "cookie", "name": "session"}}}
 		}`, srv.URL)
 		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-			Ref:    "#/paths/~1x/get",
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Selector: "#/paths/~1x/get",
 			Context: map[string]any{
 				"headers": map[string]any{"cookie": "raw=1"},
 				"apiKeys": map[string]any{"cookieKey": "secret"},
@@ -1527,8 +1527,8 @@ func TestPrepareBindingReturnsNoChallengeForOwnershipConflict(t *testing.T) {
 	  "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}}
 	}`
 	details, err := NewInvoker().PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1x/get",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1x/get",
 	})
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
@@ -1552,8 +1552,8 @@ func TestInvoke_ProcessorOwnedHeaderParametersRefused(t *testing.T) {
 			  }}}
 			}`, srv.URL, name)
 			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-				Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-				Ref:    "#/paths/~1x/get",
+				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+				Selector: "#/paths/~1x/get",
 			})
 			_, ierr := driveSingle(t, call, map[string]any{})
 			if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
@@ -1593,9 +1593,9 @@ func TestInvoke_ServerConfigurationPoint(t *testing.T) {
 	  }}}}}
 	}`
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:     "#/paths/~1ping/get",
-		Context: map[string]any{"configuration": map[string]any{"server": map[string]any{"baseUrl": srv.URL}}},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1ping/get",
+		Context:  map[string]any{"configuration": map[string]any{"server": map[string]any{"baseUrl": srv.URL}}},
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())

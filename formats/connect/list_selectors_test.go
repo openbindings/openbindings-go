@@ -7,7 +7,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestInspectSource_BasicRefs(t *testing.T) {
+func TestInspectSource_BasicSelectors(t *testing.T) {
 	protoContent := `
 syntax = "proto3";
 package testpkg;
@@ -30,14 +30,14 @@ service TestService {
 	}
 
 	if len(result.Targets) != 2 {
-		t.Fatalf("expected 2 refs, got %d", len(result.Targets))
+		t.Fatalf("expected 2 selectors, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")
 	}
 }
 
-func TestInspectSource_RefFormat(t *testing.T) {
+func TestInspectSource_SelectorFormat(t *testing.T) {
 	protoContent := `
 syntax = "proto3";
 package testpkg;
@@ -59,23 +59,23 @@ service TestService {
 		t.Fatal(err)
 	}
 
-	wantRefs := map[string]bool{
+	wantSelectors := map[string]bool{
 		"testpkg.TestService/GetItem":   false,
 		"testpkg.TestService/ListItems": false,
 	}
-	for _, ref := range result.Targets {
-		if _, ok := wantRefs[ref.Ref]; ok {
-			wantRefs[ref.Ref] = true
+	for _, selector := range result.Targets {
+		if _, ok := wantSelectors[selector.Selector]; ok {
+			wantSelectors[selector.Selector] = true
 		}
 	}
-	for ref, found := range wantRefs {
+	for selector, found := range wantSelectors {
 		if !found {
-			t.Errorf("expected ref %q not found", ref)
+			t.Errorf("expected selector %q not found", selector)
 		}
 	}
 }
 
-func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
+func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
 	protoContent := `
 syntax = "proto3";
 package testpkg;
@@ -106,18 +106,18 @@ service TestService {
 		t.Fatal(err)
 	}
 
-	createRefs := map[string]bool{}
+	createSelectors := map[string]bool{}
 	for _, b := range iface.Bindings {
-		createRefs[b.Ref] = true
+		createSelectors[b.Selector] = true
 	}
 
-	for _, ref := range result.Targets {
-		if !createRefs[ref.Ref] {
-			t.Errorf("InspectSource ref %q not in SynthesizeInterface bindings", ref.Ref)
+	for _, selector := range result.Targets {
+		if !createSelectors[selector.Selector] {
+			t.Errorf("InspectSource selector %q not in SynthesizeInterface bindings", selector.Selector)
 		}
 	}
-	if len(result.Targets) != len(createRefs) {
-		t.Errorf("ref count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createRefs))
+	if len(result.Targets) != len(createSelectors) {
+		t.Errorf("selector count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createSelectors))
 	}
 }
 
@@ -144,13 +144,13 @@ service TestService {
 	}
 
 	if len(result.Targets) != 2 {
-		t.Fatalf("expected both binding-spec-supported refs, got %d", len(result.Targets))
+		t.Fatalf("expected both binding-spec-supported selectors, got %d", len(result.Targets))
 	}
-	if result.Targets[0].Ref != "testpkg.TestService/GetItem" {
-		t.Errorf("ref = %q, want testpkg.TestService/GetItem", result.Targets[0].Ref)
+	if result.Targets[0].Selector != "testpkg.TestService/GetItem" {
+		t.Errorf("selector = %q, want testpkg.TestService/GetItem", result.Targets[0].Selector)
 	}
-	if result.Targets[1].Ref != "testpkg.TestService/StreamUpload" {
-		t.Errorf("ref = %q, want testpkg.TestService/StreamUpload", result.Targets[1].Ref)
+	if result.Targets[1].Selector != "testpkg.TestService/StreamUpload" {
+		t.Errorf("selector = %q, want testpkg.TestService/StreamUpload", result.Targets[1].Selector)
 	}
 }
 
@@ -186,15 +186,15 @@ service TestService {
 	}
 
 	if len(result.Targets) != 3 {
-		t.Fatalf("expected 3 refs, got %d", len(result.Targets))
+		t.Fatalf("expected 3 selectors, got %d", len(result.Targets))
 	}
-	if result.Targets[0].Ref != "testpkg.TestService/Alpha" {
-		t.Errorf("first ref = %q, want testpkg.TestService/Alpha", result.Targets[0].Ref)
+	if result.Targets[0].Selector != "testpkg.TestService/Alpha" {
+		t.Errorf("first selector = %q, want testpkg.TestService/Alpha", result.Targets[0].Selector)
 	}
-	if result.Targets[1].Ref != "testpkg.TestService/Mike" {
-		t.Errorf("second ref = %q, want testpkg.TestService/Mike", result.Targets[1].Ref)
+	if result.Targets[1].Selector != "testpkg.TestService/Mike" {
+		t.Errorf("second selector = %q, want testpkg.TestService/Mike", result.Targets[1].Selector)
 	}
-	if result.Targets[2].Ref != "testpkg.TestService/Zulu" {
-		t.Errorf("third ref = %q, want testpkg.TestService/Zulu", result.Targets[2].Ref)
+	if result.Targets[2].Selector != "testpkg.TestService/Zulu" {
+		t.Errorf("third selector = %q, want testpkg.TestService/Zulu", result.Targets[2].Selector)
 	}
 }

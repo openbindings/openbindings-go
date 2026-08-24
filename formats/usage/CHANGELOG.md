@@ -80,6 +80,16 @@ This release tracks the spec 0.2.0 alignment of `openbindings-go`. The public AP
   silently running the bare command (a typed-nil map slipped past the object
   guard); the routing/HookTable subsystem gained direct tests.
 
+### Changed
+
+- **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
+  `bindings[*].selector`): bindings ride
+  `invoke.BindingInvocationArgs.Selector`, refusals use
+  `ERR_SELECTOR_NOT_FOUND`, and two wire-visible coverage identifiers follow
+  the concept: the reason code `usage.no_unique_command_selector` (was
+  `usage.no_unique_command_ref`) and the ambiguous-alternative `sourceRef`
+  sentinel prefix `ambiguous-selector:` (was `ambiguous-ref:`).
+
 ## 0.1.0 — 2026-03-31
 
 Initial public release.

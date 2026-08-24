@@ -2,7 +2,7 @@ package openapi
 
 // Binding-specification conformance corpus adapter: runs the spec
 // repository's binding-specs/openapi fixtures (OAPI-D-01..03) through this
-// module's own offline lanes — content load, location grammar, and ref
+// module's own offline lanes — content load, location grammar, and selector
 // grammar/resolution — under the subcorpus README's verdict semantics:
 // valid:false means a conformant latest-revision OpenAPI processor refuses
 // the document's family-scoped material at or before bind time, decidable
@@ -60,7 +60,7 @@ type corpusTest struct {
 // corpusDocument is the raw view of a fixture's embedded OBI document,
 // preserving member PRESENCE where a typed view cannot: `content: null` is
 // a present member (the core §7 presence rule; json.RawMessage keeps it),
-// and an omitted binding ref is distinct from a present empty string.
+// and an omitted binding selector is distinct from a present empty string.
 type corpusDocument struct {
 	Sources  map[string]corpusSource  `json:"sources"`
 	Bindings map[string]corpusBinding `json:"bindings"`
@@ -73,8 +73,8 @@ type corpusSource struct {
 }
 
 type corpusBinding struct {
-	Source string  `json:"source"`
-	Ref    *string `json:"ref"`
+	Source   string  `json:"source"`
+	Selector *string `json:"selector"`
 }
 
 func TestBindingSpecCorpus(t *testing.T) {
@@ -151,7 +151,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 			}
 		}
 
-		// Ref lane (OAPI-D-03): ref is REQUIRED (an omitted ref reaches the
+		// Selector lane (OAPI-D-03): selector is REQUIRED (an omitted selector reaches the
 		// invoker as the empty string and is refused by the same grammar);
 		// pointer evaluation follows OAS reference resolution — the loader
 		// resolves path-item $refs (3.1 components.pathItems included)
@@ -160,11 +160,11 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 			if b.Source != name {
 				continue
 			}
-			ref := ""
-			if b.Ref != nil {
-				ref = *b.Ref
+			selector := ""
+			if b.Selector != nil {
+				selector = *b.Selector
 			}
-			pathTemplate, method, err := parseRef(ref)
+			pathTemplate, method, err := parseSelector(selector)
 			if err != nil {
 				return err
 			}

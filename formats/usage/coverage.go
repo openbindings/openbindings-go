@@ -17,20 +17,20 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []synthesize.S
 	}
 	type identity struct {
 		operation string
-		ref       string
+		selector  string
 	}
 	represented := make(map[string]identity, len(iface.Bindings))
 	for _, binding := range iface.Bindings {
-		represented[binding.Ref] = identity{operation: binding.Operation, ref: binding.Ref}
+		represented[binding.Selector] = identity{operation: binding.Operation, selector: binding.Selector}
 	}
 	var entries []synthesize.SynthesisCoverageEntry
-	add := func(sourceRef, bindingRef string, scope synthesize.SynthesisCoverageScope, exclusion *synthesize.SynthesisCoverageEntry) {
+	add := func(sourceRef, bindingSelector string, scope synthesize.SynthesisCoverageScope, exclusion *synthesize.SynthesisCoverageEntry) {
 		if exclusion != nil {
 			exclusion.Scope = scope
 			entries = append(entries, *exclusion)
 			return
 		}
-		id, ok := represented[bindingRef]
+		id, ok := represented[bindingSelector]
 		if !ok {
 			entries = append(entries, synthesize.SynthesisCoverageEntry{
 				SourceIndex: 0, SourceRef: sourceRef, Scope: scope,
@@ -41,7 +41,7 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []synthesize.S
 		}
 		entries = append(entries, synthesize.SynthesisCoverageEntry{
 			SourceIndex: 0, SourceRef: sourceRef, Scope: scope,
-			Status: synthesize.SynthesisRepresented, OperationKey: id.operation, BindingRef: id.ref,
+			Status: synthesize.SynthesisRepresented, OperationKey: id.operation, BindingSelector: id.selector,
 		})
 	}
 	excluded := func(sourceRef, reasonCode, rule, message string) *synthesize.SynthesisCoverageEntry {
@@ -77,13 +77,13 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []synthesize.S
 		if cmd.SubcommandRequired {
 			return
 		}
-		var refs []string
-		for _, ref := range commandRefAlternatives(spec, path) {
-			resolved, err := findCommand(spec, ref)
+		var selectors []string
+		for _, selector := range commandSelectorAlternatives(spec, path) {
+			resolved, err := findCommand(spec, selector)
 			if errors.Is(err, errAmbiguousCommandSpelling) {
-				if !ambiguousReported[ref] {
-					ambiguousReported[ref] = true
-					sourceRef := "ambiguous-ref:" + ref
+				if !ambiguousReported[selector] {
+					ambiguousReported[selector] = true
+					sourceRef := "ambiguous-selector:" + selector
 					add(sourceRef, "", synthesize.SynthesisCoverageAlternative, excluded(
 						sourceRef,
 						"usage.ambiguous_command_spelling",
@@ -94,33 +94,33 @@ func synthesisCoverage(spec *Spec, iface *openbindings.Interface) []synthesize.S
 				continue
 			}
 			if err == nil && strings.Join(resolved.canonicalPath, "\x00") == strings.Join(path, "\x00") {
-				refs = append(refs, ref)
+				selectors = append(selectors, selector)
 			}
 		}
-		if len(refs) == 0 {
-			sourceRef := "command:" + commandRef(path)
+		if len(selectors) == 0 {
+			sourceRef := "command:" + commandSelector(path)
 			add(sourceRef, "", synthesize.SynthesisCoverageTarget, excluded(
 				sourceRef,
-				"usage.no_unique_command_ref",
+				"usage.no_unique_command_selector",
 				"USAGE-D-03",
 				"the command has no spelling path that resolves uniquely through the descriptor",
 			))
 			return
 		}
 		if missingBin {
-			for _, ref := range refs {
-				add(ref, ref, synthesize.SynthesisCoverageTarget, excluded(ref, "usage.missing_target_identity", "USAGE-P-03", "the descriptor has no non-empty bin target identity"))
+			for _, selector := range selectors {
+				add(selector, selector, synthesize.SynthesisCoverageTarget, excluded(selector, "usage.missing_target_identity", "USAGE-P-03", "the descriptor has no non-empty bin target identity"))
 			}
 			return
 		}
 		if _, err := generateInputSchema(cmd, inherited); err != nil {
-			for _, ref := range refs {
-				add(ref, ref, synthesize.SynthesisCoverageTarget, excluded(ref, "usage.unresolvable_surface", "USAGE-P-04", err.Error()))
+			for _, selector := range selectors {
+				add(selector, selector, synthesize.SynthesisCoverageTarget, excluded(selector, "usage.unresolvable_surface", "USAGE-P-04", err.Error()))
 			}
 			return
 		}
-		for _, ref := range refs {
-			add(ref, ref, synthesize.SynthesisCoverageTarget, nil)
+		for _, selector := range selectors {
+			add(selector, selector, synthesize.SynthesisCoverageTarget, nil)
 		}
 	})
 	return entries

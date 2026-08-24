@@ -23,7 +23,7 @@ import (
 // caller writes (or runs the bare command for no-input operations), resolves
 // the binary and argv, executes the CLI, and emits the parsed output.
 //
-// Pre-dispatch failures (unloadable spec, unknown ref, malformed input)
+// Pre-dispatch failures (unloadable spec, unknown selector, malformed input)
 // terminate the handle before the process is spawned. A non-zero exit is a
 // terminal ERR_EXECUTION_FAILED carrying the exit code and captured output in
 // Details; a missing binary is ERR_SOURCE_CONFIG_ERROR.
@@ -68,7 +68,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	}
 
 	// Direct-binary dispatch (context-metadata hint): SDK-only feature, no
-	// spec loaded, ref is a command string. Hooks are NOT consulted on
+	// spec loaded, selector is a command string. Hooks are NOT consulted on
 	// this lane in v1 (stated, not implied).
 	if binary := metadataBinary(args.Context); binary != "" {
 		e.runDirect(bctx, args, inv, binary, input)
@@ -84,23 +84,23 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		return
 	}
 
-	// The ref is the format's own grammar: a space-separated command path
+	// The selector is the format's own grammar: a space-separated command path
 	// into the artifact ("context set"; absent = the root command). A
-	// whitespace-bearing ref is NOT the root spelling: it flows into
+	// whitespace-bearing selector is NOT the root spelling: it flows into
 	// findCommand, whose USAGE-D-03 grammar refuses empty segments.
 	var cmd *Command
 	var inherited []Flag
 	var cmdPath []string
-	if args.Ref == "" {
+	if args.Selector == "" {
 		rc := rootCommand(spec)
 		if rc == nil {
 			rc = &Command{Flags: spec.Flags(), Args: spec.Args()}
 		}
 		cmd = rc
 	} else {
-		found, ferr := findCommand(spec, args.Ref)
+		found, ferr := findCommand(spec, args.Selector)
 		if ferr != nil {
-			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeRefNotFound})
+			inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound})
 			return
 		}
 		cmd = found.cmd
@@ -229,7 +229,7 @@ func siteFor(args *invoke.BindingInvocationArgs, binName string) invoke.InvokeSi
 		site = *args.Site
 	} else {
 		site.BindingSpec = args.Source.BindingSpec
-		site.Ref = args.Ref
+		site.Selector = args.Selector
 	}
 	if site.Target == "" {
 		site.Target = binName
@@ -289,10 +289,10 @@ func emitOutput(inv *invoke.InvocationImpl[any, any], output any) {
 }
 
 // runDirect is the direct-binary dispatch path (SDK-only feature, outside
-// the format conventions): the ref is split as a command path (USAGE-D-03), every input
+// the format conventions): the selector is split as a command path (USAGE-D-03), every input
 // field rides argv as a flag, output decodes under the default text mode.
 func (e *Invoker) runDirect(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any], binary string, input any) {
-	cmdArgs, err := buildDirectArgsFromRef(args.Ref, input)
+	cmdArgs, err := buildDirectArgsFromSelector(args.Selector, input)
 	if err != nil {
 		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeValidationFailed})
 		return
@@ -776,13 +776,13 @@ func (e *Invoker) executeProcess(ctx context.Context, binary string, args []stri
 	}, nil
 }
 
-func buildDirectArgsFromRef(ref string, input any) ([]string, error) {
-	// USAGE-D-03: a ref is a space-separated command path — single spaces,
+func buildDirectArgsFromSelector(selector string, input any) ([]string, error) {
+	// USAGE-D-03: a selector is a space-separated command path — single spaces,
 	// no quoting mechanism.
-	args := strings.Split(ref, " ")
+	args := strings.Split(selector, " ")
 	for _, tok := range args {
 		if tok == "" {
-			return nil, fmt.Errorf("ref %q is malformed (USAGE-D-03): command-path segments are separated by single spaces", ref)
+			return nil, fmt.Errorf("selector %q is malformed (USAGE-D-03): command-path segments are separated by single spaces", selector)
 		}
 	}
 
@@ -823,18 +823,18 @@ type findCommandResult struct {
 
 var errAmbiguousCommandSpelling = errors.New("ambiguous usage command spelling")
 
-func findCommand(spec *Spec, ref string) (*findCommandResult, error) {
-	if ref == "" {
-		return nil, fmt.Errorf("empty-string ref is not conformant (USAGE-D-03): the root command is addressed by omitting ref")
+func findCommand(spec *Spec, selector string) (*findCommandResult, error) {
+	if selector == "" {
+		return nil, fmt.Errorf("empty-string selector is not conformant (USAGE-D-03): the root command is addressed by omitting selector")
 	}
 
-	// USAGE-D-03: a ref is a space-separated command path — segments
+	// USAGE-D-03: a selector is a space-separated command path — segments
 	// separated by SINGLE spaces, no quoting mechanism, whitespace never
 	// collapsed (parity with the direct-binary lane's grammar).
-	targetPath := strings.Split(ref, " ")
+	targetPath := strings.Split(selector, " ")
 	for _, seg := range targetPath {
 		if seg == "" {
-			return nil, fmt.Errorf("ref %q is malformed (USAGE-D-03): command-path segments are separated by single spaces", ref)
+			return nil, fmt.Errorf("selector %q is malformed (USAGE-D-03): command-path segments are separated by single spaces", selector)
 		}
 	}
 	commands := spec.Commands()
@@ -857,15 +857,15 @@ func findCommand(spec *Spec, ref string) (*findCommandResult, error) {
 			}
 		}
 		if len(matches) == 0 {
-			return nil, fmt.Errorf("command %q not found in usage spec", ref)
+			return nil, fmt.Errorf("command %q not found in usage spec", selector)
 		}
 		if len(matches) > 1 {
-			return nil, fmt.Errorf("%w: segment %q in ref %q matches %d sibling commands (USAGE-D-03)",
-				errAmbiguousCommandSpelling, target, ref, len(matches))
+			return nil, fmt.Errorf("%w: segment %q in selector %q matches %d sibling commands (USAGE-D-03)",
+				errAmbiguousCommandSpelling, target, selector, len(matches))
 		}
 		cmd := matches[0]
 		// A command alias is equal in standing to its canonical spelling at
-		// the process boundary: emit exactly the ref segment the caller
+		// the process boundary: emit exactly the selector segment the caller
 		// selected, rather than rewriting it to the canonical name.
 		path = append(path, target)
 		canonicalPath = append(canonicalPath, cmd.Name)
@@ -886,7 +886,7 @@ func findCommand(spec *Spec, ref string) (*findCommandResult, error) {
 		commands = cmd.Commands
 	}
 
-	return nil, fmt.Errorf("command %q not found in usage spec", ref)
+	return nil, fmt.Errorf("command %q not found in usage spec", selector)
 }
 
 // commandMatchesName checks if a command matches a name by its canonical name or any alias.

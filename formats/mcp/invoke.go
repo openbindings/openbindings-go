@@ -35,13 +35,13 @@ const (
 var nextProgressToken atomic.Int64
 
 // run drives one MCP binding invocation against the handle. Pre-dispatch
-// failures (bad ref, missing or non-HTTP endpoint, invalid pin, non-object
-// input, unresolvable ref) fire BEFORE the entity request is dispatched
-// (openbindings.mcp@1 §7, §9.1); ref/location/pin/input-shape failures fire
+// failures (bad selector, missing or non-HTTP endpoint, invalid pin, non-object
+// input, unresolvable selector) fire BEFORE the entity request is dispatched
+// (openbindings.mcp@1 §7, §9.1); selector/location/pin/input-shape failures fire
 // before any network I/O at all. Tools and prompts read the operation's
 // single arguments object from the handle's input channel; static resource
 // reads take no input, and resource templates read their variables object
-// once resolution has decided the ref names a template.
+// once resolution has decided the selector names a template.
 func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	// --- Pre-dispatch validation: no network I/O has happened yet. ---
 	if args.Source.BindingSpec != BindingSpec {
@@ -50,10 +50,10 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		})
 		return
 	}
-	entityType, name, err := parseRef(args.Ref)
+	entityType, name, err := parseSelector(args.Selector)
 	if err != nil {
 		inv.FireError(&invoke.InvocationError{
-			Code: invoke.ErrCodeInvalidRef,
+			Code: invoke.ErrCodeInvalidSelector,
 		})
 		return
 	}
@@ -118,7 +118,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	resolved := false
 	var applicationOutputSchema any
 	if pin != nil {
-		k, rerr := resolveRef(pin, entityType, name, args.Source.BindingSpec)
+		k, rerr := resolveSelector(pin, entityType, name, args.Source.BindingSpec)
 		if rerr != nil {
 			inv.FireError(rerr)
 			return
@@ -133,7 +133,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	// Tools and prompts take one named-arguments object. Resource input
 	// handling waits for resolution below: a template takes one input (its
 	// variables), a static resource none, and only the listing can say which
-	// the ref names.
+	// the selector names.
 	//
 	// No-input convention: when the operation layer drives an operation that
 	// declares no input (Binding set, InputSchema nil — e.g. a zero-argument
@@ -209,9 +209,9 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	}
 
 	// --- Live resolution (no pin): the capability-gated, pagination-
-	// exhausted listing for the ref's entity family, then the same byte-exact
+	// exhausted listing for the selector's entity family, then the same byte-exact
 	// match the pin path ran above (MCP-P-02). The entity request is never
-	// dispatched blind on the ref name.
+	// dispatched blind on the selector name.
 	if !resolved {
 		l, lerr := liveListing(callCtx, session, entityType)
 		if lerr != nil {
@@ -221,7 +221,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 			inv.FireError(mapMCPError(lerr, hc, invoke.ErrCodeSourceLoadFailed))
 			return
 		}
-		k, rerr := resolveRef(l, entityType, name, args.Source.BindingSpec)
+		k, rerr := resolveSelector(l, entityType, name, args.Source.BindingSpec)
 		if rerr != nil {
 			inv.FireError(rerr)
 			return
@@ -706,10 +706,10 @@ func promptArguments(v any) (map[string]string, *invoke.InvocationError) {
 }
 
 // ---------------------------------------------------------------------------
-// Ref parsing
+// Selector parsing
 // ---------------------------------------------------------------------------
 
-// parseRef extracts the entity type and name from an MCP ref.
+// parseSelector extracts the entity type and name from an MCP selector.
 // Returns (entityType, name, error).
 // Examples:
 //
@@ -723,25 +723,25 @@ func promptArguments(v any) (map[string]string, *invoke.InvocationError) {
 // byte-identical template string never collide. (resourceTemplates/ is checked
 // before resources/ though the two cannot prefix-collide, "resources/" not
 // being a prefix of "resourceTemplates/".)
-func parseRef(ref string) (entityType string, name string, err error) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return "", "", fmt.Errorf("empty MCP ref")
+func parseSelector(selector string) (entityType string, name string, err error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return "", "", fmt.Errorf("empty MCP selector")
 	}
 
 	for _, prefix := range []string{refPrefixTools, refPrefixResourceTemplates, refPrefixResources, refPrefixPrompts} {
-		if strings.HasPrefix(ref, prefix) {
-			name := strings.TrimPrefix(ref, prefix)
+		if strings.HasPrefix(selector, prefix) {
+			name := strings.TrimPrefix(selector, prefix)
 			if name == "" {
-				return "", "", fmt.Errorf("empty name in MCP ref %q", ref)
+				return "", "", fmt.Errorf("empty name in MCP selector %q", selector)
 			}
 			entityType := strings.TrimSuffix(prefix, "/")
 			return entityType, name, nil
 		}
 	}
 
-	return "", "", fmt.Errorf("MCP ref %q must start with %q, %q, %q, or %q",
-		ref, refPrefixTools, refPrefixResources, refPrefixResourceTemplates, refPrefixPrompts)
+	return "", "", fmt.Errorf("MCP selector %q must start with %q, %q, %q, or %q",
+		selector, refPrefixTools, refPrefixResources, refPrefixResourceTemplates, refPrefixPrompts)
 }
 
 // validateEndpoint checks MCP-D-02's location requirement offline, without
@@ -925,7 +925,7 @@ func siteFor(args *invoke.BindingInvocationArgs, target string) invoke.InvokeSit
 		site = *args.Site
 	} else {
 		site.BindingSpec = args.Source.BindingSpec
-		site.Ref = args.Ref
+		site.Selector = args.Selector
 	}
 	if site.Target == "" {
 		site.Target = target

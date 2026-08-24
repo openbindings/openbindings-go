@@ -159,8 +159,8 @@ func TestSynthesizeInterface_CreatesBindingsWithRefs(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected binding %q", key)
 	}
-	if binding.Ref != "#/operations/sendMsg" {
-		t.Errorf("ref = %q, want %q", binding.Ref, "#/operations/sendMsg")
+	if binding.Selector != "#/operations/sendMsg" {
+		t.Errorf("selector = %q, want %q", binding.Selector, "#/operations/sendMsg")
 	}
 	if binding.Operation != "sendMsg" {
 		t.Errorf("operation = %q, want %q", binding.Operation, "sendMsg")
@@ -401,8 +401,8 @@ func TestSynthesizeInterface_PreservesAsyncAPIV2NativeRefAndPerspective(t *testi
 		t.Fatalf("bindings = %#v", result.Interface.Bindings)
 	}
 	for _, binding := range result.Interface.Bindings {
-		if binding.Ref != "#/channels/events~1{tenant}/publish" {
-			t.Fatalf("binding ref = %q", binding.Ref)
+		if binding.Selector != "#/channels/events~1{tenant}/publish" {
+			t.Fatalf("binding selector = %q", binding.Selector)
 		}
 	}
 	for _, op := range result.Interface.Operations {

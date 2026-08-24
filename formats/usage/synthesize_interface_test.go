@@ -68,7 +68,7 @@ cmd "farewell" help="Say goodbye"
 	}
 }
 
-func TestConvertToInterface_BindingRefs(t *testing.T) {
+func TestConvertToInterface_BindingSelectors(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 bin "mycli"
@@ -82,15 +82,15 @@ cmd "greet" help="Say hello"
 	if !ok {
 		t.Fatalf("expected binding %q", key)
 	}
-	if binding.Ref != "greet" {
-		t.Errorf("ref = %q, want greet", binding.Ref)
+	if binding.Selector != "greet" {
+		t.Errorf("selector = %q, want greet", binding.Selector)
 	}
 	if binding.Operation != "greet" {
 		t.Errorf("operation = %q, want greet", binding.Operation)
 	}
 }
 
-func TestConvertToInterface_SubcommandRefs(t *testing.T) {
+func TestConvertToInterface_SubcommandSelectors(t *testing.T) {
 	iface, err := synthesizeFromArtifactText(`
 name "mycli"
 bin "mycli"
@@ -107,8 +107,8 @@ cmd "config" {
 		t.Error("expected operation 'config.set'")
 	}
 	binding := iface.Bindings["config.set."+DefaultSourceName]
-	if binding.Ref != "config set" {
-		t.Errorf("ref = %q, want 'config set'", binding.Ref)
+	if binding.Selector != "config set" {
+		t.Errorf("selector = %q, want 'config set'", binding.Selector)
 	}
 }
 
@@ -341,8 +341,8 @@ arg "[file]..." help="Files to search"
 
 	// The root operation binds via its unit; the unit's command is empty.
 	binding := iface.Bindings["grep."+DefaultSourceName]
-	if binding.Ref != "" {
-		t.Errorf("root binding ref = %q, want \"\" (the root command)", binding.Ref)
+	if binding.Selector != "" {
+		t.Errorf("root binding selector = %q, want \"\" (the root command)", binding.Selector)
 	}
 }
 
@@ -680,13 +680,13 @@ cmd "database" {
 		"db run": true, "db r": true,
 	}
 	for _, binding := range result.Interface.Bindings {
-		if !want[binding.Ref] {
-			t.Errorf("unexpected binding ref %q", binding.Ref)
+		if !want[binding.Selector] {
+			t.Errorf("unexpected binding selector %q", binding.Selector)
 		}
-		delete(want, binding.Ref)
+		delete(want, binding.Selector)
 	}
 	if len(want) != 0 {
-		t.Errorf("missing binding refs: %v", want)
+		t.Errorf("missing binding selectors: %v", want)
 	}
 	if !result.Coverage.Exhaustive || !result.Coverage.FullyRepresented {
 		t.Errorf("coverage = %#v, want exhaustive and fully represented", result.Coverage)
@@ -713,13 +713,13 @@ cmd "beta" {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var refs []string
+	var selectors []string
 	for _, binding := range result.Interface.Bindings {
-		refs = append(refs, binding.Ref)
+		selectors = append(selectors, binding.Selector)
 	}
-	sort.Strings(refs)
-	if want := []string{"", "beta"}; !reflect.DeepEqual(refs, want) {
-		t.Fatalf("emitted refs = %v, want %v", refs, want)
+	sort.Strings(selectors)
+	if want := []string{"", "beta"}; !reflect.DeepEqual(selectors, want) {
+		t.Fatalf("emitted selectors = %v, want %v", selectors, want)
 	}
 	if result.Coverage.FullyRepresented {
 		t.Fatal("ambiguous source spelling must make coverage not fully represented")
@@ -729,8 +729,8 @@ cmd "beta" {
 		status synthesize.SynthesisCoverageStatus
 		reason string
 	}{
-		"ambiguous-ref:x": {synthesize.SynthesisCoverageAlternative, synthesize.SynthesisExcluded, "usage.ambiguous_command_spelling"},
-		"command:x":       {synthesize.SynthesisCoverageTarget, synthesize.SynthesisExcluded, "usage.no_unique_command_ref"},
+		"ambiguous-selector:x": {synthesize.SynthesisCoverageAlternative, synthesize.SynthesisExcluded, "usage.ambiguous_command_spelling"},
+		"command:x":            {synthesize.SynthesisCoverageTarget, synthesize.SynthesisExcluded, "usage.no_unique_command_selector"},
 	}
 	for _, entry := range result.Coverage.Entries {
 		want, ok := wantEntries[entry.SourceRef]

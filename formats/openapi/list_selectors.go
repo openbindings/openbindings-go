@@ -11,7 +11,7 @@ import (
 )
 
 // InspectSource returns all bindable targets (path+method combinations) from
-// an OpenAPI document. Each ref is a JSON Pointer into the paths object.
+// an OpenAPI document. Each selector is a JSON Pointer into the paths object.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	// Authoring convenience: a bare filesystem path loads as its file://
 	// spelling (the strict loader refuses bare paths, OAPI-D-02).
@@ -49,15 +49,15 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	var targets []synthesize.BindableTarget
 	for _, binding := range iface.Bindings {
 		op := iface.Operations[binding.Operation]
-		targets = append(targets, synthesize.BindableTarget{Ref: binding.Ref, OperationKey: binding.Operation, Operation: &op})
+		targets = append(targets, synthesize.BindableTarget{Selector: binding.Selector, OperationKey: binding.Operation, Operation: &op})
 	}
-	sort.Slice(targets, func(i, j int) bool { return targets[i].Ref < targets[j].Ref })
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Selector < targets[j].Selector })
 
 	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, operationKey, description string) synthesize.BindableTarget {
-	target := synthesize.BindableTarget{Ref: ref, OperationKey: operationKey}
+func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
+	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

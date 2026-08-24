@@ -80,7 +80,7 @@ func configOrSourceError(err error, serverURL, sourceLocation string) *invoke.In
 //	send + ws/wss         server-streaming subscription: socket frames ->
 //	                      outputs, no caller input values
 //
-// All pre-dispatch failures (bad ref, no resolvable server, missing
+// All pre-dispatch failures (bad selector, no resolvable server, missing
 // context, an unresolved address or server variable, an unsatisfied
 // ws-binding declaration, an excluded input content family, missing publish
 // input) are raised via FireError BEFORE any network I/O, per the
@@ -111,16 +111,16 @@ type handle = invoke.BindingHandle[any, any]
 // Invoker never calls it: every production invocation is delegated to the
 // standalone asyncapi-client engine in invoker.go.
 func legacyRunBinding(ctx context.Context, client *http.Client, pool *wsPool, args *invoke.BindingInvocationArgs, h handle, doc *document) {
-	opID, err := parseRef(args.Ref)
+	opID, err := parseSelector(args.Selector)
 	if err != nil {
-		h.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidRef})
+		h.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector})
 		return
 	}
 
 	asyncOp, ok := doc.Operations[opID]
 	if !ok {
 		h.FireError(&invoke.InvocationError{
-			Code: invoke.ErrCodeRefNotFound,
+			Code: invoke.ErrCodeSelectorNotFound,
 		})
 		return
 	}
@@ -129,7 +129,7 @@ func legacyRunBinding(ctx context.Context, client *http.Client, pool *wsPool, ar
 		// through it before the operation-object test (ASYNC-D-03);
 		// resolveRefs leaves Ref set only when the reference dangles.
 		h.FireError(&invoke.InvocationError{
-			Code: invoke.ErrCodeRefNotFound,
+			Code: invoke.ErrCodeSelectorNotFound,
 		})
 		return
 	}
@@ -421,62 +421,62 @@ func validateCredentialDestinations(doc *document, op *asyncOperation, server *s
 }
 
 // ---------------------------------------------------------------------------
-// Ref parsing & server resolution
+// Selector parsing & server resolution
 // ---------------------------------------------------------------------------
 
-// parseRef parses a binding ref per ASYNC-D-03: a JSON Pointer
+// parseSelector parses a binding selector per ASYNC-D-03: a JSON Pointer
 // `#/operations/<operation-key>` addressing an operations-map entry is the
 // ONLY conformant spelling. A bare operation key without the pointer prefix
 // is refused (the former lenience is gone), and an unescaped `/` after the
 // prefix addresses a deeper path — never an operations-map entry — so it is
 // refused too. Operation keys containing `/` or `~` carry RFC 6901 escaping
 // in the pointer: ~1 → /, ~0 → ~, decoded in that order.
-func parseRef(ref string) (string, error) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return "", fmt.Errorf("ref is required and must be a JSON Pointer #/operations/<operation-key> (ASYNC-D-03)")
+func parseSelector(selector string) (string, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return "", fmt.Errorf("selector is required and must be a JSON Pointer #/operations/<operation-key> (ASYNC-D-03)")
 	}
-	if operation, ok := parseV2OperationRef(ref); ok {
+	if operation, ok := parseV2OperationSelector(selector); ok {
 		return operation, nil
 	}
 
 	const prefix = "#/operations/"
-	if !strings.HasPrefix(ref, prefix) {
-		return "", fmt.Errorf("ref %q is not a JSON Pointer #/operations/<operation-key>: the pointer is the only conformant spelling — a bare operation key is not accepted (ASYNC-D-03)", ref)
+	if !strings.HasPrefix(selector, prefix) {
+		return "", fmt.Errorf("selector %q is not a JSON Pointer #/operations/<operation-key>: the pointer is the only conformant spelling — a bare operation key is not accepted (ASYNC-D-03)", selector)
 	}
-	token := ref[len(prefix):]
+	token := selector[len(prefix):]
 	if token == "" {
-		return "", fmt.Errorf("empty operation key in ref %q (ASYNC-D-03)", ref)
+		return "", fmt.Errorf("empty operation key in selector %q (ASYNC-D-03)", selector)
 	}
 	if strings.Contains(token, "/") {
-		return "", fmt.Errorf("ref %q addresses a deeper path, not an operations-map entry: an operation key containing / carries RFC 6901 escaping (~1) (ASYNC-D-03)", ref)
+		return "", fmt.Errorf("selector %q addresses a deeper path, not an operations-map entry: an operation key containing / carries RFC 6901 escaping (~1) (ASYNC-D-03)", selector)
 	}
 	opID := strings.ReplaceAll(token, "~1", "/")
 	opID = strings.ReplaceAll(opID, "~0", "~")
 	return opID, nil
 }
 
-// operationRef builds the conformant ASYNC-D-03 spelling for an operation
+// operationSelector builds the conformant ASYNC-D-03 spelling for an operation
 // key: `#/operations/` + the RFC 6901-escaped key (~ → ~0 first, then
 // / → ~1 — escape order is the reverse of decode order).
-func operationRef(opID string) string {
-	if ref, ok := refForNormalizedOperationKey(opID); ok {
-		return ref
+func operationSelector(opID string) string {
+	if selector, ok := selectorForNormalizedOperationKey(opID); ok {
+		return selector
 	}
 	escaped := strings.ReplaceAll(opID, "~", "~0")
 	escaped = strings.ReplaceAll(escaped, "/", "~1")
 	return "#/operations/" + escaped
 }
 
-func parseV2OperationRef(ref string) (string, bool) {
-	parts := strings.Split(strings.TrimPrefix(ref, "#/"), "/")
+func parseV2OperationSelector(selector string) (string, bool) {
+	parts := strings.Split(strings.TrimPrefix(selector, "#/"), "/")
 	if len(parts) != 3 || parts[0] != "channels" || (parts[2] != "publish" && parts[2] != "subscribe") {
 		return "", false
 	}
 	return "v2:" + parts[2] + ":" + unescapeRefToken(parts[1]), true
 }
 
-func refForNormalizedOperationKey(key string) (string, bool) {
+func selectorForNormalizedOperationKey(key string) (string, bool) {
 	parts := strings.SplitN(key, ":", 3)
 	if len(parts) != 3 || parts[0] != "v2" || (parts[1] != "publish" && parts[1] != "subscribe") {
 		return "", false
@@ -1738,7 +1738,7 @@ func siteFor(args *invoke.BindingInvocationArgs, serverURL string) invoke.Invoke
 		site = *args.Site
 	} else {
 		site.BindingSpec = args.Source.BindingSpec
-		site.Ref = args.Ref
+		site.Selector = args.Selector
 	}
 	if site.Target == "" {
 		site.Target = serverURL

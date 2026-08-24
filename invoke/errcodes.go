@@ -102,12 +102,13 @@ const (
 	// SDK implementation codes (not a cross-binding taxonomy)
 	// -----------------------------------------------------------------------
 
-	// ErrCodeInvalidRef indicates the ref is malformed or can't be parsed.
-	ErrCodeInvalidRef = "ERR_INVALID_REF"
+	// ErrCodeInvalidSelector indicates the selector is malformed or can't
+	// be parsed.
+	ErrCodeInvalidSelector = "ERR_INVALID_SELECTOR"
 
-	// ErrCodeRefNotFound indicates the ref is syntactically valid but
-	// doesn't resolve to anything in the source.
-	ErrCodeRefNotFound = "ERR_REF_NOT_FOUND"
+	// ErrCodeSelectorNotFound indicates the selector is syntactically valid
+	// but doesn't resolve to anything in the source.
+	ErrCodeSelectorNotFound = "ERR_SELECTOR_NOT_FOUND"
 
 	// ErrCodeSourceLoadFailed indicates the binding source couldn't be loaded or parsed.
 	ErrCodeSourceLoadFailed = "ERR_SOURCE_LOAD_FAILED"

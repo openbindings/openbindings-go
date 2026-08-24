@@ -87,7 +87,7 @@ func runGRPCFidelityScenario(t *testing.T, scenario processorscenarios.Scenario)
 
 	content, _ := scenario.Given.Source["content"].(string)
 	location, _ := scenario.Given.Source["location"].(string)
-	ref, _ := scenario.Given.Binding["ref"].(string)
+	selector, _ := scenario.Given.Binding["selector"].(string)
 	sourceContent := json.RawMessage(strconvQuote(content))
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: location, Content: sourceContent}},
@@ -97,13 +97,13 @@ func runGRPCFidelityScenario(t *testing.T, scenario processorscenarios.Scenario)
 	}
 	operation := ""
 	for _, binding := range iface.Bindings {
-		if binding.Ref == ref {
+		if binding.Selector == selector {
 			operation = binding.Operation
 			break
 		}
 	}
 	if operation == "" {
-		t.Fatalf("synthesized gRPC interface has no binding for %q", ref)
+		t.Fatalf("synthesized gRPC interface has no binding for %q", selector)
 	}
 	op := invoke.NewOperationInvoker(invoker)
 	call := invoke.Invoke(
@@ -178,7 +178,7 @@ func newGRPCFidelityInvoker(t *testing.T, scenario processorscenarios.Scenario) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	serviceName, methodName, err := parseRef(scenario.Given.Binding["ref"].(string))
+	serviceName, methodName, err := parseSelector(scenario.Given.Binding["selector"].(string))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func runGRPCProcessorScenario(t *testing.T, scenario processorscenarios.Scenario
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, methodName, _ := parseRef(scenario.Given.Binding["ref"].(string))
+	service, methodName, _ := parseSelector(scenario.Given.Binding["selector"].(string))
 	method, invocationErr := resolveMethod(disc, service, methodName)
 	if invocationErr != nil {
 		t.Fatal(invocationErr)

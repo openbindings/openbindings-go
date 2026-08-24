@@ -173,17 +173,17 @@ func (coverageFetchSynthesizer) SynthesizeInterfaceWithCoverage(_ context.Contex
 			"source": {BindingSpec: "fake.coverage@1", Location: location},
 		},
 		Bindings: map[string]openbindings.BindingEntry{
-			"ping.source": {Operation: "ping", Source: "source", Ref: "ping"},
+			"ping.source": {Operation: "ping", Source: "source", Selector: "ping"},
 		},
 	}
 	return NewSynthesisResult(iface, []SynthesisCoverageEntry{{
-		SourceIndex:  0,
-		SourceKey:    "source",
-		SourceRef:    "ping",
-		Scope:        SynthesisCoverageTarget,
-		Status:       SynthesisRepresented,
-		OperationKey: "ping",
-		BindingKey:   "ping.source",
-		BindingRef:   "ping",
+		SourceIndex:     0,
+		SourceKey:       "source",
+		SourceRef:       "ping",
+		Scope:           SynthesisCoverageTarget,
+		Status:          SynthesisRepresented,
+		OperationKey:    "ping",
+		BindingKey:      "ping.source",
+		BindingSelector: "ping",
 	}}, true)
 }

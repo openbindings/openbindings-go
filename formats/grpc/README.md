@@ -44,7 +44,7 @@ inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
         BindingSpec: grpcbinding.BindingSpec, // "openbindings.grpc@1"
         Location:    "grpcs://api.example.com:443",
     },
-    Ref:     "mypackage.MyService/GetItem",
+    Selector: "mypackage.MyService/GetItem",
     Context: map[string]any{"headers": map[string]string{"authorization": "Bearer tok_123"}},
 })
 
@@ -66,7 +66,7 @@ For server-streaming methods, read the output stream to `io.EOF` instead:
 ```go
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{BindingSpec: grpcbinding.BindingSpec, Location: "grpcs://api.example.com:443"},
-    Ref:    "mypackage.MyService/WatchItems",
+    Selector: "mypackage.MyService/WatchItems",
 })
 _ = inv.Write(ctx, map[string]any{"topic": "orders"})
 
@@ -118,7 +118,7 @@ The conventions below are this package's own.
 `openbindings.grpc@1` (exact, opaque). Handles gRPC servers via embedded
 protobuf schemas or live reflection.
 
-### Ref format
+### Selector format
 
 `{package.Service}/{Method}` - the fully qualified service name followed by the method name:
 
@@ -185,7 +185,7 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
 
 - **Discovery**: services come from embedded protobuf content or gRPC reflection. Reflection machinery (`grpc.reflection.*`) is excluded; declared health services remain ordinary invocable operations. All four declared method kinds are synthesized.
 - **Determinism**: services iterate by fully-qualified name, methods by name; the same schema yields an identical OBI.
-- **Operation keys** are the method's unqualified name, sanitized to the OBI key grammar; a cross-service collision is disambiguated with the service's name. Binding refs are the full `package.Service/Method` form.
+- **Operation keys** are the method's unqualified name, sanitized to the OBI key grammar; a cross-service collision is disambiguated with the service's name. Binding selectors are the full `package.Service/Method` form.
 - **Schema translation** mirrors protobuf's canonical JSON mapping. Field names use their `json_name` (camelCase) spellings; enums emit `{"type": "string", "enum": [...declared value names]}`; maps emit `additionalProperties`; repeated fields emit arrays; recursive message cycles degrade to a bare `{"type": "object"}`.
 - **64-bit integers** (`int64`/`uint64`/`sint64`/`fixed64`/`sfixed64` and the 64-bit wrapper types) emit `{"type": "integer", "format": "int64"}`. Schemas describe semantic types, not wire carriage; downstream codegen reads `format: int64` to pick precision-preserving language types.
 - **Well-known types** emit their canonical JSON-mapping schemas instead of their internal fields (descending into `Timestamp`'s `seconds`/`nanos` would produce a contract the protojson layer cannot accept):
@@ -223,8 +223,8 @@ specifications with exposed wire choices (OpenAPI and AsyncAPI).
 
 `InvokeBinding` returns the `Invocation` handle synchronously; all work runs on the binding's goroutine:
 
-1. Parses the ref as `package.Service/Method` (bad ref → `ERR_INVALID_REF`, before any I/O)
-2. Resolves service and method descriptors via inline content or server reflection (load failure → `ERR_SOURCE_LOAD_FAILED`; unresolved symbol → `ERR_REF_NOT_FOUND`)
+1. Parses the selector as `package.Service/Method` (bad selector → `ERR_INVALID_SELECTOR`, before any I/O)
+2. Resolves service and method descriptors via inline content or server reflection (load failure → `ERR_SOURCE_LOAD_FAILED`; unresolved symbol → `ERR_SELECTOR_NOT_FOUND`)
 3. Resolves or reuses a cached gRPC client connection (transport per the §4 address form — `grpc://` means plaintext and `grpcs://` means TLS; a bare `host:port` requires an explicit transport election — unless the transport configuration point overrides it)
 4. Reads the single request message from the handle (`Write` one input; methods with empty request messages dispatch without one) and builds a dynamic protobuf request from it
 5. Applies explicitly named context `headers` as gRPC metadata; generic credentials without an artifact-declared carriage are challenged before dispatch
@@ -248,7 +248,7 @@ Converts a live gRPC server into an OBI by:
 - Filtering out reflection infrastructure (`grpc.reflection.*`) without discarding declared health operations
 - Including unary, server-streaming, client-streaming, and bidirectional RPCs exactly as declared
 - Converting protobuf message types to JSON Schema (input and output)
-- Generating `package.Service/Method` refs for each binding
+- Generating `package.Service/Method` selectors for each binding
 - Sorting services and methods alphabetically for deterministic output
 
 ## Resource bounds

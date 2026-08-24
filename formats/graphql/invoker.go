@@ -129,9 +129,9 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	bctx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 
-	rootType, fieldName, err := parseRef(args.Ref)
+	rootType, fieldName, err := parseSelector(args.Selector)
 	if err != nil {
-		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidRef})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector})
 		return
 	}
 	if args.Source.BindingSpec != BindingSpec {
@@ -139,7 +139,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		return
 	}
 	if args.Source.BindingSpec == BindingSpec && rootType == "subscription" {
-		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidRef})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector})
 		return
 	}
 
@@ -192,7 +192,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		return
 	}
 	if _, err := resolveField(schema, rootType, fieldName); err != nil {
-		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeRefNotFound})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound})
 		return
 	}
 
@@ -256,7 +256,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 // PrepareBinding reports required configuration without parsing a source,
 // reading caller input, introspecting, or dispatching.
 func (e *Invoker) PrepareBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	rootType, _, err := parseRef(args.Ref)
+	rootType, _, err := parseSelector(args.Selector)
 	if err != nil {
 		return nil, nil
 	}
@@ -407,23 +407,23 @@ func graphQLSynthesisCoverage(schema *introspectionSchema, iface *openbindings.I
 		items = append(items, item{key: key, binding: binding})
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].binding.Ref < items[j].binding.Ref
+		return items[i].binding.Selector < items[j].binding.Selector
 	})
 	entries := make([]synthesize.SynthesisCoverageEntry, 0, len(items))
 	for _, item := range items {
 		requirements := []string{"document"}
-		if strings.HasPrefix(item.binding.Ref, "subscription/") {
+		if strings.HasPrefix(item.binding.Selector, "subscription/") {
 			requirements = append(requirements, "subscriptionTarget")
 		}
 		entries = append(entries, synthesize.SynthesisCoverageEntry{
-			SourceIndex:  0,
-			SourceRef:    item.binding.Ref,
-			Scope:        synthesize.SynthesisCoverageTarget,
-			Status:       synthesize.SynthesisRepresented,
-			OperationKey: item.binding.Operation,
-			BindingKey:   item.key,
-			BindingRef:   item.binding.Ref,
-			Requirements: requirements,
+			SourceIndex:     0,
+			SourceRef:       item.binding.Selector,
+			Scope:           synthesize.SynthesisCoverageTarget,
+			Status:          synthesize.SynthesisRepresented,
+			OperationKey:    item.binding.Operation,
+			BindingKey:      item.key,
+			BindingSelector: item.binding.Selector,
+			Requirements:    requirements,
 		})
 	}
 	if bindingSpec == BindingSpec {

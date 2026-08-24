@@ -48,7 +48,7 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
-func unaryArgs(location string, content any, ref string) *invoke.BindingInvocationArgs {
+func unaryArgs(location string, content any, selector string) *invoke.BindingInvocationArgs {
 	// nil means ABSENT content (descriptorless mode), never a present null;
 	// a string is .proto source text (the family's string carriage).
 	var raw json.RawMessage
@@ -67,7 +67,7 @@ func unaryArgs(location string, content any, ref string) *invoke.BindingInvocati
 			Location:    location,
 			Content:     raw,
 		},
-		Ref: ref,
+		Selector: selector,
 	}
 }
 
@@ -286,14 +286,14 @@ func TestInvokeBinding_BearerTokenSent(t *testing.T) {
 	}
 }
 
-func TestInvokeBinding_InvalidRef(t *testing.T) {
+func TestInvokeBinding_InvalidSelector(t *testing.T) {
 	ctx := testContext(t)
 	srv := unreachableServer(t)
 
-	// No input is written: a malformed ref must terminate the invocation
+	// No input is written: a malformed selector must terminate the invocation
 	// before any input is consumed and before any network I/O.
-	inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, testProto, "not-a-valid-ref"))
-	mustTerminalError(t, ctx, inv, invoke.ErrCodeInvalidRef)
+	inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, testProto, "not-a-valid-selector"))
+	mustTerminalError(t, ctx, inv, invoke.ErrCodeInvalidSelector)
 }
 
 func TestInvokeBinding_MissingBaseURL(t *testing.T) {
@@ -320,8 +320,8 @@ message PingMsg { string msg = 1; }
 	// message must be the embedded-content-aware variant, distinct from the
 	// no-content-at-all message.
 	h := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
-		Ref:    "tiny.Tiny/Ping",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
+		Selector: "tiny.Tiny/Ping",
 	})
 	ierr := mustTerminalError(t, ctx, h, invoke.ErrCodeSourceConfigError)
 	if ierr.HasData() {
@@ -332,9 +332,9 @@ message PingMsg { string msg = 1; }
 	// past the config gate (failing later at the unreachable endpoint, not
 	// at configuration).
 	h2 := invokeWith(t, ctx, invoker, &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
-		Ref:     "tiny.Tiny/Ping",
-		Context: map[string]any{"configuration": map[string]any{"target": "http://127.0.0.1:1"}},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(proto)},
+		Selector: "tiny.Tiny/Ping",
+		Context:  map[string]any{"configuration": map[string]any{"target": "http://127.0.0.1:1"}},
 	}, map[string]any{"msg": "hi"})
 
 	_, ierr2 := collectOutputs(t, ctx, h2)
@@ -879,7 +879,7 @@ func TestInvokeBinding_NoInputConvention(t *testing.T) {
 	srv := fakeConnectServer(t, http.StatusOK, `{"id":"","name":"ok"}`)
 
 	args := unaryArgs(srv.URL, testProto, "testpkg.TestService/GetItem")
-	args.Binding = &openbindings.BindingEntry{Operation: "getItem", Source: "s", Ref: "testpkg.TestService/GetItem"}
+	args.Binding = &openbindings.BindingEntry{Operation: "getItem", Source: "s", Selector: "testpkg.TestService/GetItem"}
 	// InputSchema deliberately nil → no-input operation.
 
 	inv := NewInvoker().InvokeBinding(ctx, args)

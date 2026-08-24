@@ -125,7 +125,7 @@ func main() {
 
 	case "root":
 		// Root invocation mode: echo all remaining args.
-		// Used to test root command (empty ref) execution.
+		// Used to test root command (empty selector) execution.
 		fmt.Println(strings.Join(rest, " "))
 
 	default:

@@ -85,7 +85,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Ref:       refPrefixTools + tool.Name,
+			Selector:  refPrefixTools + tool.Name,
 		}
 	}
 
@@ -100,7 +100,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		}
 
 		// Static resources take no input value (openbindings.mcp@1 §8/§9.1):
-		// the URI is the binding's ref, not caller input, so the operation
+		// the URI is the binding's selector, not caller input, so the operation
 		// declares no input schema.
 		op := openbindings.Operation{
 			Description: desc,
@@ -113,7 +113,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Ref:       refPrefixResources + resource.URI,
+			Selector:  refPrefixResources + resource.URI,
 		}
 	}
 
@@ -141,7 +141,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Ref:       refPrefixResourceTemplates + tmpl.URITemplate,
+			Selector:  refPrefixResourceTemplates + tmpl.URITemplate,
 		}
 	}
 
@@ -170,7 +170,7 @@ func convertToInterface(disc *discovery, sourceLocation string, bindingSpecs ...
 		iface.Bindings[bindingKey] = openbindings.BindingEntry{
 			Operation: opKey,
 			Source:    DefaultSourceName,
-			Ref:       refPrefixPrompts + prompt.Name,
+			Selector:  refPrefixPrompts + prompt.Name,
 		}
 	}
 

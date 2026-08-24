@@ -22,7 +22,7 @@ import (
 // implements. A file naming any other revision is refused rather than run:
 // a runner that silently skips what it does not understand reports green
 // having verified none of it.
-const Format = "openbindings.binding-spec-synthesis-scenarios@3"
+const Format = "openbindings.binding-spec-synthesis-scenarios@4"
 
 type File struct {
 	Format      string     `json:"format"`
@@ -54,8 +54,8 @@ type Expected struct {
 }
 
 type BindingIdentity struct {
-	OperationKey string `json:"operationKey"`
-	BindingRef   string `json:"bindingRef"`
+	OperationKey    string `json:"operationKey"`
+	BindingSelector string `json:"bindingSelector"`
 }
 
 type ExpectedCoverage struct {
@@ -65,15 +65,15 @@ type ExpectedCoverage struct {
 }
 
 type CoverageEntry struct {
-	SourceIndex  int      `json:"sourceIndex"`
-	SourceRef    string   `json:"sourceRef"`
-	Scope        string   `json:"scope"`
-	Status       string   `json:"status"`
-	OperationKey string   `json:"operationKey,omitempty"`
-	BindingRef   string   `json:"bindingRef,omitempty"`
-	ReasonCode   string   `json:"reasonCode,omitempty"`
-	Rule         string   `json:"rule,omitempty"`
-	Requirements []string `json:"requirements"`
+	SourceIndex     int      `json:"sourceIndex"`
+	SourceRef       string   `json:"sourceRef"`
+	Scope           string   `json:"scope"`
+	Status          string   `json:"status"`
+	OperationKey    string   `json:"operationKey,omitempty"`
+	BindingSelector string   `json:"bindingSelector,omitempty"`
+	ReasonCode      string   `json:"reasonCode,omitempty"`
+	Rule            string   `json:"rule,omitempty"`
+	Requirements    []string `json:"requirements"`
 }
 
 func Load(root, family string) (*File, error) {
@@ -213,7 +213,7 @@ func operationKeys(iface *openbindings.Interface) []string {
 func bindingIdentities(iface *openbindings.Interface) []BindingIdentity {
 	out := make([]BindingIdentity, 0, len(iface.Bindings))
 	for _, binding := range iface.Bindings {
-		out = append(out, BindingIdentity{OperationKey: binding.Operation, BindingRef: binding.Ref})
+		out = append(out, BindingIdentity{OperationKey: binding.Operation, BindingSelector: binding.Selector})
 	}
 	sortBindings(out)
 	return out
@@ -225,15 +225,15 @@ func coverageEntries(entries []synthesize.SynthesisCoverageEntry) []CoverageEntr
 		requirements := append([]string{}, entry.Requirements...)
 		sort.Strings(requirements)
 		out = append(out, CoverageEntry{
-			SourceIndex:  entry.SourceIndex,
-			SourceRef:    entry.SourceRef,
-			Scope:        string(entry.Scope),
-			Status:       string(entry.Status),
-			OperationKey: entry.OperationKey,
-			BindingRef:   entry.BindingRef,
-			ReasonCode:   entry.ReasonCode,
-			Rule:         entry.Rule,
-			Requirements: requirements,
+			SourceIndex:     entry.SourceIndex,
+			SourceRef:       entry.SourceRef,
+			Scope:           string(entry.Scope),
+			Status:          string(entry.Status),
+			OperationKey:    entry.OperationKey,
+			BindingSelector: entry.BindingSelector,
+			ReasonCode:      entry.ReasonCode,
+			Rule:            entry.Rule,
+			Requirements:    requirements,
 		})
 	}
 	sortCoverage(out)
@@ -264,7 +264,7 @@ func sortBindings(values []BindingIdentity) {
 		if values[i].OperationKey != values[j].OperationKey {
 			return values[i].OperationKey < values[j].OperationKey
 		}
-		return values[i].BindingRef < values[j].BindingRef
+		return values[i].BindingSelector < values[j].BindingSelector
 	})
 }
 

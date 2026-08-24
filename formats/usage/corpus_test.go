@@ -2,7 +2,7 @@ package usage
 
 // Binding-specification conformance corpus adapter: runs the spec
 // repository's binding-specs/usage fixtures (USAGE-D-01..03) through this
-// module's own offline lanes — content decode, location grammar, and ref
+// module's own offline lanes — content decode, location grammar, and selector
 // grammar/resolution — under the subcorpus README's verdict semantics:
 // valid:false means a conformant openbindings.usage@1 processor refuses the
 // document's family-scoped material at or before bind time, decidable
@@ -57,7 +57,7 @@ type corpusTest struct {
 // corpusDocument is the raw view of a fixture's embedded OBI document,
 // preserving member PRESENCE where a typed view cannot: `content: null` is
 // a present member (the core §7 presence rule; json.RawMessage keeps it),
-// and an omitted binding ref is distinct from a present empty string.
+// and an omitted binding selector is distinct from a present empty string.
 type corpusDocument struct {
 	Sources  map[string]corpusSource  `json:"sources"`
 	Bindings map[string]corpusBinding `json:"bindings"`
@@ -70,8 +70,8 @@ type corpusSource struct {
 }
 
 type corpusBinding struct {
-	Source string  `json:"source"`
-	Ref    *string `json:"ref"`
+	Source   string  `json:"source"`
+	Selector *string `json:"selector"`
 }
 
 func TestBindingSpecCorpus(t *testing.T) {
@@ -153,18 +153,18 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 			}
 		}
 
-		// Ref lane (USAGE-D-03): omitting ref addresses the root command
-		// (nothing to refuse); a present ref is a command path — resolved
+		// Selector lane (USAGE-D-03): omitting selector addresses the root command
+		// (nothing to refuse); a present selector is a command path — resolved
 		// against an embedded artifact, grammar-checked alone otherwise.
 		for _, b := range doc.Bindings {
-			if b.Source != name || b.Ref == nil {
+			if b.Source != name || b.Selector == nil {
 				continue
 			}
 			if spec != nil {
-				if _, err := findCommand(spec, *b.Ref); err != nil {
+				if _, err := findCommand(spec, *b.Selector); err != nil {
 					return err
 				}
-			} else if _, err := buildDirectArgsFromRef(*b.Ref, nil); err != nil {
+			} else if _, err := buildDirectArgsFromSelector(*b.Selector, nil); err != nil {
 				return err
 			}
 		}

@@ -91,9 +91,9 @@ func TestAddressParameterExpansion(t *testing.T) {
 
 	publish := func(bindCtx map[string]any) error {
 		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(paramDoc(srv))},
-			Ref:     "#/operations/post",
-			Context: bindCtx,
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(paramDoc(srv))},
+			Selector: "#/operations/post",
+			Context:  bindCtx,
 		})
 		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
 		// channel's input carries the payload under "payload"; the address
@@ -156,8 +156,8 @@ func TestAddressParameterEnumIsAuthoritative(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-		Ref:    "#/operations/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		Selector: "#/operations/post",
 		Context: map[string]any{"configuration": map[string]any{
 			"address": map[string]any{"parameters": map[string]any{"roomId": "backstage"}},
 		}},
@@ -219,9 +219,9 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	defer binv.Close()
 	publish := func(bindCtx map[string]any) error {
 		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-			Ref:     "#/operations/post",
-			Context: bindCtx,
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+			Selector: "#/operations/post",
+			Context:  bindCtx,
 		})
 		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
 		// channel's input carries the payload under "payload"; the address
@@ -276,8 +276,8 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 			}},
 	}
 	callBad := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docBadDefault)},
-		Ref:    "#/operations/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docBadDefault)},
+		Selector: "#/operations/post",
 	})
 	if err := callBad.Write(bg(), map[string]any{"m": 1}); err != nil {
 		t.Fatal(err)
@@ -297,8 +297,8 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	}
 	before := requests.Load()
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docNoDefault)},
-		Ref:    "#/operations/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docNoDefault)},
+		Selector: "#/operations/post",
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
 		t.Fatal(err)
@@ -320,8 +320,8 @@ func TestServerVariablesAndPathnameAssembly(t *testing.T) {
 	// only way to satisfy it (the carriage §9.2's assembly rule
 	// presupposes).
 	callSupplied := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docNoDefault)},
-		Ref:    "#/operations/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(&docNoDefault)},
+		Selector: "#/operations/post",
 		Context: map[string]any{"configuration": map[string]any{
 			"server": map[string]any{"key": "test", "variables": map[string]any{"version": "v7"}},
 		}},
@@ -386,9 +386,9 @@ func TestChannelServersSubsetInArrayOrder(t *testing.T) {
 	defer binv.Close()
 	publish := func(doc *document, bindCtx map[string]any) error {
 		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-			Ref:     "#/operations/post",
-			Context: bindCtx,
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+			Selector: "#/operations/post",
+			Context:  bindCtx,
 		})
 		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
 		// channel's input carries the payload under "payload"; the address
@@ -461,9 +461,9 @@ func TestServerConfigurationPinnedShapesOnly(t *testing.T) {
 	defer binv.Close()
 	publish := func(serverCfg any) error {
 		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-			Ref:     "#/operations/post",
-			Context: map[string]any{"configuration": map[string]any{"server": serverCfg}},
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+			Selector: "#/operations/post",
+			Context:  map[string]any{"configuration": map[string]any{"server": serverCfg}},
 		})
 		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
 		// channel's input carries the payload under "payload"; the address
@@ -527,8 +527,8 @@ func TestOnlyUnboundProtocolServersIsRefused(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-		Ref:    "#/operations/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		Selector: "#/operations/post",
 	})
 	_, err := drainOutputs(t, call)
 	if codeOf(t, err) != "DRIVER_UNAVAILABLE" {
@@ -566,9 +566,9 @@ func TestFullURLOverride(t *testing.T) {
 	defer binv.Close()
 	publish := func(bindCtx map[string]any) error {
 		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-			Ref:     "#/operations/post",
-			Context: bindCtx,
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+			Selector: "#/operations/post",
+			Context:  bindCtx,
 		})
 		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
 		// channel's input carries the payload under "payload"; the address
@@ -657,8 +657,8 @@ func TestHTTPBindingMethodOverride(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-		Ref:    "#/operations/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		Selector: "#/operations/post",
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
 		t.Fatal(err)
@@ -674,8 +674,8 @@ func TestHTTPBindingMethodOverride(t *testing.T) {
 	}
 
 	sub := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-		Ref:    "#/operations/sub",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		Selector: "#/operations/sub",
 	})
 	if _, err := drainOutputs(t, sub); codeOf(t, err) != invoke.ErrCodeRefused {
 		t.Fatalf("standalone HTTP send must be refused, got %v", err)
@@ -753,9 +753,9 @@ func TestWSBindingQueryAndHeadersGovernUpgrade(t *testing.T) {
 	defer binv.Close()
 	publish := func(bindCtx map[string]any) error {
 		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsBindingDoc(srv))},
-			Ref:     "#/operations/publish",
-			Context: wsTextContext(bindCtx),
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsBindingDoc(srv))},
+			Selector: "#/operations/publish",
+			Context:  wsTextContext(bindCtx),
 		})
 		// The routed envelope (§9.2, ruled 2026-08-14): the parameterized
 		// channel's input carries the payload under "payload"; the address
@@ -839,9 +839,9 @@ func TestWSBindingNonGETMethodRefused(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-		Ref:     "#/operations/publish",
-		Context: wsTextContext(nil),
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		Selector: "#/operations/publish",
+		Context:  wsTextContext(nil),
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
 		t.Fatal(err)
@@ -873,8 +873,8 @@ func TestStandaloneHTTPSendIsExcluded(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
-		Ref:    "#/operations/receiveCaps",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(sseEventDoc(srv.URL, "/"))},
+		Selector: "#/operations/receiveCaps",
 	})
 	_, err := drainOutputs(t, call)
 	if codeOf(t, err) != invoke.ErrCodeRefused {
@@ -934,8 +934,8 @@ func TestInputTextLane(t *testing.T) {
 	defer binv.Close()
 	publish := func(v any) error {
 		call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(laneDoc(srv, "http", "text/plain"))},
-			Ref:    "#/operations/post",
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(laneDoc(srv, "http", "text/plain"))},
+			Selector: "#/operations/post",
 		})
 		if err := call.Write(bg(), v); err != nil {
 			return err
@@ -982,8 +982,8 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(laneDoc(srv, "http", "avro/binary"))},
-		Ref:    "#/operations/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(laneDoc(srv, "http", "avro/binary"))},
+		Selector: "#/operations/post",
 	})
 	if err := call.Write(bg(), map[string]any{"m": 1}); err != nil {
 		t.Fatal(err)
@@ -1010,8 +1010,8 @@ func TestInputArbitraryValueForNonJSONFamilyRefusedPreDispatch(t *testing.T) {
 	c.Address = "/ws"
 	wsDoc.Channels["c"] = c
 	wsCall := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsDoc)},
-		Ref:    "#/operations/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(wsDoc)},
+		Selector: "#/operations/post",
 	})
 	if err := wsCall.Write(bg(), map[string]any{"m": 1}); err != nil {
 		t.Fatal(err)
@@ -1046,8 +1046,8 @@ func TestDecodeTextLaneAndReplyDirection(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
-		Ref:    "#/operations/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(doc)},
+		Selector: "#/operations/post",
 	})
 	if err := call.Write(bg(), "ping"); err != nil {
 		t.Fatal(err)

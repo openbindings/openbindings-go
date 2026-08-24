@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
+  `bindings[*].selector`): bindings ride
+  `invoke.BindingInvocationArgs.Selector`, and refusals use
+  `ERR_INVALID_SELECTOR` / `ERR_SELECTOR_NOT_FOUND`. The OG-V-18 `$ref`
+  prohibition inside embedded schemas is untouched.
+
 - **Pre-execution refusal (OG-V-11)**: an operation-node graph invoked without
   an interface fails `ERR_VALIDATION_FAILED` instead of reaching the operation
   invoker with no interface.

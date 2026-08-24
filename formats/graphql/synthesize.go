@@ -68,10 +68,10 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string, bind
 				continue
 			}
 
-			ref := rt.label + "/" + f.Name
+			selector := rt.label + "/" + f.Name
 			opKey := synthesize.SanitizeKey(f.Name)
 			opKey = synthesize.ResolveKeyCollision(opKey, strings.ToLower(rt.label), usedKeys)
-			usedKeys[opKey] = ref
+			usedKeys[opKey] = selector
 
 			op := openbindings.Operation{}
 			if f.Description != "" {
@@ -90,7 +90,7 @@ func convertToInterface(schema *introspectionSchema, sourceLocation string, bind
 			iface.Bindings[bindingKey] = openbindings.BindingEntry{
 				Operation: opKey,
 				Source:    DefaultSourceName,
-				Ref:       ref,
+				Selector:  selector,
 			}
 		}
 	}

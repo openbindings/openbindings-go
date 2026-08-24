@@ -81,8 +81,8 @@ func TestWSReceiveBackpressure_FrameCountOverflowFailsSubscription(t *testing.T)
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: wsSource(srv, nil),
-		Ref:    "#/operations/subscribe",
+		Source:   wsSource(srv, nil),
+		Selector: "#/operations/subscribe",
 	})
 
 	// Let the flood land in the subscription's buffer before this test
@@ -149,8 +149,8 @@ func TestWSReceiveBackpressure_ByteBudgetOverflowFailsSubscription(t *testing.T)
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: wsSource(srv, nil),
-		Ref:    "#/operations/subscribe",
+		Source:   wsSource(srv, nil),
+		Selector: "#/operations/subscribe",
 	})
 
 	select {
@@ -204,8 +204,8 @@ func TestWSReceiveBackpressure_OverflowIsolatesToOneSubscription(t *testing.T) {
 	defer binv.Close()
 	source := wsSource(srv, nil)
 
-	callA := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: source, Ref: "#/operations/subscribe"})
-	callB := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: source, Ref: "#/operations/subscribe"})
+	callA := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: source, Selector: "#/operations/subscribe"})
+	callB := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{Source: source, Selector: "#/operations/subscribe"})
 	outB := callB.Outputs()
 
 	// Both subscribers must actually be registered on the ONE shared
@@ -282,8 +282,8 @@ func TestWSReceiveBackpressure_NormalDrainNeverTrips(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: wsSource(srv, nil),
-		Ref:    "#/operations/subscribe",
+		Source:   wsSource(srv, nil),
+		Selector: "#/operations/subscribe",
 	})
 	vals, err := drainOutputs(t, call)
 	if err != nil {

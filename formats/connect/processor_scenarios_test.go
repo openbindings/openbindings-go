@@ -197,7 +197,7 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			ctx["apiKey"] = generic
 		}
 	}
-	ref, _ := scenario.Given.Binding["ref"].(string)
+	selector, _ := scenario.Given.Binding["selector"].(string)
 	joined := strings.HasPrefix(scenario.ID, "CONN-FI-")
 	var call invoke.Invocation[any, any]
 	if joined {
@@ -210,11 +210,11 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		op := invoke.NewOperationInvoker(invoker)
 		call = invoke.Invoke(
 			context.Background(), op, iface,
-			invoke.NewOperationSignature[any, any](connectOperationForRef(t, iface, ref)),
+			invoke.NewOperationSignature[any, any](connectOperationForSelector(t, iface, selector)),
 			invoke.WithContext(ctx),
 		)
 	} else {
-		call = invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{Source: source, Ref: ref, Context: ctx})
+		call = invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{Source: source, Selector: selector, Context: ctx})
 	}
 	if writes, ok := scenario.Given.Invocation["writes"].([]any); ok {
 		for _, value := range writes {
@@ -272,14 +272,14 @@ func runConnectProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	return processorscenarios.Observation{Disposition: "error", Phase: phase, Data: data}
 }
 
-func connectOperationForRef(t *testing.T, iface *openbindings.Interface, ref string) string {
+func connectOperationForSelector(t *testing.T, iface *openbindings.Interface, selector string) string {
 	t.Helper()
 	for _, binding := range iface.Bindings {
-		if binding.Ref == ref {
+		if binding.Selector == selector {
 			return binding.Operation
 		}
 	}
-	t.Fatalf("synthesized Connect interface has no binding for %q", ref)
+	t.Fatalf("synthesized Connect interface has no binding for %q", selector)
 	return ""
 }
 

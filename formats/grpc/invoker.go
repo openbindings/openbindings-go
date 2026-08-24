@@ -127,22 +127,22 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 	return inv
 }
 
-// run resolves the ref to a method descriptor, reads the request from the
-// handle, and dispatches the RPC. All pre-dispatch refusals (bad ref,
+// run resolves the selector to a method descriptor, reads the request from the
+// handle, and dispatches the RPC. All pre-dispatch refusals (bad selector,
 // missing or malformed target, configuration errors, descriptor load
 // failures, schema-range and kind-coverage refusals) fire BEFORE any RPC
 // is sent; with embedded content, resolution also precedes the dial (§7:
-// a processor does not dial blind on the ref name).
+// a processor does not dial blind on the selector name).
 func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	// bctx bounds all gRPC I/O to the invocation's lifetime: caller Cancel()
 	// (or upstream ctx cancellation) tears down reflection and RPC streams.
 	bctx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 
-	svcName, methodName, err := parseRef(args.Ref)
+	svcName, methodName, err := parseSelector(args.Selector)
 	if err != nil {
 		inv.FireError(&invoke.InvocationError{
-			Code: invoke.ErrCodeInvalidRef,
+			Code: invoke.ErrCodeInvalidSelector,
 		})
 		return
 	}
@@ -245,13 +245,13 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		defer refClient.Reset()
 		svcDesc, err = resolveService(refClient, protoreflect.FullName(svcName))
 		if err != nil {
-			inv.FireError(refResolveError(svcName, err))
+			inv.FireError(selectorResolveError(svcName, err))
 			return
 		}
 		methodDesc = svcDesc.Methods().ByName(protoreflect.Name(methodName))
 		if methodDesc == nil {
 			inv.FireError(&invoke.InvocationError{
-				Code: invoke.ErrCodeRefNotFound,
+				Code: invoke.ErrCodeSelectorNotFound,
 			})
 			return
 		}

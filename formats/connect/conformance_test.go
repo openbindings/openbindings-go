@@ -263,28 +263,28 @@ func TestConformance_D01_OtherContentTypesRefused(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CONN-D-03 — ref form and byte-exact matching (§7)
+// CONN-D-03 — selector form and byte-exact matching (§7)
 // ---------------------------------------------------------------------------
 
 // Matching is byte-exact in schema mode, no case folding: a case-mismatched
-// ref is unresolvable, checked offline against the embedded schema before
+// selector is unresolvable, checked offline against the embedded schema before
 // any network I/O (unreachableServer fails the test if reached).
 func TestConformance_D03_ByteExactMatching(t *testing.T) {
 	ctx := testContext(t)
 	srv := unreachableServer(t)
 
-	for _, ref := range []string{"testpkg.TestService/getItem", "testpkg.testservice/GetItem", "TESTPKG.TestService/GetItem"} {
-		inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, testProto, ref))
+	for _, selector := range []string{"testpkg.TestService/getItem", "testpkg.testservice/GetItem", "TESTPKG.TestService/GetItem"} {
+		inv := NewInvoker().InvokeBinding(ctx, unaryArgs(srv.URL, testProto, selector))
 		outputs, terr := collectOutputs(t, ctx, inv)
-		if len(outputs) != 0 || terr == nil || terr.Code != invoke.ErrCodeRefNotFound {
-			t.Fatalf("ref %q: byte-exact matching must refuse with ERR_REF_NOT_FOUND (CONN-D-03), got %v", ref, terr)
+		if len(outputs) != 0 || terr == nil || terr.Code != invoke.ErrCodeSelectorNotFound {
+			t.Fatalf("selector %q: byte-exact matching must refuse with ERR_SELECTOR_NOT_FOUND (CONN-D-03), got %v", selector, terr)
 		}
 	}
 }
 
 // A packageless schema binds through the service's bare name (CONN-D-03:
 // package-qualified or bare for packageless schemas).
-func TestConformance_D03_PackagelessServiceRef(t *testing.T) {
+func TestConformance_D03_PackagelessServiceSelector(t *testing.T) {
 	const packagelessProto = `syntax = "proto3";
 service CoffeeShop { rpc GetMenu(MenuRequest) returns (Menu); }
 message MenuRequest {}
@@ -304,7 +304,7 @@ message Menu { string items = 1; }
 	inv := invokeWith(t, ctx, NewInvoker(), unaryArgs(srv.URL, packagelessProto, "CoffeeShop/GetMenu"))
 	v, err := invoke.Single[any](ctx, inv.Outputs())
 	if err != nil {
-		t.Fatalf("a packageless ref must resolve against the bare service name (CONN-D-03): %v", err)
+		t.Fatalf("a packageless selector must resolve against the bare service name (CONN-D-03): %v", err)
 	}
 	if v.(map[string]any)["items"] != "espresso" {
 		t.Errorf("response = %v", v)

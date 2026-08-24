@@ -504,8 +504,8 @@ func TestRevision3RangeCoverageRequiresRequestMediaAtCorrectScopes(t *testing.T)
 func TestRevision3PrepareBindingChallengesForRequiredRange(t *testing.T) {
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://api.example.test"}],"paths":{"/x":{"post":{"operationId":"put","requestBody":{"required":true,"content":{"application/*":{"schema":{"type":"object"}}}},"responses":{"204":{"description":"ok"}}}}}}`
 	args := &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1x/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1x/post",
 	}
 	details, err := NewInvoker().PrepareBinding(context.Background(), args)
 	if err != nil {
@@ -1480,7 +1480,7 @@ func TestRevision3SSEUsesWHATWGUTF8AndEmptySuccessSkipsMedia(t *testing.T) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"text/event-stream; charset=iso-8859-1"}}, Body: io.NopCloser(strings.NewReader(string(body))), Request: req}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1events/get",
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Selector: "#/paths/~1events/get",
 	})
 	outputs, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr != nil || !reflect.DeepEqual(outputs, []any{"café", "�", "��", "�"}) {
@@ -1492,7 +1492,7 @@ func TestRevision3SSEUsesWHATWGUTF8AndEmptySuccessSkipsMedia(t *testing.T) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
 	call = NewInvokerWithClient(&http.Client{Transport: emptyTransport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(emptySpec)}, Ref: "#/paths/~1events/get",
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(emptySpec)}, Selector: "#/paths/~1events/get",
 	})
 	outputs, ierr = driveOutputs(context.Background(), call, nil)
 	if ierr != nil || len(outputs) != 0 {
@@ -1506,7 +1506,7 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"application/json", "text/plain"}}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: req}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Selector: "#/paths/~1x/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr == nil || ierr.Code != invoke.ErrCodeProtocol {
@@ -1516,7 +1516,7 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 		return &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{"Content-Type": {"garbage", "also-garbage"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
 	call = NewInvokerWithClient(&http.Client{Transport: emptyTransport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Selector: "#/paths/~1x/get",
 	})
 	outputs, ierr := driveOutputs(context.Background(), call, nil)
 	if ierr != nil || len(outputs) != 0 {
@@ -1526,7 +1526,7 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 		return &http.Response{StatusCode: 500, Status: "500 Broken", Header: http.Header{"Content-Type": {"garbage", "also-garbage"}}, Body: io.NopCloser(strings.NewReader("failure")), Request: req}, nil
 	})
 	call = NewInvokerWithClient(&http.Client{Transport: failureTransport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Selector: "#/paths/~1x/get",
 	})
 	_, ierr = driveOutputs(context.Background(), call, nil)
 	if ierr == nil || ierr.Code == invoke.ErrCodeProtocol || ierr.HasData() {
@@ -1536,7 +1536,7 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 		return &http.Response{StatusCode: 500, Status: "500 Empty", Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
 	call = NewInvokerWithClient(&http.Client{Transport: emptyFailureTransport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Ref: "#/paths/~1x/get",
+		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}, Selector: "#/paths/~1x/get",
 	})
 	_, ierr = driveOutputs(context.Background(), call, nil)
 	if ierr == nil || ierr.HasData() {
@@ -1567,8 +1567,8 @@ func TestRevision3InvokerCarriesRawBytesAndRequiresRangeConfiguration(t *testing
 	spec := `{"openapi":"3.0.3","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/asset":{"post":{"operationId":"putAsset","requestBody":{"required":true,"content":{"image/png":{"schema":{"type":"string","format":"binary"}}}},"responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"object"}}}}}}}}}`
 	capture := &revision3CaptureTransport{}
 	call := NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1asset/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1asset/post",
 	})
 	_, ierr := driveSingle(t, call, map[string]any{"body": "AP8BAg=="})
 	if ierr != nil {
@@ -1581,8 +1581,8 @@ func TestRevision3InvokerCarriesRawBytesAndRequiresRangeConfiguration(t *testing
 	rangeSpec := strings.Replace(spec, `"image/png":{"schema":{"type":"string","format":"binary"}}`, `"application/*":{"schema":{"type":"object"}}`, 1)
 	capture = &revision3CaptureTransport{}
 	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
-		Ref:    "#/paths/~1asset/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
+		Selector: "#/paths/~1asset/post",
 	})
 	_, ierr = driveSingle(t, call, map[string]any{"name": "pixel"})
 	if ierr == nil || ierr.Code != invoke.ErrCodeContextRequired || capture.requests != 0 {
@@ -1595,9 +1595,9 @@ func TestRevision3InvokerCarriesRawBytesAndRequiresRangeConfiguration(t *testing
 
 	capture = &revision3CaptureTransport{}
 	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
-		Ref:     "#/paths/~1asset/post",
-		Context: map[string]any{"configuration": map[string]any{"requestMedia": ""}},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
+		Selector: "#/paths/~1asset/post",
+		Context:  map[string]any{"configuration": map[string]any{"requestMedia": ""}},
 	})
 	_, ierr = driveSingle(t, call, map[string]any{"name": "pixel"})
 	if ierr == nil || ierr.Code == invoke.ErrCodeContextRequired || capture.requests != 0 {
@@ -1606,8 +1606,8 @@ func TestRevision3InvokerCarriesRawBytesAndRequiresRangeConfiguration(t *testing
 
 	capture = &revision3CaptureTransport{}
 	call = NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
-		Ref:    "#/paths/~1asset/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(rangeSpec)},
+		Selector: "#/paths/~1asset/post",
 		Context: map[string]any{"configuration": map[string]any{
 			"requestMedia": "application/problem+json; profile=asset",
 		}},
@@ -1626,8 +1626,8 @@ func TestRevision3InvokerRejectsNoncanonicalRawBase64BeforeDispatch(t *testing.T
 	for _, value := range []string{"YQ", "AB=="} {
 		capture := &revision3CaptureTransport{}
 		call := NewInvokerWithClient(&http.Client{Transport: capture}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-			Ref:    "#/paths/~1asset/post",
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Selector: "#/paths/~1asset/post",
 		})
 		_, ierr := driveSingle(t, call, map[string]any{"body": value})
 		if ierr == nil || ierr.Code != invoke.ErrCodeRefused || capture.requests != 0 {

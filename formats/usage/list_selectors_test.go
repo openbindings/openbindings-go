@@ -7,7 +7,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestInspectSource_BasicRefs(t *testing.T) {
+func TestInspectSource_BasicSelectors(t *testing.T) {
 	content := `
 name "mycli"
 bin "mycli"
@@ -24,7 +24,7 @@ cmd "farewell" help="Say goodbye"
 	}
 
 	if len(result.Targets) != 3 {
-		t.Fatalf("expected root plus 2 command refs, got %d", len(result.Targets))
+		t.Fatalf("expected root plus 2 command selectors, got %d", len(result.Targets))
 	}
 	if !result.Exhaustive {
 		t.Error("expected Exhaustive = true")
@@ -49,24 +49,24 @@ cmd "config" {
 		t.Fatal(err)
 	}
 
-	wantRefs := map[string]bool{
+	wantSelectors := map[string]bool{
 		"config set": false,
 		"config get": false,
 		"config":     false,
 	}
-	for _, ref := range result.Targets {
-		if _, ok := wantRefs[ref.Ref]; ok {
-			wantRefs[ref.Ref] = true
+	for _, selector := range result.Targets {
+		if _, ok := wantSelectors[selector.Selector]; ok {
+			wantSelectors[selector.Selector] = true
 		}
 	}
-	for ref, found := range wantRefs {
+	for selector, found := range wantSelectors {
 		if !found {
-			t.Errorf("expected ref %q not found", ref)
+			t.Errorf("expected selector %q not found", selector)
 		}
 	}
 }
 
-func TestInspectSource_RootCommandRef(t *testing.T) {
+func TestInspectSource_RootCommandSelector(t *testing.T) {
 	content := `
 name "grep"
 bin "grep"
@@ -84,16 +84,16 @@ arg "<pattern>" help="Search pattern"
 	}
 
 	if len(result.Targets) < 1 {
-		t.Fatal("expected at least 1 ref for root command")
+		t.Fatal("expected at least 1 selector for root command")
 	}
 
 	found := false
-	for _, ref := range result.Targets {
-		if ref.Ref == "" { // the root command
+	for _, selector := range result.Targets {
+		if selector.Selector == "" { // the root command
 			found = true
 			var description string
-			if ref.Operation != nil {
-				description = ref.Operation.Description
+			if selector.Operation != nil {
+				description = selector.Operation.Description
 			}
 			if description != "Search for patterns" {
 				t.Errorf("root description = %q, want %q", description, "Search for patterns")
@@ -101,7 +101,7 @@ arg "<pattern>" help="Search pattern"
 		}
 	}
 	if !found {
-		t.Error("expected root command ref '#/units/grep'")
+		t.Error("expected root command selector '#/units/grep'")
 	}
 }
 
@@ -123,23 +123,23 @@ cmd "mike" help="M"
 	}
 
 	if len(result.Targets) != 4 {
-		t.Fatalf("expected root plus 3 refs, got %d", len(result.Targets))
+		t.Fatalf("expected root plus 3 selectors, got %d", len(result.Targets))
 	}
-	if result.Targets[0].Ref != "" {
-		t.Errorf("first ref = %q, want root", result.Targets[0].Ref)
+	if result.Targets[0].Selector != "" {
+		t.Errorf("first selector = %q, want root", result.Targets[0].Selector)
 	}
-	if result.Targets[1].Ref != "alpha" {
-		t.Errorf("second ref = %q, want alpha", result.Targets[1].Ref)
+	if result.Targets[1].Selector != "alpha" {
+		t.Errorf("second selector = %q, want alpha", result.Targets[1].Selector)
 	}
-	if result.Targets[2].Ref != "mike" {
-		t.Errorf("third ref = %q, want mike", result.Targets[2].Ref)
+	if result.Targets[2].Selector != "mike" {
+		t.Errorf("third selector = %q, want mike", result.Targets[2].Selector)
 	}
-	if result.Targets[3].Ref != "zulu" {
-		t.Errorf("fourth ref = %q, want zulu", result.Targets[3].Ref)
+	if result.Targets[3].Selector != "zulu" {
+		t.Errorf("fourth selector = %q, want zulu", result.Targets[3].Selector)
 	}
 }
 
-func TestInspectSource_RefsMatchSynthesizeInterface(t *testing.T) {
+func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
 	content := `
 name "mycli"
 bin "mycli"
@@ -152,9 +152,9 @@ cmd "farewell" help="Say goodbye"
 		t.Fatal(err)
 	}
 
-	createRefs := map[string]bool{}
+	createSelectors := map[string]bool{}
 	for _, b := range iface.Bindings {
-		createRefs[b.Ref] = true
+		createSelectors[b.Selector] = true
 	}
 
 	synthesizer := NewSynthesizer()
@@ -165,13 +165,13 @@ cmd "farewell" help="Say goodbye"
 		t.Fatal(err)
 	}
 
-	for _, ref := range result.Targets {
-		if !createRefs[ref.Ref] {
-			t.Errorf("InspectSource ref %q not in SynthesizeInterface bindings", ref.Ref)
+	for _, selector := range result.Targets {
+		if !createSelectors[selector.Selector] {
+			t.Errorf("InspectSource selector %q not in SynthesizeInterface bindings", selector.Selector)
 		}
 	}
-	if len(result.Targets) != len(createRefs) {
-		t.Errorf("ref count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createRefs))
+	if len(result.Targets) != len(createSelectors) {
+		t.Errorf("selector count mismatch: InspectSource=%d, SynthesizeInterface=%d", len(result.Targets), len(createSelectors))
 	}
 }
 
@@ -193,24 +193,24 @@ cmd "config" subcommand_required=#true {
 		t.Fatal(err)
 	}
 
-	for _, ref := range result.Targets {
-		if ref.Ref == "#/units/config" {
-			t.Error("did not expect ref '#/units/config' (subcommand_required)")
+	for _, selector := range result.Targets {
+		if selector.Selector == "#/units/config" {
+			t.Error("did not expect selector '#/units/config' (subcommand_required)")
 		}
 	}
 
-	wantRefs := map[string]bool{
+	wantSelectors := map[string]bool{
 		"config get": false,
 		"config set": false,
 	}
-	for _, ref := range result.Targets {
-		if _, ok := wantRefs[ref.Ref]; ok {
-			wantRefs[ref.Ref] = true
+	for _, selector := range result.Targets {
+		if _, ok := wantSelectors[selector.Selector]; ok {
+			wantSelectors[selector.Selector] = true
 		}
 	}
-	for ref, found := range wantRefs {
+	for selector, found := range wantSelectors {
 		if !found {
-			t.Errorf("expected ref %q not found", ref)
+			t.Errorf("expected selector %q not found", selector)
 		}
 	}
 }
@@ -227,7 +227,7 @@ func TestInspectSource_EmptySpec(t *testing.T) {
 	}
 
 	if len(result.Targets) != 0 {
-		t.Errorf("expected 0 refs, got %d", len(result.Targets))
+		t.Errorf("expected 0 selectors, got %d", len(result.Targets))
 	}
 }
 

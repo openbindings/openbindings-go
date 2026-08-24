@@ -20,6 +20,11 @@
 
 ### Changed
 
+- **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
+  `bindings[*].selector`): bindings ride
+  `invoke.BindingInvocationArgs.Selector`, and refusals use
+  `ERR_INVALID_SELECTOR` / `ERR_SELECTOR_NOT_FOUND`.
+
 - **WebSocket library migrated** from the archived `nhooyr.io/websocket` to
   its maintained rename `github.com/coder/websocket` (API-compatible).
 

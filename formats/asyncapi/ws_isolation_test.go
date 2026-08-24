@@ -57,8 +57,8 @@ func TestWSPool_WriteCancelDoesNotTearDownSiblings(t *testing.T) {
 
 	// The sibling subscription (listener A) that must survive.
 	sub := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: source,
-		Ref:    "#/operations/subscribe",
+		Source:   source,
+		Selector: "#/operations/subscribe",
 	})
 	out := sub.Outputs()
 	defer out.Stop()

@@ -78,18 +78,18 @@ func shortCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-func invocationArgs(url, ref string, bindCtx map[string]any) *invoke.BindingInvocationArgs {
+func invocationArgs(url, selector string, bindCtx map[string]any) *invoke.BindingInvocationArgs {
 	return &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: url},
-		Ref:     ref,
-		Context: bindCtx,
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: url},
+		Selector: selector,
+		Context:  bindCtx,
 	}
 }
 
-func invokeAndRead(t *testing.T, invoker *Invoker, url, ref string, _ ...*invoke.InvokeHooks) (any, error) {
+func invokeAndRead(t *testing.T, invoker *Invoker, url, selector string, _ ...*invoke.InvokeHooks) (any, error) {
 	t.Helper()
-	call := invoker.InvokeBinding(bg(), invocationArgs(url, ref, nil))
-	if len(ref) >= len("tools/") && ref[:len("tools/")] == "tools/" {
+	call := invoker.InvokeBinding(bg(), invocationArgs(url, selector, nil))
+	if len(selector) >= len("tools/") && selector[:len("tools/")] == "tools/" {
 		if err := call.Write(bg(), map[string]any{}); err != nil {
 			return nil, err
 		}
@@ -196,12 +196,12 @@ func TestIntegrationExcludedInventoryCannotDispatch(t *testing.T) {
 	testServer, _ := setupMCPServer(t)
 	invoker := NewInvoker()
 	defer invoker.Close()
-	for _, ref := range []string{"resources/app://status", "prompts/greet"} {
-		call := invoker.InvokeBinding(bg(), invocationArgs(testServer.URL, ref, nil))
+	for _, selector := range []string{"resources/app://status", "prompts/greet"} {
+		call := invoker.InvokeBinding(bg(), invocationArgs(testServer.URL, selector, nil))
 		_ = call.Close()
 		_, err := drainOutputs(t, call)
-		if codeOf(t, err) != invoke.ErrCodeInvalidRef {
-			t.Fatalf("%s: %v", ref, err)
+		if codeOf(t, err) != invoke.ErrCodeInvalidSelector {
+			t.Fatalf("%s: %v", selector, err)
 		}
 	}
 }

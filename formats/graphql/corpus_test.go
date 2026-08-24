@@ -32,8 +32,8 @@ type corpusSource struct {
 }
 
 type corpusBinding struct {
-	Source string  `json:"source"`
-	Ref    *string `json:"ref"`
+	Source   string  `json:"source"`
+	Selector *string `json:"selector"`
 }
 
 func TestBindingSpecCorpus(t *testing.T) {
@@ -112,16 +112,16 @@ func judgeCorpusDocument(raw json.RawMessage) error {
 			if binding.Source != sourceName {
 				continue
 			}
-			ref := ""
-			if binding.Ref != nil {
-				ref = *binding.Ref
+			selector := ""
+			if binding.Selector != nil {
+				selector = *binding.Selector
 			}
-			kind, fieldName, err := parseRef(ref)
+			kind, fieldName, err := parseSelector(selector)
 			if err != nil {
 				return err
 			}
 			if kind == "subscription" {
-				return fmt.Errorf("subscription refs are outside %s", BindingSpec)
+				return fmt.Errorf("subscription selectors are outside %s", BindingSpec)
 			}
 			if schema != nil {
 				if _, err := resolveField(schema, kind, fieldName); err != nil {

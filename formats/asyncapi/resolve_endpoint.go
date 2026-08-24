@@ -62,11 +62,11 @@ type Endpoint struct {
 }
 
 // ResolveEndpoint resolves the connection endpoint of the operation a
-// binding ref names, per the server and address configuration points of
+// binding selector names, per the server and address configuration points of
 // openbindings.asyncapi@1 §9.2 (ASYNC-P-04). Pure: nothing is dialed, and
 // every unresolvable input is an error, never a guess.
 //
-// ref is ASYNC-D-03's JSON Pointer `#/operations/<operation-key>` — the only
+// selector is ASYNC-D-03's JSON Pointer `#/operations/<operation-key>` — the only
 // conformant spelling (RFC 6901-escaped; a bare operation key is refused).
 //
 // The server point selects the sole bindable candidate of the operation's
@@ -95,8 +95,8 @@ type Endpoint struct {
 // protocol `bindings` objects governing the upgrade request (§8: a
 // websockets channel binding's method/query/headers) and credential
 // application (§9.5).
-func (d *Document) ResolveEndpoint(ref string, bindingContext map[string]any) (Endpoint, error) {
-	opID, err := parseRef(ref)
+func (d *Document) ResolveEndpoint(selector string, bindingContext map[string]any) (Endpoint, error) {
+	opID, err := parseSelector(selector)
 	if err != nil {
 		return Endpoint{}, err
 	}

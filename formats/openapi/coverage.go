@@ -29,11 +29,11 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 
 	type bindingIdentity struct {
 		operationKey string
-		ref          string
+		selector     string
 	}
-	byRef := make(map[string]bindingIdentity, len(iface.Bindings))
+	bySelector := make(map[string]bindingIdentity, len(iface.Bindings))
 	for _, binding := range iface.Bindings {
-		byRef[binding.Ref] = bindingIdentity{operationKey: binding.Operation, ref: binding.Ref}
+		bySelector[binding.Selector] = bindingIdentity{operationKey: binding.Operation, selector: binding.Selector}
 	}
 	sourceLocation := ""
 	bindingSpec := BindingSpec
@@ -80,8 +80,8 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 				if pathItem != nil {
 					op = pathItem.GetOperation(strings.ToUpper(method))
 				}
-				ref := buildJSONPointerRef(path, method)
-				verdict := floor.opVerdict(ref)
+				selector := buildJSONPointerSelector(path, method)
+				verdict := floor.opVerdict(selector)
 				if op == nil && verdict == nil {
 					continue
 				}
@@ -91,7 +91,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					// operation's projection entries.
 					entries = append(entries, synthesize.SynthesisCoverageEntry{
 						SourceIndex: 0,
-						SourceRef:   ref,
+						SourceRef:   selector,
 						Scope:       synthesize.SynthesisCoverageTarget,
 						Status:      synthesize.SynthesisInvalid,
 						ReasonCode:  invalidUnitReasonCode,
@@ -107,17 +107,17 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					// unloadable position without a ladder verdict).
 					continue
 				}
-				identity, ok := byRef[ref]
+				identity, ok := bySelector[selector]
 				if !ok {
 					// Tolerant synthesis skipped this operation with a
 					// recorded, spec-governed reason: a per-operation
 					// exclusion, not an implementation defect. Anything else
 					// genuinely missing remains an implementation invariant
 					// violation.
-					if skipped, recorded := unrealizable[ref]; recorded {
+					if skipped, recorded := unrealizable[selector]; recorded {
 						entries = append(entries, synthesize.SynthesisCoverageEntry{
 							SourceIndex: 0,
-							SourceRef:   ref,
+							SourceRef:   selector,
 							Scope:       synthesize.SynthesisCoverageTarget,
 							Status:      synthesize.SynthesisExcluded,
 							ReasonCode:  skipped.reasonCode,
@@ -133,7 +133,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					}
 					entries = append(entries, synthesize.SynthesisCoverageEntry{
 						SourceIndex: 0,
-						SourceRef:   ref,
+						SourceRef:   selector,
 						Scope:       synthesize.SynthesisCoverageTarget,
 						Status:      synthesize.SynthesisImplementationUnsupported,
 						ReasonCode:  "openapi.missing_emitted_binding",
@@ -144,17 +144,17 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 				targetRequirements := openAPIServerRequirements(doc, pathItem, op, sourceLocation)
 				targetRequirements = append(targetRequirements, openAPIRequestMediaRequirements(doc, pathItem, op, bindingSpec)...)
 				entries = append(entries, synthesize.SynthesisCoverageEntry{
-					SourceIndex:  0,
-					SourceRef:    ref,
-					Scope:        synthesize.SynthesisCoverageTarget,
-					Status:       synthesize.SynthesisRepresented,
-					OperationKey: identity.operationKey,
-					BindingRef:   identity.ref,
-					Requirements: targetRequirements,
+					SourceIndex:     0,
+					SourceRef:       selector,
+					Scope:           synthesize.SynthesisCoverageTarget,
+					Status:          synthesize.SynthesisRepresented,
+					OperationKey:    identity.operationKey,
+					BindingSelector: identity.selector,
+					Requirements:    targetRequirements,
 				})
 				entries = append(entries, openAPIRequestMediaCoverage(doc, op, pathItem, identity, bindingSpec, verdict)...)
 				entries = append(entries, floorProjectionEntries(verdict)...)
-				entries = append(entries, openAPICallbackCoverage(op, ref)...)
+				entries = append(entries, openAPICallbackCoverage(op, selector)...)
 			}
 		}
 	}
@@ -202,7 +202,7 @@ func openAPIServerRequirements(
 
 func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathItem *openapi3.PathItem, identity struct {
 	operationKey string
-	ref          string
+	selector     string
 }, bindingSpec string, verdict *floorOp) []synthesize.SynthesisCoverageEntry {
 	if op.RequestBody == nil || op.RequestBody.Value == nil || len(op.RequestBody.Value.Content) == 0 {
 		return nil
@@ -230,7 +230,7 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 	sort.Strings(mediaKeys)
 	entries := make([]synthesize.SynthesisCoverageEntry, 0, len(mediaKeys))
 	for _, mediaKey := range mediaKeys {
-		sourceRef := identity.ref + "/requestBody/content/" + escapeJSONPointerToken(mediaKey)
+		sourceRef := identity.selector + "/requestBody/content/" + escapeJSONPointerToken(mediaKey)
 		if verdict != nil {
 			if defects, invalid := verdict.InvalidAlternatives[sourceRef]; invalid {
 				// The ladder invalidates this alternative: `invalid`, not
@@ -257,13 +257,13 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 				requirements = []string{"configuration.requestMedia"}
 			}
 			entries = append(entries, synthesize.SynthesisCoverageEntry{
-				SourceIndex:  0,
-				SourceRef:    sourceRef,
-				Scope:        synthesize.SynthesisCoverageAlternative,
-				Status:       synthesize.SynthesisRepresented,
-				OperationKey: identity.operationKey,
-				BindingRef:   identity.ref,
-				Requirements: requirements,
+				SourceIndex:     0,
+				SourceRef:       sourceRef,
+				Scope:           synthesize.SynthesisCoverageAlternative,
+				Status:          synthesize.SynthesisRepresented,
+				OperationKey:    identity.operationKey,
+				BindingSelector: identity.selector,
+				Requirements:    requirements,
 			})
 			continue
 		}

@@ -35,7 +35,7 @@ func TestRuntimeInvokesArtifactWithoutOBI(t *testing.T) {
 				"responses":{"200":{"description":"user","content":{"application/json":{"schema":{"type":"object"}}}}}
 			}}}
 		}`)},
-		Ref: "#/paths/~1users~1{id}/get",
+		Selector: "#/paths/~1users~1{id}/get",
 	})
 
 	if err := call.Write(context.Background(), map[string]any{"id": "42"}); err != nil {
@@ -63,7 +63,7 @@ func TestRuntimePrepareDerivesArtifactPrerequisites(t *testing.T) {
 			"paths":{"/users":{"get":{"security":[{"token":[]}],"responses":{"204":{"description":"done"}}}}},
 			"components":{"securitySchemes":{"token":{"type":"http","scheme":"bearer"}}}
 		}`)},
-		Ref: "#/paths/~1users/get",
+		Selector: "#/paths/~1users/get",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -98,8 +98,8 @@ func TestRuntimeAppliesResolvedBearerContext(t *testing.T) {
 			"paths":{"/users":{"get":{"security":[{"token":[]}],"responses":{"204":{"description":"done"}}}}},
 			"components":{"securitySchemes":{"token":{"type":"http","scheme":"bearer"}}}
 		}`)},
-		Ref:     "#/paths/~1users/get",
-		Context: map[string]any{"bearerToken": "resolved-token"},
+		Selector: "#/paths/~1users/get",
+		Context:  map[string]any{"bearerToken": "resolved-token"},
 	})
 	if err := call.Close(); err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestRuntimeAppliesInstalledArtifactSecurityHandler(t *testing.T) {
 			"paths":{"/users":{"get":{"security":[{"digestAuth":[]}],"responses":{"204":{"description":"done"}}}}},
 			"components":{"securitySchemes":{"digestAuth":{"type":"http","scheme":"digest"}}}
 		}`)},
-		Ref: "#/paths/~1users/get",
+		Selector: "#/paths/~1users/get",
 	}
 	details, err := runtime.Prepare(context.Background(), args)
 	if err != nil {

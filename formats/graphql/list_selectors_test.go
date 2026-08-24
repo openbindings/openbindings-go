@@ -8,7 +8,7 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-func TestInspectSourceUsesPinnedContentAndCanonicalRefs(t *testing.T) {
+func TestInspectSourceUsesPinnedContentAndCanonicalSelectors(t *testing.T) {
 	content, _ := json.Marshal(map[string]any{"data": map[string]any{"__schema": synthesisSchema()}})
 	inspection, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{
 		BindingSpec: BindingSpec,
@@ -21,16 +21,16 @@ func TestInspectSourceUsesPinnedContentAndCanonicalRefs(t *testing.T) {
 	if !inspection.Exhaustive || len(inspection.Targets) != 3 {
 		t.Fatalf("inspection = %#v", inspection)
 	}
-	refs := map[string]bool{}
+	selectors := map[string]bool{}
 	for _, target := range inspection.Targets {
-		refs[target.Ref] = true
+		selectors[target.Selector] = true
 	}
-	for _, ref := range []string{"query/status", "query/viewer", "mutation/status"} {
-		if !refs[ref] {
-			t.Errorf("missing %q", ref)
+	for _, selector := range []string{"query/status", "query/viewer", "mutation/status"} {
+		if !selectors[selector] {
+			t.Errorf("missing %q", selector)
 		}
 	}
-	if refs["subscription/status"] {
+	if selectors["subscription/status"] {
 		t.Fatal("the first-revision candidate inspection exposed subscription/status")
 	}
 }

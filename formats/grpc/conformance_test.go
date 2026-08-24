@@ -109,8 +109,8 @@ func TestConformance_D02_NonConformantLocationRefusedPreDial(t *testing.T) {
 
 	for _, location := range []string{"https://api.example.com:443", "api.example.com:443/v1"} {
 		inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
-			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: location},
-			Ref:    "testpkg.ItemService/GetItem",
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: location},
+			Selector: "testpkg.ItemService/GetItem",
 		})
 		_, terr := drainInvocation(t, inv)
 		if terr == nil || terr.Code != invoke.ErrCodeSourceConfigError {
@@ -194,8 +194,8 @@ func TestConformance_D01_DescriptorSetJSON_InvokesEndToEnd(t *testing.T) {
 			Location:    bufconnLocation,
 			Content:     mustContent(descriptorSetJSON(t, durationFDP(), testItemsFDP())),
 		},
-		Ref:     "testpkg.ItemService/GetItem",
-		Context: map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
+		Selector: "testpkg.ItemService/GetItem",
+		Context:  map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "fds"}); err != nil {
 		t.Fatal(err)
@@ -261,18 +261,18 @@ func TestConformance_D01_OtherContentTypesRefused(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// GRPC-D-03 — ref form and byte-exact matching (§7)
+// GRPC-D-03 — selector form and byte-exact matching (§7)
 // ---------------------------------------------------------------------------
 
-func TestConformance_D03_PackagelessServiceRef(t *testing.T) {
+func TestConformance_D03_PackagelessServiceSelector(t *testing.T) {
 	proto := `syntax = "proto3";
 service CoffeeShop { rpc GetMenu(MenuRequest) returns (Menu); }
 message MenuRequest {}
 message Menu { string items = 1; }
 `
-	svcName, methodName, err := parseRef("CoffeeShop/GetMenu")
+	svcName, methodName, err := parseSelector("CoffeeShop/GetMenu")
 	if err != nil {
-		t.Fatalf("a packageless ref is legal (GRPC-D-03): %v", err)
+		t.Fatalf("a packageless selector is legal (GRPC-D-03): %v", err)
 	}
 	disc, err := discoverFromContent(context.Background(), openbindings.TextContent(proto))
 	if err != nil {
@@ -292,7 +292,7 @@ message Menu { string items = 1; }
 	}
 }
 
-// Matching is byte-exact, no case folding: a case-mismatched ref is
+// Matching is byte-exact, no case folding: a case-mismatched selector is
 // unresolvable, checked offline against embedded content (before any dial —
 // resolution precedes dispatch).
 func TestConformance_D03_ByteExactMatching(t *testing.T) {
@@ -304,16 +304,16 @@ message PingMsg { string msg = 1; }
 	invoker := NewInvoker()
 	defer invoker.Close()
 
-	for _, ref := range []string{"tiny.Tiny/ping", "tiny.tiny/Ping", "TINY.Tiny/Ping"} {
+	for _, selector := range []string{"tiny.Tiny/ping", "tiny.tiny/Ping", "TINY.Tiny/Ping"} {
 		inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
 			// The location is a valid form but unreachable: the refusal must
 			// fire from offline resolution, never a dial.
-			Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
-			Ref:    ref,
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
+			Selector: selector,
 		})
 		_, terr := drainInvocation(t, inv)
-		if terr == nil || terr.Code != invoke.ErrCodeRefNotFound {
-			t.Fatalf("ref %q: byte-exact matching must refuse with ERR_REF_NOT_FOUND, got %v", ref, terr)
+		if terr == nil || terr.Code != invoke.ErrCodeSelectorNotFound {
+			t.Fatalf("selector %q: byte-exact matching must refuse with ERR_SELECTOR_NOT_FOUND, got %v", selector, terr)
 		}
 	}
 }
@@ -399,9 +399,9 @@ func TestConformance_P02_TransportOverrideBeatsExplicitScheme(t *testing.T) {
 
 	ctx := testCtx(t)
 	inv := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://127.0.0.1:443"},
-		Ref:     "testpkg.ItemService/GetItem",
-		Context: map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://127.0.0.1:443"},
+		Selector: "testpkg.ItemService/GetItem",
+		Context:  map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "p"}); err != nil {
 		t.Fatal(err)
@@ -415,8 +415,8 @@ func TestConformance_P02_TransportOverrideBeatsExplicitScheme(t *testing.T) {
 	ctl, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	inv2 := invoker.InvokeBinding(ctl, &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://127.0.0.1:443"},
-		Ref:    "testpkg.ItemService/GetItem",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://127.0.0.1:443"},
+		Selector: "testpkg.ItemService/GetItem",
 	})
 	_ = inv2.Write(ctl, map[string]any{"id": "p"})
 	if _, err := invoke.Single(ctl, inv2.Outputs()); err == nil {
@@ -435,9 +435,9 @@ func TestConformance_P02_MalformedTransportConfigRefused(t *testing.T) {
 	}
 	for _, transport := range cases {
 		inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
-			Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:50051"},
-			Ref:     "testpkg.ItemService/GetItem",
-			Context: map[string]any{"configuration": map[string]any{"transport": transport}},
+			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "127.0.0.1:50051"},
+			Selector: "testpkg.ItemService/GetItem",
+			Context:  map[string]any{"configuration": map[string]any{"transport": transport}},
 		})
 		_, terr := drainInvocation(t, inv)
 		if terr == nil || terr.Code != invoke.ErrCodeSourceConfigError {
@@ -459,9 +459,9 @@ func TestConformance_TargetPointReplacesLocation(t *testing.T) {
 		// The location explicitly elects TLS and would fail against the
 		// plaintext server; the configured target explicitly elects plaintext. Success
 		// proves the replacement.
-		Source:  invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://203.0.113.9:443"},
-		Ref:     "testpkg.ItemService/GetItem",
-		Context: map[string]any{"configuration": map[string]any{"target": "grpc://127.0.0.1:50051"}},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpcs://203.0.113.9:443"},
+		Selector: "testpkg.ItemService/GetItem",
+		Context:  map[string]any{"configuration": map[string]any{"target": "grpc://127.0.0.1:50051"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "t"}); err != nil {
 		t.Fatal(err)
@@ -689,8 +689,8 @@ service S { rpc Do(Req) returns (Resp); }
 	defer invoker.Close()
 
 	inv := invoker.InvokeBinding(testCtx(t), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
-		Ref:    "p2.S/Do",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: "grpc://203.0.113.9:50051", Content: openbindings.TextContent(proto)},
+		Selector: "p2.S/Do",
 	})
 	_, terr := drainInvocation(t, inv)
 	if terr == nil || terr.Code != invoke.ErrCodeSourceLoadFailed {
@@ -729,8 +729,8 @@ func TestConformance_SchemaRange_InertCarriageNotRefused(t *testing.T) {
 			Location:    bufconnLocation,
 			Content:     mustContent(descriptorSetJSON(t, durationFDP(), testItemsFDP(), dirty)),
 		},
-		Ref:     "testpkg.ItemService/GetItem",
-		Context: map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
+		Selector: "testpkg.ItemService/GetItem",
+		Context:  map[string]any{"configuration": map[string]any{"transport": "plaintext"}},
 	})
 	if err := inv.Write(ctx, map[string]any{"id": "inert"}); err != nil {
 		t.Fatal(err)

@@ -29,7 +29,7 @@ import (
 // narrows coverage rather than vetoing the document (core §10's posture;
 // interface-synthesizer contract's "sound partial OBI").
 type unrealizableTarget struct {
-	ref          string
+	selector     string
 	operationKey string
 	reasonCode   string
 	rule         string
@@ -118,12 +118,12 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			// it (its invalid coverage entry is emitted by the coverage
 			// walk); the strict surface refuses, preserving its guarantee.
 			// Skipped BEFORE key derivation, in every engine identically.
-			verdict := floor.opVerdict(buildJSONPointerRef(path, method))
+			verdict := floor.opVerdict(buildJSONPointerSelector(path, method))
 			if verdict != nil && verdict.Disposition == "invalid" {
 				if onUnrealizable != nil {
 					continue
 				}
-				return iface, fmt.Errorf("cannot synthesize OpenAPI operation at %q: %s; synthesis would return a statically unbindable partial interface", buildJSONPointerRef(path, method), floorInvalidTargetMessage(len(verdict.Defects)))
+				return iface, fmt.Errorf("cannot synthesize OpenAPI operation at %q: %s; synthesis would return a statically unbindable partial interface", buildJSONPointerSelector(path, method), floorInvalidTargetMessage(len(verdict.Defects)))
 			}
 
 			opKey := deriveOperationKey(op, path, method, usedKeys)
@@ -134,7 +134,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				reason := fmt.Sprintf("parameter %q has no unique flattened identity", field)
 				if onUnrealizable != nil {
 					onUnrealizable(unrealizableTarget{
-						ref:          buildJSONPointerRef(path, method),
+						selector:     buildJSONPointerSelector(path, method),
 						operationKey: opKey,
 						reasonCode:   "openapi.flattening_collision",
 						rule:         "OAPI-P-03",
@@ -149,7 +149,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				reason := fmt.Sprintf("parameter %q declares content with no faithful candidate carriage", parameter)
 				if onUnrealizable != nil {
 					onUnrealizable(unrealizableTarget{
-						ref:          buildJSONPointerRef(path, method),
+						selector:     buildJSONPointerSelector(path, method),
 						operationKey: opKey,
 						reasonCode:   "openapi.parameter_content_excluded",
 						rule:         "OAPI-P-02",
@@ -173,7 +173,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				reason := fmt.Sprintf("parameter member %q has no expansion defined by its governing OAS style row", member)
 				if onUnrealizable != nil {
 					onUnrealizable(unrealizableTarget{
-						ref:          buildJSONPointerRef(path, method),
+						selector:     buildJSONPointerSelector(path, method),
 						operationKey: opKey,
 						reasonCode:   "openapi.parameter_style_expansion_excluded",
 						rule:         "OAPI-P-02",
@@ -198,7 +198,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				// the exclusion reason is chosen from, so a body whose only
 				// alternative the ladder invalidated is not misreported as a
 				// flattening collision.
-				plans = filterLadderInvalidAlternatives(plans, verdict, buildJSONPointerRef(path, method))
+				plans = filterLadderInvalidAlternatives(plans, verdict, buildJSONPointerSelector(path, method))
 				plannedCount := len(plans)
 				if planErr == nil {
 					for _, plan := range plans {
@@ -232,7 +232,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 							}
 						}
 						onUnrealizable(unrealizableTarget{
-							ref:          buildJSONPointerRef(path, method),
+							selector:     buildJSONPointerSelector(path, method),
 							operationKey: opKey,
 							reasonCode:   code,
 							rule:         rule,
@@ -259,7 +259,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				if dialectErr := validateProjectedOperationDialects(doc, op, params, requestPlans, bindingSpec); dialectErr != nil {
 					reason := dialectErr.Error()
 					if onUnrealizable != nil {
-						onUnrealizable(unrealizableTarget{ref: buildJSONPointerRef(path, method), operationKey: opKey, reasonCode: "openapi.unsupported_schema_dialect", rule: "OBI-D-06", message: reason})
+						onUnrealizable(unrealizableTarget{selector: buildJSONPointerSelector(path, method), operationKey: opKey, reasonCode: "openapi.unsupported_schema_dialect", rule: "OBI-D-06", message: reason})
 						continue
 					}
 					return iface, unrealizableOperation(opKey, reason)
@@ -308,12 +308,12 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 
 			iface.Operations[opKey] = obiOp
 
-			ref := buildJSONPointerRef(path, method)
+			selector := buildJSONPointerSelector(path, method)
 			bindingKey := opKey + "." + DefaultSourceName
 			binding := openbindings.BindingEntry{
 				Operation: opKey,
 				Source:    DefaultSourceName,
-				Ref:       ref,
+				Selector:  selector,
 			}
 			if usesRoutedInput(bindingSpec) && routes.needsTransform {
 				binding.InputTransform = &openbindings.TransformOrRef{Inline: routes.transformExpressionFor(bindingSpec)}
@@ -995,7 +995,7 @@ func operationDescription(op *openapi3.Operation) string {
 	return op.Summary
 }
 
-func buildJSONPointerRef(path, method string) string {
+func buildJSONPointerSelector(path, method string) string {
 	escaped := strings.ReplaceAll(path, "~", "~0")
 	escaped = strings.ReplaceAll(escaped, "/", "~1")
 	return "#/paths/" + escaped + "/" + strings.ToLower(method)

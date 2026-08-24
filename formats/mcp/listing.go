@@ -13,7 +13,7 @@ import (
 
 // listing is this family's artifact (openbindings.mcp@1 §3): the aggregate of
 // a server's declared tools, resources, resource templates, and prompts,
-// always pagination-exhausted. Only entity identities are kept — ref matching
+// always pagination-exhausted. Only entity identities are kept — selector matching
 // is byte-exact against them (MCP-D-03), and the matched remainder itself is
 // what dispatch uses — but multiplicity matters: MCP names are only
 // SHOULD-unique, so ambiguity detection needs every occurrence.
@@ -28,7 +28,7 @@ type listing struct {
 	pinned            bool
 }
 
-// targetKind is the outcome of resolving a ref against the listing: which
+// targetKind is the outcome of resolving a selector against the listing: which
 // entity family the binding invokes through (§8).
 type targetKind int
 
@@ -167,11 +167,11 @@ func pinnedDiscovery(content json.RawMessage) (*discovery, error) {
 	}, nil
 }
 
-// liveListing obtains the entity family a ref needs from the addressed
+// liveListing obtains the entity family a selector needs from the addressed
 // server, capability-gated and followed to pagination exhaustion (MCP-P-02):
 // the go-mcp iterators issue the list request repeatedly, feeding each
 // nextCursor back, until the server stops returning one. Only the family the
-// ref addresses is fetched — resolution consults nothing else, so the other
+// selector addresses is fetched — resolution consults nothing else, so the other
 // families cannot affect it. The resources capability gates both resource
 // lists.
 // maxListItems is a defensive backstop on live-listing pagination. MCP-P-02
@@ -265,7 +265,7 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 	return l, nil
 }
 
-// resolveRef resolves a parsed ref against the (pinned or live, exhausted)
+// resolveSelector resolves a parsed selector against the (pinned or live, exhausted)
 // listing BEFORE dispatch (§7, MCP-P-02): a remainder matching nothing makes
 // the binding unresolvable, and a remainder matching more than one entry
 // WITHIN its entity's collection is ambiguous and likewise unresolvable —
@@ -273,7 +273,7 @@ func liveListing(ctx context.Context, s *mcpSession, entityType string) (*listin
 // resourceTemplates matches only declared template strings (§7, R5): the two
 // are separate namespaces, so a resource URI and a byte-identical template
 // string never collide — each is reached by its own entity token.
-func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string) (targetKind, *invoke.InvocationError) {
+func resolveSelector(l *listing, entityType, remainder string, bindingSpecs ...string) (targetKind, *invoke.InvocationError) {
 	bindingSpec := BindingSpec
 	if len(bindingSpecs) > 0 {
 		bindingSpec = bindingSpecs[0]
@@ -289,12 +289,12 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 	}
 	notFound := func(_ string) (targetKind, *invoke.InvocationError) {
 		return 0, &invoke.InvocationError{
-			Code: invoke.ErrCodeRefNotFound,
+			Code: invoke.ErrCodeSelectorNotFound,
 		}
 	}
 	ambiguous := func(_ string, _ int) (targetKind, *invoke.InvocationError) {
 		return 0, &invoke.InvocationError{
-			Code: invoke.ErrCodeRefNotFound,
+			Code: invoke.ErrCodeSelectorNotFound,
 		}
 	}
 
@@ -304,12 +304,12 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		case n == 1:
 			if l.requiredTaskTools[remainder] {
 				return 0, &invoke.InvocationError{
-					Code: invoke.ErrCodeInvalidRef,
+					Code: invoke.ErrCodeInvalidSelector,
 				}
 			}
 			if bindingSpec == BindingSpec && !l.structuredTools[remainder] {
 				return 0, &invoke.InvocationError{
-					Code: invoke.ErrCodeInvalidRef,
+					Code: invoke.ErrCodeInvalidSelector,
 				}
 			}
 			return targetTool, nil
@@ -319,7 +319,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("tool")
 	case "prompts":
 		if bindingSpec == BindingSpec {
-			return 0, &invoke.InvocationError{Code: invoke.ErrCodeInvalidRef}
+			return 0, &invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector}
 		}
 		switch n := count(l.prompts); {
 		case n == 1:
@@ -330,7 +330,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("prompt")
 	case "resources":
 		if bindingSpec == BindingSpec {
-			return 0, &invoke.InvocationError{Code: invoke.ErrCodeInvalidRef}
+			return 0, &invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector}
 		}
 		switch n := count(l.resources); {
 		case n == 1:
@@ -341,7 +341,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("resource")
 	case "resourceTemplates":
 		if bindingSpec == BindingSpec {
-			return 0, &invoke.InvocationError{Code: invoke.ErrCodeInvalidRef}
+			return 0, &invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector}
 		}
 		switch n := count(l.templates); {
 		case n == 1:
@@ -352,7 +352,7 @@ func resolveRef(l *listing, entityType, remainder string, bindingSpecs ...string
 		return notFound("resource template")
 	default:
 		return 0, &invoke.InvocationError{
-			Code: invoke.ErrCodeRefNotFound,
+			Code: invoke.ErrCodeSelectorNotFound,
 		}
 	}
 }

@@ -9,8 +9,8 @@ import (
 )
 
 type coverageIdentity struct {
-	operationKey string
-	bindingRef   string
+	operationKey    string
+	bindingSelector string
 }
 
 // synthesisCoverage inventories every protobuf RPC method observed by the
@@ -27,11 +27,11 @@ func synthesisCoverage(
 		return []synthesize.SynthesisCoverageEntry{}
 	}
 
-	byRef := make(map[string]coverageIdentity, len(iface.Bindings))
+	bySelector := make(map[string]coverageIdentity, len(iface.Bindings))
 	byOperation := make(map[string]coverageIdentity, len(iface.Bindings))
 	for _, binding := range iface.Bindings {
-		id := coverageIdentity{operationKey: binding.Operation, bindingRef: binding.Ref}
-		byRef[binding.Ref] = id
+		id := coverageIdentity{operationKey: binding.Operation, bindingSelector: binding.Selector}
+		bySelector[binding.Selector] = id
 		byOperation[binding.Operation] = id
 	}
 	requirements := []string{}
@@ -52,11 +52,11 @@ func synthesisCoverage(
 	var entries []synthesize.SynthesisCoverageEntry
 	for _, svc := range disc.services {
 		for _, method := range serviceMethodsSorted(svc) {
-			ref := string(svc.FullName()) + "/" + string(method.Name())
+			selector := string(svc.FullName()) + "/" + string(method.Name())
 			if err := validateBoundClosure(method); err != nil {
 				entries = append(entries, synthesize.SynthesisCoverageEntry{
 					SourceIndex: 0,
-					SourceRef:   ref,
+					SourceRef:   selector,
 					Scope:       synthesize.SynthesisCoverageTarget,
 					Status:      synthesize.SynthesisExcluded,
 					ReasonCode:  "grpc.schema_range",
@@ -65,11 +65,11 @@ func synthesisCoverage(
 				})
 				continue
 			}
-			id, ok := byRef[ref]
+			id, ok := bySelector[selector]
 			if !ok {
 				entries = append(entries, synthesize.SynthesisCoverageEntry{
 					SourceIndex: 0,
-					SourceRef:   ref,
+					SourceRef:   selector,
 					Scope:       synthesize.SynthesisCoverageTarget,
 					Status:      synthesize.SynthesisImplementationUnsupported,
 					ReasonCode:  "grpc.missing_emitted_binding",
@@ -78,13 +78,13 @@ func synthesisCoverage(
 				continue
 			}
 			entries = append(entries, synthesize.SynthesisCoverageEntry{
-				SourceIndex:  0,
-				SourceRef:    ref,
-				Scope:        synthesize.SynthesisCoverageTarget,
-				Status:       synthesize.SynthesisRepresented,
-				OperationKey: id.operationKey,
-				BindingRef:   id.bindingRef,
-				Requirements: append([]string{}, requirements...),
+				SourceIndex:     0,
+				SourceRef:       selector,
+				Scope:           synthesize.SynthesisCoverageTarget,
+				Status:          synthesize.SynthesisRepresented,
+				OperationKey:    id.operationKey,
+				BindingSelector: id.bindingSelector,
+				Requirements:    append([]string{}, requirements...),
 			})
 		}
 	}
@@ -95,15 +95,15 @@ func synthesisCoverage(
 			continue
 		}
 		entries = append(entries, synthesize.SynthesisCoverageEntry{
-			SourceIndex:  0,
-			SourceRef:    fmt.Sprintf("%s::projection::%s::%s::%d", id.bindingRef, warning.Path, warning.Code, index),
-			Scope:        synthesize.SynthesisCoverageProjection,
-			Status:       synthesize.SynthesisLossy,
-			OperationKey: id.operationKey,
-			BindingRef:   id.bindingRef,
-			ReasonCode:   warning.Code,
-			Message:      warning.Message,
-			Details:      warning.Details,
+			SourceIndex:     0,
+			SourceRef:       fmt.Sprintf("%s::projection::%s::%s::%d", id.bindingSelector, warning.Path, warning.Code, index),
+			Scope:           synthesize.SynthesisCoverageProjection,
+			Status:          synthesize.SynthesisLossy,
+			OperationKey:    id.operationKey,
+			BindingSelector: id.bindingSelector,
+			ReasonCode:      warning.Code,
+			Message:         warning.Message,
+			Details:         warning.Details,
 		})
 	}
 	return entries

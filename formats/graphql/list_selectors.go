@@ -11,7 +11,7 @@ import (
 )
 
 // InspectSource introspects a GraphQL endpoint and returns all bindable
-// refs. The first candidate lists query and mutation fields and excludes
+// selectors. The first candidate lists query and mutation fields and excludes
 // subscriptions rather than approximating their lifecycle.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
 	endpoint := source.Location
@@ -76,18 +76,18 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 			if strings.HasPrefix(f.Name, "__") {
 				continue
 			}
-			ref := rt.label + "/" + f.Name
+			selector := rt.label + "/" + f.Name
 			opKey := synthesize.ResolveKeyCollision(synthesize.SanitizeKey(f.Name), strings.ToLower(rt.label), usedKeys)
-			usedKeys[opKey] = ref
-			targets = append(targets, bindableTarget(ref, opKey, f.Description))
+			usedKeys[opKey] = selector
+			targets = append(targets, bindableTarget(selector, opKey, f.Description))
 		}
 	}
 
 	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, operationKey, description string) synthesize.BindableTarget {
-	target := synthesize.BindableTarget{Ref: ref, OperationKey: operationKey}
+func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
+	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

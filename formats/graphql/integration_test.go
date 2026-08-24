@@ -78,7 +78,7 @@ func TestHTTPInvocationPreservesDocumentVariablesAndPartialApplicationValue(t *t
 	}
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:      pinnedInvocationSource(t, srv.URL),
-		Ref:         "query/viewer",
+		Selector:    "query/viewer",
 		InputSchema: map[string]any{"type": "object"},
 		Context:     graphqlContext(document),
 	})
@@ -108,9 +108,9 @@ func TestHTTPInvocationOmitsAbsentVariables(t *testing.T) {
 	}))
 	defer srv.Close()
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:  pinnedInvocationSource(t, srv.URL),
-		Ref:     "query/health",
-		Context: graphqlContext("query { health }"),
+		Source:   pinnedInvocationSource(t, srv.URL),
+		Selector: "query/health",
+		Context:  graphqlContext("query { health }"),
 	})
 	outputs, invocationErr := collectInvocation(context.Background(), call, nil, false)
 	if invocationErr != nil || len(outputs) != 1 {
@@ -139,9 +139,9 @@ func TestHTTPMediaClassification(t *testing.T) {
 			}))
 			defer srv.Close()
 			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-				Source:  pinnedInvocationSource(t, srv.URL),
-				Ref:     "query/viewer",
-				Context: graphqlContext("query { viewer }"),
+				Source:   pinnedInvocationSource(t, srv.URL),
+				Selector: "query/viewer",
+				Context:  graphqlContext("query { viewer }"),
 			})
 			outputs, invocationErr := collectInvocation(context.Background(), call, nil, false)
 			if invocationErr == nil || len(outputs) != 0 {
@@ -160,13 +160,13 @@ func TestPreDispatchChallengesAndRefusalsHaveNoIO(t *testing.T) {
 	invoker := NewInvoker()
 
 	details, err := invoker.PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: pinnedInvocationSource(t, srv.URL), Ref: "query/viewer",
+		Source: pinnedInvocationSource(t, srv.URL), Selector: "query/viewer",
 	})
 	if err != nil || details == nil || details.Alternatives[0].Requirements[0].Extra["point"] != "document" {
 		t.Fatalf("prepare = %#v, %v", details, err)
 	}
 	missing := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: pinnedInvocationSource(t, srv.URL), Ref: "query/viewer",
+		Source: pinnedInvocationSource(t, srv.URL), Selector: "query/viewer",
 	})
 	_, missingErr := collectInvocation(context.Background(), missing, nil, false)
 	if missingErr == nil || missingErr.Code != invoke.ErrCodeContextRequired {
@@ -174,7 +174,7 @@ func TestPreDispatchChallengesAndRefusalsHaveNoIO(t *testing.T) {
 	}
 
 	mismatch := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: pinnedInvocationSource(t, srv.URL), Ref: "query/viewer",
+		Source: pinnedInvocationSource(t, srv.URL), Selector: "query/viewer",
 		Context: graphqlContext("query { health }"),
 	})
 	_, mismatchErr := collectInvocation(context.Background(), mismatch, nil, false)
@@ -183,7 +183,7 @@ func TestPreDispatchChallengesAndRefusalsHaveNoIO(t *testing.T) {
 	}
 
 	collision := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: pinnedInvocationSource(t, srv.URL), Ref: "query/viewer",
+		Source: pinnedInvocationSource(t, srv.URL), Selector: "query/viewer",
 		Context: map[string]any{"configuration": map[string]any{
 			"document": "query { viewer }",
 			"protocolFields": map[string]any{
@@ -197,7 +197,7 @@ func TestPreDispatchChallengesAndRefusalsHaveNoIO(t *testing.T) {
 	}
 
 	unnamedCredential := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: pinnedInvocationSource(t, srv.URL), Ref: "query/viewer",
+		Source: pinnedInvocationSource(t, srv.URL), Selector: "query/viewer",
 		Context: map[string]any{
 			"bearerToken": "ambiguous",
 			"configuration": map[string]any{

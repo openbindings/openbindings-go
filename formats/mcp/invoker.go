@@ -134,18 +134,18 @@ func mcpBindingSpecInfos() []openbindings.BindingSpecInfo {
 // InvokeBinding invokes an MCP binding and returns the Invocation handle
 // synchronously; the MCP session work is scheduled on its own goroutine.
 //
-// The ref resolves against the listing before dispatch (openbindings.mcp@1
+// The selector resolves against the listing before dispatch (openbindings.mcp@1
 // §7): offline against a pinned listing when the source carries content,
 // otherwise against the live capability-gated, pagination-exhausted listing.
 // Tool arguments, prompt arguments, and a resource template's variables
 // arrive as the operation's single input message through the handle's Write
 // channel; static resource reads take no input (the binding closes the
-// input side once resolution says the ref names a static resource). For
+// input side once resolution says the selector names a static resource). For
 // tool invocations, `notifications/progress` events stream as outputs ahead
 // of the final result only when solicited (§9.3's `solicit` configuration
 // point — per-invocation context.configuration.solicit, then
-// WithSolicitProgress, default off). Pre-dispatch failures (bad ref,
-// missing endpoint, invalid pin, invalid input, unresolvable ref) terminate
+// WithSolicitProgress, default off). Pre-dispatch failures (bad selector,
+// missing endpoint, invalid pin, invalid input, unresolvable selector) terminate
 // the handle before the entity request is sent.
 //
 // Credentials are applied from args.Context (bearerToken, apiKey, basic,

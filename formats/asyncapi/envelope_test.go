@@ -153,8 +153,8 @@ func TestInvokerCarriesHeadersOverHTTP(t *testing.T) {
 	binv := NewInvoker()
 	defer binv.Close()
 	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(artifact)},
-		Ref:    "#/operations/submit",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: mustContent(artifact)},
+		Selector: "#/operations/submit",
 	})
 	if err := call.Write(context.Background(), map[string]any{
 		"payload": map[string]any{"id": 4},

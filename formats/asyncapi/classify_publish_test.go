@@ -29,8 +29,8 @@ func TestUnaryPublish3xxIsFailure(t *testing.T) {
 	defer binv.Close()
 
 	call := binv.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source: httpSource(srv),
-		Ref:    "#/operations/sendOpenMessage",
+		Source:   httpSource(srv),
+		Selector: "#/operations/sendOpenMessage",
 	})
 	if err := call.Write(bg(), map[string]any{"text": "hi"}); err != nil {
 		t.Fatal(err)

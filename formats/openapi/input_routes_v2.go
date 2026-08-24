@@ -508,4 +508,3 @@ func routeEnvelopeFor(params openapi3.Parameters, envelope *routedEnvelope, path
 func planAllowsObjectPassthrough(plan *bodyPlan) bool {
 	return plan != nil && plan.declared && !plan.synthetic && !plan.wholeObject && plan.family == familyJSON
 }
-

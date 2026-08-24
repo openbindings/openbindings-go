@@ -131,7 +131,7 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 			bindCtx["apiKey"] = generic
 		}
 	}
-	ref, _ := scenario.Given.Binding["ref"].(string)
+	selector, _ := scenario.Given.Binding["selector"].(string)
 	joined := len(scenario.ID) >= len("USAGE-FI-") && scenario.ID[:len("USAGE-FI-")] == "USAGE-FI-"
 	var call invoke.Invocation[any, any]
 	if joined {
@@ -144,11 +144,11 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 		op := invoke.NewOperationInvoker(invoker)
 		call = invoke.Invoke(
 			context.Background(), op, iface,
-			invoke.NewOperationSignature[any, any](usageOperationForRef(t, iface, ref)),
+			invoke.NewOperationSignature[any, any](usageOperationForSelector(t, iface, selector)),
 			invoke.WithContext(bindCtx),
 		)
 	} else {
-		call = invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{Source: source, Ref: ref, Context: bindCtx})
+		call = invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{Source: source, Selector: selector, Context: bindCtx})
 	}
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		_ = call.Write(context.Background(), scenario.Given.Invocation["input"])
@@ -201,14 +201,14 @@ func runUsageProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	return processorscenarios.Observation{Disposition: "refusal", Phase: phase, Data: data}
 }
 
-func usageOperationForRef(t *testing.T, iface *openbindings.Interface, ref string) string {
+func usageOperationForSelector(t *testing.T, iface *openbindings.Interface, selector string) string {
 	t.Helper()
 	for _, binding := range iface.Bindings {
-		if binding.Ref == ref {
+		if binding.Selector == selector {
 			return binding.Operation
 		}
 	}
-	t.Fatalf("synthesized Usage interface has no binding for %q", ref)
+	t.Fatalf("synthesized Usage interface has no binding for %q", selector)
 	return ""
 }
 

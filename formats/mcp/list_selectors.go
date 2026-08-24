@@ -93,8 +93,8 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 
-func bindableTarget(ref, operationKey, description string) synthesize.BindableTarget {
-	target := synthesize.BindableTarget{Ref: ref, OperationKey: operationKey}
+func bindableTarget(selector, operationKey, description string) synthesize.BindableTarget {
+	target := synthesize.BindableTarget{Selector: selector, OperationKey: operationKey}
 	if description != "" {
 		target.Operation = &openbindings.Operation{Description: description}
 	}

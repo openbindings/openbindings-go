@@ -90,7 +90,7 @@ var (
 		"bindingSpec", "location", "content", "description",
 	)
 	knownBindingEntrySet = knownSet(
-		"operation", "source", "ref", "preference", "description", "deprecated",
+		"operation", "source", "selector", "preference", "description", "deprecated",
 		"inputTransform", "outputTransform",
 	)
 	knownInterfaceSet = knownSet(
@@ -399,7 +399,7 @@ func (t TransformOrRef) MarshalJSON() ([]byte, error) {
 type BindingEntry struct {
 	Operation   string   `json:"operation"`
 	Source      string   `json:"source"`
-	Ref         string   `json:"ref,omitempty"`
+	Selector    string   `json:"selector,omitempty"`
 	Preference  *float64 `json:"preference,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Deprecated  bool     `json:"deprecated,omitempty"`
@@ -415,7 +415,7 @@ type BindingEntry struct {
 type bindingEntryWire struct {
 	Operation   string   `json:"operation"`
 	Source      string   `json:"source"`
-	Ref         string   `json:"ref,omitempty"`
+	Selector    string   `json:"selector,omitempty"`
 	Preference  *float64 `json:"preference,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Deprecated  bool     `json:"deprecated,omitempty"`
@@ -438,7 +438,7 @@ func (be *BindingEntry) UnmarshalJSON(b []byte) error {
 	*be = BindingEntry{
 		Operation:       w.Operation,
 		Source:          w.Source,
-		Ref:             w.Ref,
+		Selector:        w.Selector,
 		Preference:      w.Preference,
 		Description:     w.Description,
 		Deprecated:      w.Deprecated,
@@ -454,7 +454,7 @@ func (be BindingEntry) MarshalJSON() ([]byte, error) {
 	w := bindingEntryWire{
 		Operation:       be.Operation,
 		Source:          be.Source,
-		Ref:             be.Ref,
+		Selector:        be.Selector,
 		Preference:      be.Preference,
 		Description:     be.Description,
 		Deprecated:      be.Deprecated,

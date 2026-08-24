@@ -13,8 +13,8 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-func TestParseRef_Valid(t *testing.T) {
-	svc, method, err := parseRef("mypackage.MyService/GetItem")
+func TestParseSelector_Valid(t *testing.T) {
+	svc, method, err := parseSelector("mypackage.MyService/GetItem")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,8 +26,8 @@ func TestParseRef_Valid(t *testing.T) {
 	}
 }
 
-func TestParseRef_NestedPackage(t *testing.T) {
-	svc, method, err := parseRef("com.example.api.v1.UserService/CreateUser")
+func TestParseSelector_NestedPackage(t *testing.T) {
+	svc, method, err := parseSelector("com.example.api.v1.UserService/CreateUser")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,29 +39,29 @@ func TestParseRef_NestedPackage(t *testing.T) {
 	}
 }
 
-func TestParseRef_Empty(t *testing.T) {
-	_, _, err := parseRef("")
+func TestParseSelector_Empty(t *testing.T) {
+	_, _, err := parseSelector("")
 	if err == nil {
-		t.Error("expected error for empty ref")
+		t.Error("expected error for empty selector")
 	}
 }
 
-func TestParseRef_NoSlash(t *testing.T) {
-	_, _, err := parseRef("mypackage.MyService")
+func TestParseSelector_NoSlash(t *testing.T) {
+	_, _, err := parseSelector("mypackage.MyService")
 	if err == nil {
-		t.Error("expected error for ref without slash")
+		t.Error("expected error for selector without slash")
 	}
 }
 
-func TestParseRef_TrailingSlash(t *testing.T) {
-	_, _, err := parseRef("mypackage.MyService/")
+func TestParseSelector_TrailingSlash(t *testing.T) {
+	_, _, err := parseSelector("mypackage.MyService/")
 	if err == nil {
 		t.Error("expected error for trailing slash")
 	}
 }
 
-func TestParseRef_LeadingSlash(t *testing.T) {
-	_, _, err := parseRef("/GetItem")
+func TestParseSelector_LeadingSlash(t *testing.T) {
+	_, _, err := parseSelector("/GetItem")
 	if err == nil {
 		t.Error("expected error for leading slash only")
 	}
@@ -113,14 +113,14 @@ func TestGRPCError_StatusDetails(t *testing.T) {
 	}
 }
 
-func TestRefResolveError_TransportVsNotFound(t *testing.T) {
+func TestSelectorResolveError_TransportVsNotFound(t *testing.T) {
 	// A reflection-time transport status is unsuccessful completion, not a
-	// missing ref; its native gRPC status remains diagnostic only.
-	if ie := refResolveError("pkg.Svc", status.Error(codes.Unavailable, "down")); ie.Code != invoke.ErrCodeExecutionFailed {
+	// missing selector; its native gRPC status remains diagnostic only.
+	if ie := selectorResolveError("pkg.Svc", status.Error(codes.Unavailable, "down")); ie.Code != invoke.ErrCodeExecutionFailed {
 		t.Errorf("unavailable: code = %q, want %s", ie.Code, invoke.ErrCodeExecutionFailed)
 	}
-	if ie := refResolveError("pkg.Svc", errors.New("symbol not found")); ie.Code != "ERR_REF_NOT_FOUND" {
-		t.Errorf("not found: code = %q, want ERR_REF_NOT_FOUND", ie.Code)
+	if ie := selectorResolveError("pkg.Svc", errors.New("symbol not found")); ie.Code != "ERR_SELECTOR_NOT_FOUND" {
+		t.Errorf("not found: code = %q, want ERR_SELECTOR_NOT_FOUND", ie.Code)
 	}
 }
 

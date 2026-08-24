@@ -15,7 +15,7 @@ import (
 // failure) before any observable side effect. ctx is the invocation's
 // lifetime: its cancellation converges with the handle's Cancel().
 //
-// Wiring failures knowable synchronously (e.g. an unloadable ref) surface as
+// Wiring failures knowable synchronously (e.g. an unloadable selector) surface as
 // an already-errored handle, never as a panic.
 //
 // A concrete invoker may also implement InterfaceSynthesizer, SourceInspector,

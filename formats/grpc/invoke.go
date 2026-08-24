@@ -294,25 +294,25 @@ func checkMetadataKey(k string) error {
 	return nil
 }
 
-// parseRef splits a binding ref per GRPC-D-03 (§7):
+// parseSelector splits a binding selector per GRPC-D-03 (§7):
 // <fully-qualified-service>/<method> — the service's package-qualified
 // name, or its bare name when its file declares no package
 // (`CoffeeShop/GetMenu` is legal), one '/', and the unqualified RPC name.
 // Matching downstream is byte-exact; no case folding.
-func parseRef(ref string) (string, string, error) {
-	if ref == "" {
-		return "", "", fmt.Errorf("empty gRPC ref")
+func parseSelector(selector string) (string, string, error) {
+	if selector == "" {
+		return "", "", fmt.Errorf("empty gRPC selector")
 	}
-	idx := strings.Index(ref, "/")
-	if idx < 0 || idx != strings.LastIndex(ref, "/") || idx == 0 || idx == len(ref)-1 {
-		return "", "", fmt.Errorf("gRPC ref %q must be <fully-qualified-service>/<method> (openbindings.grpc@1 GRPC-D-03)", ref)
+	idx := strings.Index(selector, "/")
+	if idx < 0 || idx != strings.LastIndex(selector, "/") || idx == 0 || idx == len(selector)-1 {
+		return "", "", fmt.Errorf("gRPC selector %q must be <fully-qualified-service>/<method> (openbindings.grpc@1 GRPC-D-03)", selector)
 	}
-	return ref[:idx], ref[idx+1:], nil
+	return selector[:idx], selector[idx+1:], nil
 }
 
 // resolveMethod resolves <fully-qualified-service>/<method> against a
 // discovered embedded schema. Matching against the schema's declared
-// services is byte-exact, no case folding (GRPC-D-03); a ref matching no
+// services is byte-exact, no case folding (GRPC-D-03); a selector matching no
 // service or method makes the binding unresolvable.
 func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.MethodDescriptor, *invoke.InvocationError) {
 	var svcDesc protoreflect.ServiceDescriptor
@@ -324,13 +324,13 @@ func resolveMethod(disc *discovery, svcName, methodName string) (protoreflect.Me
 	}
 	if svcDesc == nil {
 		return nil, &invoke.InvocationError{
-			Code: invoke.ErrCodeRefNotFound,
+			Code: invoke.ErrCodeSelectorNotFound,
 		}
 	}
 	m := svcDesc.Methods().ByName(protoreflect.Name(methodName))
 	if m == nil {
 		return nil, &invoke.InvocationError{
-			Code: invoke.ErrCodeRefNotFound,
+			Code: invoke.ErrCodeSelectorNotFound,
 		}
 	}
 	return m, nil
@@ -387,11 +387,11 @@ func grpcError(err error, fallbackCode string) *invoke.InvocationError {
 	return &invoke.InvocationError{Code: invoke.ErrCodeExecutionFailed}
 }
 
-// refResolveError maps a reflection-resolution failure. Transport-level
+// selectorResolveError maps a reflection-resolution failure. Transport-level
 // statuses surface as structural unsuccessful completion rather than a
-// missing ref; anything else means the symbol didn't resolve. Native status
+// missing selector; anything else means the symbol didn't resolve. Native status
 // distinctions remain below the OpenBindings bridge.
-func refResolveError(svcName string, err error) *invoke.InvocationError {
+func selectorResolveError(svcName string, err error) *invoke.InvocationError {
 	if s, ok := status.FromError(err); ok {
 		switch s.Code() {
 		case codes.Unavailable, codes.DeadlineExceeded, codes.Unauthenticated, codes.PermissionDenied:
@@ -399,6 +399,6 @@ func refResolveError(svcName string, err error) *invoke.InvocationError {
 		}
 	}
 	return &invoke.InvocationError{
-		Code: invoke.ErrCodeRefNotFound,
+		Code: invoke.ErrCodeSelectorNotFound,
 	}
 }

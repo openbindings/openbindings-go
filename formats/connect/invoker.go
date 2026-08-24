@@ -115,7 +115,7 @@ var _ invoke.BindingInvoker = (*Invoker)(nil)
 // detected — the server's rejection of the framing is a failure outcome,
 // the mode's declared limit, not a guess about the method.
 //
-// All pre-dispatch failures (bad ref, missing or non-conformant base URL,
+// All pre-dispatch failures (bad selector, missing or non-conformant base URL,
 // schema load failures, schema-range and kind-coverage refusals, input
 // validation) terminate the handle before any network side effect.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
@@ -134,9 +134,9 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	// ----- Pre-side-effect failures: fire before any input is consumed and
 	// before any network I/O, so a no-input-consumed retry is safe. -----
 
-	svcName, methodName, err := parseRef(args.Ref)
+	svcName, methodName, err := parseSelector(args.Selector)
 	if err != nil {
-		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidRef})
+		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector})
 		return
 	}
 
@@ -173,9 +173,9 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	// descriptorless mode without. In schema mode the embedded content is
 	// the artifact the processor interprets (§6, content primacy):
 	// resolution against the schema precedes dispatch, byte-exact
-	// (CONN-D-03), and a ref matching no method makes the binding
+	// (CONN-D-03), and a selector matching no method makes the binding
 	// unresolvable — offline-checkable, before any network I/O. In
-	// descriptorless mode there is nothing to resolve against: the ref
+	// descriptorless mode there is nothing to resolve against: the selector
 	// segments ride verbatim into the request URL, and an unknown method
 	// surfaces as the server's own error — a failure outcome, a stated
 	// limit of the mode (§7).

@@ -42,14 +42,14 @@ func TestConvertToInterfaceInventoriesRootFields(t *testing.T) {
 	if !reflect.DeepEqual(keys, wantKeys) {
 		t.Fatalf("operation keys = %#v, want %#v", keys, wantKeys)
 	}
-	var refs []string
+	var selectors []string
 	for _, binding := range iface.Bindings {
-		refs = append(refs, binding.Ref)
+		selectors = append(selectors, binding.Selector)
 	}
-	sort.Strings(refs)
-	wantRefs := []string{"mutation/status", "query/status", "query/viewer"}
-	if !reflect.DeepEqual(refs, wantRefs) {
-		t.Fatalf("refs = %#v, want %#v", refs, wantRefs)
+	sort.Strings(selectors)
+	wantSelectors := []string{"mutation/status", "query/status", "query/viewer"}
+	if !reflect.DeepEqual(selectors, wantSelectors) {
+		t.Fatalf("selectors = %#v, want %#v", selectors, wantSelectors)
 	}
 	source := iface.Sources[DefaultSourceName]
 	if source.BindingSpec != BindingSpec {

@@ -63,7 +63,7 @@ func operationRequirementCandidate(bindingSpec string, output openbindings.JSONS
 			"createTodo": {
 				Operation: "createTodo",
 				Source:    "service",
-				Ref:       "create",
+				Selector:  "create",
 			},
 		},
 	}

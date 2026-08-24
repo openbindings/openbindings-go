@@ -179,8 +179,8 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	if sourceHasContent {
 		source.Content, _ = json.Marshal(sourceContent)
 	}
-	ref, _ := scenario.Given.Binding["ref"].(string)
-	args := &invoke.BindingInvocationArgs{Source: source, Ref: ref, Context: ctx}
+	selector, _ := scenario.Given.Binding["selector"].(string)
+	args := &invoke.BindingInvocationArgs{Source: source, Selector: selector, Context: ctx}
 	joined := strings.HasPrefix(scenario.ID, "ASYNC-FI-")
 	var call invoke.Invocation[any, any]
 	if joined {
@@ -193,7 +193,7 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 		op := invoke.NewOperationInvoker(invoker)
 		call = invoke.Invoke(
 			context.Background(), op, iface,
-			invoke.NewOperationSignature[any, any](asyncOperationForRef(t, iface, ref)),
+			invoke.NewOperationSignature[any, any](asyncOperationForSelector(t, iface, selector)),
 			invoke.WithContext(ctx),
 		)
 	} else {
@@ -255,14 +255,14 @@ func runAsyncProcessorScenario(t *testing.T, scenario processorscenarios.Scenari
 	return processorscenarios.Observation{Disposition: disposition, Phase: phase, Data: data}
 }
 
-func asyncOperationForRef(t *testing.T, iface *openbindings.Interface, ref string) string {
+func asyncOperationForSelector(t *testing.T, iface *openbindings.Interface, selector string) string {
 	t.Helper()
 	for _, binding := range iface.Bindings {
-		if binding.Ref == ref {
+		if binding.Selector == selector {
 			return binding.Operation
 		}
 	}
-	t.Fatalf("synthesized AsyncAPI interface has no binding for %q", ref)
+	t.Fatalf("synthesized AsyncAPI interface has no binding for %q", selector)
 	return ""
 }
 

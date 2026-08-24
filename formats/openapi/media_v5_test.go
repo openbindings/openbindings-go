@@ -47,8 +47,8 @@ func invokeRevision5Request(t *testing.T, spec string, input any, observe func(*
 		}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1items/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1items/post",
 	})
 	_, invocationErr := driveOutputs(context.Background(), call, input)
 	return invocationErr

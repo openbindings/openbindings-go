@@ -15,6 +15,12 @@
 
 ### Changed
 
+- **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
+  `bindings[*].selector`): bindings ride
+  `invoke.BindingInvocationArgs.Selector`, and refusals use
+  `ERR_INVALID_SELECTOR` / `ERR_SELECTOR_NOT_FOUND`. Schema `$ref`
+  generation is untouched.
+
 - **apiKey rides the consumer-named header per connect@1 §9.6.** The
   grpc-transcribed fixed `Authorization: ApiKey` placement is gone; bearer and
   apiKey coexist; a bare apiKey with no consumer-named header refuses

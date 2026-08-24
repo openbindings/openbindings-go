@@ -26,22 +26,22 @@ func minimalSchema() *introspectionSchema {
 	}
 }
 
-func TestParseRefCanonical(t *testing.T) {
+func TestParseSelectorCanonical(t *testing.T) {
 	for _, tc := range []struct {
-		ref, kind, field string
+		selector, kind, field string
 	}{
 		{"query/viewer", "query", "viewer"},
 		{"mutation/save", "mutation", "save"},
 		{"subscription/updates", "subscription", "updates"},
 	} {
-		kind, field, err := parseRef(tc.ref)
+		kind, field, err := parseSelector(tc.selector)
 		if err != nil || kind != tc.kind || field != tc.field {
-			t.Fatalf("parseRef(%q) = %q, %q, %v", tc.ref, kind, field, err)
+			t.Fatalf("parseSelector(%q) = %q, %q, %v", tc.selector, kind, field, err)
 		}
 	}
-	for _, ref := range []string{"", "Query/viewer", "query/", "query/viewer/nested", "query/not-valid"} {
-		if _, _, err := parseRef(ref); err == nil {
-			t.Errorf("parseRef(%q) unexpectedly succeeded", ref)
+	for _, selector := range []string{"", "Query/viewer", "query/", "query/viewer/nested", "query/not-valid"} {
+		if _, _, err := parseSelector(selector); err == nil {
+			t.Errorf("parseSelector(%q) unexpectedly succeeded", selector)
 		}
 	}
 }

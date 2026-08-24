@@ -53,8 +53,8 @@ func TestRevision6CarriesCombinatorialJSONAsOneApplicationValue(t *testing.T) {
 		return &http.Response{StatusCode: 204, Status: "204 No Content", Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
-		Ref:    "#/paths/~1items/post",
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1items/post",
 	})
 	inputValue := []any{map[string]any{
 		"$openbindings": BindingSpec,

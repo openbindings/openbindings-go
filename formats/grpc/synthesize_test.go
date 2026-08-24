@@ -192,7 +192,7 @@ func TestConvertToInterface_CreatesOperations(t *testing.T) {
 	}
 }
 
-func TestConvertToInterface_CreatesBindingsWithRefs(t *testing.T) {
+func TestConvertToInterface_CreatesBindingsWithSelectors(t *testing.T) {
 	disc := buildTestDiscovery(t, simpleServiceFile("testpkg", "TestService",
 		unaryMethod("GetItem"),
 	))
@@ -206,8 +206,8 @@ func TestConvertToInterface_CreatesBindingsWithRefs(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected binding %q", key)
 	}
-	if binding.Ref != "testpkg.TestService/GetItem" {
-		t.Errorf("ref = %q, want %q", binding.Ref, "testpkg.TestService/GetItem")
+	if binding.Selector != "testpkg.TestService/GetItem" {
+		t.Errorf("selector = %q, want %q", binding.Selector, "testpkg.TestService/GetItem")
 	}
 	if binding.Operation != "GetItem" {
 		t.Errorf("operation = %q, want %q", binding.Operation, "GetItem")
