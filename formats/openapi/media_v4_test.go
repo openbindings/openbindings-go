@@ -64,13 +64,13 @@ func TestRevision4RawResponseAndSynthesisBoundary(t *testing.T) {
 
 func TestRevision4ResponseRangeSelectsConcreteRawAndJSONLanes(t *testing.T) {
 	rawSpec := revision4ResponseSpec("3.1.2", `{"image/*":{}}`)
-	outputs, invocationErr := invokeRevision4Response(t, rawSpec, BindingSpec, "image/png", []byte{222, 173, 190, 239})
+	outputs, invocationErr := invokeRevision4Response(t, rawSpec, bindingSpecForTestDocument(rawSpec), "image/png", []byte{222, 173, 190, 239})
 	if invocationErr != nil || !reflect.DeepEqual(outputs, []any{"3q2+7w=="}) {
 		t.Fatalf("range raw outputs = %#v, %v", outputs, invocationErr)
 	}
 
 	jsonSpec := revision4ResponseSpec("3.1.2", `{"application/*":{"schema":{"type":"object","properties":{"ok":{"type":"boolean"}}}}}`)
-	outputs, invocationErr = invokeRevision4Response(t, jsonSpec, BindingSpec, "application/json", []byte(`{"ok":true}`))
+	outputs, invocationErr = invokeRevision4Response(t, jsonSpec, bindingSpecForTestDocument(jsonSpec), "application/json", []byte(`{"ok":true}`))
 	if invocationErr != nil || !reflect.DeepEqual(outputs, []any{map[string]any{"ok": true}}) {
 		t.Fatalf("range JSON outputs = %#v, %v", outputs, invocationErr)
 	}

@@ -98,6 +98,16 @@
 
 ### Changed
 
+- **Breaking: OpenAPI family tokens and caller inputs now match the 3.0/3.1
+  sibling specifications.** The retired family-wide token is replaced by
+  exact `openbindings.openapi-3.0@1` and `openbindings.openapi-3.1@1`
+  support, each gated to its own admitted editions; the 2.0 and 3.2 family
+  identifiers are recognized but explicitly unsupported. Binding invocation
+  accepts only the closed `{parameters?, body?}` caller envelope, including
+  location-qualified parameter keys when names collide. Synthesis keeps flat
+  developer-facing operation schemas and emits ordinary Core `inputTransform`
+  expressions that construct that envelope.
+
 - **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
   `bindings[*].selector`): bindings ride
   `invoke.BindingInvocationArgs.Selector`, `RuntimeInvocationArgs.Selector`

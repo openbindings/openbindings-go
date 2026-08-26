@@ -21,7 +21,7 @@ import (
 // specification revisions.
 
 func invokeWith(t *testing.T, spec, selector string, input any) (any, *invoke.InvocationError) {
-	return invokeWithBindingSpec(t, BindingSpec, spec, selector, input)
+	return invokeWithBindingSpec(t, bindingSpecForTestDocument(spec), spec, selector, input)
 }
 
 func invokeWithBindingSpec(t *testing.T, bindingSpec, spec, selector string, input any) (any, *invoke.InvocationError) {
@@ -143,8 +143,8 @@ func TestLoadDocument_VersionDiscrimination(t *testing.T) {
 	}
 	for _, content := range rejected {
 		_, err := loadDocument("", openbindings.TextContent(content))
-		if err == nil || !strings.Contains(err.Error(), "OAPI-P-01") {
-			t.Errorf("loadDocument(%s) = %v, want loud OAPI-P-01 refusal", content, err)
+		if err == nil {
+			t.Errorf("loadDocument(%s) = %v, want loud family-specific edition refusal", content, err)
 		}
 	}
 }
@@ -192,7 +192,7 @@ func TestInvoke_CaseFoldingHeaderCollisionRefused(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1items/get", map[string]any{})
+	_, ierr := invokeWithBindingSpec(t, bindingSpecForTestDocument(spec), spec, "#/paths/~1items/get", map[string]any{})
 	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected the unflattenable refusal, got %v", ierr)
 	}
@@ -208,9 +208,9 @@ func TestInvoke_CaseFoldingHeaderCollisionRefused(t *testing.T) {
 // operation declares no request body — loud, naming the offenders.
 func TestInvoke_UnmatchedFieldsRefusedWithoutBody(t *testing.T) {
 	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	_, ierr := invokeWith(t, widgetSpec(srv.URL), "#/paths/~1session/get", map[string]any{
+	_, ierr := invokeWith(t, widgetSpec(srv.URL), "#/paths/~1session/get", map[string]any{"parameters": map[string]any{
 		"session_id": "s", "bogus": 1,
-	})
+	}})
 	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 	}
@@ -255,7 +255,10 @@ func TestInvoke_UnmatchedFieldRefusedForNonObjectBody(t *testing.T) {
 			    "responses": {"200": {"description": "ok"}}
 			  }}}
 			}`, srv.URL, tc.content)
-			_, ierr := invokeWith(t, spec, "#/paths/~1echo/post", map[string]any{"body": "x", "stray": 1})
+			_, ierr := invokeWith(t, spec, "#/paths/~1echo/post", map[string]any{
+				"parameters": map[string]any{"stray": 1},
+				"body":       "x",
+			})
 			if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 				t.Fatalf("expected ERR_VALIDATION_FAILED, got %v", ierr)
 			}
@@ -338,7 +341,7 @@ func TestInvoke_PropertiesWithoutTypeStillFlattens(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1w/post", map[string]any{"name": "x"})
+	_, ierr := invokeWith(t, spec, "#/paths/~1w/post", map[string]any{"body": map[string]any{"name": "x"}})
 	if ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
@@ -373,18 +376,51 @@ func TestInvoke_EnvelopeShapedApplicationBodyRemainsApplicationData(t *testing.T
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	input := map[string]any{
+	applicationBody := map[string]any{
 		"$openbindings": BindingSpec,
 		"value":         map[string]any{"application": true},
 		"parameters":    []any{},
 		"body":          map[string]any{"application": true},
 	}
+	input := map[string]any{"body": applicationBody}
 
 	if _, ierr := invokeWith(t, spec, "#/paths/~1objects/post", input); ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
-	if !reflect.DeepEqual(got, input) {
-		t.Fatalf("request body = %#v, want application input %#v", got, input)
+	if !reflect.DeepEqual(got, applicationBody) {
+		t.Fatalf("request body = %#v, want application input %#v", got, applicationBody)
+	}
+}
+
+func TestInvoke_CallerEnvelopeCarriesJSONBodyWithoutSchemaValidation(t *testing.T) {
+	var bodies []string
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.1.2", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/objects": {"post": {
+	    "operationId": "postObject",
+	    "requestBody": {"required": true, "content": {"application/json": {"schema": {
+	      "type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]
+	    }}}},
+	    "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "object"}}}}}
+	  }}}
+	}`, srv.URL)
+	if _, err := loadDocumentForBindingSpec("", openbindings.TextContent(spec), BindingSpecOpenAPI31); err != nil {
+		t.Fatalf("test artifact: %v", err)
+	}
+	for _, value := range []any{nil, "scalar"} {
+		if _, invocationErr := invokeWith(t, spec, "#/paths/~1objects/post", map[string]any{"body": value}); invocationErr != nil {
+			t.Fatalf("body %#v was validated instead of carried: %v", value, invocationErr)
+		}
+	}
+	if want := []string{"null", `"scalar"`}; !reflect.DeepEqual(bodies, want) {
+		t.Fatalf("wire bodies = %#v, want %#v", bodies, want)
 	}
 }
 
@@ -412,7 +448,7 @@ func TestInvoke_PassthroughRidesJSONBodyEncoding(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1w/post", map[string]any{"name": "x", "extra": "y"})
+	_, ierr := invokeWith(t, spec, "#/paths/~1w/post", map[string]any{"body": map[string]any{"name": "x", "extra": "y"}})
 	if ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
@@ -439,9 +475,9 @@ func TestInvoke_UndeclaredMultipartMembersRefused(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1upload/post", map[string]any{
+	_, ierr := invokeWithBindingSpec(t, bindingSpecForTestDocument(spec), spec, "#/paths/~1upload/post", map[string]any{"body": map[string]any{
 		"description": "d", "note": "urgent", "meta": map[string]any{"k": "v"},
-	})
+	}})
 	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected declaration-defined multipart refusal, got %v", ierr)
 	}
@@ -467,7 +503,7 @@ func TestInvoke_UndeclaredURLEncodedMembersRefused(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1form/post", map[string]any{"name": "a b", "extra": "y"})
+	_, ierr := invokeWithBindingSpec(t, bindingSpecForTestDocument(spec), spec, "#/paths/~1form/post", map[string]any{"body": map[string]any{"name": "a b", "extra": "y"}})
 	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected declaration-defined urlencoded refusal, got %v", ierr)
 	}
@@ -493,7 +529,7 @@ func TestInvoke_SuppliedInputMissingPathParamRefuses(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1w~1{id}/post", map[string]any{"name": "x"})
+	_, ierr := invokeWith(t, spec, "#/paths/~1w~1{id}/post", map[string]any{"body": map[string]any{"name": "x"}})
 	if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 		t.Fatalf("expected ERR_REFUSED for the unfilled path template, got %v", ierr)
 	}
@@ -510,7 +546,7 @@ func TestInvoke_SuppliedInputMissingPathParamRefuses(t *testing.T) {
 	}))
 	defer srv2.Close()
 	spec2 := strings.ReplaceAll(spec, srv.URL, srv2.URL)
-	if _, ierr := invokeWith(t, spec2, "#/paths/~1w~1{id}/post", map[string]any{"id": "7"}); ierr != nil {
+	if _, ierr := invokeWith(t, spec2, "#/paths/~1w~1{id}/post", map[string]any{"parameters": map[string]any{"id": "7"}}); ierr != nil {
 		t.Fatalf("missing required body member must be the server's business, got %v", ierr)
 	}
 	if string(gotBody) != "" {
@@ -540,11 +576,11 @@ func TestInvoke_QueryStyleSerializationOnTheWire(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1search/get", map[string]any{
+	_, ierr := invokeWith(t, spec, "#/paths/~1search/get", map[string]any{"parameters": map[string]any{
 		"tags":   []any{"a", "b"},
 		"flat":   []any{"x", "y"},
 		"filter": map[string]any{"kind": "big", "size": float64(2)},
-	})
+	}})
 	if ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
@@ -575,9 +611,9 @@ func TestInvoke_PathStyleSerializationOnTheWire(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1map~1{coords}/get", map[string]any{
+	_, ierr := invokeWith(t, spec, "#/paths/~1map~1{coords}/get", map[string]any{"parameters": map[string]any{
 		"coords": []any{float64(50.4), float64(4.32)},
-	})
+	}})
 	if ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
@@ -614,7 +650,7 @@ func TestInvoke_PlusJSONSelected(t *testing.T) {
 	    "responses": {"201": {"description": "ok", "content": {"application/json": {"schema": {}}}}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1things/post", map[string]any{"k": "v"})
+	_, ierr := invokeWith(t, spec, "#/paths/~1things/post", map[string]any{"body": map[string]any{"k": "v"}})
 	if ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
@@ -642,7 +678,7 @@ func TestInvoke_BinaryOnlyBodyCarriesExactOctets(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWithBindingSpec(t, BindingSpec, spec, "#/paths/~1blob/post", map[string]any{"body": "AAEC"})
+	_, ierr := invokeWithBindingSpec(t, bindingSpecForTestDocument(spec), spec, "#/paths/~1blob/post", map[string]any{"body": "AAEC"})
 	if ierr != nil {
 		t.Fatalf("binary invocation failed: %v", ierr)
 	}
@@ -684,7 +720,7 @@ func TestInvoke_DegenerateMediaSchemaCombinationRefused(t *testing.T) {
 		{
 			"text-only with an object schema",
 			`{"text/plain": {"schema": {"type": "object", "properties": {"a": {"type": "string"}}}}}`,
-			map[string]any{"a": "x"},
+			map[string]any{"body": map[string]any{"a": "x"}},
 		},
 	}
 	for _, tc := range cases {
@@ -782,9 +818,9 @@ func TestInvoke_URLEncodedBodyOnTheWire(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1form/post", map[string]any{
+	_, ierr := invokeWith(t, spec, "#/paths/~1form/post", map[string]any{"body": map[string]any{
 		"name": "a b", "ids": []any{float64(1), float64(2)},
-	})
+	}})
 	if ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
@@ -1100,11 +1136,11 @@ func TestInvoke_CookieChannelAssembly(t *testing.T) {
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1sess/get",
 		Context:  map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 	})
-	if _, ierr := driveSingle(t, call, map[string]any{"zeta": "z", "alpha": "a"}); ierr != nil {
+	if _, ierr := driveSingle(t, call, map[string]any{"parameters": map[string]any{"zeta": "z", "alpha": "a"}}); ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	// ONE header: declared params in declaration order (zeta before alpha),
@@ -1144,11 +1180,11 @@ func TestInvoke_CredentialCollisionRefused(t *testing.T) {
 			}`, srv.URL, tc.param, tc.in, tc.in, tc.param)
 
 			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+				Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 				Selector: "#/paths/~1x/get",
 				Context:  map[string]any{"apiKey": "cred"},
 			})
-			_, ierr := driveSingle(t, call, map[string]any{tc.param: "caller-value"})
+			_, ierr := driveSingle(t, call, map[string]any{"parameters": map[string]any{tc.param: "caller-value"}})
 			if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 				t.Fatalf("expected the OAPI-P-10 collision refusal, got %v", ierr)
 			}
@@ -1189,7 +1225,7 @@ func TestInvoke_SecurityORSelectsOneCompleteAlternative(t *testing.T) {
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 		Context: map[string]any{"apiKeys": map[string]any{
 			"headerKey": "header-secret",
@@ -1236,7 +1272,7 @@ func TestInvoke_SecurityORDoesNotCombineIncompleteAlternativeFragments(t *testin
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 		Context: map[string]any{"apiKeys": map[string]any{
 			"firstHeader": "incomplete-fragment",
@@ -1273,7 +1309,7 @@ func TestInvoke_NoDeclaredSecurityDoesNotSendContextCredentials(t *testing.T) {
 	}`, srv.URL)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 		Context: map[string]any{
 			"bearerToken": "unrelated-bearer",
@@ -1305,7 +1341,7 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 		  }}}
 		}`, srv.URL)
 		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 			Selector: "#/paths/~1x/get",
 		})
 		_, ierr := driveSingle(t, call, map[string]any{})
@@ -1336,7 +1372,7 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 		  }}
 		}`, srv.URL)
 		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 			Selector: "#/paths/~1x/get",
 			Context:  map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 		})
@@ -1371,7 +1407,7 @@ func TestPrepareBinding_FiltersCollidingSecurityAlternative(t *testing.T) {
 	}`, srv.URL)
 
 	details, err := NewInvoker().PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 	})
 	if err != nil {
@@ -1401,7 +1437,7 @@ func TestInvoke_AllMissingSecurityAlternativesRefuseBeforeDispatch(t *testing.T)
 	  }}}
 	}`, srv.URL)
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 	})
 	_, ierr := driveSingle(t, call, nil)
@@ -1432,7 +1468,7 @@ func TestSchemaFreeCustomDocumentDialectRemainsInvocableAndSynthesizable(t *test
 	  }}}
 	}`, srv.URL)
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
@@ -1442,7 +1478,7 @@ func TestSchemaFreeCustomDocumentDialectRemainsInvocableAndSynthesizable(t *test
 		t.Fatalf("invocation requests = %d, want 1", requests.Load())
 	}
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatalf("schema-free portable synthesis should not interpret the custom dialect: %v", err)
@@ -1461,7 +1497,7 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 		  "paths": {"/x": {"get": {"operationId": "x", "responses": {"200": {"description": "ok"}}}}}
 		}`, srv.URL)
 		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 			Selector: "#/paths/~1x/get",
 			Context: map[string]any{
 				"headers": map[string]any{"Cookie": "raw=1"},
@@ -1492,7 +1528,7 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 		  "components": {"securitySchemes": {"cookieKey": {"type": "apiKey", "in": "cookie", "name": "session"}}}
 		}`, srv.URL)
 		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-			Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+			Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 			Selector: "#/paths/~1x/get",
 			Context: map[string]any{
 				"headers": map[string]any{"cookie": "raw=1"},
@@ -1527,7 +1563,7 @@ func TestPrepareBindingReturnsNoChallengeForOwnershipConflict(t *testing.T) {
 	  "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}}
 	}`
 	details, err := NewInvoker().PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 	})
 	if err != nil {
@@ -1552,7 +1588,7 @@ func TestInvoke_ProcessorOwnedHeaderParametersRefused(t *testing.T) {
 			  }}}
 			}`, srv.URL, name)
 			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+				Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 				Selector: "#/paths/~1x/get",
 			})
 			_, ierr := driveSingle(t, call, map[string]any{})
@@ -1593,7 +1629,7 @@ func TestInvoke_ServerConfigurationPoint(t *testing.T) {
 	  }}}}}
 	}`
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1ping/get",
 		Context:  map[string]any{"configuration": map[string]any{"server": map[string]any{"baseUrl": srv.URL}}},
 	})

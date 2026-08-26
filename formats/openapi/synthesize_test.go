@@ -391,7 +391,7 @@ func TestSynthesizeInterface_PreservesNumericExclusiveBoundsIn31(t *testing.T) {
   }}}
 }`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(content), Content: openbindings.TextContent(content)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize valid OpenAPI 3.1 numeric bounds: %v", err)
@@ -469,7 +469,7 @@ func TestSynthesize_ParamBodyCollisionGetsNeutralRoute(t *testing.T) {
 	var warnings []synthesize.SynthesizerWarning
 	synth := NewSynthesizer()
 	iface, err := synth.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources:   []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		Sources:   []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
 		OnWarning: func(w synthesize.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
 	if err != nil {
@@ -531,7 +531,7 @@ func TestSynthesize_MediaSchemaMismatchWarns(t *testing.T) {
 	var warnings []synthesize.SynthesizerWarning
 	synth := NewSynthesizer()
 	_, err := synth.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources:   []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		Sources:   []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
 		OnWarning: func(w synthesize.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
 	if err != nil {
@@ -553,7 +553,7 @@ func TestSynthesize_MediaSchemaMismatchWarns(t *testing.T) {
 	// The string-carriage lane is selected by the DECLARATION (§9.2, ruled
 	// 2026-08-15), so an object-schema text declaration selects no lane at
 	// all rather than selecting one and then failing its schema test.
-	wantText := `request body declares no media type whose declaration selects a request carriage lane openbindings.openapi@1 defines (declared: text/plain); optional body omitted from the synthesized contract`
+	wantText := `request body declares no media type whose declaration selects a request carriage lane the registered OpenAPI binding family defines (declared: text/plain); optional body omitted from the synthesized contract`
 	if w := byPath["operations.objectText.input"]; w.Code != "openapi.unresolvable_request_body" || w.Message != wantText {
 		t.Errorf("text warning = %q/%q, want openapi.unresolvable_request_body/%q", w.Code, w.Message, wantText)
 	}
@@ -573,7 +573,7 @@ func TestSynthesize_PreservesCandidateSpecificInputSurfaces(t *testing.T) {
 	  }}}
 	}`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -639,7 +639,7 @@ func TestSynthesize_TypelessBodyWrapsSynthetic(t *testing.T) {
 	}`
 	synth := NewSynthesizer()
 	iface, err := synth.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -694,7 +694,7 @@ func TestSynthesizeInterfaceWithCoverageAccountsForAlternativesAndReverseInterac
 	  }
 	}`
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -739,7 +739,7 @@ func TestSynthesizeInterfaceWithCoverageCanProveFullRepresentation(t *testing.T)
 	  }
 	}`
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -790,7 +790,7 @@ func TestSynthesizeInterface_RefusesEntryInvalidTypeKeyword(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: path}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpecOpenAPI31, Location: path}},
 	})
 	if err == nil {
 		t.Fatal("expected the §3 part-2 whole-source refusal: the document's only declared target is ladder-invalid")
@@ -849,7 +849,7 @@ func TestSynthesizeInterface_RefusesExternalInvalidTypeKeyword(t *testing.T) {
 	}
 	var warnings []synthesize.SynthesizerWarning
 	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources:   []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: path}},
+		Sources:   []synthesize.SynthesizeSource{{BindingSpec: BindingSpecOpenAPI31, Location: path}},
 		OnWarning: func(w synthesize.SynthesizerWarning) { warnings = append(warnings, w) },
 	})
 	if err == nil {

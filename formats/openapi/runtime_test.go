@@ -38,7 +38,7 @@ func TestRuntimeInvokesArtifactWithoutOBI(t *testing.T) {
 		Selector: "#/paths/~1users~1{id}/get",
 	})
 
-	if err := call.Write(context.Background(), map[string]any{"id": "42"}); err != nil {
+	if err := call.Write(context.Background(), map[string]any{"parameters": map[string]any{"id": "42"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := call.Close(); err != nil {

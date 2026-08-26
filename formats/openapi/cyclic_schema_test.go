@@ -50,7 +50,7 @@ const recursiveDoc = `{
 func TestRecursiveComponentSynthesizesAsDefs(t *testing.T) {
 	synth := &Synthesizer{}
 	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(recursiveDoc)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(recursiveDoc), Content: json.RawMessage(recursiveDoc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -100,7 +100,7 @@ func TestRecursiveComponentBelowOutputUnionHoistsAtBranchRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: content}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(content), Content: content}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -135,7 +135,7 @@ func TestSynthesisTreatsRefShapedSchemaDataAsOpaque(t *testing.T) {
   }}
 }`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(doc), Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -160,7 +160,7 @@ func TestSynthesisTreatsRefShapedSchemaDataAsOpaque(t *testing.T) {
 func TestRecursiveComponentSynthesizesAndInvokesThroughCoreDocumentRoot(t *testing.T) {
 	doc := strings.Replace(recursiveDoc, `"paths":`, `"servers": [{"url": "https://api.example.test"}], "paths":`, 1)
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(doc), Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -234,7 +234,7 @@ func TestRecursiveComponentReachedThroughArrayItemsValidatesThroughCoreDocumentR
   }}}
 }`
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(doc), Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -297,7 +297,7 @@ func TestResolvedParameterSchemaRefDoesNotEscapeIntoOBI(t *testing.T) {
 }`
 
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(doc), Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)

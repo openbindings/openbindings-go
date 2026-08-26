@@ -19,7 +19,7 @@ func synthesizeOverlayFixture(t *testing.T, synthesizer *Synthesizer, location, 
 	t.Helper()
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
-			BindingSpec: BindingSpec,
+			BindingSpec: bindingSpecForTestDocument(document),
 			Location:    location,
 			Content:     openbindings.TextContent(document),
 		}},
@@ -288,7 +288,7 @@ func TestSynthesisOverlayOwnershipIsConcurrentAndCollisionSafe(t *testing.T) {
 			authored := fmt.Sprintf("schema-%d", index+1)
 			document := fmt.Sprintf(`{"openapi":"3.1.2","info":{"title":"Race","version":"1"},"paths":{"/value":{"get":{"operationId":"value","responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"type":"string","default":null,%q:%q}}}}}}}}}`, schemaOverlayMarker, authored)
 			iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-				Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(document)}},
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(document), Content: openbindings.TextContent(document)}},
 			})
 			if err != nil {
 				errors <- err

@@ -19,7 +19,7 @@ func TestAdapterErrorBoundary_NetworkFailureIsCodeOnly(t *testing.T) {
 	})}
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":{}}}}}}}}`
 	call := NewInvokerWithClient(client).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 	})
 	_, ierr := driveSingle(t, call, nil)

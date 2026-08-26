@@ -21,7 +21,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-// This file implements §9.2 of openbindings.openapi@1 (OAPI-P-04): request
+// This file implements §9.2 of the registered OpenAPI binding family (OAPI-P-04): request
 // media selection with its deterministic tiebreaks and pre-dispatch
 // refusals, multipart part encoding (including the Base64 boundary encoding
 // for binary-signaled parts), urlencoded field serialization, and the
@@ -496,7 +496,7 @@ func planRequestBody(op *openapi3.Operation) (*bodyPlan, error) {
 // set. Sorting is a nonnormative reference-SDK policy only; the binding
 // specification gives the declarations no preference order.
 func planRequestBodies(op *openapi3.Operation) ([]*bodyPlan, error) {
-	return planRequestBodiesFor(nil, op, BindingSpec)
+	return planRequestBodiesFor(nil, op, defaultBindingSpec)
 }
 
 // planRequestBodiesFor preserves the immutable revision-1/2 candidate set and
@@ -577,7 +577,7 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 			return nil, fmt.Errorf("every request content declaration denotes a normalized-colliding parsed media identity, so no selection may land on one (colliding: %s)", strings.Join(identities, ", "))
 		}
 		sort.Strings(declared)
-		return nil, fmt.Errorf("request body declares no media type whose declaration selects a request carriage lane openbindings.openapi@1 defines (declared: %s)", strings.Join(declared, ", "))
+		return nil, fmt.Errorf("request body declares no media type whose declaration selects a request carriage lane the registered OpenAPI binding family defines (declared: %s)", strings.Join(declared, ", "))
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].parsed.identity < candidates[j].parsed.identity })
 	plans := make([]*bodyPlan, 0, len(candidates))
@@ -998,7 +998,7 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 // switch in the three engines; it discarded an explicitly written
 // encoding.contentType, collided sibling field names, and refused at dispatch
 // for values the artifact had fully declared. It is deleted, and
-// openbindings.openapi@1 section 2 now states the patch-uniformity reading
+// the registered OpenAPI binding family section 2 now states the patch-uniformity reading
 // once. Package: design/openapi-30-urlencoded-default-lane-ruling.md.
 //
 // Reproduce the per-edition presence pattern (edition order 3.0.0, 3.0.1,
@@ -1703,7 +1703,7 @@ func resolvedBodyShape(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) 
 	seen[schema] = true
 	defer delete(seen, schema)
 	if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 || schema.Not != nil {
-		return false, nil, fmt.Errorf("conditional/combinatorial request schema has no single declaration-defined flattened surface in openbindings.openapi@1 revision 1")
+		return false, nil, fmt.Errorf("conditional/combinatorial request schema has no single declaration-defined flattened surface in the registered OpenAPI binding family revision 1")
 	}
 	props := map[string]bool{}
 	object := schema.Type.Is("object") || schema.Properties != nil
@@ -1747,7 +1747,7 @@ func candidateCollides(params openapi3.Parameters, plan *bodyPlan) bool {
 }
 
 func configuredRequestPlans(plans []*bodyPlan, bindCtx map[string]any) []*bodyPlan {
-	selected, _ := configuredRequestPlansFor(nil, nil, plans, bindCtx, BindingSpec)
+	selected, _ := configuredRequestPlansFor(nil, nil, plans, bindCtx, defaultBindingSpec)
 	return selected
 }
 
@@ -1806,7 +1806,7 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 }
 
 func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans []*bodyPlan, wanted parsedMediaType, bindingSpecs ...string) ([]*bodyPlan, error) {
-	bindingSpec := BindingSpec
+	bindingSpec := defaultBindingSpec
 	if len(bindingSpecs) > 0 {
 		bindingSpec = bindingSpecs[0]
 	}
@@ -2060,7 +2060,7 @@ func buildRequestBody(doc *openapi3.T, plan *bodyPlan, routed *routedInput) (io.
 // Other parts follow the artifact's encoding object or OAS per-type defaults.
 // Fields are written in sorted order for a deterministic body.
 func buildMultipartBody(doc *openapi3.T, media *openapi3.MediaType, fields map[string]any) (io.Reader, string, error) {
-	return buildMultipartBodyForRevision(doc, media, fields, BindingSpec)
+	return buildMultipartBodyForRevision(doc, media, fields, defaultBindingSpec)
 }
 
 func buildMultipartBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, fields map[string]any, bindingSpec string) (io.Reader, string, error) {
@@ -3043,7 +3043,7 @@ func canonicalBase64BoundaryBytes(name, value string) ([]byte, error) {
 // serialized with the same expansions as query parameters and joined in
 // sorted-name order for a deterministic body.
 func buildURLEncodedBody(media *openapi3.MediaType, fields map[string]any) (string, error) {
-	return buildURLEncodedBodyForRevision(nil, media, fields, BindingSpec)
+	return buildURLEncodedBodyForRevision(nil, media, fields, defaultBindingSpec)
 }
 
 func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, fields map[string]any, bindingSpec string) (string, error) {
@@ -3178,7 +3178,7 @@ func governingResponse(op *openapi3.Operation, status int) *governingResponseMat
 // a subset of the actual Content-Type. Greatest parameter specificity wins;
 // a tie is ambiguous and loud.
 func governingResponseMedia(response *openapi3.Response, actual string) (parsedMediaType, error) {
-	return governingResponseMediaFor(response, actual, BindingSpec)
+	return governingResponseMediaFor(response, actual, defaultBindingSpec)
 }
 
 func governingResponseMediaFor(response *openapi3.Response, actual, bindingSpec string) (parsedMediaType, error) {
@@ -3288,7 +3288,7 @@ func governingResponseMediaMatchFor(response *openapi3.Response, actual, binding
 // a successful response: literal 2xx, 2XX, and default declarations. Members
 // retain declaration parameters; ordering is an implementation convention.
 func successMediaTypes(op *openapi3.Operation) []string {
-	return successMediaTypesFor(op, BindingSpec)
+	return successMediaTypesFor(op, defaultBindingSpec)
 }
 
 func successMediaTypesFor(op *openapi3.Operation, bindingSpec string) []string {

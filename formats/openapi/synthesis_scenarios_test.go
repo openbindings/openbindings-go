@@ -62,11 +62,29 @@ func TestSynthesisScenarios(t *testing.T) {
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
-	if err := synthesisscenarios.Verify(context.Background(), root, "openapi", synthesisFactory); err != nil {
-		if os.IsNotExist(err) && os.Getenv("OB_CORPUS_REQUIRED") == "" {
-			t.Skip(err)
-		}
-		t.Fatal(err)
+	for _, family := range []string{"openapi-3.0", "openapi-3.1"} {
+		family := family
+		t.Run(family, func(t *testing.T) {
+			// Later ledger clusters own the partMedia/propertyMedia configuration
+			// changes (cluster 5) and dependency synthesis (cluster 10). This node
+			// runs every current scenario except those explicitly later cells; they
+			// are not silently interpreted under the old models.
+			laterCluster := map[string]bool{
+				"OAPI30-SS-42": true,
+				"OAPI31-SS-01": true,
+				"OAPI31-SS-23": true,
+				"OAPI31-SS-24": true,
+				"OAPI31-SS-30": true,
+			}
+			if err := synthesisscenarios.VerifyWhere(context.Background(), root, family, synthesisFactory, func(scenario synthesisscenarios.Scenario) bool {
+				return !laterCluster[scenario.ID]
+			}); err != nil {
+				if os.IsNotExist(err) && os.Getenv("OB_CORPUS_REQUIRED") == "" {
+					t.Skip(err)
+				}
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

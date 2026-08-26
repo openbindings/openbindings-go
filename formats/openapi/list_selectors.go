@@ -34,13 +34,13 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	schemaOverlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
 
 	// Inspection and synthesis share the same realizability filter: an OAS
-	// operation whose revision-1 flattened boundary cannot be represented is
+	// operation whose synthesizable operation boundary cannot be represented is
 	// not advertised as bindable merely because it appears under paths — it
 	// is filtered per operation (tolerant mode), never a reason to refuse
 	// inspecting the rest of the document.
 	bindingSpec := source.BindingSpec
-	if bindingSpec == "" {
-		bindingSpec = BindingSpec
+	if err := checkAcceptedOpenAPIVersionForBindingSpec(doc, bindingSpec); err != nil {
+		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
 	iface, err := convertDocToInterfaceWithOverlay(doc, source.Location, bindingSpec, nil, func(unrealizableTarget) {}, schemaOverlays, floor)
 	if err != nil {

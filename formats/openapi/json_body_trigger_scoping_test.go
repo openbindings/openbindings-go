@@ -5,8 +5,9 @@ package openapi
 // (testdata/json-body-trigger-scoping-cases.json). This engine owns
 // SYNTHESIS, so the cells are asserted through the shipped synthesizer: a
 // whole cell publishes the one protocol-neutral `payload` operation property
-// and an inputTransform carrying "whole":"payload"; a flattened cell
-// publishes the artifact's own `value` property and no `payload`.
+// and an inputTransform that places it in the caller envelope's body; a
+// flattened cell publishes the artifact's own `value` property and maps an
+// object body.
 //
 // Two rules ride the same cells. The trigger keywords are read under the
 // GOVERNING EDITION'S dialect: on the 3.0 line patternProperties, if, then,
@@ -20,7 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"strings"
+	"reflect"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -93,7 +94,7 @@ func TestSharedJSONBodyTriggerScopingSynthesis(t *testing.T) {
 			}
 			document := jsonBodyTriggerDocument(t, fixture)
 			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-				Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(document)}},
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(document), Content: openbindings.TextContent(document)}},
 			})
 			if err != nil {
 				t.Fatalf("synthesis: %v", err)
@@ -106,23 +107,35 @@ func TestSharedJSONBodyTriggerScopingSynthesis(t *testing.T) {
 			_, payload := properties["payload"]
 			_, value := properties["value"]
 			binding := iface.Bindings["createItem.openapi"]
-			wholeTransform := binding.InputTransform != nil &&
-				strings.Contains(binding.InputTransform.Inline, `"whole":"payload"`)
+			if binding.InputTransform == nil {
+				t.Fatal("synthesized body input has no caller-envelope transform")
+			}
+			flatInput := map[string]any{"value": "member"}
+			wantBody := any(map[string]any{"value": "member"})
+			if fixture.Expect == "whole" {
+				flatInput = map[string]any{"payload": map[string]any{"value": "whole"}}
+				wantBody = map[string]any{"value": "whole"}
+			}
+			transformed, transformErr := (openAPIJSONataEvaluator{}).Evaluate(binding.InputTransform.Inline, flatInput)
+			if transformErr != nil {
+				t.Fatalf("evaluate input transform: %v", transformErr)
+			}
+			envelope, _ := transformed.(map[string]any)
 
 			if fixture.Expect == "whole" {
 				if !payload || value {
 					t.Fatalf("whole carriage did not publish a lone payload property: %#v", properties)
 				}
-				if !wholeTransform {
-					t.Fatalf("input transform does not route the whole body: %#v", binding.InputTransform)
+				if !reflect.DeepEqual(envelope["body"], wantBody) {
+					t.Fatalf("whole-body transform = %#v, want body %#v", envelope, wantBody)
 				}
 				return
 			}
 			if payload || !value {
 				t.Fatalf("flattened carriage did not publish the artifact's own property: %#v", properties)
 			}
-			if wholeTransform {
-				t.Fatalf("flattened carriage routed a whole body: %#v", binding.InputTransform)
+			if !reflect.DeepEqual(envelope["body"], wantBody) {
+				t.Fatalf("flattened-body transform = %#v, want body %#v", envelope, wantBody)
 			}
 		})
 	}

@@ -124,10 +124,11 @@ func TestSharedMediaCollisionConfinementConformance(t *testing.T) {
 
 func assertMediaCollisionRequestCell(t *testing.T, fixture mediaCollisionCase) {
 	t.Helper()
+	document := mediaCollisionRequestDocument(t, fixture)
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
-			BindingSpec: BindingSpec,
-			Content:     json.RawMessage(mediaCollisionRequestDocument(t, fixture)),
+			BindingSpec: bindingSpecForTestDocument(document),
+			Content:     json.RawMessage(document),
 		}},
 	})
 	if err != nil {
@@ -169,8 +170,15 @@ func assertMediaCollisionRequestCell(t *testing.T, fixture mediaCollisionCase) {
 		if target.ReasonCode != fixture.TargetReasonCode {
 			t.Fatalf("target reason code = %q, want %q", target.ReasonCode, fixture.TargetReasonCode)
 		}
-		if target.Rule != fixture.TargetRule {
-			t.Fatalf("target rule = %q, want %q", target.Rule, fixture.TargetRule)
+		legacyRule := strings.TrimPrefix(fixture.TargetRule, "OAPI-")
+		if legacyRule == "P-04" {
+			legacyRule = "P-03"
+		} else if legacyRule == "P-03" {
+			legacyRule = "P-02"
+		}
+		wantRule := openAPIRule(bindingSpecForOpenAPIEdition(fixture.OpenAPI), legacyRule)
+		if target.Rule != wantRule {
+			t.Fatalf("target rule = %q, want %q", target.Rule, wantRule)
 		}
 	default:
 		t.Fatalf("unknown target expectation %q", fixture.Target)
@@ -199,8 +207,9 @@ func assertMediaCollisionRequestCell(t *testing.T, fixture mediaCollisionCase) {
 		// The reason vocabulary is unchanged by confinement: a colliding
 		// alternative is the OAPI-P-04 media exclusion, never OAPI-P-03's
 		// parameter-boundary flattening collision.
-		if entry.ReasonCode != "openapi.request_media_excluded" || entry.Rule != "OAPI-P-04" {
-			t.Fatalf("alternative %q accounted %s / %s, want openapi.request_media_excluded / OAPI-P-04", mediaKey, entry.ReasonCode, entry.Rule)
+		wantRule := openAPIRule(bindingSpecForOpenAPIEdition(fixture.OpenAPI), "P-03")
+		if entry.ReasonCode != "openapi.request_media_excluded" || entry.Rule != wantRule {
+			t.Fatalf("alternative %q accounted %s / %s, want openapi.request_media_excluded / %s", mediaKey, entry.ReasonCode, entry.Rule, wantRule)
 		}
 		if !strings.Contains(entry.Message, fixture.CollidingIdentity) {
 			t.Errorf("alternative %q message = %q, want it to name the colliding identity %q", mediaKey, entry.Message, fixture.CollidingIdentity)

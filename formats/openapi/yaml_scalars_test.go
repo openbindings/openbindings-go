@@ -140,7 +140,7 @@ paths:
 	}
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
-			BindingSpec: "openbindings.openapi@1",
+			BindingSpec: BindingSpecOpenAPI30,
 			Location:    "https://scalars.example/openapi.yaml",
 			Content:     content,
 		}},

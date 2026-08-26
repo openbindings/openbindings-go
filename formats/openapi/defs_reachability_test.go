@@ -155,7 +155,7 @@ func TestAuthorialDefsSurviveReachabilityClosure(t *testing.T) {
 }`
 	synth := &Synthesizer{}
 	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(doc), Content: json.RawMessage(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)
@@ -174,7 +174,7 @@ func synthesizeDefsReachabilityDoc(t *testing.T) *openbindings.Interface {
 	t.Helper()
 	synth := &Synthesizer{}
 	result, err := synth.SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(defsReachabilityDoc)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(defsReachabilityDoc), Content: json.RawMessage(defsReachabilityDoc)}},
 	})
 	if err != nil {
 		t.Fatalf("synthesis failed: %v", err)

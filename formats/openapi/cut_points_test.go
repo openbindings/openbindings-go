@@ -90,7 +90,7 @@ func TestCutPointCaseTable(t *testing.T) {
 			input := func() *synthesize.SynthesizeInput {
 				return &synthesize.SynthesizeInput{
 					Sources: []synthesize.SynthesizeSource{{
-						BindingSpec: BindingSpec,
+						BindingSpec: bindingSpecForTestDocument(testCase.Document),
 						Content:     json.RawMessage(testCase.Document),
 					}},
 				}

@@ -100,16 +100,16 @@ func TestCoverageSynthesisReturnsSoundPartialOBI(t *testing.T) {
 	if conditional.ReasonCode != "openapi.unresolvable_request_body" && conditional.ReasonCode != "openapi.media_schema_mismatch" {
 		t.Fatalf("conditional reasonCode = %q", conditional.ReasonCode)
 	}
-	if conditional.Rule != "OAPI-P-04" {
-		t.Fatalf("conditional rule = %q; want OAPI-P-04", conditional.Rule)
+	if conditional.Rule != "OAPI30-P-03" {
+		t.Fatalf("conditional rule = %q; want OAPI30-P-03", conditional.Rule)
 	}
 
 	collide, ok := targets["#/paths/~1collide/get"]
 	if !ok || collide.Status != synthesize.SynthesisExcluded {
 		t.Fatalf("collide target = %+v; want excluded", collide)
 	}
-	if collide.ReasonCode != "openapi.flattening_collision" || collide.Rule != "OAPI-P-03" {
-		t.Fatalf("collide reason = %q rule = %q; want openapi.flattening_collision / OAPI-P-03", collide.ReasonCode, collide.Rule)
+	if collide.ReasonCode != "openapi.flattening_collision" || collide.Rule != "OAPI30-P-02" {
+		t.Fatalf("collide reason = %q rule = %q; want openapi.flattening_collision / OAPI30-P-02", collide.ReasonCode, collide.Rule)
 	}
 
 	if !result.Coverage.Exhaustive {

@@ -187,10 +187,10 @@ func TestIntegration_MultipartFormData(t *testing.T) {
 	// OAPI-P-04: a binary-signaled part's bytes come from the caller's
 	// STRING value, Base64-decoded (3.0.x signals binary via format: binary
 	// and declares no encoding, so the boundary encoding applies).
-	_, ierr := driveSingle(t, call, map[string]any{
+	_, ierr := driveSingle(t, call, map[string]any{"body": map[string]any{
 		"file":        base64.StdEncoding.EncodeToString([]byte("binary-content-here")),
 		"description": "my upload",
-	})
+	}})
 	if ierr != nil {
 		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
 	}
@@ -361,6 +361,7 @@ func TestIntegration_NoCredentialsChallenge(t *testing.T) {
 	store := testStore{}
 	binv := NewInvoker()
 	invoker := invoke.NewOperationInvoker(binv).WithRuntime(invoke.StoreContextResolver(store))
+	invoker.TransformEvaluator = openAPIJSONataEvaluator{}
 
 	iface := synthesizeOBI(t, specURL)
 
@@ -390,6 +391,7 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 
 	binv := NewInvoker()
 	invoker := invoke.NewOperationInvoker(binv).WithRuntime(invoke.StoreContextResolver(store))
+	invoker.TransformEvaluator = openAPIJSONataEvaluator{}
 	iface := synthesizeOBI(t, specURL)
 
 	// First call: listItems should succeed via resolve-and-retry.
@@ -447,6 +449,8 @@ func TestIntegration_IsolatedStoresDontShareCredentials(t *testing.T) {
 
 	opExec1 := invoke.NewOperationInvoker(NewInvoker()).WithRuntime(invoke.StoreContextResolver(store1))
 	opExec2 := invoke.NewOperationInvoker(NewInvoker()).WithRuntime(invoke.StoreContextResolver(store2))
+	opExec1.TransformEvaluator = openAPIJSONataEvaluator{}
+	opExec2.TransformEvaluator = openAPIJSONataEvaluator{}
 
 	// Invoker 1 succeeds (has credentials).
 	call1 := invoke.Invoke(ctx, opExec1, iface, invoke.NewOperationSignature[any, any]("listItems"))
@@ -1198,13 +1202,13 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 		t.Errorf("required-ness of body fields dropped: required = %v", op.Input.(map[string]any)["required"])
 	}
 
-	// The contract's shape goes onto the wire verbatim.
+	// The flat contract is carried in the public envelope's body member.
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(strings.ReplaceAll(spec, `"paths"`, `"servers": [{"url": "`+srv.URL+`"}], "paths"`))},
 		Selector: "#/paths/~1pets/post",
 		Context:  nil,
 	})
-	if _, ierr := driveSingle(t, call, map[string]any{"name": "rex"}); ierr != nil {
+	if _, ierr := driveSingle(t, call, map[string]any{"body": map[string]any{"name": "rex"}}); ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	var wire map[string]any
@@ -1263,7 +1267,7 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1users~1{id}/get",
 	})
-	if _, ierr := driveSingle(t, call, map[string]any{"id": "u1", "verbose": true}); ierr != nil {
+	if _, ierr := driveSingle(t, call, map[string]any{"parameters": map[string]any{"id": "u1", "verbose": true}}); ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotPath != "/users/u1" {
@@ -1404,7 +1408,7 @@ func TestConformance_G1_AbsentInputIsNotNoInput(t *testing.T) {
 		// InputSchema nil — the document makes no claim at this boundary.
 	})
 
-	writeErr := call.Write(ctx, map[string]any{"name": "gadget"})
+	writeErr := call.Write(ctx, map[string]any{"body": map[string]any{"name": "gadget"}})
 	closeErr := call.Close()
 	_, readErr := invoke.Single(ctx, call.Outputs())
 

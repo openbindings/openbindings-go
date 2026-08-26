@@ -33,7 +33,8 @@ package openapi
 // declared alternative is invalid keeps the existing
 // `openapi.unresolvable_request_body` / OAPI-P-04 exclusion).
 //
-// Whole-source refusal is `openbindings.openapi@1` §3's three-part text: part
+// Whole-source refusal is the registered OpenAPI binding family's §3
+// three-part text: part
 // 1 (the closed load gates) is owned by the load path and never asked here;
 // part 2 -- exactly one derived refusal -- is computed by this instrument:
 // the source refuses only when no addressable target remains. Excluded
@@ -1135,7 +1136,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 }
 
 func floorPart2Refusal(detail string) string {
-	return "whole-source refusal (OAPI-P-01, openbindings.openapi@1 §3 part 2): no addressable target remains: " + detail
+	return "whole-source refusal (OAPI30-P-01/OAPI31-P-01, registered OpenAPI family §3 part 2): no addressable target remains: " + detail
 }
 
 // ---- small helpers ---------------------------------------------------------

@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -10,6 +11,32 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 )
+
+// BindingSpec keeps the predominantly OpenAPI 3.0 historical white-box tests
+// concise while production code exposes only explicit family constants.
+// OpenAPI 3.1 tests name BindingSpecOpenAPI31 directly.
+const BindingSpec = BindingSpecOpenAPI30
+
+func bindingSpecForTestDocument(content any) string {
+	var text string
+	switch value := content.(type) {
+	case string:
+		text = value
+	case []byte:
+		text = string(value)
+	case json.RawMessage:
+		text = string(value)
+	default:
+		encoded, _ := json.Marshal(value)
+		text = string(encoded)
+	}
+	if strings.Contains(text, `"openapi":"3.1`) ||
+		strings.Contains(text, `"openapi": "3.1`) ||
+		strings.Contains(text, "openapi: 3.1") {
+		return BindingSpecOpenAPI31
+	}
+	return BindingSpecOpenAPI30
+}
 
 // ---------------------------------------------------------------------------
 // parseSelector

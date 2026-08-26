@@ -82,7 +82,7 @@ func BuiltinClassify(_ invoke.InvokeSite, raw invoke.RawResult) (bool, error) {
 // UTF-8, with invalid sequences a loud decode error. An empty body (204
 // included) yields null.
 func decodeByContentType(contentType string) invoke.OutputDecoder {
-	return decodeByContentTypeFor(contentType, BindingSpec)
+	return decodeByContentTypeFor(contentType, defaultBindingSpec)
 }
 
 func decodeByContentTypeFor(contentType, bindingSpec string) invoke.OutputDecoder {
@@ -110,7 +110,7 @@ func decodeByContentTypeFor(contentType, bindingSpec string) invoke.OutputDecode
 // decode errors — a consumer needing another charset overrides at the
 // decode configuration point.
 func decodeTextLane(contentType string, body []byte) (any, error) {
-	return decodeTextLaneFor(contentType, body, BindingSpec)
+	return decodeTextLaneFor(contentType, body, defaultBindingSpec)
 }
 
 func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any, error) {
@@ -162,7 +162,7 @@ func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any
 // body: application/json or any +json structured-suffix type. Absent or
 // unparseable headers are NOT JSON (the text lane) — never sniffed.
 func isJSONContentType(contentType string) bool {
-	return isJSONContentTypeFor(contentType, BindingSpec)
+	return isJSONContentTypeFor(contentType, defaultBindingSpec)
 }
 
 func isJSONContentTypeFor(contentType, bindingSpec string) bool {

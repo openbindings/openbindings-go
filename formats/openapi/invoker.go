@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
@@ -27,34 +28,89 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// BindingSpec identifies the unreleased first OpenAPI binding candidate.
-const BindingSpec = "openbindings.openapi@1"
+// Registered OpenAPI binding-specification identifiers. The 2.0 and 3.2
+// families are named here so dispatch can refuse them honestly; this package
+// implements only the 3.0 and 3.1 engines in the current release.
+const (
+	BindingSpecOpenAPI20 = "openbindings.openapi-2.0@1"
+	BindingSpecOpenAPI30 = "openbindings.openapi-3.0@1"
+	BindingSpecOpenAPI31 = "openbindings.openapi-3.1@1"
+	BindingSpecOpenAPI32 = "openbindings.openapi-3.2@1"
+
+	defaultBindingSpec = BindingSpecOpenAPI31
+	// ErrCodeUnsupportedBindingSpec reports a registered family whose engine
+	// is absent, or a binding invocation that names no exact family token.
+	ErrCodeUnsupportedBindingSpec = "ERR_UNSUPPORTED_BINDING_SPEC"
+)
+
+type openAPIBindingSpecRegistration struct {
+	editions    map[string]bool
+	implemented bool
+}
+
+var openAPIBindingSpecRegistry = map[string]openAPIBindingSpecRegistration{
+	BindingSpecOpenAPI20: {implemented: false},
+	BindingSpecOpenAPI30: {
+		implemented: true,
+		editions: map[string]bool{
+			"3.0.0": true, "3.0.1": true, "3.0.2": true,
+			"3.0.3": true, "3.0.4": true,
+		},
+	},
+	BindingSpecOpenAPI31: {
+		implemented: true,
+		editions:    map[string]bool{"3.1.0": true, "3.1.1": true, "3.1.2": true},
+	},
+	BindingSpecOpenAPI32: {implemented: false},
+}
 
 // Numbered "revision" labels retained in some internal helper/test filenames
 // are development-history markers, not published binding-spec revisions.
 
 func hasRoutedInputs(bindingSpec string) bool {
-	return bindingSpec == BindingSpec
+	return isImplementedOpenAPIBindingSpec(bindingSpec)
 }
 
 func hasMediaFidelity(bindingSpec string) bool {
-	return bindingSpec == BindingSpec
+	return isImplementedOpenAPIBindingSpec(bindingSpec)
 }
 
 func hasResponseFidelity(bindingSpec string) bool {
-	return bindingSpec == BindingSpec
+	return isImplementedOpenAPIBindingSpec(bindingSpec)
 }
 
 func hasDynamicObjectCarriage(bindingSpec string) bool {
-	return bindingSpec == BindingSpec
+	return isImplementedOpenAPIBindingSpec(bindingSpec)
 }
 
 func hasWholeJSONCarriage(bindingSpec string) bool {
-	return bindingSpec == BindingSpec
+	return isImplementedOpenAPIBindingSpec(bindingSpec)
 }
 
 func hasSchemaOmittedOAS30ByteCarriage(bindingSpec string) bool {
-	return bindingSpec == BindingSpec
+	return isImplementedOpenAPIBindingSpec(bindingSpec)
+}
+
+func isImplementedOpenAPIBindingSpec(bindingSpec string) bool {
+	registration, ok := openAPIBindingSpecRegistry[bindingSpec]
+	return ok && registration.implemented
+}
+
+func openAPIRule(bindingSpec, rule string) string {
+	switch bindingSpec {
+	case BindingSpecOpenAPI30:
+		return "OAPI30-" + rule
+	case BindingSpecOpenAPI31:
+		return "OAPI31-" + rule
+	default:
+		return "OAPI-" + rule
+	}
+}
+
+func unsupportedBindingSpecError(bindingSpec string) *invoke.InvocationError {
+	return invoke.NewInvocationErrorWithData(ErrCodeUnsupportedBindingSpec, map[string]any{
+		"bindingSpec": bindingSpec,
+	})
 }
 
 // DefaultSourceName is the default source key used when registering an OpenAPI source in an OBI.
@@ -107,7 +163,7 @@ type RuntimeOptions struct {
 // RuntimeSource identifies an OpenAPI artifact without requiring an OBI.
 type RuntimeSource struct {
 	// BindingSpec selects the exact OpenBindings OpenAPI binding candidate.
-	// Empty selects the current unreleased candidate.
+	// Empty selects the OpenAPI 3.1 family token.
 	BindingSpec string
 	Location    string
 	Content     json.RawMessage
@@ -204,7 +260,10 @@ func (e *Runtime) CheckBindingSpecs(bindingSpecs []string) []openbindings.Bindin
 }
 
 func openAPIBindingSpecInfos() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "OpenAPI 3.x HTTP APIs"}}
+	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpecOpenAPI30, Description: "OpenAPI 3.0 HTTP APIs"},
+		{BindingSpec: BindingSpecOpenAPI31, Description: "OpenAPI 3.1 HTTP APIs"},
+	}
 }
 
 // Invoke runs a directly selected OpenAPI operation without requiring an OBI
@@ -225,7 +284,7 @@ func runtimeBindingArgs(args *RuntimeInvocationArgs) *invoke.BindingInvocationAr
 	}
 	bindingSpec := args.Source.BindingSpec
 	if bindingSpec == "" {
-		bindingSpec = BindingSpec
+		bindingSpec = defaultBindingSpec
 	}
 	return &invoke.BindingInvocationArgs{
 		Source: invoke.InvocationSource{
@@ -246,14 +305,10 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 		return openapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 	}
 	bindingSpec := args.Source.BindingSpec
-	if bindingSpec == "" {
-		bindingSpec = BindingSpec
-	}
 	profile, ok := engineProfile(bindingSpec)
 	if !ok {
-		return openapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
+		return openapiclient.PrepareOptions{}, unsupportedBindingSpecError(bindingSpec)
 	}
-	profile = openapiclient.WithInputRouteEnvelope(profile, "$openbindings", bindingSpec)
 	var content []byte
 	var err error
 	if args.Source.Content != nil {
@@ -271,10 +326,176 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 }
 
 func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
-	if bindingSpec == BindingSpec {
+	if isImplementedOpenAPIBindingSpec(bindingSpec) {
 		return openapiclient.FullProfile(), true
 	}
 	return openapiclient.Profile{}, false
+}
+
+type runtimeOperationModel struct {
+	document   *openapi3.T
+	operation  *openapi3.Operation
+	parameters openapi3.Parameters
+	plans      []*bodyPlan
+	routes     abstractInputRoutes
+}
+
+func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocationArgs, client *http.Client, bindingSpec string) (*runtimeOperationModel, error) {
+	if args == nil {
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
+	}
+	if args.Source.Content != nil {
+		rawBytes, _ := openbindings.ContentToBytes(args.Source.Content)
+		if rawSelectorHasUnaddressablePathVariable(rawBytes, args.Selector) {
+			return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+		}
+	}
+	document, _, entryBytes, err := loadDocumentForSynthesis(ctx, client, args.Source.Location, args.Source.Content)
+	floor := computeAcceptanceFloorFromBytes(entryBytes)
+	if floor != nil && floor.Refusal != "" {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if err != nil {
+		rawBytes := entryBytes
+		if len(rawBytes) == 0 && args.Source.Content != nil {
+			rawBytes, _ = openbindings.ContentToBytes(args.Source.Content)
+		}
+		if rawSelectorHasUnaddressablePathVariable(rawBytes, args.Selector) {
+			return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+		}
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed}
+	}
+	if err := checkAcceptedOpenAPIVersionForBindingSpec(document, bindingSpec); err != nil {
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed}
+	}
+	path, method, err := parseSelector(args.Selector)
+	if err != nil {
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector}
+	}
+	if document.Paths == nil {
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound}
+	}
+	pathItem := document.Paths.Find(path)
+	if pathItem == nil {
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound}
+	}
+	operation := pathItem.GetOperation(strings.ToUpper(method))
+	if operation == nil {
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound}
+	}
+	selector := buildJSONPointerSelector(path, method)
+	verdict := floor.opVerdict(selector)
+	if verdict != nil && verdict.Disposition == "invalid" {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+
+	parameters := effectiveParameters(pathItem, operation)
+	if duplicate := duplicateEffectiveParameterIdentity(parameters); duplicate != "" {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if err := checkPathTemplateAddressability(path, parameters); err != nil {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	var plans []*bodyPlan
+	if operation.RequestBody != nil && operation.RequestBody.Value != nil {
+		plans, err = planRequestBodiesFor(document, operation, bindingSpec)
+		if err != nil {
+			return nil, invoke.NewInvocationError(invoke.ErrCodeSourceConfigError)
+		}
+		plans = filterLadderInvalidAlternatives(plans, verdict, selector)
+	}
+
+	// The two sibling specifications intentionally differ here. The 3.0
+	// family ignores declared requestBody on methods without defined body
+	// semantics; both families refuse caller body on TRACE. Removing the typed
+	// declaration before handing the operation to the standalone engine keeps
+	// ignored declarations from becoming accidental required-input gates.
+	if requestBodyIgnoredForBindingSpec(bindingSpec, method) {
+		operation.RequestBody = nil
+		plans = nil
+	}
+	if len(plans) > 0 && forceJSONBodyEnvelopeCarriage(plans) {
+		plans, err = planRequestBodiesFor(document, operation, bindingSpec)
+		if err != nil {
+			return nil, invoke.NewInvocationError(invoke.ErrCodeSourceConfigError)
+		}
+		plans = filterLadderInvalidAlternatives(plans, verdict, selector)
+	}
+
+	routes := planAbstractInputRoutes(parameters, plans)
+	return &runtimeOperationModel{
+		document: document, operation: operation, parameters: parameters, plans: plans, routes: routes,
+	}, nil
+}
+
+// forceJSONBodyEnvelopeCarriage makes the standalone wire engine consume the
+// public envelope's body as one JSON value. This is an adapter-local document
+// view: it never changes synthesis or validates the application value. The
+// engine otherwise reconstructs object-declared JSON bodies from legacy flat
+// fields, which would turn a supplied scalar or null into a refusal or `{}`.
+func forceJSONBodyEnvelopeCarriage(plans []*bodyPlan) bool {
+	changed := false
+	for _, plan := range plans {
+		if plan == nil || plan.family != familyJSON || plan.synthetic || plan.wholeObject || plan.media == nil {
+			continue
+		}
+		schema := mediaSchema(plan.media)
+		if schema == nil {
+			continue
+		}
+		admitDynamic := true
+		schema.AdditionalProperties = openapi3.AdditionalProperties{Has: &admitDynamic}
+		changed = true
+	}
+	return changed
+}
+
+func rawSelectorHasUnaddressablePathVariable(data []byte, selector string) bool {
+	path, method, err := parseSelector(selector)
+	if err != nil || len(pathTemplateVariables(path)) == 0 {
+		return false
+	}
+	root, ok := parseRawResource(data)
+	if !ok {
+		return false
+	}
+	document, ok := root.(map[string]any)
+	if !ok {
+		return false
+	}
+	paths, ok := document["paths"].(map[string]any)
+	if !ok {
+		return false
+	}
+	pathItem, ok := paths[path].(map[string]any)
+	if !ok {
+		return false
+	}
+	operation, ok := pathItem[strings.ToLower(method)].(map[string]any)
+	if !ok {
+		return false
+	}
+	declared := map[string]bool{}
+	for _, owner := range []map[string]any{pathItem, operation} {
+		parameters, _ := owner["parameters"].([]any)
+		for _, rawParameter := range parameters {
+			parameter, ok := rawParameter.(map[string]any)
+			if !ok || parameter["$ref"] != nil {
+				return false
+			}
+			name, _ := parameter["name"].(string)
+			location, _ := parameter["in"].(string)
+			if location == openapi3.ParameterInPath {
+				declared[name] = true
+			}
+		}
+	}
+	for _, name := range pathTemplateVariables(path) {
+		if !declared[name] {
+			return true
+		}
+	}
+	return false
 }
 
 func bridgeHooks(args *invoke.BindingInvocationArgs, bindingSpec string) *openapiclient.Hooks {
@@ -414,12 +635,33 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	if err != nil {
 		return bridgeExecutionError(err)
 	}
+	bindingSpec := args.Source.BindingSpec
+	if bindingSpec == "" {
+		bindingSpec = defaultBindingSpec
+	}
+	model, err := loadRuntimeOperationModel(ctx, args, e.client, bindingSpec)
+	if err != nil {
+		var localInvocationError *invoke.InvocationError
+		if errors.As(err, &localInvocationError) && localInvocationError.Code == openapiclient.CodeRefused {
+			return localInvocationError
+		}
+		// Preserve the standalone engine's established refusal taxonomy for
+		// malformed artifacts. The local model adds the edition/envelope gate;
+		// it must not relabel a source the engine already rejects more
+		// specifically.
+		if _, prepareErr := e.engine.Prepare(ctx, options); prepareErr != nil {
+			return bridgeExecutionError(prepareErr)
+		}
+		return bridgeExecutionError(err)
+	}
+	options.Source = openapiclient.Source{Location: args.Source.Location, Document: model.document}
 	prepared, err := e.engine.Prepare(ctx, options)
 	if err != nil {
 		return bridgeExecutionError(err)
 	}
 	bridgeCtx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
+
 	execution, err := prepared.Start(bridgeCtx)
 	if err != nil {
 		return bridgeExecutionError(err)
@@ -435,7 +677,21 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 			execution.Cancel()
 			return readErr
 		default:
-			if err := execution.Send(bridgeCtx, value); err != nil {
+			selectedPlans := model.plans
+			if len(model.plans) > 1 {
+				selected, selectionErr := configuredRequestPlansFor(model.document, model.operation, model.plans, args.Context, bindingSpec)
+				if selectionErr != nil {
+					execution.Cancel()
+					return invoke.NewInvocationError(openapiclient.CodeRefused)
+				}
+				selectedPlans = selected
+			}
+			engineInput, err := engineInputForCallerEnvelope(value, model.parameters, selectedPlans, model.routes, options.Profile)
+			if err != nil {
+				execution.Cancel()
+				return invoke.NewInvocationError(openapiclient.CodeRefused)
+			}
+			if err := execution.Send(bridgeCtx, engineInput); err != nil {
 				return bridgeExecutionError(err)
 			}
 			if err := execution.FinishInput(); err != nil {
@@ -482,10 +738,36 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvoca
 func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	options, err := enginePrepareOptions(args, e.client, e.securityHandlers)
 	if err != nil {
+		var invocationErr *invoke.InvocationError
+		if errors.As(err, &invocationErr) && invocationErr.Code == ErrCodeUnsupportedBindingSpec {
+			return nil, invocationErr
+		}
 		return nil, nil
+	}
+	bindingSpec := args.Source.BindingSpec
+	if bindingSpec == "" {
+		bindingSpec = defaultBindingSpec
 	}
 	var prepared *openapiclient.PreparedOperation
 	if args.Source.Content != nil {
+		if document := e.prepareDoc(args.Source.Location, args.Source.Content); document != nil {
+			if err := checkAcceptedOpenAPIVersionForBindingSpec(document, bindingSpec); err != nil {
+				return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed}
+			}
+			if path, method, selectorErr := parseSelector(args.Selector); selectorErr == nil && document.Paths != nil {
+				if pathItem := document.Paths.Find(path); pathItem != nil {
+					if operation := pathItem.GetOperation(strings.ToUpper(method)); operation != nil {
+						if duplicate := duplicateEffectiveParameterIdentity(effectiveParameters(pathItem, operation)); duplicate != "" {
+							return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+						}
+						if requestBodyIgnoredForBindingSpec(bindingSpec, method) {
+							operation.RequestBody = nil
+						}
+					}
+				}
+			}
+			options.Source = openapiclient.Source{Location: args.Source.Location, Document: document}
+		}
 		allowExternal := false
 		options.AllowExternalRefs = &allowExternal
 		prepared, err = e.engine.Prepare(ctx, options)
@@ -597,7 +879,7 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.Sy
 // webhook observed by the same load.
 //
 // This surface is per-operation tolerant: an operation whose candidate
-// flattened boundary cannot be represented is omitted from the OBI and
+// operation boundary cannot be represented is omitted from the OBI and
 // accounted for as an excluded target in coverage — a sound partial OBI with
 // every omission evidenced, never a whole-document refusal
 // (interface-synthesizer contract; core §10 posture). Strict synthesis
@@ -623,8 +905,8 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 		return nil, nil, nil, synthesize.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if src.BindingSpec != BindingSpec {
-		return nil, nil, nil, fmt.Errorf("synthesizer supports exact binding specification %q, got %q", BindingSpec, src.BindingSpec)
+	if !isImplementedOpenAPIBindingSpec(src.BindingSpec) {
+		return nil, nil, nil, fmt.Errorf("%s: binding specification %q is not implemented", ErrCodeUnsupportedBindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {
@@ -648,7 +930,7 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 		artifactContent = openbindings.TextContent(string(data))
 	}
 	doc, schemaOverlays, entryBytes, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, artifactContent)
-	// The invalid-artifact acceptance floor (openbindings.openapi@1 §3),
+	// The invalid-artifact acceptance floor (the registered OpenAPI binding family §3),
 	// computed over the entry document's raw image. Part 2's single derived
 	// whole-source refusal fires here, on every synthesis surface -- and it
 	// fires WHETHER OR NOT the load succeeded, because it is decided over the
@@ -658,6 +940,9 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 		return nil, nil, nil, errors.New(floor.Refusal)
 	}
 	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
+	}
+	if err := checkAcceptedOpenAPIVersionForBindingSpec(doc, src.BindingSpec); err != nil {
 		return nil, nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
 	// kin-openapi resolves external SchemaRefs into Value but intentionally

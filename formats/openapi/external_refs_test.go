@@ -90,7 +90,7 @@ func TestSynthesizerUsesInjectedResolver(t *testing.T) {
 	iface, err := NewSynthesizerWithClient(client).SynthesizeInterface(
 		context.Background(),
 		&synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
-			BindingSpec: BindingSpec,
+			BindingSpec: BindingSpecOpenAPI31,
 			Location:    "https://description.example/openapi.yaml",
 			Content: openbindings.TextContent(`openapi: 3.1.2
 info: {title: External, version: "1"}
@@ -127,7 +127,7 @@ Name: {type: string}
 	iface, err := NewSynthesizerWithClient(client).SynthesizeInterface(
 		context.Background(),
 		&synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
-			BindingSpec: BindingSpec,
+			BindingSpec: BindingSpecOpenAPI31,
 			Location:    "https://description.example/openapi.yaml",
 			Content: openbindings.TextContent(`openapi: 3.1.2
 info: {title: External schemas, version: "1"}

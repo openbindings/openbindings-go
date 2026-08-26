@@ -11,7 +11,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-// This file implements §9.3 of openbindings.openapi@1 (OAPI-P-05): the
+// This file implements §9.3 of the registered OpenAPI binding family (OAPI-P-05): the
 // target URL's server half. Server resolution is a named configuration
 // point; consultation order (§9.4) is per-invocation configuration →
 // consumer-level configuration → the default. Both configuration tiers
@@ -67,7 +67,7 @@ func resolveServer(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Op
 		}
 	}
 	if len(servers) != 1 {
-		return "", fmt.Errorf("the effective server list has %d alternatives; configuration.server must select one (openbindings.openapi@1 OAPI-P-05)", len(servers))
+		return "", fmt.Errorf("the effective server list has %d alternatives; configuration.server must select one (the registered OpenAPI binding family OAPI-P-05)", len(servers))
 	}
 
 	substituted, err := substituteServerVariables(servers[0], nil)

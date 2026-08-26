@@ -123,7 +123,7 @@ func TestSynthesisProjectsDirectionalSchemas(t *testing.T) {
 			}`, version)
 
 			result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
-				Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: json.RawMessage(doc)}},
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(doc), Content: json.RawMessage(doc)}},
 			})
 			if err != nil {
 				t.Fatalf("synthesize: %v", err)

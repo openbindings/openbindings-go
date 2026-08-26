@@ -22,7 +22,7 @@ import (
 // implements. A file naming any other revision is refused rather than run:
 // a runner that silently skips what it does not understand reports green
 // having verified none of it.
-const Format = "openbindings.binding-spec-synthesis-scenarios@4"
+const Format = "openbindings.binding-spec-synthesis-scenarios@5"
 
 type File struct {
 	Format      string     `json:"format"`
@@ -122,11 +122,21 @@ func Fixed(synth synthesize.CoverageSynthesizer) SynthesizerFactory {
 // Verify executes every scenario for one family through its real coverage
 // synthesizer and compares the normalized OpenBindings boundary.
 func Verify(ctx context.Context, root, family string, factory SynthesizerFactory) error {
+	return VerifyWhere(ctx, root, family, factory, nil)
+}
+
+// VerifyWhere executes the scenarios selected by include. A nil predicate
+// executes the complete family. Family adapters use a predicate only when a
+// corpus revision spans separately scheduled conformance clusters.
+func VerifyWhere(ctx context.Context, root, family string, factory SynthesizerFactory, include func(Scenario) bool) error {
 	file, err := Load(root, family)
 	if err != nil {
 		return err
 	}
 	for _, scenario := range file.Scenarios {
+		if include != nil && !include(scenario) {
+			continue
+		}
 		synth, err := factory(scenario)
 		if err != nil {
 			return err
