@@ -9,6 +9,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 
 	openapiclient "github.com/openbindings/openapi-client/go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // abstractInputRoutes is the synthesis-only correspondence between the flat,
@@ -23,9 +24,10 @@ type abstractInputRoutes struct {
 }
 
 type abstractParameterRoute struct {
-	In    string
-	Name  string
-	Field string
+	In         string
+	Name       string
+	EngineName string
+	Field      string
 }
 
 type inputSlot struct {
@@ -114,7 +116,7 @@ func planAbstractInputRoutes(params openapi3.Parameters, plans []*bodyPlan) abst
 		switch slot.kind {
 		case "parameter":
 			routes.parameters = append(routes.parameters, abstractParameterRoute{
-				In: slot.in, Name: slot.name, Field: assigned[index],
+				In: slot.in, Name: slot.name, EngineName: slot.name, Field: assigned[index],
 			})
 		case "body":
 			routes.bodyFields[slot.name] = assigned[index]
@@ -301,6 +303,10 @@ func parseCallerEnvelope(input any) (*callerEnvelope, error) {
 // the adapter boundary into the standalone engine's private execution value.
 // This value is never emitted in an OBI document or accepted from a caller.
 func engineInputForCallerEnvelope(input any, params openapi3.Parameters, plans []*bodyPlan, routes abstractInputRoutes, profile openapiclient.Profile) (any, error) {
+	return engineInputForCallerEnvelopeWithSemantics(input, params, plans, routes, profile, BindingSpecOpenAPI31, nil, nil, nil, nil)
+}
+
+func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parameters, plans []*bodyPlan, routes abstractInputRoutes, profile openapiclient.Profile, bindingSpec string, conversion ParameterConversion, doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any) (any, error) {
 	envelope, err := parseCallerEnvelope(input)
 	if err != nil {
 		return nil, err
@@ -311,12 +317,30 @@ func engineInputForCallerEnvelope(input any, params openapi3.Parameters, plans [
 		byCallerKey[callerParameterKey(route.In, route.Name, qualified)] = route
 	}
 	value := map[string]any{}
+	rawCookieEmits := false
+	structuredCookieEmits := false
 	for key, member := range envelope.parameters {
 		route, found := byCallerKey[key]
 		if !found {
 			return nil, fmt.Errorf("caller envelope contains unknown parameter key %q", key)
 		}
-		value[route.Field] = member
+		parameter := effectiveParameterAt(params, route.In, route.Name)
+		prepared, emits, err := prepareSchemaParameterValue(parameter, member, bindingSpec, conversion)
+		if err != nil {
+			return nil, fmt.Errorf("parameter %q: %w", key, err)
+		}
+		value[route.Field] = prepared
+		if route.In == openapi3.ParameterInHeader && strings.EqualFold(route.Name, "Cookie") {
+			rawCookieEmits = true
+		}
+		if route.In == openapi3.ParameterInCookie && emits {
+			structuredCookieEmits = true
+		}
+	}
+	if bindingSpec == BindingSpecOpenAPI31 && rawCookieEmits {
+		if structuredCookieEmits || len(invoke.ContextCookies(bindCtx)) > 0 || selectedCookieCredentialWouldEmit(doc, op, bindCtx) {
+			return nil, fmt.Errorf("supplied raw Cookie parameter collides with structured cookie emission")
+		}
 	}
 
 	bodyDescriptor := map[string]any{}
@@ -347,6 +371,11 @@ func engineInputForCallerEnvelope(input any, params openapi3.Parameters, plans [
 				return nil, fmt.Errorf("selected request representation requires an object body")
 			}
 			for name, member := range body {
+				var err error
+				member, err = prepareEncodingStylePropertyValue(plan, name, member, bindingSpec, conversion)
+				if err != nil {
+					return nil, err
+				}
 				field := routes.bodyField(name)
 				value[field] = member
 			}
@@ -355,8 +384,12 @@ func engineInputForCallerEnvelope(input any, params openapi3.Parameters, plans [
 
 	parameterDescriptor := make([]any, 0, len(routes.parameters))
 	for _, route := range routes.parameters {
+		engineName := route.EngineName
+		if engineName == "" {
+			engineName = route.Name
+		}
 		parameterDescriptor = append(parameterDescriptor, map[string]any{
-			"in": route.In, "name": route.Name, "field": route.Field,
+			"in": route.In, "name": engineName, "field": route.Field,
 		})
 	}
 	return []any{map[string]any{

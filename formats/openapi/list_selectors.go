@@ -28,6 +28,9 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	if floor != nil && floor.Refusal != "" {
 		return nil, errors.New(floor.Refusal)
 	}
+	if floor != nil && floor.SourceExclusion != "" {
+		return nil, errors.New(floor.SourceExclusion)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}

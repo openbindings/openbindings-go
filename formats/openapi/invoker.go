@@ -146,6 +146,7 @@ type Runtime struct {
 	client           *http.Client
 	engine           *openapiclient.Engine
 	securityHandlers map[string]SecurityHandler
+	parameterConvert ParameterConversion
 }
 
 // SecurityHandlerContext describes the authored OpenAPI security scheme an
@@ -161,6 +162,11 @@ type SecurityHandler = openapiclient.SecurityHandler
 type RuntimeOptions struct {
 	HTTPClient       *http.Client
 	SecurityHandlers map[string]SecurityHandler
+	// ParameterConversion is the OpenAPI 3.1 binding's §8.1 configuration
+	// point. It is consulted only for supplied JSON booleans and numbers on
+	// schema/style serialization paths; strings pass unchanged and nil means no
+	// conversion is configured.
+	ParameterConversion ParameterConversion
 }
 
 // RuntimeSource identifies an OpenAPI artifact without requiring an OBI.
@@ -213,10 +219,14 @@ func NewRuntimeWithOptions(options RuntimeOptions) *Runtime {
 	if client == nil {
 		client = newDefaultHTTPClient()
 	}
+	clientCopy := *client
+	clientCopy.Transport = rawCookieBridgeTransport{base: client.Transport}
+	client = &clientCopy
 	return &Runtime{
 		client:           client,
 		engine:           openapiclient.NewEngine(client),
 		securityHandlers: cloneSecurityHandlers(options.SecurityHandlers),
+		parameterConvert: options.ParameterConversion,
 	}
 }
 
@@ -332,11 +342,12 @@ func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 }
 
 type runtimeOperationModel struct {
-	document   *openapi3.T
-	operation  *openapi3.Operation
-	parameters openapi3.Parameters
-	plans      []*bodyPlan
-	routes     abstractInputRoutes
+	document        *openapi3.T
+	operation       *openapi3.Operation
+	parameters      openapi3.Parameters
+	plans           []*bodyPlan
+	routes          abstractInputRoutes
+	rawCookieHeader string
 }
 
 func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocationArgs, client *http.Client, bindingSpec string) (*runtimeOperationModel, error) {
@@ -352,6 +363,9 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	document, _, entryBytes, err := loadDocumentForSynthesis(ctx, client, args.Source.Location, args.Source.Content)
 	floor := computeAcceptanceFloorFromBytes(entryBytes)
 	if floor != nil && floor.Refusal != "" {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if floor != nil && floor.SourceExclusion != "" {
 		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
 	}
 	if err != nil {
@@ -392,7 +406,22 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	if duplicate := duplicateEffectiveParameterIdentity(parameters); duplicate != "" {
 		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
 	}
-	if err := checkPathTemplateAddressability(path, parameters); err != nil {
+	if malformedEffectiveParameterFor(parameters, bindingSpec) != "" {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if err := checkPathTemplateDeclaration(path, parameters, bindingSpec); err != nil {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if bindingSpec == BindingSpecOpenAPI31 && equivalentPathTemplateCollision(document.Paths, path) != "" {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if formStyleCookieMultiValueParamFor(parameters, bindingSpec == BindingSpecOpenAPI30) != "" {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if styleLaneUndefinedExpansionParamFor(parameters, bindingSpec, bindingSpec == BindingSpecOpenAPI30) != "" {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if unsupportedParameterContentFor(parameters, bindingSpec) != "" {
 		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
 	}
 	var plans []*bodyPlan
@@ -421,9 +450,13 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 		plans = filterLadderInvalidAlternatives(plans, verdict, selector)
 	}
 
-	routes := planAbstractInputRoutes(parameters, plans)
+	callerParameters := cloneEffectiveParameters(parameters)
+	routes := planAbstractInputRoutes(callerParameters, plans)
+	rawCookieHeader := prepareEngineParameterView(parameters, &routes, bindingSpec)
+	prepareEngineEncodingView(plans)
 	return &runtimeOperationModel{
-		document: document, operation: operation, parameters: parameters, plans: plans, routes: routes,
+		document: document, operation: operation, parameters: callerParameters, plans: plans, routes: routes,
+		rawCookieHeader: rawCookieHeader,
 	}, nil
 }
 
@@ -657,6 +690,10 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	}
 	bridgeCtx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
+	bridgeCtx = context.WithValue(bridgeCtx, completedURLValidationContextKey{}, bindingSpec)
+	if model.rawCookieHeader != "" {
+		bridgeCtx = context.WithValue(bridgeCtx, rawCookieBridgeContextKey{}, model.rawCookieHeader)
+	}
 
 	execution, err := prepared.Start(bridgeCtx)
 	if err != nil {
@@ -682,7 +719,7 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 				}
 				selectedPlans = selected
 			}
-			engineInput, err := engineInputForCallerEnvelope(value, model.parameters, selectedPlans, model.routes, options.Profile)
+			engineInput, err := engineInputForCallerEnvelopeWithSemantics(value, model.parameters, selectedPlans, model.routes, options.Profile, bindingSpec, e.parameterConvert, model.document, model.operation, args.Context)
 			if err != nil {
 				execution.Cancel()
 				return invoke.NewInvocationError(openapiclient.CodeRefused)
@@ -931,6 +968,9 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 	floor := computeAcceptanceFloorFromBytes(entryBytes)
 	if floor != nil && floor.Refusal != "" {
 		return nil, nil, nil, errors.New(floor.Refusal)
+	}
+	if floor != nil && floor.SourceExclusion != "" {
+		return nil, nil, nil, errors.New(floor.SourceExclusion)
 	}
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load OpenAPI document: %w", err)

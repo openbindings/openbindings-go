@@ -1344,9 +1344,11 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 			Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 			Selector: "#/paths/~1x/get",
 		})
-		_, ierr := driveSingle(t, call, map[string]any{})
+		_, ierr := driveSingle(t, call, map[string]any{"parameters": map[string]any{
+			"Cookie": "raw=1", "session": "structured",
+		}})
 		if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
-			t.Fatalf("expected source-config OAPI-P-10 refusal, got %v", ierr)
+			t.Fatalf("expected invocation-time OAPI31-P-02 refusal, got %v", ierr)
 		}
 		if ierr.HasData() {
 			t.Fatalf("cookie-collision evidence crossed as abstract data: %#v", ierr.Data)
@@ -1452,7 +1454,7 @@ func TestInvoke_AllMissingSecurityAlternativesRefuseBeforeDispatch(t *testing.T)
 	}
 }
 
-func TestSchemaFreeCustomDocumentDialectRemainsInvocableAndSynthesizable(t *testing.T) {
+func TestCustomDocumentDialectExcludesTheWholeSource(t *testing.T) {
 	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{}`))
@@ -1471,20 +1473,17 @@ func TestSchemaFreeCustomDocumentDialectRemainsInvocableAndSynthesizable(t *test
 		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 	})
-	if _, ierr := driveSingle(t, call, nil); ierr != nil {
-		t.Fatalf("schema-free artifact-native invocation failed: %s: %s", ierr.Code, ierr.Error())
+	if _, ierr := driveSingle(t, call, nil); ierr == nil || ierr.Code != invoke.ErrCodeRefused {
+		t.Fatalf("custom document dialect invocation error = %v, want ERR_REFUSED", ierr)
 	}
-	if requests.Load() != 1 {
-		t.Fatalf("invocation requests = %d, want 1", requests.Load())
+	if requests.Load() != 0 {
+		t.Fatalf("excluded source dispatched %d requests", requests.Load())
 	}
-	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
+	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
 	})
-	if err != nil {
-		t.Fatalf("schema-free portable synthesis should not interpret the custom dialect: %v", err)
-	}
-	if _, ok := iface.Operations["x"]; !ok {
-		t.Fatal("schema-free operation was omitted")
+	if err == nil || !strings.Contains(err.Error(), "whole-source exclusion") {
+		t.Fatalf("custom document dialect synthesis error = %v", err)
 	}
 }
 

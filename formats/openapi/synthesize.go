@@ -158,6 +158,37 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				}
 				return iface, unrealizableOperation(opKey, reason)
 			}
+			if parameter := malformedEffectiveParameterFor(params, bindingSpec); parameter != "" {
+				reason := fmt.Sprintf("effective parameter %q violates the closed Parameter Object declaration list", parameter)
+				if onUnrealizable != nil {
+					onUnrealizable(unrealizableTarget{
+						selector:     buildJSONPointerSelector(path, method),
+						operationKey: opKey,
+						reasonCode:   "openapi.parameter_declaration_excluded",
+						rule:         openAPIRule(bindingSpec, "P-02"),
+						message:      reason,
+					})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
+			}
+			if err := checkPathTemplateDeclaration(path, params, bindingSpec); bindingSpec == BindingSpecOpenAPI31 && (err != nil || equivalentPathTemplateCollision(doc.Paths, path) != "") {
+				reason := "the selected path declaration is ambiguous or does not correspond one-to-one with its effective path parameters"
+				if err != nil {
+					reason = err.Error()
+				}
+				if onUnrealizable != nil {
+					onUnrealizable(unrealizableTarget{
+						selector:     buildJSONPointerSelector(path, method),
+						operationKey: opKey,
+						reasonCode:   "openapi.path_correspondence_excluded",
+						rule:         openAPIRule(bindingSpec, "P-02"),
+						message:      reason,
+					})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
+			}
 
 			if parameter := unsupportedParameterContentFor(params, bindingSpec); parameter != "" {
 				reason := fmt.Sprintf("parameter %q declares content with no faithful candidate carriage", parameter)
@@ -190,6 +221,21 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 						selector:     buildJSONPointerSelector(path, method),
 						operationKey: opKey,
 						reasonCode:   "openapi.parameter_style_expansion_excluded",
+						rule:         openAPIRule(bindingSpec, "P-02"),
+						message:      reason,
+					})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
+			}
+
+			if parameter := formStyleCookieMultiValueParamFor(params, isOpenAPI30(formatVersion)); parameter != "" {
+				reason := fmt.Sprintf("cookie parameter %q statically proves multi-pair form expansion", parameter)
+				if onUnrealizable != nil {
+					onUnrealizable(unrealizableTarget{
+						selector:     buildJSONPointerSelector(path, method),
+						operationKey: opKey,
+						reasonCode:   "openapi.cookie_multi_value_excluded",
 						rule:         openAPIRule(bindingSpec, "P-02"),
 						message:      reason,
 					})
@@ -1424,7 +1470,7 @@ func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec stri
 		}
 		param := ref.Value
 		if hasMediaFidelity(bindingSpec) {
-			if err := validateRevision3ParameterSerialization(param); err != nil {
+			if err := validateRevision3ParameterSerialization(param, bindingSpec == BindingSpecOpenAPI30); err != nil {
 				return param.Name
 			}
 		}

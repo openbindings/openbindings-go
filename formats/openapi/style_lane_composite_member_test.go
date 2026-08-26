@@ -11,11 +11,10 @@ import (
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
-// The style-lane composite-member case table is SHARED, byte-for-byte, with
-// three other engines: openapi-client/go, openapi-client/typescript and
-// openbindings-ts/packages/openapi. Each cell pins the ADMISSION decision all
-// four must reach for one style-lane declaration, so a divergence in any one
-// of them fails the others' suites.
+// The style-lane composite-member case table is the Go SDK's executable copy
+// of the cross-engine cases. M2a updates the cells whose older ruling predates
+// the sibling specifications' §5.2 resolved-declaration procedure; the other
+// engines adopt those corrected cells in their own convergence nodes.
 //
 // This engine executes the cells through the SHIPPED synthesizer: a refused
 // parameter cell must leave no operation behind and must carry a target
@@ -28,7 +27,7 @@ import (
 // Authority: styleLaneUndefinedExpansionMember in media.go reads the style
 // table per edition. Package:
 // design/openapi-style-lane-composite-member-ruling.md, RULED 2026-08-18.
-const styleLaneCompositeMemberCasesDigest = "1ea1045c75039b00c1035a2e2c3d09e440644e32a5fa1c3689be6add1eac7673"
+const styleLaneCompositeMemberCasesDigest = "d23c8fe527971c620627307ba16e220aaab2e25a731488fe62a184a465fb2cb5"
 
 type styleLaneCompositeMemberCase struct {
 	Name     string          `json:"name"`
@@ -53,7 +52,7 @@ func loadStyleLaneCompositeMemberCases(t *testing.T) []styleLaneCompositeMemberC
 	}
 	sum := sha256.Sum256(raw)
 	if got := hex.EncodeToString(sum[:]); got != styleLaneCompositeMemberCasesDigest {
-		t.Fatalf("case table digest = %s, want %s (the table is shared byte-for-byte with three twin engines)", got, styleLaneCompositeMemberCasesDigest)
+		t.Fatalf("case table digest = %s, want %s", got, styleLaneCompositeMemberCasesDigest)
 	}
 	var table struct {
 		Cases []styleLaneCompositeMemberCase `json:"cases"`

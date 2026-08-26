@@ -1026,15 +1026,22 @@ func encodingUsesSerialization(enc *openapi3.Encoding) bool {
 
 func validateMultipartSerializationMethod(name string, schema *openapi3.Schema, enc *openapi3.Encoding, is30 bool) error {
 	method := revision3EncodingSerializationMethod(enc)
+	resolved := resolveDeclaration(schema, is30)
 	switch method.Style {
 	case openapi3.SerializationForm:
 	case openapi3.SerializationSpaceDelimited, openapi3.SerializationPipeDelimited:
-		if method.Explode || !schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{}) {
-			return fmt.Errorf("multipart part %q style %q is defined only for arrays with explode=false", name, method.Style)
+		if method.Explode {
+			return fmt.Errorf("multipart part %q style %q has no explode=true cell", name, method.Style)
+		}
+		if resolved.declaresOnly("null", "boolean", "number", "integer", "string") {
+			return fmt.Errorf("multipart part %q style %q is defined only for arrays or objects", name, method.Style)
 		}
 	case openapi3.SerializationDeepObject:
-		if !method.Explode || !schemaTypeIs(schema, "object", map[*openapi3.Schema]bool{}) {
-			return fmt.Errorf("multipart part %q style deepObject is defined only for objects with explode=true", name)
+		if !method.Explode {
+			return fmt.Errorf("multipart part %q style deepObject has no explode=false cell", name)
+		}
+		if resolved.declaresOnly("null", "boolean", "number", "integer", "string", "array") {
+			return fmt.Errorf("multipart part %q style deepObject is defined only for objects", name)
 		}
 	default:
 		return fmt.Errorf("multipart part %q declares unsupported encoding style %q", name, method.Style)
@@ -1121,107 +1128,33 @@ func validateMultipartSerializationMethod(name string, schema *openapi3.Schema, 
 // carried byte-for-byte by the other two engines. Package:
 // design/openapi-style-lane-composite-member-ruling.md, RULED 2026-08-18.
 func styleLaneUndefinedExpansionMember(schema *openapi3.Schema, is30 bool) string {
-	resolved := collapsedStyleLaneSchema(schema, is30)
-	if resolved == nil {
-		return ""
-	}
-	if schemaTypeIs(resolved, "array", map[*openapi3.Schema]bool{}) {
-		items := collapsedStyleLaneSchema(resolvedMultipartItems(resolved, map[*openapi3.Schema]bool{}), is30)
-		if styleLaneCompositeMember(items) {
+	resolved := resolveDeclaration(schema, is30)
+	if resolved.declaresOnly("array") {
+		if resolved.items().declaresOnly("object", "array") {
 			return "[]"
 		}
 		return ""
 	}
-	if !schemaTypeIs(resolved, "object", map[*openapi3.Schema]bool{}) {
+	if !resolved.declaresOnly("object") {
 		return ""
 	}
-	names := resolvedStyleLanePropertyNames(resolved, map[*openapi3.Schema]bool{})
+	names := resolved.propertyNames()
 	sort.Strings(names)
 	for _, name := range names {
-		member := resolvedMultipartProperty(resolved, name, map[*openapi3.Schema]bool{})
-		if styleLaneCompositeMember(collapsedStyleLaneSchema(member, is30)) {
+		if resolved.property(name).declaresOnly("object", "array") {
 			return "." + name
 		}
 	}
 	return ""
 }
 
-// styleLaneCompositeMember reports a resolved member schema that declares a
-// composite JSON value. A member declaring no type is NOT composite by
-// declaration: its runtime value may be a scalar, and a declaration-keyed
-// refusal must not reach a declaration that admits one.
-func styleLaneCompositeMember(schema *openapi3.Schema) bool {
-	if schema == nil {
-		return false
-	}
-	return schemaTypeIs(schema, "object", map[*openapi3.Schema]bool{}) ||
-		schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{})
-}
-
-// collapsedStyleLaneSchema applies section 9.2's single-non-null-branch and
-// union-type collapses before the member kinds are read, so the nullable
-// spelling of a declaration is classified as the declaration it restates.
-// It is the same collapse effectiveRevision3PartSchema applies, reached
-// through that function so the family holds one implementation of it.
-func collapsedStyleLaneSchema(schema *openapi3.Schema, is30 bool) *openapi3.Schema {
-	for i := 0; schema != nil && i < 8; i++ {
-		if literal, boolean := booleanSchemaLiteral(schema); boolean {
-			if literal {
-				return &openapi3.Schema{} // the same unconstrained declaration as {}
-			}
-			return nil // an unsatisfiable member has no admissible runtime value
-		}
-		collapsed, _ := effectiveRevision3PartSchema(schema, is30)
-		if collapsed == schema {
-			return schema
-		}
-		schema = collapsed
-	}
-	return schema
-}
-
-// resolvedStyleLanePropertyNames collects a resolved object's declared
-// property names, including those an allOf member contributes. Each name's
-// schema is then resolved through resolvedMultipartProperty, which is the
-// family's own notion of a resolved property schema and merges the allOf
-// contributions for that name.
-func resolvedStyleLanePropertyNames(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) []string {
-	if schema == nil || seen[schema] {
-		return nil
-	}
-	seen[schema] = true
-	defer delete(seen, schema)
-	present := map[string]bool{}
-	var names []string
-	for name := range schema.Properties {
-		if !present[name] {
-			present[name] = true
-			names = append(names, name)
-		}
-	}
-	for _, member := range schema.AllOf {
-		if member == nil {
-			continue
-		}
-		for _, name := range resolvedStyleLanePropertyNames(member.Value, seen) {
-			if !present[name] {
-				present[name] = true
-				names = append(names, name)
-			}
-		}
-	}
-	return names
-}
-
 // parameterStyleLaneUndefinedExpansionMember reports a style-lane parameter's
 // first offending declared member as "<parameter><member path>", or "" when
 // the parameter is not on the style lane or declares no offending member.
 //
-// The four styles below are the ones the ruling covers: they are the query and
-// cookie styles, and they are where the corpus population lives. The path and
-// header styles (simple, label, matrix) carry the same structural question and
-// are deliberately NOT decided here — see the residue note in
-// corpus-lab/openapi-runtime/70-*.md.
+// Every compound-capable Parameter style uses the same proof. The governing
+// location/style cell is checked separately; this function only answers the
+// nested-member question.
 func parameterStyleLaneUndefinedExpansionMember(p *openapi3.Parameter, is30 bool) string {
 	if p == nil || len(p.Content) > 0 || p.Schema == nil {
 		return ""
@@ -1232,7 +1165,8 @@ func parameterStyleLaneUndefinedExpansionMember(p *openapi3.Parameter, is30 bool
 	}
 	switch method.Style {
 	case openapi3.SerializationForm, openapi3.SerializationSpaceDelimited,
-		openapi3.SerializationPipeDelimited, openapi3.SerializationDeepObject:
+		openapi3.SerializationPipeDelimited, openapi3.SerializationDeepObject,
+		openapi3.SerializationSimple, openapi3.SerializationLabel, openapi3.SerializationMatrix:
 	default:
 		return ""
 	}
