@@ -152,7 +152,7 @@ func TestStyleLaneCompositeMemberCaseTable(t *testing.T) {
 		t.Run(testCase.Name, func(t *testing.T) {
 			result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 				Sources: []synthesize.SynthesizeSource{{
-					BindingSpec: BindingSpec,
+					BindingSpec: bindingSpecForTestDocument(styleLaneCompositeMemberDocument(t, testCase)),
 					Content:     json.RawMessage(styleLaneCompositeMemberDocument(t, testCase)),
 				}},
 			})
@@ -205,8 +205,9 @@ func assertStyleLaneParameterCell(t *testing.T, c styleLaneCompositeMemberCase, 
 		if entry.ReasonCode != "openapi.parameter_style_expansion_excluded" {
 			t.Fatalf("target reason code = %q, want openapi.parameter_style_expansion_excluded", entry.ReasonCode)
 		}
-		if entry.Rule != "OAPI-P-02" {
-			t.Fatalf("target rule = %q, want OAPI-P-02", entry.Rule)
+		wantRule := openAPIRule(bindingSpecForOpenAPIEdition(c.OpenAPI), "P-02")
+		if entry.Rule != wantRule {
+			t.Fatalf("target rule = %q, want %s", entry.Rule, wantRule)
 		}
 	default:
 		t.Fatalf("unknown expectation %q", c.Expect)

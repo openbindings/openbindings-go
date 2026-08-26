@@ -2,7 +2,7 @@ package openapi
 
 import "strings"
 
-// This file answers one question for §9.3 of openbindings.openapi@1: does a
+// This file answers one question for §9.3 of the registered OpenAPI binding family: does a
 // server URL, after Server Variable substitution, denote a target address?
 //
 // It exists because the answer used to come from the HOST LANGUAGE's URL

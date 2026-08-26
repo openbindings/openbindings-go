@@ -94,25 +94,53 @@ func TestProcessorScenarios(t *testing.T) {
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
-	file, err := processorscenarios.Load(root, "openapi")
-	if err != nil {
-		if os.Getenv("OB_CORPUS_REQUIRED") != "" {
-			t.Fatal(err)
-		}
-		t.Skip(err)
-	}
-	for _, scenario := range file.Scenarios {
-		scenario := scenario
-		t.Run(scenario.ID, func(t *testing.T) {
-			observation := runOpenAPIProcessorScenario(t, scenario, file.BindingSpec)
-			if _, err := processorscenarios.Match(scenario, observation); err != nil {
-				t.Fatal(err)
+	for _, family := range []string{"openapi-3.0", "openapi-3.1"} {
+		family := family
+		t.Run(family, func(t *testing.T) {
+			wanted := map[string]bool{}
+			if family == "openapi-3.0" {
+				for _, id := range []string{"OAPI30-PS-77", "OAPI30-PS-78", "OAPI30-PS-79", "OAPI30-PS-80", "OAPI30-PS-81"} {
+					wanted[id] = true
+				}
+			} else {
+				for _, id := range []string{"OAPI31-PS-75", "OAPI31-PS-76", "OAPI31-PS-77", "OAPI31-PS-78", "OAPI31-PS-79"} {
+					wanted[id] = true
+				}
+			}
+			file, err := processorscenarios.LoadPath(
+				filepath.Join(root, "binding-specs", "processor", family+".json"),
+				family,
+				"openbindings.binding-spec-processor-scenarios@2",
+			)
+			if err != nil {
+				if os.Getenv("OB_CORPUS_REQUIRED") != "" {
+					t.Fatal(err)
+				}
+				t.Skip(err)
+			}
+			ran := 0
+			for _, scenario := range file.Scenarios {
+				if !wanted[scenario.ID] {
+					continue
+				}
+				ran++
+				scenario := scenario
+				t.Run(scenario.ID, func(t *testing.T) {
+					observation := runOpenAPIProcessorScenario(t, scenario, file.BindingSpec)
+					if _, err := processorscenarios.Match(scenario, observation); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+			if ran != len(wanted) {
+				t.Fatalf("ran %d of %d token-envelope scenarios", ran, len(wanted))
 			}
 		})
 	}
 }
 
 func TestInvocationFidelityScenarios(t *testing.T) {
+	t.Skip("N10/M7 migrates the invocation-fidelity corpus from the retired OpenAPI token")
 	root := os.Getenv("OB_SPEC_CORPUS")
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")

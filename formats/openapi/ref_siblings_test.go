@@ -20,7 +20,7 @@ func synthesizeRefSiblingFixture(t *testing.T, client *http.Client, location, do
 	synthesizer := NewSynthesizerWithClient(client)
 	iface, err := synthesizer.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
-			BindingSpec: BindingSpec,
+			BindingSpec: bindingSpecForTestDocument(document),
 			Location:    location,
 			Content:     openbindings.TextContent(document),
 		}},
@@ -286,7 +286,7 @@ Base: {type: string, minLength: 3}
 		}
 	})}
 	iface, err := NewSynthesizerWithClient(client).SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: original}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpecOpenAPI31, Location: original}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize redirected artifact: %v", err)
@@ -430,7 +430,7 @@ components:
     Target: {type: string}
 `
 	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(unsupported)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(unsupported), Content: openbindings.TextContent(unsupported)}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported OpenAPI 3.1 schema dialect") {
 		t.Fatalf("synthesis error = %v, want unsupported-dialect refusal", err)
@@ -438,7 +438,7 @@ components:
 
 	withoutSiblings := strings.Replace(unsupported, "\n                description: cannot safely compose", "", 1)
 	if _, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(withoutSiblings)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(withoutSiblings), Content: openbindings.TextContent(withoutSiblings)}},
 	}); err == nil || !strings.Contains(err.Error(), "unsupported OpenAPI 3.1 schema dialect") {
 		t.Fatalf("unsupported dialect without ref siblings must also refuse, got %v", err)
 	}
@@ -461,7 +461,7 @@ paths:
                 type: string
 `
 	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(doc)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(doc), Content: openbindings.TextContent(doc)}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported OpenAPI 3.1 schema dialect") || !strings.Contains(err.Error(), "OBI-D-06") {
 		t.Fatalf("synthesis error = %v, want per-schema dialect refusal", err)
@@ -488,7 +488,7 @@ components:
       x-custom-constraint: true
 `
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(doc)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(doc), Content: openbindings.TextContent(doc)}},
 	})
 	if err != nil {
 		t.Fatalf("unused custom-dialect component blocked a representable operation: %v", err)
@@ -509,7 +509,7 @@ paths:
       responses: {"204": {description: ok}}
 `
 	inspection, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{
-		BindingSpec: BindingSpec,
+		BindingSpec: bindingSpecForTestDocument(doc),
 		Content:     openbindings.TextContent(doc),
 	})
 	if err != nil {
@@ -549,7 +549,7 @@ paths:
           content: {application/json: {schema: {type: string}}}
 `
 	inspection, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{
-		BindingSpec: BindingSpec,
+		BindingSpec: bindingSpecForTestDocument(doc),
 		Content:     openbindings.TextContent(doc),
 	})
 	if err != nil {
@@ -566,7 +566,7 @@ paths:
 		t.Fatalf("inspection operation keys = %v", keys)
 	}
 	_, err = NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(doc)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(doc), Content: openbindings.TextContent(doc)}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "OBI-D-06") {
 		t.Fatalf("strict synthesis must refuse the unsupported projected operation, got %v", err)

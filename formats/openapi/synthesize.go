@@ -23,7 +23,7 @@ import (
 )
 
 // unrealizableTarget records a paths operation admitted by the artifact but
-// unrepresentable under revision 1's flattened boundary. Reported instead of
+// unrepresentable at the sibling's synthesizable operation boundary. Reported instead of
 // returned as an error when the caller opts into per-operation tolerance
 // (the coverage and inspection surfaces), so one unrepresentable operation
 // narrows coverage rather than vetoing the document (core §10's posture;
@@ -39,7 +39,7 @@ type unrealizableTarget struct {
 // convertDocToInterface converts a loaded OpenAPI document into an
 // OpenBindings interface.
 //
-// When onUnrealizable is non-nil, an operation whose revision-1 flattened
+// When onUnrealizable is non-nil, an operation whose synthesizable operation
 // boundary cannot be represented is reported and skipped — no operation, no
 // binding — and synthesis continues (tolerant mode). When nil, the same
 // condition returns an error (strict mode: SynthesizeInterface), preserving
@@ -113,7 +113,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				continue
 			}
 
-			// The acceptance floor (openbindings.openapi@1 §3): a
+			// The acceptance floor (the registered OpenAPI binding family §3): a
 			// ladder-invalid target is not addressed. Tolerant surfaces skip
 			// it (its invalid coverage entry is emitted by the coverage
 			// walk); the strict surface refuses, preserving its guarantee.
@@ -130,6 +130,20 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			usedKeys[opKey] = true
 
 			params := effectiveParameters(pathItem, op)
+			if duplicate := duplicateEffectiveParameterIdentity(params); duplicate != "" {
+				reason := fmt.Sprintf("parameter identity %q is declared more than once", duplicate)
+				if onUnrealizable != nil {
+					onUnrealizable(unrealizableTarget{
+						selector:     buildJSONPointerSelector(path, method),
+						operationKey: opKey,
+						reasonCode:   "openapi.duplicate_parameter_identity",
+						rule:         openAPIRule(bindingSpec, "P-02"),
+						message:      reason,
+					})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
+			}
 			if field := unflattenableParamForRevision(params, bindingSpec); field != "" {
 				reason := fmt.Sprintf("parameter %q has no unique flattened identity", field)
 				if onUnrealizable != nil {
@@ -137,7 +151,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 						selector:     buildJSONPointerSelector(path, method),
 						operationKey: opKey,
 						reasonCode:   "openapi.flattening_collision",
-						rule:         "OAPI-P-03",
+						rule:         openAPIRule(bindingSpec, "P-02"),
 						message:      reason,
 					})
 					continue
@@ -152,7 +166,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 						selector:     buildJSONPointerSelector(path, method),
 						operationKey: opKey,
 						reasonCode:   "openapi.parameter_content_excluded",
-						rule:         "OAPI-P-02",
+						rule:         openAPIRule(bindingSpec, "P-02"),
 						message:      reason,
 					})
 					continue
@@ -176,7 +190,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 						selector:     buildJSONPointerSelector(path, method),
 						operationKey: opKey,
 						reasonCode:   "openapi.parameter_style_expansion_excluded",
-						rule:         "OAPI-P-02",
+						rule:         openAPIRule(bindingSpec, "P-02"),
 						message:      reason,
 					})
 					continue
@@ -184,10 +198,16 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				return iface, unrealizableOperation(opKey, reason)
 			}
 
+			inputOperation := op
+			if requestBodyIgnoredForBindingSpec(bindingSpec, method) {
+				copy := *op
+				copy.RequestBody = nil
+				inputOperation = &copy
+			}
 			var requestPlans []*bodyPlan
-			if op.RequestBody != nil && op.RequestBody.Value != nil {
+			if inputOperation.RequestBody != nil && inputOperation.RequestBody.Value != nil {
 				plans, planErr := planRequestBodiesFor(doc, op, bindingSpec)
-				// The acceptance floor (openbindings.openapi@1 §3): a
+				// The acceptance floor (the registered OpenAPI binding family §3): a
 				// ladder-invalid request media ALTERNATIVE is a unit that is
 				// malformed under its upstream authority, so it is not a
 				// candidate the operation may carry. It never climbs -- the
@@ -207,7 +227,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 						}
 					}
 				}
-				requiredBody := op.RequestBody.Value.Required
+				requiredBody := inputOperation.RequestBody.Value.Required
 				if requiredBody && (planErr != nil || len(requestPlans) == 0) {
 					reason := "no artifact-declared request media candidate can realize its required flattened input"
 					if planErr != nil {
@@ -221,10 +241,10 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 						// (OAPI-P-04).
 						allCollided := planErr == nil && plannedCount > 0
 						code := "openapi.unresolvable_request_body"
-						rule := "OAPI-P-04"
+						rule := openAPIRule(bindingSpec, "P-03")
 						if allCollided {
 							code = "openapi.flattening_collision"
-							rule = "OAPI-P-03"
+							rule = openAPIRule(bindingSpec, "P-02")
 						} else {
 							var dme *degenerateMediaError
 							if errors.As(planErr, &dme) {
@@ -277,7 +297,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 
 			opPointer := "#/operations/" + escapeJSONPointerSegment(opKey)
 			routes := planAbstractInputRoutes(params, requestPlans)
-			inputSchema := buildInputSchemaForPlans(op, params, requestPlans, &requestGraph, routes, schemaOverlays)
+			inputSchema := buildInputSchemaForPlans(inputOperation, params, requestPlans, &requestGraph, routes, schemaOverlays)
 			if inputSchema != nil {
 				// Project, then decycle — the TypeScript engine's order, and the
 				// one the cut-point question is asked in: the decycler walks the
@@ -315,8 +335,8 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				Source:    DefaultSourceName,
 				Selector:  selector,
 			}
-			if usesRoutedInput(bindingSpec) && routes.needsTransform {
-				binding.InputTransform = &openbindings.TransformOrRef{Inline: routes.transformExpressionFor(bindingSpec)}
+			if usesRoutedInput(bindingSpec) && routes.hasInput() {
+				binding.InputTransform = &openbindings.TransformOrRef{Inline: routes.transformExpression(params)}
 			}
 			iface.Bindings[bindingKey] = binding
 		}
@@ -361,7 +381,7 @@ func unrealizableOperation(operationKey, reason string) error {
 var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 
 // loadDocument loads and discriminates an OpenAPI source per
-// openbindings.openapi@1 §3-§6: `content`, when present, is the artifact
+// the registered OpenAPI binding family §3-§6: `content`, when present, is the artifact
 // (content primacy), with a co-present `location` serving as the embedded
 // artifact's BASE URI — relative $refs resolve against it exactly as they
 // would had the document been retrieved from that address (OAPI-D-01/D-02,
@@ -375,6 +395,17 @@ var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "p
 // §3 duplicate-key pin.
 func loadDocument(location string, content json.RawMessage) (*openapi3.T, error) {
 	return loadDocumentWithResolver(context.Background(), http.DefaultClient, location, content)
+}
+
+func loadDocumentForBindingSpec(location string, content json.RawMessage, bindingSpec string) (*openapi3.T, error) {
+	document, err := loadDocument(location, content)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkAcceptedOpenAPIVersionForBindingSpec(document, bindingSpec); err != nil {
+		return nil, err
+	}
+	return document, nil
 }
 
 // loadDocumentWithResolver loads a complete OpenAPI description using the
@@ -620,7 +651,7 @@ func synthesisEmissionGate(ctx context.Context, location string,
 		}
 		overlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
 		images := make([][]byte, 0, 2)
-		for _, bindingSpec := range []string{BindingSpec, ""} {
+		for _, bindingSpec := range []string{bindingSpecForOpenAPIEdition(doc.OpenAPI), ""} {
 			image, imageErr := emittedImage(doc, location, bindingSpec, overlays, floor)
 			if imageErr != nil {
 				return nil, true
@@ -948,20 +979,46 @@ func cloneURL(u *url.URL) *url.URL {
 	return &copy
 }
 
-// checkAcceptedOpenAPIVersion discriminates the exact accepted editions per
-// OAPI-P-01. Patch-looking values outside the frozen set are not inferred
-// compatible.
+// checkAcceptedOpenAPIVersion applies the union load gate used by the shared
+// typed loader. Binding dispatch immediately follows it with the token-local
+// gate below; no caller-visible path may use this union as a support claim.
 func checkAcceptedOpenAPIVersion(doc *openapi3.T) error {
 	v := doc.OpenAPI
 	if v == "" {
-		return fmt.Errorf("document declares no `openapi` field: openbindings.openapi@1 requires one of its exact accepted OpenAPI editions (OAPI-P-01; Swagger 2.0 is not accepted)")
+		return fmt.Errorf("document declares no `openapi` field: the registered OpenAPI 3.0/3.1 engines require an exact accepted edition (OAPI30-P-01/OAPI31-P-01; Swagger 2.0 is not accepted)")
 	}
 	switch v {
 	case "3.0.0", "3.0.1", "3.0.2", "3.0.3", "3.0.4",
 		"3.1.0", "3.1.1", "3.1.2":
 		return nil
 	}
-	return fmt.Errorf("unsupported OpenAPI version %q: openbindings.openapi@1 accepts exactly 3.0.0–3.0.4 and 3.1.0–3.1.2 (OAPI-P-01)", v)
+	return fmt.Errorf("unsupported OpenAPI version %q: the registered OpenAPI 3.0/3.1 engines accept exactly 3.0.0–3.0.4 or 3.1.0–3.1.2 under their own tokens", v)
+}
+
+func bindingSpecForOpenAPIEdition(edition string) string {
+	switch {
+	case openAPIBindingSpecRegistry[BindingSpecOpenAPI30].editions[edition]:
+		return BindingSpecOpenAPI30
+	case openAPIBindingSpecRegistry[BindingSpecOpenAPI31].editions[edition]:
+		return BindingSpecOpenAPI31
+	default:
+		return ""
+	}
+}
+
+func checkAcceptedOpenAPIVersionForBindingSpec(doc *openapi3.T, bindingSpec string) error {
+	registration, registered := openAPIBindingSpecRegistry[bindingSpec]
+	if !registered || !registration.implemented {
+		return fmt.Errorf("%s: binding specification %q is not implemented", ErrCodeUnsupportedBindingSpec, bindingSpec)
+	}
+	edition := ""
+	if doc != nil {
+		edition = doc.OpenAPI
+	}
+	if registration.editions[edition] {
+		return nil
+	}
+	return fmt.Errorf("document edition %q is not admitted by binding specification %q", edition, bindingSpec)
 }
 
 func deriveOperationKey(op *openapi3.Operation, path, method string, used map[string]bool) string {
@@ -1145,7 +1202,7 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 			default:
 				// A free-form object body (type object, no named
 				// properties): the flattened model passes unmatched input
-				// fields through into the body (openbindings.openapi@1
+				// fields through into the body (the registered OpenAPI binding family
 				// §9.1), so the flattened surface stays an OPEN object —
 				// the synthetic `body` wrap is reserved for NON-object
 				// body schemas, and wrapping here would describe a field
@@ -1355,14 +1412,11 @@ func schemaWithParameterDescription(schema map[string]any, description string) m
 	return schema
 }
 
-// unsupportedParameterContent returns the first content-form parameter whose
-// single media declaration the candidate cannot serialize. Creation-time
-// soundness requires excluding the target rather than emitting an operation
-// that is statically guaranteed to refuse when that parameter is populated.
-func unsupportedParameterContent(params openapi3.Parameters) string {
-	return unsupportedParameterContentFor(params, BindingSpec)
-}
-
+// unsupportedParameterContentFor returns the first content-form parameter
+// whose single media declaration the named binding family cannot serialize.
+// Creation-time soundness requires excluding the target rather than emitting
+// an operation that is statically guaranteed to refuse when that parameter is
+// populated.
 func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec string) string {
 	for _, ref := range params {
 		if ref == nil || ref.Value == nil {

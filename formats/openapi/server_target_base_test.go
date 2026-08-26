@@ -159,7 +159,7 @@ func TestServerTargetBaseEmittedRequirements(t *testing.T) {
 		t.Run(c.Name, func(t *testing.T) {
 			result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 				Sources: []synthesize.SynthesizeSource{{
-					BindingSpec: BindingSpec,
+					BindingSpec: bindingSpecForTestDocument(serverTargetBaseDocument(t, c)),
 					Content:     openbindings.TextContent(string(serverTargetBaseDocument(t, c))),
 				}},
 			})

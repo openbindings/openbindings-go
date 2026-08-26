@@ -21,7 +21,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-// This file implements §9.2 of openbindings.openapi@1 (OAPI-P-04): request
+// This file implements §9.2 of the registered OpenAPI binding family (OAPI-P-04): request
 // media selection with its deterministic tiebreaks and pre-dispatch
 // refusals, multipart part encoding (including the Base64 boundary encoding
 // for binary-signaled parts), urlencoded field serialization, and the
@@ -479,10 +479,11 @@ func collidesWithNormalizedIdentity(colliding map[string]string, parsed parsedMe
 }
 
 // planRequestBody returns the reference SDK's first declaration-sorted
-// candidate. Runtime invocation uses planRequestBodies and applies
-// candidate-specific admissibility after reading the caller value.
-func planRequestBody(op *openapi3.Operation) (*bodyPlan, error) {
-	plans, err := planRequestBodies(op)
+// candidate for the exact binding family token in scope. Runtime invocation
+// uses planRequestBodiesFor and applies candidate-specific admissibility after
+// reading the caller value.
+func planRequestBody(op *openapi3.Operation, bindingSpec string) (*bodyPlan, error) {
+	plans, err := planRequestBodiesFor(nil, op, bindingSpec)
 	if err != nil {
 		return nil, err
 	}
@@ -490,13 +491,6 @@ func planRequestBody(op *openapi3.Operation) (*bodyPlan, error) {
 		return &bodyPlan{}, nil
 	}
 	return plans[0], nil
-}
-
-// planRequestBodies preserves the artifact's concrete supported candidate
-// set. Sorting is a nonnormative reference-SDK policy only; the binding
-// specification gives the declarations no preference order.
-func planRequestBodies(op *openapi3.Operation) ([]*bodyPlan, error) {
-	return planRequestBodiesFor(nil, op, BindingSpec)
 }
 
 // planRequestBodiesFor preserves the immutable revision-1/2 candidate set and
@@ -577,7 +571,7 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 			return nil, fmt.Errorf("every request content declaration denotes a normalized-colliding parsed media identity, so no selection may land on one (colliding: %s)", strings.Join(identities, ", "))
 		}
 		sort.Strings(declared)
-		return nil, fmt.Errorf("request body declares no media type whose declaration selects a request carriage lane openbindings.openapi@1 defines (declared: %s)", strings.Join(declared, ", "))
+		return nil, fmt.Errorf("request body declares no media type whose declaration selects a request carriage lane the registered OpenAPI binding family defines (declared: %s)", strings.Join(declared, ", "))
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].parsed.identity < candidates[j].parsed.identity })
 	plans := make([]*bodyPlan, 0, len(candidates))
@@ -998,7 +992,7 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 // switch in the three engines; it discarded an explicitly written
 // encoding.contentType, collided sibling field names, and refused at dispatch
 // for values the artifact had fully declared. It is deleted, and
-// openbindings.openapi@1 section 2 now states the patch-uniformity reading
+// the registered OpenAPI binding family section 2 now states the patch-uniformity reading
 // once. Package: design/openapi-30-urlencoded-default-lane-ruling.md.
 //
 // Reproduce the per-edition presence pattern (edition order 3.0.0, 3.0.1,
@@ -1703,7 +1697,7 @@ func resolvedBodyShape(schema *openapi3.Schema, seen map[*openapi3.Schema]bool) 
 	seen[schema] = true
 	defer delete(seen, schema)
 	if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 || schema.Not != nil {
-		return false, nil, fmt.Errorf("conditional/combinatorial request schema has no single declaration-defined flattened surface in openbindings.openapi@1 revision 1")
+		return false, nil, fmt.Errorf("conditional/combinatorial request schema has no single declaration-defined flattened surface in the registered OpenAPI binding family revision 1")
 	}
 	props := map[string]bool{}
 	object := schema.Type.Is("object") || schema.Properties != nil
@@ -1744,11 +1738,6 @@ func candidateCollides(params openapi3.Parameters, plan *bodyPlan) bool {
 		}
 	}
 	return false
-}
-
-func configuredRequestPlans(plans []*bodyPlan, bindCtx map[string]any) []*bodyPlan {
-	selected, _ := configuredRequestPlansFor(nil, nil, plans, bindCtx, BindingSpec)
-	return selected
 }
 
 func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []*bodyPlan, bindCtx map[string]any, bindingSpec string) ([]*bodyPlan, error) {
@@ -1805,11 +1794,7 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 	return nil, nil
 }
 
-func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans []*bodyPlan, wanted parsedMediaType, bindingSpecs ...string) ([]*bodyPlan, error) {
-	bindingSpec := BindingSpec
-	if len(bindingSpecs) > 0 {
-		bindingSpec = bindingSpecs[0]
-	}
+func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans []*bodyPlan, wanted parsedMediaType, bindingSpec string) ([]*bodyPlan, error) {
 	if op == nil || op.RequestBody == nil || op.RequestBody.Value == nil {
 		return nil, nil
 	}
@@ -2053,16 +2038,13 @@ func buildRequestBody(doc *openapi3.T, plan *bodyPlan, routed *routedInput) (io.
 // Multipart (OAPI-P-04's part-encoding rules)
 // ---------------------------------------------------------------------------
 
-// buildMultipartBody encodes body fields as multipart/form-data. Revisions 1
-// and 2 retain their legacy edition-aware binary decoder. Revision 3 instead
-// treats only OAS 3.0 format:binary as a canonical Base64 raw-byte boundary;
-// OAS 3.1 contentEncoding/contentMediaType strings ride as artifact text.
-// Other parts follow the artifact's encoding object or OAS per-type defaults.
-// Fields are written in sorted order for a deterministic body.
-func buildMultipartBody(doc *openapi3.T, media *openapi3.MediaType, fields map[string]any) (io.Reader, string, error) {
-	return buildMultipartBodyForRevision(doc, media, fields, BindingSpec)
-}
-
+// buildMultipartBodyForRevision encodes body fields as multipart/form-data
+// for the exact binding family token in scope. Revisions 1 and 2 retain their
+// legacy edition-aware binary decoder. Revision 3 instead treats only OAS 3.0
+// format:binary as a canonical Base64 raw-byte boundary; OAS 3.1
+// contentEncoding/contentMediaType strings ride as artifact text. Other parts
+// follow the artifact's encoding object or OAS per-type defaults. Fields are
+// written in sorted order for a deterministic body.
 func buildMultipartBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, fields map[string]any, bindingSpec string) (io.Reader, string, error) {
 	return buildMultipartBodyForMediaType(doc, media, fields, bindingSpec, "multipart/form-data")
 }
@@ -3037,15 +3019,12 @@ func canonicalBase64BoundaryBytes(name, value string) ([]byte, error) {
 // application/x-www-form-urlencoded
 // ---------------------------------------------------------------------------
 
-// buildURLEncodedBody serializes body fields per the OAS `encoding` rules:
-// each field's style/explode/allowReserved come from the media type's
-// encoding object where present, defaulting to form/explode=true. Fields are
-// serialized with the same expansions as query parameters and joined in
-// sorted-name order for a deterministic body.
-func buildURLEncodedBody(media *openapi3.MediaType, fields map[string]any) (string, error) {
-	return buildURLEncodedBodyForRevision(nil, media, fields, BindingSpec)
-}
-
+// buildURLEncodedBodyForRevision serializes body fields per the OAS
+// `encoding` rules for the exact binding family token in scope: each field's
+// style/explode/allowReserved come from the media type's encoding object where
+// present, defaulting to form/explode=true. Fields are serialized with the
+// same expansions as query parameters and joined in sorted-name order for a
+// deterministic body.
 func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, fields map[string]any, bindingSpec string) (string, error) {
 	names := make([]string, 0, len(fields))
 	for name := range fields {
@@ -3091,13 +3070,7 @@ func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, 
 			style, explode = sm.Style, sm.Explode
 			allowReserved = enc.AllowReserved
 		}
-		var u []string
-		var err error
-		if hasMediaFidelity(bindingSpec) {
-			u, err = serializeQueryValueForRevision(name, fields[name], style, explode, allowReserved, bindingSpec, true)
-		} else {
-			u, err = serializeQueryValue(name, fields[name], style, explode, allowReserved)
-		}
+		u, err := serializeQueryValueForRevision(name, fields[name], style, explode, allowReserved, bindingSpec, true)
 		if err != nil {
 			return "", fmt.Errorf("form field %q: %w", name, err)
 		}
@@ -3173,14 +3146,10 @@ func governingResponse(op *openapi3.Operation, status int) *governingResponseMat
 	return nil
 }
 
-// governingResponseMedia selects the one concrete declaration in the
-// governing Response Object whose type/subtype and declared parameters are
-// a subset of the actual Content-Type. Greatest parameter specificity wins;
-// a tie is ambiguous and loud.
-func governingResponseMedia(response *openapi3.Response, actual string) (parsedMediaType, error) {
-	return governingResponseMediaFor(response, actual, BindingSpec)
-}
-
+// governingResponseMediaFor selects the one concrete declaration in the
+// governing Response Object whose type/subtype and declared parameters are a
+// subset of the actual Content-Type under the named binding family. Greatest
+// parameter specificity wins; a tie is ambiguous and loud.
 func governingResponseMediaFor(response *openapi3.Response, actual, bindingSpec string) (parsedMediaType, error) {
 	match, err := governingResponseMediaMatchFor(response, actual, bindingSpec)
 	if err != nil {
@@ -3284,13 +3253,10 @@ func governingResponseMediaMatchFor(response *openapi3.Response, actual, binding
 	return matches[0], nil
 }
 
-// successMediaTypes returns the declared concrete media types that may govern
-// a successful response: literal 2xx, 2XX, and default declarations. Members
-// retain declaration parameters; ordering is an implementation convention.
-func successMediaTypes(op *openapi3.Operation) []string {
-	return successMediaTypesFor(op, BindingSpec)
-}
-
+// successMediaTypesFor returns the declared concrete media types that may
+// govern a successful response under the named binding family: literal 2xx,
+// 2XX, and default declarations. Members retain declaration parameters;
+// ordering is an implementation convention.
 func successMediaTypesFor(op *openapi3.Operation, bindingSpec string) []string {
 	if op == nil || op.Responses == nil {
 		return nil
@@ -3357,36 +3323,24 @@ func successMediaTypesFor(op *openapi3.Operation, bindingSpec string) []string {
 	return out
 }
 
-// acceptHeader advertises the declared concrete media types of the
-// operation's success responses. Empty membership means header omission.
-func acceptHeader(op *openapi3.Operation) string {
-	types := successMediaTypes(op)
-	return strings.Join(types, ", ")
-}
-
+// acceptHeaderFor advertises the declared concrete media types of the
+// operation's success responses under the named binding family. Empty
+// membership means header omission.
 func acceptHeaderFor(op *openapi3.Operation, bindingSpec string) string {
 	return strings.Join(successMediaTypesFor(op, bindingSpec), ", ")
 }
 
-// isStreamingCapable reports the §8 static capability: an operation is
-// streaming-capable iff text/event-stream appears among the declared media
-// types of its success responses.
-func isStreamingCapable(op *openapi3.Operation) bool {
-	for _, mt := range successMediaTypes(op) {
-		if mt == "text/event-stream" {
-			return true
-		}
-	}
-	return false
-}
-
+// isStreamingCapableFor reports the §8 static capability under the named
+// binding family: an operation is streaming-capable iff text/event-stream
+// appears among the declared media types of its success responses.
 func isStreamingCapableFor(op *openapi3.Operation, bindingSpec string) bool {
-	if !hasMediaFidelity(bindingSpec) {
-		return isStreamingCapable(op)
-	}
 	for _, mt := range successMediaTypesFor(op, bindingSpec) {
-		parsed, err := parseMediaDeclaration(mt)
-		if err == nil && mediaRangeBaseMatches(parsed.base, "text/event-stream") {
+		if hasMediaFidelity(bindingSpec) {
+			parsed, err := parseMediaDeclaration(mt)
+			if err == nil && mediaRangeBaseMatches(parsed.base, "text/event-stream") {
+				return true
+			}
+		} else if normalizeMediaType(mt) == "text/event-stream" {
 			return true
 		}
 	}

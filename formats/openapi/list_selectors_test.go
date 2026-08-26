@@ -42,7 +42,8 @@ func TestInspectSource_BasicSelectors(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		BindingSpec: BindingSpecOpenAPI30,
+		Content:     openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +79,8 @@ func TestInspectSource_JSONPointerFormat(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		BindingSpec: BindingSpecOpenAPI30,
+		Content:     openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +123,8 @@ func TestInspectSource_DescriptionFromSummary(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		BindingSpec: BindingSpecOpenAPI30,
+		Content:     openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +149,7 @@ func TestInspectSource_DescriptionFromSummary(t *testing.T) {
 
 func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
 	doc := minimalDoc()
-	iface := mustConvertDocToInterface(t, doc, "")
+	iface := mustConvertDocToInterface(t, doc, BindingSpecOpenAPI30)
 
 	// Collect binding selectors from SynthesizeInterface.
 	createSelectors := map[string]bool{}
@@ -176,7 +179,8 @@ func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		BindingSpec: BindingSpecOpenAPI30,
+		Content:     openbindings.TextContent(content),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +218,7 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iface := mustConvertDocToInterface(t, doc, "")
+	iface := mustConvertDocToInterface(t, doc, BindingSpecOpenAPI30)
 
 	// Map each selector to the operation key SynthesizeInterface assigned it.
 	createKeyBySelector := map[string]string{}
@@ -222,7 +226,10 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 		createKeyBySelector[b.Selector] = b.Operation
 	}
 
-	result, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{Content: openbindings.TextContent(content)})
+	result, err := NewSynthesizer().InspectSource(context.Background(), &openbindings.Source{
+		BindingSpec: BindingSpecOpenAPI30,
+		Content:     openbindings.TextContent(content),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +248,7 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
 func TestInspectSource_NoPaths(t *testing.T) {
 	// The 3.0 line makes `paths` REQUIRED: a document that declares none has
 	// no position from which any target can be addressed, and §3 part 2's
-	// derived whole-source refusal fires (openbindings.openapi@1 §3).
+	// derived whole-source refusal fires (openbindings.openapi-3.0@1 §3).
 	content := `{
   "openapi": "3.0.3",
   "info": {"title": "Empty", "version": "1.0.0"}
@@ -249,7 +256,8 @@ func TestInspectSource_NoPaths(t *testing.T) {
 
 	synthesizer := NewSynthesizer()
 	_, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(content),
+		BindingSpec: BindingSpecOpenAPI30,
+		Content:     openbindings.TextContent(content),
 	})
 	if err == nil {
 		t.Fatal("expected the §3 part-2 whole-source refusal for a 3.0 document with no paths")
@@ -267,7 +275,8 @@ func TestInspectSource_NoPaths(t *testing.T) {
   "components": {"schemas": {"Thing": {"type": "object"}}}
 }`
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(componentsOnly),
+		BindingSpec: BindingSpecOpenAPI31,
+		Content:     openbindings.TextContent(componentsOnly),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +291,7 @@ func TestInspectSource_NoPaths(t *testing.T) {
 
 func TestInspectSource_NilContent(t *testing.T) {
 	synthesizer := NewSynthesizer()
-	_, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{})
+	_, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{BindingSpec: BindingSpecOpenAPI30})
 	if err == nil {
 		t.Error("expected error for empty source")
 	}

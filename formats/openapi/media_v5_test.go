@@ -22,16 +22,11 @@ func dynamicBodySpec(openapiVersion, mediaType, schema string) string {
 	return `{"openapi":` + quoteJSON(openapiVersion) + `,"info":{"title":"dynamic object carriage","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/items":{"post":{"operationId":"createItem","parameters":[{"name":"id","in":"query","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{` + quoteJSON(mediaType) + `:{"schema":` + schema + `}}},"responses":{"204":{"description":"stored"}}}}}}`
 }
 
-func dynamicRoutedInput(payload map[string]any) []any {
-	return []any{map[string]any{
-		"$openbindings": BindingSpec,
-		"value": map[string]any{
-			"id":      "query-value",
-			"payload": payload,
-		},
-		"parameters": []any{map[string]any{"in": "query", "name": "id", "field": "id"}},
-		"body":       map[string]any{"whole": "payload"},
-	}}
+func dynamicEnvelopeInput(payload map[string]any) map[string]any {
+	return map[string]any{
+		"parameters": map[string]any{"id": "query-value"},
+		"body":       payload,
+	}
 }
 
 func invokeRevision5Request(t *testing.T, spec string, input any, observe func(*http.Request)) *invoke.InvocationError {
@@ -47,7 +42,7 @@ func invokeRevision5Request(t *testing.T, spec string, input any, observe func(*
 		}, nil
 	})
 	call := NewInvokerWithClient(&http.Client{Transport: transport}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1items/post",
 	})
 	_, invocationErr := driveOutputs(context.Background(), call, input)
@@ -56,7 +51,7 @@ func invokeRevision5Request(t *testing.T, spec string, input any, observe func(*
 
 func TestRevision5AdditionalPropertiesFormPreservesIndependentNames(t *testing.T) {
 	spec := dynamicBodySpec("3.0.4", "application/x-www-form-urlencoded", `{"type":"object","properties":{"fixed":{"type":"string"}},"additionalProperties":{"type":"string"}}`)
-	invocationErr := invokeRevision5Request(t, spec, dynamicRoutedInput(map[string]any{
+	invocationErr := invokeRevision5Request(t, spec, dynamicEnvelopeInput(map[string]any{
 		"id": "body-value", "extra": "a b", "fixed": "yes",
 	}), func(req *http.Request) {
 		if got := req.URL.Query().Get("id"); got != "query-value" {
@@ -81,13 +76,13 @@ func TestRevision5AdditionalPropertiesFormPreservesIndependentNames(t *testing.T
 	}
 
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	binding := iface.Bindings["createItem.openapi"]
-	if binding.InputTransform == nil || !strings.Contains(binding.InputTransform.Inline, `"whole":"payload"`) {
+	if binding.InputTransform == nil || strings.Contains(binding.InputTransform.Inline, "$openbindings") {
 		t.Fatalf("input transform = %#v", binding.InputTransform)
 	}
 	input := iface.Operations["createItem"].Input.(map[string]any)
@@ -106,7 +101,7 @@ func TestRevision5AdditionalPropertiesFormPreservesIndependentNames(t *testing.T
 
 func TestRevision5PatternPropertiesSelectsMultipartMemberSchema(t *testing.T) {
 	spec := dynamicBodySpec("3.1.2", "multipart/form-data", `{"type":"object","patternProperties":{"^meta_":{"type":"object","additionalProperties":{"type":"string"}}},"additionalProperties":false}`)
-	invocationErr := invokeRevision5Request(t, spec, dynamicRoutedInput(map[string]any{
+	invocationErr := invokeRevision5Request(t, spec, dynamicEnvelopeInput(map[string]any{
 		"meta_first": map[string]any{"role": "admin"},
 	}), func(req *http.Request) {
 		_, params, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
@@ -138,7 +133,7 @@ func TestRevision5PatternPropertiesSelectsMultipartMemberSchema(t *testing.T) {
 func TestRevision5DoesNotTreatExplicitAdditionalPropertiesFalseAsDynamic(t *testing.T) {
 	spec := dynamicBodySpec("3.1.2", "application/json", `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`)
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -25,13 +25,13 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-func bindingSpecCorpusDir(t *testing.T) string {
+func bindingSpecCorpusDir(t *testing.T, family string) string {
 	t.Helper()
 	root := os.Getenv("OB_SPEC_CORPUS")
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
-	dir := filepath.Join(root, "binding-specs", "openapi")
+	dir := filepath.Join(root, "binding-specs", family)
 	if _, err := os.Stat(dir); err != nil {
 		// OB_CORPUS_REQUIRED (set in CI) turns a missing corpus into a hard
 		// failure so a mis-wired path turns CI red instead of silently green;
@@ -78,57 +78,70 @@ type corpusBinding struct {
 }
 
 func TestBindingSpecCorpus(t *testing.T) {
-	dir := bindingSpecCorpusDir(t)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read corpus dir: %v", err)
-	}
-	ran := false
-	for _, e := range entries {
-		if filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			t.Fatalf("read %s: %v", e.Name(), err)
-		}
-		var fix corpusFixture
-		if err := json.Unmarshal(raw, &fix); err != nil {
-			t.Fatalf("parse %s: %v", e.Name(), err)
-		}
-		if fix.BindingSpec != BindingSpec {
-			t.Fatalf("%s: fixture bindingSpec %q is not current %q", e.Name(), fix.BindingSpec, BindingSpec)
-		}
-		ran = true
-		for _, tt := range fix.Tests {
-			tt := tt
-			t.Run(fix.Rule+"/"+tt.Description, func(t *testing.T) {
-				refusal := judgeCorpusDocument(t, tt.Document)
-				if tt.Valid && refusal != nil {
-					t.Errorf("expected nothing to refuse, got: %v", refusal)
+	for _, family := range []struct {
+		name        string
+		bindingSpec string
+	}{{"openapi-3.0", BindingSpecOpenAPI30}, {"openapi-3.1", BindingSpecOpenAPI31}} {
+		family := family
+		t.Run(family.name, func(t *testing.T) {
+			dir := bindingSpecCorpusDir(t, family.name)
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("read corpus dir: %v", err)
+			}
+			ran := false
+			for _, e := range entries {
+				if filepath.Ext(e.Name()) != ".json" {
+					continue
 				}
-				if !tt.Valid && refusal == nil {
-					t.Errorf("expected a bind-time refusal, but the family-scoped material was accepted")
+				raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+				if err != nil {
+					t.Fatalf("read %s: %v", e.Name(), err)
 				}
-			})
-		}
-	}
-	if !ran {
-		t.Fatal("corpus directory contains no fixture files")
+				var fix corpusFixture
+				if err := json.Unmarshal(raw, &fix); err != nil {
+					t.Fatalf("parse %s: %v", e.Name(), err)
+				}
+				if fix.BindingSpec != family.bindingSpec {
+					t.Fatalf("%s: fixture bindingSpec %q, want %q", e.Name(), fix.BindingSpec, family.bindingSpec)
+				}
+				ran = true
+				for _, tt := range fix.Tests {
+					tt := tt
+					t.Run(fix.Rule+"/"+tt.Description, func(t *testing.T) {
+						refusal := judgeCorpusDocument(t, tt.Document, family.bindingSpec)
+						if tt.Valid && refusal != nil {
+							t.Errorf("expected nothing to refuse, got: %v", refusal)
+						}
+						if !tt.Valid && refusal == nil {
+							t.Errorf("expected a bind-time refusal, but the family-scoped material was accepted")
+						}
+					})
+				}
+			}
+			if !ran {
+				t.Fatal("corpus directory contains no fixture files")
+			}
+		})
 	}
 }
 
 // judgeCorpusDocument routes one embedded OBI document's family-scoped
 // material through this module's offline lanes, returning the first refusal
 // or nil when there is nothing to refuse.
-func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
+func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) error {
 	t.Helper()
 	var obiDoc corpusDocument
 	if err := json.Unmarshal(raw, &obiDoc); err != nil {
 		t.Fatalf("fixture document does not parse: %v", err)
 	}
 	for name, src := range obiDoc.Sources {
-		if src.BindingSpec != BindingSpec {
+		if src.BindingSpec != bindingSpec {
+			for _, binding := range obiDoc.Bindings {
+				if binding.Source == name {
+					return fmt.Errorf("source %q selects sibling binding specification %q, want %q", name, src.BindingSpec, bindingSpec)
+				}
+			}
 			continue
 		}
 
@@ -137,7 +150,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage) error {
 		// artifacts are self-contained, so the load performs no I/O.
 		var doc *openapi3.T
 		if src.Content != nil {
-			d, err := loadDocument("", src.Content)
+			d, err := loadDocumentForBindingSpec("", src.Content, bindingSpec)
 			if err != nil {
 				return err
 			}

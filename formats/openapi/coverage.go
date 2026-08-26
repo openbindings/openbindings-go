@@ -36,13 +36,16 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 		bySelector[binding.Selector] = bindingIdentity{operationKey: binding.Operation, selector: binding.Selector}
 	}
 	sourceLocation := ""
-	bindingSpec := BindingSpec
+	bindingSpec := ""
 	for _, source := range iface.Sources {
-		if source.BindingSpec == BindingSpec {
+		if isImplementedOpenAPIBindingSpec(source.BindingSpec) {
 			sourceLocation = source.Location
 			bindingSpec = source.BindingSpec
 			break
 		}
+	}
+	if bindingSpec == "" {
+		return []synthesize.SynthesisCoverageEntry{}
 	}
 
 	// The walk is driven from the UNION of the loaded document's path×method
@@ -142,7 +145,9 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					continue
 				}
 				targetRequirements := openAPIServerRequirements(doc, pathItem, op, sourceLocation)
-				targetRequirements = append(targetRequirements, openAPIRequestMediaRequirements(doc, pathItem, op, bindingSpec)...)
+				if !requestBodyIgnoredForBindingSpec(bindingSpec, method) {
+					targetRequirements = append(targetRequirements, openAPIRequestMediaRequirements(doc, pathItem, op, bindingSpec)...)
+				}
 				entries = append(entries, synthesize.SynthesisCoverageEntry{
 					SourceIndex:     0,
 					SourceRef:       selector,
@@ -152,7 +157,9 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					BindingSelector: identity.selector,
 					Requirements:    targetRequirements,
 				})
-				entries = append(entries, openAPIRequestMediaCoverage(doc, op, pathItem, identity, bindingSpec, verdict)...)
+				if !requestBodyIgnoredForBindingSpec(bindingSpec, method) {
+					entries = append(entries, openAPIRequestMediaCoverage(doc, op, pathItem, identity, bindingSpec, verdict)...)
+				}
 				entries = append(entries, floorProjectionEntries(verdict)...)
 				entries = append(entries, openAPICallbackCoverage(op, selector)...)
 			}
@@ -269,11 +276,11 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 		}
 		reasonCode := "openapi.request_media_excluded"
 		message := "request media alternative has no faithful candidate carriage"
-		rule := "OAPI-P-04"
+		rule := openAPIRule(bindingSpec, "P-03")
 		if planned[mediaKey] {
 			reasonCode = "openapi.flattening_collision"
 			message = "request media alternative collides with an independently declared parameter in the candidate's application boundary"
-			rule = "OAPI-P-03"
+			rule = openAPIRule(bindingSpec, "P-02")
 		} else if identity, collides := colliding[mediaKey]; collides {
 			message = fmt.Sprintf("request media alternative denotes the parsed media identity %s, which another declaration in this content map also denotes; no selection may land on a normalized-colliding identity", identity)
 		} else if planErr != nil {
@@ -376,7 +383,7 @@ func excludedReverseOpenAPIInteraction(sourceRef string) synthesize.SynthesisCov
 		Status:      synthesize.SynthesisExcluded,
 		ReasonCode:  "openapi.reverse_direction",
 		Rule:        "OAPI-D-03",
-		Message:     "callbacks and webhooks describe service-to-consumer requests outside openbindings.openapi@1",
+		Message:     "callbacks and webhooks describe service-to-consumer requests outside the registered OpenAPI binding family",
 	}
 }
 

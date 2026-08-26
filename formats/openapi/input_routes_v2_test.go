@@ -1,89 +1,94 @@
 package openapi
 
 import (
-	"strings"
+	"reflect"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
+
+	openapiclient "github.com/openbindings/openapi-client/go"
 )
 
-func TestParseRoutedEnvelopeRejectsSharedDestinationField(t *testing.T) {
-	_, err := parseRoutedEnvelope([]any{map[string]any{
-		"$openbindings": BindingSpec,
-		"value":         map[string]any{"shared": "x"},
-		"parameters": []any{
-			map[string]any{"in": "path", "name": "id", "field": "shared"},
-			map[string]any{"in": "query", "name": "id", "field": "shared"},
-		},
-		"body": map[string]any{},
-	}})
-	if err == nil || !strings.Contains(err.Error(), "more than one destination") {
-		t.Fatalf("expected shared-field refusal, got %v", err)
+func TestParseCallerEnvelopeRejectsUnknownTopLevelKey(t *testing.T) {
+	if _, err := parseCallerEnvelope(map[string]any{"extra": true}); err == nil {
+		t.Fatal("expected the closed caller envelope to reject an unknown key")
 	}
 }
 
-func TestParseRoutedEnvelopeRequiresExactDescriptorShape(t *testing.T) {
-	_, err := parseRoutedEnvelope([]any{map[string]any{
-		"$openbindings": BindingSpec,
-		"value":         map[string]any{},
-		"parameters":    []any{},
-		"body":          map[string]any{},
-		"extra":         true,
-	}})
-	if err == nil || !strings.Contains(err.Error(), "exactly") {
-		t.Fatalf("expected exact-shape refusal, got %v", err)
+func TestParseCallerEnvelopeRejectsNonObjectParameters(t *testing.T) {
+	if _, err := parseCallerEnvelope(map[string]any{"parameters": []any{}}); err == nil {
+		t.Fatal("expected a non-object parameters member to be rejected")
 	}
 }
 
-func TestParseRoutedEnvelopeLeavesMarkerShapedObjectFlat(t *testing.T) {
-	envelope, err := parseRoutedEnvelope(map[string]any{
-		"$openbindings": BindingSpec,
-		"value":         map[string]any{"application": true},
-	})
-	if err != nil || envelope != nil {
-		t.Fatalf("marker-shaped application object parsed as private envelope: %#v, %v", envelope, err)
+func TestEngineInputRejectsUnknownParameterKey(t *testing.T) {
+	params := openapi3.Parameters{&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "q", In: "query"}}}
+	routes := planAbstractInputRoutes(params, nil)
+	_, err := engineInputForCallerEnvelope(
+		map[string]any{"parameters": map[string]any{"other": "x"}},
+		params, nil, routes, openapiclient.FullProfile(),
+	)
+	if err == nil {
+		t.Fatal("expected an unknown parameter key to be rejected")
 	}
 }
 
-func TestTransformExpressionUsesArrayForEmptyParameterRoutes(t *testing.T) {
-	routes := abstractInputRoutes{
-		wholeBodyField: "payload",
-		needsTransform: true,
-	}
-	expression := routes.transformExpressionFor(BindingSpec)
-	if !strings.Contains(expression, `"parameters":[]`) {
-		t.Fatalf("empty parameter routes must remain an array: %s", expression)
-	}
-	if strings.Contains(expression, `"parameters":null`) {
-		t.Fatalf("empty parameter routes must not be encoded as null: %s", expression)
-	}
-}
-
-func TestValidateEnvelopeRoutesRejectsUnknownIdentity(t *testing.T) {
-	envelope := &routedEnvelope{
-		value:      map[string]any{},
-		parameters: []abstractParameterRoute{{In: "query", Name: "id", Field: "queryID"}},
-		bodyFields: map[string]string{},
-	}
+func TestQualifiedParameterModeUsesEveryLocation(t *testing.T) {
 	params := openapi3.Parameters{
-		&openapi3.ParameterRef{Value: &openapi3.Parameter{In: "path", Name: "id"}},
+		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "id", In: "path"}},
+		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "id", In: "query"}},
 	}
-	if err := validateEnvelopeRoutes(params, nil, envelope); err == nil || !strings.Contains(err.Error(), "does not identify") {
-		t.Fatalf("expected unknown-identity refusal, got %v", err)
-	}
-}
-
-func TestRouteEnvelopeReroutesAlternateCandidateFieldIntoSelectedOpenJSONBody(t *testing.T) {
-	envelope := &routedEnvelope{
-		value:      map[string]any{"renamed": "x"},
-		bodyFields: map[string]string{"id": "renamed"},
-	}
-	plan := &bodyPlan{declared: true, family: familyJSON, props: map[string]bool{"name": true}}
-	routed, err := routeEnvelope(nil, envelope, "/items", plan)
+	routes := planAbstractInputRoutes(params, nil)
+	_, err := engineInputForCallerEnvelope(
+		map[string]any{"parameters": map[string]any{"path/id": "p", "query/id": "q"}},
+		params, nil, routes, openapiclient.FullProfile(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := routed.bodyFields["id"]; got != "x" {
-		t.Fatalf("alternate candidate field was not routed through the selected JSON object's passthrough: %#v", routed.bodyFields)
+	if _, err := engineInputForCallerEnvelope(
+		map[string]any{"parameters": map[string]any{"id": "bare"}},
+		params, nil, routes, openapiclient.FullProfile(),
+	); err == nil {
+		t.Fatal("expected qualified mode to reject the bare parameter name")
+	}
+}
+
+func TestInputTransformConstructsPublicEnvelope(t *testing.T) {
+	params := openapi3.Parameters{&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "q", In: "query"}}}
+	plans := []*bodyPlan{{declared: true, required: true, props: map[string]bool{"name": true}, family: familyJSON}}
+	routes := planAbstractInputRoutes(params, plans)
+	got, err := (openAPIJSONataEvaluator{}).Evaluate(routes.transformExpression(params), map[string]any{
+		"q": "term", "name": "Ada",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"parameters": map[string]any{"q": "term"},
+		"body":       map[string]any{"name": "Ada"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("transform = %#v, want %#v", got, want)
+	}
+}
+
+func TestInputTransformEscapesQualifiedParameterNames(t *testing.T) {
+	params := openapi3.Parameters{
+		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "a/b~c", In: "path"}},
+		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "a/b~c", In: "query"}},
+	}
+	routes := planAbstractInputRoutes(params, nil)
+	got, err := (openAPIJSONataEvaluator{}).Evaluate(routes.transformExpression(params), map[string]any{
+		"a/b~c": "p", "a/b~c_2": "q",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"parameters": map[string]any{
+		"path/a~1b~0c": "p", "query/a~1b~0c": "q",
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("transform = %#v, want %#v", got, want)
 	}
 }

@@ -21,7 +21,7 @@ import (
 // `{type: string}`.
 //
 // THE ANSWER IS THE INCORPORATED AUTHORITY'S, AND IT DIFFERS BY EDITION LINE.
-// `openbindings.openapi@1` §2 accepts eight editions "each interpreted under its
+// The registered OpenAPI family siblings' §2 accepts eight editions "each interpreted under its
 // own immutable official text", so the two lines are read separately rather than
 // averaged. Every quotation below is verified at the pinned bytes by
 // `corpus-lab/scripts/verify-pointer-below-reference-authorities.mjs`, which

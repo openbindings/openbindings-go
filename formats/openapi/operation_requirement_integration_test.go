@@ -87,7 +87,7 @@ func TestOperationRequirementSynthesizedOpenAPI(t *testing.T) {
 		context.Background(),
 		&synthesize.SynthesizeInput{
 			Sources: []synthesize.SynthesizeSource{{
-				BindingSpec: BindingSpec,
+				BindingSpec: bindingSpecForTestDocument(specContent),
 				Content:     specContent,
 			}},
 		},
@@ -101,12 +101,14 @@ func TestOperationRequirementSynthesizedOpenAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	opInvoker := invoke.NewOperationInvoker(NewInvoker())
+	opInvoker.TransformEvaluator = openAPIJSONataEvaluator{}
 	resolution, err := invoke.ResolveOperationRequirement(
 		context.Background(),
 		requirement,
 		[]invoke.OperationImplementation{{
 			Interface: candidate,
-			Invoker:   invoke.NewOperationInvoker(NewInvoker()),
+			Invoker:   opInvoker,
 			Label:     "tasks-api",
 		}},
 	)

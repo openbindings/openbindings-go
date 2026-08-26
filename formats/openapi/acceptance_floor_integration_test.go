@@ -17,7 +17,7 @@ import (
 func synthesizeWithCoverage(t *testing.T, content string) *synthesize.SynthesizeResult {
 	t.Helper()
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(content)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(content), Content: openbindings.TextContent(content)}},
 	})
 	if err != nil {
 		t.Fatalf("SynthesizeInterfaceWithCoverage: %v", err)

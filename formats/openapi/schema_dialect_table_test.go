@@ -158,7 +158,7 @@ func TestSchemaObjectDialectTableThroughSynthesis(t *testing.T) {
 			result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 				Name: "dialect",
 				Sources: []synthesize.SynthesizeSource{{
-					BindingSpec: "openbindings.openapi@1",
+					BindingSpec: bindingSpecForOpenAPIEdition(cell.OpenAPI),
 					Name:        "dialect",
 					Content:     json.RawMessage(document),
 					Embed:       true,

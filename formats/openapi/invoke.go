@@ -74,17 +74,13 @@ func BuiltinClassify(_ invoke.InvokeSite, raw invoke.RawResult) (bool, error) {
 	return raw.Status != nil && *raw.Status >= 200 && *raw.Status < 300, nil
 }
 
-// decodeByContentType returns the builtin decoder implementing the header
-// rule (OAPI-P-07): strict JSON for application/json and +json suffixes (a
-// declared-JSON body that fails to parse is a lying server — a loud
-// ErrCodeResponseError, never a silent string); the text lane otherwise —
-// bytes become a string per the header's charset parameter, defaulting to
-// UTF-8, with invalid sequences a loud decode error. An empty body (204
-// included) yields null.
-func decodeByContentType(contentType string) invoke.OutputDecoder {
-	return decodeByContentTypeFor(contentType, BindingSpec)
-}
-
+// decodeByContentTypeFor returns the builtin decoder implementing the header
+// rule (OAPI-P-07) for the exact binding family token in scope: strict JSON
+// for application/json and +json suffixes (a declared-JSON body that fails to
+// parse is a lying server — a loud ErrCodeResponseError, never a silent
+// string); the text lane otherwise — bytes become a string per the header's
+// charset parameter, defaulting to UTF-8, with invalid sequences a loud decode
+// error. An empty body (204 included) yields null.
 func decodeByContentTypeFor(contentType, bindingSpec string) invoke.OutputDecoder {
 	isJSON := isJSONContentTypeFor(contentType, bindingSpec)
 	return func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
@@ -104,15 +100,11 @@ func decodeByContentTypeFor(contentType, bindingSpec string) invoke.OutputDecode
 	}
 }
 
-// decodeTextLane decodes response bytes as text per the Content-Type
+// decodeTextLaneFor decodes response bytes as text per the Content-Type
 // header's charset parameter, defaulting to UTF-8 (OAPI-P-07). Invalid
 // sequences, and charsets this implementation cannot decode, are loud
 // decode errors — a consumer needing another charset overrides at the
 // decode configuration point.
-func decodeTextLane(contentType string, body []byte) (any, error) {
-	return decodeTextLaneFor(contentType, body, BindingSpec)
-}
-
 func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any, error) {
 	charset := "utf-8"
 	if contentType != "" {
@@ -158,13 +150,10 @@ func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any
 	}
 }
 
-// isJSONContentType reports whether a Content-Type header declares a JSON
-// body: application/json or any +json structured-suffix type. Absent or
-// unparseable headers are NOT JSON (the text lane) — never sniffed.
-func isJSONContentType(contentType string) bool {
-	return isJSONContentTypeFor(contentType, BindingSpec)
-}
-
+// isJSONContentTypeFor reports whether a Content-Type header declares a JSON
+// body for the exact binding family token in scope: application/json or any
+// +json structured-suffix type. Absent or unparseable headers are NOT JSON
+// (the text lane) — never sniffed.
 func isJSONContentTypeFor(contentType, bindingSpec string) bool {
 	if hasMediaFidelity(bindingSpec) {
 		parsed, err := parseRevision3MediaType(contentType)

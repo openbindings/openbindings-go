@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -10,6 +11,32 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 )
+
+// BindingSpec keeps the predominantly OpenAPI 3.0 historical white-box tests
+// concise while production code exposes only explicit family constants.
+// OpenAPI 3.1 tests name BindingSpecOpenAPI31 directly.
+const BindingSpec = BindingSpecOpenAPI30
+
+func bindingSpecForTestDocument(content any) string {
+	var text string
+	switch value := content.(type) {
+	case string:
+		text = value
+	case []byte:
+		text = string(value)
+	case json.RawMessage:
+		text = string(value)
+	default:
+		encoded, _ := json.Marshal(value)
+		text = string(encoded)
+	}
+	if strings.Contains(text, `"openapi":"3.1`) ||
+		strings.Contains(text, `"openapi": "3.1`) ||
+		strings.Contains(text, "openapi: 3.1") {
+		return BindingSpecOpenAPI31
+	}
+	return BindingSpecOpenAPI30
+}
 
 // ---------------------------------------------------------------------------
 // parseSelector
@@ -719,7 +746,7 @@ func TestRouteInput_PathQueryHeaderBody(t *testing.T) {
 		"title":        "hello",
 	}
 
-	routed, err := routeInput(params, input, "/items/{id}", &bodyPlan{declared: true, family: familyJSON})
+	routed, err := routeInputFor(params, input, "/items/{id}", &bodyPlan{declared: true, family: familyJSON}, BindingSpec)
 	if err != nil {
 		t.Fatalf("routeInput: %v", err)
 	}
@@ -756,7 +783,7 @@ func TestRouteInput_CookieParamsInDeclarationOrder(t *testing.T) {
 		"title":      "hello",
 	}
 
-	routed, err := routeInput(params, input, "/session", &bodyPlan{declared: true, family: familyJSON})
+	routed, err := routeInputFor(params, input, "/session", &bodyPlan{declared: true, family: familyJSON}, BindingSpec)
 	if err != nil {
 		t.Fatalf("routeInput: %v", err)
 	}
@@ -782,7 +809,7 @@ func TestRouteInput_PathValuesPercentEncoded(t *testing.T) {
 	}
 	input := map[string]any{"id": "a/b?c#d"}
 
-	routed, err := routeInput(params, input, "/users/{id}", &bodyPlan{})
+	routed, err := routeInputFor(params, input, "/users/{id}", &bodyPlan{}, BindingSpec)
 	if err != nil {
 		t.Fatalf("routeInput: %v", err)
 	}
@@ -797,7 +824,7 @@ func TestRouteInput_MissingPathParamRefuses(t *testing.T) {
 	params := openapi3.Parameters{
 		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "id", In: "path", Required: true}},
 	}
-	_, err := routeInput(params, map[string]any{"other": 1}, "/users/{id}", &bodyPlan{declared: true, family: familyJSON})
+	_, err := routeInputFor(params, map[string]any{"other": 1}, "/users/{id}", &bodyPlan{declared: true, family: familyJSON}, BindingSpec)
 	if err == nil {
 		t.Fatal("expected refusal for a missing path parameter")
 	}
@@ -830,7 +857,7 @@ func TestEncodePathValue_MatchesEncodeURIComponent(t *testing.T) {
 func TestRouteInput_UnknownFieldsPassThroughWithDeclaredBody(t *testing.T) {
 	input := map[string]any{"foo": "bar", "baz": 1}
 
-	routed, err := routeInput(openapi3.Parameters{}, input, "/test", &bodyPlan{declared: true, family: familyJSON})
+	routed, err := routeInputFor(openapi3.Parameters{}, input, "/test", &bodyPlan{declared: true, family: familyJSON}, BindingSpec)
 	if err != nil {
 		t.Fatalf("routeInput: %v", err)
 	}
@@ -848,7 +875,7 @@ func TestRouteInput_UnknownFieldsPassThroughWithDeclaredBody(t *testing.T) {
 func TestRouteInput_UnknownFieldsRefusedWithoutBody(t *testing.T) {
 	input := map[string]any{"foo": "bar", "baz": 1}
 
-	_, err := routeInput(openapi3.Parameters{}, input, "/test", &bodyPlan{})
+	_, err := routeInputFor(openapi3.Parameters{}, input, "/test", &bodyPlan{}, BindingSpec)
 	if err == nil {
 		t.Fatal("expected refusal for unmatched fields on an operation without a request body")
 	}
@@ -872,7 +899,7 @@ func TestRouteInput_CollisionIsScreenedWithoutDuplication(t *testing.T) {
 	if !candidateCollides(params, plan) {
 		t.Fatal("the media candidate must be inadmissible before routing")
 	}
-	routed, err := routeInput(params, input, "/users/{id}", plan)
+	routed, err := routeInputFor(params, input, "/users/{id}", plan, BindingSpec)
 	if err != nil {
 		t.Fatalf("routeInput: %v", err)
 	}
@@ -911,7 +938,7 @@ func TestPlanRequestBody_MediaTypeParameters(t *testing.T) {
 			},
 		},
 	}
-	plan, err := planRequestBody(op)
+	plan, err := planRequestBody(op, BindingSpec)
 	if err != nil {
 		t.Fatalf("planRequestBody: %v", err)
 	}
@@ -929,7 +956,7 @@ func TestRouteInput_ParamOnlyStaysExclusive(t *testing.T) {
 		{Value: &openapi3.Parameter{Name: "id", In: "path", Required: true}},
 	}
 	input := map[string]any{"id": "u1"}
-	routed, err := routeInput(params, input, "/users/{id}", &bodyPlan{})
+	routed, err := routeInputFor(params, input, "/users/{id}", &bodyPlan{}, BindingSpec)
 	if err != nil {
 		t.Fatalf("routeInput: %v", err)
 	}

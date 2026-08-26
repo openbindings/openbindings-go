@@ -14,7 +14,7 @@ import (
 // cycle participant is hoisted into the operation schema's `$defs` and every
 // occurrence becomes a same-document `$ref` to it (OBI-D-16). WHICH nodes get
 // hoisted is synthesis surface, exactly as their `$defs` keys are:
-// `openbindings.openapi@1` §10 places deterministic generation of OBI documents
+// The registered OpenAPI family siblings' §10 places deterministic generation of OBI documents
 // from OpenAPI artifacts — "operation-key derivation, output-schema selection,
 // schema translation" — outside the specification, and the binding-specification
 // authoring doctrine states that a family specification does not define a

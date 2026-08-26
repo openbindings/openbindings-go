@@ -12,11 +12,10 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-// This file implements the flattened input model of openbindings.openapi@1
-// §9.1 (OAPI-P-02, OAPI-P-03): the caller-facing input value is one JSON
-// object — parameters from every location and the request body merged into
-// one object — and parameter serialization follows the OAS
-// style/explode/allowReserved rules, incorporated wholesale.
+// This file implements effective-parameter identity and the OAS
+// style/explode/allowReserved serialization rules. The binding-facing caller
+// value is the §7 envelope; synthesis may separately retain a flat,
+// protocol-neutral operation contract and map it into that envelope.
 
 // ---------------------------------------------------------------------------
 // Effective parameter set
@@ -43,6 +42,44 @@ func effectiveParameters(pathItem *openapi3.PathItem, op *openapi3.Operation) op
 		out = append(out, pref)
 	}
 	return out
+}
+
+// duplicateEffectiveParameterIdentity reports an exact name-plus-location
+// identity that survives path/operation override and OAS header ignoring.
+// Cross-location duplicates are legal and use the caller envelope's qualified
+// mode; two declarations at one effective identity exclude the operation.
+func duplicateEffectiveParameterIdentity(params openapi3.Parameters) string {
+	seen := map[string]bool{}
+	for _, pref := range params {
+		if pref == nil || pref.Value == nil {
+			continue
+		}
+		parameter := pref.Value
+		identity := parameter.In + "\x00" + parameter.Name
+		if seen[identity] {
+			return parameter.In + "/" + escapeJSONPointerSegment(parameter.Name)
+		}
+		seen[identity] = true
+	}
+	return ""
+}
+
+// requestBodyIgnoredForBindingSpec applies the sibling-specific HTTP method
+// disposition before either invocation or synthesis constructs its input.
+func requestBodyIgnoredForBindingSpec(bindingSpec, method string) bool {
+	method = strings.ToLower(method)
+	if bindingSpec == BindingSpecOpenAPI31 {
+		return method == "trace"
+	}
+	if bindingSpec != BindingSpecOpenAPI30 {
+		return false
+	}
+	switch method {
+	case "get", "head", "delete", "options", "trace":
+		return true
+	default:
+		return false
+	}
 }
 
 // checkEffectiveParameterOwnership enforces the declaration-only portions of
@@ -229,10 +266,6 @@ type routedInput struct {
 //   - a missing declared path parameter always refuses before dispatch (the
 //     URL cannot be built); every other missing member is the server's
 //     declared validation's business.
-func routeInput(params openapi3.Parameters, input map[string]any, pathTemplate string, plan *bodyPlan) (*routedInput, error) {
-	return routeInputFor(params, input, pathTemplate, plan, BindingSpec)
-}
-
 func routeInputFor(params openapi3.Parameters, input map[string]any, pathTemplate string, plan *bodyPlan, bindingSpec string) (*routedInput, error) {
 	r := &routedInput{
 		resolvedPath: pathTemplate,
@@ -326,11 +359,8 @@ const syntheticBodyProperty = "body"
 // ERR_MISSING_INPUT rather than the generic validation refusal.
 var errMissingPathParam = errors.New("missing path parameter")
 
-// routeParameter serializes one populated parameter onto its wire location.
-func routeParameter(r *routedInput, p *openapi3.Parameter, value any) error {
-	return routeParameterFor(r, p, value, BindingSpec)
-}
-
+// routeParameterFor serializes one populated parameter onto its wire location
+// under the exact binding family token in scope.
 func routeParameterFor(r *routedInput, p *openapi3.Parameter, value any, bindingSpec string) error {
 	if hasMediaFidelity(bindingSpec) {
 		if err := validateRevision3ParameterSerialization(p); err != nil {
@@ -479,14 +509,11 @@ func revision3ParameterSerializationMethod(p *openapi3.Parameter) (*openapi3.Ser
 	return &openapi3.SerializationMethod{Style: style, Explode: explode}, nil
 }
 
-// serializeParamContent serializes a content-form parameter's value per its
-// declared media type: JSON family values JSON-serialize; text/plain carries
-// a string value verbatim. Any other declared media type has no defined
-// parameter carriage in revision 1 and refuses loudly.
-func serializeParamContent(p *openapi3.Parameter, value any) (string, error) {
-	return serializeParamContentFor(p, value, BindingSpec)
-}
-
+// serializeParamContentFor serializes a content-form parameter's value per
+// its declared media type under the exact binding family token in scope: JSON
+// family values JSON-serialize; text/plain carries a string value verbatim.
+// Any other declared media type has no defined parameter carriage and refuses
+// loudly.
 func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec string) (string, error) {
 	if len(p.Content) != 1 {
 		return "", fmt.Errorf("parameter %q content must contain exactly one media type", p.Name)
@@ -527,7 +554,7 @@ func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec stri
 		}
 		return s, nil
 	default:
-		return "", fmt.Errorf("parameter %q declares content %q: no parameter carriage is defined for that media type in openbindings.openapi@1", p.Name, mediaKey)
+		return "", fmt.Errorf("parameter %q declares content %q: no parameter carriage is defined for that media type in the registered OpenAPI binding family", p.Name, mediaKey)
 	}
 }
 
@@ -535,14 +562,10 @@ func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec stri
 // Style/explode expansions (OAPI-P-02: the OAS tables, incorporated wholesale)
 // ---------------------------------------------------------------------------
 
-// serializePathValue expands one path parameter per the OAS style table.
-// Value pieces are percent-encoded with the encodeURIComponent byte set
-// (cross-SDK URL parity); the style's structural characters (";", "=", ".",
-// ",") stay literal.
-func serializePathValue(name string, value any, style string, explode bool) (string, error) {
-	return serializePathValueForRevision(name, value, style, explode, BindingSpec)
-}
-
+// serializePathValueForRevision expands one path parameter per the OAS style
+// table under the exact binding family token in scope. Value pieces are
+// percent-encoded with the encodeURIComponent byte set (cross-SDK URL parity);
+// the style's structural characters (";", "=", ".", ",") stay literal.
 func serializePathValueForRevision(name string, value any, style string, explode bool, bindingSpec string) (string, error) {
 	esc := encodePathValue
 	if hasMediaFidelity(bindingSpec) {
@@ -569,13 +592,10 @@ func serializeHeaderValue(value any, style string, explode bool) (string, error)
 	return expandSimple(value, explode, func(s string) string { return s })
 }
 
-// serializeQueryValue expands one query parameter into fully percent-encoded
-// name=value units, per the OAS query styles. allowReserved lets RFC 3986
-// reserved characters in VALUES pass unescaped.
-func serializeQueryValue(name string, value any, style string, explode bool, allowReserved bool) ([]string, error) {
-	return serializeQueryValueForRevision(name, value, style, explode, allowReserved, BindingSpec, false)
-}
-
+// serializeQueryValueForRevision expands one query parameter into fully
+// percent-encoded name=value units under the exact binding family token in
+// scope, per the OAS query styles. allowReserved lets RFC 3986 reserved
+// characters in VALUES pass unescaped.
 func serializeQueryValueForRevision(name string, value any, style string, explode bool, allowReserved bool, bindingSpec string, formSafe bool) ([]string, error) {
 	n := queryEscape(name, false)
 	esc := func(s string) string { return queryEscape(s, allowReserved) }
@@ -1007,7 +1027,7 @@ func queryEscape(s string, allowReserved bool) string {
 // form-urlencoded rules, and 3.1.2 Section 4.8.12.4 names the tilde.
 //
 // Which member of that permitted set to pick is the IMPLEMENTATIONS'
-// convention, not the binding specification's: openbindings.openapi@1 states
+// convention, not the binding specification's: the registered OpenAPI binding family states
 // the permitted set and does not narrow it. The pick is pinned by the shared
 // twin case table (testdata/urlencoded-escaper-cases.json), executed by both Go
 // engines and by openapi-client/typescript.

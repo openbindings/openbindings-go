@@ -39,7 +39,7 @@ func TestRuntimeRefusesUnaddressablePathTemplateVariableBeforeDispatch(t *testin
 		}, nil
 	})}
 	call := NewRuntimeWithClient(client).Invoke(context.Background(), &RuntimeInvocationArgs{
-		Source: RuntimeSource{Content: openbindings.TextContent(`{
+		Source: RuntimeSource{BindingSpec: BindingSpecOpenAPI30, Content: openbindings.TextContent(`{
 			"openapi":"3.0.3",
 			"info":{"title":"unaddressable target","version":"1"},
 			"servers":[{"url":"https://api.example.test"}],
@@ -58,6 +58,16 @@ func TestRuntimeRefusesUnaddressablePathTemplateVariableBeforeDispatch(t *testin
 	}
 	if dispatched != "" {
 		t.Fatalf("refused invocation still put %q on the wire", dispatched)
+	}
+}
+
+func TestRawSelectorFindsUnaddressablePathVariable(t *testing.T) {
+	document := []byte(`{
+		"openapi":"3.0.3",
+		"paths": {"/policies/{policy_slug}": {"get": {"responses": {"204": {"description":"ok"}}}}}
+	}`)
+	if !rawSelectorHasUnaddressablePathVariable(document, "#/paths/~1policies~1{policy_slug}/get") {
+		t.Fatal("raw selector did not find the undeclared path variable")
 	}
 }
 

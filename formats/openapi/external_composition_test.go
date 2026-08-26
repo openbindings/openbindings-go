@@ -109,7 +109,7 @@ func TestExternalCompositionIsPointerScoped(t *testing.T) {
 			iface, err := NewSynthesizerWithClient(client).SynthesizeInterface(
 				context.Background(),
 				&synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
-					BindingSpec: BindingSpec,
+					BindingSpec: bindingSpecForTestDocument(testCase.Documents[testCase.Entry].body(t)),
 					Location:    testCase.Entry,
 				}}},
 			)

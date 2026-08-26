@@ -14,7 +14,8 @@ import (
 // A cyclic schema is emitted using the dialect's own recursion mechanism: the
 // cycle participant is hoisted into the operation schema's `$defs` and every
 // occurrence becomes a same-document `$ref` to it. The hoisted member needs a
-// key, and that key is SYNTHESIS surface: `openbindings.openapi@1` §10 places
+// key, and that key is SYNTHESIS surface: the registered OpenAPI family
+// siblings' §10 places
 // deterministic generation of OBI documents from OpenAPI artifacts outside the
 // specification, and the binding-specification authoring doctrine states that a
 // family specification does not define a synthesis naming convention. Nothing

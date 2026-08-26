@@ -15,7 +15,7 @@ import (
 // externalComposition narrows external reference composition to the used
 // closure.
 //
-// `openbindings.openapi@1` §6 ("Reference scope") states the rule: a reference
+// The registered OpenAPI family siblings' §6 ("Reference scope") states the rule: a reference
 // that leaves the current document composes the value at the referenced JSON
 // Pointer together with that value's transitive closure of references, and
 // nothing else — so a defect OUTSIDE the composed closure does not make the
@@ -501,7 +501,7 @@ func (n *retentionNode) markUncomposedReference(tokens []string) {
 // the cost of keeping it does: a string, a number, `null`, a sequence, and (at
 // an Object-only position such as `parameters`) a boolean are all values the
 // typed loader cannot read where it expects an Object, so keeping one refuses
-// an artifact `openbindings.openapi@1` §6 says resolves, "however the
+// an artifact the registered OpenAPI family siblings' §6 says resolves, "however the
 // referenced document is stored".
 //
 // `null` is not usable as the neutral element: kin-openapi refuses
