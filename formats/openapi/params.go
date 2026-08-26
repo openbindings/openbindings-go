@@ -84,11 +84,10 @@ func requestBodyIgnoredForBindingSpec(bindingSpec, method string) bool {
 
 // checkEffectiveParameterOwnership enforces the declaration-only portions of
 // OAPI-P-10. Host and Content-Length are owned by the HTTP processor and
-// therefore cannot be caller-routed parameters. A raw Cookie header also
-// cannot coexist with structured cookie parameters because both would own the
-// single HTTP Cookie field. These are artifact-shape failures, independent of
-// any invocation input, and must be refused before input consumption.
-func checkEffectiveParameterOwnership(params openapi3.Parameters) error {
+// therefore cannot be caller-routed parameters. The 3.0 sibling also treats a
+// raw Cookie header plus structured cookie parameters as a declaration-time
+// collision; 3.1 defers that pair to the invocation-time emission check.
+func checkEffectiveParameterOwnership(params openapi3.Parameters, bindingSpec string) error {
 	var rawCookieHeader bool
 	var structuredCookieParameter bool
 	for _, pref := range params {
@@ -108,7 +107,7 @@ func checkEffectiveParameterOwnership(params openapi3.Parameters) error {
 			structuredCookieParameter = true
 		}
 	}
-	if rawCookieHeader && structuredCookieParameter {
+	if bindingSpec != BindingSpecOpenAPI31 && rawCookieHeader && structuredCookieParameter {
 		return fmt.Errorf("operation declares both a raw Cookie header parameter and structured cookie parameters (OAPI-P-10: unresolvable)")
 	}
 	return nil
@@ -133,6 +132,10 @@ func checkEffectiveParameterOwnership(params openapi3.Parameters) error {
 // (invoker.go), which applies the same check; the twin is kept here because
 // this file mirrors that engine's input model.
 func checkPathTemplateAddressability(pathTemplate string, params openapi3.Parameters) error {
+	return checkPathTemplateDeclaration(pathTemplate, params, BindingSpecOpenAPI31)
+}
+
+func checkPathTemplateDeclaration(pathTemplate string, params openapi3.Parameters, bindingSpec string) error {
 	declared := map[string]bool{}
 	for _, pref := range params {
 		if pref == nil || pref.Value == nil {
@@ -142,20 +145,135 @@ func checkPathTemplateAddressability(pathTemplate string, params openapi3.Parame
 			declared[pref.Value.Name] = true
 		}
 	}
-	var unaddressable []string
-	seen := map[string]bool{}
+	var unaddressable, duplicates []string
+	seenExpressions := map[string]bool{}
 	for _, name := range pathTemplateVariables(pathTemplate) {
-		if declared[name] || seen[name] {
-			continue
+		if seenExpressions[name] {
+			duplicates = append(duplicates, name)
 		}
-		seen[name] = true
-		unaddressable = append(unaddressable, name)
+		seenExpressions[name] = true
+		if !declared[name] {
+			unaddressable = append(unaddressable, name)
+		}
 	}
-	if len(unaddressable) == 0 {
+	if len(unaddressable) > 0 {
+		sort.Strings(unaddressable)
+		return fmt.Errorf("path template variable(s) %s have no declared path parameter: the target URL cannot be built (OAPI-P-05: unresolvable target)", strings.Join(unaddressable, ", "))
+	}
+	if bindingSpec != BindingSpecOpenAPI31 {
 		return nil
 	}
-	sort.Strings(unaddressable)
-	return fmt.Errorf("path template variable(s) %s have no declared path parameter: the target URL cannot be built (OAPI-P-05: unresolvable target)", strings.Join(unaddressable, ", "))
+	if len(duplicates) > 0 {
+		sort.Strings(duplicates)
+		return fmt.Errorf("path template expression(s) %s occur more than once (OAPI31-P-02: excluded target)", strings.Join(duplicates, ", "))
+	}
+	var unmatched []string
+	for name := range declared {
+		if !seenExpressions[name] {
+			unmatched = append(unmatched, name)
+		}
+	}
+	if len(unmatched) > 0 {
+		sort.Strings(unmatched)
+		return fmt.Errorf("declared path parameter(s) %s have no path template expression (OAPI31-P-02: excluded target)", strings.Join(unmatched, ", "))
+	}
+	return nil
+}
+
+// equivalentPathTemplateCollision reports another 3.1 Paths key with the
+// same static hierarchy after template names are erased. The OAS forbids this
+// ambiguity even though both raw keys are independently valid map members.
+func equivalentPathTemplateCollision(paths *openapi3.Paths, selected string) string {
+	if paths == nil {
+		return ""
+	}
+	want, templated := normalizedPathTemplateHierarchy(selected)
+	if !templated {
+		return ""
+	}
+	for candidate := range paths.Map() {
+		if candidate == selected {
+			continue
+		}
+		if normalized, hasTemplate := normalizedPathTemplateHierarchy(candidate); hasTemplate && normalized == want {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func normalizedPathTemplateHierarchy(path string) (string, bool) {
+	var out strings.Builder
+	templated := false
+	for index := 0; index < len(path); {
+		if path[index] != '{' {
+			out.WriteByte(path[index])
+			index++
+			continue
+		}
+		close := strings.IndexByte(path[index+1:], '}')
+		if close < 0 {
+			out.WriteByte(path[index])
+			index++
+			continue
+		}
+		templated = true
+		out.WriteString("{}")
+		index += close + 2
+	}
+	return out.String(), templated
+}
+
+func formStyleCookieMultiValueProof(p *openapi3.Parameter, is30 bool) bool {
+	if p == nil || is30 || p.In != openapi3.ParameterInCookie || len(p.Content) > 0 || p.Schema == nil || p.Schema.Value == nil {
+		return false
+	}
+	method, err := revision3ParameterSerializationMethod(p)
+	if err != nil || method.Style != openapi3.SerializationForm || !method.Explode {
+		return false
+	}
+	resolved := resolveDeclaration(p.Schema.Value, false)
+	return resolved.declaresOnly("array") || resolved.declaresOnly("object") && len(resolved.propertyNames()) > 0
+}
+
+func formStyleCookieMultiValueParamFor(params openapi3.Parameters, is30 bool) string {
+	for _, ref := range params {
+		if ref != nil && formStyleCookieMultiValueProof(ref.Value, is30) {
+			return ref.Value.Name
+		}
+	}
+	return ""
+}
+
+// malformedEffectiveParameterFor applies the 3.1 closed Parameter Object
+// declaration gate after reference resolution. The raw acceptance floor owns
+// entry-document positions; this typed twin covers external references whose
+// target bytes are unavailable to that floor.
+func malformedEffectiveParameterFor(params openapi3.Parameters, bindingSpec string) string {
+	if bindingSpec != BindingSpecOpenAPI31 {
+		return ""
+	}
+	for _, ref := range params {
+		if ref == nil || ref.Value == nil {
+			continue
+		}
+		parameter := ref.Value
+		name := parameter.Name
+		if name == "" {
+			name = "<unnamed>"
+		}
+		if parameter.Name == "" || parameter.In != openapi3.ParameterInPath && parameter.In != openapi3.ParameterInQuery &&
+			parameter.In != openapi3.ParameterInHeader && parameter.In != openapi3.ParameterInCookie {
+			return name
+		}
+		hasSchema := parameter.Schema != nil
+		hasContent := parameter.Content != nil
+		if hasSchema == hasContent || parameter.In == openapi3.ParameterInPath && !parameter.Required ||
+			hasContent && len(parameter.Content) != 1 {
+			return name
+		}
+	}
+	return ""
 }
 
 // pathTemplateVariables returns the names of the brace-delimited expressions in
@@ -363,7 +481,7 @@ var errMissingPathParam = errors.New("missing path parameter")
 // under the exact binding family token in scope.
 func routeParameterFor(r *routedInput, p *openapi3.Parameter, value any, bindingSpec string) error {
 	if hasMediaFidelity(bindingSpec) {
-		if err := validateRevision3ParameterSerialization(p); err != nil {
+		if err := validateRevision3ParameterSerialization(p, bindingSpec == BindingSpecOpenAPI30); err != nil {
 			return fmt.Errorf("parameter %q: %w", p.Name, err)
 		}
 	}
@@ -441,7 +559,7 @@ func routeParameterFor(r *routedInput, p *openapi3.Parameter, value any, binding
 	return nil
 }
 
-func validateRevision3ParameterSerialization(p *openapi3.Parameter) error {
+func validateRevision3ParameterSerialization(p *openapi3.Parameter, is30 bool) error {
 	if p == nil || len(p.Content) > 0 {
 		return nil
 	}
@@ -453,6 +571,7 @@ func validateRevision3ParameterSerialization(p *openapi3.Parameter) error {
 	if p.Schema != nil {
 		schema = p.Schema.Value
 	}
+	resolved := resolveDeclaration(schema, is30)
 	switch p.In {
 	case openapi3.ParameterInPath:
 		if method.Style != openapi3.SerializationSimple && method.Style != openapi3.SerializationLabel && method.Style != openapi3.SerializationMatrix {
@@ -471,12 +590,18 @@ func validateRevision3ParameterSerialization(p *openapi3.Parameter) error {
 		case openapi3.SerializationForm:
 			return nil
 		case openapi3.SerializationSpaceDelimited, openapi3.SerializationPipeDelimited:
-			if method.Explode || !schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{}) {
-				return fmt.Errorf("query style %q is defined only for arrays with explode=false", method.Style)
+			if method.Explode {
+				return fmt.Errorf("query style %q has no explode=true cell", method.Style)
+			}
+			if resolved.declaresOnly("null", "boolean", "number", "integer", "string") {
+				return fmt.Errorf("query style %q is defined only for arrays or objects", method.Style)
 			}
 		case openapi3.SerializationDeepObject:
-			if !method.Explode || !schemaTypeIs(schema, "object", map[*openapi3.Schema]bool{}) {
-				return fmt.Errorf("query style deepObject is defined only for objects with explode=true")
+			if !method.Explode {
+				return fmt.Errorf("query style deepObject has no explode=false cell")
+			}
+			if resolved.declaresOnly("null", "boolean", "number", "integer", "string", "array") {
+				return fmt.Errorf("query style deepObject is defined only for objects")
 			}
 		default:
 			return fmt.Errorf("style %q is not defined for query parameters", method.Style)

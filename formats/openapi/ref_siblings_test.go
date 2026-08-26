@@ -432,14 +432,14 @@ components:
 	_, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(unsupported), Content: openbindings.TextContent(unsupported)}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported OpenAPI 3.1 schema dialect") {
-		t.Fatalf("synthesis error = %v, want unsupported-dialect refusal", err)
+	if err == nil || !strings.Contains(err.Error(), "whole-source exclusion") {
+		t.Fatalf("synthesis error = %v, want the named root-dialect source exclusion", err)
 	}
 
 	withoutSiblings := strings.Replace(unsupported, "\n                description: cannot safely compose", "", 1)
 	if _, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(withoutSiblings), Content: openbindings.TextContent(withoutSiblings)}},
-	}); err == nil || !strings.Contains(err.Error(), "unsupported OpenAPI 3.1 schema dialect") {
+	}); err == nil || !strings.Contains(err.Error(), "whole-source exclusion") {
 		t.Fatalf("unsupported dialect without ref siblings must also refuse, got %v", err)
 	}
 }
@@ -498,7 +498,7 @@ components:
 	}
 }
 
-func TestInspectSourceListsSchemaFreeCustomDocumentDialectOperation(t *testing.T) {
+func TestInspectSourceExcludesSchemaFreeCustomDocumentDialect(t *testing.T) {
 	doc := `openapi: 3.1.2
 jsonSchemaDialect: https://example.test/custom-dialect
 info: {title: Inspect custom dialect, version: "1"}
@@ -512,15 +512,12 @@ paths:
 		BindingSpec: bindingSpecForTestDocument(doc),
 		Content:     openbindings.TextContent(doc),
 	})
-	if err != nil {
-		t.Fatalf("schema-free inspection should use artifact-native loading: %v", err)
-	}
-	if len(inspection.Targets) != 1 || inspection.Targets[0].OperationKey != "health" {
-		t.Fatalf("inspection targets = %+v", inspection.Targets)
+	if err == nil || !strings.Contains(err.Error(), "whole-source exclusion") {
+		t.Fatalf("inspection = %+v, error = %v; want source-scope root-dialect exclusion", inspection, err)
 	}
 }
 
-func TestCustomDocumentDialectGatesOnlyOperationsThatProjectIt(t *testing.T) {
+func TestCustomDocumentDialectExcludesEveryOperationAtSourceScope(t *testing.T) {
 	doc := `openapi: 3.1.2
 jsonSchemaDialect: https://example.test/custom-dialect
 info: {title: Mixed dialect operations, version: "1"}
@@ -552,24 +549,14 @@ paths:
 		BindingSpec: bindingSpecForTestDocument(doc),
 		Content:     openbindings.TextContent(doc),
 	})
-	if err != nil {
-		t.Fatalf("tolerant inspection: %v", err)
-	}
-	keys := map[string]bool{}
-	for _, target := range inspection.Targets {
-		keys[target.OperationKey] = true
-		if target.OperationKey == "unsupported" {
-			t.Fatalf("inspection published a false 2020-12 contract: %+v", target)
-		}
-	}
-	if !keys["schemaFree"] || !keys["supported"] || len(keys) != 2 {
-		t.Fatalf("inspection operation keys = %v", keys)
+	if err == nil || !strings.Contains(err.Error(), "whole-source exclusion") {
+		t.Fatalf("inspection = %+v, error = %v; root dialect must exclude the whole source", inspection, err)
 	}
 	_, err = NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{BindingSpec: bindingSpecForTestDocument(doc), Content: openbindings.TextContent(doc)}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "OBI-D-06") {
-		t.Fatalf("strict synthesis must refuse the unsupported projected operation, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "whole-source exclusion") {
+		t.Fatalf("strict synthesis must apply the same source-scope exclusion, got %v", err)
 	}
 }
 

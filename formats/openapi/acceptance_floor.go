@@ -156,7 +156,10 @@ func floorAuthority(class, line string) string {
 		}
 		return "OAS 3.1 line, Response Object: `description` is REQUIRED"
 	case floorD10:
-		return "OAS, Parameter Object: `name` and `in` are REQUIRED"
+		if is30 {
+			return "OAS, Parameter Object: `name` and `in` are REQUIRED"
+		}
+		return "OAS 3.1 line, Parameter Object: name and in are required; in is path, query, header, or cookie; exactly one of schema/content is present; path is required; content has one entry"
 	case floorD11:
 		return `OAS, Components Object: fixed-field maps MUST use keys matching ^[a-zA-Z0-9\.\-_]+$`
 	case floorD12:
@@ -218,6 +221,10 @@ type acceptanceFloor struct {
 	// Refusal is non-empty when §3 part 2's single derived rule fires: no
 	// addressable target remains.
 	Refusal string
+	// SourceExclusion is §5.2's one named source-scope exclusion. It is kept
+	// separate from Refusal because it is not one of §3.2's closed load gates
+	// and invocation must surface ERR_REFUSED rather than SOURCE_LOAD_FAILED.
+	SourceExclusion string
 	// Ops in deterministic order: sorted path keys x httpMethods order.
 	Ops     map[string]*floorOp
 	OpOrder []string
@@ -310,6 +317,111 @@ func floorSplitPointer(pointer string) (string, string, bool) {
 	return pointer[:i], token, true
 }
 
+type floorParameterRow struct {
+	value    any
+	resolved map[string]any
+	known    bool
+	ptr      string
+}
+
+func floorEffectiveParameterRows(root, pathItem, operation map[string]any, pathPtr, operationPtr string) []floorParameterRow {
+	rows := func(value any, ptr string) []floorParameterRow {
+		list, _ := value.([]any)
+		result := make([]floorParameterRow, 0, len(list))
+		for index, raw := range list {
+			resolved, known := raw.(map[string]any)
+			if isFloorRefObj(raw) {
+				known = false
+				if ref := refString(raw); strings.HasPrefix(ref, "#") {
+					target, resolution := floorResolveInternal(root, ref)
+					known = resolution.resolved
+					resolved, _ = target.(map[string]any)
+				}
+			}
+			result = append(result, floorParameterRow{value: raw, resolved: resolved, known: known, ptr: ptr + "/" + strconv.Itoa(index)})
+		}
+		return result
+	}
+	pathRows := rows(pathItem["parameters"], pathPtr)
+	operationRows := rows(operation["parameters"], operationPtr)
+	overridden := map[string]bool{}
+	for _, row := range operationRows {
+		if identity, ok := floorParameterIdentity(row.resolved); ok {
+			overridden[identity] = true
+		}
+	}
+	result := make([]floorParameterRow, 0, len(pathRows)+len(operationRows))
+	for _, row := range pathRows {
+		if identity, ok := floorParameterIdentity(row.resolved); ok && overridden[identity] {
+			continue
+		}
+		if !floorIgnoredHeaderParameter(row.resolved) {
+			result = append(result, row)
+		}
+	}
+	for _, row := range operationRows {
+		if !floorIgnoredHeaderParameter(row.resolved) {
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func floorParameterIdentity(parameter map[string]any) (string, bool) {
+	if parameter == nil {
+		return "", false
+	}
+	name, nameOK := parameter["name"].(string)
+	in, inOK := parameter["in"].(string)
+	return in + "\x00" + name, nameOK && inOK
+}
+
+func floorIgnoredHeaderParameter(parameter map[string]any) bool {
+	if parameter == nil || parameter["in"] != "header" {
+		return false
+	}
+	name, _ := parameter["name"].(string)
+	return strings.EqualFold(name, "Accept") || strings.EqualFold(name, "Content-Type") || strings.EqualFold(name, "Authorization")
+}
+
+func floorParameterDeclarationDefective(parameter map[string]any) bool {
+	if parameter == nil {
+		return true
+	}
+	_, nameOK := parameter["name"].(string)
+	in, inOK := parameter["in"].(string)
+	if !nameOK || !inOK || in != "path" && in != "query" && in != "header" && in != "cookie" {
+		return true
+	}
+	_, hasSchema := parameter["schema"]
+	content, hasContent := parameter["content"]
+	if hasSchema == hasContent {
+		return true
+	}
+	if in == "path" {
+		required, _ := parameter["required"].(bool)
+		if !required {
+			return true
+		}
+	}
+	if hasContent {
+		contentMap, ok := content.(map[string]any)
+		if !ok || len(contentMap) != 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func floorParameterMissingNameOrIn(parameter map[string]any) bool {
+	if parameter == nil {
+		return false
+	}
+	_, hasName := parameter["name"]
+	_, hasIn := parameter["in"]
+	return !hasName || !hasIn
+}
+
 // computeAcceptanceFloorFromBytes parses the entry document's raw bytes and
 // computes the floor. A byte stream that does not parse, whose root is not an
 // object, or whose edition is not accepted returns nil: those verdicts belong
@@ -351,6 +463,13 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 		ResponseMemberDefects:      map[string]bool{},
 		ConformantSchemaComponents: map[string]bool{},
 		ClimbingURefSites:          map[string]bool{},
+	}
+	if line == "3.1" {
+		if dialect, present := root["jsonSchemaDialect"]; present {
+			if value, ok := dialect.(string); !ok || value != oas31DialectURI {
+				f.SourceExclusion = fmt.Sprintf("whole-source exclusion: root jsonSchemaDialect %q is not the incorporated OpenAPI 3.1 base dialect", dialect)
+			}
+		}
 	}
 	attribute := func(class, position string) {
 		if _, seen := f.Attributed[position]; !seen {
@@ -504,31 +623,17 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 					addDefect(defect(floorD2b, ref))
 					continue
 				}
-				// D10: Parameter Objects omitting name or in.
-				for _, holder := range []struct {
-					list any
-					ptr  string
-				}{
-					{pathItem["parameters"], "#/paths/" + floorEsc(pathKey) + "/parameters"},
-					{opMap["parameters"], ref + "/parameters"},
-				} {
-					list, isList := holder.list.([]any)
-					if !isList {
-						continue
+				// D10: the closed selected-effective Parameter Object declaration
+				// list. Operation-level identity overrides and ignored special
+				// headers are applied before classifying, exactly as §8.1 does.
+				for _, parameter := range floorEffectiveParameterRows(root, pathItem, opMap,
+					"#/paths/"+floorEsc(pathKey)+"/parameters", ref+"/parameters") {
+					defective := line == "3.1" && parameter.known && floorParameterDeclarationDefective(parameter.resolved)
+					if line == "3.0" && !isFloorRefObj(parameter.value) {
+						defective = floorParameterMissingNameOrIn(parameter.resolved)
 					}
-					for i, p := range list {
-						if isFloorRefObj(p) {
-							continue
-						}
-						pm, isM := p.(map[string]any)
-						if !isM {
-							continue
-						}
-						_, hasName := pm["name"]
-						_, hasIn := pm["in"]
-						if !hasName || !hasIn {
-							addDefect(defect(floorD10, holder.ptr+"/"+strconv.Itoa(i)))
-						}
+					if defective {
+						addDefect(defect(floorD10, parameter.ptr))
 					}
 				}
 				// Responses: D7 / D9 / D8 / D12.
@@ -924,40 +1029,30 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 		}
 
 		// P1 -- effective parameters (path-level plus operation-level).
-		for _, holder := range []struct {
-			list any
-			ptr  string
-		}{
-			{row.pathItem["parameters"], "#/paths/" + floorEsc(row.path) + "/parameters"},
-			{opMap["parameters"], op.Ref + "/parameters"},
-		} {
-			list, isList := holder.list.([]any)
-			if !isList {
+		for _, parameter := range floorEffectiveParameterRows(root, row.pathItem, opMap,
+			"#/paths/"+floorEsc(row.path)+"/parameters", op.Ref+"/parameters") {
+			p := parameter.value
+			pptr := parameter.ptr
+			if d, ok := isDefective(pptr); ok {
+				addClimb(d)
 				continue
 			}
-			for i, p := range list {
-				pptr := holder.ptr + "/" + strconv.Itoa(i)
-				if d, ok := isDefective(pptr); ok {
-					addClimb(d)
-					continue
-				}
-				if isFloorRefObj(p) {
-					if ref := refString(p); strings.HasPrefix(ref, "#") {
-						if _, res := floorResolveInternal(root, ref); !res.resolved && !res.stoppedOnReference {
-							addClimb(floorDefect{Class: floorURef, Position: pptr, Authority: floorAuthority(floorURef, line)})
-						}
+			if isFloorRefObj(p) {
+				if ref := refString(p); strings.HasPrefix(ref, "#") {
+					if _, res := floorResolveInternal(root, ref); !res.resolved && !res.stoppedOnReference {
+						addClimb(floorDefect{Class: floorURef, Position: pptr, Authority: floorAuthority(floorURef, line)})
 					}
-					continue
 				}
-				pm, isPM := p.(map[string]any)
-				if !isPM {
-					continue
-				}
-				if schema, isS := pm["schema"].(map[string]any); isS {
-					defs, projs := closureDefects(pptr+"/schema", schema)
-					addClimb(defs...)
-					addProjection(op.Ref, projs...)
-				}
+				continue
+			}
+			pm, isPM := p.(map[string]any)
+			if !isPM {
+				continue
+			}
+			if schema, isS := pm["schema"].(map[string]any); isS {
+				defs, projs := closureDefects(pptr+"/schema", schema)
+				addClimb(defs...)
+				addProjection(op.Ref, projs...)
 			}
 		}
 

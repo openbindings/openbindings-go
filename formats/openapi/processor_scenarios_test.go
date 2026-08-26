@@ -99,11 +99,21 @@ func TestProcessorScenarios(t *testing.T) {
 		t.Run(family, func(t *testing.T) {
 			wanted := map[string]bool{}
 			if family == "openapi-3.0" {
-				for _, id := range []string{"OAPI30-PS-77", "OAPI30-PS-78", "OAPI30-PS-79", "OAPI30-PS-80", "OAPI30-PS-81"} {
+				for _, id := range []string{
+					"OAPI30-PS-77", "OAPI30-PS-78", "OAPI30-PS-79", "OAPI30-PS-80", "OAPI30-PS-81",
+					"OAPI30-PS-82", "OAPI30-PS-83", "OAPI30-PS-84",
+				} {
 					wanted[id] = true
 				}
 			} else {
-				for _, id := range []string{"OAPI31-PS-75", "OAPI31-PS-76", "OAPI31-PS-77", "OAPI31-PS-78", "OAPI31-PS-79"} {
+				for _, id := range []string{
+					"OAPI31-PS-25",
+					"OAPI31-PS-75", "OAPI31-PS-76", "OAPI31-PS-77", "OAPI31-PS-78", "OAPI31-PS-79",
+					"OAPI31-PS-80", "OAPI31-PS-81", "OAPI31-PS-82", "OAPI31-PS-83", "OAPI31-PS-84",
+					"OAPI31-PS-85", "OAPI31-PS-86", "OAPI31-PS-87", "OAPI31-PS-88", "OAPI31-PS-89",
+					"OAPI31-PS-90", "OAPI31-PS-91", "OAPI31-PS-92", "OAPI31-PS-93", "OAPI31-PS-94",
+					"OAPI31-PS-95",
+				} {
 					wanted[id] = true
 				}
 			}
@@ -133,7 +143,7 @@ func TestProcessorScenarios(t *testing.T) {
 				})
 			}
 			if ran != len(wanted) {
-				t.Fatalf("ran %d of %d token-envelope scenarios", ran, len(wanted))
+				t.Fatalf("ran %d of %d selected convergence scenarios", ran, len(wanted))
 			}
 		})
 	}
