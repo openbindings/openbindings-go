@@ -266,10 +266,6 @@ type routedInput struct {
 //   - a missing declared path parameter always refuses before dispatch (the
 //     URL cannot be built); every other missing member is the server's
 //     declared validation's business.
-func routeInput(params openapi3.Parameters, input map[string]any, pathTemplate string, plan *bodyPlan) (*routedInput, error) {
-	return routeInputFor(params, input, pathTemplate, plan, defaultBindingSpec)
-}
-
 func routeInputFor(params openapi3.Parameters, input map[string]any, pathTemplate string, plan *bodyPlan, bindingSpec string) (*routedInput, error) {
 	r := &routedInput{
 		resolvedPath: pathTemplate,
@@ -363,11 +359,8 @@ const syntheticBodyProperty = "body"
 // ERR_MISSING_INPUT rather than the generic validation refusal.
 var errMissingPathParam = errors.New("missing path parameter")
 
-// routeParameter serializes one populated parameter onto its wire location.
-func routeParameter(r *routedInput, p *openapi3.Parameter, value any) error {
-	return routeParameterFor(r, p, value, defaultBindingSpec)
-}
-
+// routeParameterFor serializes one populated parameter onto its wire location
+// under the exact binding family token in scope.
 func routeParameterFor(r *routedInput, p *openapi3.Parameter, value any, bindingSpec string) error {
 	if hasMediaFidelity(bindingSpec) {
 		if err := validateRevision3ParameterSerialization(p); err != nil {
@@ -516,14 +509,11 @@ func revision3ParameterSerializationMethod(p *openapi3.Parameter) (*openapi3.Ser
 	return &openapi3.SerializationMethod{Style: style, Explode: explode}, nil
 }
 
-// serializeParamContent serializes a content-form parameter's value per its
-// declared media type: JSON family values JSON-serialize; text/plain carries
-// a string value verbatim. Any other declared media type has no defined
-// parameter carriage in revision 1 and refuses loudly.
-func serializeParamContent(p *openapi3.Parameter, value any) (string, error) {
-	return serializeParamContentFor(p, value, defaultBindingSpec)
-}
-
+// serializeParamContentFor serializes a content-form parameter's value per
+// its declared media type under the exact binding family token in scope: JSON
+// family values JSON-serialize; text/plain carries a string value verbatim.
+// Any other declared media type has no defined parameter carriage and refuses
+// loudly.
 func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec string) (string, error) {
 	if len(p.Content) != 1 {
 		return "", fmt.Errorf("parameter %q content must contain exactly one media type", p.Name)
@@ -572,14 +562,10 @@ func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec stri
 // Style/explode expansions (OAPI-P-02: the OAS tables, incorporated wholesale)
 // ---------------------------------------------------------------------------
 
-// serializePathValue expands one path parameter per the OAS style table.
-// Value pieces are percent-encoded with the encodeURIComponent byte set
-// (cross-SDK URL parity); the style's structural characters (";", "=", ".",
-// ",") stay literal.
-func serializePathValue(name string, value any, style string, explode bool) (string, error) {
-	return serializePathValueForRevision(name, value, style, explode, defaultBindingSpec)
-}
-
+// serializePathValueForRevision expands one path parameter per the OAS style
+// table under the exact binding family token in scope. Value pieces are
+// percent-encoded with the encodeURIComponent byte set (cross-SDK URL parity);
+// the style's structural characters (";", "=", ".", ",") stay literal.
 func serializePathValueForRevision(name string, value any, style string, explode bool, bindingSpec string) (string, error) {
 	esc := encodePathValue
 	if hasMediaFidelity(bindingSpec) {
@@ -606,13 +592,10 @@ func serializeHeaderValue(value any, style string, explode bool) (string, error)
 	return expandSimple(value, explode, func(s string) string { return s })
 }
 
-// serializeQueryValue expands one query parameter into fully percent-encoded
-// name=value units, per the OAS query styles. allowReserved lets RFC 3986
-// reserved characters in VALUES pass unescaped.
-func serializeQueryValue(name string, value any, style string, explode bool, allowReserved bool) ([]string, error) {
-	return serializeQueryValueForRevision(name, value, style, explode, allowReserved, defaultBindingSpec, false)
-}
-
+// serializeQueryValueForRevision expands one query parameter into fully
+// percent-encoded name=value units under the exact binding family token in
+// scope, per the OAS query styles. allowReserved lets RFC 3986 reserved
+// characters in VALUES pass unescaped.
 func serializeQueryValueForRevision(name string, value any, style string, explode bool, allowReserved bool, bindingSpec string, formSafe bool) ([]string, error) {
 	n := queryEscape(name, false)
 	esc := func(s string) string { return queryEscape(s, allowReserved) }

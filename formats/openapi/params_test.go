@@ -52,7 +52,7 @@ func TestSerializePathValue_OASStyleTable(t *testing.T) {
 		{"label", false, "", "."},
 	}
 	for _, tc := range cases {
-		got, err := serializePathValue("color", tc.value, tc.style, tc.explode)
+		got, err := serializePathValueForRevision("color", tc.value, tc.style, tc.explode, BindingSpec)
 		if err != nil {
 			t.Errorf("%s/explode=%v (%T): unexpected error %v", tc.style, tc.explode, tc.value, err)
 			continue
@@ -88,7 +88,7 @@ func TestSerializeQueryValue_OASStyleTable(t *testing.T) {
 		{"form", false, "", []string{"color="}},
 	}
 	for _, tc := range cases {
-		got, err := serializeQueryValue("color", tc.value, tc.style, tc.explode, false)
+		got, err := serializeQueryValueForRevision("color", tc.value, tc.style, tc.explode, false, BindingSpec, false)
 		if err != nil {
 			t.Errorf("%s/explode=%v (%T): unexpected error %v", tc.style, tc.explode, tc.value, err)
 			continue
@@ -101,20 +101,20 @@ func TestSerializeQueryValue_OASStyleTable(t *testing.T) {
 
 // Undefined table cells refuse loudly rather than inventing a serialization.
 func TestSerializeQueryValue_UndefinedCellsRefuse(t *testing.T) {
-	if _, err := serializeQueryValue("color", "blue", "spaceDelimited", false, false); err == nil {
+	if _, err := serializeQueryValueForRevision("color", "blue", "spaceDelimited", false, false, BindingSpec, false); err == nil {
 		t.Error("spaceDelimited with a primitive must refuse")
 	}
-	if _, err := serializeQueryValue("color", "blue", "pipeDelimited", false, false); err == nil {
+	if _, err := serializeQueryValueForRevision("color", "blue", "pipeDelimited", false, false, BindingSpec, false); err == nil {
 		t.Error("pipeDelimited with a primitive must refuse")
 	}
-	if _, err := serializeQueryValue("color", styleTableArray, "deepObject", true, false); err == nil {
+	if _, err := serializeQueryValueForRevision("color", styleTableArray, "deepObject", true, false, BindingSpec, false); err == nil {
 		t.Error("deepObject with a non-object must refuse")
 	}
-	if _, err := serializePathValue("id", "x", "form", false); err == nil {
+	if _, err := serializePathValueForRevision("id", "x", "form", false, BindingSpec); err == nil {
 		t.Error("form style on a path parameter must refuse")
 	}
 	// Nested non-primitives inside an expansion have no OAS-defined form.
-	if _, err := serializeQueryValue("f", []any{map[string]any{"x": 1}}, "form", false, false); err == nil {
+	if _, err := serializeQueryValueForRevision("f", []any{map[string]any{"x": 1}}, "form", false, false, BindingSpec, false); err == nil {
 		t.Error("nested object inside an array expansion must refuse")
 	}
 }
@@ -138,11 +138,11 @@ func TestSerializeHeaderValue_Simple(t *testing.T) {
 // allowReserved lets RFC 3986 reserved characters pass unescaped in query
 // values (OAPI-P-02); names stay escaped.
 func TestSerializeQueryValue_AllowReserved(t *testing.T) {
-	got, err := serializeQueryValue("path", "a/b?c=d", "form", true, false)
+	got, err := serializeQueryValueForRevision("path", "a/b?c=d", "form", true, false, BindingSpec, false)
 	if err != nil || got[0] != "path=a%2Fb%3Fc%3Dd" {
 		t.Errorf("escaped = (%v, %v), want path=a%%2Fb%%3Fc%%3Dd", got, err)
 	}
-	got, err = serializeQueryValue("path", "a/b?c=d", "form", true, true)
+	got, err = serializeQueryValueForRevision("path", "a/b?c=d", "form", true, true, BindingSpec, false)
 	if err != nil || got[0] != "path=a/b?c=d" {
 		t.Errorf("allowReserved = (%v, %v), want path=a/b?c=d", got, err)
 	}
@@ -188,7 +188,7 @@ func TestRouteParameter_ContentFormParam(t *testing.T) {
 		bodyFields:   map[string]any{},
 		populated:    map[string]map[string]bool{"header": {}, "query": {}, "cookie": {}},
 	}
-	if err := routeParameter(r, p, map[string]any{"a": float64(1)}); err != nil {
+	if err := routeParameterFor(r, p, map[string]any{"a": float64(1)}, BindingSpec); err != nil {
 		t.Fatalf("routeParameter: %v", err)
 	}
 	if len(r.queryUnits) != 1 || r.queryUnits[0] != "filter=%7B%22a%22%3A1%7D" {
@@ -201,7 +201,7 @@ func TestRouteParameter_ContentFormParam(t *testing.T) {
 		In:      "query",
 		Content: openapi3.Content{"application/octet-stream": &openapi3.MediaType{}},
 	}
-	if err := routeParameter(r, p2, "x"); err == nil {
+	if err := routeParameterFor(r, p2, "x", BindingSpec); err == nil {
 		t.Error("content parameter with an undefined media type must refuse")
 	}
 }
@@ -249,14 +249,14 @@ func TestEffectiveParameters_DropsSpecialHeaders(t *testing.T) {
 // the request body; other unmatched fields have nowhere to ride and refuse.
 func TestRouteInput_SyntheticBody(t *testing.T) {
 	plan := &bodyPlan{declared: true, family: familyJSON, synthetic: true}
-	routed, err := routeInput(nil, map[string]any{"body": []any{float64(1), float64(2)}}, "/x", plan)
+	routed, err := routeInputFor(nil, map[string]any{"body": []any{float64(1), float64(2)}}, "/x", plan, BindingSpec)
 	if err != nil {
 		t.Fatalf("routeInput: %v", err)
 	}
 	if !routed.bodySet {
 		t.Fatal("synthetic body not captured")
 	}
-	if _, err := routeInput(nil, map[string]any{"stray": 1}, "/x", plan); err == nil {
+	if _, err := routeInputFor(nil, map[string]any{"stray": 1}, "/x", plan, BindingSpec); err == nil {
 		t.Error("a non-body field on a synthetic-body operation must refuse")
 	}
 }

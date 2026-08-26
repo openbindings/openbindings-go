@@ -26,7 +26,7 @@ func TestRuntimeInvokesArtifactWithoutOBI(t *testing.T) {
 	})}
 	runtime := NewRuntimeWithClient(client)
 	call := runtime.Invoke(context.Background(), &RuntimeInvocationArgs{
-		Source: RuntimeSource{Content: openbindings.TextContent(`{
+		Source: RuntimeSource{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(`{
 			"openapi":"3.1.0",
 			"info":{"title":"Standalone runtime","version":"1"},
 			"servers":[{"url":"https://api.example.test/v1"}],
@@ -56,7 +56,7 @@ func TestRuntimeInvokesArtifactWithoutOBI(t *testing.T) {
 func TestRuntimePrepareDerivesArtifactPrerequisites(t *testing.T) {
 	runtime := NewRuntime()
 	details, err := runtime.Prepare(context.Background(), &RuntimeInvocationArgs{
-		Source: RuntimeSource{Content: openbindings.TextContent(`{
+		Source: RuntimeSource{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(`{
 			"openapi":"3.1.0",
 			"info":{"title":"Standalone runtime","version":"1"},
 			"servers":[{"url":"https://api.example.test/v1"}],
@@ -91,7 +91,7 @@ func TestRuntimeAppliesResolvedBearerContext(t *testing.T) {
 	})}
 	runtime := NewRuntimeWithClient(client)
 	call := runtime.Invoke(context.Background(), &RuntimeInvocationArgs{
-		Source: RuntimeSource{Content: openbindings.TextContent(`{
+		Source: RuntimeSource{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(`{
 			"openapi":"3.1.0",
 			"info":{"title":"Secured runtime","version":"1"},
 			"servers":[{"url":"https://api.example.test"}],
@@ -135,7 +135,7 @@ func TestRuntimeAppliesInstalledArtifactSecurityHandler(t *testing.T) {
 		},
 	})
 	args := &RuntimeInvocationArgs{
-		Source: RuntimeSource{Content: openbindings.TextContent(`{
+		Source: RuntimeSource{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(`{
 			"openapi":"3.1.0",
 			"info":{"title":"Secured runtime","version":"1"},
 			"servers":[{"url":"https://api.example.test"}],

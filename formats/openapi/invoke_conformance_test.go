@@ -1078,27 +1078,27 @@ func TestInvoke_SSECarriageReturnLineEndings(t *testing.T) {
 
 func TestDecode_CharsetHandling(t *testing.T) {
 	// latin-1 declared: bytes transcode.
-	dec := decodeByContentType("text/plain; charset=iso-8859-1")
+	dec := decodeByContentTypeFor("text/plain; charset=iso-8859-1", BindingSpecOpenAPI31)
 	out, err := dec(invoke.InvokeSite{}, invoke.RawResult{Body: []byte{0xe9}})
 	if err != nil || out != "é" {
 		t.Errorf("latin-1 = (%v, %v), want é", out, err)
 	}
 
 	// Invalid UTF-8 under the default charset is a loud decode error.
-	dec = decodeByContentType("text/plain")
+	dec = decodeByContentTypeFor("text/plain", BindingSpecOpenAPI31)
 	if _, err := dec(invoke.InvokeSite{}, invoke.RawResult{Body: []byte{0xff, 0xfe}}); err == nil {
 		t.Error("invalid UTF-8 must be a loud decode error, never mojibake")
 	}
 
 	// An undecodable declared charset is loud (override at the decode point).
-	dec = decodeByContentType("text/plain; charset=shift_jis")
+	dec = decodeByContentTypeFor("text/plain; charset=shift_jis", BindingSpecOpenAPI31)
 	if _, err := dec(invoke.InvokeSite{}, invoke.RawResult{Body: []byte("x")}); err == nil {
 		t.Error("an unsupported charset must be a loud decode error")
 	}
 
 	// The builtin decoder returns nil for absent bytes; the invocation layer
 	// interprets that as zero output values rather than a JSON null result.
-	dec = decodeByContentType("application/json")
+	dec = decodeByContentTypeFor("application/json", BindingSpecOpenAPI31)
 	out, err = dec(invoke.InvokeSite{}, invoke.RawResult{Body: nil})
 	if err != nil || out != nil {
 		t.Errorf("empty body = (%v, %v), want null", out, err)

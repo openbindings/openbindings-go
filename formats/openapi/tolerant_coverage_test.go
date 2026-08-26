@@ -120,6 +120,22 @@ func TestCoverageSynthesisReturnsSoundPartialOBI(t *testing.T) {
 	}
 }
 
+func TestOpenAPICoverageMakesNoClaimWithoutAMatchedFamilyToken(t *testing.T) {
+	doc, err := loadDocument("", json.RawMessage(mixedDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	iface := &openbindings.Interface{
+		Sources: map[string]openbindings.Source{
+			"foreign": {BindingSpec: "example.foreign@1"},
+		},
+	}
+	entries := openAPISynthesisCoverage(doc, iface, nil, nil)
+	if len(entries) != 0 {
+		t.Fatalf("coverage entries = %+v, want no OpenAPI claim without a matched family token", entries)
+	}
+}
+
 func TestInspectSourceFiltersUnrepresentableTargets(t *testing.T) {
 	synth := &Synthesizer{}
 	inspection, err := synth.InspectSource(context.Background(), &openbindings.Source{

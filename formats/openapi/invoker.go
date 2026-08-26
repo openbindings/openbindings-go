@@ -37,7 +37,6 @@ const (
 	BindingSpecOpenAPI31 = "openbindings.openapi-3.1@1"
 	BindingSpecOpenAPI32 = "openbindings.openapi-3.2@1"
 
-	defaultBindingSpec = BindingSpecOpenAPI31
 	// ErrCodeUnsupportedBindingSpec reports a registered family whose engine
 	// is absent, or a binding invocation that names no exact family token.
 	ErrCodeUnsupportedBindingSpec = "ERR_UNSUPPORTED_BINDING_SPEC"
@@ -108,9 +107,13 @@ func openAPIRule(bindingSpec, rule string) string {
 }
 
 func unsupportedBindingSpecError(bindingSpec string) *invoke.InvocationError {
-	return invoke.NewInvocationErrorWithData(ErrCodeUnsupportedBindingSpec, map[string]any{
+	data := map[string]any{
 		"bindingSpec": bindingSpec,
-	})
+	}
+	if bindingSpec == "" {
+		data["message"] = "name an exact OpenAPI family token in Source.BindingSpec"
+	}
+	return invoke.NewInvocationErrorWithData(ErrCodeUnsupportedBindingSpec, data)
 }
 
 // DefaultSourceName is the default source key used when registering an OpenAPI source in an OBI.
@@ -163,7 +166,7 @@ type RuntimeOptions struct {
 // RuntimeSource identifies an OpenAPI artifact without requiring an OBI.
 type RuntimeSource struct {
 	// BindingSpec selects the exact OpenBindings OpenAPI binding candidate.
-	// Empty selects the OpenAPI 3.1 family token.
+	// It must name an implemented family token exactly.
 	BindingSpec string
 	Location    string
 	Content     json.RawMessage
@@ -282,13 +285,9 @@ func runtimeBindingArgs(args *RuntimeInvocationArgs) *invoke.BindingInvocationAr
 	if args == nil {
 		args = &RuntimeInvocationArgs{}
 	}
-	bindingSpec := args.Source.BindingSpec
-	if bindingSpec == "" {
-		bindingSpec = defaultBindingSpec
-	}
 	return &invoke.BindingInvocationArgs{
 		Source: invoke.InvocationSource{
-			BindingSpec: bindingSpec,
+			BindingSpec: args.Source.BindingSpec,
 			Location:    args.Source.Location,
 			Content:     args.Source.Content,
 		},
@@ -636,9 +635,6 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		return bridgeExecutionError(err)
 	}
 	bindingSpec := args.Source.BindingSpec
-	if bindingSpec == "" {
-		bindingSpec = defaultBindingSpec
-	}
 	model, err := loadRuntimeOperationModel(ctx, args, e.client, bindingSpec)
 	if err != nil {
 		var localInvocationError *invoke.InvocationError
@@ -745,9 +741,6 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 		return nil, nil
 	}
 	bindingSpec := args.Source.BindingSpec
-	if bindingSpec == "" {
-		bindingSpec = defaultBindingSpec
-	}
 	var prepared *openapiclient.PreparedOperation
 	if args.Source.Content != nil {
 		if document := e.prepareDoc(args.Source.Location, args.Source.Content); document != nil {

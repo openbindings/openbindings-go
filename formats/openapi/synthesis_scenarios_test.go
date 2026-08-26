@@ -57,6 +57,14 @@ func synthesisFactory(scenario synthesisscenarios.Scenario) (synthesize.Coverage
 	return NewSynthesizerWithClient(synthesisResourceClient(scenario.Resources)), nil
 }
 
+var pendingSynthesisScenarioReasons = map[string]string{
+	"OAPI30-SS-42": "OAPI30-SS-42: pending N10 M2/M3 (multipart part-default convergence)",
+	"OAPI31-SS-01": "OAPI31-SS-01: pending N10 dependencies node",
+	"OAPI31-SS-23": "OAPI31-SS-23: pending N10 M2/M3 (multipart part-default convergence)",
+	"OAPI31-SS-24": "OAPI31-SS-24: pending N10 M2/M3 (multipart part-default convergence)",
+	"OAPI31-SS-30": "OAPI31-SS-30: pending N10 M2/M3 (multipart part-default convergence)",
+}
+
 func TestSynthesisScenarios(t *testing.T) {
 	root := os.Getenv("OB_SPEC_CORPUS")
 	if root == "" {
@@ -65,23 +73,42 @@ func TestSynthesisScenarios(t *testing.T) {
 	for _, family := range []string{"openapi-3.0", "openapi-3.1"} {
 		family := family
 		t.Run(family, func(t *testing.T) {
-			// Later ledger clusters own the partMedia/propertyMedia configuration
-			// changes (cluster 5) and dependency synthesis (cluster 10). This node
-			// runs every current scenario except those explicitly later cells; they
-			// are not silently interpreted under the old models.
-			laterCluster := map[string]bool{
-				"OAPI30-SS-42": true,
-				"OAPI31-SS-01": true,
-				"OAPI31-SS-23": true,
-				"OAPI31-SS-24": true,
-				"OAPI31-SS-30": true,
-			}
-			if err := synthesisscenarios.VerifyWhere(context.Background(), root, family, synthesisFactory, func(scenario synthesisscenarios.Scenario) bool {
-				return !laterCluster[scenario.ID]
-			}); err != nil {
+			file, err := synthesisscenarios.Load(root, family)
+			if err != nil {
 				if os.IsNotExist(err) && os.Getenv("OB_CORPUS_REQUIRED") == "" {
 					t.Skip(err)
 				}
+				t.Fatal(err)
+			}
+
+			// These are pre-existing engine gaps owned by later N10 nodes. They
+			// remain fenced from verification, but each corpus position is a
+			// visible, reasoned subtest skip rather than a silent green exclusion.
+			seenPending := map[string]bool{}
+			for _, scenario := range file.Scenarios {
+				reason, pending := pendingSynthesisScenarioReasons[scenario.ID]
+				if !pending {
+					continue
+				}
+				seenPending[scenario.ID] = true
+				t.Run(scenario.ID, func(t *testing.T) {
+					t.Skip(reason)
+				})
+			}
+			prefix := "OAPI30-"
+			if family == "openapi-3.1" {
+				prefix = "OAPI31-"
+			}
+			for id := range pendingSynthesisScenarioReasons {
+				if strings.HasPrefix(id, prefix) && !seenPending[id] {
+					t.Fatalf("pending synthesis scenario %s is absent from the %s corpus", id, family)
+				}
+			}
+
+			if err := synthesisscenarios.VerifyWhere(context.Background(), root, family, synthesisFactory, func(scenario synthesisscenarios.Scenario) bool {
+				_, pending := pendingSynthesisScenarioReasons[scenario.ID]
+				return !pending
+			}); err != nil {
 				t.Fatal(err)
 			}
 		})

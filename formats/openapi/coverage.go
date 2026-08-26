@@ -36,13 +36,16 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 		bySelector[binding.Selector] = bindingIdentity{operationKey: binding.Operation, selector: binding.Selector}
 	}
 	sourceLocation := ""
-	bindingSpec := defaultBindingSpec
+	bindingSpec := ""
 	for _, source := range iface.Sources {
 		if isImplementedOpenAPIBindingSpec(source.BindingSpec) {
 			sourceLocation = source.Location
 			bindingSpec = source.BindingSpec
 			break
 		}
+	}
+	if bindingSpec == "" {
+		return []synthesize.SynthesisCoverageEntry{}
 	}
 
 	// The walk is driven from the UNION of the loaded document's path×method

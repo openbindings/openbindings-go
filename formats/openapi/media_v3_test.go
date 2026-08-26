@@ -1036,7 +1036,7 @@ func TestRevision3FormCandidatesFailClosedAndHonorEncodingObjects(t *testing.T) 
 		t.Fatal(err)
 	}
 	wanted, _ := parseRevision3MediaType("application/x-www-form-urlencoded")
-	if _, err := selectRevision3RequestPlan(doc, rangeOp, plans, wanted); err == nil || !strings.Contains(err.Error(), "schema-omitted") {
+	if _, err := selectRevision3RequestPlan(doc, rangeOp, plans, wanted, BindingSpec); err == nil || !strings.Contains(err.Error(), "schema-omitted") {
 		t.Fatalf("schema-omitted range form selection error = %v", err)
 	}
 

@@ -77,7 +77,7 @@ func TestPlanRequestBody_SelectionOrder(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := planRequestBody(opWithRequestBody(tc.content, false))
+			plan, err := planRequestBody(opWithRequestBody(tc.content, false), BindingSpec)
 			if err != nil {
 				t.Fatalf("planRequestBody: %v", err)
 			}
@@ -95,7 +95,7 @@ func TestPlanRequestBody_UnderdefinedFormCarriageRefuses(t *testing.T) {
 		{"multipart/form-data": emptyMedia()},
 	}
 	for _, content := range cases {
-		if _, err := planRequestBody(opWithRequestBody(content, false)); err == nil {
+		if _, err := planRequestBody(opWithRequestBody(content, false), BindingSpec); err == nil {
 			t.Errorf("content %v must refuse selection", content)
 		}
 	}
@@ -111,14 +111,14 @@ func TestPlanRequestBody_SyntheticModes(t *testing.T) {
 
 	plan, err := planRequestBody(opWithRequestBody(openapi3.Content{
 		"application/json": &openapi3.MediaType{Schema: arraySchema},
-	}, false))
+	}, false), BindingSpec)
 	if err != nil || !plan.synthetic {
 		t.Errorf("array body schema must be synthetic, got %+v (%v)", plan, err)
 	}
 
 	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{
 		"application/json": &openapi3.MediaType{Schema: objectSchema},
-	}, false))
+	}, false), BindingSpec)
 	if err != nil || plan.synthetic {
 		t.Errorf("object body schema must not be synthetic, got %+v (%v)", plan, err)
 	}
@@ -127,7 +127,7 @@ func TestPlanRequestBody_SyntheticModes(t *testing.T) {
 	}
 
 	// A string-declared text body always rides the synthetic lane.
-	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{"text/plain": stringMedia()}, false))
+	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{"text/plain": stringMedia()}, false), BindingSpec)
 	if err != nil || !plan.synthetic {
 		t.Errorf("string-schema text/plain must be synthetic, got %+v (%v)", plan, err)
 	}
@@ -139,7 +139,7 @@ func TestPlanRequestBody_SyntheticModes(t *testing.T) {
 	typelessSchema := &openapi3.SchemaRef{Value: &openapi3.Schema{}}
 	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{
 		"application/json": &openapi3.MediaType{Schema: typelessSchema},
-	}, false))
+	}, false), BindingSpec)
 	if err != nil || !plan.synthetic {
 		t.Errorf("typeless body schema must be synthetic, got %+v (%v)", plan, err)
 	}
@@ -151,7 +151,7 @@ func TestPlanRequestBody_SyntheticModes(t *testing.T) {
 	}}
 	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{
 		"application/json": &openapi3.MediaType{Schema: propsNoTypeSchema},
-	}, false))
+	}, false), BindingSpec)
 	if err != nil || plan.synthetic {
 		t.Errorf("properties-without-type schema must not be synthetic, got %+v (%v)", plan, err)
 	}
@@ -164,7 +164,7 @@ func TestPlanRequestBody_SyntheticModes(t *testing.T) {
 	nullableObjectSchema := &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"object", "null"}}}
 	plan, err = planRequestBody(opWithRequestBody(openapi3.Content{
 		"application/json": &openapi3.MediaType{Schema: nullableObjectSchema},
-	}, false))
+	}, false), BindingSpec)
 	if err != nil || !plan.synthetic {
 		t.Errorf("nullable-object schema without properties must be synthetic, got %+v (%v)", plan, err)
 	}
@@ -270,7 +270,7 @@ func TestBuildMultipartBody_30BinaryBase64(t *testing.T) {
 		"file": base64.StdEncoding.EncodeToString([]byte("raw-bytes")),
 		"desc": "a file",
 	}
-	r, ct, err := buildMultipartBody(doc, media, fields)
+	r, ct, err := buildMultipartBodyForRevision(doc, media, fields, BindingSpecOpenAPI30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestBuildMultipartBody_30BinaryBase64(t *testing.T) {
 	}
 
 	// An invalid base64 string is a loud error, never silent bytes.
-	if _, _, err := buildMultipartBody(doc, media, map[string]any{"file": "!!not-base64!!"}); err == nil {
+	if _, _, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": "!!not-base64!!"}, BindingSpecOpenAPI30); err == nil {
 		t.Error("invalid base64 for a binary-signaled part must refuse")
 	}
 }
@@ -307,21 +307,21 @@ func TestAcceptHeader(t *testing.T) {
 		Content: openapi3.Content{"application/xml": emptyMedia(), "*/*": emptyMedia()},
 	}})
 
-	got := successMediaTypes(op)
+	got := successMediaTypesFor(op, BindingSpec)
 	want := []string{"application/json", "text/csv", "text/event-stream"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("successMediaTypes = %v, want %v (404 excluded; 2XX shadows default; media ranges excluded)", got, want)
 	}
-	if !isStreamingCapable(op) {
+	if !isStreamingCapableFor(op, BindingSpec) {
 		t.Error("operation declaring text/event-stream on a success response is streaming-capable")
 	}
 
 	empty := &openapi3.Operation{Responses: openapi3.NewResponses()}
 	empty.Responses.Set("204", &openapi3.ResponseRef{Value: &openapi3.Response{}})
-	if got := acceptHeader(empty); got != "" {
+	if got := acceptHeaderFor(empty, BindingSpec); got != "" {
 		t.Errorf("acceptHeader with no declared media = %q, want omission", got)
 	}
-	if isStreamingCapable(empty) {
+	if isStreamingCapableFor(empty, BindingSpec) {
 		t.Error("operation with no declared media is not streaming-capable")
 	}
 
@@ -331,7 +331,7 @@ func TestAcceptHeader(t *testing.T) {
 	defOnly.Responses.Set("default", &openapi3.ResponseRef{Value: &openapi3.Response{
 		Content: openapi3.Content{"text/event-stream": emptyMedia()},
 	}})
-	if !isStreamingCapable(defOnly) {
+	if !isStreamingCapableFor(defOnly, BindingSpec) {
 		t.Error("a default entry that can govern a 2xx participates in shape determination (§8)")
 	}
 }

@@ -72,14 +72,44 @@ func TestUnimplementedOpenAPIFamiliesRefuseBeforeArtifactParsing(t *testing.T) {
 }
 
 func TestBindingInvokerRequiresAnExactFamilyToken(t *testing.T) {
+	assertExactTokenError := func(t *testing.T, err *invoke.InvocationError) {
+		t.Helper()
+		if err == nil || err.Code != ErrCodeUnsupportedBindingSpec {
+			t.Fatalf("invocation error = %#v, want %s", err, ErrCodeUnsupportedBindingSpec)
+		}
+		data, ok := err.Data.(map[string]any)
+		if !ok || data["message"] != "name an exact OpenAPI family token in Source.BindingSpec" {
+			t.Fatalf("invocation error data = %#v, want exact-token guidance", err.Data)
+		}
+	}
+
 	args := &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{Content: openbindings.TextContent("not an OpenAPI artifact")},
 		Selector: "#/paths/~1x/get",
 	}
 	_, invocationErr := driveSingle(t, NewInvoker().InvokeBinding(context.Background(), args), nil)
-	if invocationErr == nil || invocationErr.Code != ErrCodeUnsupportedBindingSpec {
-		t.Fatalf("invocation error = %#v, want %s", invocationErr, ErrCodeUnsupportedBindingSpec)
+	assertExactTokenError(t, invocationErr)
+
+	_, prepareErr := NewInvoker().PrepareBinding(context.Background(), args)
+	var prepareInvocationErr *invoke.InvocationError
+	if !errors.As(prepareErr, &prepareInvocationErr) {
+		t.Fatalf("prepare error = %#v, want invocation error", prepareErr)
 	}
+	assertExactTokenError(t, prepareInvocationErr)
+
+	runtimeArgs := &RuntimeInvocationArgs{
+		Source:   RuntimeSource{Content: openbindings.TextContent("not an OpenAPI artifact")},
+		Selector: "#/paths/~1x/get",
+	}
+	_, runtimeInvocationErr := driveSingle(t, NewRuntime().Invoke(context.Background(), runtimeArgs), nil)
+	assertExactTokenError(t, runtimeInvocationErr)
+
+	_, runtimePrepareErr := NewRuntime().Prepare(context.Background(), runtimeArgs)
+	var runtimePrepareInvocationErr *invoke.InvocationError
+	if !errors.As(runtimePrepareErr, &runtimePrepareInvocationErr) {
+		t.Fatalf("runtime prepare error = %#v, want invocation error", runtimePrepareErr)
+	}
+	assertExactTokenError(t, runtimePrepareInvocationErr)
 }
 
 func TestOpenAPIFamilyTokenMustMatchArtifactEdition(t *testing.T) {

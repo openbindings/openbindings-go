@@ -1412,14 +1412,11 @@ func schemaWithParameterDescription(schema map[string]any, description string) m
 	return schema
 }
 
-// unsupportedParameterContent returns the first content-form parameter whose
-// single media declaration the candidate cannot serialize. Creation-time
-// soundness requires excluding the target rather than emitting an operation
-// that is statically guaranteed to refuse when that parameter is populated.
-func unsupportedParameterContent(params openapi3.Parameters) string {
-	return unsupportedParameterContentFor(params, defaultBindingSpec)
-}
-
+// unsupportedParameterContentFor returns the first content-form parameter
+// whose single media declaration the named binding family cannot serialize.
+// Creation-time soundness requires excluding the target rather than emitting
+// an operation that is statically guaranteed to refuse when that parameter is
+// populated.
 func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec string) string {
 	for _, ref := range params {
 		if ref == nil || ref.Value == nil {
