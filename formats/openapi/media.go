@@ -1858,8 +1858,13 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 	return nil, nil
 }
 
+// soleConcreteRequestPlan implements the ratified usable-set election:
+// exactly one USABLE concrete alternative (after confinement removes
+// excluded and colliding entries) self-selects; the authored map size is
+// irrelevant. Two or more usable alternatives require requestMedia, and
+// supplied values never elect.
 func soleConcreteRequestPlan(op *openapi3.Operation, plans []*bodyPlan) *bodyPlan {
-	if op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || len(op.RequestBody.Value.Content) != 1 || len(plans) != 1 {
+	if op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || len(plans) != 1 {
 		return nil
 	}
 	plan := plans[0]
