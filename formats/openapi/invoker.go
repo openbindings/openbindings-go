@@ -239,7 +239,7 @@ func NewRuntimeWithOptions(options RuntimeOptions) *Runtime {
 	clientCopy := *client
 	requestCodings, requestDefect := normalizeContentEncoders(options.RequestContentCodings)
 	responseCodings, responseDefect := normalizeContentDecoders(options.ResponseContentCodings)
-	clientCopy.Transport = rawCookieBridgeTransport{
+	clientCopy.Transport = governedTransport{
 		base:            client.Transport,
 		requestCodings:  requestCodings,
 		responseCodings: responseCodings,
@@ -339,7 +339,7 @@ func runtimeBindingArgs(args *RuntimeInvocationArgs) *invoke.BindingInvocationAr
 	}
 }
 
-func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Client, securityHandlers map[string]SecurityHandler) (openapiclient.PrepareOptions, error) {
+func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Client, securityHandlers map[string]SecurityHandler, parameterConverter ParameterConversion) (openapiclient.PrepareOptions, error) {
 	if args == nil {
 		return openapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 	}
@@ -360,7 +360,7 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 		Source: openapiclient.Source{Location: args.Source.Location, Content: content},
 		Ref:    args.Selector, Profile: profile, Context: args.Context, HTTPClient: client,
 		Hooks: bridgeHooks(args, bindingSpec), MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes,
-		SecurityHandlers: securityHandlers,
+		SecurityHandlers: securityHandlers, ParameterConverter: parameterConverter,
 	}, nil
 }
 
@@ -379,7 +379,6 @@ type runtimeOperationModel struct {
 	parameters               openapi3.Parameters
 	plans                    []*bodyPlan
 	routes                   abstractInputRoutes
-	rawCookieHeader          string
 	preStartBodyGate         bool
 	multipartTransferHeaders map[string]map[string]bool
 }
@@ -490,13 +489,11 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 
 	callerParameters := cloneEffectiveParameters(parameters)
 	routes := planAbstractInputRoutes(callerParameters, plans)
-	rawCookieHeader := prepareEngineParameterView(parameters, &routes, bindingSpec)
 	prepareEngineEncodingView(plans)
 	prepareEngineResponseView(operation, bindingSpec)
 	return &runtimeOperationModel{
 		document: document, pathItem: pathItem, operation: operation, governanceOperation: governanceOperation,
 		parameters: callerParameters, plans: plans, routes: routes,
-		rawCookieHeader:          rawCookieHeader,
 		preStartBodyGate:         preStartBodyGate,
 		multipartTransferHeaders: multipartTransferHeaders,
 	}, nil
@@ -765,7 +762,7 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	if e.codingDefect != nil {
 		return invoke.NewInvocationError(openapiclient.CodeRefused)
 	}
-	options, err := enginePrepareOptions(args, e.client, e.securityHandlers)
+	options, err := enginePrepareOptions(args, e.client, e.securityHandlers, e.parameterConvert)
 	if err != nil {
 		return bridgeExecutionError(err)
 	}
@@ -848,9 +845,6 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		multipartTransferHeaders: model.multipartTransferHeaders,
 	}
 	bridgeCtx = context.WithValue(bridgeCtx, mediaGovernanceContextKey{}, governance)
-	if model.rawCookieHeader != "" {
-		bridgeCtx = context.WithValue(bridgeCtx, rawCookieBridgeContextKey{}, model.rawCookieHeader)
-	}
 	// Prove absence before starting the carrier: these methods can never route
 	// a body, so dispatch must wait for either one body-free input or EOF.
 	var preReadValue any
@@ -996,7 +990,7 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvoca
 // schemes, it reports no requirement and lets the invocation raise the
 // challenge instead.
 func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	options, err := enginePrepareOptions(args, e.client, e.securityHandlers)
+	options, err := enginePrepareOptions(args, e.client, e.securityHandlers, e.parameterConvert)
 	if err != nil {
 		var invocationErr *invoke.InvocationError
 		if errors.As(err, &invocationErr) && invocationErr.Code == ErrCodeUnsupportedBindingSpec {

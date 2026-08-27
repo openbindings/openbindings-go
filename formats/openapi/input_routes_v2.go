@@ -9,7 +9,6 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 
 	openapiclient "github.com/openbindings/openapi-client/go"
-	"github.com/openbindings/openbindings-go/invoke"
 )
 
 // abstractInputRoutes is the synthesis-only correspondence between the flat,
@@ -24,10 +23,9 @@ type abstractInputRoutes struct {
 }
 
 type abstractParameterRoute struct {
-	In         string
-	Name       string
-	EngineName string
-	Field      string
+	In    string
+	Name  string
+	Field string
 }
 
 type inputSlot struct {
@@ -116,7 +114,7 @@ func planAbstractInputRoutes(params openapi3.Parameters, plans []*bodyPlan) abst
 		switch slot.kind {
 		case "parameter":
 			routes.parameters = append(routes.parameters, abstractParameterRoute{
-				In: slot.in, Name: slot.name, EngineName: slot.name, Field: assigned[index],
+				In: slot.in, Name: slot.name, Field: assigned[index],
 			})
 		case "body":
 			routes.bodyFields[slot.name] = assigned[index]
@@ -317,30 +315,12 @@ func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parame
 		byCallerKey[callerParameterKey(route.In, route.Name, qualified)] = route
 	}
 	value := map[string]any{}
-	rawCookieEmits := false
-	structuredCookieEmits := false
 	for key, member := range envelope.parameters {
 		route, found := byCallerKey[key]
 		if !found {
 			return nil, fmt.Errorf("caller envelope contains unknown parameter key %q", key)
 		}
-		parameter := effectiveParameterAt(params, route.In, route.Name)
-		prepared, emits, err := prepareSchemaParameterValue(parameter, member, bindingSpec, conversion)
-		if err != nil {
-			return nil, fmt.Errorf("parameter %q: %w", key, err)
-		}
-		value[route.Field] = prepared
-		if route.In == openapi3.ParameterInHeader && strings.EqualFold(route.Name, "Cookie") {
-			rawCookieEmits = true
-		}
-		if route.In == openapi3.ParameterInCookie && emits {
-			structuredCookieEmits = true
-		}
-	}
-	if (bindingSpec == BindingSpecOpenAPI30 || bindingSpec == BindingSpecOpenAPI31) && rawCookieEmits {
-		if structuredCookieEmits || len(invoke.ContextCookies(bindCtx)) > 0 || selectedCookieCredentialWouldEmit(doc, op, bindCtx) {
-			return nil, fmt.Errorf("supplied raw Cookie parameter collides with structured cookie emission")
-		}
+		value[route.Field] = member
 	}
 
 	bodyDescriptor := map[string]any{}
@@ -395,12 +375,8 @@ func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parame
 
 	parameterDescriptor := make([]any, 0, len(routes.parameters))
 	for _, route := range routes.parameters {
-		engineName := route.EngineName
-		if engineName == "" {
-			engineName = route.Name
-		}
 		parameterDescriptor = append(parameterDescriptor, map[string]any{
-			"in": route.In, "name": engineName, "field": route.Field,
+			"in": route.In, "name": route.Name, "field": route.Field,
 		})
 	}
 	return []any{map[string]any{

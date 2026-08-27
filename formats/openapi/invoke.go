@@ -1036,8 +1036,8 @@ func encodePathValue(s string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Credentials and channel assembly (§9.6: OAPI-P-09 wire application,
-// OAPI-P-10 channel assembly)
+// Credentials and channel assembly (openbindings.openapi-3.0@1 §11;
+// openbindings.openapi-3.1@1 §11).
 // ---------------------------------------------------------------------------
 
 // credentialPlacement is one credential's wire application: which channel
@@ -1119,7 +1119,8 @@ func credentialValues(plan securityPlan, bindCtx map[string]any) []credentialPla
 }
 
 // credentialDestinations is the artifact-only wire footprint of one security
-// plan. It lets context negotiation discard OAPI-P-10-colliding alternatives
+// plan. It lets context negotiation discard alternatives that collide under
+// openbindings.openapi-3.0@1 §11 / openbindings.openapi-3.1@1 §11
 // before credentials exist, so an unusable alternative is never challenged.
 func credentialDestinations(plan securityPlan) []credentialPlacement {
 	placements := make([]credentialPlacement, 0, len(plan.schemes))
@@ -1145,7 +1146,8 @@ func credentialDestinations(plan securityPlan) []credentialPlacement {
 	return placements
 }
 
-// checkCredentialCollisions enforces the OAPI-P-10 refusal: a name collision
+// checkCredentialCollisions enforces openbindings.openapi-3.0@1 §11 /
+// openbindings.openapi-3.1@1 §11: a name collision
 // between a credential and a caller-populated declared parameter on the same
 // channel is refused before dispatch — loud, never a silent overwrite in
 // either direction. Header names compare case-insensitively.
