@@ -3,7 +3,6 @@ package openapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1337,37 +1336,40 @@ func TestInvoke_NoDeclaredSecurityDoesNotSendContextCredentials(t *testing.T) {
 }
 
 func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
-	t.Run("structured cookie parameter", func(t *testing.T) {
-		srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-		spec := fmt.Sprintf(`{
-		  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
-		  "servers": [{"url": %q}],
-		  "paths": {"/x": {"get": {
-		    "operationId": "x",
-		    "parameters": [
-		      {"name": "Cookie", "in": "header", "schema": {"type": "string"}},
-		      {"name": "session", "in": "cookie", "schema": {"type": "string"}}
-		    ],
-		    "responses": {"200": {"description": "ok"}}
-		  }}}
-		}`, srv.URL)
-		call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-			Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
-			Selector: "#/paths/~1x/get",
+	for _, edition := range []string{"3.0.4", "3.1.2"} {
+		edition := edition
+		t.Run("structured cookie parameter "+edition, func(t *testing.T) {
+			srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+			spec := fmt.Sprintf(`{
+			  "openapi": %q, "info": {"title": "t", "version": "1"},
+			  "servers": [{"url": %q}],
+			  "paths": {"/x": {"get": {
+			    "operationId": "x",
+			    "parameters": [
+			      {"name": "Cookie", "in": "header", "schema": {"type": "string"}},
+			      {"name": "session", "in": "cookie", "schema": {"type": "string"}}
+			    ],
+			    "responses": {"200": {"description": "ok"}}
+			  }}}
+			}`, edition, srv.URL)
+			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+				Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
+				Selector: "#/paths/~1x/get",
+			})
+			_, ierr := driveSingle(t, call, map[string]any{"parameters": map[string]any{
+				"Cookie": "raw=1", "session": "structured",
+			}})
+			if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
+				t.Fatalf("expected invocation-time P-02 refusal, got %v", ierr)
+			}
+			if ierr.HasData() {
+				t.Fatalf("cookie-collision evidence crossed as abstract data: %#v", ierr.Data)
+			}
+			if requests.Load() != 0 {
+				t.Error("refusal must precede dispatch")
+			}
 		})
-		_, ierr := driveSingle(t, call, map[string]any{"parameters": map[string]any{
-			"Cookie": "raw=1", "session": "structured",
-		}})
-		if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
-			t.Fatalf("expected invocation-time OAPI31-P-02 refusal, got %v", ierr)
-		}
-		if ierr.HasData() {
-			t.Fatalf("cookie-collision evidence crossed as abstract data: %#v", ierr.Data)
-		}
-		if requests.Load() != 0 {
-			t.Error("refusal must precede dispatch")
-		}
-	})
+	}
 
 	t.Run("selected cookie credential", func(t *testing.T) {
 		srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
@@ -1389,7 +1391,7 @@ func TestInvoke_RawCookieConflictsRefused(t *testing.T) {
 			Selector: "#/paths/~1x/get",
 			Context:  map[string]any{"apiKeys": map[string]any{"cookieKey": "secret"}},
 		})
-		_, ierr := driveSingle(t, call, map[string]any{})
+		_, ierr := driveSingle(t, call, map[string]any{"parameters": map[string]any{"Cookie": "raw=1"}})
 		if ierr == nil || ierr.Code != invoke.ErrCodeRefused {
 			t.Fatalf("expected validation OAPI-P-10 refusal, got %v", ierr)
 		}
@@ -1569,7 +1571,7 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 	})
 }
 
-func TestPrepareBindingRefusesOwnershipConflictWithoutAuthChallenge(t *testing.T) {
+func TestPrepareBindingAllowsCookieDeclarationsAndReturnsAuthChallenge(t *testing.T) {
 	spec := `{
 	  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
 	  "servers": [{"url": "https://api.example.com"}],
@@ -1587,12 +1589,15 @@ func TestPrepareBindingRefusesOwnershipConflictWithoutAuthChallenge(t *testing.T
 		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 	})
-	if details != nil {
-		t.Fatalf("unresolvable operation must not emit an auth challenge: %+v", details)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
 	}
-	var invocationErr *invoke.InvocationError
-	if !errors.As(err, &invocationErr) || invocationErr.Code != invoke.ErrCodeRefused {
-		t.Fatalf("unresolvable operation must refuse during preflight, got %v", err)
+	if details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 {
+		t.Fatalf("challenge = %+v, want bearer prerequisite", details)
+	}
+	requirement := details.Alternatives[0].Requirements[0]
+	if requirement.Type != "auth.bearer" || requirement.Name != "bearer" {
+		t.Fatalf("requirement = %+v, want named auth.bearer", requirement)
 	}
 }
 

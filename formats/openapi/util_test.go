@@ -642,11 +642,10 @@ func TestRequiredContext_OAuthInsufficientFlowChallengesBareRequiredScopes(t *te
 	}
 }
 
-// OAPI-P-10 ownership is part of security-plan viability, not something a
-// resolver should discover after provisioning credentials. A colliding
-// alternative is removed from the challenge while a later complete safe
-// alternative remains available.
-func TestRequiredContext_FiltersCollidingSecurityAlternative(t *testing.T) {
+// Raw-Cookie declarations alone do not remove a structured-cookie credential
+// alternative. Both credential alternatives remain visible until an
+// invocation supplies a raw Cookie value that would collide on the wire.
+func TestRequiredContext_PreservesCookieAlternativeUntilInvocation(t *testing.T) {
 	doc := &openapi3.T{
 		Components: &openapi3.Components{SecuritySchemes: openapi3.SecuritySchemes{
 			"cookieKey": &openapi3.SecuritySchemeRef{Value: &openapi3.SecurityScheme{Type: "apiKey", In: "cookie", Name: "session"}},
@@ -662,12 +661,20 @@ func TestRequiredContext_FiltersCollidingSecurityAlternative(t *testing.T) {
 		&openapi3.ParameterRef{Value: &openapi3.Parameter{Name: "Cookie", In: openapi3.ParameterInHeader}},
 	}
 	details := requiredContext(doc, op, nil, "https://api.example.com", params)
-	if details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 {
-		t.Fatalf("challenge = %+v, want only the safe bearer alternative", details)
+	if details == nil || len(details.Alternatives) != 2 {
+		t.Fatalf("challenge = %+v, want both credential alternatives", details)
 	}
-	req := details.Alternatives[0].Requirements[0]
-	if req.Type != "auth.bearer" || req.Name != "bearer" {
-		t.Errorf("surviving requirement = %+v, want named auth.bearer", req)
+	for index, want := range []struct{ requirementType, name string }{
+		{"auth.apiKey", "cookieKey"},
+		{"auth.bearer", "bearer"},
+	} {
+		if len(details.Alternatives[index].Requirements) != 1 {
+			t.Fatalf("alternative %d = %+v, want one requirement", index, details.Alternatives[index])
+		}
+		requirement := details.Alternatives[index].Requirements[0]
+		if requirement.Type != want.requirementType || requirement.Name != want.name {
+			t.Errorf("alternative %d requirement = %+v, want %s %q", index, requirement, want.requirementType, want.name)
+		}
 	}
 }
 
