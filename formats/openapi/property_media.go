@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -119,68 +118,4 @@ func selectPropertyMedia(plan *bodyPlan, name, choice string) (string, error) {
 		return "", fmt.Errorf("configuration.propertyMedia.%s %q ambiguously matches %s", name, choice, strings.Join(labels, ", "))
 	}
 	return wanted.canonical, nil
-}
-
-// prepareEnginePropertyMediaView materializes the adapter-private document
-// consumed by the predecessor wire carrier. All binding decisions were made
-// from the unmodified plan first. Placeholders keep optional operations
-// preparable; invocation still refuses a supplied body until every required
-// choice is present and valid.
-func prepareEnginePropertyMediaView(plans []*bodyPlan, bindCtx map[string]any) {
-	configured, _, _ := propertyMediaMap(bindCtx)
-	for _, plan := range plans {
-		if plan == nil || plan.media == nil || (plan.family != familyMultipart && plan.family != familyURLEncoded) {
-			continue
-		}
-		if plan.media.Encoding == nil {
-			plan.media.Encoding = openapi3.Encodings{}
-		}
-		root := mediaSchema(plan.media)
-		for _, name := range plan.propertyMedia {
-			choice := "application/octet-stream"
-			if raw, ok := configured[name].(string); ok {
-				if parsed, err := parseRevision3MediaType(raw); err == nil && parsed.rangeSpecificity == 2 {
-					choice = parsed.canonical
-				}
-			}
-			encoding := plan.media.Encoding[name]
-			if encoding == nil {
-				encoding = &openapi3.Encoding{}
-				plan.media.Encoding[name] = encoding
-			}
-			encoding.ContentType = choice
-		}
-		if plan.family != familyMultipart {
-			continue
-		}
-		for name := range plan.rawProperties {
-			encoding := plan.media.Encoding[name]
-			if encoding == nil {
-				encoding = &openapi3.Encoding{}
-				plan.media.Encoding[name] = encoding
-			}
-			if encoding.ContentType == "" {
-				encoding.ContentType = "application/octet-stream"
-			}
-			property := resolvedMultipartPropertyFor(root, name, map[*openapi3.Schema]bool{}, true, plan.oas30)
-			if property != nil && schemaTypeIs(property, "array", map[*openapi3.Schema]bool{}) {
-				property = resolvedMultipartItems(property, map[*openapi3.Schema]bool{})
-			}
-			if property == nil {
-				continue
-			}
-			property.Type = &openapi3.Types{"string"}
-			property.ContentEncoding = ""
-			property.ContentMediaType = ""
-			if plan.oas30 {
-				property.Format = "binary"
-			} else {
-				property.Format = ""
-				// The predecessor carrier needs a string-lane marker to pass the
-				// already-decoded octets through unchanged. This adapter-private
-				// annotation is never synthesized and emits no part header.
-				property.ContentEncoding = "identity"
-			}
-		}
-	}
 }

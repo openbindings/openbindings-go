@@ -21,7 +21,8 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-// This file implements §9.2 of the registered OpenAPI binding family (OAPI-P-04): request
+// This file implements openbindings.openapi-3.0@1 §9.2 and
+// openbindings.openapi-3.1@1 §9.2: request
 // media selection with its deterministic tiebreaks and pre-dispatch
 // refusals, multipart part encoding (including the Base64 boundary encoding
 // for binary-signaled parts), urlencoded field serialization, and the §8
@@ -80,7 +81,7 @@ type bodyPlan struct {
 	bindingSpec               string
 	oas30                     bool
 	propertyMedia             []string          // properties requiring a concrete consumer media choice
-	propertyMediaDeclarations map[string]string // authored Encoding contentType lists, before adapter materialization
+	propertyMediaDeclarations map[string]string // authored Encoding contentType lists, before concrete selection
 	rawProperties             map[string]bool   // content-path properties crossing the canonical Base64 boundary
 }
 
@@ -387,7 +388,8 @@ func mediaParameterValuesEqual(name, left, right string) bool {
 }
 
 // degenerateMediaError is §9.2's degenerate media/schema combination
-// refusal (OAPI-P-04): the selected request media type has no OAS-defined
+// refusal (openbindings.openapi-3.0@1 §9.2;
+// openbindings.openapi-3.1@1 §9.2): the selected request media type has no OAS-defined
 // wire form for the declared body schema. A distinct type so synthesis
 // (synthesize.go) can surface the same fact as the
 // openapi.media_schema_mismatch warning without re-deriving the selection.
@@ -540,7 +542,7 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 			// §9.2 normalized collision, confined: no request selection may
 			// land on this parsed identity, so the key contributes no
 			// candidate and its alternative is an accounted exclusion. The
-			// map's non-colliding entries are unaffected (OAPI-P-04).
+			// map's non-colliding entries are unaffected (§9.2 in both family documents).
 			collided[identity] = true
 			continue
 		}
@@ -1477,7 +1479,7 @@ func defaultRevision3PartContentType(schema *openapi3.Schema, is30 bool) (string
 		// 3.0.0 through 3.0.3's prose names only `binary` before "other
 		// primitive types". Under the editions' own §4.1 patch-uniformity
 		// instruction the line answers uniformly, and 3.0.4 read under its
-		// own text fixes what the uniform default is (§9.2, OAPI-P-04).
+		// own text fixes what the uniform default is (§9.2 in both family documents).
 		return "application/octet-stream", true
 	case schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) && !is30 && schemaHasContentEncoding(schema):
 		return "application/octet-stream", true
@@ -2127,7 +2129,8 @@ func buildRequestBody(doc *openapi3.T, plan *bodyPlan, routed *routedInput) (io.
 }
 
 // ---------------------------------------------------------------------------
-// Multipart (OAPI-P-04's part-encoding rules)
+// Multipart (openbindings.openapi-3.0@1 §9.2;
+// openbindings.openapi-3.1@1 §9.2)
 // ---------------------------------------------------------------------------
 
 // buildMultipartBodyForRevision encodes body fields as multipart/form-data
@@ -2903,39 +2906,6 @@ func openAPI30Base64TransferHeader(encoding *openapi3.Encoding) (bool, error) {
 		}
 	}
 	return true, nil
-}
-
-func openAPI30MultipartTransferHeaders(plans []*bodyPlan) map[string]map[string]bool {
-	result := map[string]map[string]bool{}
-	for _, plan := range plans {
-		if plan == nil || plan.bindingSpec != BindingSpecOpenAPI30 || plan.family != familyMultipart || plan.media == nil {
-			continue
-		}
-		root := mediaSchema(plan.media)
-		for name, encoding := range plan.media.Encoding {
-			schema := resolvedMultipartProperty(root, name, map[*openapi3.Schema]bool{})
-			schema, _ = effectiveRevision3PartSchema(schema, true)
-			if schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{}) {
-				schema = resolvedMultipartItems(schema, map[*openapi3.Schema]bool{})
-			}
-			if !byteFormatSignaled(schema) {
-				continue
-			}
-			emit, err := openAPI30Base64TransferHeader(encoding)
-			if err != nil || !emit {
-				continue
-			}
-			mediaType := normalizeMediaType(plan.mediaType)
-			if result[mediaType] == nil {
-				result[mediaType] = map[string]bool{}
-			}
-			result[mediaType][name] = true
-		}
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	return result
 }
 
 // isComplexPartValue decides object-vs-primitive part encoding: by the
