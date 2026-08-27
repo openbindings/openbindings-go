@@ -176,6 +176,23 @@ func (d resolvedDeclaration) admitsNull() bool {
 	return !d.ambiguous && d.types["null"]
 }
 
+func (d resolvedDeclaration) soleNonNullType() (string, bool) {
+	if d.ambiguous || len(d.types) == 0 {
+		return "", false
+	}
+	member := ""
+	for candidate := range d.types {
+		if candidate == "null" {
+			continue
+		}
+		if member != "" {
+			return "", false
+		}
+		member = candidate
+	}
+	return member, member != ""
+}
+
 // format returns the one declaration-level format contributed by the
 // resolved conjuncts. Conflicting values have no single carriage meaning.
 func (d resolvedDeclaration) format() (string, bool) {
@@ -291,6 +308,20 @@ func (d resolvedDeclaration) property(name string) resolvedDeclaration {
 		}
 	}
 	return resolveDeclaration(allOfSchema(matches), d.oas30)
+}
+
+func (d resolvedDeclaration) requiresProperty(name string) bool {
+	if d.ambiguous {
+		return false
+	}
+	for _, conjunct := range d.conjuncts {
+		for _, required := range conjunct.Required {
+			if required == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (d resolvedDeclaration) items() resolvedDeclaration {

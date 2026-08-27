@@ -148,14 +148,14 @@ func checkPathTemplateDeclaration(pathTemplate string, params openapi3.Parameter
 	}
 	if len(unaddressable) > 0 {
 		sort.Strings(unaddressable)
-		return fmt.Errorf("path template variable(s) %s have no declared path parameter: the target URL cannot be built (OAPI-P-05: unresolvable target)", strings.Join(unaddressable, ", "))
+		return fmt.Errorf("path template variable(s) %s have no declared path parameter: the target URL cannot be built (%s: excluded target)", strings.Join(unaddressable, ", "), openAPIRule(bindingSpec, "P-02"))
 	}
-	if bindingSpec != BindingSpecOpenAPI31 {
+	if bindingSpec != BindingSpecOpenAPI30 && bindingSpec != BindingSpecOpenAPI31 {
 		return nil
 	}
-	if len(duplicates) > 0 {
+	if bindingSpec == BindingSpecOpenAPI31 && len(duplicates) > 0 {
 		sort.Strings(duplicates)
-		return fmt.Errorf("path template expression(s) %s occur more than once (OAPI31-P-02: excluded target)", strings.Join(duplicates, ", "))
+		return fmt.Errorf("path template expression(s) %s occur more than once (%s: excluded target)", strings.Join(duplicates, ", "), openAPIRule(bindingSpec, "P-02"))
 	}
 	var unmatched []string
 	for name := range declared {
@@ -165,7 +165,7 @@ func checkPathTemplateDeclaration(pathTemplate string, params openapi3.Parameter
 	}
 	if len(unmatched) > 0 {
 		sort.Strings(unmatched)
-		return fmt.Errorf("declared path parameter(s) %s have no path template expression (OAPI31-P-02: excluded target)", strings.Join(unmatched, ", "))
+		return fmt.Errorf("declared path parameter(s) %s have no path template expression (%s: excluded target)", strings.Join(unmatched, ", "), openAPIRule(bindingSpec, "P-02"))
 	}
 	return nil
 }
@@ -215,14 +215,14 @@ func normalizedPathTemplateHierarchy(path string) (string, bool) {
 }
 
 func formStyleCookieMultiValueProof(p *openapi3.Parameter, is30 bool) bool {
-	if p == nil || is30 || p.In != openapi3.ParameterInCookie || len(p.Content) > 0 || p.Schema == nil || p.Schema.Value == nil {
+	if p == nil || p.In != openapi3.ParameterInCookie || len(p.Content) > 0 || p.Schema == nil || p.Schema.Value == nil {
 		return false
 	}
 	method, err := revision3ParameterSerializationMethod(p)
 	if err != nil || method.Style != openapi3.SerializationForm || !method.Explode {
 		return false
 	}
-	resolved := resolveDeclaration(p.Schema.Value, false)
+	resolved := resolveDeclaration(p.Schema.Value, is30)
 	return resolved.declaresOnly("array") || resolved.declaresOnly("object") && len(resolved.propertyNames()) > 0
 }
 
@@ -235,12 +235,12 @@ func formStyleCookieMultiValueParamFor(params openapi3.Parameters, is30 bool) st
 	return ""
 }
 
-// malformedEffectiveParameterFor applies the 3.1 closed Parameter Object
+// malformedEffectiveParameterFor applies the sibling closed Parameter Object
 // declaration gate after reference resolution. The raw acceptance floor owns
 // entry-document positions; this typed twin covers external references whose
 // target bytes are unavailable to that floor.
 func malformedEffectiveParameterFor(params openapi3.Parameters, bindingSpec string) string {
-	if bindingSpec != BindingSpecOpenAPI31 {
+	if bindingSpec != BindingSpecOpenAPI30 && bindingSpec != BindingSpecOpenAPI31 {
 		return ""
 	}
 	for _, ref := range params {

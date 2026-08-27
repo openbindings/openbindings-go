@@ -170,7 +170,9 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 			}
 		}
 	}
-	entries = append(entries, openAPIWebhookCoverage(doc)...)
+	if bindingSpec == BindingSpecOpenAPI31 {
+		entries = append(entries, openAPIWebhookCoverage(doc)...)
+	}
 	return entries
 }
 

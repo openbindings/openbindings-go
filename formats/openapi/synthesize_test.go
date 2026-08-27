@@ -728,6 +728,26 @@ func TestSynthesizeInterfaceWithCoverageAccountsForAlternativesAndReverseInterac
 	}
 }
 
+func TestOpenAPI30WebhooksCreateNoDependency(t *testing.T) {
+	spec := `{
+	  "openapi": "3.0.4",
+	  "info": {"title": "coverage", "version": "1"},
+	  "paths": {"/jobs": {"get": {"responses": {"204": {"description": "ok"}}}}},
+	  "webhooks": {"ignored": {"post": {"responses": {"204": {"description": "ignored"}}}}}
+	}`
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpecOpenAPI30, Content: openbindings.TextContent(spec)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range result.Coverage.Entries {
+		if strings.HasPrefix(entry.SourceRef, "#/webhooks/") {
+			t.Fatalf("3.0 webhooks created a dependency: %#v", entry)
+		}
+	}
+}
+
 func TestSynthesizeInterfaceWithCoverageCanProveFullRepresentation(t *testing.T) {
 	spec := `{
 	  "openapi": "3.1.0",

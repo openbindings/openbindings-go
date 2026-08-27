@@ -24,6 +24,18 @@ func invokeWith(t *testing.T, spec, selector string, input any) (any, *invoke.In
 	return invokeWithContext(t, spec, selector, nil, input)
 }
 
+func invokeWithParameterConversion(t *testing.T, spec, selector string, input any) (any, *invoke.InvocationError) {
+	t.Helper()
+	spec = withDeclaredJSONResponses(t, spec)
+	call := NewInvokerWithOptions(RuntimeOptions{ParameterConversion: func(value any) (string, error) {
+		return fmt.Sprint(value), nil
+	}}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
+		Selector: selector,
+	})
+	return driveSingle(t, call, input)
+}
+
 func invokeWithContext(t *testing.T, spec, selector string, bindingContext map[string]any, input any) (any, *invoke.InvocationError) {
 	t.Helper()
 	spec = withDeclaredJSONResponses(t, spec)
@@ -587,7 +599,7 @@ func TestInvoke_QueryStyleSerializationOnTheWire(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1search/get", map[string]any{"parameters": map[string]any{
+	_, ierr := invokeWithParameterConversion(t, spec, "#/paths/~1search/get", map[string]any{"parameters": map[string]any{
 		"tags":   []any{"a", "b"},
 		"flat":   []any{"x", "y"},
 		"filter": map[string]any{"kind": "big", "size": float64(2)},
@@ -622,7 +634,7 @@ func TestInvoke_PathStyleSerializationOnTheWire(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1map~1{coords}/get", map[string]any{"parameters": map[string]any{
+	_, ierr := invokeWithParameterConversion(t, spec, "#/paths/~1map~1{coords}/get", map[string]any{"parameters": map[string]any{
 		"coords": []any{float64(50.4), float64(4.32)},
 	}})
 	if ierr != nil {
@@ -833,7 +845,7 @@ func TestInvoke_URLEncodedBodyOnTheWire(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1form/post", map[string]any{"body": map[string]any{
+	_, ierr := invokeWithParameterConversion(t, spec, "#/paths/~1form/post", map[string]any{"body": map[string]any{
 		"name": "a b", "ids": []any{float64(1), float64(2)},
 	}})
 	if ierr != nil {
@@ -842,7 +854,7 @@ func TestInvoke_URLEncodedBodyOnTheWire(t *testing.T) {
 	if gotCT != "application/x-www-form-urlencoded" {
 		t.Errorf("Content-Type = %q", gotCT)
 	}
-	if string(gotBody) != "ids=%5B1%2C2%5D&name=a+b" {
+	if string(gotBody) != "ids=%5B%221%22%2C%222%22%5D&name=a+b" {
 		t.Errorf("body = %q", gotBody)
 	}
 }

@@ -68,7 +68,7 @@ func prepareSchemaParameterValue(parameter *openapi3.Parameter, value any, bindi
 		if err != nil {
 			return nil, false, err
 		}
-		if bindingSpec == BindingSpecOpenAPI31 && len(units) > 1 {
+		if (bindingSpec == BindingSpecOpenAPI30 || bindingSpec == BindingSpecOpenAPI31) && len(units) > 1 {
 			return nil, false, fmt.Errorf("supplied value would produce multiple cookie pairs")
 		}
 		return prepared, len(units) > 0, nil
@@ -81,8 +81,8 @@ func prepareEncodingStylePropertyValue(plan *bodyPlan, name string, value any, b
 		return value, nil
 	}
 	encoding := plan.media.Encoding[name]
-	if !encodingUsesSerialization(encoding) {
-		return value, nil
+	if !encodingUsesSerializationForPlan(plan, encoding) {
+		return prepareContentFormPropertyValue(plan, name, value, conversion)
 	}
 	method := revision3EncodingSerializationMethod(encoding)
 	prepared, err := prepareStyleValue(name, value, method.Style, bindingSpec, conversion)
@@ -92,8 +92,19 @@ func prepareEncodingStylePropertyValue(plan *bodyPlan, name string, value any, b
 	return prepared, nil
 }
 
+func contentFormNullIsElided(plan *bodyPlan, name string, value any, bindingSpec string) bool {
+	if value != nil || plan == nil || plan.media == nil || bindingSpec != BindingSpecOpenAPI30 {
+		return false
+	}
+	if encodingUsesSerializationForPlan(plan, plan.media.Encoding[name]) {
+		return false
+	}
+	root := resolveDeclaration(mediaSchema(plan.media), true)
+	return !root.requiresProperty(name) && root.property(name).admitsNull()
+}
+
 func prepareStyleValue(name string, value any, style, bindingSpec string, conversion ParameterConversion) (any, error) {
-	if bindingSpec == BindingSpecOpenAPI31 && value == nil {
+	if (bindingSpec == BindingSpecOpenAPI30 || bindingSpec == BindingSpecOpenAPI31) && value == nil {
 		switch style {
 		case openapi3.SerializationMatrix, openapi3.SerializationLabel, openapi3.SerializationSimple, openapi3.SerializationForm:
 			return nil, nil
@@ -102,7 +113,7 @@ func prepareStyleValue(name string, value any, style, bindingSpec string, conver
 		}
 	}
 	converted := value
-	if bindingSpec == BindingSpecOpenAPI31 {
+	if bindingSpec == BindingSpecOpenAPI30 || bindingSpec == BindingSpecOpenAPI31 {
 		var err error
 		converted, err = convertParameterScalars(value, conversion, false)
 		if err != nil {
@@ -127,6 +138,62 @@ func prepareStyleValue(name string, value any, style, bindingSpec string, conver
 		}
 	}
 	return converted, nil
+}
+
+// prepareContentFormPropertyValue applies §8.1's scalar conversion to the
+// content-based form and multipart lanes. Unlike an RFC 6570-style property,
+// an object rides as JSON and its nested members are not stringified. Arrays
+// on the multipart path become repeated parts, so conversion follows the
+// resolved items declaration element by element.
+func prepareContentFormPropertyValue(plan *bodyPlan, name string, value any, conversion ParameterConversion) (any, error) {
+	if plan == nil || plan.media == nil {
+		return value, nil
+	}
+	// M3 closes the 3.0 per-line conversion row. The 3.1 corpus retains its
+	// separately adjudicated non-string multipart behavior in this node.
+	if plan.bindingSpec != BindingSpecOpenAPI30 {
+		return value, nil
+	}
+	root := resolveDeclaration(mediaSchema(plan.media), plan.oas30)
+	property := root.property(name)
+	converted, err := convertContentFormScalars(property, value, conversion)
+	if err != nil {
+		return nil, fmt.Errorf("body property %q: %w", name, err)
+	}
+	return converted, nil
+}
+
+func convertContentFormScalars(declaration resolvedDeclaration, value any, conversion ParameterConversion) (any, error) {
+	if value == nil || declaration.ambiguous || declaration.typeless() {
+		return value, nil
+	}
+	if declaration.declaresOnly("array", "null") {
+		array, ok := asArray(value)
+		if !ok {
+			return value, nil
+		}
+		items := declaration.items()
+		result := make([]any, len(array))
+		for index, member := range array {
+			converted, err := convertContentFormScalars(items, member, conversion)
+			if err != nil {
+				return nil, fmt.Errorf("array member %d: %w", index, err)
+			}
+			result[index] = converted
+		}
+		return result, nil
+	}
+	if declaration.declaresOnly("boolean", "number", "integer", "null") && jsonBooleanOrNumber(value) {
+		if conversion == nil {
+			return nil, fmt.Errorf("JSON boolean or number requires configuration.parameterConversion")
+		}
+		text, err := conversion(value)
+		if err != nil {
+			return nil, fmt.Errorf("configuration.parameterConversion: %w", err)
+		}
+		return text, nil
+	}
+	return value, nil
 }
 
 func convertParameterScalars(value any, conversion ParameterConversion, member bool) (any, error) {
@@ -330,9 +397,10 @@ func prepareEngineEncodingView(plans []*bodyPlan) {
 				encoding.Explode = nil
 				encoding.AllowReserved = false
 			}
-			if plan.bindingSpec == BindingSpecOpenAPI31 {
-				// Header schemas are descriptive at this boundary. In particular,
-				// contentEncoding never synthesizes Content-Transfer-Encoding.
+			if plan.bindingSpec == BindingSpecOpenAPI30 || plan.bindingSpec == BindingSpecOpenAPI31 {
+				// Header schemas are descriptive at this boundary. The 3.0 static
+				// Content-Transfer-Encoding exception is captured before this
+				// carrier-compatibility view is prepared and restored by transport.
 				encoding.Headers = nil
 			}
 			if !encodingUsesSerializationForPlan(plan, encoding) {
@@ -409,6 +477,9 @@ func (t rawCookieBridgeTransport) RoundTrip(request *http.Request) (*http.Respon
 		for _, value := range values {
 			copy.Header.Add("Cookie", value)
 		}
+	}
+	if err := applyDeclaredMultipartTransferHeaders(copy); err != nil {
+		return nil, err
 	}
 	if err := applyRequestContentCodings(copy, t.requestCodings); err != nil {
 		return nil, err

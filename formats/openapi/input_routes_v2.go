@@ -378,6 +378,9 @@ func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parame
 				if err != nil {
 					return nil, err
 				}
+				if contentFormNullIsElided(plan, name, member, bindingSpec) {
+					continue
+				}
 				if bindingSpec == BindingSpecOpenAPI31 && plan.rawProperties[name] {
 					member, err = decodeRawPropertyForEngine(name, member)
 					if err != nil {

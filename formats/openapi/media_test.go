@@ -404,10 +404,15 @@ func TestRequestStringCarriage_DeclarationScoped(t *testing.T) {
 	// No lane builds a document from an object model, so an object-declared
 	// selection outside the JSON and form lanes selects nothing at all.
 	for _, media := range []string{"text/plain", "text/csv", "text/json", "application/xml", "text/xml"} {
-		if _, err := planRequestBodiesFor(doc31, opWithRequestBody(openapi3.Content{
-			media: &openapi3.MediaType{Schema: objectSchema()},
-		}, true), BindingSpec); err == nil {
-			t.Errorf("object-declared %s must select no carriage lane", media)
+		for _, testCase := range []struct {
+			doc   *openapi3.T
+			token string
+		}{{doc31, BindingSpecOpenAPI31}, {doc30, BindingSpecOpenAPI30}} {
+			if _, err := planRequestBodiesFor(testCase.doc, opWithRequestBody(openapi3.Content{
+				media: &openapi3.MediaType{Schema: objectSchema()},
+			}, true), testCase.token); err == nil {
+				t.Errorf("%s object-declared %s must select no carriage lane", testCase.token, media)
+			}
 		}
 	}
 

@@ -71,6 +71,7 @@ func TestInspectSource_JSONPointerFormat(t *testing.T) {
     "/users/{id}": {
       "put": {
         "summary": "Update user",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
         "responses": {"200": {"description": "OK"}}
       }
     }

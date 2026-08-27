@@ -389,7 +389,9 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 		t.Fatalf("store.Set failed: %v", err)
 	}
 
-	binv := NewInvoker()
+	binv := NewInvokerWithOptions(RuntimeOptions{ParameterConversion: func(value any) (string, error) {
+		return fmt.Sprint(value), nil
+	}})
 	invoker := invoke.NewOperationInvoker(binv).WithRuntime(invoke.StoreContextResolver(store))
 	invoker.TransformEvaluator = openAPIJSONataEvaluator{}
 	iface := synthesizeOBI(t, specURL)
@@ -1029,6 +1031,7 @@ func TestIntegration_SSEResponse_Cancellation(t *testing.T) {
 		Selector: "#/paths/~1events/get",
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
 	})
+	_ = call.Close()
 
 	<-started
 	cancel()
@@ -1169,7 +1172,9 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 	  }
 	}`, srv.URL)
 
-	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+	call := NewInvokerWithOptions(RuntimeOptions{ParameterConversion: func(value any) (string, error) {
+		return fmt.Sprint(value), nil
+	}}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1users~1{id}/get",
 	})
