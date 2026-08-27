@@ -122,6 +122,7 @@ func TestProcessorScenarios(t *testing.T) {
 			if ran != len(file.Scenarios) {
 				t.Fatalf("ran %d of %d processor scenarios", ran, len(file.Scenarios))
 			}
+			t.Logf("executed %d of %d processor scenarios", ran, len(file.Scenarios))
 		})
 	}
 }

@@ -130,6 +130,36 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			usedKeys[opKey] = true
 
 			params := effectiveParameters(pathItem, op)
+			if _, serverErr := eligibleServers(effectiveServers(doc, pathItem, op), doc.OpenAPI, location); serverErr != nil {
+				reason := serverErr.Error()
+				if onUnrealizable != nil {
+					onUnrealizable(unrealizableTarget{
+						selector:     buildJSONPointerSelector(path, method),
+						operationKey: opKey,
+						reasonCode:   "openapi.server_url_excluded",
+						rule:         openAPIRule(bindingSpec, "P-04"),
+						message:      reason,
+					})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
+			}
+			securityRequirements := effectiveSecurityRequirements(doc, op)
+			if securityRequirements != nil && len(*securityRequirements) > 0 {
+				entryPlans := viableSecurityPlansWithContext(doc, op, contextWithConfigurationPoint(nil, "implicitConnectionScope", "entry"), "", params)
+				referringPlans := viableSecurityPlansWithContext(doc, op, contextWithConfigurationPoint(nil, "implicitConnectionScope", "referring"), "", params)
+				if len(entryPlans) == 0 && len(referringPlans) == 0 {
+					reason := "the effective security declaration has no usable complete alternative"
+					if onUnrealizable != nil {
+						onUnrealizable(unrealizableTarget{
+							selector: buildJSONPointerSelector(path, method), operationKey: opKey,
+							reasonCode: "openapi.security_alternative_unusable", rule: openAPIRule(bindingSpec, "P-04"), message: reason,
+						})
+						continue
+					}
+					return iface, unrealizableOperation(opKey, reason)
+				}
+			}
 			if duplicate := duplicateEffectiveParameterIdentity(params); duplicate != "" {
 				reason := fmt.Sprintf("parameter identity %q is declared more than once", duplicate)
 				if onUnrealizable != nil {
@@ -558,6 +588,8 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 					data = append([]byte(nil), entryOverride...)
 				}
 			}
+			retrieval := artifactRetrievalURI(resource, retrievalURIs, &retrievalMu)
+			normalizer.rememberImplicitSecuritySchemes(data, retrieval)
 			data = composition.prune(resource, data)
 			// A reference the edition's own text makes unresolvable is reported
 			// here, at the seam that already serves every resource, rather than
@@ -565,7 +597,7 @@ func loadDocumentWithResolverEntry(ctx context.Context, client *http.Client, loc
 			if err := composition.refusal(); err != nil {
 				return nil, err
 			}
-			return normalizer.normalizeResourceAt(data, resource, artifactRetrievalURI(resource, retrievalURIs, &retrievalMu))
+			return normalizer.normalizeResourceAt(data, resource, retrieval)
 		}
 
 		doc, err := loadDocumentRaw(loader, normalizer, composition, location, content, &captured, entryOverride)

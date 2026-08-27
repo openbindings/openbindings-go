@@ -290,45 +290,23 @@ type namedSecurityScheme struct {
 }
 
 type securityPlan struct {
-	context invoke.ContextAlternative
-	schemes []namedSecurityScheme
+	context       invoke.ContextAlternative
+	schemes       []namedSecurityScheme
+	authoredIndex int
 }
 
-// securityConfigurationError refuses every undefined SecurityScheme name.
-// An unresolved name is invalid OpenAPI source configuration, not an
-// anonymous or skippable OR alternative: dropping it would silently weaken
-// the API author's security declaration and diverge from the TS processor.
+// securityConfigurationError reports an unusable effective security list.
+// Scheme defects are confined to the alternatives that require them; a
+// complete sibling alternative keeps the operation usable.
 func securityConfigurationError(doc *openapi3.T, op *openapi3.Operation) error {
 	requirements := effectiveSecurityRequirements(doc, op)
 	if requirements == nil || len(*requirements) == 0 {
 		return nil
 	}
-	missing := map[string]bool{}
-	for _, requirement := range *requirements {
-		for name := range requirement {
-			if doc.Components == nil || doc.Components.SecuritySchemes == nil {
-				missing[name] = true
-				continue
-			}
-			ref, found := doc.Components.SecuritySchemes[name]
-			if !found || ref == nil || ref.Value == nil {
-				missing[name] = true
-			}
-		}
-	}
-	if len(missing) == 0 {
+	if len(securityPlans(doc, op, "")) > 0 {
 		return nil
 	}
-	names := make([]string, 0, len(missing))
-	for name := range missing {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	suffix := ""
-	if len(names) > 1 {
-		suffix = "s"
-	}
-	return fmt.Errorf("OpenAPI security requirement references undefined security scheme%s: %s", suffix, strings.Join(names, ", "))
+	return fmt.Errorf("the effective OpenAPI security list has no usable alternative")
 }
 
 // securityPlans expands the artifact's OR-of-AND Security Requirement
@@ -337,17 +315,21 @@ func securityConfigurationError(doc *openapi3.T, op *openapi3.Operation) error {
 // product of its schemes' runtime alternatives. Every expanded plan still
 // represents exactly one complete artifact-declared requirement object.
 func securityPlans(doc *openapi3.T, op *openapi3.Operation, baseURL string) []securityPlan {
+	return securityPlansWithContext(doc, op, baseURL, nil)
+}
+
+func securityPlansWithContext(doc *openapi3.T, op *openapi3.Operation, baseURL string, bindCtx map[string]any) []securityPlan {
 	requirements := effectiveSecurityRequirements(doc, op)
 	if requirements == nil || len(*requirements) == 0 {
 		return nil
 	}
 	var plans []securityPlan
-	for _, secReq := range *requirements {
+	for authoredIndex, secReq := range *requirements {
 		if len(secReq) == 0 {
-			plans = append(plans, securityPlan{})
+			plans = append(plans, securityPlan{authoredIndex: authoredIndex})
 			continue
 		}
-		expanded := []securityPlan{{}}
+		expanded := []securityPlan{{authoredIndex: authoredIndex}}
 		expressible := true
 		names := make([]string, 0, len(secReq))
 		for schemeName := range secReq {
@@ -355,17 +337,24 @@ func securityPlans(doc *openapi3.T, op *openapi3.Operation, baseURL string) []se
 		}
 		sort.Strings(names)
 		for _, schemeName := range names {
-			if doc.Components == nil || doc.Components.SecuritySchemes == nil {
+			scheme, ok := securitySchemeForOperation(doc, op, schemeName, bindCtx)
+			if !ok || malformedSecurityScheme(scheme) != nil {
 				expressible = false
 				break
 			}
-			ref, ok := doc.Components.SecuritySchemes[schemeName]
-			if !ok || ref.Value == nil {
+			if strings.HasPrefix(doc.OpenAPI, "3.0.") && scheme.Type == "mutualTLS" {
 				expressible = false
 				break
 			}
 			requiredScopes := append([]string(nil), secReq[schemeName]...)
-			options := schemeRequirements(ref.Value, baseURL, requiredScopes)
+			if strings.HasPrefix(doc.OpenAPI, "3.0.") && !securitySchemeUsesScopes(scheme) && len(requiredScopes) > 0 {
+				expressible = false
+				break
+			}
+			options := schemeRequirements(scheme, baseURL, requiredScopes)
+			if strings.HasPrefix(doc.OpenAPI, "3.1.") && !securitySchemeUsesScopes(scheme) && len(requiredScopes) > 0 {
+				options = requirementsWithRoles(options, requiredScopes)
+			}
 			if len(options) == 0 {
 				expressible = false
 				break
@@ -376,16 +365,17 @@ func securityPlans(doc *openapi3.T, op *openapi3.Operation, baseURL string) []se
 					durable := true
 					option.Name = schemeName
 					option.Durable = &durable
-					if ref.Value.Description != "" {
-						option.Description = ref.Value.Description
+					if scheme.Description != "" {
+						option.Description = scheme.Description
 					}
 					reqs := append([]invoke.ContextRequirement(nil), plan.context.Requirements...)
 					reqs = append(reqs, option)
 					schemes := append([]namedSecurityScheme(nil), plan.schemes...)
-					schemes = append(schemes, namedSecurityScheme{name: schemeName, scheme: ref.Value})
+					schemes = append(schemes, namedSecurityScheme{name: schemeName, scheme: scheme})
 					next = append(next, securityPlan{
-						context: invoke.ContextAlternative{Requirements: reqs},
-						schemes: schemes,
+						context:       invoke.ContextAlternative{Requirements: reqs},
+						schemes:       schemes,
+						authoredIndex: authoredIndex,
 					})
 				}
 			}
@@ -398,8 +388,84 @@ func securityPlans(doc *openapi3.T, op *openapi3.Operation, baseURL string) []se
 	return plans
 }
 
+func securitySchemeUsesScopes(scheme *openapi3.SecurityScheme) bool {
+	return scheme != nil && (scheme.Type == "oauth2" || scheme.Type == "openIdConnect")
+}
+
+func requirementsWithRoles(requirements []invoke.ContextRequirement, roles []string) []invoke.ContextRequirement {
+	result := append([]invoke.ContextRequirement(nil), requirements...)
+	for index := range result {
+		if result[index].Extra == nil {
+			result[index].Extra = map[string]any{}
+		}
+		result[index].Extra["roles"] = append([]string(nil), roles...)
+	}
+	return result
+}
+
+func securitySchemeForOperation(doc *openapi3.T, op *openapi3.Operation, name string, bindCtx map[string]any) (*openapi3.SecurityScheme, bool) {
+	scope := "entry"
+	if configured, ok := invoke.ContextConfiguration(bindCtx)["implicitConnectionScope"].(string); ok && configured != "" {
+		scope = configured
+	}
+	if scope == "referring" && op != nil && op.Extensions != nil {
+		if rawSchemes, ok := op.Extensions[referringSecuritySchemesMarker].(map[string]any); ok {
+			if raw, found := rawSchemes[name]; found {
+				encoded, err := json.Marshal(raw)
+				if err == nil {
+					var scheme openapi3.SecurityScheme
+					if json.Unmarshal(encoded, &scheme) == nil {
+						return &scheme, true
+					}
+				}
+			}
+		}
+	}
+	if doc == nil || doc.Components == nil || doc.Components.SecuritySchemes == nil {
+		return nil, false
+	}
+	ref, found := doc.Components.SecuritySchemes[name]
+	if !found || ref == nil || ref.Value == nil {
+		return nil, false
+	}
+	return ref.Value, true
+}
+
+func malformedSecurityScheme(scheme *openapi3.SecurityScheme) error {
+	if scheme == nil {
+		return fmt.Errorf("Security Scheme Object is absent")
+	}
+	switch scheme.Type {
+	case "apiKey":
+		if scheme.Name == "" || (scheme.In != "header" && scheme.In != "query" && scheme.In != "cookie") {
+			return fmt.Errorf("apiKey Security Scheme Object requires a name and a query, header, or cookie destination")
+		}
+	case "http":
+		if scheme.Scheme == "" {
+			return fmt.Errorf("HTTP Security Scheme Object requires a scheme")
+		}
+	case "oauth2":
+		if scheme.Flows == nil {
+			return fmt.Errorf("OAuth 2.0 Security Scheme Object requires flows")
+		}
+	case "openIdConnect":
+		if scheme.OpenIdConnectUrl == "" {
+			return fmt.Errorf("OpenID Connect Security Scheme Object requires openIdConnectUrl")
+		}
+	case "mutualTLS":
+		// No additional fixed fields.
+	default:
+		return fmt.Errorf("Security Scheme Object type %q is not declared by the accepted OpenAPI edition", scheme.Type)
+	}
+	return nil
+}
+
 func viableSecurityPlans(doc *openapi3.T, op *openapi3.Operation, baseURL string, params openapi3.Parameters) []securityPlan {
-	plans := securityPlans(doc, op, baseURL)
+	return viableSecurityPlansWithContext(doc, op, nil, baseURL, params)
+}
+
+func viableSecurityPlansWithContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters) []securityPlan {
+	plans := securityPlansWithContext(doc, op, baseURL, bindCtx)
 	if len(plans) == 0 {
 		return nil
 	}
@@ -410,6 +476,310 @@ func viableSecurityPlans(doc *openapi3.T, op *openapi3.Operation, baseURL string
 		}
 	}
 	return viable
+}
+
+// electSecurityAlternative applies the binding's named `security`
+// configuration point to the authored OR list. The portable SDK spelling is
+// {"index": N}, where N is the zero-based Security Requirement Object index.
+// A sole authored alternative self-selects; an effective empty list means no
+// security. Array order is never a preference when more than one complete
+// alternative is declared.
+func electSecurityAlternative(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters) ([]securityPlan, error) {
+	if configured, present := invoke.ContextConfiguration(bindCtx)["implicitConnectionScope"]; present && configured != nil {
+		scope, ok := configured.(string)
+		if !ok || (scope != "entry" && scope != "referring") {
+			return nil, fmt.Errorf("configuration.implicitConnectionScope must be entry or referring")
+		}
+	}
+	requirements := effectiveSecurityRequirements(doc, op)
+	if requirements == nil || len(*requirements) == 0 {
+		return nil, nil
+	}
+	selected := 0
+	rawSelection, configured := invoke.ContextConfiguration(bindCtx)["security"]
+	if len(*requirements) > 1 && (!configured || rawSelection == nil) {
+		return nil, fmt.Errorf("the effective security list has %d alternatives; configuration.security must select one", len(*requirements))
+	}
+	if configured && rawSelection != nil {
+		index, ok := securityConfigurationIndex(rawSelection)
+		if !ok || index < 0 || index >= len(*requirements) {
+			return nil, fmt.Errorf("configuration.security must select an effective alternative by zero-based index")
+		}
+		selected = index
+	}
+	plans := securityPlansWithContext(doc, op, baseURL, bindCtx)
+	selectedPlans := make([]securityPlan, 0, len(plans))
+	for _, plan := range plans {
+		if plan.authoredIndex != selected {
+			continue
+		}
+		if err := checkCredentialCollisions(credentialDestinations(plan), params, nil); err == nil {
+			selectedPlans = append(selectedPlans, plan)
+		}
+	}
+	if len(selectedPlans) == 0 {
+		return nil, fmt.Errorf("selected security alternative %d is unusable", selected)
+	}
+	installSelectedSecurityAlternative(doc, op, (*requirements)[selected], selectedPlans)
+	return selectedPlans, nil
+}
+
+// requiredSecuritySelectionContext exposes the binding's security election as
+// a typed, preflightable configuration requirement. It intentionally carries
+// authored indexes: the value chooses a complete Security Requirement Object,
+// never one of the runtime expansions of an OAuth flow.
+func requiredSecuritySelectionContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, target string) (*invoke.ContextRequiredDetails, bool, error) {
+	requirements := effectiveSecurityRequirements(doc, op)
+	if requirements == nil || len(*requirements) <= 1 {
+		return nil, false, nil
+	}
+	raw, present := invoke.ContextConfiguration(bindCtx)["security"]
+	if present && raw != nil {
+		index, ok := securityConfigurationIndex(raw)
+		if !ok || index < 0 || index >= len(*requirements) {
+			return nil, false, fmt.Errorf("configuration.security must select an effective alternative by zero-based index")
+		}
+		return nil, false, nil
+	}
+	values := make([]any, len(*requirements))
+	for index := range values {
+		values[index] = index
+	}
+	durable := true
+	requirement := invoke.NewConfigValueRequirement(
+		"security", "/index", "select one complete effective OpenAPI security alternative",
+		map[string]any{"type": "integer", "enum": values}, &durable,
+	)
+	return &invoke.ContextRequiredDetails{
+		Target:       target,
+		Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{requirement}}},
+	}, true, nil
+}
+
+func requiredImplicitConnectionScopeContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters, target string) (*invoke.ContextRequiredDetails, bool, error) {
+	configuration := invoke.ContextConfiguration(bindCtx)
+	if raw, present := configuration["implicitConnectionScope"]; present && raw != nil {
+		scope, ok := raw.(string)
+		if !ok || (scope != "entry" && scope != "referring") {
+			return nil, false, fmt.Errorf("configuration.implicitConnectionScope must be entry or referring")
+		}
+		return nil, false, nil
+	}
+	requirements := effectiveSecurityRequirements(doc, op)
+	if requirements == nil || len(*requirements) == 0 {
+		return nil, false, nil
+	}
+	selected := 0
+	if len(*requirements) > 1 {
+		raw, present := configuration["security"]
+		if !present || raw == nil {
+			// Security election is the earlier configuration point.
+			return nil, false, nil
+		}
+		index, ok := securityConfigurationIndex(raw)
+		if !ok || index < 0 || index >= len(*requirements) {
+			return nil, false, fmt.Errorf("configuration.security must select an effective alternative by zero-based index")
+		}
+		selected = index
+	}
+	if len(viableSecurityPlansAtScope(doc, op, bindCtx, baseURL, params, selected, "entry")) > 0 {
+		return nil, false, nil
+	}
+	if len(viableSecurityPlansAtScope(doc, op, bindCtx, baseURL, params, selected, "referring")) == 0 {
+		return nil, false, nil
+	}
+	durable := true
+	requirement := invoke.NewConfigValueRequirement(
+		"implicitConnectionScope", "", "resolve Security Requirement names in the referring OpenAPI document",
+		map[string]any{"type": "string", "enum": []any{"referring"}}, &durable,
+	)
+	return &invoke.ContextRequiredDetails{
+		Target:       target,
+		Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{requirement}}},
+	}, true, nil
+}
+
+func viableSecurityPlansAtScope(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters, authoredIndex int, scope string) []securityPlan {
+	scoped := contextWithConfigurationPoint(bindCtx, "implicitConnectionScope", scope)
+	plans := securityPlansWithContext(doc, op, baseURL, scoped)
+	viable := make([]securityPlan, 0, len(plans))
+	for _, plan := range plans {
+		if plan.authoredIndex == authoredIndex && checkCredentialCollisions(credentialDestinations(plan), params, nil) == nil {
+			viable = append(viable, plan)
+		}
+	}
+	return viable
+}
+
+func contextWithConfigurationPoint(bindCtx map[string]any, point string, value any) map[string]any {
+	copyContext := make(map[string]any, len(bindCtx)+1)
+	for name, current := range bindCtx {
+		copyContext[name] = current
+	}
+	configuration := invoke.ContextConfiguration(bindCtx)
+	copyConfiguration := make(map[string]any, len(configuration)+1)
+	for name, current := range configuration {
+		copyConfiguration[name] = current
+	}
+	copyConfiguration[point] = value
+	copyContext["configuration"] = copyConfiguration
+	return copyContext
+}
+
+func securityConfigurationIndex(raw any) (int, bool) {
+	if object, ok := raw.(map[string]any); ok {
+		return configIndex(object["index"])
+	}
+	return configIndex(raw)
+}
+
+func installSelectedSecurityAlternative(doc *openapi3.T, op *openapi3.Operation, requirement openapi3.SecurityRequirement, plans []securityPlan) {
+	if op == nil {
+		return
+	}
+	copyRequirement := openapi3.SecurityRequirement{}
+	for name, values := range requirement {
+		copyRequirement[name] = append([]string(nil), values...)
+	}
+	selected := openapi3.SecurityRequirements{copyRequirement}
+	op.Security = &selected
+	if doc.Components == nil {
+		doc.Components = &openapi3.Components{}
+	}
+	if doc.Components.SecuritySchemes == nil {
+		doc.Components.SecuritySchemes = openapi3.SecuritySchemes{}
+	}
+	for _, plan := range plans {
+		for _, named := range plan.schemes {
+			doc.Components.SecuritySchemes[named.name] = &openapi3.SecuritySchemeRef{Value: named.scheme}
+		}
+	}
+}
+
+func requiredSelectedSecurityContext(plans []securityPlan, bindCtx map[string]any, baseURL string, handlers map[string]SecurityHandler) *invoke.ContextRequiredDetails {
+	if len(plans) == 0 {
+		return nil
+	}
+	alternatives := make([]invoke.ContextAlternative, 0, len(plans))
+	for _, plan := range plans {
+		if len(plan.context.Requirements) == 0 {
+			return nil
+		}
+		if securityPlanHasRuntimeHandler(plan, handlers) {
+			// The standalone engine owns mixed handler/builtin prerequisite
+			// negotiation. It understands which named handler is already installed.
+			return nil
+		}
+		alternatives = append(alternatives, plan.context)
+	}
+	details := &invoke.ContextRequiredDetails{Target: baseURL, Alternatives: alternatives}
+	if invoke.ContextSatisfies(bindCtx, details) {
+		return nil
+	}
+	return details
+}
+
+func securityPlanHasRuntimeHandler(plan securityPlan, handlers map[string]SecurityHandler) bool {
+	for _, named := range plan.schemes {
+		if handlers[named.name] != nil {
+			return true
+		}
+	}
+	return false
+}
+
+type credentialWirePolicy struct {
+	query []credentialPlacement
+}
+
+func validateSelectedCredentials(plans []securityPlan, bindCtx map[string]any) (*credentialWirePolicy, error) {
+	for _, plan := range plans {
+		if len(plan.context.Requirements) > 0 && !invoke.ContextSatisfies(bindCtx, &invoke.ContextRequiredDetails{Alternatives: []invoke.ContextAlternative{plan.context}}) {
+			continue
+		}
+		placements := credentialValues(plan, bindCtx)
+		policy := &credentialWirePolicy{}
+		for _, named := range plan.schemes {
+			scheme := named.scheme
+			switch scheme.Type {
+			case "http":
+				switch strings.ToLower(scheme.Scheme) {
+				case "basic":
+					user, password, ok := invoke.ContextBasicAuthFor(bindCtx, named.name)
+					if ok {
+						if strings.Contains(user, ":") || !validBasicCredentialText(user) || !validBasicCredentialText(password) {
+							return nil, fmt.Errorf("basic credential %q violates RFC 7617 user-id or character-encoding constraints", named.name)
+						}
+					}
+				case "bearer":
+					if token := invoke.ContextBearerTokenFor(bindCtx, named.name); token != "" && !validBearerToken(token) {
+						return nil, fmt.Errorf("bearer credential %q is not an RFC 6750 b64token", named.name)
+					}
+				}
+			case "oauth2", "openIdConnect":
+				token := invoke.ContextAccessTokenFor(bindCtx, named.name)
+				if token == "" {
+					token = invoke.ContextBearerToken(bindCtx)
+				}
+				if token != "" && !validBearerToken(token) {
+					return nil, fmt.Errorf("access token for %q is not an RFC 6750 b64token", named.name)
+				}
+			}
+		}
+		for _, placement := range placements {
+			switch placement.channel {
+			case "cookie":
+				if !validRFC6265CookieValue(placement.value) {
+					return nil, fmt.Errorf("cookie credential %q cannot be carried as an RFC 6265 cookie-value", placement.name)
+				}
+			case "query":
+				policy.query = append(policy.query, placement)
+			}
+		}
+		return policy, nil
+	}
+	return &credentialWirePolicy{}, nil
+}
+
+func validBasicCredentialText(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] < 0x20 || value[index] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func validBearerToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	padding := false
+	payload := false
+	for _, char := range value {
+		if char == '=' {
+			padding = true
+			continue
+		}
+		if padding {
+			return false
+		}
+		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || strings.ContainsRune("-._~+/", char)) {
+			return false
+		}
+		payload = true
+	}
+	return payload
+}
+
+func validRFC6265CookieValue(value string) bool {
+	for index := 0; index < len(value); index++ {
+		char := value[index]
+		if char != 0x21 && !(char >= 0x23 && char <= 0x2b) && !(char >= 0x2d && char <= 0x3a) && !(char >= 0x3c && char <= 0x5b) && !(char >= 0x5d && char <= 0x7e) {
+			return false
+		}
+	}
+	return true
 }
 
 // securityAlternativesCollision reports an ownership conflict only when every
