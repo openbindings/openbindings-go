@@ -323,7 +323,19 @@ func prepareEngineEncodingView(plans []*bodyPlan) {
 		}
 		root := mediaSchema(plan.media)
 		for name, encoding := range plan.media.Encoding {
-			if !encodingUsesSerialization(encoding) {
+			if plan.bindingSpec == BindingSpecOpenAPI30 && plan.family == familyMultipart {
+				// OAS 3.0 limits these Encoding controls to urlencoded bodies;
+				// its multipart path ignores them.
+				encoding.Style = ""
+				encoding.Explode = nil
+				encoding.AllowReserved = false
+			}
+			if plan.bindingSpec == BindingSpecOpenAPI31 {
+				// Header schemas are descriptive at this boundary. In particular,
+				// contentEncoding never synthesizes Content-Transfer-Encoding.
+				encoding.Headers = nil
+			}
+			if !encodingUsesSerializationForPlan(plan, encoding) {
 				continue
 			}
 			method := revision3EncodingSerializationMethod(encoding)
@@ -347,8 +359,13 @@ func prepareEngineEncodingView(plans []*bodyPlan) {
 
 type rawCookieBridgeContextKey struct{}
 type completedURLValidationContextKey struct{}
+type mediaGovernanceContextKey struct{}
 
-type rawCookieBridgeTransport struct{ base http.RoundTripper }
+type rawCookieBridgeTransport struct {
+	base            http.RoundTripper
+	requestCodings  map[string]ContentEncoder
+	responseCodings map[string]ContentDecoder
+}
 
 func (t rawCookieBridgeTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	base := t.base
@@ -361,20 +378,36 @@ func (t rawCookieBridgeTransport) RoundTrip(request *http.Request) (*http.Respon
 		}
 	}
 	sentinel, _ := request.Context().Value(rawCookieBridgeContextKey{}).(string)
-	if sentinel == "" || len(request.Header.Values(sentinel)) == 0 {
-		return base.RoundTrip(request)
-	}
-	if len(request.Header.Values("Cookie")) > 0 {
+	hasRawCookie := sentinel != "" && len(request.Header.Values(sentinel)) > 0
+	if hasRawCookie && len(request.Header.Values("Cookie")) > 0 {
 		return nil, fmt.Errorf("raw Cookie adapter bridge reached dispatch with a structured Cookie field")
 	}
 	copy := request.Clone(request.Context())
 	copy.Header = request.Header.Clone()
-	values := copy.Header.Values(sentinel)
-	copy.Header.Del(sentinel)
-	for _, value := range values {
-		copy.Header.Add("Cookie", value)
+	// §9.1: this binding never advertises a response-media preference.
+	copy.Header.Del("Accept")
+	if hasRawCookie {
+		values := copy.Header.Values(sentinel)
+		copy.Header.Del(sentinel)
+		for _, value := range values {
+			copy.Header.Add("Cookie", value)
+		}
 	}
-	return base.RoundTrip(copy)
+	if err := applyRequestContentCodings(copy, t.requestCodings); err != nil {
+		return nil, err
+	}
+	response, err := base.RoundTrip(copy)
+	if err != nil {
+		return nil, err
+	}
+	governed, err := applyResponseGovernance(copy, response, t.responseCodings)
+	if err != nil {
+		if governance, _ := copy.Context().Value(mediaGovernanceContextKey{}).(*mediaGovernance); governance != nil {
+			governance.recordFailure(err)
+		}
+		return nil, err
+	}
+	return governed, nil
 }
 
 // validateCompletedRequestURL performs §8.2's last pre-dispatch check after

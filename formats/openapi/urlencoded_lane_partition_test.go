@@ -14,7 +14,7 @@ import (
 // identical file is executed by openapi-client/go and by
 // openapi-client/typescript/src; changing it in one engine without the others
 // fails here.
-const urlencodedLanePartitionCasesDigest = "254966b36a9ee291416330518bbc2af341a2f54c2fe547f58e946ceb4e0d1e09"
+const urlencodedLanePartitionCasesDigest = "d74cecd90efc7feb4d487b14afb71f24ed9eb581ce764f77beff9972a5bc4e58"
 
 type urlencodedLanePartitionTable struct {
 	Comment   string                        `json:"$comment"`

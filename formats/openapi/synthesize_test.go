@@ -751,7 +751,7 @@ func TestSynthesizeInterfaceWithCoverageCanProveFullRepresentation(t *testing.T)
 
 // PokeAPI's published openapi.yml declares `type: ”` (empty string) inside
 // evolution-chain response schemas. Under the acceptance floor
-// (openbindings.openapi@1 §3) that operation is a ladder-INVALID target: the
+// (the openapi family specifications §3) that operation is a ladder-INVALID target: the
 // strict surface refuses rather than salvaging, and where every declared
 // target is invalid the §3 part-2 whole-source refusal fires. Salvage
 // (schema_overlay's dirty-keyword drop, the dogfood fix) remains for

@@ -177,6 +177,12 @@ func openAPIRequestMediaRequirements(doc *openapi3.T, pathItem *openapi3.PathIte
 	if err != nil {
 		return nil
 	}
+	if len(plans) == 1 && len(plans[0].propertyMedia) > 0 {
+		// Retain the corpus's established synthesis requirement label while
+		// runtime configuration uses the family specification's propertyMedia
+		// point.
+		return []string{"configuration.propertyMedia"}
+	}
 	params := effectiveParameters(pathItem, op)
 	hasRange := false
 	for _, plan := range plans {
@@ -223,11 +229,13 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 	planned := make(map[string]bool, len(plans))
 	represented := make(map[string]bool, len(plans))
 	requiresRequestMedia := make(map[string]bool, len(plans))
+	requiresPropertyMedia := make(map[string]bool, len(plans))
 	for _, plan := range plans {
 		planned[plan.mediaKey] = true
 		if usesRoutedInput(bindingSpec) || !candidateCollides(params, plan) {
 			represented[plan.mediaKey] = true
 			requiresRequestMedia[plan.mediaKey] = plan.mediaRange
+			requiresPropertyMedia[plan.mediaKey] = len(plan.propertyMedia) > 0
 		}
 	}
 	mediaKeys := make([]string, 0, len(op.RequestBody.Value.Content))
@@ -262,6 +270,9 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 			var requirements []string
 			if requiresRequestMedia[mediaKey] {
 				requirements = []string{"configuration.requestMedia"}
+			}
+			if requiresPropertyMedia[mediaKey] {
+				requirements = append(requirements, "configuration.propertyMedia")
 			}
 			entries = append(entries, synthesize.SynthesisCoverageEntry{
 				SourceIndex:     0,

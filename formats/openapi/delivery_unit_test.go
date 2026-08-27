@@ -53,7 +53,12 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 			"/big": map[string]any{
 				"get": map[string]any{
 					"operationId": "big",
-					"responses":   map[string]any{"200": map[string]any{"description": "OK"}},
+					"responses": map[string]any{"200": map[string]any{
+						"description": "OK",
+						"content": map[string]any{
+							"application/json": map[string]any{"schema": map[string]any{"type": "object"}},
+						},
+					}},
 				},
 			},
 		},
@@ -77,12 +82,9 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	}
 }
 
-// TestDeliveryUnitBound_SSEPerEventNotCumulative verifies the SSE bound
-// applies per event, never cumulatively (each event is one delivery unit;
-// mirrors asyncapi's TestSSEReceiveCapIsPerEvent): events well over 1 KiB
-// each — and more than the 10 MiB default in total — keep flowing under
-// the default bound.
-func TestDeliveryUnitBound_SSEPerEventNotCumulative(t *testing.T) {
+// An SSE response is one HTTP delivery unit. Event delimiters do not split the
+// operation boundary, so a body over the default bound refuses as a whole.
+func TestDeliveryUnitBound_SSEIsOneCumulativeUnit(t *testing.T) {
 	const eventSize = 2 * 1024 * 1024 // 2 MiB per event, 6 events = 12 MiB total
 	payload := strings.Repeat("x", eventSize)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,19 +102,16 @@ func TestDeliveryUnitBound_SSEPerEventNotCumulative(t *testing.T) {
 		Selector: "#/paths/~1events/get",
 	})
 	vals, ierr := driveOutputs(context.Background(), call, nil)
-	if ierr != nil {
-		t.Fatalf("a >10MiB cumulative stream of under-bound events must not error: %v", ierr)
+	if ierr == nil || len(vals) != 0 {
+		t.Fatalf("oversized unary SSE = outputs %d, error %v", len(vals), ierr)
 	}
-	if len(vals) != 6 {
-		t.Fatalf("expected 6 events, got %d", len(vals))
+	if ierr.Code != invoke.ErrCodeResponseError {
+		t.Fatalf("error code = %q, want %q", ierr.Code, invoke.ErrCodeResponseError)
 	}
 }
 
-// TestDeliveryUnitBound_SSETinyBoundRefusesLoudly verifies the consumer
-// delivery-unit bound is live on the SSE lane: with a 1 KiB bound set via
-// BindingInvocationArgs.MaxDeliveryUnitBytes, a ~4 KiB event refuses loudly
-// with the delivery-unit overflow identity (ERR_RESPONSE_ERROR, the same
-// message template as asyncapi's per-event cap).
+// A consumer-supplied small delivery-unit bound applies to the complete SSE
+// body and refuses loudly before any partial value is emitted.
 func TestDeliveryUnitBound_SSETinyBoundRefusesLoudly(t *testing.T) {
 	payload := strings.Repeat("x", 4096)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

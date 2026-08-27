@@ -23,7 +23,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-const formByteCarriageCasesDigest = "fd1b8f260712957bd96398cbe48787b56c9d14f51f3cd52d1ea5f33fd0e5c0c0"
+const formByteCarriageCasesDigest = "37b2cf5eece416504551780469e934a17627b90f1be3e282c7826308ca8d4c0a"
 
 type formByteCarriageCase struct {
 	Name                string         `json:"name"`

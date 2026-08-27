@@ -360,6 +360,8 @@ func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parame
 		switch {
 		case plan == nil:
 			return nil, fmt.Errorf("caller envelope supplies body but the operation declares no supported request body")
+		case plan.family == familyText && envelope.body == nil:
+			return nil, fmt.Errorf("character-data request lane has no null lexical form")
 		case plan.synthetic || plan.wholeObject:
 			if routes.wholeBodyField == "" {
 				return nil, fmt.Errorf("selected request representation has no whole-body route")
@@ -375,6 +377,12 @@ func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parame
 				member, err = prepareEncodingStylePropertyValue(plan, name, member, bindingSpec, conversion)
 				if err != nil {
 					return nil, err
+				}
+				if bindingSpec == BindingSpecOpenAPI31 && plan.rawProperties[name] {
+					member, err = decodeRawPropertyForEngine(name, member)
+					if err != nil {
+						return nil, err
+					}
 				}
 				field := routes.bodyField(name)
 				value[field] = member
@@ -398,6 +406,32 @@ func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parame
 		"parameters":          parameterDescriptor,
 		"body":                bodyDescriptor,
 	}}, nil
+}
+
+func decodeRawPropertyForEngine(name string, value any) (any, error) {
+	decode := func(member any) (string, error) {
+		text, ok := member.(string)
+		if !ok {
+			return "", fmt.Errorf("raw multipart property %q must be a canonical Base64 string, got %T", name, member)
+		}
+		decoded, err := canonicalBase64BoundaryBytes(name, text)
+		if err != nil {
+			return "", err
+		}
+		return string(decoded), nil
+	}
+	if members, ok := asArray(value); ok {
+		result := make([]any, len(members))
+		for index, member := range members {
+			decoded, err := decode(member)
+			if err != nil {
+				return nil, err
+			}
+			result[index] = decoded
+		}
+		return result, nil
+	}
+	return decode(value)
 }
 
 func preferredBodyPlan(plans []*bodyPlan) *bodyPlan {

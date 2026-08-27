@@ -1005,7 +1005,7 @@ func TestRevision3MultipartParametersCharsetsAndEncodingRules(t *testing.T) {
 	_, encodedParams, _ := mime.ParseMediaType(encodedCT)
 	encodedReader := multipart.NewReader(encodedBody, encodedParams["boundary"])
 	encodedPart, _ := encodedReader.NextPart()
-	if encodedPart.Header.Get("Content-Type") != "application/octet-stream" || encodedPart.Header.Get("Content-Transfer-Encoding") != "base64" {
+	if encodedPart.Header.Get("Content-Type") != "application/octet-stream" || encodedPart.Header.Get("Content-Transfer-Encoding") != "" {
 		t.Fatalf("encoded headers = %#v", encodedPart.Header)
 	}
 	encodedMedia.Encoding = map[string]*openapi3.Encoding{"payload": {ContentType: "application/json"}}
@@ -1125,19 +1125,16 @@ func TestRevision3MultipartAdmitsInertContentKeywordsOnDeclaredNonString(t *test
 	}
 }
 
-func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
+func TestRevision3MultipartEncodingFactsUseConfigurationAndDescriptiveHeaders(t *testing.T) {
 	doc := &openapi3.T{OpenAPI: "3.1.2"}
 	baseSchema := func(property *openapi3.Schema) *openapi3.Schema {
 		return &openapi3.Schema{Type: &openapi3.Types{"object"}, Properties: openapi3.Schemas{"value": {Value: property}}}
 	}
-	tests := []struct {
+	refused := []struct {
 		name  string
 		media *openapi3.MediaType
 		want  string
 	}{
-		{"dynamic headers", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}})}, Encoding: map[string]*openapi3.Encoding{"value": {Headers: openapi3.Headers{"X-Part": {Value: &openapi3.Header{Parameter: openapi3.Parameter{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}}}}}}}}, "encoding.headers"},
-		{"content type list", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}})}, Encoding: map[string]*openapi3.Encoding{"value": {ContentType: "text/plain, application/json"}}}, "member selection"},
-		{"content type wildcard", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}})}, Encoding: map[string]*openapi3.Encoding{"value": {ContentType: "text/*"}}}, "not one supported concrete"},
 		{"multi-non-null choice", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{AnyOf: openapi3.SchemaRefs{
 			{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
 			{Value: &openapi3.Schema{Type: &openapi3.Types{"integer"}}},
@@ -1147,11 +1144,10 @@ func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
 			{Value: &openapi3.Schema{Type: &openapi3.Types{"integer"}}},
 			{Value: &openapi3.Schema{Type: &openapi3.Types{"null"}}},
 		}})}}, "choice applicator"},
-		{"content media type with no declared type", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{ContentMediaType: "application/json"})}}, "no JSON-to-octet part boundary"},
 		{"content media conflict", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{AllOf: openapi3.SchemaRefs{{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, ContentMediaType: "image/png"}}, {Value: &openapi3.Schema{ContentMediaType: "image/jpeg"}}}})}}, "conflicting contentMediaType"},
 		{"content encoding header injection", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}, ContentEncoding: "base64\r\nX-Evil"})}}, "valid HTTP token"},
 	}
-	for _, test := range tests {
+	for _, test := range refused {
 		t.Run(test.name, func(t *testing.T) {
 			op := opWithRequestBody(openapi3.Content{"multipart/form-data": test.media}, true)
 			if _, err := planRequestBodiesFor(doc, op, BindingSpec); err == nil || !strings.Contains(err.Error(), test.want) {
@@ -1159,20 +1155,35 @@ func TestRevision3MultipartRefusesUnrepresentableEncodingFacts(t *testing.T) {
 			}
 		})
 	}
+
+	admitted := []struct {
+		name          string
+		media         *openapi3.MediaType
+		propertyMedia bool
+	}{
+		{"descriptive headers", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}})}, Encoding: map[string]*openapi3.Encoding{"value": {Headers: openapi3.Headers{"X-Part": {Value: &openapi3.Header{Parameter: openapi3.Parameter{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}}}}}}}}}, false},
+		{"content type list", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}})}, Encoding: map[string]*openapi3.Encoding{"value": {ContentType: "text/plain, application/json"}}}, true},
+		{"content type wildcard", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{Type: &openapi3.Types{"string"}})}, Encoding: map[string]*openapi3.Encoding{"value": {ContentType: "text/*"}}}, true},
+		{"typeless contentMediaType", &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: baseSchema(&openapi3.Schema{ContentMediaType: "application/json"})}}, false},
+	}
+	for _, test := range admitted {
+		t.Run(test.name, func(t *testing.T) {
+			op := opWithRequestBody(openapi3.Content{"multipart/form-data": test.media}, true)
+			plans, err := planRequestBodiesFor(doc, op, BindingSpec)
+			if err != nil || len(plans) != 1 {
+				t.Fatalf("plan = %#v, %v", plans, err)
+			}
+			if got := len(plans[0].propertyMedia) > 0; got != test.propertyMedia {
+				t.Fatalf("propertyMedia requirement = %v, want %v", plans[0].propertyMedia, test.propertyMedia)
+			}
+		})
+	}
 }
 
-// TestRevision3MultipartTypeAbsentPartRefusesOn30 pins the 3.0 half of §9.2's
-// type-absent part cell. It replaces
-// TestRevision3MultipartUnconstrainedPartUsesValueTypedDefaults, which pinned
-// the specification's own value-keyed convention as an executed assertion --
-// a bare-description part admitted, with the OAS per-type default keyed from
-// the supplied value's JSON application type. Escalation M2 (ruled
-// 2026-08-20) deleted that convention: no accepted 3.0 edition states a
-// default contentType row that reaches a declaration carrying no `type`, and
-// this specification authors none for that residue, so the part refuses
-// before dispatch here exactly as it does on the 3.1 line -- one outcome,
-// two grounds, which is why the two tests state their reasons separately.
-func TestRevision3MultipartTypeAbsentPartRefusesOn30(t *testing.T) {
+// A typeless 3.0 multipart part remains represented but records the required
+// propertyMedia decision. Without that invocation choice the writer refuses;
+// it never guesses from the supplied application's JSON type.
+func TestRevision3MultipartTypeAbsentPartRequiresPropertyMediaOn30(t *testing.T) {
 	for _, edition := range []string{"3.0.0", "3.0.1", "3.0.2", "3.0.3", "3.0.4"} {
 		doc := &openapi3.T{OpenAPI: edition}
 		media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
@@ -1181,29 +1192,23 @@ func TestRevision3MultipartTypeAbsentPartRefusesOn30(t *testing.T) {
 				"file": {Value: &openapi3.Schema{Description: "Profile picture file"}},
 			},
 		}}}
-		err := validateRevision3MultipartMedia(doc, media)
-		if err == nil || !strings.Contains(err.Error(), "no default part Content-Type row on any accepted OAS 3.0 edition") {
+		if err := validateRevision3MultipartMedia(doc, media); err != nil {
 			t.Fatalf("%s type-absent part admission = %v", edition, err)
 		}
 		op := opWithRequestBody(openapi3.Content{"multipart/form-data": media}, true)
-		if _, err := planRequestBodiesFor(doc, op, BindingSpec); err == nil {
-			t.Fatalf("%s type-absent part plan succeeded; the only alternative must leave no candidate", edition)
+		plans, err := planRequestBodiesFor(doc, op, BindingSpec)
+		if err != nil || len(plans) != 1 || !reflect.DeepEqual(plans[0].propertyMedia, []string{"file"}) {
+			t.Fatalf("%s type-absent plan = %#v, %v", edition, plans, err)
 		}
-		// The body-encoding lane refuses it too, so the admission refusal is
-		// not the only thing standing between the declaration and the wire.
 		if _, _, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": "hello"}, BindingSpec); err == nil {
-			t.Fatalf("%s type-absent part encoded a body", edition)
+			t.Fatalf("%s type-absent part encoded without propertyMedia", edition)
 		}
 	}
 }
 
-// TestRevision3MultipartTypeAbsentPartRefusesOn31 pins the other half of the
-// edition split. Every accepted 3.1 edition states application/octet-stream
-// for a part whose `type` is absent -- 3.1.1 and 3.1.2 in the Encoding
-// Object default table's first row, 3.1.0 through the total catch-all closing
-// its prose enumeration -- and this revision defines no JSON-to-octet part
-// boundary, so the part refuses before dispatch on all three.
-func TestRevision3MultipartTypeAbsentPartRefusesOn31(t *testing.T) {
+// Every accepted 3.1 edition defaults a typeless part to octet-stream and the
+// binding crosses the canonical Base64 boundary before emission.
+func TestRevision3MultipartTypeAbsentPartUsesRawOctetsOn31(t *testing.T) {
 	for _, edition := range []string{"3.1.0", "3.1.1", "3.1.2"} {
 		doc := &openapi3.T{OpenAPI: edition}
 		media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
@@ -1212,9 +1217,21 @@ func TestRevision3MultipartTypeAbsentPartRefusesOn31(t *testing.T) {
 				"file": {Value: &openapi3.Schema{Description: "Profile picture file"}},
 			},
 		}}}
-		err := validateRevision3MultipartMedia(doc, media)
-		if err == nil || !strings.Contains(err.Error(), "application/octet-stream") {
+		if err := validateRevision3MultipartMedia(doc, media); err != nil {
 			t.Fatalf("%s type-absent part admission = %v", edition, err)
+		}
+		reader, contentType, err := buildMultipartBodyForRevision(doc, media, map[string]any{"file": "YWJj"}, BindingSpec)
+		if err != nil {
+			t.Fatalf("%s build: %v", edition, err)
+		}
+		_, params, _ := mime.ParseMediaType(contentType)
+		part, err := multipart.NewReader(reader, params["boundary"]).NextPart()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(part)
+		if part.Header.Get("Content-Type") != "application/octet-stream" || string(body) != "abc" {
+			t.Fatalf("%s part = (%q, %q)", edition, part.Header.Get("Content-Type"), body)
 		}
 	}
 }
@@ -1328,8 +1345,7 @@ func TestRevision3URLEncodedTypeAbsentPropertyRefusesOnEveryEdition(t *testing.T
 	}}}
 	for _, edition := range []string{"3.0.0", "3.0.1", "3.0.2", "3.0.3", "3.0.4"} {
 		doc := &openapi3.T{OpenAPI: edition}
-		if err := validateRevision3URLEncodedMedia(doc, media); err == nil ||
-			!strings.Contains(err.Error(), "no default part Content-Type row on any accepted OAS 3.0 edition") {
+		if err := validateRevision3URLEncodedMedia(doc, media); err == nil {
 			t.Fatalf("%s type-absent urlencoded property admission = %v", edition, err)
 		}
 		if _, err := buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": "x y"}, BindingSpec); err == nil {
@@ -1338,7 +1354,7 @@ func TestRevision3URLEncodedTypeAbsentPropertyRefusesOnEveryEdition(t *testing.T
 	}
 	for _, edition := range []string{"3.1.0", "3.1.1", "3.1.2"} {
 		doc := &openapi3.T{OpenAPI: edition}
-		if err := validateRevision3URLEncodedMedia(doc, media); err == nil || !strings.Contains(err.Error(), "application/octet-stream") {
+		if err := validateRevision3URLEncodedMedia(doc, media); err == nil {
 			t.Fatalf("%s type-absent urlencoded property admission = %v", edition, err)
 		}
 	}
@@ -1463,7 +1479,7 @@ func TestRevision3InvalidResponseMediaDoesNotInventTextOutput(t *testing.T) {
 	}
 }
 
-func TestRevision3SSEUsesWHATWGUTF8AndEmptySuccessSkipsMedia(t *testing.T) {
+func TestRevision3SSEUsesCharacterLaneAndEmptySuccessSkipsMedia(t *testing.T) {
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/events":{"get":{"responses":{"200":{"description":"ok","content":{"text/event-stream":{"schema":{"type":"string"}}}}}}}}}`
 	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		body := append([]byte("data: café\n\ndata: "), 0xff)
@@ -1478,8 +1494,8 @@ func TestRevision3SSEUsesWHATWGUTF8AndEmptySuccessSkipsMedia(t *testing.T) {
 		Source: invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}, Selector: "#/paths/~1events/get",
 	})
 	outputs, ierr := driveOutputs(context.Background(), call, nil)
-	if ierr != nil || !reflect.DeepEqual(outputs, []any{"café", "�", "��", "�"}) {
-		t.Fatalf("SSE UTF-8 replacement outputs = %#v, %v", outputs, ierr)
+	if ierr == nil || len(outputs) != 0 {
+		t.Fatalf("unsupported SSE charset outputs = %#v, %v", outputs, ierr)
 	}
 
 	emptySpec := strings.Replace(spec, `,"content":{"text/event-stream":{"schema":{"type":"string"}}}`, "", 1)
@@ -1524,8 +1540,8 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 		Source: invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}, Selector: "#/paths/~1x/get",
 	})
 	_, ierr = driveOutputs(context.Background(), call, nil)
-	if ierr == nil || ierr.Code == invoke.ErrCodeProtocol || ierr.HasData() {
-		t.Fatalf("non-2xx native failure was preempted by Content-Type: %v", ierr)
+	if ierr == nil || ierr.Code != invoke.ErrCodeProtocol || ierr.HasData() {
+		t.Fatalf("nonempty response without a governing Response Object = %v, want protocol error", ierr)
 	}
 	emptyFailureTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 500, Status: "500 Empty", Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil

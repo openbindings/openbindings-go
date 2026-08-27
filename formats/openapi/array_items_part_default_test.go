@@ -19,7 +19,7 @@ import (
 // identical file is executed by openbindings-go/formats/openapi and by
 // openapi-client/typescript/src; changing it in one engine without the others
 // fails here.
-const arrayItemsPartDefaultCasesDigest = "334169f20f73f42159fcdd45e3b11bdfa87957add143df5bb4ef4fccd30d00e1"
+const arrayItemsPartDefaultCasesDigest = "6ebde01f9b2dac385b1e123b43592dbb79177e2051f3bb75cbedef7edd64fd87"
 
 type arrayItemsPartDefaultTable struct {
 	Comment string                      `json:"$comment"`
@@ -112,8 +112,12 @@ func arrayItemsPartDefaultDecision(t *testing.T, c arrayItemsPartDefaultCase) st
 	if item == nil || item.Post == nil {
 		t.Fatalf("%s: loaded document has no form operation", c.Name)
 	}
-	if _, err := planRequestBodiesFor(doc, item.Post, BindingSpec); err != nil {
+	plans, err := planRequestBodiesFor(doc, item.Post, BindingSpec)
+	if err != nil {
 		return "refused"
+	}
+	if plansRequirePropertyMedia(plans) {
+		return "missing-required-choice"
 	}
 	media := item.Post.RequestBody.Value.Content[c.Media]
 	if media == nil {
@@ -193,7 +197,7 @@ func TestArrayItemsPartDefaultCaseTable(t *testing.T) {
 // TestArrayItemsPartDefaultRefusesANonArrayValue runs every multipart cell a
 // second time with a value that is not an array.
 //
-// openbindings.openapi@1 §9.2 says of the form lanes: "An invalid value or a
+// the openapi family specifications §9.2 says of the form lanes: "An invalid value or a
 // member for which the resolved schema leaves no faithful form carriage refuses
 // before dispatch." An array property's multipart carriage is one part per
 // element, so a value with no elements has no faithful carriage at all. The
@@ -217,10 +221,14 @@ func TestArrayItemsPartDefaultRefusesANonArrayValue(t *testing.T) {
 			}
 			item := doc.Paths.Find("/form")
 			got := "refused"
-			if _, planErr := planRequestBodiesFor(doc, item.Post, BindingSpec); planErr == nil {
-				media := item.Post.RequestBody.Value.Content[c.Media]
-				fields := map[string]any{c.PropertyName: c.NonArrayValue}
-				got = "admitted;emit=" + arrayItemsPartDefaultRendering(t, doc, media, c, fields)
+			if plans, planErr := planRequestBodiesFor(doc, item.Post, BindingSpec); planErr == nil {
+				if plansRequirePropertyMedia(plans) {
+					got = "missing-required-choice"
+				} else {
+					media := item.Post.RequestBody.Value.Content[c.Media]
+					fields := map[string]any{c.PropertyName: c.NonArrayValue}
+					got = "admitted;emit=" + arrayItemsPartDefaultRendering(t, doc, media, c, fields)
+				}
 			}
 			if got != c.NonArrayValueExpect {
 				t.Fatalf("%s: decision with a non-array value = %q, want %q\nbasis: %s", c.Name, got, c.NonArrayValueExpect, c.Basis)
@@ -277,7 +285,15 @@ func TestArrayItemsPartDefaultWriteLaneAgreesWithAdmission(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: load document: %v", c.Name, err)
 			}
-			media := doc.Paths.Find("/form").Post.RequestBody.Value.Content[c.Media]
+			operation := doc.Paths.Find("/form").Post
+			plans, planErr := planRequestBodiesFor(doc, operation, BindingSpec)
+			if planErr == nil && plansRequirePropertyMedia(plans) {
+				if c.WriteLane != "missing-required-choice" {
+					t.Fatalf("%s: direct write requires propertyMedia, want %q", c.Name, c.WriteLane)
+				}
+				return
+			}
+			media := operation.RequestBody.Value.Content[c.Media]
 			fields := map[string]any{c.PropertyName: c.Value}
 			_, _, buildErr := buildMultipartBodyForRevision(doc, media, fields, BindingSpec)
 			got := "admitted"
@@ -313,14 +329,9 @@ func TestArrayItemsPartDefaultNestedArrayCellsPinBothLanes(t *testing.T) {
 	}
 }
 
-// TestArrayItemsTypelessItemsCellsPinBothLanes is the M2 convergence, pinned
-// the same way: a multipart array whose ITEMS schema declares no type is the
-// type-absent part cell — the multipart lane derives the part Content-Type
-// from the items schema, so that schema IS the resolved part schema — and both
-// lanes refuse it on the 3.0 line, as the 3.1 twin already did. The two cells
-// carry `writeLane` for the same reason the nested-array cells do: admission
-// refusing makes the encoder's own answer invisible on the wire, so it has to
-// be measured directly.
+// TestArrayItemsTypelessItemsCellsPinBothLanes pins the 3.0 half of the
+// corrected family split: the plan is represented, while a table harness with
+// no configuration reaches the required propertyMedia choice in both probes.
 func TestArrayItemsTypelessItemsCellsPinBothLanes(t *testing.T) {
 	seen := 0
 	for _, c := range loadArrayItemsPartDefaultTable(t) {
@@ -328,8 +339,8 @@ func TestArrayItemsTypelessItemsCellsPinBothLanes(t *testing.T) {
 			continue
 		}
 		seen++
-		if c.Expect != "refused" || c.WriteLane != "refused" {
-			t.Fatalf("%s: expect = %q, writeLane = %q; both lanes must refuse a typeless items declaration", c.Name, c.Expect, c.WriteLane)
+		if c.Expect != "missing-required-choice" || c.WriteLane != "missing-required-choice" {
+			t.Fatalf("%s: expect = %q, writeLane = %q; both probes must expose the missing propertyMedia choice", c.Name, c.Expect, c.WriteLane)
 		}
 	}
 	if seen != 2 {

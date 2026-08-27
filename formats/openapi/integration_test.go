@@ -774,11 +774,7 @@ func sseSpec(serverURL string) string {
 							"content": map[string]any{
 								"text/event-stream": map[string]any{
 									"schema": map[string]any{
-										"type": "object",
-										"properties": map[string]any{
-											"id":  map[string]any{"type": "string"},
-											"msg": map[string]any{"type": "string"},
-										},
+										"type": "string",
 									},
 								},
 								"application/json": map[string]any{
@@ -808,102 +804,36 @@ func sseCall(srv *httptest.Server) invoke.Invocation[any, any] {
 	})
 }
 
-// sseCallHooked drives the same op with the documented consumer pattern
-// for JSON SSE streams: an OutputDecoder that parses each event's data and
-// reconstructs the framing wrap from the per-unit Meta (x-sse-event/id).
-func sseCallHooked(srv *httptest.Server) invoke.Invocation[any, any] {
-	op := invoke.NewOperationInvoker(NewInvoker())
-	op.OutputDecoder = func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
-		var data any
-		if err := json.Unmarshal(raw.Body, &data); err != nil {
-			return nil, err
-		}
-		ev, id := "", ""
-		if vs := raw.Meta["x-sse-event"]; len(vs) > 0 {
-			ev = vs[0]
-		}
-		if vs := raw.Meta["x-sse-id"]; len(vs) > 0 {
-			id = vs[0]
-		}
-		if ev == "" && id == "" {
-			return data, nil
-		}
-		wrapped := map[string]any{"data": data}
-		if ev != "" {
-			wrapped["event"] = ev
-		}
-		if id != "" {
-			wrapped["id"] = id
-		}
-		return wrapped, nil
-	}
-	return op.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Selector: "#/paths/~1events/get",
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
-	})
-}
-
-func TestIntegration_SSEResponse_StreamsEvents(t *testing.T) {
+func TestIntegration_SSEResponse_FiniteStreamIsOneUnaryValue(t *testing.T) {
+	want := "data: {\"id\":\"1\",\"msg\":\"first\"}\n\n" +
+		"data: {\"id\":\"2\",\"msg\":\"second\"}\n\n" +
+		"event: progress\nid: 42\ndata: {\"id\":\"3\",\"msg\":\"third\"}\n\n" +
+		": this is a comment, should be ignored\n\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if accept := r.Header.Get("Accept"); !strings.Contains(accept, "text/event-stream") {
-			t.Errorf("Accept header = %q, expected to contain text/event-stream", accept)
+		if accept := r.Header.Get("Accept"); accept != "" {
+			t.Errorf("Accept header = %q, want absent", accept)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-		_, _ = io.WriteString(w, "data: {\"id\":\"1\",\"msg\":\"first\"}\n\n")
-		if flusher != nil {
-			flusher.Flush()
-		}
-		_, _ = io.WriteString(w, "data: {\"id\":\"2\",\"msg\":\"second\"}\n\n")
-		if flusher != nil {
-			flusher.Flush()
-		}
-		_, _ = io.WriteString(w, "event: progress\nid: 42\ndata: {\"id\":\"3\",\"msg\":\"third\"}\n\n")
-		if flusher != nil {
-			flusher.Flush()
-		}
-		_, _ = io.WriteString(w, ": this is a comment, should be ignored\n\n")
+		_, _ = io.WriteString(w, want)
 		if flusher != nil {
 			flusher.Flush()
 		}
 	}))
 	defer srv.Close()
 
-	events, ierr := driveOutputs(context.Background(), sseCallHooked(srv), nil)
+	events, ierr := driveOutputs(context.Background(), sseCall(srv), nil)
 	if ierr != nil {
-		t.Fatalf("unexpected stream error: %v", ierr)
+		t.Fatalf("unexpected unary response error: %v", ierr)
 	}
-	if len(events) != 3 {
-		t.Fatalf("expected 3 SSE events, got %d", len(events))
-	}
-
-	first, ok := events[0].(map[string]any)
-	if !ok || first["id"] != "1" || first["msg"] != "first" {
-		t.Errorf("event 0 = %+v, want id=1 msg=first", events[0])
-	}
-	second, ok := events[1].(map[string]any)
-	if !ok || second["id"] != "2" || second["msg"] != "second" {
-		t.Errorf("event 1 = %+v, want id=2 msg=second", events[1])
-	}
-	third, ok := events[2].(map[string]any)
-	if !ok {
-		t.Fatalf("event 2: expected wrapped map, got %T", events[2])
-	}
-	if third["event"] != "progress" || third["id"] != "42" {
-		t.Errorf("event 2 metadata = %+v, want event=progress id=42", third)
-	}
-	innerData, ok := third["data"].(map[string]any)
-	if !ok || innerData["msg"] != "third" {
-		t.Errorf("event 2 inner data = %+v, want msg=third", third["data"])
+	if len(events) != 1 || events[0] != want {
+		t.Fatalf("unary event-stream outputs = %#v, want one complete body", events)
 	}
 }
 
-// A mid-stream lifetime DEADLINE on an SSE (server-streaming) response:
-// already-emitted events stand, then exactly one terminal ERR_CANCELLED. A
-// caller-supplied lifetime deadline cancels the abstract invocation; the
-// native timeout distinction remains below the bridge. This must agree with
-// the gRPC server-stream deadline terminal.
+// A lifetime deadline before the response body reaches EOF yields no partial
+// value: the HTTP response body is one delivery unit at this binding boundary.
 func TestIntegration_SSEResponse_MidStreamDeadlineIsCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -919,7 +849,6 @@ func TestIntegration_SSEResponse_MidStreamDeadlineIsCancelled(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// The invocation LIFETIME carries the deadline; reads use a separate ctx.
 	lifeCtx, cancelLife := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancelLife()
 	call := NewInvoker().InvokeBinding(lifeCtx, &invoke.BindingInvocationArgs{
@@ -932,15 +861,7 @@ func TestIntegration_SSEResponse_MidStreamDeadlineIsCancelled(t *testing.T) {
 	defer cancelRead()
 	out := call.Outputs()
 
-	first, err := out.Read(readCtx)
-	if err != nil {
-		t.Fatalf("first event must stand, got %v", err)
-	}
-	if first == nil {
-		t.Fatal("first event must be non-nil (an output flowed before the deadline)")
-	}
-
-	_, err = out.Read(readCtx)
+	_, err := out.Read(readCtx)
 	var terr *invoke.InvocationError
 	if !errors.As(err, &terr) {
 		t.Fatalf("expected *InvocationError, got %T: %v", err, err)
@@ -983,17 +904,16 @@ func TestIntegration_SSEResponse_MultilineData(t *testing.T) {
 		t.Fatalf("unexpected error: %v", ierr)
 	}
 	if len(events) != 1 {
-		t.Fatalf("expected 1 event from multiline data, got %d", len(events))
+		t.Fatalf("expected one unary body, got %d", len(events))
 	}
 	str, ok := events[0].(string)
-	if !ok || str != "line one\nline two\nline three" {
-		t.Errorf("data = %q, want joined multiline", events[0])
+	if !ok || str != "data: line one\ndata: line two\ndata: line three\n\n" {
+		t.Errorf("data = %q, want complete event-stream body", events[0])
 	}
 }
 
 // TestIntegration_SSEResponse_MidStreamClose verifies that an abrupt
-// server-side connection drop after some events surfaces the events received
-// before the close and terminates the invocation cleanly (no hang, no leak).
+// server-side connection drop cannot surface a partial operation value.
 func TestIntegration_SSEResponse_MidStreamClose(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -1021,37 +941,30 @@ func TestIntegration_SSEResponse_MidStreamClose(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	events, _ := driveOutputs(ctx, sseCall(srv), nil)
-	if len(events) < 2 {
-		t.Fatalf("expected at least 2 events before drop, got %d", len(events))
+	events, ierr := driveOutputs(ctx, sseCall(srv), nil)
+	if len(events) != 0 || ierr == nil {
+		t.Fatalf("partial stream produced outputs=%#v, error=%v", events, ierr)
 	}
 }
 
 // TestIntegration_SSEResponse_MalformedLines verifies that malformed SSE lines
-// are handled leniently per the W3C spec and only valid data events surface.
+// remain opaque at the unary binding boundary rather than being parsed into
+// multiple values.
 func TestIntegration_SSEResponse_MalformedLines(t *testing.T) {
+	want := ": this is a comment\ngarbage-line-no-colon\nunknown-field: value\ndata: {\"id\":\"survivor\"}\n\n: another comment\ndata: {\"id\":\"second\"}\n\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, ": this is a comment\n")
-		_, _ = io.WriteString(w, "garbage-line-no-colon\n")
-		_, _ = io.WriteString(w, "unknown-field: value\n")
-		_, _ = io.WriteString(w, "data: {\"id\":\"survivor\"}\n\n")
-		_, _ = io.WriteString(w, ": another comment\n")
-		_, _ = io.WriteString(w, "data: {\"id\":\"second\"}\n\n")
+		_, _ = io.WriteString(w, want)
 	}))
 	defer srv.Close()
 
-	events, ierr := driveOutputs(context.Background(), sseCallHooked(srv), nil)
+	events, ierr := driveOutputs(context.Background(), sseCall(srv), nil)
 	if ierr != nil {
 		t.Fatalf("unexpected error: %v", ierr)
 	}
-	if len(events) != 2 {
-		t.Fatalf("expected 2 valid events from malformed stream, got %d", len(events))
-	}
-	first, _ := events[0].(map[string]any)
-	if first["id"] != "survivor" {
-		t.Errorf("first event id = %v, want survivor", first["id"])
+	if len(events) != 1 || events[0] != want {
+		t.Fatalf("opaque unary outputs = %#v", events)
 	}
 }
 
@@ -1093,10 +1006,11 @@ func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
-// TestIntegration_SSEResponse_Cancellation verifies that cancelling the
-// invocation tears down the SSE stream cleanly; the output stream terminates
+// TestIntegration_SSEResponse_Cancellation verifies that cancelling before a
+// streaming response reaches EOF produces no partial value and terminates
 // promptly with ERR_CANCELLED.
 func TestIntegration_SSEResponse_Cancellation(t *testing.T) {
+	started := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -1105,6 +1019,7 @@ func TestIntegration_SSEResponse_Cancellation(t *testing.T) {
 		if flusher != nil {
 			flusher.Flush()
 		}
+		close(started)
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
@@ -1115,18 +1030,9 @@ func TestIntegration_SSEResponse_Cancellation(t *testing.T) {
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
 	})
 
-	out := call.Outputs()
-	first, err := out.Read(context.Background())
-	if err != nil {
-		t.Fatalf("first event error: %v", err)
-	}
-	// Text lane under the header rule: the event arrives as its data
-	// string (decode behavior is covered by the StreamsEvents tests).
-	if fs, ok := first.(string); !ok || fs == "" {
-		t.Fatalf("expected first event data string, got %T %v", first, first)
-	}
-
+	<-started
 	cancel()
+	out := call.Outputs()
 	done := make(chan error, 1)
 	go func() {
 		_, err := out.Read(context.Background())

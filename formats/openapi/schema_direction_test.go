@@ -29,13 +29,12 @@ func TestProjectOpenAPISchemaProjectsContentSchema(t *testing.T) {
 	requestContent := request["contentSchema"].(map[string]any)
 	responseContent := response["contentSchema"].(map[string]any)
 
-	assertRequired(t, requestContent, []string{"client"}, []string{"server"})
-	assertRequired(t, responseContent, []string{"server"}, []string{"client"})
-	if _, ok := schemaProperties(t, requestContent)["server"]; ok {
-		t.Error("request contentSchema retained readOnly property")
-	}
-	if _, ok := schemaProperties(t, responseContent)["client"]; ok {
-		t.Error("response contentSchema retained writeOnly property")
+	for direction, content := range map[string]map[string]any{"request": requestContent, "response": responseContent} {
+		assertRequired(t, content, []string{"server", "client"}, nil)
+		properties := schemaProperties(t, content)
+		if len(properties) != 2 {
+			t.Errorf("%s contentSchema properties = %v, want both annotated members", direction, properties)
+		}
 	}
 }
 
@@ -133,27 +132,21 @@ func TestSynthesisProjectsDirectionalSchemas(t *testing.T) {
 			output := schemaValueMap(t, op.Output)
 
 			inputProps := schemaProperties(t, input)
-			for _, name := range []string{"filter", "password", "clientSecret", "displayName", "nested", "directory", "manager"} {
+			for _, name := range []string{"filter", "id", "password", "serverNote", "clientSecret", "displayName", "nested", "directory", "manager", "neverDirectional"} {
 				if _, ok := inputProps[name]; !ok {
 					t.Errorf("input omitted request property %q: %#v", name, inputProps)
 				}
 			}
-			for _, name := range []string{"id", "serverNote", "neverDirectional"} {
-				if _, ok := inputProps[name]; ok {
-					t.Errorf("input retained readOnly property %q", name)
-				}
-			}
-			assertRequired(t, input, []string{"filter", "password", "clientSecret", "displayName", "nested", "directory", "manager"}, []string{"id", "serverNote", "neverDirectional"})
+			assertRequired(t, input, []string{"filter", "id", "password", "serverNote", "clientSecret", "displayName", "nested", "directory", "manager", "neverDirectional"}, nil)
 
 			filter := inputProps["filter"].(map[string]any)
 			filterProps := schemaProperties(t, filter)
-			if _, ok := filterProps["serverGenerated"]; ok {
-				t.Error("request parameter schema retained nested readOnly property")
+			for _, name := range []string{"serverGenerated", "clientProvided", "ordinary"} {
+				if _, ok := filterProps[name]; !ok {
+					t.Errorf("request parameter schema omitted annotated property %q", name)
+				}
 			}
-			if _, ok := filterProps["clientProvided"]; !ok {
-				t.Error("request parameter schema omitted writeOnly property")
-			}
-			assertRequired(t, filter, []string{"clientProvided", "ordinary"}, []string{"serverGenerated"})
+			assertRequired(t, filter, []string{"serverGenerated", "clientProvided", "ordinary"}, nil)
 
 			inputNested := inputProps["nested"].(map[string]any)["items"].(map[string]any)
 			assertDirectionalLeaf(t, inputNested, "createdAt", "draft", true)
@@ -165,25 +158,22 @@ func TestSynthesisProjectsDirectionalSchemas(t *testing.T) {
 				return ok
 			})
 			outputProfileProps := schemaProperties(t, outputProfile)
-			if _, ok := outputProfileProps["serverNote"]; !ok {
-				t.Error("response omitted readOnly property serverNote")
-			}
-			for _, name := range []string{"clientSecret", "neverDirectional"} {
-				if _, ok := outputProfileProps[name]; ok {
-					t.Errorf("response retained writeOnly property %q", name)
+			for _, name := range []string{"serverNote", "clientSecret", "displayName", "nested", "directory", "neverDirectional"} {
+				if _, ok := outputProfileProps[name]; !ok {
+					t.Errorf("response omitted annotated property %q", name)
 				}
 			}
-			assertRequired(t, outputProfile, []string{"serverNote", "displayName", "nested", "directory"}, []string{"clientSecret", "neverDirectional"})
+			assertRequired(t, outputProfile, []string{"serverNote", "clientSecret", "displayName", "nested", "directory", "neverDirectional"}, nil)
 
 			outputIdentity := findSchemaMap(t, output, func(schema map[string]any) bool {
 				_, ok := schemaPropertiesIfPresent(schema)["id"]
 				return ok
 			})
 			outputIdentityProps := schemaProperties(t, outputIdentity)
-			if _, ok := outputIdentityProps["password"]; ok {
-				t.Error("response retained writeOnly property password")
+			if _, ok := outputIdentityProps["password"]; !ok {
+				t.Error("response omitted writeOnly-annotated password")
 			}
-			assertRequired(t, outputIdentity, []string{"id", "manager"}, []string{"password"})
+			assertRequired(t, outputIdentity, []string{"id", "password", "manager"}, nil)
 
 			outputNested := findSchemaMap(t, output, func(schema map[string]any) bool {
 				_, ok := schemaPropertiesIfPresent(schema)["label"]
@@ -208,7 +198,7 @@ func TestSynthesisProjectsDirectionalSchemas(t *testing.T) {
 				}
 				return false
 			})
-			assertRequired(t, outputRoot, []string{"id", "serverNote", "displayName", "nested", "directory", "manager"}, []string{"password", "clientSecret", "neverDirectional"})
+			assertRequired(t, outputRoot, []string{"id", "password", "serverNote", "clientSecret", "displayName", "nested", "directory", "manager", "neverDirectional"}, nil)
 
 			inputJSON, _ := json.Marshal(input)
 			outputJSON, _ := json.Marshal(output)
@@ -218,11 +208,11 @@ func TestSynthesisProjectsDirectionalSchemas(t *testing.T) {
 			if !strings.Contains(string(outputJSON), "#/operations/upsertUser/output/$defs/User") {
 				t.Fatalf("output lost stable recursive $defs identity: %s", outputJSON)
 			}
-			if strings.Contains(string(inputJSON), `"readOnly":true`) {
-				t.Errorf("request projection retained readOnly annotation/property: %s", inputJSON)
+			if !strings.Contains(string(inputJSON), `"readOnly":true`) || !strings.Contains(string(inputJSON), `"writeOnly":true`) {
+				t.Errorf("request schema lost readOnly/writeOnly annotations: %s", inputJSON)
 			}
-			if strings.Contains(string(outputJSON), `"writeOnly":true`) {
-				t.Errorf("response projection retained writeOnly annotation/property: %s", outputJSON)
+			if !strings.Contains(string(outputJSON), `"readOnly":true`) || !strings.Contains(string(outputJSON), `"writeOnly":true`) {
+				t.Errorf("response schema lost readOnly/writeOnly annotations: %s", outputJSON)
 			}
 		})
 	}
@@ -276,23 +266,13 @@ func assertRequired(t *testing.T, schema map[string]any, present, absent []strin
 func assertDirectionalLeaf(t *testing.T, schema map[string]any, readOnlyName, writeOnlyName string, request bool) {
 	t.Helper()
 	properties := schemaProperties(t, schema)
-	if request {
-		if _, ok := properties[readOnlyName]; ok {
-			t.Errorf("request retained readOnly property %q", readOnlyName)
-		}
-		if _, ok := properties[writeOnlyName]; !ok {
-			t.Errorf("request omitted writeOnly property %q", writeOnlyName)
-		}
-		assertRequired(t, schema, []string{writeOnlyName, "label"}, []string{readOnlyName})
-		return
-	}
 	if _, ok := properties[readOnlyName]; !ok {
-		t.Errorf("response omitted readOnly property %q", readOnlyName)
+		t.Errorf("schema omitted readOnly-annotated property %q", readOnlyName)
 	}
-	if _, ok := properties[writeOnlyName]; ok {
-		t.Errorf("response retained writeOnly property %q", writeOnlyName)
+	if _, ok := properties[writeOnlyName]; !ok {
+		t.Errorf("schema omitted writeOnly-annotated property %q", writeOnlyName)
 	}
-	assertRequired(t, schema, []string{readOnlyName, "label"}, []string{writeOnlyName})
+	assertRequired(t, schema, []string{readOnlyName, writeOnlyName, "label"}, nil)
 }
 
 func findSchemaMap(t *testing.T, root any, predicate func(map[string]any) bool) map[string]any {

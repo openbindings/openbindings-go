@@ -19,7 +19,7 @@ import (
 // openapi-client/go, by openapi-client/typescript, and by
 // openbindings-ts/packages/openapi against that package's BUILT dist; changing
 // it in one engine without the others fails here.
-const partContentEncodingCasesDigest = "350a4d87e531218a0f189b754a91c6573eaf98d850c69546a044debdd36fa8b5"
+const partContentEncodingCasesDigest = "7715dd10e63e4fa2865c354325e3d15af7800fb6768fc4d4e9b5d060b46dd030"
 
 type partContentEncodingTable struct {
 	Comment string                    `json:"$comment"`
@@ -117,8 +117,14 @@ func partContentEncodingDecision(t *testing.T, c partContentEncodingCase) string
 	if item == nil || item.Post == nil {
 		t.Fatalf("%s: loaded document has no form operation", c.Name)
 	}
-	if _, err := planRequestBodiesFor(doc, item.Post, BindingSpec); err != nil {
+	plans, err := planRequestBodiesFor(doc, item.Post, BindingSpec)
+	if err != nil {
 		return "refused"
+	}
+	for _, plan := range plans {
+		if len(plan.propertyMedia) > 0 {
+			return "missing-required-choice"
+		}
 	}
 	media := item.Post.RequestBody.Value.Content[c.Media]
 	if media == nil {
@@ -163,8 +169,8 @@ func partContentEncodingEmission(doc *openapi3.T, media *openapi3.MediaType, c p
 		}
 		// Content-Transfer-Encoding is deliberately outside the shared
 		// rendering: the TypeScript engine writes parts through FormData and
-		// cannot emit it at all. TestRevision3PartContentTransferEncoding pins
-		// it on this side.
+		// cannot emit it at all. The dedicated transfer-header test pins the
+		// 3.1 no-emission rule on this side.
 		rendered = append(rendered, part.Header.Get("Content-Type")+":"+string(body))
 		part.Close()
 	}
@@ -246,20 +252,16 @@ func TestContentEncodingChangesOnlyTheDeclaredStringRow(t *testing.T) {
 	}
 }
 
-// TestRevision3PartContentTransferEncoding pins the one part header the shared
-// table deliberately excludes, because the TypeScript engine writes parts
-// through FormData and cannot emit it. [JSON Schema 2020-12] Section 8.3
-// derives `contentEncoding` from MIME's Content-Transfer-Encoding header and
-// conditions it on the instance being a string, so a declared non-string part
-// carrying the keyword emits no such header even though it is now admitted.
-func TestRevision3PartContentTransferEncoding(t *testing.T) {
+// OAS 3.1 contentEncoding describes the artifact string; it never instructs
+// this binding to synthesize a Content-Transfer-Encoding part header.
+func TestRevision3PartContentEncodingEmitsNoTransferHeader(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		schema map[string]any
 		value  any
 		want   string
 	}{
-		{"declared string", map[string]any{"type": "string", "contentEncoding": "base64"}, "abc", "base64"},
+		{"declared string", map[string]any{"type": "string", "contentEncoding": "base64"}, "abc", ""},
 		{"declared integer", map[string]any{"type": "integer", "contentEncoding": "base64"}, 7, ""},
 		{"declared object", map[string]any{"type": "object", "contentEncoding": "base64"}, map[string]any{"k": "v"}, ""},
 	} {

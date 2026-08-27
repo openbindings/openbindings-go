@@ -164,7 +164,7 @@ components:
 
 // TestPruneToRetainedDropsAReferenceTheClosureOnlyWalkedPast pins the retention
 // half directly: a `$ref` at a position a composed pointer merely passed
-// through is outside `openbindings.openapi@1` §6's closure and is not served,
+// through is outside `the openapi family specifications` §6's closure and is not served,
 // while every other scalar on the way — and a reference the closure DID compose
 // — stays.
 func TestPruneToRetainedDropsAReferenceTheClosureOnlyWalkedPast(t *testing.T) {

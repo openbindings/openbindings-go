@@ -1,6 +1,11 @@
 package openapi
 
-import "github.com/getkin/kin-openapi/openapi3"
+import (
+	"sort"
+
+	"github.com/dlclark/regexp2"
+	"github.com/getkin/kin-openapi/openapi3"
+)
 
 // resolvedDeclaration is the single declaration-only view used by the
 // OpenAPI 3.0/3.1 binding siblings' lane, style, shape, and member-inspection
@@ -52,7 +57,10 @@ func resolvedDeclarationConjuncts(schema *openapi3.Schema, oas30 bool, seen map[
 		if literal {
 			return []*openapi3.Schema{{}}, false
 		}
-		return nil, false
+		// Preserve the false literal as an explicit unsatisfiable conjunct.
+		// It has no lane and must not collapse into the same typeless view as
+		// an omitted or assertion-free declaration.
+		return []*openapi3.Schema{schema}, false
 	}
 	seen[schema] = true
 	defer delete(seen, schema)
@@ -147,6 +155,80 @@ func (d resolvedDeclaration) admitsStringAsSoleNonNullType() bool {
 	return true
 }
 
+func (d resolvedDeclaration) typeless() bool {
+	if d.ambiguous || len(d.types) != 0 {
+		return false
+	}
+	for _, conjunct := range d.conjuncts {
+		if literal, boolean := booleanSchemaLiteral(conjunct); boolean && !literal {
+			return false
+		}
+		if conjunct != nil && conjunct.Type != nil {
+			// An explicit empty type set, or mutually contradictory conjoined
+			// type sets, admits no instance. It is not an absent declaration.
+			return false
+		}
+	}
+	return true
+}
+
+func (d resolvedDeclaration) admitsNull() bool {
+	return !d.ambiguous && d.types["null"]
+}
+
+// format returns the one declaration-level format contributed by the
+// resolved conjuncts. Conflicting values have no single carriage meaning.
+func (d resolvedDeclaration) format() (string, bool) {
+	values := map[string]bool{}
+	for _, conjunct := range d.conjuncts {
+		if conjunct != nil && conjunct.Format != "" {
+			values[conjunct.Format] = true
+		}
+	}
+	if len(values) > 1 {
+		return "", true
+	}
+	for value := range values {
+		return value, false
+	}
+	return "", false
+}
+
+// keywordString returns the one resolved string annotation used by §9.
+// OAS 3.0 callers deliberately do not consult contentEncoding or
+// contentMediaType because those keywords are outside that line's dialect.
+func (d resolvedDeclaration) keywordString(key string) (string, bool) {
+	if d.oas30 && (key == "contentEncoding" || key == "contentMediaType") {
+		return "", false
+	}
+	values := map[string]bool{}
+	for _, conjunct := range d.conjuncts {
+		if conjunct == nil {
+			continue
+		}
+		var value string
+		switch key {
+		case "contentEncoding":
+			value = conjunct.ContentEncoding
+		case "contentMediaType":
+			value = conjunct.ContentMediaType
+		}
+		if value == "" && conjunct.Extensions != nil {
+			value, _ = conjunct.Extensions[key].(string)
+		}
+		if value != "" {
+			values[value] = true
+		}
+	}
+	if len(values) > 1 {
+		return "", true
+	}
+	for value := range values {
+		return value, false
+	}
+	return "", false
+}
+
 func (d resolvedDeclaration) propertyNames() []string {
 	if d.ambiguous {
 		return nil
@@ -170,8 +252,42 @@ func (d resolvedDeclaration) property(name string) resolvedDeclaration {
 	}
 	var matches []*openapi3.Schema
 	for _, conjunct := range d.conjuncts {
+		matched := false
 		if ref := conjunct.Properties[name]; ref != nil && ref.Value != nil {
 			matches = append(matches, ref.Value)
+			matched = true
+		}
+		if !d.oas30 {
+			patterns := make([]string, 0, len(conjunct.PatternProperties))
+			for pattern := range conjunct.PatternProperties {
+				patterns = append(patterns, pattern)
+			}
+			sort.Strings(patterns)
+			for _, pattern := range patterns {
+				re, err := regexp2.Compile(pattern, regexp2.ECMAScript)
+				if err != nil {
+					continue
+				}
+				ok, err := re.MatchString(name)
+				if err != nil || !ok {
+					continue
+				}
+				matched = true
+				if ref := conjunct.PatternProperties[pattern]; ref != nil && ref.Value != nil {
+					matches = append(matches, ref.Value)
+				}
+			}
+		}
+		if matched {
+			continue
+		}
+		switch {
+		case conjunct.AdditionalProperties.Schema != nil && conjunct.AdditionalProperties.Schema.Value != nil:
+			if literal, boolean := booleanSchemaLiteral(conjunct.AdditionalProperties.Schema.Value); !boolean || literal {
+				matches = append(matches, conjunct.AdditionalProperties.Schema.Value)
+			}
+		case conjunct.AdditionalProperties.Has == nil || *conjunct.AdditionalProperties.Has:
+			matches = append(matches, &openapi3.Schema{})
 		}
 	}
 	return resolveDeclaration(allOfSchema(matches), d.oas30)

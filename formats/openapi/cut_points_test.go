@@ -134,11 +134,11 @@ func TestCutPointCaseTable(t *testing.T) {
 	}
 }
 
-// TestCutPointsAreDirectionalAndAddressed states the two properties the case
-// table exercises end to end, at the unit the convention is stated in.
-func TestCutPointsAreDirectionalAndAddressed(t *testing.T) {
-	// `parent` is readOnly, so the request direction has no cycle to cut and the
-	// response direction does.
+// TestCutPointsPreserveAnnotationsAndAddresses states the two properties the
+// case table exercises end to end, at the unit the convention is stated in.
+func TestCutPointsPreserveAnnotationsAndAddresses(t *testing.T) {
+	// readOnly is an annotation, so the recursive edge survives in both
+	// directions and both direction-specific addresses are cut points.
 	registry := map[string]any{
 		"#/components/schemas/Folder": map[string]any{
 			"type": "object",
@@ -152,8 +152,8 @@ func TestCutPointsAreDirectionalAndAddressed(t *testing.T) {
 		},
 	}
 	request, response := newDirectionGraphs(registry)
-	if len(request.cyclic) != 0 {
-		t.Errorf("request cut points = %v, want none: projection removed the only edge", request.cyclic)
+	if !request.cyclic["#/components/schemas/Folder"] {
+		t.Errorf("request cut points = %v, want Folder", request.cyclic)
 	}
 	if !response.cyclic["#/components/schemas/Folder"] {
 		t.Errorf("response cut points = %v, want Folder", response.cyclic)
