@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,12 +17,13 @@ import (
 // OpenAPI synthesis fidelity in revision 1:
 //   - every client-invoked paths operation;
 //   - every independently selectable request media declaration;
+//   - unusable server/security alternatives whose smallest-owner exclusions
+//     must remain visible beside a represented sibling;
 //   - callbacks and 3.1 webhooks, which are upstream interactions but are
 //     explicitly outside this revision's caller-to-service direction.
 //
-// Incorporated parameter serialization, response selection, server
-// resolution, and security requirements are behavior of a represented target,
-// not independently addressable units.
+// Incorporated parameter serialization and response selection are behavior of
+// a represented target, not independently addressable units.
 func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, unrealizable map[string]unrealizableTarget, floor *acceptanceFloor) []synthesize.SynthesisCoverageEntry {
 	if doc == nil || iface == nil {
 		return []synthesize.SynthesisCoverageEntry{}
@@ -145,6 +147,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					continue
 				}
 				targetRequirements := openAPIServerRequirements(doc, pathItem, op, sourceLocation)
+				targetRequirements = append(targetRequirements, openAPISecurityRequirements(doc, op, effectiveParameters(pathItem, op))...)
 				if !requestBodyIgnoredForBindingSpec(bindingSpec, method) {
 					targetRequirements = append(targetRequirements, openAPIRequestMediaRequirements(doc, pathItem, op, bindingSpec)...)
 				}
@@ -157,6 +160,8 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 					BindingSelector: identity.selector,
 					Requirements:    targetRequirements,
 				})
+				entries = append(entries, openAPIServerAlternativeCoverage(doc, pathItem, op, selector, identity.operationKey, bindingSpec, sourceLocation)...)
+				entries = append(entries, openAPISecurityAlternativeCoverage(doc, op, effectiveParameters(pathItem, op), selector, identity.operationKey, bindingSpec)...)
 				if !requestBodyIgnoredForBindingSpec(bindingSpec, method) {
 					entries = append(entries, openAPIRequestMediaCoverage(doc, op, pathItem, identity, bindingSpec, verdict)...)
 				}
@@ -208,9 +213,117 @@ func openAPIServerRequirements(
 	sourceLocation string,
 ) []string {
 	if _, err := resolveServer(doc, pathItem, op, nil, sourceLocation); err != nil {
+		var required *configRequired
+		if !errors.As(err, &required) {
+			return nil
+		}
 		return []string{"configuration.server"}
 	}
 	return nil
+}
+
+func openAPISecurityRequirements(doc *openapi3.T, op *openapi3.Operation, params openapi3.Parameters) []string {
+	requirements := effectiveSecurityRequirements(doc, op)
+	if requirements == nil || len(*requirements) == 0 {
+		return nil
+	}
+	var result []string
+	if len(*requirements) > 1 {
+		result = append(result, "configuration.security")
+	}
+	entryPlans := viableSecurityPlansWithContext(doc, op, contextWithConfigurationPoint(nil, "implicitConnectionScope", "entry"), "", params)
+	referringPlans := viableSecurityPlansWithContext(doc, op, contextWithConfigurationPoint(nil, "implicitConnectionScope", "referring"), "", params)
+	if len(entryPlans) == 0 && len(referringPlans) > 0 {
+		result = append(result, "configuration.implicitConnectionScope")
+	}
+	return result
+}
+
+func openAPIServerAlternativeCoverage(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Operation, selector, operationKey, bindingSpec, sourceLocation string) []synthesize.SynthesisCoverageEntry {
+	servers, prefix := effectiveServerDeclaration(doc, pathItem, op, selector)
+	if len(servers) == 0 {
+		return nil
+	}
+	if len(servers) == 1 {
+		eligible, _ := eligibleServers(servers, doc.OpenAPI, sourceLocation)
+		if len(eligible) == 1 {
+			if _, err := resolveServer(doc, pathItem, op, nil, sourceLocation); err == nil {
+				// A sole usable alternative self-selects and owns no
+				// configuration requirement independent of the target.
+				return nil
+			}
+		}
+	}
+	entries := make([]synthesize.SynthesisCoverageEntry, 0, len(servers))
+	for index, server := range servers {
+		eligible, err := eligibleServers(openapi3.Servers{server}, doc.OpenAPI, sourceLocation)
+		if len(eligible) != 0 {
+			continue
+		}
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
+			SourceIndex: 0, SourceRef: fmt.Sprintf("%s/%d", prefix, index), Scope: synthesize.SynthesisCoverageAlternative,
+			Status: synthesize.SynthesisExcluded, ReasonCode: "openapi.server_url_excluded", Rule: openAPIRule(bindingSpec, "P-04"), Message: err.Error(),
+			OperationKey: operationKey, BindingSelector: selector,
+		})
+	}
+	return entries
+}
+
+func effectiveServerDeclaration(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Operation, selector string) (openapi3.Servers, string) {
+	if op != nil && op.Servers != nil && len(*op.Servers) > 0 {
+		return *op.Servers, selector + "/servers"
+	}
+	if pathItem != nil && len(pathItem.Servers) > 0 {
+		return pathItem.Servers, selector[:strings.LastIndex(selector, "/")] + "/servers"
+	}
+	if doc != nil && len(doc.Servers) > 0 {
+		return doc.Servers, "#/servers"
+	}
+	return nil, ""
+}
+
+func openAPISecurityAlternativeCoverage(doc *openapi3.T, op *openapi3.Operation, params openapi3.Parameters, selector, operationKey, bindingSpec string) []synthesize.SynthesisCoverageEntry {
+	requirements := effectiveSecurityRequirements(doc, op)
+	if requirements == nil || len(*requirements) == 0 {
+		return nil
+	}
+	prefix := "#/security"
+	if op != nil && op.Security != nil {
+		prefix = selector + "/security"
+	}
+	plans := append(
+		securityPlansWithContext(doc, op, "", contextWithConfigurationPoint(nil, "implicitConnectionScope", "entry")),
+		securityPlansWithContext(doc, op, "", contextWithConfigurationPoint(nil, "implicitConnectionScope", "referring"))...,
+	)
+	if len(*requirements) == 1 {
+		for _, plan := range plans {
+			if plan.authoredIndex == 0 && checkCredentialCollisions(credentialDestinations(plan), params, nil) == nil {
+				// A sole usable alternative self-selects; its credentials are
+				// invocation prerequisites, not binding configuration.
+				return nil
+			}
+		}
+	}
+	entries := make([]synthesize.SynthesisCoverageEntry, 0, len(*requirements))
+	for index := range *requirements {
+		usable := false
+		for _, plan := range plans {
+			if plan.authoredIndex == index && checkCredentialCollisions(credentialDestinations(plan), params, nil) == nil {
+				usable = true
+				break
+			}
+		}
+		if usable {
+			continue
+		}
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
+			SourceIndex: 0, SourceRef: fmt.Sprintf("%s/%d", prefix, index), Scope: synthesize.SynthesisCoverageAlternative,
+			Status: synthesize.SynthesisExcluded, ReasonCode: "openapi.security_alternative_unusable", Rule: openAPIRule(bindingSpec, "P-04"),
+			Message:      "security alternative is malformed, unresolved, or collides with an owned request destination",
+			OperationKey: operationKey, BindingSelector: selector,
+		})
+	}
+	return entries
 }
 
 func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathItem *openapi3.PathItem, identity struct {

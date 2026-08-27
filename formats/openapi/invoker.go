@@ -373,6 +373,7 @@ func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 
 type runtimeOperationModel struct {
 	document            *openapi3.T
+	pathItem            *openapi3.PathItem
 	operation           *openapi3.Operation
 	governanceOperation *openapi3.Operation
 	parameters          openapi3.Parameters
@@ -488,7 +489,7 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	prepareEngineEncodingView(plans)
 	prepareEngineResponseView(operation, bindingSpec)
 	return &runtimeOperationModel{
-		document: document, operation: operation, governanceOperation: governanceOperation,
+		document: document, pathItem: pathItem, operation: operation, governanceOperation: governanceOperation,
 		parameters: callerParameters, plans: plans, routes: routes,
 		rawCookieHeader: rawCookieHeader,
 	}, nil
@@ -777,6 +778,35 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		}
 		return bridgeExecutionError(err)
 	}
+	serverBase, serverErr := resolveServer(model.document, model.pathItem, model.operation, args.Context, args.Source.Location)
+	if serverErr != nil {
+		var required *configRequired
+		if errors.As(serverErr, &required) {
+			return invoke.NewContextRequiredError(configRequiredDetails(required, args.Source.Location))
+		}
+		return invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if scopeDetails, _, scopeErr := requiredImplicitConnectionScopeContext(model.document, model.operation, args.Context, serverBase, model.parameters, serverBase); scopeErr != nil {
+		return invoke.NewInvocationError(openapiclient.CodeRefused)
+	} else if scopeDetails != nil {
+		return invoke.NewContextRequiredError(scopeDetails)
+	}
+	selectedSecurity, securityErr := electSecurityAlternative(model.document, model.operation, args.Context, serverBase, model.parameters)
+	if securityErr != nil {
+		return invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	securityDetails := requiredSelectedSecurityContext(selectedSecurity, args.Context, serverBase, e.securityHandlers)
+	credentialPolicy, credentialErr := validateSelectedCredentials(selectedSecurity, args.Context)
+	if credentialErr != nil {
+		return invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	engineBase := strings.TrimRight(serverBase, "/")
+	if engineBase == "" {
+		engineBase = serverBase
+	}
+	selectedServer := openapi3.Servers{&openapi3.Server{URL: engineBase}}
+	model.operation.Servers = &selectedServer
+	options.Context = contextWithoutConfigurationPoints(args.Context, "server", "security", "implicitConnectionScope")
 	mediaDetails, mediaErr := requiredRequestMediaContext(model.document, model.operation, bindingSpec, args.Context)
 	if mediaErr != nil {
 		return invoke.NewInvocationError(openapiclient.CodeRefused)
@@ -797,9 +827,14 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	if err != nil {
 		return bridgeExecutionError(err)
 	}
+	if securityDetails != nil {
+		return invoke.NewContextRequiredError(securityDetails)
+	}
 	bridgeCtx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 	bridgeCtx = context.WithValue(bridgeCtx, completedURLValidationContextKey{}, bindingSpec)
+	bridgeCtx = context.WithValue(bridgeCtx, serverAssemblyContextKey{}, &serverAssemblyPolicy{resolvedBase: serverBase, engineBase: engineBase})
+	bridgeCtx = context.WithValue(bridgeCtx, credentialWireContextKey{}, credentialPolicy)
 	governance := &mediaGovernance{
 		document: model.document, operation: model.governanceOperation,
 		parameters: model.parameters, bindingSpec: bindingSpec,
@@ -884,6 +919,39 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	return nil
 }
 
+func configRequiredDetails(required *configRequired, target string) *invoke.ContextRequiredDetails {
+	requirement := invoke.NewConfigValueRequirement(
+		required.point, required.path, required.description, required.schema, required.durable,
+	)
+	return &invoke.ContextRequiredDetails{
+		Target:       target,
+		Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{requirement}}},
+	}
+}
+
+func contextWithoutConfigurationPoints(bindCtx map[string]any, points ...string) map[string]any {
+	if bindCtx == nil {
+		return nil
+	}
+	copyContext := make(map[string]any, len(bindCtx))
+	for name, value := range bindCtx {
+		copyContext[name] = value
+	}
+	configuration, _ := bindCtx["configuration"].(map[string]any)
+	if configuration == nil {
+		return copyContext
+	}
+	copyConfiguration := make(map[string]any, len(configuration))
+	for name, value := range configuration {
+		copyConfiguration[name] = value
+	}
+	for _, point := range points {
+		delete(copyConfiguration, point)
+	}
+	copyContext["configuration"] = copyConfiguration
+	return copyContext
+}
+
 // PrepareBinding adapts the SDK binding preflight to the artifact runtime.
 func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	return e.Runtime.prepareBinding(ctx, args)
@@ -911,6 +979,7 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 	bindingSpec := args.Source.BindingSpec
 	var prepared *openapiclient.PreparedOperation
 	var localDetails *invoke.ContextRequiredDetails
+	configurationPending := false
 	if args.Source.Content != nil {
 		if document := e.prepareDoc(args.Source.Location, args.Source.Content); document != nil {
 			if err := checkAcceptedOpenAPIVersionForBindingSpec(document, bindingSpec); err != nil {
@@ -919,8 +988,43 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 			if path, method, selectorErr := parseSelector(args.Selector); selectorErr == nil && document.Paths != nil {
 				if pathItem := document.Paths.Find(path); pathItem != nil {
 					if operation := pathItem.GetOperation(strings.ToUpper(method)); operation != nil {
-						if duplicate := duplicateEffectiveParameterIdentity(effectiveParameters(pathItem, operation)); duplicate != "" {
+						parameters := effectiveParameters(pathItem, operation)
+						if duplicate := duplicateEffectiveParameterIdentity(parameters); duplicate != "" {
 							return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+						}
+						serverBase, serverErr := resolveServer(document, pathItem, operation, args.Context, args.Source.Location)
+						if serverErr != nil {
+							var required *configRequired
+							if !errors.As(serverErr, &required) {
+								return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+							}
+							localDetails = mergeContextRequirements(localDetails, configRequiredDetails(required, args.Source.Location))
+							configurationPending = true
+						}
+						selectionTarget := serverBase
+						if selectionTarget == "" {
+							selectionTarget = args.Source.Location
+						}
+						selectionDetails, selectionPending, selectionErr := requiredSecuritySelectionContext(document, operation, args.Context, selectionTarget)
+						if selectionErr != nil {
+							return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+						}
+						localDetails = mergeContextRequirements(localDetails, selectionDetails)
+						configurationPending = configurationPending || selectionPending
+						if !selectionPending {
+							scopeDetails, scopePending, scopeErr := requiredImplicitConnectionScopeContext(document, operation, args.Context, serverBase, parameters, selectionTarget)
+							if scopeErr != nil {
+								return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+							}
+							localDetails = mergeContextRequirements(localDetails, scopeDetails)
+							configurationPending = configurationPending || scopePending
+							if !scopePending {
+								selected, securityErr := electSecurityAlternative(document, operation, args.Context, serverBase, parameters)
+								if securityErr != nil {
+									return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+								}
+								localDetails = mergeContextRequirements(localDetails, requiredSelectedSecurityContext(selected, args.Context, selectionTarget, e.securityHandlers))
+							}
 						}
 						if requestBodyIgnoredForBindingSpec(bindingSpec, method) {
 							operation.RequestBody = nil
@@ -940,10 +1044,24 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 							prepareEnginePropertyMediaView(plans, args.Context)
 						}
 						prepareEngineResponseView(operation, bindingSpec)
+						if !configurationPending {
+							if _, configured := invoke.ContextConfiguration(args.Context)["server"]; configured {
+								engineBase := strings.TrimRight(serverBase, "/")
+								if engineBase == "" {
+									engineBase = serverBase
+								}
+								selectedServer := openapi3.Servers{&openapi3.Server{URL: engineBase}}
+								operation.Servers = &selectedServer
+							}
+							options.Context = contextWithoutConfigurationPoints(args.Context, "server", "security", "implicitConnectionScope")
+						}
 					}
 				}
 			}
 			options.Source = openapiclient.Source{Location: args.Source.Location, Document: document}
+		}
+		if configurationPending {
+			return localDetails, nil
 		}
 		allowExternal := false
 		options.AllowExternalRefs = &allowExternal

@@ -306,7 +306,7 @@ func TestRuntimeParameterConversionAndRawCookieBridge(t *testing.T) {
 	})
 }
 
-func TestCompletedURLValidationIsOpenAPI31PreDispatch(t *testing.T) {
+func TestCompletedURLValidationIsPreDispatchForBothSiblings(t *testing.T) {
 	called := 0
 	base := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 		called++
@@ -331,11 +331,11 @@ func TestCompletedURLValidationIsOpenAPI31PreDispatch(t *testing.T) {
 	}
 
 	request = request.WithContext(context.WithValue(request.Context(), completedURLValidationContextKey{}, BindingSpecOpenAPI30))
-	if _, err := transport.RoundTrip(request); err != nil {
-		t.Fatalf("3.0-only completed-target work escaped M2a: %v", err)
+	if _, err := transport.RoundTrip(request); err == nil || !strings.Contains(err.Error(), "RFC 3986") {
+		t.Fatalf("3.0 completed-URL error = %v", err)
 	}
-	if called != 1 {
-		t.Fatalf("3.0 request dispatches = %d, want 1", called)
+	if called != 0 {
+		t.Fatalf("invalid 3.0 completed URL dispatched %d times", called)
 	}
 }
 

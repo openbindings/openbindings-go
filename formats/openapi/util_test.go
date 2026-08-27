@@ -713,7 +713,7 @@ func TestRequiredContext_DigestOnlyAlternativeSurfaced(t *testing.T) {
 	}
 }
 
-func TestSecurityConfigurationErrorRefusesMixedValidAndMissingAlternatives(t *testing.T) {
+func TestSecurityConfigurationErrorConfinesMixedValidAndMissingAlternatives(t *testing.T) {
 	doc := &openapi3.T{Components: &openapi3.Components{SecuritySchemes: openapi3.SecuritySchemes{
 		"bearer": {Value: &openapi3.SecurityScheme{Type: "http", Scheme: "bearer"}},
 	}}}
@@ -723,8 +723,8 @@ func TestSecurityConfigurationErrorRefusesMixedValidAndMissingAlternatives(t *te
 	}
 	op := &openapi3.Operation{Security: &security}
 	err := securityConfigurationError(doc, op)
-	if err == nil || !strings.Contains(err.Error(), "missing") {
-		t.Fatalf("mixed valid/missing alternatives must refuse invalid source, got %v", err)
+	if err != nil {
+		t.Fatalf("a missing scheme must make only its alternative unusable, got %v", err)
 	}
 }
 

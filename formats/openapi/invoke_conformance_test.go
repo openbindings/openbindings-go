@@ -3,6 +3,7 @@ package openapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1208,9 +1209,9 @@ func TestInvoke_CredentialCollisionRefused(t *testing.T) {
 	}
 }
 
-// Security Requirement Objects are alternatives, not a pool of schemes. Even
-// when context can satisfy both alternatives, the invoker applies exactly one
-// complete alternative and does not leak the other credential onto the wire.
+// Security Requirement Objects are alternatives, not a pool of schemes. The
+// explicit choice applies exactly one complete alternative and does not leak
+// another satisfiable credential onto the wire.
 func TestInvoke_SecurityORSelectsOneCompleteAlternative(t *testing.T) {
 	var gotHeader string
 	var gotQuery string
@@ -1240,7 +1241,7 @@ func TestInvoke_SecurityORSelectsOneCompleteAlternative(t *testing.T) {
 		Context: map[string]any{"apiKeys": map[string]any{
 			"headerKey": "header-secret",
 			"queryKey":  "query-secret",
-		}},
+		}, "configuration": map[string]any{"security": map[string]any{"index": 0}}},
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
@@ -1287,7 +1288,7 @@ func TestInvoke_SecurityORDoesNotCombineIncompleteAlternativeFragments(t *testin
 		Context: map[string]any{"apiKeys": map[string]any{
 			"firstHeader": "incomplete-fragment",
 			"queryKey":    "complete-alternative",
-		}},
+		}, "configuration": map[string]any{"security": map[string]any{"index": 1}}},
 	})
 	if _, ierr := driveSingle(t, call, nil); ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
@@ -1418,19 +1419,30 @@ func TestPrepareBinding_FiltersCollidingSecurityAlternative(t *testing.T) {
 	  }}
 	}`, srv.URL)
 
-	details, err := NewInvoker().PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
+	invoker := NewInvoker()
+	args := &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
-	})
+	}
+	details, err := invoker.PrepareBinding(context.Background(), args)
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
 	if details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 {
-		t.Fatalf("challenge = %+v, want only the safe bearer alternative", details)
+		t.Fatalf("challenge = %+v, want the security selection requirement", details)
 	}
 	req := details.Alternatives[0].Requirements[0]
+	if req.Type != "config.value" || req.Extra["point"] != "security" || req.Extra["path"] != "/index" {
+		t.Errorf("selection requirement = %+v, want configuration.security index", req)
+	}
+	args.Context = map[string]any{"configuration": map[string]any{"security": map[string]any{"index": 1}}}
+	details, err = invoker.PrepareBinding(context.Background(), args)
+	if err != nil || details == nil || len(details.Alternatives) != 1 || len(details.Alternatives[0].Requirements) != 1 {
+		t.Fatalf("selected challenge = %+v, %v; want bearer prerequisite", details, err)
+	}
+	req = details.Alternatives[0].Requirements[0]
 	if req.Type != "auth.bearer" || req.Name != "bearer" {
-		t.Errorf("surviving requirement = %+v, want named auth.bearer", req)
+		t.Errorf("selected requirement = %+v, want named auth.bearer", req)
 	}
 	if requests.Load() != 0 {
 		t.Error("prepareBinding must perform no network I/O")
@@ -1557,7 +1569,7 @@ func TestInvoke_RawCookieContextHeaderConflictsStructuredSources(t *testing.T) {
 	})
 }
 
-func TestPrepareBindingReturnsNoChallengeForOwnershipConflict(t *testing.T) {
+func TestPrepareBindingRefusesOwnershipConflictWithoutAuthChallenge(t *testing.T) {
 	spec := `{
 	  "openapi": "3.1.0", "info": {"title": "t", "version": "1"},
 	  "servers": [{"url": "https://api.example.com"}],
@@ -1575,11 +1587,12 @@ func TestPrepareBindingReturnsNoChallengeForOwnershipConflict(t *testing.T) {
 		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 	})
-	if err != nil {
-		t.Fatalf("prepare: %v", err)
-	}
 	if details != nil {
 		t.Fatalf("unresolvable operation must not emit an auth challenge: %+v", details)
+	}
+	var invocationErr *invoke.InvocationError
+	if !errors.As(err, &invocationErr) || invocationErr.Code != invoke.ErrCodeRefused {
+		t.Fatalf("unresolvable operation must refuse during preflight, got %v", err)
 	}
 }
 

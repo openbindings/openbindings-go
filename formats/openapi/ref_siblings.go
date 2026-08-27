@@ -26,6 +26,7 @@ type rawRefSiblingNormalizer struct {
 	targets         map[string]map[rawRefTarget]struct{}
 	join            func(*url.URL, *url.URL) *url.URL
 	schemaOverlays  *rawSchemaOverlayCollector
+	securitySchemes map[string]map[string]any
 }
 
 type rawRefTarget struct {
@@ -48,7 +49,14 @@ const (
 
 type rawRefSemantics uint8
 
-const referenceMetadataMarker = "x-openbindings-internal-reference-metadata"
+const (
+	referenceMetadataMarker        = "x-openbindings-internal-reference-metadata"
+	serverDocumentMarker           = "x-openbindings-internal-server-document"
+	serverVariableDefaultMarker    = "x-openbindings-internal-server-default-present"
+	serverVariableEnumMarker       = "x-openbindings-internal-server-enum-present"
+	operationDocumentMarker        = "x-openbindings-internal-operation-document"
+	referringSecuritySchemesMarker = "x-openbindings-internal-referring-security-schemes"
+)
 
 const (
 	rawRefSemanticsUnknown rawRefSemantics = iota
@@ -58,9 +66,37 @@ const (
 
 func newRawRefSiblingNormalizer(join func(*url.URL, *url.URL) *url.URL) *rawRefSiblingNormalizer {
 	return &rawRefSiblingNormalizer{
-		targets: map[string]map[rawRefTarget]struct{}{},
-		join:    join,
+		targets:         map[string]map[rawRefTarget]struct{}{},
+		join:            join,
+		securitySchemes: map[string]map[string]any{},
 	}
+}
+
+// rememberImplicitSecuritySchemes runs on a resource before the external
+// composition pruner removes components that have no explicit $ref edge.
+// Security Requirement names are implicit connections, so their referring
+// document's component map must survive in this sidecar for the configured
+// referring-scope interpretation.
+func (n *rawRefSiblingNormalizer) rememberImplicitSecuritySchemes(data []byte, resource *url.URL) {
+	var root any
+	if _, err := yaml.Unmarshal(data, &root, yaml.DecodeOpts{DisableTimestamps: true}); err != nil {
+		return
+	}
+	document, _ := root.(map[string]any)
+	components, _ := document["components"].(map[string]any)
+	schemes, _ := components["securitySchemes"].(map[string]any)
+	if len(schemes) == 0 {
+		return
+	}
+	n.mu.Lock()
+	n.securitySchemes[artifactResourceKey(resource)] = schemes
+	n.mu.Unlock()
+}
+
+func (n *rawRefSiblingNormalizer) implicitSecuritySchemes(resource *url.URL) map[string]any {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.securitySchemes[artifactResourceKey(resource)]
 }
 
 // normalizeResource parses one raw root or external resource, rewrites only
@@ -470,8 +506,11 @@ func supportedComposingDialect(dialect string) bool {
 
 func (n *rawRefSiblingNormalizer) normalizeOpenAPIDocument(root map[string]any, semantics rawRefSemantics, base *url.URL) (bool, error) {
 	changed := false
+	changed = markRawServers(root["servers"], base) || changed
 	components, _ := root["components"].(map[string]any)
+	var referringSecuritySchemes map[string]any
 	if components != nil {
+		referringSecuritySchemes, _ = components["securitySchemes"].(map[string]any)
 		for _, item := range rawMapValues(components["schemas"]) {
 			c, err := n.normalizeTarget(item, rawSchemaTarget, semantics, base)
 			if err != nil {
@@ -493,6 +532,9 @@ func (n *rawRefSiblingNormalizer) normalizeOpenAPIDocument(root map[string]any, 
 		}
 		for _, entry := range componentKinds {
 			for _, item := range rawMapValues(components[entry.key]) {
+				if entry.kind == rawPathItemTarget {
+					changed = markRawPathItemBindingOrigins(item, base, referringSecuritySchemes) || changed
+				}
 				c, err := n.normalizeTarget(item, entry.kind, semantics, base)
 				if err != nil {
 					return false, err
@@ -501,8 +543,12 @@ func (n *rawRefSiblingNormalizer) normalizeOpenAPIDocument(root map[string]any, 
 			}
 		}
 	}
+	if len(referringSecuritySchemes) == 0 {
+		referringSecuritySchemes = n.implicitSecuritySchemes(base)
+	}
 	for _, key := range []string{"paths", "webhooks"} {
 		for _, item := range rawMapValues(root[key]) {
+			changed = markRawPathItemBindingOrigins(item, base, referringSecuritySchemes) || changed
 			c, err := n.normalizeTarget(item, rawPathItemTarget, semantics, base)
 			if err != nil {
 				return false, err
@@ -511,6 +557,69 @@ func (n *rawRefSiblingNormalizer) normalizeOpenAPIDocument(root map[string]any, 
 		}
 	}
 	return changed, nil
+}
+
+// markRawPathItemBindingOrigins retains the declaring document for the two
+// OpenAPI implicit-connection rules that disappear when kin-openapi resolves
+// a referenced Path Item into the entry document: relative Server URLs and
+// Security Requirement component names. The markers live only in the
+// loader's private image and use extension fields so the typed loader keeps
+// them without changing any authored OpenAPI member.
+func markRawPathItemBindingOrigins(value any, base *url.URL, referringSecuritySchemes map[string]any) bool {
+	object, _ := value.(map[string]any)
+	if object == nil {
+		return false
+	}
+	changed := markRawServers(object["servers"], base)
+	for _, method := range httpMethods {
+		operation, _ := object[method].(map[string]any)
+		if operation == nil {
+			continue
+		}
+		changed = markRawServers(operation["servers"], base) || changed
+		if _, present := operation["security"]; present {
+			if document := artifactResourceKey(base); document != "" {
+				operation[operationDocumentMarker] = document
+				changed = true
+			}
+			if len(referringSecuritySchemes) > 0 {
+				operation[referringSecuritySchemesMarker] = referringSecuritySchemes
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func markRawServers(value any, base *url.URL) bool {
+	servers, _ := value.([]any)
+	changed := false
+	for _, rawServer := range servers {
+		server, _ := rawServer.(map[string]any)
+		if server == nil {
+			continue
+		}
+		if document := artifactResourceKey(base); document != "" {
+			server[serverDocumentMarker] = document
+			changed = true
+		}
+		variables, _ := server["variables"].(map[string]any)
+		for _, rawVariable := range variables {
+			variable, _ := rawVariable.(map[string]any)
+			if variable == nil {
+				continue
+			}
+			if _, present := variable["default"]; present {
+				variable[serverVariableDefaultMarker] = true
+				changed = true
+			}
+			if _, present := variable["enum"]; present {
+				variable[serverVariableEnumMarker] = true
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 func rawMapValues(value any) []any {
@@ -578,6 +687,7 @@ func (n *rawRefSiblingNormalizer) normalizeTarget(value any, kind rawRefTargetKi
 
 	switch kind {
 	case rawPathItemTarget:
+		changed = markRawPathItemBindingOrigins(object, base, nil) || changed
 		if parameters, ok := object["parameters"].([]any); ok {
 			for _, parameter := range parameters {
 				if err := apply(parameter, rawParameterTarget); err != nil {

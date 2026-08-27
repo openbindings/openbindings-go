@@ -35,7 +35,7 @@ func TestEffectiveServers_Precedence(t *testing.T) {
 		t.Errorf("multiple document servers require selection, got (%q, %v)", got, err)
 	}
 	// Implied "/" resolves against the artifact's base URI (the location).
-	if got, _ := resolveServer(&openapi3.T{}, nil, nil, nil, "https://host.example.com/openapi.json"); got != "https://host.example.com" {
+	if got, _ := resolveServer(&openapi3.T{}, nil, nil, nil, "https://host.example.com/openapi.json"); got != "https://host.example.com/" {
 		t.Errorf("implied / must resolve against the location, got %q", got)
 	}
 }
@@ -86,8 +86,9 @@ func TestResolveServer_ConfigurationPoint(t *testing.T) {
 		t.Errorf("object baseUrl = %q", got)
 	}
 
-	// Select another entry by url (trailing slash trimmed for joining).
-	if got, _ := resolveServer(doc, nil, nil, ctxWith(map[string]any{"url": "https://alt.example.com/base/"}), ""); got != "https://alt.example.com/base" {
+	// Select another entry by url. The authored trailing slash is preserved;
+	// operation path bytes are appended verbatim later.
+	if got, _ := resolveServer(doc, nil, nil, ctxWith(map[string]any{"url": "https://alt.example.com/base/"}), ""); got != "https://alt.example.com/base/" {
 		t.Errorf("url selection = %q", got)
 	}
 	// A string matching a declared entry's url template selects that entry.
@@ -95,7 +96,7 @@ func TestResolveServer_ConfigurationPoint(t *testing.T) {
 		t.Errorf("string url-template selection = %q", got)
 	}
 	// Select by index.
-	if got, _ := resolveServer(doc, nil, nil, ctxWith(map[string]any{"index": float64(1)}), ""); got != "https://alt.example.com/base" {
+	if got, _ := resolveServer(doc, nil, nil, ctxWith(map[string]any{"index": float64(1)}), ""); got != "https://alt.example.com/base/" {
 		t.Errorf("index selection = %q", got)
 	}
 
@@ -152,7 +153,7 @@ func TestResolveServer_RelativeResolution(t *testing.T) {
 func TestResolveServer_LegacyMetadataBaseURL(t *testing.T) {
 	doc := serversDoc()
 	ctx := map[string]any{"metadata": map[string]any{"baseURL": "https://meta.example.com/"}}
-	if got, _ := resolveServer(doc, nil, nil, ctx, ""); got != "https://meta.example.com" {
+	if got, _ := resolveServer(doc, nil, nil, ctx, ""); got != "https://meta.example.com/" {
 		t.Errorf("metadata baseURL = %q", got)
 	}
 	// configuration.server wins over metadata.baseURL.
@@ -184,7 +185,7 @@ func TestResolveServer_MissingVariableDefault(t *testing.T) {
 func TestResolveServer_ConfigRequired(t *testing.T) {
 	// Undefaulted, unsupplied variable → config.value on the server point.
 	doc := &openapi3.T{
-		OpenAPI: "3.0.3",
+		OpenAPI: "3.1.2",
 		Servers: openapi3.Servers{{
 			URL:       "https://{env}.example.com",
 			Variables: map[string]*openapi3.ServerVariable{"env": {Enum: []string{"prod", "staging"}}},
