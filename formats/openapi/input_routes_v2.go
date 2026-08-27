@@ -337,7 +337,7 @@ func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parame
 			structuredCookieEmits = true
 		}
 	}
-	if bindingSpec == BindingSpecOpenAPI31 && rawCookieEmits {
+	if (bindingSpec == BindingSpecOpenAPI30 || bindingSpec == BindingSpecOpenAPI31) && rawCookieEmits {
 		if structuredCookieEmits || len(invoke.ContextCookies(bindCtx)) > 0 || selectedCookieCredentialWouldEmit(doc, op, bindCtx) {
 			return nil, fmt.Errorf("supplied raw Cookie parameter collides with structured cookie emission")
 		}
