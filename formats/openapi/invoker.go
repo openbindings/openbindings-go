@@ -372,15 +372,14 @@ func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 }
 
 type runtimeOperationModel struct {
-	document                 *openapi3.T
-	pathItem                 *openapi3.PathItem
-	operation                *openapi3.Operation
-	governanceOperation      *openapi3.Operation
-	parameters               openapi3.Parameters
-	plans                    []*bodyPlan
-	routes                   abstractInputRoutes
-	preStartBodyGate         bool
-	multipartTransferHeaders map[string]map[string]bool
+	document            *openapi3.T
+	pathItem            *openapi3.PathItem
+	operation           *openapi3.Operation
+	governanceOperation *openapi3.Operation
+	parameters          openapi3.Parameters
+	plans               []*bodyPlan
+	routes              abstractInputRoutes
+	preStartBodyGate    bool
 }
 
 func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocationArgs, client *http.Client, bindingSpec string) (*runtimeOperationModel, error) {
@@ -474,7 +473,6 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	// ignored declarations from becoming accidental required-input gates.
 	bodyForbidden := requestBodyIgnoredForBindingSpec(bindingSpec, method)
 	preStartBodyGate := bodyForbidden
-	multipartTransferHeaders := openAPI30MultipartTransferHeaders(plans)
 	if bodyForbidden {
 		operation.RequestBody = nil
 		plans = nil
@@ -489,13 +487,11 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 
 	callerParameters := cloneEffectiveParameters(parameters)
 	routes := planAbstractInputRoutes(callerParameters, plans)
-	prepareEngineEncodingView(plans)
 	prepareEngineResponseView(operation, bindingSpec)
 	return &runtimeOperationModel{
 		document: document, pathItem: pathItem, operation: operation, governanceOperation: governanceOperation,
 		parameters: callerParameters, plans: plans, routes: routes,
-		preStartBodyGate:         preStartBodyGate,
-		multipartTransferHeaders: multipartTransferHeaders,
+		preStartBodyGate: preStartBodyGate,
 	}, nil
 }
 
@@ -825,7 +821,6 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	if propertyDetails != nil {
 		return invoke.NewContextRequiredError(propertyDetails)
 	}
-	prepareEnginePropertyMediaView(model.plans, args.Context)
 	options.Source = openapiclient.Source{Location: args.Source.Location, Document: model.document}
 	prepared, err := e.engine.Prepare(ctx, options)
 	if err != nil {
@@ -842,7 +837,6 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	governance := &mediaGovernance{
 		document: model.document, operation: model.governanceOperation,
 		parameters: model.parameters, bindingSpec: bindingSpec,
-		multipartTransferHeaders: model.multipartTransferHeaders,
 	}
 	bridgeCtx = context.WithValue(bridgeCtx, mediaGovernanceContextKey{}, governance)
 	// Prove absence before starting the carrier: these methods can never route
@@ -894,14 +888,8 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 					return invoke.NewInvocationError(openapiclient.CodeRefused)
 				}
 				selectedPlans = selected
-				for _, selectedPlan := range selectedPlans {
-					if _, propertyErr := configuredPropertyMedia(selectedPlan, args.Context); propertyErr != nil {
-						execution.Cancel()
-						return invoke.NewInvocationError(openapiclient.CodeRefused)
-					}
-				}
 			}
-			engineInput, err := engineInputForCallerEnvelopeWithSemantics(value, model.parameters, selectedPlans, model.routes, options.Profile, bindingSpec, e.parameterConvert, model.document, model.operation, args.Context)
+			engineInput, err := engineInputForCallerEnvelope(value, model.parameters, selectedPlans, model.routes, options.Profile)
 			if err != nil {
 				execution.Cancel()
 				return invoke.NewInvocationError(openapiclient.CodeRefused)
@@ -1061,10 +1049,6 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 							return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
 						}
 						localDetails = mergeContextRequirements(localDetails, propertyDetails)
-						if plans, planErr := planRequestBodiesFor(document, operation, bindingSpec); planErr == nil {
-							prepareEngineEncodingView(plans)
-							prepareEnginePropertyMediaView(plans, args.Context)
-						}
 						prepareEngineResponseView(operation, bindingSpec)
 						if !configurationPending {
 							if _, configured := invoke.ContextConfiguration(args.Context)["server"]; configured {

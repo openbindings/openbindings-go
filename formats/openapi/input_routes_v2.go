@@ -301,10 +301,6 @@ func parseCallerEnvelope(input any) (*callerEnvelope, error) {
 // the adapter boundary into the standalone engine's private execution value.
 // This value is never emitted in an OBI document or accepted from a caller.
 func engineInputForCallerEnvelope(input any, params openapi3.Parameters, plans []*bodyPlan, routes abstractInputRoutes, profile openapiclient.Profile) (any, error) {
-	return engineInputForCallerEnvelopeWithSemantics(input, params, plans, routes, profile, BindingSpecOpenAPI31, nil, nil, nil, nil)
-}
-
-func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parameters, plans []*bodyPlan, routes abstractInputRoutes, profile openapiclient.Profile, bindingSpec string, conversion ParameterConversion, doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any) (any, error) {
 	envelope, err := parseCallerEnvelope(input)
 	if err != nil {
 		return nil, err
@@ -353,20 +349,6 @@ func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parame
 				return nil, fmt.Errorf("selected request representation requires an object body")
 			}
 			for name, member := range body {
-				var err error
-				member, err = prepareEncodingStylePropertyValue(plan, name, member, bindingSpec, conversion)
-				if err != nil {
-					return nil, err
-				}
-				if contentFormNullIsElided(plan, name, member, bindingSpec) {
-					continue
-				}
-				if bindingSpec == BindingSpecOpenAPI31 && plan.rawProperties[name] {
-					member, err = decodeRawPropertyForEngine(name, member)
-					if err != nil {
-						return nil, err
-					}
-				}
 				field := routes.bodyField(name)
 				value[field] = member
 			}
@@ -385,32 +367,6 @@ func engineInputForCallerEnvelopeWithSemantics(input any, params openapi3.Parame
 		"parameters":          parameterDescriptor,
 		"body":                bodyDescriptor,
 	}}, nil
-}
-
-func decodeRawPropertyForEngine(name string, value any) (any, error) {
-	decode := func(member any) (string, error) {
-		text, ok := member.(string)
-		if !ok {
-			return "", fmt.Errorf("raw multipart property %q must be a canonical Base64 string, got %T", name, member)
-		}
-		decoded, err := canonicalBase64BoundaryBytes(name, text)
-		if err != nil {
-			return "", err
-		}
-		return string(decoded), nil
-	}
-	if members, ok := asArray(value); ok {
-		result := make([]any, len(members))
-		for index, member := range members {
-			decoded, err := decode(member)
-			if err != nil {
-				return nil, err
-			}
-			result[index] = decoded
-		}
-		return result, nil
-	}
-	return decode(value)
 }
 
 func preferredBodyPlan(plans []*bodyPlan) *bodyPlan {

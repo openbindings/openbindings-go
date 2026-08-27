@@ -242,53 +242,6 @@ func cloneEffectiveParameters(parameters openapi3.Parameters) openapi3.Parameter
 	return result
 }
 
-// prepareEngineEncodingView gives the standalone carrier the declaration
-// shape its older admission check expects. The adapter has already applied
-// the binding's resolved-declaration proof; serialization itself remains
-// value-driven and therefore preserves object values for the newly admitted
-// spaceDelimited/pipeDelimited cells.
-func prepareEngineEncodingView(plans []*bodyPlan) {
-	for _, plan := range plans {
-		if plan == nil || plan.media == nil {
-			continue
-		}
-		root := mediaSchema(plan.media)
-		for name, encoding := range plan.media.Encoding {
-			if plan.bindingSpec == BindingSpecOpenAPI30 && plan.family == familyMultipart {
-				// OAS 3.0 limits these Encoding controls to urlencoded bodies;
-				// its multipart path ignores them.
-				encoding.Style = ""
-				encoding.Explode = nil
-				encoding.AllowReserved = false
-			}
-			if plan.bindingSpec == BindingSpecOpenAPI30 || plan.bindingSpec == BindingSpecOpenAPI31 {
-				// Header schemas are descriptive at this boundary. The 3.0 static
-				// Content-Transfer-Encoding exception is captured before this
-				// carrier-compatibility view is prepared and restored by transport.
-				encoding.Headers = nil
-			}
-			if !encodingUsesSerializationForPlan(plan, encoding) {
-				continue
-			}
-			method := revision3EncodingSerializationMethod(encoding)
-			var engineType string
-			switch method.Style {
-			case openapi3.SerializationSpaceDelimited, openapi3.SerializationPipeDelimited:
-				engineType = "array"
-			case openapi3.SerializationDeepObject:
-				engineType = "object"
-			}
-			if engineType == "" {
-				continue
-			}
-			property := resolvedMultipartProperty(root, name, map[*openapi3.Schema]bool{})
-			if property != nil {
-				property.Type = &openapi3.Types{engineType}
-			}
-		}
-	}
-}
-
 type completedURLValidationContextKey struct{}
 type mediaGovernanceContextKey struct{}
 type serverAssemblyContextKey struct{}
@@ -329,9 +282,6 @@ func (t governedTransport) RoundTrip(request *http.Request) (*http.Response, err
 	}
 	// §9.1: this binding never advertises a response-media preference.
 	copy.Header.Del("Accept")
-	if err := applyDeclaredMultipartTransferHeaders(copy); err != nil {
-		return nil, err
-	}
 	if err := applyRequestContentCodings(copy, t.requestCodings); err != nil {
 		return nil, err
 	}
