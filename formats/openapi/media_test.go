@@ -288,11 +288,10 @@ func TestBuildMultipartBody_30BinaryBase64(t *testing.T) {
 	}
 }
 
-// The Accept header advertises the declared concrete media types of the
-// SUCCESS responses (2xx literals + 2XX, plus default only when it can
-// actually govern an otherwise-unmatched 2xx); ranges are not concrete and
-// absent declarations do not invent application/json (§9.2, §8).
-func TestAcceptHeader(t *testing.T) {
+// The success-media inventory drives response synthesis and streaming
+// capability. It is not emitted as an Accept header: the binding sends no
+// Accept header on the wire.
+func TestSuccessMediaInventory(t *testing.T) {
 	op := &openapi3.Operation{Responses: openapi3.NewResponses()}
 	op.Responses.Set("200", &openapi3.ResponseRef{Value: &openapi3.Response{
 		Content: openapi3.Content{"application/json": emptyMedia(), "text/event-stream": emptyMedia()},

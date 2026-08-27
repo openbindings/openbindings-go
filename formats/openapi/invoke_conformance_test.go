@@ -21,7 +21,18 @@ import (
 // specification revisions.
 
 func invokeWith(t *testing.T, spec, selector string, input any) (any, *invoke.InvocationError) {
-	return invokeWithBindingSpec(t, bindingSpecForTestDocument(spec), spec, selector, input)
+	return invokeWithContext(t, spec, selector, nil, input)
+}
+
+func invokeWithContext(t *testing.T, spec, selector string, bindingContext map[string]any, input any) (any, *invoke.InvocationError) {
+	t.Helper()
+	spec = withDeclaredJSONResponses(t, spec)
+	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
+		Selector: selector,
+		Context:  bindingContext,
+	})
+	return driveSingle(t, call, input)
 }
 
 func invokeWithBindingSpec(t *testing.T, bindingSpec, spec, selector string, input any) (any, *invoke.InvocationError) {
@@ -627,7 +638,8 @@ func TestInvoke_PathStyleSerializationOnTheWire(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // The lexicographically least +json type is selected when exact
-// application/json is absent, and rides as the request Content-Type.
+// application/json is absent, and the caller's requestMedia choice selects
+// the concrete +json declaration that rides as the request Content-Type.
 func TestInvoke_PlusJSONSelected(t *testing.T) {
 	var gotCT string
 	var gotBody []byte
@@ -650,12 +662,14 @@ func TestInvoke_PlusJSONSelected(t *testing.T) {
 	    "responses": {"201": {"description": "ok", "content": {"application/json": {"schema": {}}}}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1things/post", map[string]any{"body": map[string]any{"k": "v"}})
+	_, ierr := invokeWithContext(t, spec, "#/paths/~1things/post", map[string]any{
+		"configuration": map[string]any{"requestMedia": "application/vnd.a+json"},
+	}, map[string]any{"body": map[string]any{"k": "v"}})
 	if ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
 	if gotCT != "application/vnd.a+json" {
-		t.Errorf("Content-Type = %q, want the lexicographically least +json type", gotCT)
+		t.Errorf("Content-Type = %q, want the configured +json type", gotCT)
 	}
 	if string(gotBody) != `{"k":"v"}` {
 		t.Errorf("body = %s", gotBody)
@@ -750,9 +764,8 @@ func TestInvoke_DegenerateMediaSchemaCombinationRefused(t *testing.T) {
 }
 
 // The degenerate-combination refusal reaches only artifacts declaring NO
-// JSON-family request media: a co-declared JSON media type is selected
-// first (JSON carries any shape), so the same scalar schema dispatches
-// over JSON with no refusal.
+// JSON-family request media: a caller-selected co-declared JSON media type
+// carries the same scalar shape with no refusal.
 func TestInvoke_DegenerateCombinationUnreachableWithJSONCoDeclared(t *testing.T) {
 	var gotCT string
 	var gotBody []byte
@@ -774,7 +787,9 @@ func TestInvoke_DegenerateCombinationUnreachableWithJSONCoDeclared(t *testing.T)
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWith(t, spec, "#/paths/~1op/post", map[string]any{"body": "x"})
+	_, ierr := invokeWithContext(t, spec, "#/paths/~1op/post", map[string]any{
+		"configuration": map[string]any{"requestMedia": "application/json"},
+	}, map[string]any{"body": "x"})
 	if ierr != nil {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
 	}
@@ -859,8 +874,8 @@ func TestInvoke_SyntheticBodyUnwrapOnTheWire(t *testing.T) {
 	}
 }
 
-// text/plain selection: a string body rides verbatim; the Accept header
-// reflects the declared success media.
+// text/plain selection: a string body rides verbatim and the declared
+// response media governs decoding without producing an Accept header.
 func TestInvoke_TextPlainBody(t *testing.T) {
 	var gotCT string
 	var gotBody []byte
@@ -897,9 +912,9 @@ func TestInvoke_TextPlainBody(t *testing.T) {
 	}
 }
 
-// The Accept header carries the declared success media; membership is
-// normative (§9.2).
-func TestInvoke_AcceptHeaderMembership(t *testing.T) {
+// Response-media declarations govern decoding and synthesis, but the binding
+// never emits them as an Accept header.
+func TestInvoke_NoAcceptHeader(t *testing.T) {
 	var gotAccept string
 	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAccept = r.Header.Get("Accept")
@@ -920,11 +935,8 @@ func TestInvoke_AcceptHeaderMembership(t *testing.T) {
 	if _, ierr := invokeWith(t, spec, "#/paths/~1csvjson/get", nil); ierr != nil {
 		t.Fatalf("invoke: %v", ierr)
 	}
-	if !strings.Contains(gotAccept, "application/json") || !strings.Contains(gotAccept, "text/csv") {
-		t.Errorf("Accept = %q, must contain both declared success media", gotAccept)
-	}
-	if strings.Contains(gotAccept, "problem+json") {
-		t.Errorf("Accept = %q, must not contain failure-response media", gotAccept)
+	if gotAccept != "" {
+		t.Errorf("Accept = %q, want absent", gotAccept)
 	}
 
 	// Absent any declaration: no Accept header is invented. Drive this one
@@ -985,13 +997,13 @@ func TestInvoke_DeclaredBothShapesSelectByFraming(t *testing.T) {
 		    "operationId": "dual",
 		    "responses": {"200": {"description": "ok", "content": {
 		      "application/json": {"schema": {"type": "object"}},
-		      "text/event-stream": {}
+		      "text/event-stream": {"schema": {"type": "string"}}
 		    }}}
 		  }}}
 		}`, url)
 	}
 
-	// SSE framing → server-streaming.
+	// SSE framing remains one unary body at the operation boundary.
 	sseSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)
@@ -1006,8 +1018,8 @@ func TestInvoke_DeclaredBothShapesSelectByFraming(t *testing.T) {
 	if ierr != nil {
 		t.Fatalf("stream: %v", ierr)
 	}
-	if len(events) != 2 || events[0] != "one" || events[1] != "two" {
-		t.Fatalf("events = %v, want [one two]", events)
+	if len(events) != 1 || events[0] != "data: one\n\ndata: two\n\n" {
+		t.Fatalf("events = %v, want one complete event-stream body", events)
 	}
 
 	// JSON framing → unary.
@@ -1025,13 +1037,10 @@ func TestInvoke_DeclaredBothShapesSelectByFraming(t *testing.T) {
 	}
 }
 
-// WHATWG extraction: a lone empty `data:` line DISPATCHES an event whose
-// data is the empty string (the data-buffer emptiness check precedes the
-// trailing-LF strip; openapi@1 §8), at its position in the stream. Blocks
-// with no data line — comment-only or `event:`/`id:`-only — dispatch
-// nothing, and an incomplete final event is discarded. Shared empty-data
-// case: byte-identical stream across the openapi and asyncapi engines.
-func TestInvoke_SSEEmptyDataEventDispatchesEmptyString(t *testing.T) {
+// Event framing, including empty data and incomplete final blocks, remains
+// opaque inside the one response body value.
+func TestInvoke_SSEFramingRemainsOpaque(t *testing.T) {
+	want := ": comment only\n\nevent: tick\nid: 7\n\ndata: first\n\ndata:\n\ndata: third\n\ndata: incomplete-final-event"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)
@@ -1048,13 +1057,14 @@ func TestInvoke_SSEEmptyDataEventDispatchesEmptyString(t *testing.T) {
 	if ierr != nil {
 		t.Fatalf("stream: %v", ierr)
 	}
-	if len(events) != 3 || events[0] != "first" || events[1] != "" || events[2] != "third" {
-		t.Fatalf("events = %v, want [first, empty string, third]", events)
+	if len(events) != 1 || events[0] != want {
+		t.Fatalf("events = %#v, want one opaque body", events)
 	}
 }
 
-// CRLF and lone-CR line endings are valid event-stream line terminators.
-func TestInvoke_SSECarriageReturnLineEndings(t *testing.T) {
+// CRLF and lone-CR bytes are preserved in the unary body.
+func TestInvoke_SSECarriageReturnBytesPreserved(t *testing.T) {
+	want := "data: crlf\r\n\r\ndata: cr\r\r"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)
@@ -1067,8 +1077,8 @@ func TestInvoke_SSECarriageReturnLineEndings(t *testing.T) {
 	if ierr != nil {
 		t.Fatalf("stream: %v", ierr)
 	}
-	if len(events) != 2 || events[0] != "crlf" || events[1] != "cr" {
-		t.Fatalf("events = %v, want [crlf cr]", events)
+	if len(events) != 1 || events[0] != want {
+		t.Fatalf("events = %#v, want preserved body", events)
 	}
 }
 

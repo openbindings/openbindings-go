@@ -93,7 +93,7 @@ var floorD15Cases = []floorD15Case{
 		//
 		// This case read "is REFERRED, not this class" until then, and the
 		// comment it carried is the record of why the referral fell. It rested
-		// on `openbindings.openapi@1` §9.2 ascribing an interpretation to a
+		// on `the openapi family specifications` §9.2 ascribing an interpretation to a
 		// boolean-valued schema on this line -- "A Media Type Object whose
 		// `schema` is the JSON Schema boolean `true` … is the same declaration
 		// as an omitted `schema` … UNDER EITHER EDITION" -- and that clause

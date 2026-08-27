@@ -19,7 +19,7 @@ import (
 // openapi-client/typescript, and by openbindings-ts/packages/openapi against
 // that package's BUILT dist; changing it in one engine without the others
 // fails here.
-const partDefaultTypeAbsentCasesDigest = "2d871e381018d76ff8e4cce4c8cf4c70aa3e32278a2b003291aaef104ed07d75"
+const partDefaultTypeAbsentCasesDigest = "c6494b3b833f03d13e1e7e5cb83547f484b0e20f8f77b70f5f893075eb04e46c"
 
 type partDefaultTypeAbsentTable struct {
 	Comment string                      `json:"$comment"`
@@ -110,8 +110,12 @@ func partDefaultTypeAbsentDecision(t *testing.T, c partDefaultTypeAbsentCase) st
 	if item == nil || item.Post == nil {
 		t.Fatalf("%s: loaded document has no form operation", c.Name)
 	}
-	if _, err := planRequestBodiesFor(doc, item.Post, BindingSpec); err != nil {
+	plans, err := planRequestBodiesFor(doc, item.Post, BindingSpec)
+	if err != nil {
 		return "refused"
+	}
+	if plansRequirePropertyMedia(plans) {
+		return "missing-required-choice"
 	}
 	media := item.Post.RequestBody.Value.Content[c.Media]
 	if media == nil {
@@ -172,29 +176,49 @@ func TestPartDefaultTypeAbsentCaseTable(t *testing.T) {
 	}
 }
 
-// TestTypeAbsentPartRefusesOnEveryAcceptedEdition states the claim the table
-// exists for as a claim in its own right, rather than leaving it implicit in
-// 128 cells: a form part whose resolved schema declares no `type` refuses on
-// EVERY accepted edition — the 3.1 editions state a default this revision
-// defines no boundary to cross, the 3.0 editions state no row at all and this
-// revision authors none — while a part that declares a type is admitted on all
-// eight. It replaces TestTypeAbsentPartRefusesExactlyOnThe31Line, whose
-// predicate was the deleted 3.0-line value-keyed convention as an executed
-// assertion (escalation M2, ruled 2026-08-20).
-func TestTypeAbsentPartRefusesOnEveryAcceptedEdition(t *testing.T) {
+// TestTypeAbsentPartUsesTheFamilyDecision states the corrected family split
+// independently of the table expectations: 3.1 typeless multipart parts are
+// admitted, while 3.0 typeless multipart parts remain represented and require
+// propertyMedia. Boolean schemas are source-invalid on 3.0, and this rule does
+// not invent a typeless raw lane for urlencoded bodies.
+func TestTypeAbsentPartUsesTheFamilyDecision(t *testing.T) {
 	// EXECUTED, not read off the table's own expectations: the claim is about
 	// the engine, so a revert of the implementation has to turn this red too.
 	checked := 0
 	for _, c := range loadPartDefaultTypeAbsentTable(t) {
 		got := partDefaultTypeAbsentDecision(t, c)
-		admitted := strings.HasPrefix(got, "admitted;")
-		want := c.DeclaresType
-		if admitted != want {
-			t.Errorf("%s: admitted = %v, want %v (decision %q)\nbasis: %s", c.Name, admitted, want, got, c.Basis)
+		want := ""
+		switch {
+		case c.DeclaresType:
+			want = "admitted"
+		case c.Media == "multipart/form-data" && strings.HasPrefix(c.OpenAPI, "3.1"):
+			want = "admitted"
+		case c.Media == "multipart/form-data" && strings.HasPrefix(c.OpenAPI, "3.0") && c.Kind != "boolean-literal-true":
+			want = "missing-required-choice"
+		default:
+			want = "refused"
+		}
+		decision := "refused"
+		if strings.HasPrefix(got, "admitted;") {
+			decision = "admitted"
+		} else if got == "missing-required-choice" {
+			decision = got
+		}
+		if decision != want {
+			t.Errorf("%s: decision class = %q, want %q (decision %q)\nbasis: %s", c.Name, decision, want, got, c.Basis)
 		}
 		checked++
 	}
 	if checked != 128 {
 		t.Fatalf("checked %d cells, want 128", checked)
 	}
+}
+
+func plansRequirePropertyMedia(plans []*bodyPlan) bool {
+	for _, plan := range plans {
+		if plan != nil && len(plan.propertyMedia) > 0 {
+			return true
+		}
+	}
+	return false
 }

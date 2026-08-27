@@ -14,10 +14,8 @@ import (
 // Twin of openbindings-ts/packages/openapi/src/defs-reachability.test.ts.
 //
 // One self-recursive component, reached from a request body only through a
-// property the OAS declares readOnly. Request projection removes that
-// property, so the emitted input schema cannot reach the component; the
-// emitted output schema, where readOnly properties stand, can. The emitted
-// `$defs` map must state exactly that difference.
+// property the OAS declares readOnly. The annotation does not delete the
+// property in either direction, so both emitted schemas reach the component.
 //
 // The document is authored from the OAS text (readOnly is an OAS 3.1 Schema
 // Object keyword inherited from JSON Schema 2020-12 §9.4.1; a self-recursive
@@ -74,18 +72,16 @@ const defsReachabilityDoc = `{
   }
 }`
 
-// TestDefsOmitUnreachableCutPoint pins the reachability-closure half: a cycle
-// root reached only through a branch the direction projection removes must not
-// survive in the emitted `$defs` inventory.
-func TestDefsOmitUnreachableCutPoint(t *testing.T) {
+func TestDefsKeepReadOnlyReachedCutPointInInput(t *testing.T) {
 	iface := synthesizeDefsReachabilityDoc(t)
 	input := decodeSchema(t, iface.Operations["createRecord"].Input)
 
-	if _, present := input["properties"].(map[string]any)["audit"]; present {
-		t.Fatalf("request projection must omit the readOnly property; got %v", input["properties"])
+	if _, present := input["properties"].(map[string]any)["audit"]; !present {
+		t.Fatalf("input must preserve the readOnly-annotated property; got %v", input["properties"])
 	}
-	if defs, present := input["$defs"]; present {
-		t.Fatalf("emitted input reaches no definition, so $defs must be absent; got %v", defs)
+	defs, present := input["$defs"].(map[string]any)
+	if !present || defs["AuditEntry"] == nil {
+		t.Fatalf("emitted input reaches AuditEntry, so $defs must retain it; got %v", input["$defs"])
 	}
 	assertDefsReachabilityClosed(t, "createRecord/input", input, "#/operations/createRecord/input")
 }

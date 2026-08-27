@@ -1,7 +1,5 @@
 package openapi
 
-import "strings"
-
 // openAPISchemaDirection names the data direction represented by a
 // synthesized operation boundary. Directionality is an OpenAPI adapter
 // concern: it is projected before the schema enters the protocol-neutral OBI.
@@ -40,49 +38,32 @@ var directionalSchemaSingleKeys = map[string]bool{
 	"unevaluatedProperties": true,
 }
 
-type openAPISchemaProjector struct {
-	direction      openAPISchemaDirection
-	rootExemptions map[string]bool
-	defs           map[string]any
-	// registry, when set, lets the ownership calculation follow an artifact-space
-	// `#/components/schemas/...` reference the way it follows a local `$defs`
-	// one. It is set only when projecting the reference registry itself (see
-	// projectRefRegistry): there the references have not been inlined yet, so a
-	// property whose schema is a reference to a readOnly component would
-	// otherwise look unannotated.
-	registry map[string]any
-	// omitted records whether this projection dropped anything. Callers that
-	// project a whole registry use it to tell the two directions apart without
-	// comparing their results.
-	omitted bool
-}
+type openAPISchemaProjector struct{}
 
-// projectOpenAPISchema applies OpenAPI read/write directionality to an
-// already-decycled operation schema. Request projection omits readOnly
-// properties; response projection omits writeOnly properties. Applying the
-// projection after decycling deliberately leaves stable $defs names and refs
-// untouched while still projecting every reachable definition. Projection can
-// however remove the last reference to a hoisted definition, so callers close
-// the emitted schema over reachability afterwards (pruneUnreachableDefs).
+// projectOpenAPISchema clones an already-decycled operation schema without
+// treating readOnly or writeOnly annotations as member-deletion instructions.
+// OAS leaves enforcement of those annotations to the application, and the
+// binding neither deletes a supplied wire member nor synthesizes one.
 //
-// rootExemptions names request-wrapper properties that are not source-schema
-// properties at all (parameters and a synthetic whole-body field). A
-// readOnly annotation on such a schema root cannot erase the independently
-// declared OpenAPI input; nested properties are still projected normally.
+// direction and rootExemptions remain explicit inputs because they define the
+// synthesis boundary and are part of the adapter's stable internal API. The
+// current family rules preserve annotated members in both directions.
 func projectOpenAPISchema(schema map[string]any, direction openAPISchemaDirection, rootExemptions map[string]bool) map[string]any {
 	return projectOpenAPISchemaWithRegistry(schema, direction, rootExemptions, nil)
 }
 
 // projectOpenAPISchemaWithRegistry is projectOpenAPISchema over a schema whose
-// `$ref`s have not been inlined yet. `registry` lets the ownership calculation
-// read a referenced declaration's annotations, which the inlined form would have
-// carried inline.
+// `$ref`s have not been inlined yet. The registry is retained in the signature
+// for the registry projection boundary; preserving annotated members means it
+// does not need to be resolved during this cloning pass.
 func projectOpenAPISchemaWithRegistry(schema map[string]any, direction openAPISchemaDirection, rootExemptions map[string]bool, registry map[string]any) map[string]any {
 	if schema == nil {
 		return nil
 	}
-	projector := openAPISchemaProjector{direction: direction, rootExemptions: rootExemptions, registry: registry}
-	projector.defs, _ = schema["$defs"].(map[string]any)
+	_ = direction
+	_ = rootExemptions
+	_ = registry
+	projector := openAPISchemaProjector{}
 	projected, ok := projector.project(schema, true).(map[string]any)
 	if !ok {
 		return schema
@@ -114,11 +95,7 @@ func (p *openAPISchemaProjector) project(value any, root bool) any {
 		return value
 	}
 
-	var exemptions map[string]bool
-	if root {
-		exemptions = p.rootExemptions
-	}
-	omitted := p.omittedProperties(schema, exemptions, map[string]bool{})
+	_ = root
 	out := make(map[string]any, len(schema))
 	for key, raw := range schema {
 		switch {
@@ -130,10 +107,6 @@ func (p *openAPISchemaProjector) project(value any, root bool) any {
 			}
 			projected := make(map[string]any, len(properties))
 			for name, property := range properties {
-				if omitted[name] {
-					p.omitted = true
-					continue
-				}
 				projected[name] = p.project(property, false)
 			}
 			out[key] = projected
@@ -153,10 +126,7 @@ func (p *openAPISchemaProjector) project(value any, root bool) any {
 			}
 			required := make([]any, 0, len(names))
 			for _, rawName := range names {
-				name, ok := rawName.(string)
-				if ok && !omitted[name] {
-					required = append(required, name)
-				}
+				required = append(required, rawName)
 			}
 			if len(required) > 0 {
 				out[key] = required
@@ -194,97 +164,4 @@ func (p *openAPISchemaProjector) project(value any, root bool) any {
 		}
 	}
 	return out
-}
-
-// omittedProperties finds the names excluded at one schema's own instance
-// boundary. allOf members jointly describe that same instance, so their
-// omissions also repair a required list owned by the parent schema. Local
-// $defs refs are followed only for this ownership calculation; emitted refs
-// remain unchanged.
-func (p *openAPISchemaProjector) omittedProperties(schema map[string]any, exemptions map[string]bool, seenRefs map[string]bool) map[string]bool {
-	omitted := map[string]bool{}
-	if resolved, ref, ok := p.resolveLocalRef(schema); ok {
-		if seenRefs[ref] {
-			return omitted
-		}
-		seenRefs[ref] = true
-		for name := range p.omittedProperties(resolved, exemptions, seenRefs) {
-			omitted[name] = true
-		}
-		delete(seenRefs, ref)
-		return omitted
-	}
-	if properties, ok := schema["properties"].(map[string]any); ok {
-		for name, property := range properties {
-			if !exemptions[name] && p.excludedProperty(property, map[string]bool{}) {
-				omitted[name] = true
-			}
-		}
-	}
-	if members, ok := schema["allOf"].([]any); ok {
-		for _, member := range members {
-			nested, ok := member.(map[string]any)
-			if !ok {
-				continue
-			}
-			for name := range p.omittedProperties(nested, nil, seenRefs) {
-				omitted[name] = true
-			}
-		}
-	}
-	return omitted
-}
-
-func (p *openAPISchemaProjector) excludedProperty(value any, seenRefs map[string]bool) bool {
-	schema, ok := value.(map[string]any)
-	if !ok {
-		return false
-	}
-	if resolved, ref, ok := p.resolveLocalRef(schema); ok {
-		if seenRefs[ref] {
-			return false
-		}
-		seenRefs[ref] = true
-		return p.excludedProperty(resolved, seenRefs)
-	}
-	if p.direction == openAPIRequestSchema {
-		excluded, _ := schema["readOnly"].(bool)
-		return excluded
-	}
-	excluded, _ := schema["writeOnly"].(bool)
-	return excluded
-}
-
-func (p *openAPISchemaProjector) resolveLocalRef(schema map[string]any) (map[string]any, string, bool) {
-	ref, ok := schema["$ref"].(string)
-	if !ok {
-		return nil, "", false
-	}
-	if p.registry != nil {
-		if resolved, found := resolveRegistryRef(ref, p.registry); found {
-			if target, ok := resolved.(map[string]any); ok {
-				return target, ref, true
-			}
-		}
-	}
-	if p.defs == nil {
-		return nil, "", false
-	}
-	marker := "/$defs/"
-	index := strings.LastIndex(ref, marker)
-	if index < 0 {
-		if strings.HasPrefix(ref, "#/$defs/") {
-			index = 0
-			marker = "#/$defs/"
-		} else {
-			return nil, "", false
-		}
-	}
-	encoded := ref[index+len(marker):]
-	if slash := strings.IndexByte(encoded, '/'); slash >= 0 {
-		encoded = encoded[:slash]
-	}
-	name := unescapeJSONPointerSegment(encoded)
-	resolved, ok := p.defs[name].(map[string]any)
-	return resolved, ref, ok
 }

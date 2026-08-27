@@ -251,8 +251,12 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				inputOperation = &copy
 			}
 			var requestPlans []*bodyPlan
+			invalidPropertyMediaCandidate := false
 			if inputOperation.RequestBody != nil && inputOperation.RequestBody.Value != nil {
 				plans, planErr := planRequestBodiesFor(doc, op, bindingSpec)
+				for _, plan := range plans {
+					invalidPropertyMediaCandidate = invalidPropertyMediaCandidate || len(plan.propertyMedia) > 0
+				}
 				// The acceptance floor (the registered OpenAPI binding family §3): a
 				// ladder-invalid request media ALTERNATIVE is a unit that is
 				// malformed under its upstream authority, so it is not a
@@ -294,6 +298,8 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 						} else {
 							var dme *degenerateMediaError
 							if errors.As(planErr, &dme) {
+								code = "openapi.media_schema_mismatch"
+							} else if invalidPropertyMediaCandidate {
 								code = "openapi.media_schema_mismatch"
 							}
 						}

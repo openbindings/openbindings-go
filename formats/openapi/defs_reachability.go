@@ -7,14 +7,12 @@ import "strings"
 // schema root can reach, computed as a fixpoint (a minted definition is kept
 // when the root tree references it, or when a kept definition does).
 //
-// The invariant needs enforcing because hoisting and direction projection run
-// in that order: inlineRefsInOperationSchema materializes a `$defs` entry for
-// every cycle participant it meets while walking the source-shaped tree, and
-// projectOpenAPISchema then removes the readOnly (request) or writeOnly
-// (response) properties. A minted definition whose only reference sat on a
-// removed property survives as an orphan — a component published inside the
-// operation's contract that no instance of that contract can contain, which
-// is emitting something the artifact does not mean.
+// The invariant is enforced after hoisting and schema projection:
+// inlineRefsInOperationSchema materializes a `$defs` entry for every cycle
+// participant it meets, while later normalization can leave a minted entry
+// unreachable. Publishing that orphan inside the operation contract would
+// emit something the artifact does not mean. readOnly and writeOnly
+// annotations do not delete properties and therefore do not create orphans.
 //
 // `hoisted` is what keeps the rule narrow. An OAS 3.1 Schema Object is a JSON
 // Schema 2020-12 schema and may carry its own `$defs`; those members are

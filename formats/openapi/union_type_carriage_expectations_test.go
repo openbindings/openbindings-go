@@ -6,9 +6,9 @@ package openapi
 // changes in one engine and not in the other fails there too.
 //
 // Reading a cell: `<edition>|<request media>|<type spelling>|<contentEncoding
-// present?>` decides to `refused`, or to `admitted` plus what one part
-// carries for a canonical value of the declared type and what a supplied
-// JSON null does.
+// present?>` decides to `refused`, `missing-required-choice`, or `admitted`
+// plus what one part carries for the probe value and what a supplied JSON
+// null does.
 //
 // The rows this block moved, and why:
 //   - Every 3.1 spelling with exactly one non-"null" member — string-null,
@@ -39,29 +39,15 @@ package openapi
 //     exactly the type it names, or none — and is read as that under both
 //     lines. That tolerance is the engines' own, is identical in both, and
 //     is why `string-array-1` is admitted at 3.0.4.
-//   - EIGHT cells moved from admitted to refused on 2026-08-17, all at
-//     3.1.2, all in the |plain column: `absent-type`, `memberless` and
-//     `boolean-true` (the structural true spelling) declare no `type` at
-//     all, and every accepted 3.1 edition states that part's default
-//     Content-Type as application/octet-stream — 3.1.1 and 3.1.2 as the
-//     Encoding Object default table's `type`-absent first row, 3.1.0
-//     through the total catch-all closing its prose enumeration — which
-//     this revision defines no JSON-to-octet part boundary to cross.
-//     `empty-array` refuses on a different and narrower ground: its `type`
-//     is present, so no stated row reaches it at all, and JSON Schema
-//     2020-12's meta-schema requires an array-valued `type` to carry at
-//     least one member, so the declaration admits no instance. Those eight
-//     were admitted at 3.0.4 until 2026-08-20, where no stated row reached a
-//     declaration carrying no `type` and §9.2's own convention answered.
-//   - FOURTEEN cells moved from admitted to refused on 2026-08-20 (stage-3
-//     block 5, escalation M2), all at 3.0.4: `absent-type`, `memberless`,
-//     `empty-array` and `boolean-true|plain`, on both media. The 3.0-line
-//     value-keyed convention is deleted from §9.2, so a resolved part schema
-//     declaring no `type` refuses on EVERY accepted edition — the 3.1
-//     editions state a default this revision defines no boundary to cross,
-//     the 3.0 editions state no row at all and this revision authors none.
-//     Each of the fourteen now reads exactly as its 3.1.2 twin above, which
-//     is what one rule governing both lines means.
+//   - Corrected 2026-08-26: a typeless 3.1 multipart part defaults to
+//     application/octet-stream and uses the canonical-Base64 raw-octet lane.
+//     The table's ordinary "x" probe is deliberately noncanonical and thus
+//     reaches an invocation error after admission. A typeless 3.0 multipart
+//     part remains represented but requires configuration.propertyMedia; this
+//     harness supplies none and records missing-required-choice. Typeless
+//     urlencoded cells still refuse because that lane has no octet boundary.
+//     `empty-array` remains refused on the narrower ground that its explicit
+//     empty type set admits no instance.
 var unionTypeCarriageExpectations = map[string]string{
 	"3.0.4|application/x-www-form-urlencoded|absent-type|contentEncoding":    "refused",
 	"3.0.4|application/x-www-form-urlencoded|absent-type|plain":              "refused",
@@ -91,8 +77,8 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.0.4|application/x-www-form-urlencoded|string-object|plain":            "refused",
 	"3.0.4|application/x-www-form-urlencoded|string|contentEncoding":         "admitted;value=p=x;null=p=",
 	"3.0.4|application/x-www-form-urlencoded|string|plain":                   "admitted;value=p=x;null=p=",
-	"3.0.4|multipart/form-data|absent-type|contentEncoding":                  "refused",
-	"3.0.4|multipart/form-data|absent-type|plain":                            "refused",
+	"3.0.4|multipart/form-data|absent-type|contentEncoding":                  "missing-required-choice",
+	"3.0.4|multipart/form-data|absent-type|plain":                            "missing-required-choice",
 	"3.0.4|multipart/form-data|array-null|contentEncoding":                   "refused",
 	"3.0.4|multipart/form-data|array-null|plain":                             "refused",
 	"3.0.4|multipart/form-data|boolean-true|contentEncoding":                 "refused",
@@ -101,8 +87,8 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.0.4|multipart/form-data|empty-array|plain":                            "refused",
 	"3.0.4|multipart/form-data|integer-null|contentEncoding":                 "refused",
 	"3.0.4|multipart/form-data|integer-null|plain":                           "refused",
-	"3.0.4|multipart/form-data|memberless|contentEncoding":                   "refused",
-	"3.0.4|multipart/form-data|memberless|plain":                             "refused",
+	"3.0.4|multipart/form-data|memberless|contentEncoding":                   "missing-required-choice",
+	"3.0.4|multipart/form-data|memberless|plain":                             "missing-required-choice",
 	"3.0.4|multipart/form-data|null-only|contentEncoding":                    "refused",
 	"3.0.4|multipart/form-data|null-only|plain":                              "refused",
 	"3.0.4|multipart/form-data|null-string|contentEncoding":                  "refused",
@@ -147,18 +133,18 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.1.2|application/x-www-form-urlencoded|string-object|plain":            "refused",
 	"3.1.2|application/x-www-form-urlencoded|string|contentEncoding":         "admitted;value=p=x;null=error",
 	"3.1.2|application/x-www-form-urlencoded|string|plain":                   "admitted;value=p=x;null=p=",
-	"3.1.2|multipart/form-data|absent-type|contentEncoding":                  "refused",
-	"3.1.2|multipart/form-data|absent-type|plain":                            "refused",
+	"3.1.2|multipart/form-data|absent-type|contentEncoding":                  "admitted;value=error;null=error",
+	"3.1.2|multipart/form-data|absent-type|plain":                            "admitted;value=error;null=error",
 	"3.1.2|multipart/form-data|array-null|contentEncoding":                   "admitted;value=text/plain:a;null=elided",
 	"3.1.2|multipart/form-data|array-null|plain":                             "admitted;value=text/plain:a;null=elided",
 	"3.1.2|multipart/form-data|boolean-true|contentEncoding":                 "refused",
-	"3.1.2|multipart/form-data|boolean-true|plain":                           "refused",
+	"3.1.2|multipart/form-data|boolean-true|plain":                           "admitted;value=error;null=error",
 	"3.1.2|multipart/form-data|empty-array|contentEncoding":                  "refused",
 	"3.1.2|multipart/form-data|empty-array|plain":                            "refused",
 	"3.1.2|multipart/form-data|integer-null|contentEncoding":                 "admitted;value=text/plain:7;null=elided",
 	"3.1.2|multipart/form-data|integer-null|plain":                           "admitted;value=text/plain:7;null=elided",
-	"3.1.2|multipart/form-data|memberless|contentEncoding":                   "refused",
-	"3.1.2|multipart/form-data|memberless|plain":                             "refused",
+	"3.1.2|multipart/form-data|memberless|contentEncoding":                   "admitted;value=error;null=error",
+	"3.1.2|multipart/form-data|memberless|plain":                             "admitted;value=error;null=error",
 	"3.1.2|multipart/form-data|null-only|contentEncoding":                    "refused",
 	"3.1.2|multipart/form-data|null-only|plain":                              "refused",
 	"3.1.2|multipart/form-data|null-string|contentEncoding":                  "admitted;value=application/octet-stream:x;null=elided",

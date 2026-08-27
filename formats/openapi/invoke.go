@@ -28,17 +28,77 @@ func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindin
 		_, err := configuredRequestPlansFor(doc, op, plans, bindCtx, bindingSpec)
 		return nil, err
 	}
-	if !onlyRangePlans(plans) {
+	if soleConcreteRequestPlan(op, plans) != nil {
 		return nil, nil
 	}
 	durable := true
 	requirement := invoke.NewConfigValueRequirement(
 		"requestMedia", "",
-		"select a concrete request media type admitted by the OpenAPI declaration",
+		"select the concrete request media type for this non-sole-concrete declaration",
 		nil, &durable,
 	)
 	return &invoke.ContextRequiredDetails{
 		Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{requirement}}},
+	}, nil
+}
+
+func requiredPropertyMediaContext(doc *openapi3.T, op *openapi3.Operation, bindingSpec string, bindCtx map[string]any) (*invoke.ContextRequiredDetails, error) {
+	if !hasMediaFidelity(bindingSpec) || op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
+		return nil, nil
+	}
+	plans, err := planRequestBodiesFor(doc, op, bindingSpec)
+	if err != nil {
+		return nil, err
+	}
+	if requestMediaUnconfigured(bindCtx) {
+		sole := soleConcreteRequestPlan(op, plans)
+		if sole == nil {
+			// requestMedia is the first missing decision. A retry with that
+			// selection can discover the selected alternative's property choices.
+			return nil, nil
+		}
+		plans = []*bodyPlan{sole}
+	} else {
+		plans, err = configuredRequestPlansFor(doc, op, plans, bindCtx, bindingSpec)
+		if err != nil {
+			return nil, err
+		}
+	}
+	configured, _, err := propertyMediaMap(bindCtx)
+	if err != nil {
+		return nil, err
+	}
+	durable := true
+	var requirements []invoke.ContextRequirement
+	seen := map[string]bool{}
+	for _, plan := range plans {
+		for _, name := range plan.propertyMedia {
+			raw, present := configured[name]
+			if !present || raw == nil {
+				if !seen[name] {
+					seen[name] = true
+					requirements = append(requirements, invoke.NewConfigValueRequirement(
+						"propertyMedia", "/"+escapeJSONPointerSegment(name),
+						"select one concrete media type for this form or multipart property",
+						nil, &durable,
+					))
+				}
+				continue
+			}
+			choice, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("configuration.propertyMedia.%s must be a concrete media-type string", name)
+			}
+			if _, err := selectPropertyMedia(plan, name, choice); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(requirements) == 0 {
+		return nil, nil
+	}
+	return &invoke.ContextRequiredDetails{
+		Alternatives: []invoke.ContextAlternative{{Requirements: requirements}},
 	}, nil
 }
 
@@ -60,11 +120,27 @@ func mergeContextRequirements(left, right *invoke.ContextRequiredDetails) *invok
 	for _, a := range left.Alternatives {
 		for _, b := range right.Alternatives {
 			requirements := append([]invoke.ContextRequirement(nil), a.Requirements...)
-			requirements = append(requirements, b.Requirements...)
+			for _, requirement := range b.Requirements {
+				if !containsEquivalentContextRequirement(requirements, requirement) {
+					requirements = append(requirements, requirement)
+				}
+			}
 			merged.Alternatives = append(merged.Alternatives, invoke.ContextAlternative{Requirements: requirements})
 		}
 	}
 	return merged
+}
+
+func containsEquivalentContextRequirement(requirements []invoke.ContextRequirement, wanted invoke.ContextRequirement) bool {
+	for _, requirement := range requirements {
+		if requirement.Type != wanted.Type || requirement.Name != wanted.Name {
+			continue
+		}
+		if requirement.Extra["point"] == wanted.Extra["point"] && requirement.Extra["path"] == wanted.Extra["path"] {
+			return true
+		}
+	}
+	return false
 }
 
 // BuiltinClassify is the openapi builtin result classifier (OAPI-P-08):

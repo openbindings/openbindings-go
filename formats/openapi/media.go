@@ -24,9 +24,10 @@ import (
 // This file implements §9.2 of the registered OpenAPI binding family (OAPI-P-04): request
 // media selection with its deterministic tiebreaks and pre-dispatch
 // refusals, multipart part encoding (including the Base64 boundary encoding
-// for binary-signaled parts), urlencoded field serialization, and the
-// Accept-header membership rule — plus the §8 declared-media facts (success
-// responses, streaming capability) the interaction shape is bounded by.
+// for binary-signaled parts), urlencoded field serialization, and the §8
+// declared-media facts (success responses and streaming capability) the
+// interaction shape is bounded by. Those facts never produce an Accept
+// header; §9.1 requires the binding to omit it.
 
 // normalizeMediaType lowercases a media type and strips its parameters:
 // matching throughout §9.2 compares type and subtype, ignoring parameters.
@@ -65,19 +66,22 @@ const (
 // (§9.1: object schemas flatten by property name; non-object schemas ride
 // the synthetic `body` property, unwrapped at the wire).
 type bodyPlan struct {
-	declared    bool
-	required    bool
-	mediaKey    string // the declared content key, verbatim
-	mediaType   string // normalized type/subtype (the request Content-Type)
-	media       *openapi3.MediaType
-	family      string
-	synthetic   bool
-	wholeObject bool            // complete body rides under one protocol-neutral application field
-	props       map[string]bool // declared top-level body property names (object mode)
-	mediaRange  bool            // mediaKey is a revision-3 media-range declaration
-	rawBoundary bool            // caller string is Base64 boundary carriage for raw bytes
-	bindingSpec string
-	oas30       bool
+	declared                  bool
+	required                  bool
+	mediaKey                  string // the declared content key, verbatim
+	mediaType                 string // normalized type/subtype (the request Content-Type)
+	media                     *openapi3.MediaType
+	family                    string
+	synthetic                 bool
+	wholeObject               bool            // complete body rides under one protocol-neutral application field
+	props                     map[string]bool // declared top-level body property names (object mode)
+	mediaRange                bool            // mediaKey is a revision-3 media-range declaration
+	rawBoundary               bool            // caller string is Base64 boundary carriage for raw bytes
+	bindingSpec               string
+	oas30                     bool
+	propertyMedia             []string          // properties requiring a concrete consumer media choice
+	propertyMediaDeclarations map[string]string // authored Encoding contentType lists, before adapter materialization
+	rawProperties             map[string]bool   // content-path properties crossing the canonical Base64 boundary
 }
 
 type parsedMediaType struct {
@@ -603,6 +607,9 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 		plan.rawBoundary = candidate.rawBoundary
 		plan.bindingSpec = bindingSpec
 		plan.oas30 = oas30
+		plan.propertyMedia = requiredPropertyMediaNames(plan)
+		plan.propertyMediaDeclarations = propertyMediaDeclarations(plan)
+		plan.rawProperties = rawPropertyNames(plan)
 		applyRevision3BodyShape(plan)
 		if hasDynamicObjectCarriage(bindingSpec) {
 			applyDynamicObjectShape(plan)
@@ -802,7 +809,8 @@ func exactRequestFamily(doc *openapi3.T, parsed parsedMediaType, media *openapi3
 	// character-data media below. The CALLER determines those octets, so the
 	// lane authors no correspondence. Scoped by the declaration: the supplied
 	// value's type never selects a lane.
-	if isCharacterDataMedia(parsed.base) && schemaTypeIs(mediaSchema(media), "string", map[*openapi3.Schema]bool{}) {
+	oas30 := doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
+	if isCharacterDataMedia(parsed.base) && resolveDeclaration(mediaSchema(media), oas30).admitsStringAsSoleNonNullType() {
 		if err := supportedTextCharset(parsed); err != nil {
 			return "", false, err
 		}
@@ -882,8 +890,13 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 	is30 := doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
 	for name := range props {
 		propertySchema := resolvedMultipartProperty(schema, name, map[*openapi3.Schema]bool{})
-		if literal, boolean := booleanSchemaLiteral(propertySchema); boolean && !literal {
-			continue
+		if literal, boolean := booleanSchemaLiteral(propertySchema); boolean {
+			if is30 && literal {
+				return fmt.Errorf("OAS 3.0 form property %q uses a boolean schema outside its Schema Object dialect", name)
+			}
+			if !literal {
+				continue
+			}
 		}
 		propertySchema, _ = effectiveRevision3PartSchema(propertySchema, is30)
 		var enc *openapi3.Encoding
@@ -894,6 +907,9 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 			if err := validateMultipartSerializationMethod(name, propertySchema, enc, is30); err != nil {
 				return err
 			}
+			continue
+		}
+		if encodingRequiresPropertyMedia(enc) {
 			continue
 		}
 		contentType, err := revision3PartContentType(propertySchema, enc, is30)
@@ -918,22 +934,30 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 	}
 	is30 := doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
 	for name := range props {
+		if !multipartPropertyNameSafe(name) {
+			return fmt.Errorf("multipart property name %q contains CR or LF", name)
+		}
 		partSchema := resolvedMultipartProperty(schema, name, map[*openapi3.Schema]bool{})
-		if literal, boolean := booleanSchemaLiteral(partSchema); boolean && !literal {
-			continue // an unsatisfiable property has no admissible runtime value
+		if literal, boolean := booleanSchemaLiteral(partSchema); boolean {
+			if is30 && literal {
+				return fmt.Errorf("OAS 3.0 multipart property %q uses a boolean schema outside its Schema Object dialect", name)
+			}
+			if !literal {
+				continue // an unsatisfiable property has no admissible runtime value
+			}
 		}
 		partSchema, _ = effectiveRevision3PartSchema(partSchema, is30)
 		var enc *openapi3.Encoding
 		if media != nil {
 			enc = media.Encoding[name]
 		}
-		if enc != nil && len(enc.Headers) > 0 {
-			return fmt.Errorf("multipart part %q declares encoding.headers, but this binding revision defines no caller source for dynamic part-header values", name)
-		}
-		if encodingUsesSerialization(enc) {
+		if !is30 && encodingUsesSerialization(enc) {
 			if err := validateMultipartSerializationMethod(name, partSchema, enc, is30); err != nil {
 				return err
 			}
+			continue
+		}
+		if encodingRequiresPropertyMedia(enc) {
 			continue
 		}
 		contentSchema := partSchema
@@ -942,6 +966,9 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 			if schemaTypeIs(contentSchema, "array", map[*openapi3.Schema]bool{}) {
 				return fmt.Errorf("multipart part %q has nested array items with no defined repeated-part mapping", name)
 			}
+		}
+		if is30 && resolveDeclaration(contentSchema, true).typeless() && (enc == nil || enc.ContentType == "") {
+			continue // invocation supplies propertyMedia; synthesis keeps the alternative
 		}
 		contentType, err := revision3PartContentType(contentSchema, enc, is30)
 		if err != nil {
@@ -952,6 +979,102 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 		}
 	}
 	return nil
+}
+
+func multipartPropertyNameSafe(name string) bool {
+	return !strings.ContainsAny(name, "\r\n")
+}
+
+func encodingRequiresPropertyMedia(encoding *openapi3.Encoding) bool {
+	if encoding == nil || encoding.ContentType == "" {
+		return false
+	}
+	members, err := splitHTTPList(encoding.ContentType)
+	return err == nil && (len(members) != 1 || isMediaRange(members[0]))
+}
+
+func requiredPropertyMediaNames(plan *bodyPlan) []string {
+	if plan == nil || plan.media == nil || (plan.family != familyMultipart && plan.family != familyURLEncoded) {
+		return nil
+	}
+	root := resolveDeclaration(mediaSchema(plan.media), plan.oas30)
+	var names []string
+	for _, name := range root.propertyNames() {
+		property := root.property(name)
+		if property.declaresOnly("array") || property.declaresOnly("array", "null") {
+			property = property.items()
+		}
+		encoding := plan.media.Encoding[name]
+		if encodingUsesSerializationForPlan(plan, encoding) {
+			continue
+		}
+		contentType := ""
+		if encoding != nil {
+			contentType = encoding.ContentType
+		}
+		requiresChoice := plan.oas30 && plan.family == familyMultipart && property.typeless()
+		if contentType != "" {
+			members, err := splitHTTPList(contentType)
+			if err == nil && (len(members) != 1 || isMediaRange(members[0])) {
+				requiresChoice = true
+			}
+		}
+		if requiresChoice {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func rawPropertyNames(plan *bodyPlan) map[string]bool {
+	if plan == nil || plan.media == nil || (plan.family != familyMultipart && plan.family != familyURLEncoded) {
+		return nil
+	}
+	root := resolveDeclaration(mediaSchema(plan.media), plan.oas30)
+	result := map[string]bool{}
+	for _, name := range root.propertyNames() {
+		encoding := plan.media.Encoding[name]
+		if encodingUsesSerializationForPlan(plan, encoding) {
+			continue
+		}
+		property := root.property(name)
+		if property.declaresOnly("array") || property.declaresOnly("array", "null") {
+			property = property.items()
+		}
+		if plan.family == familyMultipart && property.typeless() {
+			result[name] = true
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func propertyMediaDeclarations(plan *bodyPlan) map[string]string {
+	if plan == nil || plan.media == nil || len(plan.propertyMedia) == 0 {
+		return nil
+	}
+	result := map[string]string{}
+	for _, name := range plan.propertyMedia {
+		if encoding := plan.media.Encoding[name]; encoding != nil && encoding.ContentType != "" {
+			result[name] = encoding.ContentType
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func encodingUsesSerializationForPlan(plan *bodyPlan, encoding *openapi3.Encoding) bool {
+	// OAS 3.0 applies Encoding serialization controls to urlencoded bodies
+	// only. Its multipart lane ignores all three controls.
+	if plan != nil && plan.oas30 && plan.family == familyMultipart {
+		return false
+	}
+	return encodingUsesSerialization(encoding)
 }
 
 // encodingUsesSerialization reports whether an Encoding Object writes an
@@ -1209,13 +1332,23 @@ func revision3EncodingSerializationMethod(enc *openapi3.Encoding) openapi3.Seria
 
 func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, is30 bool) (parsedMediaType, error) {
 	if schema == nil {
-		return parsedMediaType{}, fmt.Errorf("an absent part schema defaults to application/octet-stream, but this binding revision defines no JSON-to-octet boundary")
+		if is30 {
+			return parsedMediaType{}, fmt.Errorf("a typeless OAS 3.0 part requires configuration.propertyMedia")
+		}
+		return parseRevision3MediaType("application/octet-stream")
 	}
 	if literal, boolean := booleanSchemaLiteral(schema); boolean {
 		if !literal {
 			return parsedMediaType{}, fmt.Errorf("an unsatisfiable false part schema admits no value")
 		}
 		schema = &openapi3.Schema{} // true is the same unconstrained declaration as {}
+	}
+	declaration := resolveDeclaration(schema, is30)
+	if declaration.ambiguous {
+		return parsedMediaType{}, fmt.Errorf("part schema declares a choice applicator that does not collapse to one non-null branch; no single part carriage is defined")
+	}
+	if len(declaration.types) == 0 && !declaration.typeless() {
+		return parsedMediaType{}, fmt.Errorf("part schema admits no resolved type with a faithful part carriage")
 	}
 	contentEncoding, encodingConflict := resolvedSchemaKeywordString(schema, "contentEncoding")
 	if encodingConflict {
@@ -1268,22 +1401,8 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 					// least one member, so the declaration admits no instance.
 					return parsedMediaType{}, fmt.Errorf("part schema declares an empty `type`, which no accepted OAS 3.1 default part Content-Type row reaches and which admits no instance; no part carriage is defined")
 				}
-				// §9.2: a resolved part schema that declares no `type` refuses
-				// before dispatch on EVERY accepted edition, and no supplied
-				// value's JSON type ever selects a part's carriage. The two
-				// lines reach that one outcome on different grounds, so the
-				// diagnostic names the ground the artifact's own edition
-				// supplies.
 				if !is30 {
-					// Every accepted 3.1 edition states a default for such a
-					// part, and all three state application/octet-stream:
-					// 3.1.1 and 3.1.2 tabulate it as the Encoding Object
-					// default table's `type`-absent row, and 3.1.0 reaches it
-					// through the total catch-all closing its prose
-					// enumeration ("for all other cases the default is
-					// application/octet-stream"). This revision defines no
-					// JSON-to-octet part boundary, so the part refuses.
-					return parsedMediaType{}, fmt.Errorf("a part schema declaring no `type` defaults to application/octet-stream on every accepted OAS 3.1 edition, but this binding revision defines no JSON-to-octet part boundary")
+					return parseRevision3MediaType("application/octet-stream")
 				}
 				// The 3.0 line states no row for it at all: 3.0.0 through
 				// 3.0.3 enumerate a `string` with `format: binary`, "other
@@ -1291,10 +1410,10 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 				// catch-all, and 3.0.4 tabulates the same cases keyed on
 				// `type`. Every stated row is keyed on a declared `type` and
 				// none reaches a declaration carrying none. This
-				// specification authors no row for that residue, so the part
-				// refuses here too and its alternative is an accounted
-				// exclusion.
-				return parsedMediaType{}, fmt.Errorf("a part schema declaring no `type` has no default part Content-Type row on any accepted OAS 3.0 edition, and this binding revision authors none; no part carriage is defined")
+				// specification authors no default for that residue. The
+				// consumer supplies the missing concrete type through the
+				// propertyMedia configuration point.
+				return parsedMediaType{}, fmt.Errorf("a typeless OAS 3.0 part requires configuration.propertyMedia")
 			}
 			if len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 {
 				return parsedMediaType{}, fmt.Errorf("part schema declares a choice applicator that does not collapse to one non-null branch; no single part carriage is defined")
@@ -1305,7 +1424,10 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 				}
 				return parsedMediaType{}, fmt.Errorf("part schema declares union type %v, which does not collapse to one non-null type; no single part carriage is defined", types)
 			}
-			return parsedMediaType{}, fmt.Errorf("typeless part schema defaults to application/octet-stream, but this binding revision defines no JSON-to-octet boundary")
+			if !is30 {
+				return parseRevision3MediaType("application/octet-stream")
+			}
+			return parsedMediaType{}, fmt.Errorf("a typeless OAS 3.0 part requires configuration.propertyMedia")
 		}
 	}
 	parsed, err := parseRevision3MediaType(declared)
@@ -1339,7 +1461,10 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 // a declared non-string keeps its own row. No accepted edition states a
 // refusal for that combination.
 func defaultRevision3PartContentType(schema *openapi3.Schema, is30 bool) (string, bool) {
+	declaration := resolveDeclaration(schema, is30)
 	switch {
+	case !is30 && declaration.typeless():
+		return "application/octet-stream", true
 	case schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) && is30 &&
 		(binarySignaled(schema, true) || byteFormatSignaled(schema)):
 		// 3.0.4's default-`contentType` table gives `string` with `format`
@@ -1368,7 +1493,7 @@ type revision3PropertyCarriageMode uint8
 const (
 	revision3PropertyJSON revision3PropertyCarriageMode = iota
 	revision3PropertyText
-	revision3PropertyRaw30
+	revision3PropertyRawOctets
 	// revision3PropertyArtifactEncoded carries a string the ARTIFACT declares
 	// to be already-encoded text: the characters ride the wire unchanged and
 	// the OpenBindings raw-byte boundary decode never runs. Each accepted line
@@ -1396,6 +1521,7 @@ func artifactEncodedStringProperty(schema *openapi3.Schema, is30 bool) bool {
 }
 
 func revision3PropertyCarriage(schema *openapi3.Schema, contentType parsedMediaType, is30, allowRaw30 bool) (revision3PropertyCarriageMode, error) {
+	declaration := resolveDeclaration(schema, is30)
 	if artifactEncodedStringProperty(schema, is30) {
 		return revision3PropertyArtifactEncoded, nil
 	}
@@ -1404,9 +1530,15 @@ func revision3PropertyCarriage(schema *openapi3.Schema, contentType parsedMediaT
 	}
 	if is30 && schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) && binarySignaled(schema, true) {
 		if allowRaw30 {
-			return revision3PropertyRaw30, nil
+			return revision3PropertyRawOctets, nil
 		}
 		return 0, fmt.Errorf("OAS 3.0 binary has no defined urlencoded octet boundary")
+	}
+	if declaration.typeless() {
+		if allowRaw30 {
+			return revision3PropertyRawOctets, nil
+		}
+		return 0, fmt.Errorf("a typeless property has no defined urlencoded octet boundary")
 	}
 	if contentType.base == "text/plain" {
 		if schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) ||
@@ -1504,17 +1636,17 @@ func octetRequestCarriage(doc *openapi3.T, media *openapi3.MediaType, bindingSpe
 		return false, false, nil
 	}
 	schema := mediaSchema(media)
-	// §9.2: a schema that asserts nothing — the JSON Schema boolean `true`,
-	// or a memberless Schema Object — is the same declaration as an omitted
-	// `schema` for these lanes under either edition.
-	if schemaAssertsNothing(schema) {
-		schema = nil
-	}
-	if isOpenAPI30(majorMinor(doc.OpenAPI)) {
-		if schema == nil && hasSchemaOmittedOAS30ByteCarriage(bindingSpec) {
+	oas30 := isOpenAPI30(majorMinor(doc.OpenAPI))
+	declaration := resolveDeclaration(schema, oas30)
+	if oas30 {
+		if declaration.typeless() && hasSchemaOmittedOAS30ByteCarriage(bindingSpec) {
 			return true, true, nil
 		}
-		if schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) && binarySignaled(schema, true) {
+		format, conflict := declaration.format()
+		if conflict {
+			return false, false, fmt.Errorf("resolved schema declares conflicting format values")
+		}
+		if declaration.admitsStringAsSoleNonNullType() && format == "binary" {
 			return true, true, nil
 		}
 		// §9.2: a `type: string` with `format: byte` is ALREADY the encoded
@@ -1525,7 +1657,7 @@ func octetRequestCarriage(doc *openapi3.T, media *openapi3.MediaType, bindingSpe
 		// same disposition: the byte lane WITHOUT the OpenBindings boundary
 		// decode, because artifact encoding and the OpenBindings raw-byte
 		// boundary encoding are distinct.
-		if schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) && byteFormatSignaled(schema) {
+		if declaration.admitsStringAsSoleNonNullType() && format == "byte" {
 			return true, false, nil
 		}
 		return false, false, nil
@@ -1534,14 +1666,14 @@ func octetRequestCarriage(doc *openapi3.T, media *openapi3.MediaType, bindingSpe
 	// Its JSON-domain caller boundary is Base64. Conversely a declared
 	// contentEncoding describes the application string itself; those encoded
 	// characters ride the wire unchanged.
-	if schema == nil {
+	if declaration.typeless() {
 		return true, true, nil
 	}
-	encoding, conflict := resolvedSchemaKeywordString(schema, "contentEncoding")
+	encoding, conflict := declaration.keywordString("contentEncoding")
 	if conflict {
 		return false, false, fmt.Errorf("resolved schema declares conflicting contentEncoding values")
 	}
-	if schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) && encoding != "" {
+	if declaration.admitsStringAsSoleNonNullType() && encoding != "" {
 		return true, false, nil
 	}
 	return false, false, nil
@@ -1575,10 +1707,12 @@ func responseUsesRawBoundary(doc *openapi3.T, media *openapi3.MediaType, actualC
 		return false
 	}
 	if doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI)) {
-		return (hasSchemaOmittedOAS30ByteCarriage(bindingSpec) && exactDeclaration && mediaSchema(media) == nil) ||
-			binarySignaled(mediaSchema(media), true)
+		declaration := resolveDeclaration(mediaSchema(media), true)
+		format, conflict := declaration.format()
+		return !conflict && ((hasSchemaOmittedOAS30ByteCarriage(bindingSpec) && exactDeclaration && declaration.typeless()) ||
+			(declaration.admitsStringAsSoleNonNullType() && format == "binary"))
 	}
-	return media != nil && media.Schema == nil
+	return resolveDeclaration(mediaSchema(media), false).typeless()
 }
 
 func booleanSchemaLiteral(schema *openapi3.Schema) (bool, bool) {
@@ -1681,26 +1815,22 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 		if !hasMediaFidelity(bindingSpec) {
 			return plans, nil
 		}
-		concrete := make([]*bodyPlan, 0, len(plans))
-		hasRange := false
-		for _, plan := range plans {
-			if plan.mediaRange {
-				hasRange = true
-				continue
-			}
-			concrete = append(concrete, plan)
+		if soleConcreteRequestPlan(op, plans) != nil {
+			return plans, nil
 		}
-		if len(concrete) == 0 && hasRange {
-			if op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
-				return nil, fmt.Errorf("OpenAPI request media range requires configuration.requestMedia before this supplied optional body can be dispatched")
-			}
+		if op != nil && op.RequestBody != nil && op.RequestBody.Value != nil && op.RequestBody.Value.Required {
 			return nil, &configRequired{
 				point:       "requestMedia",
 				path:        "",
-				description: "OpenAPI request media range requires a concrete requestMedia selection",
+				description: "OpenAPI request body requires a concrete requestMedia selection",
 			}
 		}
-		return concrete, nil
+		if len(plans) > 0 {
+			if op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
+				return nil, fmt.Errorf("OpenAPI request body requires configuration.requestMedia before this supplied optional body can be dispatched")
+			}
+		}
+		return nil, fmt.Errorf("request body has no admissible media candidate")
 	}
 	wanted, ok := raw.(string)
 	if !ok {
@@ -1726,6 +1856,21 @@ func configuredRequestPlansFor(doc *openapi3.T, op *openapi3.Operation, plans []
 		}
 	}
 	return nil, nil
+}
+
+func soleConcreteRequestPlan(op *openapi3.Operation, plans []*bodyPlan) *bodyPlan {
+	if op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || len(op.RequestBody.Value.Content) != 1 || len(plans) != 1 {
+		return nil
+	}
+	plan := plans[0]
+	if plan == nil || plan.mediaRange {
+		return nil
+	}
+	declared, err := parseMediaDeclaration(plan.mediaKey)
+	if err != nil || declared.rangeSpecificity != 2 {
+		return nil
+	}
+	return plan
 }
 
 func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans []*bodyPlan, wanted parsedMediaType, bindingSpec string) ([]*bodyPlan, error) {
@@ -1807,6 +1952,9 @@ func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans [
 	plan.rawBoundary = rawBoundary
 	plan.bindingSpec = bindingSpec
 	plan.oas30 = doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
+	plan.propertyMedia = requiredPropertyMediaNames(plan)
+	plan.propertyMediaDeclarations = propertyMediaDeclarations(plan)
+	plan.rawProperties = rawPropertyNames(plan)
 	applyRevision3BodyShape(plan)
 	if hasDynamicObjectCarriage(bindingSpec) {
 		applyDynamicObjectShape(plan)
@@ -2012,6 +2160,9 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 
 	schema := mediaSchema(media)
 	for _, name := range names {
+		if !multipartPropertyNameSafe(name) {
+			return nil, "", fmt.Errorf("multipart property name %q contains CR or LF", name)
+		}
 		value := fields[name]
 		propSchema := resolvedMultipartPropertyFor(
 			schema,
@@ -2030,9 +2181,6 @@ func buildMultipartBodyForMediaType(doc *openapi3.T, media *openapi3.MediaType, 
 		var enc *openapi3.Encoding
 		if media != nil {
 			enc = media.Encoding[name]
-		}
-		if hasMediaFidelity(bindingSpec) && enc != nil && len(enc.Headers) > 0 {
-			return nil, "", fmt.Errorf("multipart part %q declares encoding.headers, but this binding revision defines no caller source for dynamic part-header values", name)
 		}
 		if hasMediaFidelity(bindingSpec) && encodingUsesSerialization(enc) {
 			units, err := serializeMultipartValue(name, value, enc)
@@ -2633,9 +2781,6 @@ func writeMultipartPart(writer *multipart.Writer, name string, value any, schema
 }
 
 func writeRevision3MultipartPart(writer *multipart.Writer, name string, value any, schema *openapi3.Schema, enc *openapi3.Encoding, is30 bool) error {
-	if enc != nil && len(enc.Headers) > 0 {
-		return fmt.Errorf("multipart part %q declares encoding.headers, but this binding revision defines no caller source for dynamic part-header values", name)
-	}
 	parsedContentType, err := revision3PartContentType(schema, enc, is30)
 	if err != nil {
 		return fmt.Errorf("multipart part %q: %w", name, err)
@@ -2645,10 +2790,10 @@ func writeRevision3MultipartPart(writer *multipart.Writer, name string, value an
 	if err != nil {
 		return fmt.Errorf("multipart part %q: %w", name, err)
 	}
-	rawBinary := mode == revision3PropertyRaw30
+	rawBinary := mode == revision3PropertyRawOctets
 	var body []byte
 	switch mode {
-	case revision3PropertyRaw30:
+	case revision3PropertyRawOctets:
 		text, ok := value.(string)
 		if !ok {
 			return fmt.Errorf("binary part %q: the value must be a string carrying canonical Base64 bytes, got %T", name, value)
@@ -2680,30 +2825,8 @@ func writeRevision3MultipartPart(writer *multipart.Writer, name string, value an
 	}
 	h.Set("Content-Disposition", disposition)
 	h.Set("Content-Type", parsedContentType.canonical)
-	// The 3.0 line emits NO Content-Transfer-Encoding, and that is a stated
-	// answer rather than an omission. 3.0.4 equates a `format: byte` part with
-	// an Encoding Object whose `headers` field carries a
-	// Content-Transfer-Encoding schema requiring base64; §9.2 reads that
-	// equivalence as DECLARATION semantics, so the header rides only when the
-	// artifact itself declares it. This binding declines any artifact that
-	// does declare `encoding.headers` (see writeRevision3MultipartPart's own
-	// guard above), because a Header Object supplies a schema and not a value
-	// and this candidate has no caller source for one -- so the header is
-	// never emitted here on either ground.
-	if !is30 {
-		contentEncoding, conflict := resolvedSchemaKeywordString(schema, "contentEncoding")
-		if conflict {
-			return fmt.Errorf("multipart part %q: resolved schema declares conflicting contentEncoding values", name)
-		}
-		// [JSON Schema 2020-12] Section 8.3 derives contentEncoding from MIME's
-		// Content-Transfer-Encoding header and conditions it on the instance
-		// being a string. On a declared non-string type the keyword is inert,
-		// so the header it maps to is not emitted either; emitting it would
-		// give an annotation that carries no meaning force on the wire.
-		if contentEncoding != "" && schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) {
-			h.Set("Content-Transfer-Encoding", contentEncoding)
-		}
-	}
+	// OAS 3.1 contentEncoding is an artifact annotation, not a part-header
+	// emission instruction. No Content-Transfer-Encoding is synthesized.
 	part, err := writer.CreatePart(h)
 	if err != nil {
 		return fmt.Errorf("create part %q: %w", name, err)
@@ -3021,7 +3144,7 @@ func revision3PropertyBytes(name string, value any, schema *openapi3.Schema, con
 	switch mode {
 	case revision3PropertyJSON:
 		return json.Marshal(value)
-	case revision3PropertyRaw30:
+	case revision3PropertyRawOctets:
 		text, ok := value.(string)
 		if !ok {
 			return nil, fmt.Errorf("binary value must be a canonical Base64 string, got %T", value)
@@ -3044,7 +3167,7 @@ func revision3PropertyBytes(name string, value any, schema *openapi3.Schema, con
 }
 
 // ---------------------------------------------------------------------------
-// Success responses, Accept, streaming capability (§8, §9.2)
+// Success responses and streaming capability (§8, §9.2)
 // ---------------------------------------------------------------------------
 
 // isSuccessResponseKey reports the §8 definition of a success response

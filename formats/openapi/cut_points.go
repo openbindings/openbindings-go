@@ -204,15 +204,14 @@ func (g *directionGraph) hoists(ref *openapi3.SchemaRef) bool {
 // newDirectionGraphs projects the reference registry once per direction and
 // computes each direction's cut points from its own projected graph.
 //
-// Where a document carries no directional annotation at all — the common case —
-// the projection is the identity, both directions share the untouched registry,
-// and the cycle computation runs once.
+// readOnly and writeOnly annotations are preserved in both directions, so the
+// two projections share one registry and the cycle computation runs once.
 func newDirectionGraphs(registry map[string]any) (request directionGraph, response directionGraph) {
 	requestRegistry, requestOmitted := projectRefRegistry(registry, openAPIRequestSchema)
 	responseRegistry, responseOmitted := projectRefRegistry(registry, openAPIResponseSchema)
 	if !requestOmitted && !responseOmitted {
-		// Neither direction dropped anything, so the two projections are the same
-		// graph and one cycle computation answers for both.
+		// The two projections are the same graph, so one cycle computation answers
+		// for both.
 		graph := newDirectionGraph(requestRegistry)
 		return graph, graph
 	}
@@ -225,12 +224,9 @@ func newDirectionGraph(registry map[string]any) directionGraph {
 	return directionGraph{registry: addressed, cyclic: cyclic, readdressed: readdressed}
 }
 
-// projectRefRegistry applies one direction's read/write projection to every
-// registry entry. It always projects: the projection is where a referenced
-// declaration is normalized for emission, and the decycler that consumes this
-// registry is the last pass over those nodes. The second result reports whether
-// this direction dropped anything, which is the only thing that can make the
-// two directions differ.
+// projectRefRegistry clones every registry entry at the directional synthesis
+// boundary. readOnly and writeOnly are annotations, not deletion instructions,
+// so the second result remains false and both directions share the same graph.
 func projectRefRegistry(registry map[string]any, direction openAPISchemaDirection) (map[string]any, bool) {
 	projected := make(map[string]any, len(registry))
 	omitted := false
@@ -240,15 +236,14 @@ func projectRefRegistry(registry map[string]any, direction openAPISchemaDirectio
 			projected[ref] = node
 			continue
 		}
-		projector := openAPISchemaProjector{direction: direction, registry: registry}
-		projector.defs, _ = schema["$defs"].(map[string]any)
+		_ = direction
+		projector := openAPISchemaProjector{}
 		out, ok := projector.project(schema, false).(map[string]any)
 		if !ok {
 			projected[ref] = node
 			continue
 		}
 		projected[ref] = out
-		omitted = omitted || projector.omitted
 	}
 	return projected, omitted
 }

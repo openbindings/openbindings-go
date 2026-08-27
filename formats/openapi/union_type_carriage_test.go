@@ -121,8 +121,14 @@ func unionTypeCarriageDecision(t *testing.T, edition, media, rawSchema string, e
 		Properties: openapi3.Schemas{"p": {Value: part}},
 	}}}
 	op := opWithRequestBody(openapi3.Content{media: body}, true)
-	if _, err := planRequestBodiesFor(doc, op, BindingSpec); err != nil {
+	plans, err := planRequestBodiesFor(doc, op, BindingSpec)
+	if err != nil {
 		return "refused"
+	}
+	for _, plan := range plans {
+		if len(plan.propertyMedia) > 0 {
+			return "missing-required-choice"
+		}
 	}
 	return "admitted;value=" + unionTypeEmission(t, doc, media, body, unionTypeProbeValue(rawSchema)) +
 		";null=" + unionTypeEmission(t, doc, media, body, nil)

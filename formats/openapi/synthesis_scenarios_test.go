@@ -58,11 +58,7 @@ func synthesisFactory(scenario synthesisscenarios.Scenario) (synthesize.Coverage
 }
 
 var pendingSynthesisScenarioReasons = map[string]string{
-	"OAPI30-SS-42": "OAPI30-SS-42: pending N10 M2/M3 (multipart part-default convergence)",
 	"OAPI31-SS-01": "OAPI31-SS-01: pending N10 dependencies node",
-	"OAPI31-SS-23": "OAPI31-SS-23: pending N10 M2/M3 (multipart part-default convergence)",
-	"OAPI31-SS-24": "OAPI31-SS-24: pending N10 M2/M3 (multipart part-default convergence)",
-	"OAPI31-SS-30": "OAPI31-SS-30: pending N10 M2/M3 (multipart part-default convergence)",
 }
 
 func TestSynthesisScenarios(t *testing.T) {

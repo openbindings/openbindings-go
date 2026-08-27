@@ -1288,11 +1288,12 @@ func refString(v any) string {
 // This REFERRED the 3.0 spelling until 2026-08-20 (F-O1-13), on the ground
 // that §9.2 ascribed a part interpretation to a boolean-valued multipart part
 // there, so whether Schema-Object-hood or that part rule governed was a
-// candidate-versus-authority question one level up. Escalation M2 deleted the
-// interpretation that referral rested on -- a typeless part now refuses on
-// every accepted edition -- and the ruled outcome is that the spelling
-// confines as an accounted `invalid` at the smallest owning unit rather than
-// refusing the whole source.
+// candidate-versus-authority question one level up. The ruled outcome is that
+// the boolean spelling confines as an accounted `invalid` at the smallest
+// owning unit because it is not a 3.0 Schema Object. That dialect ruling is
+// independent of the later typeless-part correction: a valid typeless 3.0
+// Schema Object remains representable and records the required propertyMedia
+// choice for invocation.
 func isFloorSchemaValued(v any, line string) bool {
 	if _, isObject := v.(map[string]any); isObject {
 		return true

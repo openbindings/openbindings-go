@@ -125,7 +125,13 @@ const DefaultSourceName = "openapi"
 // be configured independently and tests can substitute clients without
 // reaching into package-level globals.
 func newDefaultHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// HTTP Content-Encoding is governed by §9.4 at the adapter boundary. The
+	// standard transport's implicit gzip decoding would erase that field before
+	// the governing Header Object and configured decoder can inspect it.
+	transport.DisableCompression = true
 	return &http.Client{
+		Transport: transport,
 		// Redirects may rewrite an artifact-declared method or discard its
 		// encoded body. The candidate defines no semantics-preserving follow
 		// rule, so the conforming default observes the redirect response.
@@ -147,7 +153,16 @@ type Runtime struct {
 	engine           *openapiclient.Engine
 	securityHandlers map[string]SecurityHandler
 	parameterConvert ParameterConversion
+	requestCodings   map[string]ContentEncoder
+	responseCodings  map[string]ContentDecoder
+	codingDefect     error
 }
+
+// ContentEncoder and ContentDecoder are deterministic, whole-representation
+// HTTP content-coding capabilities. The binding applies request encoders in
+// field order and response decoders in reverse field order.
+type ContentEncoder func([]byte) ([]byte, error)
+type ContentDecoder func([]byte) ([]byte, error)
 
 // SecurityHandlerContext describes the authored OpenAPI security scheme an
 // extension handler is applying.
@@ -166,7 +181,9 @@ type RuntimeOptions struct {
 	// point. It is consulted only for supplied JSON booleans and numbers on
 	// schema/style serialization paths; strings pass unchanged and nil means no
 	// conversion is configured.
-	ParameterConversion ParameterConversion
+	ParameterConversion    ParameterConversion
+	RequestContentCodings  map[string]ContentEncoder
+	ResponseContentCodings map[string]ContentDecoder
 }
 
 // RuntimeSource identifies an OpenAPI artifact without requiring an OBI.
@@ -220,13 +237,26 @@ func NewRuntimeWithOptions(options RuntimeOptions) *Runtime {
 		client = newDefaultHTTPClient()
 	}
 	clientCopy := *client
-	clientCopy.Transport = rawCookieBridgeTransport{base: client.Transport}
+	requestCodings, requestDefect := normalizeContentEncoders(options.RequestContentCodings)
+	responseCodings, responseDefect := normalizeContentDecoders(options.ResponseContentCodings)
+	clientCopy.Transport = rawCookieBridgeTransport{
+		base:            client.Transport,
+		requestCodings:  requestCodings,
+		responseCodings: responseCodings,
+	}
 	client = &clientCopy
+	codingDefect := requestDefect
+	if codingDefect == nil {
+		codingDefect = responseDefect
+	}
 	return &Runtime{
 		client:           client,
 		engine:           openapiclient.NewEngine(client),
 		securityHandlers: cloneSecurityHandlers(options.SecurityHandlers),
 		parameterConvert: options.ParameterConversion,
+		requestCodings:   requestCodings,
+		responseCodings:  responseCodings,
+		codingDefect:     codingDefect,
 	}
 }
 
@@ -342,12 +372,13 @@ func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 }
 
 type runtimeOperationModel struct {
-	document        *openapi3.T
-	operation       *openapi3.Operation
-	parameters      openapi3.Parameters
-	plans           []*bodyPlan
-	routes          abstractInputRoutes
-	rawCookieHeader string
+	document            *openapi3.T
+	operation           *openapi3.Operation
+	governanceOperation *openapi3.Operation
+	parameters          openapi3.Parameters
+	plans               []*bodyPlan
+	routes              abstractInputRoutes
+	rawCookieHeader     string
 }
 
 func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocationArgs, client *http.Client, bindingSpec string) (*runtimeOperationModel, error) {
@@ -396,6 +427,7 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	if operation == nil {
 		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound}
 	}
+	governanceOperation := cloneOpenAPIOperation(operation)
 	selector := buildJSONPointerSelector(path, method)
 	verdict := floor.opVerdict(selector)
 	if verdict != nil && verdict.Disposition == "invalid" {
@@ -454,10 +486,29 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	routes := planAbstractInputRoutes(callerParameters, plans)
 	rawCookieHeader := prepareEngineParameterView(parameters, &routes, bindingSpec)
 	prepareEngineEncodingView(plans)
+	prepareEngineResponseView(operation, bindingSpec)
 	return &runtimeOperationModel{
-		document: document, operation: operation, parameters: callerParameters, plans: plans, routes: routes,
+		document: document, operation: operation, governanceOperation: governanceOperation,
+		parameters: callerParameters, plans: plans, routes: routes,
 		rawCookieHeader: rawCookieHeader,
 	}, nil
+}
+
+func cloneOpenAPIOperation(operation *openapi3.Operation) *openapi3.Operation {
+	if operation == nil {
+		return nil
+	}
+	raw, err := json.Marshal(operation)
+	if err != nil {
+		copy := *operation
+		return &copy
+	}
+	var copy openapi3.Operation
+	if json.Unmarshal(raw, &copy) != nil {
+		shallow := *operation
+		return &shallow
+	}
+	return &copy
 }
 
 // forceJSONBodyEnvelopeCarriage makes the standalone wire engine consume the
@@ -539,7 +590,9 @@ func bridgeHooks(args *invoke.BindingInvocationArgs, bindingSpec string) *openap
 			coreSite := coreHookSite(args, bindingSpec, site.Target)
 			coreRaw := invoke.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
 			contentType := ""
-			if values := raw.Meta["Content-Type"]; len(values) > 0 {
+			if values := raw.Meta[actualContentTypeHeader]; len(values) > 0 {
+				contentType = values[0]
+			} else if values := raw.Meta["Content-Type"]; len(values) > 0 {
 				contentType = values[0]
 			}
 			value, err := args.Hooks.DecodeOutput(coreSite, coreRaw, decodeByContentTypeFor(contentType, bindingSpec))
@@ -571,12 +624,28 @@ func coreHookSite(args *invoke.BindingInvocationArgs, bindingSpec, target string
 func toCoreMetadata(metadata openapiclient.Metadata) invoke.Metadata {
 	result := make(invoke.Metadata, len(metadata))
 	for name, values := range metadata {
+		if strings.EqualFold(name, actualContentTypeHeader) {
+			continue
+		}
 		result[name] = append([]string(nil), values...)
+	}
+	for name, values := range metadata {
+		if strings.EqualFold(name, actualContentTypeHeader) && len(values) > 0 {
+			result["Content-Type"] = []string{values[0]}
+		}
 	}
 	return result
 }
 
 func bridgeExecutionError(err error) error {
+	var refused *preDispatchMediaError
+	if errors.As(err, &refused) {
+		return invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	var protocol *responseProtocolError
+	if errors.As(err, &protocol) {
+		return invoke.NewInvocationError(openapiclient.CodeProtocol)
+	}
 	var invocation *invoke.InvocationError
 	if errors.As(err, &invocation) && invocation != nil {
 		return invocation
@@ -663,6 +732,9 @@ func (e *Runtime) invokeBinding(ctx context.Context, args *invoke.BindingInvocat
 }
 
 func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) error {
+	if e.codingDefect != nil {
+		return invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
 	options, err := enginePrepareOptions(args, e.client, e.securityHandlers)
 	if err != nil {
 		return bridgeExecutionError(err)
@@ -683,6 +755,21 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		}
 		return bridgeExecutionError(err)
 	}
+	mediaDetails, mediaErr := requiredRequestMediaContext(model.document, model.operation, bindingSpec, args.Context)
+	if mediaErr != nil {
+		return invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if mediaDetails != nil {
+		return invoke.NewContextRequiredError(mediaDetails)
+	}
+	propertyDetails, propertyErr := requiredPropertyMediaContext(model.document, model.operation, bindingSpec, args.Context)
+	if propertyErr != nil {
+		return invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	if propertyDetails != nil {
+		return invoke.NewContextRequiredError(propertyDetails)
+	}
+	prepareEnginePropertyMediaView(model.plans, args.Context)
 	options.Source = openapiclient.Source{Location: args.Source.Location, Document: model.document}
 	prepared, err := e.engine.Prepare(ctx, options)
 	if err != nil {
@@ -691,6 +778,11 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	bridgeCtx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
 	bridgeCtx = context.WithValue(bridgeCtx, completedURLValidationContextKey{}, bindingSpec)
+	governance := &mediaGovernance{
+		document: model.document, operation: model.governanceOperation,
+		parameters: model.parameters, bindingSpec: bindingSpec,
+	}
+	bridgeCtx = context.WithValue(bridgeCtx, mediaGovernanceContextKey{}, governance)
 	if model.rawCookieHeader != "" {
 		bridgeCtx = context.WithValue(bridgeCtx, rawCookieBridgeContextKey{}, model.rawCookieHeader)
 	}
@@ -711,13 +803,24 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 			return readErr
 		default:
 			selectedPlans := model.plans
-			if len(model.plans) > 1 {
+			envelope, envelopeErr := parseCallerEnvelope(value)
+			if envelopeErr != nil {
+				execution.Cancel()
+				return invoke.NewInvocationError(openapiclient.CodeRefused)
+			}
+			if envelope.bodyPresent {
 				selected, selectionErr := configuredRequestPlansFor(model.document, model.operation, model.plans, args.Context, bindingSpec)
 				if selectionErr != nil {
 					execution.Cancel()
 					return invoke.NewInvocationError(openapiclient.CodeRefused)
 				}
 				selectedPlans = selected
+				for _, selectedPlan := range selectedPlans {
+					if _, propertyErr := configuredPropertyMedia(selectedPlan, args.Context); propertyErr != nil {
+						execution.Cancel()
+						return invoke.NewInvocationError(openapiclient.CodeRefused)
+					}
+				}
 			}
 			engineInput, err := engineInputForCallerEnvelopeWithSemantics(value, model.parameters, selectedPlans, model.routes, options.Profile, bindingSpec, e.parameterConvert, model.document, model.operation, args.Context)
 			if err != nil {
@@ -738,6 +841,9 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 
 	_, _ = execution.Response(bridgeCtx)
 	for event := range execution.Events() {
+		if governance.emptyResponse.Load() {
+			continue
+		}
 		if err := inv.EmitOutput(event.Value); err != nil {
 			execution.Cancel()
 			return nil
@@ -746,6 +852,9 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	if err := execution.Wait(); err != nil {
 		if bridgeCtx.Err() != nil {
 			return nil
+		}
+		if mediaErr := governance.recordedFailure(); mediaErr != nil {
+			return bridgeExecutionError(mediaErr)
 		}
 		return bridgeExecutionError(err)
 	}
@@ -779,6 +888,7 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 	}
 	bindingSpec := args.Source.BindingSpec
 	var prepared *openapiclient.PreparedOperation
+	var localDetails *invoke.ContextRequiredDetails
 	if args.Source.Content != nil {
 		if document := e.prepareDoc(args.Source.Location, args.Source.Content); document != nil {
 			if err := checkAcceptedOpenAPIVersionForBindingSpec(document, bindingSpec); err != nil {
@@ -793,6 +903,21 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 						if requestBodyIgnoredForBindingSpec(bindingSpec, method) {
 							operation.RequestBody = nil
 						}
+						mediaDetails, mediaErr := requiredRequestMediaContext(document, operation, bindingSpec, args.Context)
+						if mediaErr != nil {
+							return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+						}
+						localDetails = mergeContextRequirements(localDetails, mediaDetails)
+						propertyDetails, propertyErr := requiredPropertyMediaContext(document, operation, bindingSpec, args.Context)
+						if propertyErr != nil {
+							return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+						}
+						localDetails = mergeContextRequirements(localDetails, propertyDetails)
+						if plans, planErr := planRequestBodiesFor(document, operation, bindingSpec); planErr == nil {
+							prepareEngineEncodingView(plans)
+							prepareEnginePropertyMediaView(plans, args.Context)
+						}
+						prepareEngineResponseView(operation, bindingSpec)
 					}
 				}
 			}
@@ -814,7 +939,7 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 	if prepared == nil {
 		return nil, nil
 	}
-	return toCorePrerequisites(prepared.Prerequisites()), nil
+	return mergeContextRequirements(toCorePrerequisites(prepared.Prerequisites()), localDetails), nil
 }
 
 // prepareDoc returns the OpenAPI document without performing network I/O:
