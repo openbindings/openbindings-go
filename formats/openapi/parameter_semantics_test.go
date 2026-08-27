@@ -80,10 +80,10 @@ func TestOpenAPI30ParameterConversionAndNullConverged(t *testing.T) {
 		Name: "q", In: openapi3.ParameterInQuery,
 		Schema: &openapi3.SchemaRef{Value: openapi3.NewArraySchema().WithItems(openapi3.NewIntegerSchema())},
 	}
-	if _, _, err := prepareSchemaParameterValue(parameter, []any{float64(7)}, BindingSpecOpenAPI30, nil); err == nil || !strings.Contains(err.Error(), "parameterConversion") {
+	if _, err := prepareStyleValue(parameter.Name, []any{float64(7)}, openapi3.SerializationForm, BindingSpecOpenAPI30, nil); err == nil || !strings.Contains(err.Error(), "parameterConversion") {
 		t.Fatalf("missing 3.0 conversion error = %v", err)
 	}
-	if _, _, err := prepareSchemaParameterValue(parameter, []any{float64(7), nil}, BindingSpecOpenAPI30, func(value any) (string, error) {
+	if _, err := prepareStyleValue(parameter.Name, []any{float64(7), nil}, openapi3.SerializationForm, BindingSpecOpenAPI30, func(value any) (string, error) {
 		return fmt.Sprintf("converted<%v>", value), nil
 	}); err == nil || !strings.Contains(err.Error(), "null array/object member") {
 		t.Fatalf("3.0 null-member error = %v", err)
@@ -158,14 +158,22 @@ func TestNonRFCStyleDelimitersAreRefusedBeforeExpansion(t *testing.T) {
 }
 
 func TestHeaderInvalidFieldBytesRefuse(t *testing.T) {
-	parameter := &openapi3.Parameter{
-		Name: "X-Test", In: openapi3.ParameterInHeader,
-		Schema: &openapi3.SchemaRef{Value: openapi3.NewStringSchema()},
-	}
+	dispatches := 0
+	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		dispatches++
+		return &http.Response{StatusCode: http.StatusNoContent, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+	})
+	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://api.example.test"}],"paths":{"/x":{"get":{"parameters":[{"name":"X-Test","in":"header","schema":{"type":"string"}}],"responses":{"204":{"description":"ok"}}}}}}`
 	for _, value := range []string{"safe\r\nInjected: yes", "safe\x00unsafe"} {
-		if _, _, err := prepareSchemaParameterValue(parameter, value, BindingSpecOpenAPI31, nil); err == nil || !strings.Contains(err.Error(), "invalid HTTP field byte") {
+		call := NewInvokerWithOptions(RuntimeOptions{HTTPClient: &http.Client{Transport: transport}}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+			Source: invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI31, Content: openbindings.TextContent(spec)}, Selector: "#/paths/~1x/get",
+		})
+		if _, err := driveSingle(t, call, map[string]any{"parameters": map[string]any{"X-Test": value}}); err == nil || err.Code != invoke.ErrCodeRefused {
 			t.Errorf("value %q error = %v", value, err)
 		}
+	}
+	if dispatches != 0 {
+		t.Fatalf("invalid header values dispatched %d times", dispatches)
 	}
 }
 
@@ -197,11 +205,6 @@ func TestOpenAPICookieStaticAndRuntimeProofs(t *testing.T) {
 	}
 	if !formStyleCookieMultiValueProof(array, true) || !formStyleCookieMultiValueProof(object, true) {
 		t.Fatal("provably multi-pair 3.0 cookie declarations survived static proof")
-	}
-	for _, bindingSpec := range []string{BindingSpecOpenAPI30, BindingSpecOpenAPI31} {
-		if _, _, err := prepareSchemaParameterValue(typeless, []any{"a", "b"}, bindingSpec, nil); err == nil || !strings.Contains(err.Error(), "multiple cookie pairs") {
-			t.Fatalf("%s runtime multi-pair error = %v", bindingSpec, err)
-		}
 	}
 }
 
@@ -307,7 +310,7 @@ func TestTypedEffectiveParameterDeclarationGateCoversResolvedReferences(t *testi
 	}
 }
 
-func TestRuntimeParameterConversionAndRawCookieBridge(t *testing.T) {
+func TestRuntimeParameterConversionAndRawCookieNativePath(t *testing.T) {
 	response := func(request *http.Request) *http.Response {
 		return &http.Response{
 			StatusCode: http.StatusOK, Status: "200 OK",
@@ -379,7 +382,7 @@ func TestCompletedURLValidationIsPreDispatchForBothSiblings(t *testing.T) {
 			Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: request,
 		}, nil
 	})
-	transport := rawCookieBridgeTransport{base: base}
+	transport := governedTransport{base: base}
 
 	request, err := http.NewRequest(http.MethodGet, "https://api.example.test/x", nil)
 	if err != nil {

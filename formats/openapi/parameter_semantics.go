@@ -8,73 +8,15 @@ import (
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"golang.org/x/net/http/httpguts"
-
-	"github.com/openbindings/openbindings-go/invoke"
+	openapiclient "github.com/openbindings/openapi-client/go"
 )
 
-// ParameterConversion is §8.1's deterministic consumer conversion from one
-// JSON boolean or number to a string. The converter owns the spelling; the
-// binding supplies no canonicalization fallback. It must be safe for
+// ParameterConversion is openbindings.openapi-3.0@1 §8.1 /
+// openbindings.openapi-3.1@1 §8.1's deterministic consumer conversion from
+// one JSON boolean or number to a string. The converter owns the spelling;
+// the binding supplies no canonicalization fallback. It must be safe for
 // concurrent invocation by a Runtime.
-type ParameterConversion func(value any) (string, error)
-
-func effectiveParameterAt(parameters openapi3.Parameters, in, name string) *openapi3.Parameter {
-	for _, ref := range parameters {
-		if ref != nil && ref.Value != nil && ref.Value.In == in && ref.Value.Name == name {
-			return ref.Value
-		}
-	}
-	return nil
-}
-
-// prepareSchemaParameterValue applies the value-dependent half of §8 before
-// the standalone HTTP carrier sees a routed value. It returns whether a
-// cookie-location parameter would emit at least one structured cookie unit.
-func prepareSchemaParameterValue(parameter *openapi3.Parameter, value any, bindingSpec string, conversion ParameterConversion) (any, bool, error) {
-	if parameter == nil {
-		return nil, false, fmt.Errorf("has no effective declaration")
-	}
-	if len(parameter.Content) > 0 {
-		serialized, err := serializeParamContentFor(parameter, value, bindingSpec)
-		if err != nil {
-			return nil, false, err
-		}
-		if parameter.In == openapi3.ParameterInHeader && !httpguts.ValidHeaderFieldValue(serialized) {
-			return nil, false, fmt.Errorf("serialized header contains an invalid HTTP field byte")
-		}
-		return value, parameter.In == openapi3.ParameterInCookie, nil
-	}
-
-	method, err := revision3ParameterSerializationMethod(parameter)
-	if err != nil {
-		return nil, false, err
-	}
-	prepared, err := prepareStyleValue(parameter.Name, value, method.Style, bindingSpec, conversion)
-	if err != nil {
-		return nil, false, err
-	}
-	switch parameter.In {
-	case openapi3.ParameterInHeader:
-		serialized, err := serializeHeaderValue(prepared, method.Style, method.Explode)
-		if err != nil {
-			return nil, false, err
-		}
-		if !httpguts.ValidHeaderFieldValue(serialized) {
-			return nil, false, fmt.Errorf("serialized header contains an invalid HTTP field byte")
-		}
-	case openapi3.ParameterInCookie:
-		units, err := serializeCookieValue(parameter.Name, prepared, method.Style, method.Explode)
-		if err != nil {
-			return nil, false, err
-		}
-		if (bindingSpec == BindingSpecOpenAPI30 || bindingSpec == BindingSpecOpenAPI31) && len(units) > 1 {
-			return nil, false, fmt.Errorf("supplied value would produce multiple cookie pairs")
-		}
-		return prepared, len(units) > 0, nil
-	}
-	return prepared, false, nil
-}
+type ParameterConversion = openapiclient.ParameterConverter
 
 func prepareEncodingStylePropertyValue(plan *bodyPlan, name string, value any, bindingSpec string, conversion ParameterConversion) (any, error) {
 	if plan == nil || plan.media == nil {
@@ -288,27 +230,6 @@ func styleValueContainsDelimiter(value any, delimiters string) bool {
 	return false
 }
 
-func selectedCookieCredentialWouldEmit(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any) bool {
-	if doc == nil || op == nil {
-		return false
-	}
-	for _, plan := range securityPlans(doc, op, "") {
-		if len(plan.context.Requirements) == 0 {
-			return false
-		}
-		if !invoke.ContextSatisfies(bindCtx, &invoke.ContextRequiredDetails{Alternatives: []invoke.ContextAlternative{plan.context}}) {
-			continue
-		}
-		for _, placement := range credentialValues(plan, bindCtx) {
-			if placement.channel == "cookie" && placement.value != "" {
-				return true
-			}
-		}
-		return false
-	}
-	return false
-}
-
 func cloneEffectiveParameters(parameters openapi3.Parameters) openapi3.Parameters {
 	result := make(openapi3.Parameters, 0, len(parameters))
 	for _, ref := range parameters {
@@ -319,63 +240,6 @@ func cloneEffectiveParameters(parameters openapi3.Parameters) openapi3.Parameter
 		result = append(result, &openapi3.ParameterRef{Ref: ref.Ref, Value: &copy})
 	}
 	return result
-}
-
-// prepareEngineParameterView removes adapter gaps from the private document
-// view only. Public caller keys and synthesis retain the authored declaration.
-func prepareEngineParameterView(parameters openapi3.Parameters, routes *abstractInputRoutes, bindingSpec string) string {
-	usedHeaders := map[string]bool{}
-	for _, ref := range parameters {
-		if ref != nil && ref.Value != nil && ref.Value.In == openapi3.ParameterInHeader {
-			usedHeaders[http.CanonicalHeaderKey(ref.Value.Name)] = true
-		}
-	}
-	sentinel := "X-Openbindings-Adapter-Raw-Cookie"
-	for suffix := 2; usedHeaders[http.CanonicalHeaderKey(sentinel)]; suffix++ {
-		sentinel = fmt.Sprintf("X-Openbindings-Adapter-Raw-Cookie-%d", suffix)
-	}
-	foundRaw := false
-	for _, ref := range parameters {
-		if ref == nil || ref.Value == nil {
-			continue
-		}
-		parameter := ref.Value
-		if bindingSpec == BindingSpecOpenAPI31 && parameter.In == openapi3.ParameterInHeader && strings.EqualFold(parameter.Name, "Cookie") {
-			parameter.Name = sentinel
-			foundRaw = true
-		}
-		if len(parameter.Content) > 0 {
-			continue
-		}
-		method, err := revision3ParameterSerializationMethod(parameter)
-		if err != nil {
-			continue
-		}
-		var engineType string
-		switch method.Style {
-		case openapi3.SerializationSpaceDelimited, openapi3.SerializationPipeDelimited:
-			engineType = "array"
-		case openapi3.SerializationDeepObject:
-			engineType = "object"
-		}
-		if engineType != "" {
-			copy := openapi3.Schema{}
-			if parameter.Schema != nil && parameter.Schema.Value != nil {
-				copy = *parameter.Schema.Value
-			}
-			copy.Type = &openapi3.Types{engineType}
-			parameter.Schema = &openapi3.SchemaRef{Value: &copy}
-		}
-	}
-	if foundRaw && routes != nil {
-		for index := range routes.parameters {
-			if routes.parameters[index].In == openapi3.ParameterInHeader && strings.EqualFold(routes.parameters[index].Name, "Cookie") {
-				routes.parameters[index].EngineName = sentinel
-			}
-		}
-		return sentinel
-	}
-	return ""
 }
 
 // prepareEngineEncodingView gives the standalone carrier the declaration
@@ -425,7 +289,6 @@ func prepareEngineEncodingView(plans []*bodyPlan) {
 	}
 }
 
-type rawCookieBridgeContextKey struct{}
 type completedURLValidationContextKey struct{}
 type mediaGovernanceContextKey struct{}
 type serverAssemblyContextKey struct{}
@@ -436,21 +299,16 @@ type serverAssemblyPolicy struct {
 	engineBase   string
 }
 
-type rawCookieBridgeTransport struct {
+type governedTransport struct {
 	base            http.RoundTripper
 	requestCodings  map[string]ContentEncoder
 	responseCodings map[string]ContentDecoder
 }
 
-func (t rawCookieBridgeTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+func (t governedTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	base := t.base
 	if base == nil {
 		base = http.DefaultTransport
-	}
-	sentinel, _ := request.Context().Value(rawCookieBridgeContextKey{}).(string)
-	hasRawCookie := sentinel != "" && len(request.Header.Values(sentinel)) > 0
-	if hasRawCookie && len(request.Header.Values("Cookie")) > 0 {
-		return nil, fmt.Errorf("raw Cookie adapter bridge reached dispatch with a structured Cookie field")
 	}
 	copy := request.Clone(request.Context())
 	copy.Header = request.Header.Clone()
@@ -471,13 +329,6 @@ func (t rawCookieBridgeTransport) RoundTrip(request *http.Request) (*http.Respon
 	}
 	// §9.1: this binding never advertises a response-media preference.
 	copy.Header.Del("Accept")
-	if hasRawCookie {
-		values := copy.Header.Values(sentinel)
-		copy.Header.Del(sentinel)
-		for _, value := range values {
-			copy.Header.Add("Cookie", value)
-		}
-	}
 	if err := applyDeclaredMultipartTransferHeaders(copy); err != nil {
 		return nil, err
 	}

@@ -83,7 +83,8 @@ func requestBodyIgnoredForBindingSpec(bindingSpec, method string) bool {
 }
 
 // checkEffectiveParameterOwnership enforces the declaration-only portions of
-// OAPI-P-10. Host and Content-Length are owned by the HTTP processor and
+// openbindings.openapi-3.0@1 §8.3 / openbindings.openapi-3.1@1 §8.3. Host and
+// Content-Length are owned by the HTTP processor and
 // therefore cannot be caller-routed parameters. Raw-Cookie and
 // structured-cookie declarations are permitted together in both siblings;
 // their collision is decided from emitted invocation contributions.
@@ -103,7 +104,8 @@ func checkEffectiveParameterOwnership(params openapi3.Parameters) error {
 	return nil
 }
 
-// checkPathTemplateAddressability enforces §9.3 (OAPI-P-05): the target URL is
+// checkPathTemplateAddressability enforces openbindings.openapi-3.0@1 §§8.2,
+// 10 / openbindings.openapi-3.1@1 §§8.2, 10: the target URL is
 // the resolved server joined with the operation's path template, so a template
 // variable that no declared path parameter can supply leaves no target to
 // address and refuses before dispatch — the same ground §9.1 states for the
@@ -290,7 +292,8 @@ func pathTemplateVariables(pathTemplate string) []string {
 // unflattenableParam reports the first parameter name declared in two
 // DIFFERENT locations (legal per the OAS's name-plus-location identity, but
 // unrepresentable by the flattened model): such an operation is refused
-// loudly at binding resolution (OAPI-P-03). Empty string means flattenable.
+// loudly at binding resolution (openbindings.openapi-3.0@1 §7;
+// openbindings.openapi-3.1@1 §7). Empty string means flattenable.
 func unflattenableParam(params openapi3.Parameters) string {
 	locs := map[string]string{}
 	headerNames := map[string]string{}
@@ -355,16 +358,17 @@ type routedInput struct {
 	bodySet    bool
 
 	// populated records which declared parameters the caller populated, per
-	// channel ("header" names canonicalized), for the OAPI-P-10
+	// channel ("header" names canonicalized), for openbindings.openapi-3.0@1
+	// §11 / openbindings.openapi-3.1@1 §11
 	// credential-collision refusal.
 	populated map[string]map[string]bool
 }
 
-// routeInput maps one flattened input object onto the wire per §9.1
-// (OAPI-P-03):
+// routeInput maps one flattened input object onto the wire per
+// openbindings.openapi-3.0@1 §§7–8 / openbindings.openapi-3.1@1 §§7–8:
 //
 //   - declared parameters ride their location, serialized per the OAS
-//     style/explode/allowReserved rules (OAPI-P-02);
+//     style/explode/allowReserved rules (§8.2 in both family documents);
 //   - parameter/body-property collisions are rejected before this function:
 //     independently declared upstream values are never collapsed or
 //     duplicated;
@@ -477,7 +481,8 @@ func routeParameterFor(r *routedInput, p *openapi3.Parameter, value any, binding
 	}
 	// A `content`-form parameter (schema-less, a single-entry content map)
 	// serializes its value per its declared media type and rides its
-	// location as that serialized string (OAPI-P-02).
+	// location as that serialized string (openbindings.openapi-3.0@1 §8.3;
+	// openbindings.openapi-3.1@1 §8.3).
 	if len(p.Content) > 0 {
 		serialized, err := serializeParamContentFor(p, value, bindingSpec)
 		if err != nil {
@@ -674,7 +679,8 @@ func serializeParamContentFor(p *openapi3.Parameter, value any, bindingSpec stri
 }
 
 // ---------------------------------------------------------------------------
-// Style/explode expansions (OAPI-P-02: the OAS tables, incorporated wholesale)
+// Style/explode expansions (openbindings.openapi-3.0@1 §8.2;
+// openbindings.openapi-3.1@1 §8.2).
 // ---------------------------------------------------------------------------
 
 // serializePathValueForRevision expands one path parameter per the OAS style
@@ -768,7 +774,8 @@ func revision3URIEscape(value string, allowReserved, formSafe bool) string {
 }
 
 // serializeCookieValue expands one cookie parameter (form style only) into
-// raw name=value units, which channel assembly (§9.6, OAPI-P-10) joins into
+// raw name=value units, which channel assembly (openbindings.openapi-3.0@1
+// §11; openbindings.openapi-3.1@1 §11) joins into
 // the single Cookie header with "; ". Cookie values are not percent-encoded
 // (the OAS defines no cookie escaping); exploded array/object expansions use
 // the cookie header's own pair separator rather than form's "&", which has

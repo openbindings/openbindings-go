@@ -7,7 +7,8 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-// The OAS style-examples table (OAPI-P-02: serialization incorporated
+// The OAS style-examples table (openbindings.openapi-3.0@1 §8.2;
+// openbindings.openapi-3.1@1 §8.2: serialization incorporated
 // wholesale), exercised cell by cell with the OAS's own example values:
 // primitive "blue", array [blue, black, brown], object {R:100, G:200,
 // B:150}. One deliberate difference from the table's literal strings:
@@ -136,7 +137,8 @@ func TestSerializeHeaderValue_Simple(t *testing.T) {
 }
 
 // allowReserved lets RFC 3986 reserved characters pass unescaped in query
-// values (OAPI-P-02); names stay escaped.
+// values (openbindings.openapi-3.0@1 §8.2;
+// openbindings.openapi-3.1@1 §8.2); names stay escaped.
 func TestSerializeQueryValue_AllowReserved(t *testing.T) {
 	got, err := serializeQueryValueForRevision("path", "a/b?c=d", "form", true, false, BindingSpec, false)
 	if err != nil || got[0] != "path=a%2Fb%3Fc%3Dd" {
@@ -174,7 +176,8 @@ func TestPrimitiveString(t *testing.T) {
 }
 
 // A content-form parameter serializes per its declared media type and rides
-// its location as that string (OAPI-P-02).
+// its location as that string (openbindings.openapi-3.0@1 §8.3;
+// openbindings.openapi-3.1@1 §8.3).
 func TestRouteParameter_ContentFormParam(t *testing.T) {
 	p := &openapi3.Parameter{
 		Name: "filter",
@@ -207,7 +210,8 @@ func TestRouteParameter_ContentFormParam(t *testing.T) {
 }
 
 // Two declared parameters sharing one name across DIFFERENT locations make
-// the operation unflattenable (OAPI-P-03).
+// the operation unflattenable (openbindings.openapi-3.0@1 §7;
+// openbindings.openapi-3.1@1 §7).
 func TestUnflattenableParam(t *testing.T) {
 	params := openapi3.Parameters{
 		{Value: &openapi3.Parameter{Name: "id", In: "path", Required: true}},

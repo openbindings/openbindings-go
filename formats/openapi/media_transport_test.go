@@ -32,7 +32,7 @@ func TestMediaTransportAppliesCodingStacksAndOmitsAccept(t *testing.T) {
 	var requestBody []byte
 	var requestHeader http.Header
 	decodeOrder := []string{}
-	transport := rawCookieBridgeTransport{
+	transport := governedTransport{
 		base: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 			requestBody, _ = io.ReadAll(request.Body)
 			requestHeader = request.Header.Clone()
@@ -94,7 +94,7 @@ func TestMediaTransportBuffersFiniteEventStreamAsUnary(t *testing.T) {
 	request, _ := http.NewRequest(http.MethodGet, server.URL+"/x", nil)
 	governance := &mediaGovernance{document: document, operation: document.Paths.Find("/x").Get, bindingSpec: BindingSpecOpenAPI31}
 	request = request.WithContext(context.WithValue(request.Context(), mediaGovernanceContextKey{}, governance))
-	transport := rawCookieBridgeTransport{base: http.DefaultTransport}
+	transport := governedTransport{base: http.DefaultTransport}
 	response, err := transport.RoundTrip(request)
 	if err != nil {
 		t.Fatal(err)
