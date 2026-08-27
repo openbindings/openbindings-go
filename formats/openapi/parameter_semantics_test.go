@@ -42,18 +42,51 @@ func TestParameterConversionIsConfiguredAndRecursive(t *testing.T) {
 	}
 }
 
-func TestOpenAPI30ParameterConversionAndNullRemainForM3(t *testing.T) {
+func TestOpenAPI30ContentFormConversionAndNullableDisposition(t *testing.T) {
+	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: openapi3.NewObjectSchema().
+		WithProperty("count", openapi3.NewIntegerSchema()).
+		WithProperty("note", &openapi3.Schema{Type: &openapi3.Types{"string"}, Nullable: true})}}
+	plan := &bodyPlan{
+		bindingSpec: BindingSpecOpenAPI30,
+		oas30:       true,
+		family:      familyURLEncoded,
+		media:       media,
+	}
+	if _, err := prepareEncodingStylePropertyValue(plan, "count", float64(7), BindingSpecOpenAPI30, nil); err == nil || !strings.Contains(err.Error(), "parameterConversion") {
+		t.Fatalf("missing content-form conversion error = %v", err)
+	}
+	converted, err := prepareEncodingStylePropertyValue(plan, "count", float64(7), BindingSpecOpenAPI30, func(any) (string, error) {
+		return "seven", nil
+	})
+	if err != nil || converted != "seven" {
+		t.Fatalf("content-form conversion = (%#v, %v), want seven", converted, err)
+	}
+
+	note := media.Schema.Value.Properties["note"].Value
+	collapsed, nullable := effectiveRevision3PartSchema(note, true)
+	if !nullable || collapsed == nil || !resolveDeclaration(collapsed, true).declaresOnly("string") {
+		t.Fatalf("3.0 nullable form declaration = (%#v, %v)", collapsed, nullable)
+	}
+	body, err := buildURLEncodedBodyForRevision(
+		&openapi3.T{OpenAPI: "3.0.4"}, media, map[string]any{"note": nil}, BindingSpecOpenAPI30,
+	)
+	if err != nil || body != "" {
+		t.Fatalf("nullable content-form body = %q, %v; want elided", body, err)
+	}
+}
+
+func TestOpenAPI30ParameterConversionAndNullConverged(t *testing.T) {
 	parameter := &openapi3.Parameter{
 		Name: "q", In: openapi3.ParameterInQuery,
 		Schema: &openapi3.SchemaRef{Value: openapi3.NewArraySchema().WithItems(openapi3.NewIntegerSchema())},
 	}
-	value := []any{float64(7), nil}
-	prepared, _, err := prepareSchemaParameterValue(parameter, value, BindingSpecOpenAPI30, nil)
-	if err != nil {
-		t.Fatalf("3.0-only M3 behavior changed during M2a: %v", err)
+	if _, _, err := prepareSchemaParameterValue(parameter, []any{float64(7)}, BindingSpecOpenAPI30, nil); err == nil || !strings.Contains(err.Error(), "parameterConversion") {
+		t.Fatalf("missing 3.0 conversion error = %v", err)
 	}
-	if !reflect.DeepEqual(prepared, value) {
-		t.Fatalf("3.0 value = %#v, want unchanged %#v", prepared, value)
+	if _, _, err := prepareSchemaParameterValue(parameter, []any{float64(7), nil}, BindingSpecOpenAPI30, func(value any) (string, error) {
+		return fmt.Sprintf("converted<%v>", value), nil
+	}); err == nil || !strings.Contains(err.Error(), "null array/object member") {
+		t.Fatalf("3.0 null-member error = %v", err)
 	}
 }
 
@@ -68,34 +101,38 @@ func TestParameterNullWholeValueMatrix(t *testing.T) {
 		{name: "simple", style: openapi3.SerializationSimple, wire: ""},
 		{name: "form", style: openapi3.SerializationForm, wire: "id="},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			prepared, err := prepareStyleValue("id", nil, testCase.style, BindingSpecOpenAPI31, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var wire string
-			switch testCase.style {
-			case openapi3.SerializationForm:
-				units, err := serializeQueryValueForRevision("id", prepared, testCase.style, true, false, BindingSpecOpenAPI31, false)
+		for _, bindingSpec := range []string{BindingSpecOpenAPI30, BindingSpecOpenAPI31} {
+			t.Run(testCase.name+"/"+bindingSpec, func(t *testing.T) {
+				prepared, err := prepareStyleValue("id", nil, testCase.style, bindingSpec, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				wire = strings.Join(units, "&")
-			default:
-				wire, err = serializePathValueForRevision("id", prepared, testCase.style, false, BindingSpecOpenAPI31)
-				if err != nil {
-					t.Fatal(err)
+				var wire string
+				switch testCase.style {
+				case openapi3.SerializationForm:
+					units, err := serializeQueryValueForRevision("id", prepared, testCase.style, true, false, bindingSpec, false)
+					if err != nil {
+						t.Fatal(err)
+					}
+					wire = strings.Join(units, "&")
+				default:
+					wire, err = serializePathValueForRevision("id", prepared, testCase.style, false, bindingSpec)
+					if err != nil {
+						t.Fatal(err)
+					}
 				}
-			}
-			if wire != testCase.wire {
-				t.Fatalf("wire = %q, want %q", wire, testCase.wire)
-			}
-		})
+				if wire != testCase.wire {
+					t.Fatalf("wire = %q, want %q", wire, testCase.wire)
+				}
+			})
+		}
 	}
 
 	for _, style := range []string{openapi3.SerializationSpaceDelimited, openapi3.SerializationPipeDelimited, openapi3.SerializationDeepObject} {
-		if _, err := prepareStyleValue("id", nil, style, BindingSpecOpenAPI31, nil); err == nil {
-			t.Errorf("null unexpectedly admitted for style %q", style)
+		for _, bindingSpec := range []string{BindingSpecOpenAPI30, BindingSpecOpenAPI31} {
+			if _, err := prepareStyleValue("id", nil, style, bindingSpec, nil); err == nil {
+				t.Errorf("%s null unexpectedly admitted for style %q", bindingSpec, style)
+			}
 		}
 	}
 	if _, err := convertParameterScalars([]any{"ok", nil}, nil, false); err == nil || !strings.Contains(err.Error(), "null") {
@@ -132,7 +169,7 @@ func TestHeaderInvalidFieldBytesRefuse(t *testing.T) {
 	}
 }
 
-func TestOpenAPI31CookieStaticAndRuntimeProofs(t *testing.T) {
+func TestOpenAPICookieStaticAndRuntimeProofs(t *testing.T) {
 	explode := boolPointer(true)
 	array := &openapi3.Parameter{
 		Name: "parts", In: openapi3.ParameterInCookie, Style: openapi3.SerializationForm, Explode: explode,
@@ -158,11 +195,13 @@ func TestOpenAPI31CookieStaticAndRuntimeProofs(t *testing.T) {
 	if formStyleCookieMultiValueProof(typeless, false) || formStyleCookieMultiValueProof(union, false) {
 		t.Fatal("typeless or nullable-array declaration was guessed into static exclusion")
 	}
-	if formStyleCookieMultiValueProof(array, true) {
-		t.Fatal("the 3.1-only static proof leaked into the 3.0 sibling")
+	if !formStyleCookieMultiValueProof(array, true) || !formStyleCookieMultiValueProof(object, true) {
+		t.Fatal("provably multi-pair 3.0 cookie declarations survived static proof")
 	}
-	if _, _, err := prepareSchemaParameterValue(typeless, []any{"a", "b"}, BindingSpecOpenAPI31, nil); err == nil || !strings.Contains(err.Error(), "multiple cookie pairs") {
-		t.Fatalf("runtime multi-pair error = %v", err)
+	for _, bindingSpec := range []string{BindingSpecOpenAPI30, BindingSpecOpenAPI31} {
+		if _, _, err := prepareSchemaParameterValue(typeless, []any{"a", "b"}, bindingSpec, nil); err == nil || !strings.Contains(err.Error(), "multiple cookie pairs") {
+			t.Fatalf("%s runtime multi-pair error = %v", bindingSpec, err)
+		}
 	}
 }
 
@@ -173,6 +212,9 @@ func TestOpenAPI31PathCorrespondenceAndEquivalentHierarchy(t *testing.T) {
 	if err := checkPathTemplateDeclaration("/items", openapi3.Parameters{pathParameter("id")}, BindingSpecOpenAPI31); err == nil || !strings.Contains(err.Error(), "no path template expression") {
 		t.Fatalf("reverse-correspondence error = %v", err)
 	}
+	if err := checkPathTemplateDeclaration("/items", openapi3.Parameters{pathParameter("id")}, BindingSpecOpenAPI30); err == nil || !strings.Contains(err.Error(), "OAPI30-P-02") {
+		t.Fatalf("3.0 reverse-correspondence error = %v", err)
+	}
 	if err := checkPathTemplateDeclaration("/{id}/{id}", openapi3.Parameters{pathParameter("id")}, BindingSpecOpenAPI31); err == nil || !strings.Contains(err.Error(), "more than once") {
 		t.Fatalf("duplicate-expression error = %v", err)
 	}
@@ -182,6 +224,28 @@ func TestOpenAPI31PathCorrespondenceAndEquivalentHierarchy(t *testing.T) {
 	)
 	if got := equivalentPathTemplateCollision(paths, "/items/{id}"); got != "/items/{name}" {
 		t.Fatalf("collision = %q, want /items/{name}", got)
+	}
+}
+
+func TestOpenAPI30IgnoredHeaderParametersAndAllowEmptyValue(t *testing.T) {
+	parameter := func(name, in string) *openapi3.ParameterRef {
+		return &openapi3.ParameterRef{Value: &openapi3.Parameter{
+			Name: name, In: in, Schema: &openapi3.SchemaRef{Value: openapi3.NewStringSchema()},
+		}}
+	}
+	pathItem := &openapi3.PathItem{Parameters: openapi3.Parameters{
+		parameter("aCcEpT", openapi3.ParameterInHeader),
+		parameter("CONTENT-TYPE", openapi3.ParameterInHeader),
+		parameter("authorization", openapi3.ParameterInHeader),
+		parameter("q", openapi3.ParameterInQuery),
+	}}
+	params := effectiveParameters(pathItem, &openapi3.Operation{})
+	if len(params) != 1 || params[0].Value.Name != "q" {
+		t.Fatalf("effective parameters = %#v, want only q", params)
+	}
+	units, err := serializeQueryValueForRevision("q", "", openapi3.SerializationForm, true, false, BindingSpecOpenAPI30, false)
+	if err != nil || !reflect.DeepEqual(units, []string{"q="}) {
+		t.Fatalf("allowEmptyValue wire = %#v, %v; want q=", units, err)
 	}
 }
 
@@ -203,12 +267,12 @@ func TestParameterDeclarationFloorAndRootDialectExclusion(t *testing.T) {
 		t.Fatalf("unknown non-extension field was guessed defective: %#v", verdict)
 	}
 
-	deferred30 := computeAcceptanceFloorFromBytes([]byte(`{
+	closed30 := computeAcceptanceFloorFromBytes([]byte(`{
 		"openapi":"3.0.3","info":{"title":"t","version":"1"},
 		"paths":{"/x":{"get":{"parameters":[{"name":"q","in":"query","schema":{},"content":{"application/json":{}}}],"responses":{"204":{"description":"ok"}}}}}
 	}`))
-	if verdict := deferred30.opVerdict("#/paths/~1x/get"); verdict == nil || verdict.Disposition != "represented" {
-		t.Fatalf("3.0-only complete Parameter gate must remain for M3: %#v", verdict)
+	if verdict := closed30.opVerdict("#/paths/~1x/get"); verdict == nil || verdict.Disposition != "invalid" {
+		t.Fatalf("3.0 complete Parameter gate verdict = %#v", verdict)
 	}
 
 	dialect := computeAcceptanceFloorFromBytes([]byte(`{
@@ -238,8 +302,8 @@ func TestTypedEffectiveParameterDeclarationGateCoversResolvedReferences(t *testi
 	if got := malformedEffectiveParameterFor(missingCarriage, BindingSpecOpenAPI31); got != "q" {
 		t.Fatalf("missing-carriage parameter = %q", got)
 	}
-	if got := malformedEffectiveParameterFor(missingCarriage, BindingSpecOpenAPI30); got != "" {
-		t.Fatalf("3.0-only complete declaration gate leaked from M3: %q", got)
+	if got := malformedEffectiveParameterFor(missingCarriage, BindingSpecOpenAPI30); got != "q" {
+		t.Fatalf("3.0 missing-carriage parameter = %q", got)
 	}
 }
 

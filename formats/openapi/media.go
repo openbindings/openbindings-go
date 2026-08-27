@@ -967,6 +967,11 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 				return fmt.Errorf("multipart part %q has nested array items with no defined repeated-part mapping", name)
 			}
 		}
+		if is30 && byteFormatSignaled(contentSchema) {
+			if _, err := openAPI30Base64TransferHeader(enc); err != nil {
+				return fmt.Errorf("multipart part %q: %w", name, err)
+			}
+		}
 		if is30 && resolveDeclaration(contentSchema, true).typeless() && (enc == nil || enc.ContentType == "") {
 			continue // invocation supplies propertyMedia; synthesis keeps the alternative
 		}
@@ -2382,6 +2387,16 @@ func effectiveRevision3PartSchema(schema *openapi3.Schema, is30 bool) (*openapi3
 		collapsed.Type = &openapi3.Types{member}
 		return &collapsed, true
 	}
+	resolved := resolveDeclaration(schema, is30)
+	if member, ok := resolved.soleNonNullType(); ok && resolved.admitsNull() {
+		// OAS 3.0 spells this as `type: <member>, nullable: true` in
+		// the same Schema Object. Keeping null admission as a separate form
+		// disposition lets the non-null member select exactly one carriage.
+		collapsed := *schema
+		collapsed.Type = &openapi3.Types{member}
+		collapsed.Nullable = false
+		return &collapsed, true
+	}
 	return schema, false
 }
 
@@ -2830,8 +2845,17 @@ func writeRevision3MultipartPart(writer *multipart.Writer, name string, value an
 	}
 	h.Set("Content-Disposition", disposition)
 	h.Set("Content-Type", parsedContentType.canonical)
+	if is30 && byteFormatSignaled(schema) {
+		emit, err := openAPI30Base64TransferHeader(enc)
+		if err != nil {
+			return fmt.Errorf("multipart part %q: %w", name, err)
+		}
+		if emit {
+			h.Set("Content-Transfer-Encoding", "base64")
+		}
+	}
 	// OAS 3.1 contentEncoding is an artifact annotation, not a part-header
-	// emission instruction. No Content-Transfer-Encoding is synthesized.
+	// emission instruction. Other Encoding headers are descriptive only.
 	part, err := writer.CreatePart(h)
 	if err != nil {
 		return fmt.Errorf("create part %q: %w", name, err)
@@ -2840,6 +2864,78 @@ func writeRevision3MultipartPart(writer *multipart.Writer, name string, value an
 		return fmt.Errorf("write part %q: %w", name, err)
 	}
 	return nil
+}
+
+func openAPI30Base64TransferHeader(encoding *openapi3.Encoding) (bool, error) {
+	if encoding == nil {
+		return false, nil
+	}
+	var header *openapi3.Header
+	for name, ref := range encoding.Headers {
+		if strings.EqualFold(name, "Content-Transfer-Encoding") && ref != nil {
+			header = ref.Value
+			break
+		}
+	}
+	if header == nil {
+		return false, nil
+	}
+	if header.Schema == nil || header.Schema.Value == nil {
+		return false, fmt.Errorf("explicit Content-Transfer-Encoding Header does not admit base64")
+	}
+	declaration := resolveDeclaration(header.Schema.Value, true)
+	if declaration.ambiguous || len(declaration.types) > 0 && !declaration.types["string"] {
+		return false, fmt.Errorf("explicit Content-Transfer-Encoding Header does not admit base64")
+	}
+	for _, conjunct := range declaration.conjuncts {
+		if conjunct == nil || len(conjunct.Enum) == 0 {
+			continue
+		}
+		admitted := false
+		for _, member := range conjunct.Enum {
+			if text, ok := member.(string); ok && text == "base64" {
+				admitted = true
+				break
+			}
+		}
+		if !admitted {
+			return false, fmt.Errorf("explicit Content-Transfer-Encoding Header disallows base64")
+		}
+	}
+	return true, nil
+}
+
+func openAPI30MultipartTransferHeaders(plans []*bodyPlan) map[string]map[string]bool {
+	result := map[string]map[string]bool{}
+	for _, plan := range plans {
+		if plan == nil || plan.bindingSpec != BindingSpecOpenAPI30 || plan.family != familyMultipart || plan.media == nil {
+			continue
+		}
+		root := mediaSchema(plan.media)
+		for name, encoding := range plan.media.Encoding {
+			schema := resolvedMultipartProperty(root, name, map[*openapi3.Schema]bool{})
+			schema, _ = effectiveRevision3PartSchema(schema, true)
+			if schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{}) {
+				schema = resolvedMultipartItems(schema, map[*openapi3.Schema]bool{})
+			}
+			if !byteFormatSignaled(schema) {
+				continue
+			}
+			emit, err := openAPI30Base64TransferHeader(encoding)
+			if err != nil || !emit {
+				continue
+			}
+			mediaType := normalizeMediaType(plan.mediaType)
+			if result[mediaType] == nil {
+				result[mediaType] = map[string]bool{}
+			}
+			result[mediaType][name] = true
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // isComplexPartValue decides object-vs-primitive part encoding: by the

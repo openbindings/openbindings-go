@@ -235,6 +235,77 @@ func TestFormatByteEmitsNoContentTransferEncoding(t *testing.T) {
 	}
 }
 
+func TestOpenAPI30ArtifactDeclaredBase64TransferHeader(t *testing.T) {
+	document := func(values string) json.RawMessage {
+		return json.RawMessage(`{
+			"openapi":"3.0.4","info":{"title":"transfer","version":"1"},
+			"paths":{"/send":{"post":{"requestBody":{"required":true,"content":{"multipart/form-data":{
+				"schema":{"type":"object","properties":{"payload":{"type":"string","format":"byte"}}},
+				"encoding":{"payload":{"headers":{"Content-Transfer-Encoding":{"schema":{"type":"string","enum":[` + values + `]}}}}}
+			}}},"responses":{"204":{"description":"ok"}}}}}
+		}`)
+	}
+	for _, testCase := range []struct {
+		name, values, wantHeader string
+		wantError                bool
+	}{
+		{name: "admits base64", values: `"base64"`, wantHeader: "base64"},
+		{name: "disallows base64", values: `"quoted-printable"`, wantError: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			doc, err := loadDocument("", document(testCase.values))
+			if err != nil {
+				t.Fatal(err)
+			}
+			media := doc.Paths.Find("/send").Post.RequestBody.Value.Content["multipart/form-data"]
+			reader, contentType, err := buildMultipartBodyForRevision(doc, media, map[string]any{"payload": "YWJj"}, BindingSpecOpenAPI30)
+			if testCase.wantError {
+				if err == nil || !strings.Contains(err.Error(), "disallows base64") {
+					t.Fatalf("transfer-header error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, params, _ := mime.ParseMediaType(contentType)
+			part, err := multipart.NewReader(reader, params["boundary"]).NextRawPart()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := part.Header.Get("Content-Transfer-Encoding"); got != testCase.wantHeader {
+				t.Fatalf("Content-Transfer-Encoding = %q, want %q", got, testCase.wantHeader)
+			}
+		})
+	}
+}
+
+func TestOpenAPI30DescriptiveEncodingHeaderDoesNotEmit(t *testing.T) {
+	doc, err := loadDocument("", json.RawMessage(`{
+		"openapi":"3.0.4","info":{"title":"headers","version":"1"},
+		"paths":{"/send":{"post":{"requestBody":{"required":true,"content":{"multipart/form-data":{
+			"schema":{"type":"object","properties":{"payload":{"type":"string"}}},
+			"encoding":{"payload":{"headers":{"X-Part-Meta":{"schema":{"type":"string"}}}}}
+		}}},"responses":{"204":{"description":"ok"}}}}}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	media := doc.Paths.Find("/send").Post.RequestBody.Value.Content["multipart/form-data"]
+	reader, contentType, err := buildMultipartBodyForRevision(doc, media, map[string]any{"payload": "hello"}, BindingSpecOpenAPI30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, params, _ := mime.ParseMediaType(contentType)
+	part, err := multipart.NewReader(reader, params["boundary"]).NextRawPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := part.Header.Get("X-Part-Meta"); got != "" {
+		t.Fatalf("descriptive Encoding header emitted %q", got)
+	}
+}
+
 // TestFormatByteIsNotBoundaryDecoded pins the value half against its nearest
 // neighbour rather than in isolation: on the 3.0 line `binary` and `byte` take
 // the SAME default part Content-Type and differ only in whether the caller's

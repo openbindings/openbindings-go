@@ -202,7 +202,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 				}
 				return iface, unrealizableOperation(opKey, reason)
 			}
-			if err := checkPathTemplateDeclaration(path, params, bindingSpec); bindingSpec == BindingSpecOpenAPI31 && (err != nil || equivalentPathTemplateCollision(doc.Paths, path) != "") {
+			if err := checkPathTemplateDeclaration(path, params, bindingSpec); err != nil || bindingSpec == BindingSpecOpenAPI31 && equivalentPathTemplateCollision(doc.Paths, path) != "" {
 				reason := "the selected path declaration is ambiguous or does not correspond one-to-one with its effective path parameters"
 				if err != nil {
 					reason = err.Error()

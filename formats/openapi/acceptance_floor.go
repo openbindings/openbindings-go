@@ -157,7 +157,7 @@ func floorAuthority(class, line string) string {
 		return "OAS 3.1 line, Response Object: `description` is REQUIRED"
 	case floorD10:
 		if is30 {
-			return "OAS, Parameter Object: `name` and `in` are REQUIRED"
+			return "OAS 3.0 line, Parameter Object: name and in are required; in is path, query, header, or cookie; exactly one of schema/content is present; path is required; content has one entry"
 		}
 		return "OAS 3.1 line, Parameter Object: name and in are required; in is path, query, header, or cookie; exactly one of schema/content is present; path is required; content has one entry"
 	case floorD11:
@@ -413,15 +413,6 @@ func floorParameterDeclarationDefective(parameter map[string]any) bool {
 	return false
 }
 
-func floorParameterMissingNameOrIn(parameter map[string]any) bool {
-	if parameter == nil {
-		return false
-	}
-	_, hasName := parameter["name"]
-	_, hasIn := parameter["in"]
-	return !hasName || !hasIn
-}
-
 // computeAcceptanceFloorFromBytes parses the entry document's raw bytes and
 // computes the floor. A byte stream that does not parse, whose root is not an
 // object, or whose edition is not accepted returns nil: those verdicts belong
@@ -628,10 +619,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 				// headers are applied before classifying, exactly as §8.1 does.
 				for _, parameter := range floorEffectiveParameterRows(root, pathItem, opMap,
 					"#/paths/"+floorEsc(pathKey)+"/parameters", ref+"/parameters") {
-					defective := line == "3.1" && parameter.known && floorParameterDeclarationDefective(parameter.resolved)
-					if line == "3.0" && !isFloorRefObj(parameter.value) {
-						defective = floorParameterMissingNameOrIn(parameter.resolved)
-					}
+					defective := parameter.known && floorParameterDeclarationDefective(parameter.resolved)
 					if defective {
 						addDefect(defect(floorD10, parameter.ptr))
 					}

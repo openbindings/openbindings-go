@@ -687,7 +687,7 @@ func (n *rawRefSiblingNormalizer) normalizeTarget(value any, kind rawRefTargetKi
 
 	switch kind {
 	case rawPathItemTarget:
-		changed = markRawPathItemBindingOrigins(object, base, nil) || changed
+		changed = markRawPathItemBindingOrigins(object, base, n.implicitSecuritySchemes(base)) || changed
 		if parameters, ok := object["parameters"].([]any); ok {
 			for _, parameter := range parameters {
 				if err := apply(parameter, rawParameterTarget); err != nil {

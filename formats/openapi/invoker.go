@@ -177,7 +177,7 @@ type SecurityHandler = openapiclient.SecurityHandler
 type RuntimeOptions struct {
 	HTTPClient       *http.Client
 	SecurityHandlers map[string]SecurityHandler
-	// ParameterConversion is the OpenAPI 3.1 binding's §8.1 configuration
+	// ParameterConversion is the OpenAPI 3.0/3.1 bindings' §8.1 configuration
 	// point. It is consulted only for supplied JSON booleans and numbers on
 	// schema/style serialization paths; strings pass unchanged and nil means no
 	// conversion is configured.
@@ -372,14 +372,16 @@ func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 }
 
 type runtimeOperationModel struct {
-	document            *openapi3.T
-	pathItem            *openapi3.PathItem
-	operation           *openapi3.Operation
-	governanceOperation *openapi3.Operation
-	parameters          openapi3.Parameters
-	plans               []*bodyPlan
-	routes              abstractInputRoutes
-	rawCookieHeader     string
+	document                 *openapi3.T
+	pathItem                 *openapi3.PathItem
+	operation                *openapi3.Operation
+	governanceOperation      *openapi3.Operation
+	parameters               openapi3.Parameters
+	plans                    []*bodyPlan
+	routes                   abstractInputRoutes
+	rawCookieHeader          string
+	preStartBodyGate         bool
+	multipartTransferHeaders map[string]map[string]bool
 }
 
 func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocationArgs, client *http.Client, bindingSpec string) (*runtimeOperationModel, error) {
@@ -471,7 +473,10 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	// semantics; both families refuse caller body on TRACE. Removing the typed
 	// declaration before handing the operation to the standalone engine keeps
 	// ignored declarations from becoming accidental required-input gates.
-	if requestBodyIgnoredForBindingSpec(bindingSpec, method) {
+	bodyForbidden := requestBodyIgnoredForBindingSpec(bindingSpec, method)
+	preStartBodyGate := bodyForbidden
+	multipartTransferHeaders := openAPI30MultipartTransferHeaders(plans)
+	if bodyForbidden {
 		operation.RequestBody = nil
 		plans = nil
 	}
@@ -491,7 +496,9 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	return &runtimeOperationModel{
 		document: document, pathItem: pathItem, operation: operation, governanceOperation: governanceOperation,
 		parameters: callerParameters, plans: plans, routes: routes,
-		rawCookieHeader: rawCookieHeader,
+		rawCookieHeader:          rawCookieHeader,
+		preStartBodyGate:         preStartBodyGate,
+		multipartTransferHeaders: multipartTransferHeaders,
 	}, nil
 }
 
@@ -838,18 +845,39 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	governance := &mediaGovernance{
 		document: model.document, operation: model.governanceOperation,
 		parameters: model.parameters, bindingSpec: bindingSpec,
+		multipartTransferHeaders: model.multipartTransferHeaders,
 	}
 	bridgeCtx = context.WithValue(bridgeCtx, mediaGovernanceContextKey{}, governance)
 	if model.rawCookieHeader != "" {
 		bridgeCtx = context.WithValue(bridgeCtx, rawCookieBridgeContextKey{}, model.rawCookieHeader)
 	}
-
+	// Prove absence before starting the carrier: these methods can never route
+	// a body, so dispatch must wait for either one body-free input or EOF.
+	var preReadValue any
+	var preReadErr error
+	preRead := false
+	if model.preStartBodyGate {
+		preReadValue, preReadErr = inv.ReadInput(bridgeCtx)
+		preRead = true
+		if preReadErr != nil && !errors.Is(preReadErr, io.EOF) {
+			return preReadErr
+		}
+		if preReadErr == nil {
+			envelope, envelopeErr := parseCallerEnvelope(preReadValue)
+			if envelopeErr != nil || envelope.bodyPresent {
+				return invoke.NewInvocationError(openapiclient.CodeRefused)
+			}
+		}
+	}
 	execution, err := prepared.Start(bridgeCtx)
 	if err != nil {
 		return bridgeExecutionError(err)
 	}
 	if execution.InputRequested() {
-		value, readErr := inv.ReadInput(bridgeCtx)
+		value, readErr := preReadValue, preReadErr
+		if !preRead {
+			value, readErr = inv.ReadInput(bridgeCtx)
+		}
 		switch {
 		case errors.Is(readErr, io.EOF):
 			if err := execution.FinishInput(); err != nil {

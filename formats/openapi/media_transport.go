@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,13 +21,71 @@ const (
 )
 
 type mediaGovernance struct {
-	document      *openapi3.T
-	operation     *openapi3.Operation
-	parameters    openapi3.Parameters
-	bindingSpec   string
-	emptyResponse atomic.Bool
-	failureMu     sync.Mutex
-	failure       error
+	document                 *openapi3.T
+	operation                *openapi3.Operation
+	parameters               openapi3.Parameters
+	bindingSpec              string
+	multipartTransferHeaders map[string]map[string]bool
+	emptyResponse            atomic.Bool
+	failureMu                sync.Mutex
+	failure                  error
+}
+
+func applyDeclaredMultipartTransferHeaders(request *http.Request) error {
+	governance, _ := request.Context().Value(mediaGovernanceContextKey{}).(*mediaGovernance)
+	if governance == nil || governance.bindingSpec != BindingSpecOpenAPI30 || len(governance.multipartTransferHeaders) == 0 {
+		return nil
+	}
+	mediaType, parameters, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || !strings.EqualFold(mediaType, "multipart/form-data") {
+		return nil
+	}
+	properties := governance.multipartTransferHeaders[normalizeMediaType(mediaType)]
+	if len(properties) == 0 {
+		return nil
+	}
+	boundary := parameters["boundary"]
+	if boundary == "" {
+		return &preDispatchMediaError{message: "multipart request has no boundary"}
+	}
+	body, err := readRequestBody(request)
+	if err != nil {
+		return &preDispatchMediaError{message: err.Error()}
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), boundary)
+	var rewritten bytes.Buffer
+	writer := multipart.NewWriter(&rewritten)
+	if err := writer.SetBoundary(boundary); err != nil {
+		return &preDispatchMediaError{message: err.Error()}
+	}
+	for {
+		part, nextErr := reader.NextPart()
+		if nextErr == io.EOF {
+			break
+		}
+		if nextErr != nil {
+			return &preDispatchMediaError{message: nextErr.Error()}
+		}
+		partBody, readErr := io.ReadAll(part)
+		if readErr != nil {
+			return &preDispatchMediaError{message: readErr.Error()}
+		}
+		if properties[part.FormName()] {
+			part.Header.Set("Content-Transfer-Encoding", "base64")
+		}
+		out, createErr := writer.CreatePart(part.Header)
+		if createErr != nil {
+			return &preDispatchMediaError{message: createErr.Error()}
+		}
+		if _, writeErr := out.Write(partBody); writeErr != nil {
+			return &preDispatchMediaError{message: writeErr.Error()}
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return &preDispatchMediaError{message: err.Error()}
+	}
+	replaceRequestBody(request, rewritten.Bytes())
+	return nil
 }
 
 func (g *mediaGovernance) recordFailure(err error) {
