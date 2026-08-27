@@ -498,17 +498,39 @@ func cloneOpenAPIOperation(operation *openapi3.Operation) *openapi3.Operation {
 	if operation == nil {
 		return nil
 	}
-	raw, err := json.Marshal(operation)
-	if err != nil {
-		copy := *operation
-		return &copy
+	clone := *operation
+	if operation.Responses == nil {
+		return &clone
 	}
-	var copy openapi3.Operation
-	if json.Unmarshal(raw, &copy) != nil {
-		shallow := *operation
-		return &shallow
+
+	responses := openapi3.NewResponsesWithCapacity(operation.Responses.Len())
+	responses.Extensions = operation.Responses.Extensions
+	responses.Origin = operation.Responses.Origin
+	for key, ref := range operation.Responses.Map() {
+		if ref == nil {
+			responses.Set(key, nil)
+			continue
+		}
+		refClone := *ref
+		if ref.Value != nil {
+			responseClone := *ref.Value
+			if ref.Value.Content != nil {
+				responseClone.Content = make(openapi3.Content, len(ref.Value.Content))
+				for mediaType, media := range ref.Value.Content {
+					if media == nil {
+						responseClone.Content[mediaType] = nil
+						continue
+					}
+					mediaClone := *media
+					responseClone.Content[mediaType] = &mediaClone
+				}
+			}
+			refClone.Value = &responseClone
+		}
+		responses.Set(key, &refClone)
 	}
-	return &copy
+	clone.Responses = responses
+	return &clone
 }
 
 // forceJSONBodyEnvelopeCarriage makes the standalone wire engine consume the

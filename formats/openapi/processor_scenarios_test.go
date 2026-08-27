@@ -97,31 +97,6 @@ func TestProcessorScenarios(t *testing.T) {
 	for _, family := range []string{"openapi-3.0", "openapi-3.1"} {
 		family := family
 		t.Run(family, func(t *testing.T) {
-			wanted := map[string]bool{}
-			if family == "openapi-3.0" {
-				for _, id := range []string{
-					"OAPI30-PS-56",
-					"OAPI30-PS-77", "OAPI30-PS-78", "OAPI30-PS-79", "OAPI30-PS-80", "OAPI30-PS-81",
-					"OAPI30-PS-82", "OAPI30-PS-83", "OAPI30-PS-84",
-					"OAPI30-PS-85", "OAPI30-PS-86", "OAPI30-PS-87", "OAPI30-PS-88", "OAPI30-PS-89",
-					"OAPI30-PS-90", "OAPI30-PS-91", "OAPI30-PS-92", "OAPI30-PS-93",
-				} {
-					wanted[id] = true
-				}
-			} else {
-				for _, id := range []string{
-					"OAPI31-PS-04", "OAPI31-PS-06", "OAPI31-PS-25", "OAPI31-PS-43", "OAPI31-PS-59", "OAPI31-PS-73",
-					"OAPI31-PS-75", "OAPI31-PS-76", "OAPI31-PS-77", "OAPI31-PS-78", "OAPI31-PS-79",
-					"OAPI31-PS-80", "OAPI31-PS-81", "OAPI31-PS-82", "OAPI31-PS-83", "OAPI31-PS-84",
-					"OAPI31-PS-85", "OAPI31-PS-86", "OAPI31-PS-87", "OAPI31-PS-88", "OAPI31-PS-89",
-					"OAPI31-PS-90", "OAPI31-PS-91", "OAPI31-PS-92", "OAPI31-PS-93", "OAPI31-PS-94",
-					"OAPI31-PS-95",
-					"OAPI31-PS-96", "OAPI31-PS-97", "OAPI31-PS-98", "OAPI31-PS-99", "OAPI31-PS-100",
-					"OAPI31-PS-101", "OAPI31-PS-102", "OAPI31-PS-103", "OAPI31-PS-104", "OAPI31-PS-105",
-				} {
-					wanted[id] = true
-				}
-			}
 			file, err := processorscenarios.LoadPath(
 				filepath.Join(root, "binding-specs", "processor", family+".json"),
 				family,
@@ -135,9 +110,6 @@ func TestProcessorScenarios(t *testing.T) {
 			}
 			ran := 0
 			for _, scenario := range file.Scenarios {
-				if !wanted[scenario.ID] {
-					continue
-				}
 				ran++
 				scenario := scenario
 				t.Run(scenario.ID, func(t *testing.T) {
@@ -147,8 +119,8 @@ func TestProcessorScenarios(t *testing.T) {
 					}
 				})
 			}
-			if ran != len(wanted) {
-				t.Fatalf("ran %d of %d selected convergence scenarios", ran, len(wanted))
+			if ran != len(file.Scenarios) {
+				t.Fatalf("ran %d of %d processor scenarios", ran, len(file.Scenarios))
 			}
 		})
 	}
@@ -271,7 +243,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	} else if len(roundTripper.dispatches) > 0 {
 		disposition = "error"
 	}
-	phase := openAPIErrorPhase(terminal, len(roundTripper.dispatches) > 0, scenario.ID)
+	phase := openAPIErrorPhase(terminal, len(roundTripper.dispatches) > 0)
 	data["error"] = normalizedError
 	return processorscenarios.Observation{Disposition: disposition, Phase: phase, Data: data}
 }
@@ -317,7 +289,7 @@ func scenarioContext(scenario processorscenarios.Scenario) map[string]any {
 	return ctx
 }
 
-func openAPIErrorPhase(err *invoke.InvocationError, dispatched bool, scenarioID string) string {
+func openAPIErrorPhase(err *invoke.InvocationError, dispatched bool) string {
 	if dispatched {
 		return "response"
 	}
@@ -325,12 +297,6 @@ func openAPIErrorPhase(err *invoke.InvocationError, dispatched bool, scenarioID 
 		return "load"
 	}
 	if err.Code == invoke.ErrCodeInvalidSelector || err.Code == invoke.ErrCodeSelectorNotFound {
-		return "resolution"
-	}
-	// These corpus cases are declaration-normalization collisions discovered
-	// while resolving the selected OpenAPI operation. The abstract error shape
-	// intentionally carries no internal phase or native diagnostic evidence.
-	if scenarioID == "OAPI-PS-15" || scenarioID == "OAPI-PS-16" {
 		return "resolution"
 	}
 	return "pre-dispatch"

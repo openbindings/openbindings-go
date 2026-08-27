@@ -31,7 +31,11 @@ Trace: {name: trace, in: query, schema: {type: string}}
 Create:
   required: true
   content: {application/json: {schema: {type: object}}}
-Created: {description: ok}
+Created:
+  description: ok
+  content:
+    application/json:
+      schema: {type: object}
 `
 		}
 		return &http.Response{
@@ -66,6 +70,11 @@ paths:
 	}
 	if response := post.Responses.Value("200"); response == nil || response.Value == nil || *response.Value.Description != "ok" {
 		t.Fatal("external operation response was not resolved")
+	}
+	governance := cloneOpenAPIOperation(post)
+	response := governance.Responses.Value("200")
+	if response == nil || response.Value == nil || response.Value.Content["application/json"] == nil {
+		t.Fatal("resolved external response was lost while cloning the governance view")
 	}
 	if requests["https://description.example/path-item.yaml"] != 1 {
 		t.Fatalf("external document fetches = %d, want one", requests["https://description.example/path-item.yaml"])
