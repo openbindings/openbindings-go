@@ -391,6 +391,30 @@ func scenarioOpenAPIInvoker(client *http.Client, scenario processorscenarios.Sce
 			}
 		}
 	}
+	if declared, ok := scenario.Given.Runtime["responseContentCodings"].(map[string]any); ok {
+		options.ResponseContentCodings = map[string]ContentDecoder{}
+		for token, raw := range declared {
+			token := token
+			switch raw {
+			case "reverse":
+				options.ResponseContentCodings[token] = func(input []byte) ([]byte, error) {
+					output := append([]byte(nil), input...)
+					for left, right := 0, len(output)-1; left < right; left, right = left+1, right-1 {
+						output[left], output[right] = output[right], output[left]
+					}
+					return output, nil
+				}
+			case "unwrap":
+				options.ResponseContentCodings[token] = func(input []byte) ([]byte, error) {
+					prefix := token + "("
+					if !strings.HasPrefix(string(input), prefix) || !strings.HasSuffix(string(input), ")") {
+						return nil, fmt.Errorf("%s response coding cannot unwrap representation", token)
+					}
+					return append([]byte(nil), input[len(prefix):len(input)-1]...), nil
+				}
+			}
+		}
+	}
 	return NewInvokerWithOptions(options)
 }
 
