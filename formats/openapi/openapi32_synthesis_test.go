@@ -78,3 +78,32 @@ func TestOpenAPI32NativeResponseSurfaceRetainsRangeAndOptionalDescription(t *tes
 		t.Fatalf("native response surface = %#v", operation.Responses.Map())
 	}
 }
+
+func TestOpenAPI32SequentialResponseSynthesisPublishesPerItemContract(t *testing.T) {
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
+			BindingSpec: BindingSpecOpenAPI32,
+			Content: openbindings.TextContent(`{
+  "openapi":"3.2.0",
+  "info":{"title":"sequential response synthesis","version":"1"},
+  "servers":[{"url":"https://api.example"}],
+  "paths":{"/events":{"get":{"operationId":"watchEvents","responses":{"200":{"content":{"application/jsonl":{
+    "schema":{"type":"array"},
+    "itemSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}
+  }}}}}}}
+}`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, _ := result.Interface.Operations["watchEvents"].Output.(map[string]any)
+	if output["type"] != "object" {
+		t.Fatalf("sequential output = %#v, want itemSchema object", output)
+	}
+	properties, _ := output["properties"].(map[string]any)
+	id, _ := properties["id"].(map[string]any)
+	if id["type"] != "string" {
+		t.Fatalf("sequential item property = %#v", id)
+	}
+}

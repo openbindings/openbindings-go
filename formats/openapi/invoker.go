@@ -372,7 +372,7 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 		Hooks: bridgeHooks(args, bindingSpec), MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes,
 		SecurityHandlers: securityHandlers, ParameterConverter: parameterConverter,
 		RequestContentCodings: requestCodings, ResponseContentCodings: responseCodings,
-		BufferEventStreams: true, OmitAcceptHeader: true,
+		BufferEventStreams: bindingSpec != BindingSpecOpenAPI32, OmitAcceptHeader: true,
 	}, nil
 }
 

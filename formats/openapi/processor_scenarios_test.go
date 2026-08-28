@@ -215,16 +215,7 @@ func TestProcessorScenarios(t *testing.T) {
 				t.Skip(err)
 			}
 			ran := 0
-			deferred := 0
 			for _, scenario := range file.Scenarios {
-				// OAPI32-PS-01 is the corpus's pre-existing sequential/SSE
-				// response seed. M5 implements only the request surface; M6 owns
-				// this scenario and removes this named seam when responseComplete
-				// becomes true.
-				if family.name == "openapi-3.2" && scenario.ID == "OAPI32-PS-01" {
-					deferred++
-					continue
-				}
 				if family.wanted != nil && !family.wanted[scenario.ID] {
 					continue
 				}
@@ -237,14 +228,10 @@ func TestProcessorScenarios(t *testing.T) {
 					}
 				})
 			}
-			if ran+deferred != len(file.Scenarios) {
-				t.Fatalf("ran %d and deferred %d of %d processor scenarios", ran, deferred, len(file.Scenarios))
+			if ran != len(file.Scenarios) {
+				t.Fatalf("ran %d of %d processor scenarios", ran, len(file.Scenarios))
 			}
-			if deferred > 0 {
-				t.Logf("executed %d of %d active processor scenarios (%d sequential-response scenario deferred)", ran, ran, deferred)
-			} else {
-				t.Logf("executed %d of %d processor scenarios", ran, len(file.Scenarios))
-			}
+			t.Logf("executed %d of %d processor scenarios", ran, len(file.Scenarios))
 		})
 	}
 }
@@ -302,6 +289,9 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		Source:   source,
 		Selector: selector,
 		Context:  scenarioContext(scenario),
+	}
+	if limit, ok := scenario.Given.Runtime["maxDeliveryUnitBytes"].(float64); ok {
+		args.MaxDeliveryUnitBytes = int64(limit)
 	}
 	joined := strings.HasPrefix(scenario.ID, "OAPI-FI-")
 	processor := scenarioOpenAPIInvoker(client, scenario)

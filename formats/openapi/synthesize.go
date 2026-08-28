@@ -1666,6 +1666,23 @@ func buildOutputSchemaWithCyclicRefs(op *openapi3.Operation, schemaOverlays *raw
 				continue
 			}
 			media := ref.Value.Content[mediaKey]
+			if bindingSpec == BindingSpecOpenAPI32 {
+				kind, sequentialErr := openapiclient.ClassifyOpenAPI32SequentialResponse(mediaKey, media)
+				if sequentialErr != nil {
+					continue
+				}
+				if kind != "" {
+					if media == nil || media.ItemSchema == nil {
+						return nil // the artifact makes no per-item operation-value claim
+					}
+					cyclicRootRef := ""
+					if media.ItemSchema.Ref != "" && graph.isCyclic(media.ItemSchema.Ref) {
+						cyclicRootRef = media.ItemSchema.Ref
+					}
+					appendSchema(graph.rootForm(media.ItemSchema, schemaOverlays), cyclicRootRef)
+					continue
+				}
+			}
 			admitsJSON := isJSONMediaType(parsed.base) || (parsed.rangeSpecificity < 2 && (parsed.base == "application/*" || parsed.base == "*/*"))
 			if admitsJSON {
 				if media == nil || media.Schema == nil {
@@ -1965,6 +1982,16 @@ func projectedOutputSchemaRefs(op *openapi3.Operation, bindingSpec string) []*op
 				parsed, err = parseMediaDeclaration(mediaKey)
 			} else {
 				parsed, err = parseMediaType(mediaKey)
+			}
+			if err == nil && bindingSpec == BindingSpecOpenAPI32 {
+				kind, sequentialErr := openapiclient.ClassifyOpenAPI32SequentialResponse(mediaKey, media)
+				if sequentialErr == nil && kind != "" {
+					if media == nil || media.ItemSchema == nil {
+						return nil
+					}
+					refs = append(refs, media.ItemSchema)
+					continue
+				}
 			}
 			admitsJSON := err == nil && (isJSONMediaType(parsed.base) || (hasResponseFidelity(bindingSpec) && parsed.rangeSpecificity < 2 && (parsed.base == "application/*" || parsed.base == "*/*")))
 			if !admitsJSON {
