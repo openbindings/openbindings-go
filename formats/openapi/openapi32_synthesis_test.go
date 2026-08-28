@@ -52,36 +52,160 @@ func TestOpenAPI32RequestSurfaceSynthesisEmitsContractsAndEditionSelectors(t *te
 	if result.Interface.Operations["queryItem"].Output == nil {
 		t.Fatal("plain unary 3.1-equivalent response contract was not emitted")
 	}
-	if openAPI32M6ResponseSeams[0].name == "" || openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
-		t.Fatal("3.2 response seams or unwarranted capability gate were lost")
+	if !openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
+		t.Fatal("3.2 was not warranted after response and dependency convergence")
 	}
 }
 
-func TestOpenAPI32UnaryResponseBridgeKeepsOnlyExplicitEquivalentCells(t *testing.T) {
-	description := "ok"
+func TestOpenAPI32SynthesisEmitsTargetlessInboundDependencies(t *testing.T) {
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
+			BindingSpec: BindingSpecOpenAPI32,
+			Content: openbindings.TextContent(`{
+  "openapi":"3.2.0",
+  "info":{"title":"dependencies","version":"1"},
+  "servers":[{"url":"https://api.example"}],
+  "paths":{"/jobs":{"post":{"operationId":"createJob","callbacks":{"done":{"{$request.body#/url}":{
+    "post":{"operationId":"receiveDone","requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}}}},"responses":{"200":{"content":{"application/json":{"schema":{"type":"string"}}}}}},
+    "additionalOperations":{"REPORT":{"operationId":"reportDone","responses":{"204":{}}}}
+  }}},"responses":{"202":{}}}}},
+  "webhooks":{"changed":{"query":{"operationId":"queryChange","responses":{"200":{}}}}}
+}`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(result.Interface.Dependencies); got != 3 {
+		t.Fatalf("dependencies = %d, want 3", got)
+	}
+	for key, dependency := range result.Interface.Dependencies {
+		if len(dependency.BindingSpecs) != 0 {
+			t.Errorf("dependency %q bindingSpecs = %#v, want absent", key, dependency.BindingSpecs)
+		}
+		if _, bound := result.Interface.Bindings[dependency.Operation+"."+DefaultSourceName]; bound {
+			t.Errorf("dependency operation %q acquired a binding", dependency.Operation)
+		}
+	}
+	input, _ := result.Interface.Operations["receiveDone"].Input.(map[string]any)
+	properties, _ := input["properties"].(map[string]any)
+	id, _ := properties["id"].(map[string]any)
+	if id["type"] != "string" {
+		t.Fatalf("callback request contract = %#v", input)
+	}
+	if output, _ := result.Interface.Operations["receiveDone"].Output.(map[string]any); output["type"] != "string" {
+		t.Fatalf("callback response contract = %#v", output)
+	}
+	dependencyCoverage := 0
+	for _, entry := range result.Coverage.Entries {
+		if entry.Scope == synthesize.SynthesisCoverageDependency {
+			dependencyCoverage++
+			if entry.OperationKey != "" || entry.BindingSelector != "" {
+				t.Errorf("dependency coverage leaked target identity: %#v", entry)
+			}
+		}
+	}
+	if dependencyCoverage != 3 {
+		t.Fatalf("dependency coverage entries = %d, want 3", dependencyCoverage)
+	}
+}
+
+func TestOpenAPI32NativeResponseSurfaceRetainsRangeAndOptionalDescription(t *testing.T) {
 	operation := &openapi3.Operation{Responses: openapi3.NewResponses()}
 	operation.Responses.Set("200", &openapi3.ResponseRef{Value: &openapi3.Response{
-		Description: &description,
 		Content: openapi3.Content{
 			"application/json":  &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}}},
 			"application/jsonl": &openapi3.MediaType{ItemSchema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}}},
 		},
 	}})
-	operation.Responses.Set("201", &openapi3.ResponseRef{Ref: "#/components/responses/Created", Value: &openapi3.Response{
-		Description: &description,
-		Content:     openapi3.Content{"application/jsonl": &openapi3.MediaType{ItemSchema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}}}},
-	}})
-	operation.Responses.Set("202", &openapi3.ResponseRef{Value: &openapi3.Response{Description: &description, Headers: openapi3.Headers{
+	operation.Responses.Set("202", &openapi3.ResponseRef{Value: &openapi3.Response{Headers: openapi3.Headers{
 		"Content-Encoding": &openapi3.HeaderRef{Value: &openapi3.Header{}},
 	}}})
-	operation.Responses.Set("2XX", &openapi3.ResponseRef{Value: &openapi3.Response{Description: &description}})
+	operation.Responses.Set("2XX", &openapi3.ResponseRef{Value: &openapi3.Response{}})
 
-	bridged := openAPI32UnaryResponseBridgeOperation(operation)
-	if bridged.Responses.Len() != 1 {
-		t.Fatalf("bridged responses = %#v", bridged.Responses.Map())
+	if operation.Responses.Len() != 3 {
+		t.Fatalf("native responses = %#v", operation.Responses.Map())
 	}
-	responseRef := bridged.Responses.Value("200")
-	if responseRef == nil || responseRef.Value == nil || len(responseRef.Value.Content) != 1 || responseRef.Value.Content["application/json"] == nil {
-		t.Fatalf("bridged 200 response = %#v", responseRef)
+	responseRef := operation.Responses.Value("200")
+	if responseRef == nil || responseRef.Value == nil || len(responseRef.Value.Content) != 2 || operation.Responses.Value("2XX") == nil {
+		t.Fatalf("native response surface = %#v", operation.Responses.Map())
+	}
+}
+
+func TestOpenAPI32SequentialResponseSynthesisPublishesPerItemContract(t *testing.T) {
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
+			BindingSpec: BindingSpecOpenAPI32,
+			Content: openbindings.TextContent(`{
+  "openapi":"3.2.0",
+  "info":{"title":"sequential response synthesis","version":"1"},
+  "servers":[{"url":"https://api.example"}],
+  "paths":{"/events":{"get":{"operationId":"watchEvents","responses":{"200":{"content":{"application/jsonl":{
+    "schema":{"type":"array"},
+    "itemSchema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}
+  }}}}}}}
+}`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, _ := result.Interface.Operations["watchEvents"].Output.(map[string]any)
+	if output["type"] != "object" {
+		t.Fatalf("sequential output = %#v, want itemSchema object", output)
+	}
+	properties, _ := output["properties"].(map[string]any)
+	id, _ := properties["id"].(map[string]any)
+	if id["type"] != "string" {
+		t.Fatalf("sequential item property = %#v", id)
+	}
+}
+
+func TestOpenAPI32ResponseIdentityConfinementReportsAlternativeCoverage(t *testing.T) {
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
+			BindingSpec: BindingSpecOpenAPI32,
+			Content: openbindings.TextContent(`
+openapi: 3.2.0
+info: {title: response identity coverage, version: "1"}
+servers: [{url: https://api.example}]
+components:
+  schemas:
+    Resource:
+      $id: https://schemas.example/resource
+      type: object
+      properties: {name: {type: string}}
+paths:
+  /x:
+    get:
+      operationId: readValue
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Resource/properties/name'}
+            text/plain:
+              schema: {type: string}
+`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := result.Interface.Operations["readValue"]; !ok {
+		t.Fatal("sibling response media did not preserve operation")
+	}
+	found := false
+	for _, entry := range result.Coverage.Entries {
+		if entry.SourceRef == "#/paths/~1x/get/responses/200/content/application~1json" {
+			found = true
+			if entry.Scope != synthesize.SynthesisCoverageAlternative || entry.Status != synthesize.SynthesisExcluded ||
+				entry.ReasonCode != "openapi.response_media_excluded" || entry.Rule != "OAPI32-P-01" {
+				t.Fatalf("response media coverage = %#v", entry)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("response media exclusion absent from coverage: %#v", result.Coverage.Entries)
 	}
 }

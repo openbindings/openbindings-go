@@ -57,9 +57,7 @@ func synthesisFactory(scenario synthesisscenarios.Scenario) (synthesize.Coverage
 	return NewSynthesizerWithClient(synthesisResourceClient(scenario.Resources)), nil
 }
 
-var pendingSynthesisScenarioReasons = map[string]string{
-	"OAPI31-SS-01": "OAPI31-SS-01: pending N10 dependencies node",
-}
+var pendingSynthesisScenarioReasons = map[string]string{}
 
 func TestSynthesisScenarios(t *testing.T) {
 	root := os.Getenv("OB_SPEC_CORPUS")

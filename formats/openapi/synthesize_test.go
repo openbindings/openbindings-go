@@ -723,8 +723,11 @@ func TestSynthesizeInterfaceWithCoverageAccountsForAlternativesAndReverseInterac
 	if got := reasonBySelector["#/paths/~1jobs/post/requestBody/content/application~1x-custom"]; got != "openapi.request_media_excluded" {
 		t.Fatalf("custom media reason = %q, want openapi.request_media_excluded", got)
 	}
-	if got := statusBySelector["#/webhooks/jobChanged/post"]; got != synthesize.SynthesisExcluded {
+	if got := statusBySelector["#/webhooks/jobChanged/post"]; got != synthesize.SynthesisRepresented {
 		t.Fatalf("webhook status = %q", got)
+	}
+	if len(result.Interface.Dependencies) != 2 {
+		t.Fatalf("dependencies = %d, want callback and webhook", len(result.Interface.Dependencies))
 	}
 }
 

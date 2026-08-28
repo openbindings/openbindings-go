@@ -93,9 +93,12 @@ var (
 		"operation", "source", "selector", "preference", "description", "deprecated",
 		"inputTransform", "outputTransform",
 	)
+	knownDependencyEntrySet = knownSet(
+		"operation", "bindingSpecs",
+	)
 	knownInterfaceSet = knownSet(
 		"openbindings", "name", "version", "description",
-		"schemas", "operations",
+		"schemas", "operations", "dependencies",
 		"sources", "bindings", "transforms",
 	)
 )
@@ -464,6 +467,50 @@ func (be BindingEntry) MarshalJSON() ([]byte, error) {
 	return marshalLossless(be.Unknown, be.Extensions, w)
 }
 
+// DependencyEntry names an operation contract consumed at a local
+// composition point. BindingSpecs, when present, is an unordered any-of list
+// of exact binding-specification identifiers accepted at that point. A nil
+// slice leaves the dependency unconstrained by binding family.
+type DependencyEntry struct {
+	Operation    string   `json:"operation"`
+	BindingSpecs []string `json:"bindingSpecs,omitempty"`
+
+	LosslessFields
+}
+
+type dependencyEntryWire struct {
+	Operation    string    `json:"operation"`
+	BindingSpecs *[]string `json:"bindingSpecs,omitempty"`
+}
+
+func (d *DependencyEntry) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+
+	var w dependencyEntryWire
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+
+	*d = DependencyEntry{Operation: w.Operation}
+	if w.BindingSpecs != nil {
+		d.BindingSpecs = append([]string{}, (*w.BindingSpecs)...)
+	}
+	d.Extensions, d.Unknown = splitLossless(raw, knownDependencyEntrySet)
+	return nil
+}
+
+func (d DependencyEntry) MarshalJSON() ([]byte, error) {
+	w := dependencyEntryWire{Operation: d.Operation}
+	if d.BindingSpecs != nil {
+		bindingSpecs := append([]string{}, d.BindingSpecs...)
+		w.BindingSpecs = &bindingSpecs
+	}
+	return marshalLossless(d.Unknown, d.Extensions, w)
+}
+
 // Interface is the OpenBindings document shape.
 type Interface struct {
 	OpenBindings string `json:"openbindings"`
@@ -471,8 +518,9 @@ type Interface struct {
 	Version      string `json:"version,omitempty"`
 	Description  string `json:"description,omitempty"`
 
-	Schemas    map[string]JSONSchema `json:"schemas,omitempty"`
-	Operations map[string]Operation  `json:"operations"`
+	Schemas      map[string]JSONSchema      `json:"schemas,omitempty"`
+	Operations   map[string]Operation       `json:"operations"`
+	Dependencies map[string]DependencyEntry `json:"dependencies,omitempty"`
 
 	Sources  map[string]Source       `json:"sources,omitempty"`
 	Bindings map[string]BindingEntry `json:"bindings,omitempty"`
@@ -489,8 +537,9 @@ type interfaceWire struct {
 	Version      string `json:"version,omitempty"`
 	Description  string `json:"description,omitempty"`
 
-	Schemas    map[string]JSONSchema `json:"schemas,omitempty"`
-	Operations map[string]Operation  `json:"operations"`
+	Schemas      map[string]JSONSchema      `json:"schemas,omitempty"`
+	Operations   map[string]Operation       `json:"operations"`
+	Dependencies map[string]DependencyEntry `json:"dependencies,omitempty"`
 
 	Sources  map[string]Source       `json:"sources,omitempty"`
 	Bindings map[string]BindingEntry `json:"bindings,omitempty"`
@@ -516,6 +565,7 @@ func (i *Interface) UnmarshalJSON(b []byte) error {
 		Description:  w.Description,
 		Schemas:      w.Schemas,
 		Operations:   w.Operations,
+		Dependencies: w.Dependencies,
 		Sources:      w.Sources,
 		Bindings:     w.Bindings,
 		Transforms:   w.Transforms,
@@ -533,6 +583,7 @@ func (i Interface) MarshalJSON() ([]byte, error) {
 		Description:  i.Description,
 		Schemas:      i.Schemas,
 		Operations:   i.Operations,
+		Dependencies: i.Dependencies,
 		Sources:      i.Sources,
 		Bindings:     i.Bindings,
 		Transforms:   i.Transforms,

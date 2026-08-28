@@ -1316,3 +1316,32 @@ func TestInterfaceValidate_TransformParseValidity(t *testing.T) {
 		}
 	}
 }
+
+func TestInterfaceValidate_DependencyContracts(t *testing.T) {
+	valid := Interface{
+		OpenBindings: "0.2.0",
+		Operations:   map[string]Operation{"deliver": {}},
+		Dependencies: map[string]DependencyEntry{
+			"customer.delivery": {Operation: "deliver"},
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid dependency: %v", err)
+	}
+
+	emptyConstraint := valid
+	emptyConstraint.Dependencies = map[string]DependencyEntry{
+		"customer.delivery": {Operation: "deliver", BindingSpecs: []string{}},
+	}
+	if err := emptyConstraint.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-D-02") {
+		t.Fatalf("empty bindingSpecs validation = %v, want OBI-D-02", err)
+	}
+
+	missingOperation := valid
+	missingOperation.Dependencies = map[string]DependencyEntry{
+		"customer.delivery": {Operation: "missing"},
+	}
+	if err := missingOperation.Validate(); err == nil || !strings.Contains(err.Error(), "OBI-D-19") {
+		t.Fatalf("missing dependency operation validation = %v, want OBI-D-19", err)
+	}
+}

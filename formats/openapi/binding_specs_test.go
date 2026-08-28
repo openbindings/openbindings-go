@@ -29,14 +29,14 @@ func TestRegisteredOpenAPIFamilyCapabilities(t *testing.T) {
 			t.Errorf("registration %q = %#v, want requestImplemented=%v", token, registration, implemented)
 		}
 	}
-	if openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
-		t.Fatal("OpenAPI 3.2 must remain response-incomplete and unwarranted until M6")
+	if !openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
+		t.Fatal("OpenAPI 3.2 must be response-complete after M6")
 	}
 	if !usesRoutedInput(BindingSpecOpenAPI32) || !hasMediaFidelity(BindingSpecOpenAPI32) {
 		t.Fatal("OpenAPI 3.2 request capabilities must use the routed 3.1-trunk substrate")
 	}
-	if hasResponseFidelity(BindingSpecOpenAPI32) {
-		t.Fatal("OpenAPI 3.2 response-divergent cells must remain behind the M6 seam")
+	if !hasResponseFidelity(BindingSpecOpenAPI32) {
+		t.Fatal("OpenAPI 3.2 response capabilities must be enabled")
 	}
 	wantEditions := map[string]map[string]bool{
 		BindingSpecOpenAPI20: {"2.0": true},
@@ -51,21 +51,15 @@ func TestRegisteredOpenAPIFamilyCapabilities(t *testing.T) {
 	}
 }
 
-func TestOpenAPI32RequestImplementationRemainsUnwarrantedUntilM6(t *testing.T) {
-	seen20 := false
+func TestOpenAPI32IsWarrantedAfterResponseAndDependencyConvergence(t *testing.T) {
+	seen := map[string]bool{}
 	for _, info := range openAPIBindingSpecInfos() {
-		if info.BindingSpec == BindingSpecOpenAPI20 {
-			seen20 = true
-		}
-		if info.BindingSpec == BindingSpecOpenAPI32 {
-			t.Fatal("openbindings.openapi-3.2@1 was warranted before M6 completed its response seams")
-		}
+		seen[info.BindingSpec] = true
 	}
-	if !seen20 {
-		t.Fatal("openbindings.openapi-2.0@1 must remain warranted after the M4 merge")
-	}
-	if len(openAPI32M6ResponseSeams) != 5 {
-		t.Fatalf("named M6 response seams = %d, want 5", len(openAPI32M6ResponseSeams))
+	for _, bindingSpec := range []string{BindingSpecOpenAPI20, BindingSpecOpenAPI30, BindingSpecOpenAPI31, BindingSpecOpenAPI32} {
+		if !seen[bindingSpec] {
+			t.Errorf("%s is not warranted", bindingSpec)
+		}
 	}
 }
 

@@ -49,6 +49,7 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 	normalizedEntries := append([]SynthesisCoverageEntry(nil), entries...)
 	seen := make(map[string]struct{}, len(normalizedEntries))
 	fullyRepresented := exhaustive
+	representedDependencies := 0
 	for index := range normalizedEntries {
 		entry := &normalizedEntries[index]
 		if entry.SourceIndex < 0 {
@@ -57,7 +58,7 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 		if entry.SourceRef == "" {
 			return nil, fmt.Errorf("synthesis coverage entry %d has empty sourceRef", index)
 		}
-		if entry.Scope != SynthesisCoverageTarget && entry.Scope != SynthesisCoverageAlternative && entry.Scope != SynthesisCoverageProjection {
+		if entry.Scope != SynthesisCoverageTarget && entry.Scope != SynthesisCoverageAlternative && entry.Scope != SynthesisCoverageProjection && entry.Scope != SynthesisCoverageDependency {
 			return nil, fmt.Errorf("synthesis coverage entry %d has invalid scope %q", index, entry.Scope)
 		}
 		key := fmt.Sprintf("%d\x00%s\x00%s", entry.SourceIndex, entry.Scope, entry.SourceRef)
@@ -75,6 +76,17 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 				return nil, fmt.Errorf("synthesis coverage entry %d repeats requirement %q", index, requirement)
 			}
 			requirements[requirement] = struct{}{}
+		}
+
+		if entry.Scope == SynthesisCoverageDependency {
+			if entry.Status != SynthesisRepresented {
+				return nil, fmt.Errorf("dependency synthesis coverage entry %d must be represented", index)
+			}
+			if entry.OperationKey != "" || entry.BindingKey != "" || entry.BindingSelector != "" || entry.SourceKey != "" || entry.ReasonCode != "" {
+				return nil, fmt.Errorf("represented dependency synthesis coverage entry %d must not carry operation or binding identity", index)
+			}
+			representedDependencies++
+			continue
 		}
 
 		if entry.Status == SynthesisRepresented || entry.Status == SynthesisLossy {
@@ -130,6 +142,9 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 		default:
 			return nil, fmt.Errorf("synthesis coverage entry %d has invalid status %q", index, entry.Status)
 		}
+	}
+	if representedDependencies != len(iface.Dependencies) {
+		return nil, fmt.Errorf("dependency synthesis coverage represents %d source interactions for %d emitted dependencies", representedDependencies, len(iface.Dependencies))
 	}
 
 	return &SynthesizeResult{

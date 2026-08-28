@@ -29,9 +29,7 @@ import (
 )
 
 // Registered OpenAPI binding-specification identifiers. Swagger 2.0 and
-// OpenAPI 3.0/3.1 are complete and warranted. OpenAPI 3.2 has an in-progress
-// request engine but remains unwarranted until its response surface is
-// completed.
+// OpenAPI 3.0/3.1/3.2 are complete and warranted.
 const (
 	BindingSpecOpenAPI20 = "openbindings.openapi-2.0@1"
 	BindingSpecOpenAPI30 = "openbindings.openapi-3.0@1"
@@ -70,7 +68,7 @@ var openAPIBindingSpecRegistry = map[string]openAPIBindingSpecRegistration{
 	},
 	BindingSpecOpenAPI32: {
 		requestImplemented: true,
-		responseComplete:   false,
+		responseComplete:   true,
 		editions:           map[string]bool{"3.2.0": true},
 	},
 }
@@ -103,9 +101,8 @@ func hasSchemaOmittedOAS30ByteCarriage(bindingSpec string) bool {
 	return isRequestImplementedOpenAPIBindingSpec(bindingSpec)
 }
 
-// isImplementedOpenAPIBindingSpec remains the response-complete warranting
-// gate consumed by capability advertisement and checkBindingSpecs. The 3.2
-// request lane must not enter it before M6 removes every named response seam.
+// isImplementedOpenAPIBindingSpec is the response-complete warranting gate
+// consumed by capability advertisement and checkBindingSpecs.
 func isImplementedOpenAPIBindingSpec(bindingSpec string) bool {
 	registration, ok := openAPIBindingSpecRegistry[bindingSpec]
 	return ok && registration.responseComplete
@@ -316,6 +313,7 @@ func openAPIBindingSpecInfos() []openbindings.BindingSpecInfo {
 		{BindingSpec: BindingSpecOpenAPI20, Description: "OpenAPI 2.0 (Swagger) HTTP APIs"},
 		{BindingSpec: BindingSpecOpenAPI30, Description: "OpenAPI 3.0 HTTP APIs"},
 		{BindingSpec: BindingSpecOpenAPI31, Description: "OpenAPI 3.1 HTTP APIs"},
+		{BindingSpec: BindingSpecOpenAPI32, Description: "OpenAPI 3.2 HTTP APIs"},
 	}
 }
 
@@ -372,16 +370,14 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 		Hooks: bridgeHooks(args, bindingSpec), MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes,
 		SecurityHandlers: securityHandlers, ParameterConverter: parameterConverter,
 		RequestContentCodings: requestCodings, ResponseContentCodings: responseCodings,
-		BufferEventStreams: true, OmitAcceptHeader: true,
+		BufferEventStreams: bindingSpec != BindingSpecOpenAPI32, OmitAcceptHeader: true,
 	}, nil
 }
 
 func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 	if isRequestImplementedOpenAPIBindingSpec(bindingSpec) {
-		// OpenAPI 3.2 response behavior reaches this profile only through the
-		// explicit plain-unary 3.1-equivalence bridge. Sequential media, SSE,
-		// response-header deltas, range keys, and every other 3.2 response cell
-		// remain named M6 seams; responseComplete stays false above.
+		// OpenAPI 3.2 uses its native artifact lane for request and response
+		// governance.
 		return openapiclient.FullProfile(), true
 	}
 	return openapiclient.Profile{}, false
@@ -484,10 +480,6 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 			return nil, &invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound}
 		}
 		target = adapterOpenAPI32SecurityTarget(target)
-		bridged := openAPI32UnaryResponseBridgeOperation(target.Operation)
-		if bridged != nil {
-			target.Operation = bridged
-		}
 		operationTarget = target
 		path, method, selector = reference.Path, reference.Method, reference.Ref
 		document = target.Document
