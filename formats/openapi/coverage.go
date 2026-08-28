@@ -254,6 +254,15 @@ func openAPI32SynthesisCoverage(
 		if !requestBodyIgnoredForBindingSpec(bindingSpec, disposition.Reference.Method) {
 			entries = append(entries, openAPIRequestMediaCoverage(target.Document, operation, target.PathItem, identity, bindingSpec, verdict)...)
 		}
+		for _, exclusion := range target.ResponseMediaExclusions {
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0,
+				SourceRef:   selector + "/responses/" + escapeJSONPointerToken(exclusion.ResponseKey) + "/content/" + escapeJSONPointerToken(exclusion.MediaType),
+				Scope:       synthesize.SynthesisCoverageAlternative, Status: synthesize.SynthesisExcluded,
+				ReasonCode: "openapi.response_media_excluded", Rule: openAPIRule(bindingSpec, "P-01"), Message: exclusion.Reason,
+				Details: map[string]any{"mediaType": exclusion.MediaType, "responseKey": exclusion.ResponseKey},
+			})
+		}
 		entries = append(entries, floorProjectionEntries(verdict)...)
 		// Callback/webhook dependency contracts are an explicit M6 seam.
 	}

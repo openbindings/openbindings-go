@@ -107,3 +107,52 @@ func TestOpenAPI32SequentialResponseSynthesisPublishesPerItemContract(t *testing
 		t.Fatalf("sequential item property = %#v", id)
 	}
 }
+
+func TestOpenAPI32ResponseIdentityConfinementReportsAlternativeCoverage(t *testing.T) {
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
+			BindingSpec: BindingSpecOpenAPI32,
+			Content: openbindings.TextContent(`
+openapi: 3.2.0
+info: {title: response identity coverage, version: "1"}
+servers: [{url: https://api.example}]
+components:
+  schemas:
+    Resource:
+      $id: https://schemas.example/resource
+      type: object
+      properties: {name: {type: string}}
+paths:
+  /x:
+    get:
+      operationId: readValue
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Resource/properties/name'}
+            text/plain:
+              schema: {type: string}
+`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := result.Interface.Operations["readValue"]; !ok {
+		t.Fatal("sibling response media did not preserve operation")
+	}
+	found := false
+	for _, entry := range result.Coverage.Entries {
+		if entry.SourceRef == "#/paths/~1x/get/responses/200/content/application~1json" {
+			found = true
+			if entry.Scope != synthesize.SynthesisCoverageAlternative || entry.Status != synthesize.SynthesisExcluded ||
+				entry.ReasonCode != "openapi.response_media_excluded" || entry.Rule != "OAPI32-P-01" {
+				t.Fatalf("response media coverage = %#v", entry)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("response media exclusion absent from coverage: %#v", result.Coverage.Entries)
+	}
+}
