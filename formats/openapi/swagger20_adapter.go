@@ -6,16 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	openapiclient "github.com/openbindings/openapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
-// runSwagger20 is the edition-specific adapter lane while the 2.0 token
-// remains registered but unwarranted. It owns the OpenBindings envelope,
-// qualified-key, and configuration vocabulary; the client receives only
-// location-separated OpenAPI-native values.
+// runSwagger20 is the warranted edition-specific adapter lane. It owns the
+// OpenBindings envelope, qualified-key, and configuration vocabulary; the
+// client receives only location-separated OpenAPI-native values.
 func (e *Runtime) runSwagger20(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) error {
 	if args == nil {
 		return &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
@@ -107,6 +107,162 @@ func (e *Runtime) runSwagger20(ctx context.Context, args *invoke.BindingInvocati
 	}
 	inv.CloseOutput()
 	return nil
+}
+
+// prepareSwagger20Binding derives the selected native target's declared
+// configuration and credential needs without retrieval or dispatch. Inline
+// content is parsed with external references disabled; a location-only source
+// remains unknowable to this side-effect-free surface and is left to Invoke.
+func (e *Runtime) prepareSwagger20Binding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	if args == nil {
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
+	}
+	if args.Source.Content == nil {
+		return nil, nil
+	}
+	content, err := openbindings.ContentToBytes(args.Source.Content)
+	if err != nil {
+		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed}
+	}
+	configuration, configErr := swagger20Configuration(args.Context)
+	if configErr != nil {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	allowExternal := false
+	prepared, err := e.engine.PrepareSwagger20(ctx, openapiclient.Swagger20PrepareOptions{
+		Source: openapiclient.Swagger20Source{Location: args.Source.Location, Content: content},
+		Ref:    args.Selector, Context: args.Context, HTTPClient: e.client,
+		Server: configuration.server, ServerSchemeIndex: configuration.serverSchemeIndex,
+		SecurityAlternative: configuration.securityAlternative,
+		SecurityCredentials: swagger20Credentials(args.Context),
+		RequestMedia:        configuration.requestMedia, PropertyMedia: configuration.propertyMedia,
+		ParameterConverter: e.parameterConvert, EmptyValueForm: configuration.emptyValueForm,
+		RequestContentCodings: e.requestCodings, ResponseContentCodings: e.responseCodings,
+		AllowExternalRefs: &allowExternal,
+	})
+	if err != nil {
+		return nil, bridgeExecutionError(err)
+	}
+	operation, err := prepared.SynthesisOperation()
+	if err != nil || operation.Excluded {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	target := args.Source.Location
+	details := swagger20ConfigurationRequirements(operation, args.Context, e)
+	securityDetails, err := swagger20SecurityRequirements(operation, configuration.securityAlternative, args.Context, target)
+	if err != nil {
+		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+	}
+	return mergeContextRequirements(details, securityDetails), nil
+}
+
+func swagger20ConfigurationRequirements(operation openapiclient.Swagger20SynthesisOperation, bindCtx map[string]any, runtime *Runtime) *invoke.ContextRequiredDetails {
+	configured := invoke.ContextConfiguration(bindCtx)
+	durable := true
+	var requirements []invoke.ContextRequirement
+	add := func(point, path, description string, schema map[string]any) {
+		requirements = append(requirements, invoke.NewConfigValueRequirement(point, path, description, schema, &durable))
+	}
+	for _, requirement := range operation.Requirements {
+		point := strings.TrimPrefix(requirement, "configuration.")
+		switch point {
+		case "server", "security", "requestMedia", "emptyValueForm":
+			if _, present := configured[point]; present {
+				continue
+			}
+		case "propertyMedia":
+			propertyMedia, _ := configured[point].(map[string]any)
+			for _, parameter := range operation.Parameters {
+				if parameter.In != openapiclient.Swagger20ParameterFormData || !parameter.Required || !swagger20SynthesisParameterIsFile(parameter) {
+					continue
+				}
+				if raw, present := propertyMedia[parameter.Name]; present && raw != nil {
+					continue
+				}
+				add(point, "/"+escapeJSONPointerSegment(parameter.Name), "select one concrete media type for this present file form parameter", map[string]any{"type": "string"})
+			}
+			continue
+		case "parameterConversion":
+			if runtime != nil && runtime.parameterConvert != nil {
+				continue
+			}
+		case "requestContentCodings":
+			if runtime != nil && len(runtime.requestCodings) > 0 {
+				continue
+			}
+		case "responseContentCodings":
+			if runtime != nil && len(runtime.responseCodings) > 0 {
+				continue
+			}
+		default:
+			continue
+		}
+		schema := map[string]any(nil)
+		description := "supply the Swagger 2.0 " + point + " configuration value"
+		switch point {
+		case "requestMedia":
+			schema = map[string]any{"type": "string"}
+		case "security":
+			schema = map[string]any{"type": "object", "properties": map[string]any{"index": map[string]any{"type": "integer", "minimum": 0}}, "required": []any{"index"}, "additionalProperties": false}
+		case "emptyValueForm":
+			schema = map[string]any{"enum": []any{"name-only", "empty"}}
+		}
+		add(point, "", description, schema)
+	}
+	if len(requirements) == 0 {
+		return nil
+	}
+	return &invoke.ContextRequiredDetails{Alternatives: []invoke.ContextAlternative{{Requirements: requirements}}}
+}
+
+func swagger20SynthesisParameterIsFile(parameter openapiclient.Swagger20SynthesisParameter) bool {
+	var schema map[string]any
+	return json.Unmarshal(parameter.Schema, &schema) == nil && schema["type"] == "file"
+}
+
+func swagger20SecurityRequirements(operation openapiclient.Swagger20SynthesisOperation, selected *int, bindCtx map[string]any, target string) (*invoke.ContextRequiredDetails, error) {
+	if len(operation.Security) == 0 {
+		return nil, nil
+	}
+	index := 0
+	if selected != nil {
+		index = *selected
+	} else if len(operation.Security) != 1 {
+		// Selection itself is reported by swagger20ConfigurationRequirements;
+		// credentials are discoverable after the caller chooses one complete
+		// alternative, never volunteered or combined across alternatives.
+		return nil, nil
+	}
+	if index < 0 || index >= len(operation.Security) || !operation.Security[index].Usable {
+		return nil, fmt.Errorf("selected Swagger 2.0 security alternative is unusable")
+	}
+	alternative := operation.Security[index]
+	if alternative.Anonymous {
+		return nil, nil
+	}
+	requirements := make([]invoke.ContextRequirement, 0, len(alternative.Schemes))
+	for _, scheme := range alternative.Schemes {
+		requirement := invoke.ContextRequirement{Name: scheme.Name}
+		switch scheme.Type {
+		case "basic":
+			requirement.Type = "auth.basic"
+		case "apiKey":
+			requirement.Type = "auth.apiKey"
+		case "oauth2":
+			requirement.Type = "auth.oauth2"
+			if len(scheme.Scopes) > 0 {
+				requirement.Extra = map[string]any{"scopes": append([]string(nil), scheme.Scopes...)}
+			}
+		default:
+			return nil, fmt.Errorf("unknown Swagger 2.0 security scheme type %q", scheme.Type)
+		}
+		requirements = append(requirements, requirement)
+	}
+	details := &invoke.ContextRequiredDetails{Target: target, Alternatives: []invoke.ContextAlternative{{Requirements: requirements}}}
+	if invoke.ContextSatisfies(bindCtx, details) {
+		return nil, nil
+	}
+	return details, nil
 }
 
 type swagger20RuntimeConfiguration struct {
