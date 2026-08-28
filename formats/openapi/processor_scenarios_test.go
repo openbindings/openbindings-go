@@ -156,6 +156,36 @@ func TestProcessorScenarios(t *testing.T) {
 				"OAPI20-PS-51": true,
 				"OAPI20-PS-52": true,
 				"OAPI20-PS-53": true,
+				"OAPI20-PS-54": true,
+				"OAPI20-PS-55": true,
+				"OAPI20-PS-56": true,
+				"OAPI20-PS-57": true,
+				"OAPI20-PS-58": true,
+				"OAPI20-PS-59": true,
+				"OAPI20-PS-60": true,
+				"OAPI20-PS-61": true,
+				"OAPI20-PS-62": true,
+				"OAPI20-PS-63": true,
+				"OAPI20-PS-64": true,
+				"OAPI20-PS-65": true,
+				"OAPI20-PS-66": true,
+				"OAPI20-PS-67": true,
+				"OAPI20-PS-68": true,
+				"OAPI20-PS-69": true,
+				"OAPI20-PS-70": true,
+				"OAPI20-PS-71": true,
+				"OAPI20-PS-72": true,
+				"OAPI20-PS-73": true,
+				"OAPI20-PS-74": true,
+				"OAPI20-PS-75": true,
+				"OAPI20-PS-76": true,
+				"OAPI20-PS-77": true,
+				"OAPI20-PS-78": true,
+				"OAPI20-PS-79": true,
+				"OAPI20-PS-80": true,
+				"OAPI20-PS-81": true,
+				"OAPI20-PS-82": true,
+				"OAPI20-PS-83": true,
 			},
 		},
 		{name: "openapi-3.0"},
@@ -361,6 +391,9 @@ func scenarioContext(scenario processorscenarios.Scenario) map[string]any {
 	}
 	if credentials, ok := scenario.Given.Runtime["credentials"].(map[string]any); ok {
 		ctx["apiKeys"] = credentials
+		if strings.HasPrefix(scenario.ID, "OAPI20-") {
+			ctx["credentials"] = credentials
+		}
 	}
 	return ctx
 }

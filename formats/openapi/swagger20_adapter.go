@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,7 @@ func (e *Runtime) runSwagger20(ctx context.Context, args *invoke.BindingInvocati
 		}
 	}
 	configuration, configErr := swagger20Configuration(args.Context)
+	credentials := swagger20Credentials(args.Context)
 	prepared, err := e.engine.PrepareSwagger20(ctx, openapiclient.Swagger20PrepareOptions{
 		Source: openapiclient.Swagger20Source{
 			Location: args.Source.Location,
@@ -37,6 +39,9 @@ func (e *Runtime) runSwagger20(ctx context.Context, args *invoke.BindingInvocati
 		Context:                args.Context,
 		HTTPClient:             e.client,
 		Server:                 configuration.server,
+		ServerSchemeIndex:      configuration.serverSchemeIndex,
+		SecurityAlternative:    configuration.securityAlternative,
+		SecurityCredentials:    credentials,
 		RequestMedia:           configuration.requestMedia,
 		PropertyMedia:          configuration.propertyMedia,
 		ParameterConverter:     e.parameterConvert,
@@ -105,10 +110,12 @@ func (e *Runtime) runSwagger20(ctx context.Context, args *invoke.BindingInvocati
 }
 
 type swagger20RuntimeConfiguration struct {
-	server         string
-	requestMedia   string
-	propertyMedia  map[string]string
-	emptyValueForm openapiclient.Swagger20EmptyValueForm
+	server              string
+	serverSchemeIndex   *int
+	securityAlternative *int
+	requestMedia        string
+	propertyMedia       map[string]string
+	emptyValueForm      openapiclient.Swagger20EmptyValueForm
 }
 
 func swagger20Configuration(bindCtx map[string]any) (swagger20RuntimeConfiguration, error) {
@@ -120,15 +127,37 @@ func swagger20Configuration(bindCtx map[string]any) (swagger20RuntimeConfigurati
 			result.server = typed
 		case map[string]any:
 			if len(typed) != 1 {
-				return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.server object must contain only baseUrl")
+				return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.server object must contain only baseUrl or index")
 			}
-			result.server, _ = typed["baseUrl"].(string)
+			if rawIndex, ok := typed["index"]; ok {
+				index, valid := swagger20ConfigIndex(rawIndex)
+				if !valid || index < 0 {
+					return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.server index must be a nonnegative integer")
+				}
+				result.serverSchemeIndex = &index
+			} else {
+				result.server, _ = typed["baseUrl"].(string)
+				if result.server == "" {
+					return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.server baseUrl must be a nonempty complete URL")
+				}
+			}
 		default:
-			return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.server must be a complete URL string or baseUrl object")
+			return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.server must be a complete URL string, baseUrl object, or index object")
 		}
-		if result.server == "" {
+		if result.server == "" && result.serverSchemeIndex == nil {
 			return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.server must contain a nonempty complete URL")
 		}
+	}
+	if raw, present := configuration["security"]; present {
+		object, ok := raw.(map[string]any)
+		if !ok || len(object) != 1 {
+			return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.security must be an object containing only index")
+		}
+		index, valid := swagger20ConfigIndex(object["index"])
+		if !valid || index < 0 {
+			return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.security index must be a nonnegative integer")
+		}
+		result.securityAlternative = &index
 	}
 	if raw, present := configuration["requestMedia"]; present {
 		text, ok := raw.(string)
@@ -166,6 +195,73 @@ func swagger20Configuration(bindCtx map[string]any) (swagger20RuntimeConfigurati
 		result.emptyValueForm = openapiclient.Swagger20EmptyValueForm(text)
 	}
 	return result, nil
+}
+
+func swagger20ConfigIndex(raw any) (int, bool) {
+	if number, ok := raw.(json.Number); ok {
+		integer, err := number.Int64()
+		return int(integer), err == nil && int64(int(integer)) == integer
+	}
+	return configIndex(raw)
+}
+
+func swagger20Credentials(bindCtx map[string]any) openapiclient.Swagger20SecurityCredentials {
+	result := openapiclient.Swagger20SecurityCredentials{
+		Basic: map[string]openapiclient.Swagger20BasicCredential{}, APIKeys: map[string]string{}, OAuth2: map[string]openapiclient.Swagger20OAuth2Credential{},
+	}
+	add := func(values map[string]any) {
+		for name, raw := range values {
+			switch credential := raw.(type) {
+			case string:
+				result.APIKeys[name] = credential
+			case map[string]any:
+				userID, userPresent := credential["userId"].(string)
+				if !userPresent {
+					userID, userPresent = credential["username"].(string)
+				}
+				password, passwordPresent := credential["password"].(string)
+				if userPresent && passwordPresent {
+					result.Basic[name] = openapiclient.Swagger20BasicCredential{UserID: userID, Password: password}
+				}
+				accessToken, tokenPresent := credential["accessToken"].(string)
+				if tokenPresent {
+					scopes, valid := swagger20CredentialScopes(credential["scopes"])
+					if valid {
+						result.OAuth2[name] = openapiclient.Swagger20OAuth2Credential{AccessToken: accessToken, Scopes: scopes}
+					}
+				}
+			}
+		}
+	}
+	if values, ok := bindCtx["credentials"].(map[string]any); ok {
+		add(values)
+	}
+	if values, ok := bindCtx["apiKeys"].(map[string]any); ok {
+		add(values)
+	}
+	return result
+}
+
+func swagger20CredentialScopes(raw any) ([]string, bool) {
+	if raw == nil {
+		return nil, true
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		if typed, ok := raw.([]string); ok {
+			return append([]string(nil), typed...), true
+		}
+		return nil, false
+	}
+	result := make([]string, len(values))
+	for index, rawValue := range values {
+		value, ok := rawValue.(string)
+		if !ok {
+			return nil, false
+		}
+		result[index] = value
+	}
+	return result, true
 }
 
 func swagger20InputForCallerEnvelope(input any, parameters []openapiclient.Swagger20ParameterInfo) (openapiclient.Swagger20Input, error) {

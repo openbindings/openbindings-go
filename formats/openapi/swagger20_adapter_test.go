@@ -64,6 +64,21 @@ func TestSwagger20AdapterOwnsExactLoadAndSelectorGates(t *testing.T) {
 	}
 }
 
+func TestSwagger20ConfigurationSelections(t *testing.T) {
+	configuration, err := swagger20Configuration(map[string]any{"configuration": map[string]any{
+		"server": map[string]any{"index": float64(1)}, "security": map[string]any{"index": float64(2)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.serverSchemeIndex == nil || *configuration.serverSchemeIndex != 1 {
+		t.Fatalf("server scheme index = %#v, want 1", configuration.serverSchemeIndex)
+	}
+	if configuration.securityAlternative == nil || *configuration.securityAlternative != 2 {
+		t.Fatalf("security alternative = %#v, want 2", configuration.securityAlternative)
+	}
+}
+
 func TestSwagger20AdapterMapsQualifiedKeysAndConfiguration(t *testing.T) {
 	roundTripper := &scenarioRoundTripper{peer: map[string]any{"status": 204}}
 	client := &http.Client{Transport: roundTripper}
