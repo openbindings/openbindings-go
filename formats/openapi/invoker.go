@@ -28,9 +28,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// Registered OpenAPI binding-specification identifiers. The 2.0 and 3.2
-// families are named here so dispatch can refuse them honestly; this package
-// implements only the 3.0 and 3.1 engines in the current release.
+// Registered OpenAPI binding-specification identifiers. The 2.0 family has
+// an edition-specific construction lane but remains unwarranted until its
+// complete execution and synthesis surface lands; the 3.2 engine is absent.
 const (
 	BindingSpecOpenAPI20 = "openbindings.openapi-2.0@1"
 	BindingSpecOpenAPI30 = "openbindings.openapi-3.0@1"
@@ -724,6 +724,9 @@ func (e *Runtime) invokeBinding(ctx context.Context, args *invoke.BindingInvocat
 }
 
 func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) error {
+	if args != nil && args.Source.BindingSpec == BindingSpecOpenAPI20 {
+		return e.runSwagger20Pass1(ctx, args)
+	}
 	options, err := enginePrepareOptions(args, e.client, e.securityHandlers, e.parameterConvert, e.requestCodings, e.responseCodings)
 	if err != nil {
 		return bridgeExecutionError(err)

@@ -42,8 +42,8 @@ func TestRegisteredOpenAPIFamiliesIncludeUnimplementedTokens(t *testing.T) {
 	}
 }
 
-func TestUnimplementedOpenAPIFamiliesRefuseBeforeArtifactParsing(t *testing.T) {
-	for _, token := range []string{BindingSpecOpenAPI20, BindingSpecOpenAPI32} {
+func TestAbsentOpenAPIEnginesRefuseBeforeArtifactParsing(t *testing.T) {
+	for _, token := range []string{BindingSpecOpenAPI32} {
 		t.Run(token, func(t *testing.T) {
 			args := &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: token, Content: openbindings.TextContent("not an OpenAPI artifact")},

@@ -94,12 +94,28 @@ func TestProcessorScenarios(t *testing.T) {
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
-	for _, family := range []string{"openapi-3.0", "openapi-3.1"} {
+	for _, family := range []struct {
+		name   string
+		wanted map[string]bool
+	}{
+		{
+			name: "openapi-2.0",
+			wanted: map[string]bool{
+				"OAPI20-PS-02": true,
+				"OAPI20-PS-03": true,
+				"OAPI20-PS-04": true,
+				"OAPI20-PS-05": true,
+				"OAPI20-PS-06": true,
+			},
+		},
+		{name: "openapi-3.0"},
+		{name: "openapi-3.1"},
+	} {
 		family := family
-		t.Run(family, func(t *testing.T) {
+		t.Run(family.name, func(t *testing.T) {
 			file, err := processorscenarios.LoadPath(
-				filepath.Join(root, "binding-specs", "processor", family+".json"),
-				family,
+				filepath.Join(root, "binding-specs", "processor", family.name+".json"),
+				family.name,
 				"openbindings.binding-spec-processor-scenarios@2",
 			)
 			if err != nil {
@@ -110,6 +126,9 @@ func TestProcessorScenarios(t *testing.T) {
 			}
 			ran := 0
 			for _, scenario := range file.Scenarios {
+				if family.wanted != nil && !family.wanted[scenario.ID] {
+					continue
+				}
 				ran++
 				scenario := scenario
 				t.Run(scenario.ID, func(t *testing.T) {
@@ -119,8 +138,12 @@ func TestProcessorScenarios(t *testing.T) {
 					}
 				})
 			}
-			if ran != len(file.Scenarios) {
-				t.Fatalf("ran %d of %d processor scenarios", ran, len(file.Scenarios))
+			want := len(file.Scenarios)
+			if family.wanted != nil {
+				want = len(family.wanted)
+			}
+			if ran != want {
+				t.Fatalf("ran %d processor scenarios, want %d", ran, want)
 			}
 			t.Logf("executed %d of %d processor scenarios", ran, len(file.Scenarios))
 		})
