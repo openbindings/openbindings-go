@@ -3,11 +3,11 @@ module github.com/openbindings/openbindings-go/formats/openapi
 go 1.25.12
 
 require (
-	github.com/getkin/kin-openapi v0.146.0
+	github.com/getkin/kin-openapi v0.149.0
 	github.com/oasdiff/yaml v0.1.1
 	github.com/openbindings/openapi-client/go v0.1.0
 	github.com/openbindings/openbindings-go v0.2.0
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/text v0.38.0
 )
 

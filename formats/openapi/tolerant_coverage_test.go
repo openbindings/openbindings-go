@@ -130,7 +130,7 @@ func TestOpenAPICoverageMakesNoClaimWithoutAMatchedFamilyToken(t *testing.T) {
 			"foreign": {BindingSpec: "example.foreign@1"},
 		},
 	}
-	entries := openAPISynthesisCoverage(doc, iface, nil, nil)
+	entries := openAPISynthesisCoverage(doc, nil, iface, nil, nil)
 	if len(entries) != 0 {
 		t.Fatalf("coverage entries = %+v, want no OpenAPI claim without a matched family token", entries)
 	}

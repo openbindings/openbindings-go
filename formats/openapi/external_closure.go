@@ -683,7 +683,9 @@ func rawReferenceStrings(value any, visit func(string)) {
 // 3.1 line JSON Schema 2020-12 §8.2.3.1's note has "other keywords can appear
 // alongside of "$ref" in the same schema object", the node keeps its own
 // members, and a token naming none of them resolves nothing (which is why that
-// line REFUSES).
+// line REFUSES). OAS 3.2 retains that literal-pointer behavior: Schema Object
+// siblings compose, while added Reference Object properties remain ignored by
+// the position-aware normalization pass.
 func openAPIIgnoresReferenceSiblings(edition string) bool {
 	return openAPIFollowsPointerBelowReference(edition)
 }

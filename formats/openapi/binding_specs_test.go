@@ -13,27 +13,36 @@ import (
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
-func TestRegisteredOpenAPIFamiliesIncludeUnimplementedTokens(t *testing.T) {
-	want := map[string]bool{
+func TestRegisteredOpenAPIFamilyCapabilities(t *testing.T) {
+	wantRequest := map[string]bool{
 		BindingSpecOpenAPI20: true,
 		BindingSpecOpenAPI30: true,
 		BindingSpecOpenAPI31: true,
-		BindingSpecOpenAPI32: false,
+		BindingSpecOpenAPI32: true,
 	}
-	if len(openAPIBindingSpecRegistry) != len(want) {
-		t.Fatalf("registry size = %d, want %d", len(openAPIBindingSpecRegistry), len(want))
+	if len(openAPIBindingSpecRegistry) != len(wantRequest) {
+		t.Fatalf("registry size = %d, want %d", len(openAPIBindingSpecRegistry), len(wantRequest))
 	}
-	for token, implemented := range want {
+	for token, implemented := range wantRequest {
 		registration, present := openAPIBindingSpecRegistry[token]
-		if !present || registration.implemented != implemented {
-			t.Errorf("registration %q = %#v, want implemented=%v", token, registration, implemented)
+		if !present || registration.requestImplemented != implemented {
+			t.Errorf("registration %q = %#v, want requestImplemented=%v", token, registration, implemented)
 		}
+	}
+	if openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
+		t.Fatal("OpenAPI 3.2 must remain response-incomplete and unwarranted until M6")
+	}
+	if !usesRoutedInput(BindingSpecOpenAPI32) || !hasMediaFidelity(BindingSpecOpenAPI32) {
+		t.Fatal("OpenAPI 3.2 request capabilities must use the routed 3.1-trunk substrate")
+	}
+	if hasResponseFidelity(BindingSpecOpenAPI32) {
+		t.Fatal("OpenAPI 3.2 response-divergent cells must remain behind the M6 seam")
 	}
 	wantEditions := map[string]map[string]bool{
 		BindingSpecOpenAPI20: {"2.0": true},
 		BindingSpecOpenAPI30: {"3.0.0": true, "3.0.1": true, "3.0.2": true, "3.0.3": true, "3.0.4": true},
 		BindingSpecOpenAPI31: {"3.1.0": true, "3.1.1": true, "3.1.2": true},
-		BindingSpecOpenAPI32: nil,
+		BindingSpecOpenAPI32: {"3.2.0": true},
 	}
 	for token, editions := range wantEditions {
 		if got := openAPIBindingSpecRegistry[token].editions; !reflect.DeepEqual(got, editions) {
@@ -42,32 +51,21 @@ func TestRegisteredOpenAPIFamiliesIncludeUnimplementedTokens(t *testing.T) {
 	}
 }
 
-func TestAbsentOpenAPIEnginesRefuseBeforeArtifactParsing(t *testing.T) {
-	for _, token := range []string{BindingSpecOpenAPI32} {
-		t.Run(token, func(t *testing.T) {
-			args := &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: token, Content: openbindings.TextContent("not an OpenAPI artifact")},
-				Selector: "#/paths/~1x/get",
-			}
-			call := NewInvoker().InvokeBinding(context.Background(), args)
-			_, invocationErr := driveSingle(t, call, nil)
-			if invocationErr == nil || invocationErr.Code != ErrCodeUnsupportedBindingSpec {
-				t.Fatalf("invocation error = %#v, want %s", invocationErr, ErrCodeUnsupportedBindingSpec)
-			}
-
-			_, synthesisErr := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-				Sources: []synthesize.SynthesizeSource{{BindingSpec: token, Content: openbindings.TextContent("not an OpenAPI artifact")}},
-			})
-			if synthesisErr == nil || !strings.Contains(synthesisErr.Error(), ErrCodeUnsupportedBindingSpec) {
-				t.Fatalf("synthesis error = %v, want %s", synthesisErr, ErrCodeUnsupportedBindingSpec)
-			}
-
-			_, prepareErr := NewInvoker().PrepareBinding(context.Background(), args)
-			var prepareInvocationErr *invoke.InvocationError
-			if !errors.As(prepareErr, &prepareInvocationErr) || prepareInvocationErr.Code != ErrCodeUnsupportedBindingSpec {
-				t.Fatalf("prepare error = %#v, want %s", prepareErr, ErrCodeUnsupportedBindingSpec)
-			}
-		})
+func TestOpenAPI32RequestImplementationRemainsUnwarrantedUntilM6(t *testing.T) {
+	seen20 := false
+	for _, info := range openAPIBindingSpecInfos() {
+		if info.BindingSpec == BindingSpecOpenAPI20 {
+			seen20 = true
+		}
+		if info.BindingSpec == BindingSpecOpenAPI32 {
+			t.Fatal("openbindings.openapi-3.2@1 was warranted before M6 completed its response seams")
+		}
+	}
+	if !seen20 {
+		t.Fatal("openbindings.openapi-2.0@1 must remain warranted after the M4 merge")
+	}
+	if len(openAPI32M6ResponseSeams) != 5 {
+		t.Fatalf("named M6 response seams = %d, want 5", len(openAPI32M6ResponseSeams))
 	}
 }
 
@@ -166,6 +164,14 @@ func TestRequestBodyMethodDispositionIsFamilySpecific(t *testing.T) {
 	}
 	if !requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI31, "trace") {
 		t.Error("3.1 TRACE requestBody was not ignored")
+	}
+	for _, method := range []string{"get", "head", "delete", "options", "post", "put", "patch", "query", "COPY"} {
+		if requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI32, method) {
+			t.Errorf("3.2 %s requestBody was ignored", method)
+		}
+	}
+	if !requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI32, "trace") {
+		t.Error("3.2 TRACE requestBody was not ignored")
 	}
 
 	for _, testCase := range []struct {

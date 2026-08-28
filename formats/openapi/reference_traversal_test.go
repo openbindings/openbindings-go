@@ -6,7 +6,7 @@ import (
 )
 
 // TestPointerBelowReferenceEditionPartition asserts the partition as a literal
-// map over all eight accepted editions, so a change to it is a change to a
+// map over all nine accepted editions, so a change to it is a change to a
 // visible table rather than to a switch statement's default arm. The
 // end-to-end verdicts are executed from the shared twin case table in
 // external_composition_test.go; this pins the rule the table exercises.
@@ -24,6 +24,7 @@ func TestPointerBelowReferenceEditionPartition(t *testing.T) {
 		"3.1.0": false, // fragment is a JSON-Pointer over the referenced document
 		"3.1.1": false, //
 		"3.1.2": false, //
+		"3.2.0": false, // fragment is a JSON-Pointer over the referenced document
 	}
 	for edition, follows := range want {
 		if got := openAPIFollowsPointerBelowReference(edition); got != follows {
@@ -32,7 +33,7 @@ func TestPointerBelowReferenceEditionPartition(t *testing.T) {
 	}
 	// An edition this specification does not accept is refused by OAPI-P-01
 	// with its own diagnostic, so this rule must not pre-empt it.
-	for _, edition := range []string{"", "2.0", "3.0.5", "3.1.3", "3.2.0"} {
+	for _, edition := range []string{"", "2.0", "3.0.5", "3.1.3", "3.2.1"} {
 		if !openAPIFollowsPointerBelowReference(edition) {
 			t.Errorf("openAPIFollowsPointerBelowReference(%q) refuses; an unaccepted edition must reach OAPI-P-01's diagnostic instead", edition)
 		}

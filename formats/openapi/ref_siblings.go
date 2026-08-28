@@ -491,7 +491,7 @@ func rawSemanticsForOpenAPIVersion(version string) rawRefSemantics {
 	switch {
 	case version == "3.0" || strings.HasPrefix(version, "3.0."):
 		return rawRefSemanticsIgnore
-	case version == "3.1" || strings.HasPrefix(version, "3.1."):
+	case version == "3.1" || strings.HasPrefix(version, "3.1.") || version == "3.2" || strings.HasPrefix(version, "3.2."):
 		return rawRefSemanticsCompose
 	default:
 		return rawRefSemanticsUnknown

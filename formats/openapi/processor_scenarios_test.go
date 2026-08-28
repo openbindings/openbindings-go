@@ -186,10 +186,20 @@ func TestProcessorScenarios(t *testing.T) {
 				"OAPI20-PS-81": true,
 				"OAPI20-PS-82": true,
 				"OAPI20-PS-83": true,
+				"OAPI20-PS-84": true,
+				"OAPI20-PS-85": true,
+				"OAPI20-PS-86": true,
+				"OAPI20-PS-87": true,
+				"OAPI20-PS-88": true,
+				"OAPI20-PS-89": true,
+				"OAPI20-PS-90": true,
+				"OAPI20-PS-91": true,
+				"OAPI20-PS-92": true,
 			},
 		},
 		{name: "openapi-3.0"},
 		{name: "openapi-3.1"},
+		{name: "openapi-3.2"},
 	} {
 		family := family
 		t.Run(family.name, func(t *testing.T) {
@@ -205,7 +215,16 @@ func TestProcessorScenarios(t *testing.T) {
 				t.Skip(err)
 			}
 			ran := 0
+			deferred := 0
 			for _, scenario := range file.Scenarios {
+				// OAPI32-PS-01 is the corpus's pre-existing sequential/SSE
+				// response seed. M5 implements only the request surface; M6 owns
+				// this scenario and removes this named seam when responseComplete
+				// becomes true.
+				if family.name == "openapi-3.2" && scenario.ID == "OAPI32-PS-01" {
+					deferred++
+					continue
+				}
 				if family.wanted != nil && !family.wanted[scenario.ID] {
 					continue
 				}
@@ -218,14 +237,14 @@ func TestProcessorScenarios(t *testing.T) {
 					}
 				})
 			}
-			want := len(file.Scenarios)
-			if family.wanted != nil {
-				want = len(family.wanted)
+			if ran+deferred != len(file.Scenarios) {
+				t.Fatalf("ran %d and deferred %d of %d processor scenarios", ran, deferred, len(file.Scenarios))
 			}
-			if ran != want {
-				t.Fatalf("ran %d processor scenarios, want %d", ran, want)
+			if deferred > 0 {
+				t.Logf("executed %d of %d request-surface processor scenarios (%d M6 response scenario deferred)", ran, ran, deferred)
+			} else {
+				t.Logf("executed %d of %d processor scenarios", ran, len(file.Scenarios))
 			}
-			t.Logf("executed %d of %d processor scenarios", ran, len(file.Scenarios))
 		})
 	}
 }
@@ -285,6 +304,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		Context:  scenarioContext(scenario),
 	}
 	joined := strings.HasPrefix(scenario.ID, "OAPI-FI-")
+	processor := scenarioOpenAPIInvoker(client, scenario)
 	var call invoke.Invocation[any, any]
 	if joined {
 		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
@@ -295,7 +315,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		if err != nil {
 			t.Fatal(err)
 		}
-		op := invoke.NewOperationInvoker(NewInvokerWithClient(client))
+		op := invoke.NewOperationInvoker(processor)
 		op.TransformEvaluator = openAPIJSONataEvaluator{}
 		call = invoke.Invoke(
 			context.Background(), op, iface,
@@ -303,9 +323,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			invoke.WithContext(scenarioContext(scenario)),
 		)
 	} else {
-		call = NewInvokerWithOptions(RuntimeOptions{
-			HTTPClient: client, ParameterConversion: scenarioParameterConversion(scenario),
-		}).InvokeBinding(context.Background(), args)
+		call = processor.InvokeBinding(context.Background(), args)
 	}
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		if err := call.Write(context.Background(), scenario.Given.Invocation["input"]); err != nil {
@@ -352,6 +370,28 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	phase := openAPIErrorPhase(terminal, len(roundTripper.dispatches) > 0)
 	data["error"] = normalizedError
 	return processorscenarios.Observation{Disposition: disposition, Phase: phase, Data: data}
+}
+
+func scenarioOpenAPIInvoker(client *http.Client, scenario processorscenarios.Scenario) *Invoker {
+	options := RuntimeOptions{
+		HTTPClient:          client,
+		ParameterConversion: scenarioParameterConversion(scenario),
+	}
+	if declared, ok := scenario.Given.Runtime["requestContentCodings"].(map[string]any); ok {
+		options.RequestContentCodings = map[string]ContentEncoder{}
+		for token, raw := range declared {
+			if raw == "reverse" {
+				options.RequestContentCodings[token] = func(input []byte) ([]byte, error) {
+					output := append([]byte(nil), input...)
+					for left, right := 0, len(output)-1; left < right; left, right = left+1, right-1 {
+						output[left], output[right] = output[right], output[left]
+					}
+					return output, nil
+				}
+			}
+		}
+	}
+	return NewInvokerWithOptions(options)
 }
 
 func openAPIFidelityOperationID(scenarioID string) string {

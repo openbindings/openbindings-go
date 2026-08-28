@@ -287,7 +287,7 @@ func securityPlansWithContext(doc *openapi3.T, op *openapi3.Operation, baseURL s
 				break
 			}
 			options := schemeRequirements(scheme, baseURL, requiredScopes)
-			if strings.HasPrefix(doc.OpenAPI, "3.1.") && !securitySchemeUsesScopes(scheme) && len(requiredScopes) > 0 {
+			if (strings.HasPrefix(doc.OpenAPI, "3.1.") || strings.HasPrefix(doc.OpenAPI, "3.2.")) && !securitySchemeUsesScopes(scheme) && len(requiredScopes) > 0 {
 				options = requirementsWithRoles(options, requiredScopes)
 			}
 			if len(options) == 0 {
@@ -344,6 +344,11 @@ func securitySchemeForOperation(doc *openapi3.T, op *openapi3.Operation, name st
 		scope = configured
 	}
 	if scope == "referring" && op != nil && op.Extensions != nil {
+		if schemes, ok := op.Extensions[referringSecuritySchemesMarker].(openapi3.SecuritySchemes); ok {
+			if ref, found := schemes[name]; found && ref != nil && ref.Value != nil {
+				return ref.Value, true
+			}
+		}
 		if rawSchemes, ok := op.Extensions[referringSecuritySchemesMarker].(map[string]any); ok {
 			if raw, found := rawSchemes[name]; found {
 				encoded, err := json.Marshal(raw)

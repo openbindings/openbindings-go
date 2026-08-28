@@ -47,10 +47,73 @@ type unrealizableTarget struct {
 // the convenient strict surface's guarantee that it never returns a
 // statically unbindable partial interface without evidence.
 func convertDocToInterface(doc *openapi3.T, location, bindingSpec string, warn func(synthesize.SynthesizerWarning), onUnrealizable func(unrealizableTarget)) (openbindings.Interface, error) {
-	return convertDocToInterfaceWithOverlay(doc, location, bindingSpec, warn, onUnrealizable, nil, nil)
+	return convertArtifactToInterfaceWithOverlay(doc, nil, location, bindingSpec, warn, onUnrealizable, nil, nil)
 }
 
 func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec string, warn func(synthesize.SynthesizerWarning), onUnrealizable func(unrealizableTarget), schemaOverlays *rawSchemaOverlayCollector, floor *acceptanceFloor) (openbindings.Interface, error) {
+	return convertArtifactToInterfaceWithOverlay(doc, nil, location, bindingSpec, warn, onUnrealizable, schemaOverlays, floor)
+}
+
+type synthesisOperationTarget struct {
+	document  *openapi3.T
+	pathItem  *openapi3.PathItem
+	operation *openapi3.Operation
+	path      string
+	method    string
+	selector  string
+}
+
+func synthesisOperationTargets(doc *openapi3.T, artifact *openapiclient.Artifact) []synthesisOperationTarget {
+	if artifact != nil && artifact.Edition.IsOpenAPI32() {
+		infos := artifact.Operations()
+		result := make([]synthesisOperationTarget, 0, len(infos))
+		for _, info := range infos {
+			target, err := artifact.ResolveOperation(info.Ref)
+			if err != nil {
+				continue
+			}
+			operation := openAPI32UnaryResponseBridgeOperation(target.Operation)
+			if len(target.ReferringSecuritySchemes) > 0 {
+				copyOperation := *operation
+				copyOperation.Extensions = make(map[string]any, len(operation.Extensions)+1)
+				for name, value := range operation.Extensions {
+					copyOperation.Extensions[name] = value
+				}
+				copyOperation.Extensions[referringSecuritySchemesMarker] = target.ReferringSecuritySchemes
+				operation = &copyOperation
+			}
+			result = append(result, synthesisOperationTarget{
+				document: target.Document, pathItem: target.PathItem, operation: operation,
+				path: target.Path, method: target.Method, selector: target.Ref,
+			})
+		}
+		return result
+	}
+	if doc == nil || doc.Paths == nil {
+		return nil
+	}
+	pathKeys := make([]string, 0, doc.Paths.Len())
+	for path := range doc.Paths.Map() {
+		pathKeys = append(pathKeys, path)
+	}
+	sort.Strings(pathKeys)
+	var result []synthesisOperationTarget
+	for _, path := range pathKeys {
+		pathItem := doc.Paths.Find(path)
+		if pathItem == nil {
+			continue
+		}
+		for _, method := range httpMethods {
+			operation := pathItem.GetOperation(strings.ToUpper(method))
+			if operation != nil {
+				result = append(result, synthesisOperationTarget{document: doc, pathItem: pathItem, operation: operation, path: path, method: method, selector: buildJSONPointerSelector(path, method)})
+			}
+		}
+	}
+	return result
+}
+
+func convertArtifactToInterfaceWithOverlay(doc *openapi3.T, artifact *openapiclient.Artifact, location, bindingSpec string, warn func(synthesize.SynthesizerWarning), onUnrealizable func(unrealizableTarget), schemaOverlays *rawSchemaOverlayCollector, floor *acceptanceFloor) (openbindings.Interface, error) {
 	// The schema-dialect translation keys off the artifact's own declared
 	// version (3.0 vs 3.1); the identifier stays exact and version-free.
 	formatVersion := majorMinor(doc.OpenAPI)
@@ -77,7 +140,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 		iface.Description = doc.Info.Description
 	}
 
-	if doc.Paths == nil {
+	if doc.Paths == nil && artifact == nil {
 		return iface, nil
 	}
 
@@ -95,334 +158,320 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 
 	usedKeys := map[string]bool{}
 
-	// Sort paths alphabetically for deterministic output across languages.
-	pathKeys := make([]string, 0, doc.Paths.Len())
-	for path := range doc.Paths.Map() {
-		pathKeys = append(pathKeys, path)
-	}
-	sort.Strings(pathKeys)
-
-	for _, path := range pathKeys {
-		pathItem := doc.Paths.Find(path)
-		if pathItem == nil {
-			continue
+	for _, target := range synthesisOperationTargets(doc, artifact) {
+		path, method, selector := target.path, target.method, target.selector
+		pathItem, op, operationDocument := target.pathItem, target.operation, target.document
+		if operationDocument == nil {
+			operationDocument = doc
 		}
 
-		for _, method := range httpMethods {
-			op := pathItem.GetOperation(strings.ToUpper(method))
-			if op == nil {
+		// The acceptance floor (the registered OpenAPI binding family §3): a
+		// ladder-invalid target is not addressed. Tolerant surfaces skip
+		// it (its invalid coverage entry is emitted by the coverage
+		// walk); the strict surface refuses, preserving its guarantee.
+		// Skipped BEFORE key derivation, in every engine identically.
+		verdict := floor.opVerdict(selector)
+		if verdict != nil && verdict.Disposition == "invalid" {
+			if onUnrealizable != nil {
 				continue
 			}
-
-			// The acceptance floor (the registered OpenAPI binding family §3): a
-			// ladder-invalid target is not addressed. Tolerant surfaces skip
-			// it (its invalid coverage entry is emitted by the coverage
-			// walk); the strict surface refuses, preserving its guarantee.
-			// Skipped BEFORE key derivation, in every engine identically.
-			verdict := floor.opVerdict(buildJSONPointerSelector(path, method))
-			if verdict != nil && verdict.Disposition == "invalid" {
-				if onUnrealizable != nil {
-					continue
-				}
-				return iface, fmt.Errorf("cannot synthesize OpenAPI operation at %q: %s; synthesis would return a statically unbindable partial interface", buildJSONPointerSelector(path, method), floorInvalidTargetMessage(len(verdict.Defects)))
-			}
-
-			opKey := deriveOperationKey(op, path, method, usedKeys)
-			usedKeys[opKey] = true
-
-			params := effectiveParameters(pathItem, op)
-			if _, serverErr := openapiclient.EffectiveServerSet(doc, pathItem, op, location); serverErr != nil {
-				reason := serverErr.Error()
-				if onUnrealizable != nil {
-					onUnrealizable(unrealizableTarget{
-						selector:     buildJSONPointerSelector(path, method),
-						operationKey: opKey,
-						reasonCode:   "openapi.server_url_excluded",
-						rule:         openAPIRule(bindingSpec, "P-04"),
-						message:      reason,
-					})
-					continue
-				}
-				return iface, unrealizableOperation(opKey, reason)
-			}
-			securityRequirements := effectiveSecurityRequirements(doc, op)
-			if securityRequirements != nil && len(*securityRequirements) > 0 {
-				entryPlans := viableSecurityPlansWithContext(doc, op, contextWithConfigurationPoint(nil, "implicitConnectionScope", "entry"), "", params)
-				referringPlans := viableSecurityPlansWithContext(doc, op, contextWithConfigurationPoint(nil, "implicitConnectionScope", "referring"), "", params)
-				if len(entryPlans) == 0 && len(referringPlans) == 0 {
-					reason := "the effective security declaration has no usable complete alternative"
-					if onUnrealizable != nil {
-						onUnrealizable(unrealizableTarget{
-							selector: buildJSONPointerSelector(path, method), operationKey: opKey,
-							reasonCode: "openapi.security_alternative_unusable", rule: openAPIRule(bindingSpec, "P-04"), message: reason,
-						})
-						continue
-					}
-					return iface, unrealizableOperation(opKey, reason)
-				}
-			}
-			if duplicate := duplicateEffectiveParameterIdentity(params); duplicate != "" {
-				reason := fmt.Sprintf("parameter identity %q is declared more than once", duplicate)
-				if onUnrealizable != nil {
-					onUnrealizable(unrealizableTarget{
-						selector:     buildJSONPointerSelector(path, method),
-						operationKey: opKey,
-						reasonCode:   "openapi.duplicate_parameter_identity",
-						rule:         openAPIRule(bindingSpec, "P-02"),
-						message:      reason,
-					})
-					continue
-				}
-				return iface, unrealizableOperation(opKey, reason)
-			}
-			if field := unflattenableParamForRevision(params, bindingSpec); field != "" {
-				reason := fmt.Sprintf("parameter %q has no unique flattened identity", field)
-				if onUnrealizable != nil {
-					onUnrealizable(unrealizableTarget{
-						selector:     buildJSONPointerSelector(path, method),
-						operationKey: opKey,
-						reasonCode:   "openapi.flattening_collision",
-						rule:         openAPIRule(bindingSpec, "P-02"),
-						message:      reason,
-					})
-					continue
-				}
-				return iface, unrealizableOperation(opKey, reason)
-			}
-			if parameter := malformedEffectiveParameterFor(params, bindingSpec); parameter != "" {
-				reason := fmt.Sprintf("effective parameter %q violates the closed Parameter Object declaration list", parameter)
-				if onUnrealizable != nil {
-					onUnrealizable(unrealizableTarget{
-						selector:     buildJSONPointerSelector(path, method),
-						operationKey: opKey,
-						reasonCode:   "openapi.parameter_declaration_excluded",
-						rule:         openAPIRule(bindingSpec, "P-02"),
-						message:      reason,
-					})
-					continue
-				}
-				return iface, unrealizableOperation(opKey, reason)
-			}
-			if err := checkPathTemplateDeclaration(path, params, bindingSpec); err != nil || bindingSpec == BindingSpecOpenAPI31 && equivalentPathTemplateCollision(doc.Paths, path) != "" {
-				reason := "the selected path declaration is ambiguous or does not correspond one-to-one with its effective path parameters"
-				if err != nil {
-					reason = err.Error()
-				}
-				if onUnrealizable != nil {
-					onUnrealizable(unrealizableTarget{
-						selector:     buildJSONPointerSelector(path, method),
-						operationKey: opKey,
-						reasonCode:   "openapi.path_correspondence_excluded",
-						rule:         openAPIRule(bindingSpec, "P-02"),
-						message:      reason,
-					})
-					continue
-				}
-				return iface, unrealizableOperation(opKey, reason)
-			}
-
-			if parameter := unsupportedParameterContentFor(params, bindingSpec); parameter != "" {
-				reason := fmt.Sprintf("parameter %q declares content with no faithful candidate carriage", parameter)
-				if onUnrealizable != nil {
-					onUnrealizable(unrealizableTarget{
-						selector:     buildJSONPointerSelector(path, method),
-						operationKey: opKey,
-						reasonCode:   "openapi.parameter_content_excluded",
-						rule:         openAPIRule(bindingSpec, "P-02"),
-						message:      reason,
-					})
-					continue
-				}
-				return iface, unrealizableOperation(opKey, reason)
-			}
-
-			// A style-lane parameter declaring a member with no defined
-			// expansion can never be populated faithfully: every value
-			// conforming to the declaration carries that member as a
-			// composite, and the governing OAS style row defines no
-			// representation for one. The refusal is decided by the
-			// DECLARATION, so the operation is excluded here with durable
-			// evidence rather than published as represented and refused at
-			// invocation. See styleLaneUndefinedExpansionMember in media.go
-			// for the per-edition authority reading.
-			if member := styleLaneUndefinedExpansionParamFor(params, bindingSpec, isOpenAPI30(formatVersion)); member != "" {
-				reason := fmt.Sprintf("parameter member %q has no expansion defined by its governing OAS style row", member)
-				if onUnrealizable != nil {
-					onUnrealizable(unrealizableTarget{
-						selector:     buildJSONPointerSelector(path, method),
-						operationKey: opKey,
-						reasonCode:   "openapi.parameter_style_expansion_excluded",
-						rule:         openAPIRule(bindingSpec, "P-02"),
-						message:      reason,
-					})
-					continue
-				}
-				return iface, unrealizableOperation(opKey, reason)
-			}
-
-			if parameter := formStyleCookieMultiValueParamFor(params, isOpenAPI30(formatVersion)); parameter != "" {
-				reason := fmt.Sprintf("cookie parameter %q statically proves multi-pair form expansion", parameter)
-				if onUnrealizable != nil {
-					onUnrealizable(unrealizableTarget{
-						selector:     buildJSONPointerSelector(path, method),
-						operationKey: opKey,
-						reasonCode:   "openapi.cookie_multi_value_excluded",
-						rule:         openAPIRule(bindingSpec, "P-02"),
-						message:      reason,
-					})
-					continue
-				}
-				return iface, unrealizableOperation(opKey, reason)
-			}
-
-			inputOperation := op
-			if requestBodyIgnoredForBindingSpec(bindingSpec, method) {
-				copy := *op
-				copy.RequestBody = nil
-				inputOperation = &copy
-			}
-			var requestPlans []*bodyPlan
-			invalidPropertyMediaCandidate := false
-			if inputOperation.RequestBody != nil && inputOperation.RequestBody.Value != nil {
-				plans, planErr := planRequestBodiesFor(doc, op, bindingSpec)
-				for _, plan := range plans {
-					invalidPropertyMediaCandidate = invalidPropertyMediaCandidate || len(plan.propertyMedia) > 0
-				}
-				// The acceptance floor (the registered OpenAPI binding family §3): a
-				// ladder-invalid request media ALTERNATIVE is a unit that is
-				// malformed under its upstream authority, so it is not a
-				// candidate the operation may carry. It never climbs -- the
-				// operation survives on its remaining alternatives, and a
-				// REQUIRED body left with none falls to the existing
-				// unresolvable-request-body exclusion below (OAPI-P-04),
-				// carried and not reopened. Applied BEFORE the candidate count
-				// the exclusion reason is chosen from, so a body whose only
-				// alternative the ladder invalidated is not misreported as a
-				// flattening collision.
-				plans = filterLadderInvalidAlternatives(plans, verdict, buildJSONPointerSelector(path, method))
-				plannedCount := len(plans)
-				if planErr == nil {
-					for _, plan := range plans {
-						if usesRoutedInput(bindingSpec) || !candidateCollides(params, plan) {
-							requestPlans = append(requestPlans, plan)
-						}
-					}
-				}
-				requiredBody := inputOperation.RequestBody.Value.Required
-				if requiredBody && (planErr != nil || len(requestPlans) == 0) {
-					reason := "no artifact-declared request media candidate can realize its required flattened input"
-					if planErr != nil {
-						reason = planErr.Error()
-					}
-					if onUnrealizable != nil {
-						// Every plannable candidate colliding with an
-						// independently declared parameter is the
-						// flattening-identity refusal (OAPI-P-03); a candidate
-						// set that never planned is the media-carriage refusal
-						// (OAPI-P-04).
-						allCollided := planErr == nil && plannedCount > 0
-						code := "openapi.unresolvable_request_body"
-						rule := openAPIRule(bindingSpec, "P-03")
-						if allCollided {
-							code = "openapi.flattening_collision"
-							rule = openAPIRule(bindingSpec, "P-02")
-						} else {
-							var dme *degenerateMediaError
-							if errors.As(planErr, &dme) {
-								code = "openapi.media_schema_mismatch"
-							} else if invalidPropertyMediaCandidate {
-								code = "openapi.media_schema_mismatch"
-							}
-						}
-						onUnrealizable(unrealizableTarget{
-							selector:     buildJSONPointerSelector(path, method),
-							operationKey: opKey,
-							reasonCode:   code,
-							rule:         rule,
-							message:      reason + "; the required request body has no faithful candidate carriage",
-						})
-						continue
-					}
-					return iface, unrealizableOperation(opKey, reason)
-				}
-				if len(requestPlans) == 0 && warn != nil {
-					code := "openapi.unresolvable_request_body"
-					var dme *degenerateMediaError
-					if errors.As(planErr, &dme) {
-						code = "openapi.media_schema_mismatch"
-					}
-					reason := "no artifact-declared request media candidate can realize its flattened input"
-					if planErr != nil {
-						reason = planErr.Error()
-					}
-					warn(synthesize.SynthesizerWarning{Code: code, Message: reason + "; optional body omitted from the synthesized contract", Path: fmt.Sprintf("operations.%s.input", opKey)})
-				}
-			}
-			if formatVersion == "3.1" {
-				if dialectErr := validateProjectedOperationDialects(doc, op, params, requestPlans, bindingSpec); dialectErr != nil {
-					reason := dialectErr.Error()
-					if onUnrealizable != nil {
-						onUnrealizable(unrealizableTarget{selector: buildJSONPointerSelector(path, method), operationKey: opKey, reasonCode: "openapi.unsupported_schema_dialect", rule: "OBI-D-06", message: reason})
-						continue
-					}
-					return iface, unrealizableOperation(opKey, reason)
-				}
-			}
-
-			obiOp := openbindings.Operation{
-				Description: operationDescription(op),
-				Deprecated:  op.Deprecated,
-			}
-
-			if len(op.Tags) > 0 {
-				obiOp.Tags = op.Tags
-			}
-
-			opPointer := "#/operations/" + escapeJSONPointerSegment(opKey)
-			routes := planAbstractInputRoutes(params, requestPlans)
-			inputSchema := buildInputSchemaForPlans(inputOperation, params, requestPlans, &requestGraph, routes, schemaOverlays)
-			if inputSchema != nil {
-				// Project, then decycle — the TypeScript engine's order, and the
-				// one the cut-point question is asked in: the decycler walks the
-				// graph this direction actually emits. Projecting the root reads
-				// annotations through the unprojected registry, because a
-				// reference has not been inlined yet.
-				projected := projectOpenAPISchemaWithRegistry(inputSchema, openAPIRequestSchema, requestSchemaProjectionExemptions(routes), refRegistry)
-				inlined, hoisted := inlineRefsInOperationSchema(projected, requestGraph.registry, requestGraph.cyclic, opPointer+"/input", namer)
-				restored := restoreBooleanSchemas(pruneUnreachableDefs(inlined, opPointer+"/input", hoisted))
-				if object, ok := restored.(map[string]any); ok {
-					obiOp.Input = translateSchemaDialect(object, formatVersion)
-				} else {
-					obiOp.Input = restored
-				}
-			}
-
-			outputSchema := buildOutputSchemaWithCyclicRefs(op, schemaOverlays, bindingSpec, &responseGraph, doc.OpenAPI)
-			if outputSchema != nil {
-				projected := projectOpenAPISchemaWithRegistry(outputSchema, openAPIResponseSchema, nil, refRegistry)
-				inlined, hoisted := inlineRefsInOperationSchema(projected, responseGraph.registry, responseGraph.cyclic, opPointer+"/output", namer)
-				restored := restoreBooleanSchemas(pruneUnreachableDefs(inlined, opPointer+"/output", hoisted))
-				if object, ok := restored.(map[string]any); ok {
-					obiOp.Output = translateSchemaDialect(object, formatVersion)
-				} else {
-					obiOp.Output = restored
-				}
-			}
-
-			iface.Operations[opKey] = obiOp
-
-			selector := buildJSONPointerSelector(path, method)
-			bindingKey := opKey + "." + DefaultSourceName
-			binding := openbindings.BindingEntry{
-				Operation: opKey,
-				Source:    DefaultSourceName,
-				Selector:  selector,
-			}
-			if usesRoutedInput(bindingSpec) && routes.hasInput() {
-				binding.InputTransform = &openbindings.TransformOrRef{Inline: routes.transformExpression(params)}
-			}
-			iface.Bindings[bindingKey] = binding
+			return iface, fmt.Errorf("cannot synthesize OpenAPI operation at %q: %s; synthesis would return a statically unbindable partial interface", selector, floorInvalidTargetMessage(len(verdict.Defects)))
 		}
+
+		opKey := deriveOperationKey(op, path, method, usedKeys)
+		usedKeys[opKey] = true
+
+		params := effectiveParameters(pathItem, op)
+		if _, serverErr := openapiclient.EffectiveServerSet(operationDocument, pathItem, op, location); serverErr != nil {
+			reason := serverErr.Error()
+			if onUnrealizable != nil {
+				onUnrealizable(unrealizableTarget{
+					selector:     selector,
+					operationKey: opKey,
+					reasonCode:   "openapi.server_url_excluded",
+					rule:         openAPIRule(bindingSpec, "P-04"),
+					message:      reason,
+				})
+				continue
+			}
+			return iface, unrealizableOperation(opKey, reason)
+		}
+		securityRequirements := effectiveSecurityRequirements(operationDocument, op)
+		if securityRequirements != nil && len(*securityRequirements) > 0 {
+			entryPlans := viableSecurityPlansWithContext(operationDocument, op, contextWithConfigurationPoint(nil, "implicitConnectionScope", "entry"), "", params)
+			referringPlans := viableSecurityPlansWithContext(operationDocument, op, contextWithConfigurationPoint(nil, "implicitConnectionScope", "referring"), "", params)
+			if len(entryPlans) == 0 && len(referringPlans) == 0 {
+				reason := "the effective security declaration has no usable complete alternative"
+				if onUnrealizable != nil {
+					onUnrealizable(unrealizableTarget{
+						selector: selector, operationKey: opKey,
+						reasonCode: "openapi.security_alternative_unusable", rule: openAPIRule(bindingSpec, "P-04"), message: reason,
+					})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
+			}
+		}
+		if duplicate := duplicateEffectiveParameterIdentity(params); duplicate != "" {
+			reason := fmt.Sprintf("parameter identity %q is declared more than once", duplicate)
+			if onUnrealizable != nil {
+				onUnrealizable(unrealizableTarget{
+					selector:     selector,
+					operationKey: opKey,
+					reasonCode:   "openapi.duplicate_parameter_identity",
+					rule:         openAPIRule(bindingSpec, "P-02"),
+					message:      reason,
+				})
+				continue
+			}
+			return iface, unrealizableOperation(opKey, reason)
+		}
+		if field := unflattenableParamForRevision(params, bindingSpec); field != "" {
+			reason := fmt.Sprintf("parameter %q has no unique flattened identity", field)
+			if onUnrealizable != nil {
+				onUnrealizable(unrealizableTarget{
+					selector:     selector,
+					operationKey: opKey,
+					reasonCode:   "openapi.flattening_collision",
+					rule:         openAPIRule(bindingSpec, "P-02"),
+					message:      reason,
+				})
+				continue
+			}
+			return iface, unrealizableOperation(opKey, reason)
+		}
+		if parameter := malformedEffectiveParameterFor(params, bindingSpec); parameter != "" {
+			reason := fmt.Sprintf("effective parameter %q violates the closed Parameter Object declaration list", parameter)
+			if onUnrealizable != nil {
+				onUnrealizable(unrealizableTarget{
+					selector:     selector,
+					operationKey: opKey,
+					reasonCode:   "openapi.parameter_declaration_excluded",
+					rule:         openAPIRule(bindingSpec, "P-02"),
+					message:      reason,
+				})
+				continue
+			}
+			return iface, unrealizableOperation(opKey, reason)
+		}
+		if err := checkPathTemplateDeclaration(path, params, bindingSpec); err != nil || bindingSpec == BindingSpecOpenAPI31 && equivalentPathTemplateCollision(doc.Paths, path) != "" {
+			reason := "the selected path declaration is ambiguous or does not correspond one-to-one with its effective path parameters"
+			if err != nil {
+				reason = err.Error()
+			}
+			if onUnrealizable != nil {
+				onUnrealizable(unrealizableTarget{
+					selector:     selector,
+					operationKey: opKey,
+					reasonCode:   "openapi.path_correspondence_excluded",
+					rule:         openAPIRule(bindingSpec, "P-02"),
+					message:      reason,
+				})
+				continue
+			}
+			return iface, unrealizableOperation(opKey, reason)
+		}
+
+		if parameter := unsupportedParameterContentFor(params, bindingSpec); parameter != "" {
+			reason := fmt.Sprintf("parameter %q declares content with no faithful candidate carriage", parameter)
+			if onUnrealizable != nil {
+				onUnrealizable(unrealizableTarget{
+					selector:     selector,
+					operationKey: opKey,
+					reasonCode:   "openapi.parameter_content_excluded",
+					rule:         openAPIRule(bindingSpec, "P-02"),
+					message:      reason,
+				})
+				continue
+			}
+			return iface, unrealizableOperation(opKey, reason)
+		}
+
+		// A style-lane parameter declaring a member with no defined
+		// expansion can never be populated faithfully: every value
+		// conforming to the declaration carries that member as a
+		// composite, and the governing OAS style row defines no
+		// representation for one. The refusal is decided by the
+		// DECLARATION, so the operation is excluded here with durable
+		// evidence rather than published as represented and refused at
+		// invocation. See styleLaneUndefinedExpansionMember in media.go
+		// for the per-edition authority reading.
+		if member := styleLaneUndefinedExpansionParamFor(params, bindingSpec, isOpenAPI30(formatVersion)); member != "" {
+			reason := fmt.Sprintf("parameter member %q has no expansion defined by its governing OAS style row", member)
+			if onUnrealizable != nil {
+				onUnrealizable(unrealizableTarget{
+					selector:     selector,
+					operationKey: opKey,
+					reasonCode:   "openapi.parameter_style_expansion_excluded",
+					rule:         openAPIRule(bindingSpec, "P-02"),
+					message:      reason,
+				})
+				continue
+			}
+			return iface, unrealizableOperation(opKey, reason)
+		}
+
+		if parameter := formStyleCookieMultiValueParamFor(params, isOpenAPI30(formatVersion)); parameter != "" {
+			reason := fmt.Sprintf("cookie parameter %q statically proves multi-pair form expansion", parameter)
+			if onUnrealizable != nil {
+				onUnrealizable(unrealizableTarget{
+					selector:     selector,
+					operationKey: opKey,
+					reasonCode:   "openapi.cookie_multi_value_excluded",
+					rule:         openAPIRule(bindingSpec, "P-02"),
+					message:      reason,
+				})
+				continue
+			}
+			return iface, unrealizableOperation(opKey, reason)
+		}
+
+		inputOperation := op
+		if requestBodyIgnoredForBindingSpec(bindingSpec, method) {
+			copy := *op
+			copy.RequestBody = nil
+			inputOperation = &copy
+		}
+		var requestPlans []*bodyPlan
+		invalidPropertyMediaCandidate := false
+		if inputOperation.RequestBody != nil && inputOperation.RequestBody.Value != nil {
+			plans, planErr := planRequestBodiesFor(operationDocument, op, bindingSpec)
+			for _, plan := range plans {
+				invalidPropertyMediaCandidate = invalidPropertyMediaCandidate || len(plan.propertyMedia) > 0
+			}
+			// The acceptance floor (the registered OpenAPI binding family §3): a
+			// ladder-invalid request media ALTERNATIVE is a unit that is
+			// malformed under its upstream authority, so it is not a
+			// candidate the operation may carry. It never climbs -- the
+			// operation survives on its remaining alternatives, and a
+			// REQUIRED body left with none falls to the existing
+			// unresolvable-request-body exclusion below (OAPI-P-04),
+			// carried and not reopened. Applied BEFORE the candidate count
+			// the exclusion reason is chosen from, so a body whose only
+			// alternative the ladder invalidated is not misreported as a
+			// flattening collision.
+			plans = filterLadderInvalidAlternatives(plans, verdict, selector)
+			plannedCount := len(plans)
+			if planErr == nil {
+				for _, plan := range plans {
+					if usesRoutedInput(bindingSpec) || !candidateCollides(params, plan) {
+						requestPlans = append(requestPlans, plan)
+					}
+				}
+			}
+			requiredBody := inputOperation.RequestBody.Value.Required
+			if requiredBody && (planErr != nil || len(requestPlans) == 0) {
+				reason := "no artifact-declared request media candidate can realize its required flattened input"
+				if planErr != nil {
+					reason = planErr.Error()
+				}
+				if onUnrealizable != nil {
+					// Every plannable candidate colliding with an
+					// independently declared parameter is the
+					// flattening-identity refusal (OAPI-P-03); a candidate
+					// set that never planned is the media-carriage refusal
+					// (OAPI-P-04).
+					allCollided := planErr == nil && plannedCount > 0
+					code := "openapi.unresolvable_request_body"
+					rule := openAPIRule(bindingSpec, "P-03")
+					if allCollided {
+						code = "openapi.flattening_collision"
+						rule = openAPIRule(bindingSpec, "P-02")
+					} else {
+						var dme *degenerateMediaError
+						if errors.As(planErr, &dme) {
+							code = "openapi.media_schema_mismatch"
+						} else if invalidPropertyMediaCandidate {
+							code = "openapi.media_schema_mismatch"
+						}
+					}
+					onUnrealizable(unrealizableTarget{
+						selector:     selector,
+						operationKey: opKey,
+						reasonCode:   code,
+						rule:         rule,
+						message:      reason + "; the required request body has no faithful candidate carriage",
+					})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
+			}
+			if len(requestPlans) == 0 && warn != nil {
+				code := "openapi.unresolvable_request_body"
+				var dme *degenerateMediaError
+				if errors.As(planErr, &dme) {
+					code = "openapi.media_schema_mismatch"
+				}
+				reason := "no artifact-declared request media candidate can realize its flattened input"
+				if planErr != nil {
+					reason = planErr.Error()
+				}
+				warn(synthesize.SynthesizerWarning{Code: code, Message: reason + "; optional body omitted from the synthesized contract", Path: fmt.Sprintf("operations.%s.input", opKey)})
+			}
+		}
+		if formatVersion == "3.1" {
+			if dialectErr := validateProjectedOperationDialects(operationDocument, op, params, requestPlans, bindingSpec); dialectErr != nil {
+				reason := dialectErr.Error()
+				if onUnrealizable != nil {
+					onUnrealizable(unrealizableTarget{selector: selector, operationKey: opKey, reasonCode: "openapi.unsupported_schema_dialect", rule: "OBI-D-06", message: reason})
+					continue
+				}
+				return iface, unrealizableOperation(opKey, reason)
+			}
+		}
+
+		obiOp := openbindings.Operation{
+			Description: operationDescription(op),
+			Deprecated:  op.Deprecated,
+		}
+
+		if len(op.Tags) > 0 {
+			obiOp.Tags = op.Tags
+		}
+
+		opPointer := "#/operations/" + escapeJSONPointerSegment(opKey)
+		routes := planAbstractInputRoutes(params, requestPlans)
+		inputSchema := buildInputSchemaForPlans(inputOperation, params, requestPlans, &requestGraph, routes, schemaOverlays)
+		if inputSchema != nil {
+			// Project, then decycle — the TypeScript engine's order, and the
+			// one the cut-point question is asked in: the decycler walks the
+			// graph this direction actually emits. Projecting the root reads
+			// annotations through the unprojected registry, because a
+			// reference has not been inlined yet.
+			projected := projectOpenAPISchemaWithRegistry(inputSchema, openAPIRequestSchema, requestSchemaProjectionExemptions(routes), refRegistry)
+			inlined, hoisted := inlineRefsInOperationSchema(projected, requestGraph.registry, requestGraph.cyclic, opPointer+"/input", namer)
+			restored := restoreBooleanSchemas(pruneUnreachableDefs(inlined, opPointer+"/input", hoisted))
+			if object, ok := restored.(map[string]any); ok {
+				obiOp.Input = translateSchemaDialect(object, formatVersion)
+			} else {
+				obiOp.Input = restored
+			}
+		}
+
+		outputSchema := buildOutputSchemaWithCyclicRefs(op, schemaOverlays, bindingSpec, &responseGraph, operationDocument.OpenAPI)
+		if outputSchema != nil {
+			projected := projectOpenAPISchemaWithRegistry(outputSchema, openAPIResponseSchema, nil, refRegistry)
+			inlined, hoisted := inlineRefsInOperationSchema(projected, responseGraph.registry, responseGraph.cyclic, opPointer+"/output", namer)
+			restored := restoreBooleanSchemas(pruneUnreachableDefs(inlined, opPointer+"/output", hoisted))
+			if object, ok := restored.(map[string]any); ok {
+				obiOp.Output = translateSchemaDialect(object, formatVersion)
+			} else {
+				obiOp.Output = restored
+			}
+		}
+
+		iface.Operations[opKey] = obiOp
+
+		bindingKey := opKey + "." + DefaultSourceName
+		binding := openbindings.BindingEntry{
+			Operation: opKey,
+			Source:    DefaultSourceName,
+			Selector:  selector,
+		}
+		if usesRoutedInput(bindingSpec) && routes.hasInput() {
+			binding.InputTransform = &openbindings.TransformOrRef{Inline: routes.transformExpression(params)}
+		}
+		iface.Bindings[bindingKey] = binding
 	}
 
 	return iface, nil
@@ -1065,8 +1114,8 @@ func cloneURL(u *url.URL) *url.URL {
 }
 
 // checkAcceptedOpenAPIVersion applies the union load gate used by the shared
-// typed loader. Binding dispatch immediately follows it with the token-local
-// gate below; no caller-visible path may use this union as a support claim.
+// 3.0/3.1 synthesis loader. The 3.2 request lane classifies through the
+// client-owned Artifact loader before reference resolution instead.
 func checkAcceptedOpenAPIVersion(doc *openapi3.T) error {
 	v := doc.OpenAPI
 	if v == "" {
@@ -1086,6 +1135,8 @@ func bindingSpecForOpenAPIEdition(edition string) string {
 		return BindingSpecOpenAPI30
 	case openAPIBindingSpecRegistry[BindingSpecOpenAPI31].editions[edition]:
 		return BindingSpecOpenAPI31
+	case openAPIBindingSpecRegistry[BindingSpecOpenAPI32].editions[edition]:
+		return BindingSpecOpenAPI32
 	default:
 		return ""
 	}
@@ -1093,7 +1144,7 @@ func bindingSpecForOpenAPIEdition(edition string) string {
 
 func checkAcceptedOpenAPIVersionForBindingSpec(doc *openapi3.T, bindingSpec string) error {
 	registration, registered := openAPIBindingSpecRegistry[bindingSpec]
-	if !registered || !registration.implemented {
+	if !registered || !registration.requestImplemented {
 		return fmt.Errorf("%s: binding specification %q is not implemented", ErrCodeUnsupportedBindingSpec, bindingSpec)
 	}
 	edition := ""
@@ -1215,6 +1266,13 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 			requestPlan.media.Schema != nil && schemaAssertsNothing(requestPlan.media.Schema.Value)
 		if requestPlan.media != nil && requestPlan.media.Schema != nil && !assertionFreeByteLane {
 			bodySchema = graph.declaredForm(requestPlan.media.Schema, schemaOverlays)
+		} else if requestPlan.media != nil && requestPlan.media.ItemSchema != nil &&
+			(requestPlan.family == familySequential || requestPlan.family == familyMultipart ||
+				requestPlan.mediaRange && requestPlan.bindingSpec == BindingSpecOpenAPI32) {
+			bodySchema = map[string]any{
+				"type":  "array",
+				"items": graph.declaredForm(requestPlan.media.ItemSchema, schemaOverlays),
+			}
 		} else if requestPlan.rawBoundary {
 			bodySchema = map[string]any{"type": "string", "contentEncoding": "base64"}
 		} else if hasMediaFidelity(requestPlan.bindingSpec) && requestPlan.synthetic {
@@ -1508,7 +1566,7 @@ func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec stri
 			continue
 		}
 		param := ref.Value
-		if hasMediaFidelity(bindingSpec) {
+		if hasMediaFidelity(bindingSpec) && bindingSpec != BindingSpecOpenAPI32 {
 			if err := validateRevision3ParameterSerialization(param, bindingSpec == BindingSpecOpenAPI30); err != nil {
 				return param.Name
 			}
@@ -1527,7 +1585,10 @@ func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec stri
 			} else {
 				parsed, err = parseMediaType(mediaKey)
 			}
-			if err != nil || (!isJSONMediaType(parsed.base) && parsed.base != "text/plain") {
+			queryStringForm := bindingSpec == BindingSpecOpenAPI32 &&
+				param.In == openapiclient.ParameterInQueryString &&
+				parsed.base == "application/x-www-form-urlencoded"
+			if err != nil || (!queryStringForm && !isJSONMediaType(parsed.base) && parsed.base != "text/plain") {
 				return param.Name
 			}
 			if hasMediaFidelity(bindingSpec) && parsed.base == "text/plain" && supportedTextCharset(parsed) != nil {
