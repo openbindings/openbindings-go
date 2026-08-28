@@ -1,9 +1,11 @@
 package openapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -94,12 +96,106 @@ func TestProcessorScenarios(t *testing.T) {
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
-	for _, family := range []string{"openapi-3.0", "openapi-3.1"} {
+	for _, family := range []struct {
+		name   string
+		wanted map[string]bool
+	}{
+		{
+			name: "openapi-2.0",
+			wanted: map[string]bool{
+				"OAPI20-PS-01": true,
+				"OAPI20-PS-02": true,
+				"OAPI20-PS-03": true,
+				"OAPI20-PS-04": true,
+				"OAPI20-PS-05": true,
+				"OAPI20-PS-06": true,
+				"OAPI20-PS-07": true,
+				"OAPI20-PS-08": true,
+				"OAPI20-PS-09": true,
+				"OAPI20-PS-10": true,
+				"OAPI20-PS-11": true,
+				"OAPI20-PS-12": true,
+				"OAPI20-PS-13": true,
+				"OAPI20-PS-14": true,
+				"OAPI20-PS-15": true,
+				"OAPI20-PS-16": true,
+				"OAPI20-PS-17": true,
+				"OAPI20-PS-18": true,
+				"OAPI20-PS-19": true,
+				"OAPI20-PS-20": true,
+				"OAPI20-PS-21": true,
+				"OAPI20-PS-22": true,
+				"OAPI20-PS-23": true,
+				"OAPI20-PS-24": true,
+				"OAPI20-PS-25": true,
+				"OAPI20-PS-26": true,
+				"OAPI20-PS-27": true,
+				"OAPI20-PS-28": true,
+				"OAPI20-PS-29": true,
+				"OAPI20-PS-30": true,
+				"OAPI20-PS-31": true,
+				"OAPI20-PS-32": true,
+				"OAPI20-PS-33": true,
+				"OAPI20-PS-34": true,
+				"OAPI20-PS-35": true,
+				"OAPI20-PS-36": true,
+				"OAPI20-PS-37": true,
+				"OAPI20-PS-38": true,
+				"OAPI20-PS-39": true,
+				"OAPI20-PS-40": true,
+				"OAPI20-PS-41": true,
+				"OAPI20-PS-42": true,
+				"OAPI20-PS-43": true,
+				"OAPI20-PS-44": true,
+				"OAPI20-PS-45": true,
+				"OAPI20-PS-46": true,
+				"OAPI20-PS-47": true,
+				"OAPI20-PS-48": true,
+				"OAPI20-PS-49": true,
+				"OAPI20-PS-50": true,
+				"OAPI20-PS-51": true,
+				"OAPI20-PS-52": true,
+				"OAPI20-PS-53": true,
+				"OAPI20-PS-54": true,
+				"OAPI20-PS-55": true,
+				"OAPI20-PS-56": true,
+				"OAPI20-PS-57": true,
+				"OAPI20-PS-58": true,
+				"OAPI20-PS-59": true,
+				"OAPI20-PS-60": true,
+				"OAPI20-PS-61": true,
+				"OAPI20-PS-62": true,
+				"OAPI20-PS-63": true,
+				"OAPI20-PS-64": true,
+				"OAPI20-PS-65": true,
+				"OAPI20-PS-66": true,
+				"OAPI20-PS-67": true,
+				"OAPI20-PS-68": true,
+				"OAPI20-PS-69": true,
+				"OAPI20-PS-70": true,
+				"OAPI20-PS-71": true,
+				"OAPI20-PS-72": true,
+				"OAPI20-PS-73": true,
+				"OAPI20-PS-74": true,
+				"OAPI20-PS-75": true,
+				"OAPI20-PS-76": true,
+				"OAPI20-PS-77": true,
+				"OAPI20-PS-78": true,
+				"OAPI20-PS-79": true,
+				"OAPI20-PS-80": true,
+				"OAPI20-PS-81": true,
+				"OAPI20-PS-82": true,
+				"OAPI20-PS-83": true,
+			},
+		},
+		{name: "openapi-3.0"},
+		{name: "openapi-3.1"},
+	} {
 		family := family
-		t.Run(family, func(t *testing.T) {
-			file, err := processorscenarios.LoadPath(
-				filepath.Join(root, "binding-specs", "processor", family+".json"),
-				family,
+		t.Run(family.name, func(t *testing.T) {
+			file, err := loadOpenAPIProcessorScenarioFile(
+				filepath.Join(root, "binding-specs", "processor", family.name+".json"),
+				family.name,
 				"openbindings.binding-spec-processor-scenarios@2",
 			)
 			if err != nil {
@@ -110,6 +206,9 @@ func TestProcessorScenarios(t *testing.T) {
 			}
 			ran := 0
 			for _, scenario := range file.Scenarios {
+				if family.wanted != nil && !family.wanted[scenario.ID] {
+					continue
+				}
 				ran++
 				scenario := scenario
 				t.Run(scenario.ID, func(t *testing.T) {
@@ -119,8 +218,12 @@ func TestProcessorScenarios(t *testing.T) {
 					}
 				})
 			}
-			if ran != len(file.Scenarios) {
-				t.Fatalf("ran %d of %d processor scenarios", ran, len(file.Scenarios))
+			want := len(file.Scenarios)
+			if family.wanted != nil {
+				want = len(family.wanted)
+			}
+			if ran != want {
+				t.Fatalf("ran %d processor scenarios, want %d", ran, want)
 			}
 			t.Logf("executed %d of %d processor scenarios", ran, len(file.Scenarios))
 		})
@@ -200,7 +303,9 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			invoke.WithContext(scenarioContext(scenario)),
 		)
 	} else {
-		call = NewInvokerWithClient(client).InvokeBinding(context.Background(), args)
+		call = NewInvokerWithOptions(RuntimeOptions{
+			HTTPClient: client, ParameterConversion: scenarioParameterConversion(scenario),
+		}).InvokeBinding(context.Background(), args)
 	}
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		if err := call.Write(context.Background(), scenario.Given.Invocation["input"]); err != nil {
@@ -286,6 +391,9 @@ func scenarioContext(scenario processorscenarios.Scenario) map[string]any {
 	}
 	if credentials, ok := scenario.Given.Runtime["credentials"].(map[string]any); ok {
 		ctx["apiKeys"] = credentials
+		if strings.HasPrefix(scenario.ID, "OAPI20-") {
+			ctx["credentials"] = credentials
+		}
 	}
 	return ctx
 }
@@ -321,8 +429,47 @@ func numberAsInt(value any) (int, bool) {
 		return number, true
 	case float64:
 		return int(number), number == float64(int(number))
+	case json.Number:
+		integer, err := number.Int64()
+		return int(integer), err == nil && int64(int(integer)) == integer
 	default:
 		return 0, false
+	}
+}
+
+func loadOpenAPIProcessorScenarioFile(path, family, format string) (*processorscenarios.File, error) {
+	file, err := processorscenarios.LoadPath(path, family, format)
+	if err != nil || family != "openapi-2.0" {
+		return file, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var exact processorscenarios.File
+	if err := decoder.Decode(&exact); err != nil {
+		return nil, err
+	}
+	return &exact, nil
+}
+
+func scenarioParameterConversion(scenario processorscenarios.Scenario) ParameterConversion {
+	raw, ok := scenario.Given.Configuration["parameterConversion"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return func(value any) (string, error) {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return "", err
+		}
+		converted, present := raw[string(encoded)].(string)
+		if !present {
+			return "", fmt.Errorf("parameterConversion has no result for %s", encoded)
+		}
+		return converted, nil
 	}
 }
 

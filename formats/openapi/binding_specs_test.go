@@ -15,7 +15,7 @@ import (
 
 func TestRegisteredOpenAPIFamiliesIncludeUnimplementedTokens(t *testing.T) {
 	want := map[string]bool{
-		BindingSpecOpenAPI20: false,
+		BindingSpecOpenAPI20: true,
 		BindingSpecOpenAPI30: true,
 		BindingSpecOpenAPI31: true,
 		BindingSpecOpenAPI32: false,
@@ -30,7 +30,7 @@ func TestRegisteredOpenAPIFamiliesIncludeUnimplementedTokens(t *testing.T) {
 		}
 	}
 	wantEditions := map[string]map[string]bool{
-		BindingSpecOpenAPI20: nil,
+		BindingSpecOpenAPI20: {"2.0": true},
 		BindingSpecOpenAPI30: {"3.0.0": true, "3.0.1": true, "3.0.2": true, "3.0.3": true, "3.0.4": true},
 		BindingSpecOpenAPI31: {"3.1.0": true, "3.1.1": true, "3.1.2": true},
 		BindingSpecOpenAPI32: nil,
@@ -42,8 +42,8 @@ func TestRegisteredOpenAPIFamiliesIncludeUnimplementedTokens(t *testing.T) {
 	}
 }
 
-func TestUnimplementedOpenAPIFamiliesRefuseBeforeArtifactParsing(t *testing.T) {
-	for _, token := range []string{BindingSpecOpenAPI20, BindingSpecOpenAPI32} {
+func TestAbsentOpenAPIEnginesRefuseBeforeArtifactParsing(t *testing.T) {
+	for _, token := range []string{BindingSpecOpenAPI32} {
 		t.Run(token, func(t *testing.T) {
 			args := &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: token, Content: openbindings.TextContent("not an OpenAPI artifact")},

@@ -15,6 +15,7 @@ package openapi
 // when absent.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -23,6 +24,8 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	openapiclient "github.com/openbindings/openapi-client/go"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func bindingSpecCorpusDir(t *testing.T, family string) string {
@@ -81,7 +84,7 @@ func TestBindingSpecCorpus(t *testing.T) {
 	for _, family := range []struct {
 		name        string
 		bindingSpec string
-	}{{"openapi-3.0", BindingSpecOpenAPI30}, {"openapi-3.1", BindingSpecOpenAPI31}} {
+	}{{"openapi-2.0", BindingSpecOpenAPI20}, {"openapi-3.0", BindingSpecOpenAPI30}, {"openapi-3.1", BindingSpecOpenAPI31}} {
 		family := family
 		t.Run(family.name, func(t *testing.T) {
 			dir := bindingSpecCorpusDir(t, family.name)
@@ -149,12 +152,25 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 		// must be the parsed document object or its source text. Fixture
 		// artifacts are self-contained, so the load performs no I/O.
 		var doc *openapi3.T
+		var swagger20 *openapiclient.Swagger20Document
 		if src.Content != nil {
-			d, err := loadDocumentForBindingSpec("", src.Content, bindingSpec)
-			if err != nil {
-				return err
+			if bindingSpec == BindingSpecOpenAPI20 {
+				content, err := openbindings.ContentToBytes(src.Content)
+				if err != nil {
+					return err
+				}
+				loaded, err := openapiclient.LoadSwagger20(context.Background(), openapiclient.Swagger20Source{Content: content}, openapiclient.ClientOptions{})
+				if err != nil {
+					return err
+				}
+				swagger20 = loaded.Document()
+			} else {
+				d, err := loadDocumentForBindingSpec("", src.Content, bindingSpec)
+				if err != nil {
+					return err
+				}
+				doc = d
 			}
-			doc = d
 		}
 
 		// Location lane (OAPI-D-02): grammar only, never dereferenced.
@@ -176,6 +192,20 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 			selector := ""
 			if b.Selector != nil {
 				selector = *b.Selector
+			}
+			if bindingSpec == BindingSpecOpenAPI20 {
+				if err := openapiclient.ValidateSwagger20Selector(selector); err != nil {
+					return err
+				}
+				if swagger20 == nil {
+					continue // location-only source: grammar-checked alone
+				}
+				if _, err := openapiclient.NewEngine(nil).PrepareSwagger20(context.Background(), openapiclient.Swagger20PrepareOptions{
+					Source: openapiclient.Swagger20Source{Document: swagger20}, Ref: selector,
+				}); err != nil {
+					return err
+				}
+				continue
 			}
 			pathTemplate, method, err := parseSelector(selector)
 			if err != nil {

@@ -1,7 +1,7 @@
 // Package openapi implements the OpenAPI binding format for OpenBindings.
 //
 // The package handles:
-//   - Converting OpenAPI 3.x documents to OpenBindings interfaces
+//   - Converting native Swagger 2.0 and OpenAPI 3.x documents to OpenBindings interfaces
 //   - Invoking operations via HTTP requests through the Invocation handle
 //   - Deriving context requirements (CONTEXT_REQUIRED negotiation) from the
 //     document's securitySchemes
@@ -28,9 +28,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// Registered OpenAPI binding-specification identifiers. The 2.0 and 3.2
-// families are named here so dispatch can refuse them honestly; this package
-// implements only the 3.0 and 3.1 engines in the current release.
+// Registered OpenAPI binding-specification identifiers. Swagger 2.0 and the
+// OpenAPI 3.x families use edition-specific document lanes; the 3.2 engine is
+// absent.
 const (
 	BindingSpecOpenAPI20 = "openbindings.openapi-2.0@1"
 	BindingSpecOpenAPI30 = "openbindings.openapi-3.0@1"
@@ -48,7 +48,7 @@ type openAPIBindingSpecRegistration struct {
 }
 
 var openAPIBindingSpecRegistry = map[string]openAPIBindingSpecRegistration{
-	BindingSpecOpenAPI20: {implemented: false},
+	BindingSpecOpenAPI20: {implemented: true, editions: map[string]bool{"2.0": true}},
 	BindingSpecOpenAPI30: {
 		implemented: true,
 		editions: map[string]bool{
@@ -97,6 +97,8 @@ func isImplementedOpenAPIBindingSpec(bindingSpec string) bool {
 
 func openAPIRule(bindingSpec, rule string) string {
 	switch bindingSpec {
+	case BindingSpecOpenAPI20:
+		return "OAPI20-" + rule
 	case BindingSpecOpenAPI30:
 		return "OAPI30-" + rule
 	case BindingSpecOpenAPI31:
@@ -176,10 +178,9 @@ type SecurityHandler = openapiclient.SecurityHandler
 type RuntimeOptions struct {
 	HTTPClient       *http.Client
 	SecurityHandlers map[string]SecurityHandler
-	// ParameterConversion is the OpenAPI 3.0/3.1 bindings' §8.1 configuration
-	// point. It is consulted only for supplied JSON booleans and numbers on
-	// schema/style serialization paths; strings pass unchanged and nil means no
-	// conversion is configured.
+	// ParameterConversion is the OpenAPI bindings' deterministic non-string
+	// scalar conversion point. Swagger 2.0 also consults it for null; strings
+	// pass unchanged and nil means no conversion is configured.
 	ParameterConversion    ParameterConversion
 	RequestContentCodings  map[string]ContentEncoder
 	ResponseContentCodings map[string]ContentDecoder
@@ -289,6 +290,7 @@ func (e *Runtime) CheckBindingSpecs(bindingSpecs []string) []openbindings.Bindin
 
 func openAPIBindingSpecInfos() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{
+		{BindingSpec: BindingSpecOpenAPI20, Description: "OpenAPI 2.0 (Swagger) HTTP APIs"},
 		{BindingSpec: BindingSpecOpenAPI30, Description: "OpenAPI 3.0 HTTP APIs"},
 		{BindingSpec: BindingSpecOpenAPI31, Description: "OpenAPI 3.1 HTTP APIs"},
 	}
@@ -724,6 +726,9 @@ func (e *Runtime) invokeBinding(ctx context.Context, args *invoke.BindingInvocat
 }
 
 func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) error {
+	if args != nil && args.Source.BindingSpec == BindingSpecOpenAPI20 {
+		return e.runSwagger20(ctx, args, inv)
+	}
 	options, err := enginePrepareOptions(args, e.client, e.securityHandlers, e.parameterConvert, e.requestCodings, e.responseCodings)
 	if err != nil {
 		return bridgeExecutionError(err)
@@ -922,6 +927,9 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvoca
 // schemes, it reports no requirement and lets the invocation raise the
 // challenge instead.
 func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	if args != nil && args.Source.BindingSpec == BindingSpecOpenAPI20 {
+		return e.prepareSwagger20Binding(ctx, args)
+	}
 	options, err := enginePrepareOptions(args, e.client, e.securityHandlers, e.parameterConvert, e.requestCodings, e.responseCodings)
 	if err != nil {
 		var invocationErr *invoke.InvocationError
@@ -1110,6 +1118,10 @@ func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.Bi
 
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
+	if swagger20SynthesisInput(in) {
+		iface, _, _, err := c.synthesizeSwagger20(ctx, in, false)
+		return iface, err
+	}
 	iface, _, _, err := c.synthesizeObserved(ctx, in, nil)
 	return iface, err
 }
@@ -1125,6 +1137,13 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.Sy
 // (interface-synthesizer contract; core §10 posture). Strict synthesis
 // (SynthesizeInterface) is unchanged.
 func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
+	if swagger20SynthesisInput(in) {
+		iface, _, entries, err := c.synthesizeSwagger20(ctx, in, true)
+		if err != nil {
+			return nil, err
+		}
+		return synthesize.NewSynthesisResult(iface, entries, true)
+	}
 	unrealizable := map[string]unrealizableTarget{}
 	iface, doc, floor, err := c.synthesizeObserved(ctx, in, func(target unrealizableTarget) {
 		unrealizable[target.selector] = target
@@ -1134,6 +1153,10 @@ func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *s
 	}
 	entries := openAPISynthesisCoverage(doc, iface, unrealizable, floor)
 	return synthesize.NewSynthesisResult(iface, entries, true)
+}
+
+func swagger20SynthesisInput(in *synthesize.SynthesizeInput) bool {
+	return in != nil && len(in.Sources) == 1 && in.Sources[0].BindingSpec == BindingSpecOpenAPI20
 }
 
 func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.SynthesizeInput, onUnrealizable func(unrealizableTarget)) (*openbindings.Interface, *openapi3.T, *acceptanceFloor, error) {

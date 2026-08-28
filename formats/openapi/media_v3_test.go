@@ -22,7 +22,7 @@ import (
 
 func TestBindingSpecRegistryWarrantsOnlyImplementedFamilies(t *testing.T) {
 	got := NewInvoker().BindingSpecs()
-	want := []string{BindingSpecOpenAPI30, BindingSpecOpenAPI31}
+	want := []string{BindingSpecOpenAPI20, BindingSpecOpenAPI30, BindingSpecOpenAPI31}
 	var ids []string
 	for _, info := range got {
 		ids = append(ids, info.BindingSpec)
@@ -33,7 +33,7 @@ func TestBindingSpecRegistryWarrantsOnlyImplementedFamilies(t *testing.T) {
 	verdicts := NewInvoker().CheckBindingSpecs([]string{
 		BindingSpecOpenAPI20, BindingSpecOpenAPI30, BindingSpecOpenAPI31, BindingSpecOpenAPI32,
 	})
-	if got := []bool{verdicts[0].Supported, verdicts[1].Supported, verdicts[2].Supported, verdicts[3].Supported}; !reflect.DeepEqual(got, []bool{false, true, true, false}) {
+	if got := []bool{verdicts[0].Supported, verdicts[1].Supported, verdicts[2].Supported, verdicts[3].Supported}; !reflect.DeepEqual(got, []bool{true, true, true, false}) {
 		t.Fatalf("support verdicts = %v", got)
 	}
 }
