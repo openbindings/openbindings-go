@@ -16,6 +16,7 @@ package openapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -203,7 +204,15 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 					continue
 				}
 				if _, err := artifact.ResolveOperation(selector); err != nil {
-					return err
+					// The D-rule corpus judges selector grammar and structural
+					// resolution in isolation. A structurally resolved target may
+					// still be excluded later by a request-surface P-rule (for
+					// example, path-parameter correspondence), exactly as the 3.0
+					// and 3.1 lanes below do not apply their parameter gates here.
+					var resolution *openapiclient.OperationResolutionError
+					if !errors.As(err, &resolution) || resolution.Kind != openapiclient.OperationTargetExcluded {
+						return err
+					}
 				}
 				continue
 			}

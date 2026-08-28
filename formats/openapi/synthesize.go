@@ -1510,7 +1510,7 @@ func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec stri
 			continue
 		}
 		param := ref.Value
-		if hasMediaFidelity(bindingSpec) {
+		if hasMediaFidelity(bindingSpec) && bindingSpec != BindingSpecOpenAPI32 {
 			if err := validateRevision3ParameterSerialization(param, bindingSpec == BindingSpecOpenAPI30); err != nil {
 				return param.Name
 			}
@@ -1529,7 +1529,10 @@ func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec stri
 			} else {
 				parsed, err = parseMediaType(mediaKey)
 			}
-			if err != nil || (!isJSONMediaType(parsed.base) && parsed.base != "text/plain") {
+			queryStringForm := bindingSpec == BindingSpecOpenAPI32 &&
+				param.In == openapiclient.ParameterInQueryString &&
+				parsed.base == "application/x-www-form-urlencoded"
+			if err != nil || (!queryStringForm && !isJSONMediaType(parsed.base) && parsed.base != "text/plain") {
 				return param.Name
 			}
 			if hasMediaFidelity(bindingSpec) && parsed.base == "text/plain" && supportedTextCharset(parsed) != nil {
