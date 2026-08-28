@@ -126,9 +126,9 @@ const DefaultSourceName = "openapi"
 // reaching into package-level globals.
 func newDefaultHTTPClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	// HTTP Content-Encoding is governed by §9.4 at the adapter boundary. The
-	// standard transport's implicit gzip decoding would erase that field before
-	// the governing Header Object and configured decoder can inspect it.
+	// Preserve Content-Encoding for the standalone client's OpenAPI response
+	// governance; the standard transport's implicit gzip decoder would erase it
+	// before the governing Header Object and configured decoder can inspect it.
 	transport.DisableCompression = true
 	return &http.Client{
 		Transport: transport,
@@ -155,14 +155,13 @@ type Runtime struct {
 	parameterConvert ParameterConversion
 	requestCodings   map[string]ContentEncoder
 	responseCodings  map[string]ContentDecoder
-	codingDefect     error
 }
 
 // ContentEncoder and ContentDecoder are deterministic, whole-representation
 // HTTP content-coding capabilities. The binding applies request encoders in
 // field order and response decoders in reverse field order.
-type ContentEncoder func([]byte) ([]byte, error)
-type ContentDecoder func([]byte) ([]byte, error)
+type ContentEncoder = openapiclient.ContentEncoder
+type ContentDecoder = openapiclient.ContentDecoder
 
 // SecurityHandlerContext describes the authored OpenAPI security scheme an
 // extension handler is applying.
@@ -236,27 +235,13 @@ func NewRuntimeWithOptions(options RuntimeOptions) *Runtime {
 	if client == nil {
 		client = newDefaultHTTPClient()
 	}
-	clientCopy := *client
-	requestCodings, requestDefect := normalizeContentEncoders(options.RequestContentCodings)
-	responseCodings, responseDefect := normalizeContentDecoders(options.ResponseContentCodings)
-	clientCopy.Transport = governedTransport{
-		base:            client.Transport,
-		requestCodings:  requestCodings,
-		responseCodings: responseCodings,
-	}
-	client = &clientCopy
-	codingDefect := requestDefect
-	if codingDefect == nil {
-		codingDefect = responseDefect
-	}
 	return &Runtime{
 		client:           client,
 		engine:           openapiclient.NewEngine(client),
 		securityHandlers: cloneSecurityHandlers(options.SecurityHandlers),
 		parameterConvert: options.ParameterConversion,
-		requestCodings:   requestCodings,
-		responseCodings:  responseCodings,
-		codingDefect:     codingDefect,
+		requestCodings:   options.RequestContentCodings,
+		responseCodings:  options.ResponseContentCodings,
 	}
 }
 
@@ -339,7 +324,7 @@ func runtimeBindingArgs(args *RuntimeInvocationArgs) *invoke.BindingInvocationAr
 	}
 }
 
-func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Client, securityHandlers map[string]SecurityHandler, parameterConverter ParameterConversion) (openapiclient.PrepareOptions, error) {
+func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Client, securityHandlers map[string]SecurityHandler, parameterConverter ParameterConversion, requestCodings map[string]ContentEncoder, responseCodings map[string]ContentDecoder) (openapiclient.PrepareOptions, error) {
 	if args == nil {
 		return openapiclient.PrepareOptions{}, &invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError}
 	}
@@ -361,6 +346,8 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 		Ref:    args.Selector, Profile: profile, Context: args.Context, HTTPClient: client,
 		Hooks: bridgeHooks(args, bindingSpec), MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes,
 		SecurityHandlers: securityHandlers, ParameterConverter: parameterConverter,
+		RequestContentCodings: requestCodings, ResponseContentCodings: responseCodings,
+		BufferEventStreams: true, OmitAcceptHeader: true,
 	}, nil
 }
 
@@ -372,14 +359,13 @@ func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 }
 
 type runtimeOperationModel struct {
-	document            *openapi3.T
-	pathItem            *openapi3.PathItem
-	operation           *openapi3.Operation
-	governanceOperation *openapi3.Operation
-	parameters          openapi3.Parameters
-	plans               []*bodyPlan
-	routes              abstractInputRoutes
-	preStartBodyGate    bool
+	document         *openapi3.T
+	pathItem         *openapi3.PathItem
+	operation        *openapi3.Operation
+	parameters       openapi3.Parameters
+	plans            []*bodyPlan
+	routes           abstractInputRoutes
+	preStartBodyGate bool
 }
 
 func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocationArgs, client *http.Client, bindingSpec string) (*runtimeOperationModel, error) {
@@ -428,7 +414,6 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	if operation == nil {
 		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound}
 	}
-	governanceOperation := cloneOpenAPIOperation(operation)
 	selector := buildJSONPointerSelector(path, method)
 	verdict := floor.opVerdict(selector)
 	if verdict != nil && verdict.Disposition == "invalid" {
@@ -487,9 +472,8 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 
 	callerParameters := cloneEffectiveParameters(parameters)
 	routes := planAbstractInputRoutes(callerParameters, plans)
-	prepareEngineResponseView(operation, bindingSpec)
 	return &runtimeOperationModel{
-		document: document, pathItem: pathItem, operation: operation, governanceOperation: governanceOperation,
+		document: document, pathItem: pathItem, operation: operation,
 		parameters: callerParameters, plans: plans, routes: routes,
 		preStartBodyGate: preStartBodyGate,
 	}, nil
@@ -613,10 +597,11 @@ func bridgeHooks(args *invoke.BindingInvocationArgs, bindingSpec string) *openap
 			coreSite := coreHookSite(args, bindingSpec, site.Target)
 			coreRaw := invoke.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
 			contentType := ""
-			if values := raw.Meta[actualContentTypeHeader]; len(values) > 0 {
-				contentType = values[0]
-			} else if values := raw.Meta["Content-Type"]; len(values) > 0 {
-				contentType = values[0]
+			for name, values := range raw.Meta {
+				if strings.EqualFold(name, "Content-Type") && len(values) > 0 {
+					contentType = values[0]
+					break
+				}
 			}
 			value, err := args.Hooks.DecodeOutput(coreSite, coreRaw, decodeByContentTypeFor(contentType, bindingSpec))
 			return value, true, err
@@ -647,28 +632,12 @@ func coreHookSite(args *invoke.BindingInvocationArgs, bindingSpec, target string
 func toCoreMetadata(metadata openapiclient.Metadata) invoke.Metadata {
 	result := make(invoke.Metadata, len(metadata))
 	for name, values := range metadata {
-		if strings.EqualFold(name, actualContentTypeHeader) {
-			continue
-		}
 		result[name] = append([]string(nil), values...)
-	}
-	for name, values := range metadata {
-		if strings.EqualFold(name, actualContentTypeHeader) && len(values) > 0 {
-			result["Content-Type"] = []string{values[0]}
-		}
 	}
 	return result
 }
 
 func bridgeExecutionError(err error) error {
-	var refused *preDispatchMediaError
-	if errors.As(err, &refused) {
-		return invoke.NewInvocationError(openapiclient.CodeRefused)
-	}
-	var protocol *responseProtocolError
-	if errors.As(err, &protocol) {
-		return invoke.NewInvocationError(openapiclient.CodeProtocol)
-	}
 	var invocation *invoke.InvocationError
 	if errors.As(err, &invocation) && invocation != nil {
 		return invocation
@@ -755,10 +724,7 @@ func (e *Runtime) invokeBinding(ctx context.Context, args *invoke.BindingInvocat
 }
 
 func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) error {
-	if e.codingDefect != nil {
-		return invoke.NewInvocationError(openapiclient.CodeRefused)
-	}
-	options, err := enginePrepareOptions(args, e.client, e.securityHandlers, e.parameterConvert)
+	options, err := enginePrepareOptions(args, e.client, e.securityHandlers, e.parameterConvert, e.requestCodings, e.responseCodings)
 	if err != nil {
 		return bridgeExecutionError(err)
 	}
@@ -796,15 +762,7 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		return invoke.NewInvocationError(openapiclient.CodeRefused)
 	}
 	securityDetails := requiredSelectedSecurityContext(selectedSecurity, args.Context, serverBase, e.securityHandlers)
-	credentialPolicy, credentialErr := validateSelectedCredentials(selectedSecurity, args.Context)
-	if credentialErr != nil {
-		return invoke.NewInvocationError(openapiclient.CodeRefused)
-	}
-	engineBase := strings.TrimRight(serverBase, "/")
-	if engineBase == "" {
-		engineBase = serverBase
-	}
-	selectedServer := openapi3.Servers{&openapi3.Server{URL: engineBase}}
+	selectedServer := openapi3.Servers{&openapi3.Server{URL: serverBase}}
 	model.operation.Servers = &selectedServer
 	options.Context = contextWithoutConfigurationPoints(args.Context, "server", "security", "implicitConnectionScope")
 	mediaDetails, mediaErr := requiredRequestMediaContext(model.document, model.operation, bindingSpec, args.Context)
@@ -831,14 +789,6 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	}
 	bridgeCtx, stop := invoke.DoneContext(ctx, inv.Done())
 	defer stop()
-	bridgeCtx = context.WithValue(bridgeCtx, completedURLValidationContextKey{}, bindingSpec)
-	bridgeCtx = context.WithValue(bridgeCtx, serverAssemblyContextKey{}, &serverAssemblyPolicy{resolvedBase: serverBase, engineBase: engineBase})
-	bridgeCtx = context.WithValue(bridgeCtx, credentialWireContextKey{}, credentialPolicy)
-	governance := &mediaGovernance{
-		document: model.document, operation: model.governanceOperation,
-		parameters: model.parameters, bindingSpec: bindingSpec,
-	}
-	bridgeCtx = context.WithValue(bridgeCtx, mediaGovernanceContextKey{}, governance)
 	// Prove absence before starting the carrier: these methods can never route
 	// a body, so dispatch must wait for either one body-free input or EOF.
 	var preReadValue any
@@ -908,9 +858,6 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 
 	_, _ = execution.Response(bridgeCtx)
 	for event := range execution.Events() {
-		if governance.emptyResponse.Load() {
-			continue
-		}
 		if err := inv.EmitOutput(event.Value); err != nil {
 			execution.Cancel()
 			return nil
@@ -919,9 +866,6 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	if err := execution.Wait(); err != nil {
 		if bridgeCtx.Err() != nil {
 			return nil
-		}
-		if mediaErr := governance.recordedFailure(); mediaErr != nil {
-			return bridgeExecutionError(mediaErr)
 		}
 		return bridgeExecutionError(err)
 	}
@@ -978,7 +922,7 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvoca
 // schemes, it reports no requirement and lets the invocation raise the
 // challenge instead.
 func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	options, err := enginePrepareOptions(args, e.client, e.securityHandlers, e.parameterConvert)
+	options, err := enginePrepareOptions(args, e.client, e.securityHandlers, e.parameterConvert, e.requestCodings, e.responseCodings)
 	if err != nil {
 		var invocationErr *invoke.InvocationError
 		if errors.As(err, &invocationErr) && invocationErr.Code == ErrCodeUnsupportedBindingSpec {
@@ -1049,14 +993,9 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 							return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
 						}
 						localDetails = mergeContextRequirements(localDetails, propertyDetails)
-						prepareEngineResponseView(operation, bindingSpec)
 						if !configurationPending {
 							if _, configured := invoke.ContextConfiguration(args.Context)["server"]; configured {
-								engineBase := strings.TrimRight(serverBase, "/")
-								if engineBase == "" {
-									engineBase = serverBase
-								}
-								selectedServer := openapi3.Servers{&openapi3.Server{URL: engineBase}}
+								selectedServer := openapi3.Servers{&openapi3.Server{URL: serverBase}}
 								operation.Servers = &selectedServer
 							}
 							options.Context = contextWithoutConfigurationPoints(args.Context, "server", "security", "implicitConnectionScope")

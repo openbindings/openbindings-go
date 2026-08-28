@@ -299,7 +299,7 @@ func openAPISecurityAlternativeCoverage(doc *openapi3.T, op *openapi3.Operation,
 	)
 	if len(*requirements) == 1 {
 		for _, plan := range plans {
-			if plan.authoredIndex == 0 && checkCredentialCollisions(credentialDestinations(plan), params, nil) == nil {
+			if plan.authoredIndex == 0 && securityPlanCarriageError(plan, params) == nil {
 				// A sole usable alternative self-selects; its credentials are
 				// invocation prerequisites, not binding configuration.
 				return nil
@@ -310,7 +310,7 @@ func openAPISecurityAlternativeCoverage(doc *openapi3.T, op *openapi3.Operation,
 	for index := range *requirements {
 		usable := false
 		for _, plan := range plans {
-			if plan.authoredIndex == index && checkCredentialCollisions(credentialDestinations(plan), params, nil) == nil {
+			if plan.authoredIndex == index && securityPlanCarriageError(plan, params) == nil {
 				usable = true
 				break
 			}

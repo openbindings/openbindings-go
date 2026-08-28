@@ -51,9 +51,9 @@ type rawRefSemantics uint8
 
 const (
 	referenceMetadataMarker        = "x-openbindings-internal-reference-metadata"
-	serverDocumentMarker           = "x-openbindings-internal-server-document"
-	serverVariableDefaultMarker    = "x-openbindings-internal-server-default-present"
-	serverVariableEnumMarker       = "x-openbindings-internal-server-enum-present"
+	serverDocumentMarker           = "x-openapi-client-internal-server-document"
+	serverVariableDefaultMarker    = "x-openapi-client-internal-server-default-present"
+	serverVariableEnumMarker       = "x-openapi-client-internal-server-enum-present"
 	operationDocumentMarker        = "x-openbindings-internal-operation-document"
 	referringSecuritySchemesMarker = "x-openbindings-internal-referring-security-schemes"
 )

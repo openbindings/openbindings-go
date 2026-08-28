@@ -3251,29 +3251,6 @@ func isSuccessResponseKey(key string) bool {
 	return len(key) == 3 && key[0] == '2' && key[1] >= '0' && key[1] <= '9' && key[2] >= '0' && key[2] <= '9'
 }
 
-type governingResponseMatch struct {
-	key      string
-	response *openapi3.Response
-}
-
-// governingResponse applies the OAS exact → class-range → default lookup for
-// one actual status. The default entry may therefore govern a successful 2xx
-// status when neither a literal nor 2XX entry exists. The matched key remains
-// part of the result so failure completion can preserve which artifact
-// declaration described the native response.
-func governingResponse(op *openapi3.Operation, status int) *governingResponseMatch {
-	if op == nil || op.Responses == nil {
-		return nil
-	}
-	responses := op.Responses.Map()
-	for _, key := range []string{fmt.Sprintf("%d", status), fmt.Sprintf("%dXX", status/100), "default"} {
-		if ref := responses[key]; ref != nil && ref.Value != nil {
-			return &governingResponseMatch{key: key, response: ref.Value}
-		}
-	}
-	return nil
-}
-
 // governingResponseMediaFor selects the one concrete declaration in the
 // governing Response Object whose type/subtype and declared parameters are a
 // subset of the actual Content-Type under the named binding family. Greatest

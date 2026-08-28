@@ -373,39 +373,6 @@ func TestRuntimeParameterConversionAndRawCookieNativePath(t *testing.T) {
 	})
 }
 
-func TestCompletedURLValidationIsPreDispatchForBothSiblings(t *testing.T) {
-	called := 0
-	base := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
-		called++
-		return &http.Response{
-			StatusCode: http.StatusNoContent, Status: "204 No Content",
-			Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: request,
-		}, nil
-	})
-	transport := governedTransport{base: base}
-
-	request, err := http.NewRequest(http.MethodGet, "https://api.example.test/x", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.URL.RawQuery = "q=%ZZ"
-	request = request.WithContext(context.WithValue(request.Context(), completedURLValidationContextKey{}, BindingSpecOpenAPI31))
-	if _, err := transport.RoundTrip(request); err == nil || !strings.Contains(err.Error(), "RFC 3986") {
-		t.Fatalf("3.1 completed-URL error = %v", err)
-	}
-	if called != 0 {
-		t.Fatalf("invalid 3.1 completed URL dispatched %d times", called)
-	}
-
-	request = request.WithContext(context.WithValue(request.Context(), completedURLValidationContextKey{}, BindingSpecOpenAPI30))
-	if _, err := transport.RoundTrip(request); err == nil || !strings.Contains(err.Error(), "RFC 3986") {
-		t.Fatalf("3.0 completed-URL error = %v", err)
-	}
-	if called != 0 {
-		t.Fatalf("invalid 3.0 completed URL dispatched %d times", called)
-	}
-}
-
 func TestRuntimeEncodingStyleUsesCompoundObjectDeclaration(t *testing.T) {
 	var body string
 	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {

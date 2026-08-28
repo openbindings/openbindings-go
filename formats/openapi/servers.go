@@ -3,398 +3,132 @@ package openapi
 import (
 	"errors"
 	"fmt"
-	"net/url"
-	"sort"
-	"strings"
-
-	"github.com/openbindings/openbindings-go/invoke"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	openapiclient "github.com/openbindings/openapi-client/go"
+	"github.com/openbindings/openbindings-go/invoke"
 )
 
-// This file implements §9.3 of the registered OpenAPI binding family (OAPI-P-05): the
-// target URL's server half. Server resolution is a named configuration
-// point; consultation order (§9.4) is per-invocation configuration →
-// consumer-level configuration → the default. Both configuration tiers
-// arrive merged in the binding context's `configuration` field (the
-// operation invoker resolves consumer-level context into the same carrier),
-// so this file consults one merged value.
-
-// resolveServer resolves the operation's server per OAPI-P-05:
-//
-//   - The effective server list is the OAS's: the operation's `servers`,
-//     else the path item's, else the document's, else the implied
-//     `url: "/"`.
-//
-//   - A sole effective entry selects itself with declared variable defaults;
-//     multiple artifact alternatives require configuration to select one.
-//
-//   - Consumer configuration (context.configuration.server) may instead
-//     select another entry, supply variable values, or supply a complete
-//     base URL outright. Accepted shapes:
-//
-//     "https://api.example.com"                        // absolute base URL outright
-//     "https://{env}.example.com"                      // string matching a declared entry's url
-//     {"baseUrl": "https://api.example.com"}           // absolute base URL outright
-//     {"url": "https://{env}.example.com"}             // select the declared entry with that url
-//     {"index": 1}                                     // select the effective list's Nth entry
-//     {"variables": {"env": "staging"}}                // server-variable values (validated against enum)
-//
-//     `url`/`index` and `variables` compose; `baseUrl` stands alone.
-//
-//   - A relative effective-server URL (the implied "/" included) resolves
-//     against the artifact's base URI (§6: the source's location) per
-//     RFC 3986. The one pre-dispatch refusal is a server URL that cannot
-//     resolve to an absolute URL.
-//
-// The legacy context.metadata.baseURL override is honored below the
-// configuration point (the configuration point is the contract surface).
+// resolveServer keeps OpenBindings configuration consultation in the adapter
+// while delegating OpenAPI Server Object inheritance, eligibility, variables,
+// relative resolution, and configured-base mechanics to the client.
 func resolveServer(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Operation, bindCtx map[string]any, sourceLocation string) (string, error) {
-	servers := effectiveServers(doc, pathItem, op)
-	version := ""
-	if doc != nil {
-		version = doc.OpenAPI
-	}
-	var eligibilityErr error
-	servers, eligibilityErr = eligibleServers(servers, version, sourceLocation)
-	if eligibilityErr != nil {
-		return "", eligibilityErr
-	}
-
-	if cfg := invoke.ContextConfiguration(bindCtx); cfg != nil {
-		if raw, ok := cfg["server"]; ok && raw != nil {
-			resolved, selected, err := resolveServerConfig(raw, servers, version)
-			if err != nil {
-				return "", err
-			}
-			return absolutizeServerURL(resolved, declaringDocumentLocation(selected, sourceLocation))
-		}
-	}
-
-	if meta := invoke.ContextMetadata(bindCtx); meta != nil {
-		if base, ok := meta["baseURL"].(string); ok && base != "" {
-			return absolutizeServerURL(base, sourceLocation)
-		}
-	}
-	if len(servers) != 1 {
-		urls := make([]string, 0, len(servers))
-		for _, server := range servers {
-			if server != nil {
-				urls = append(urls, server.URL)
-			}
-		}
-		return "", &configRequired{
-			point:       "server",
-			path:        "/url",
-			description: fmt.Sprintf("the effective server list has %d alternatives; configuration.server must select one", len(servers)),
-			schema:      enumSchema(urls),
-			durable:     &serverChoiceDurable,
-		}
-	}
-
-	substituted, err := substituteServerVariablesFor(servers[0], nil, version)
+	set, err := openapiclient.EffectiveServerSet(doc, pathItem, op, sourceLocation)
 	if err != nil {
 		return "", err
 	}
-	return absolutizeServerURL(substituted, declaringDocumentLocation(servers[0], sourceLocation))
-}
-
-// eligibleServers confines declaration defects to their authored
-// alternatives. A missing variable value or relative-base location remains a
-// usable, configurable alternative; an empty enum, bad enum/default relation,
-// unresolved template structure, or query/fragment Server URL does not.
-func eligibleServers(servers openapi3.Servers, version, sourceLocation string) (openapi3.Servers, error) {
-	eligible := make(openapi3.Servers, 0, len(servers))
-	var first error
-	for _, server := range servers {
-		resolved, err := substituteServerVariablesFor(server, nil, version)
-		if err == nil {
-			_, err = absolutizeServerURL(resolved, declaringDocumentLocation(server, sourceLocation))
-		}
-		var required *configRequired
-		if err == nil || errors.As(err, &required) {
-			eligible = append(eligible, server)
-			continue
-		}
-		if first == nil {
-			first = err
+	if cfg := invoke.ContextConfiguration(bindCtx); cfg != nil {
+		if raw, ok := cfg["server"]; ok && raw != nil {
+			selection, err := adapterServerSelection(raw, set.Servers())
+			if err != nil {
+				return "", err
+			}
+			resolved, err := set.Resolve(selection)
+			return resolved, adapterServerResolutionError(err)
 		}
 	}
-	if len(eligible) > 0 {
-		return eligible, nil
+	if meta := invoke.ContextMetadata(bindCtx); meta != nil {
+		if base, ok := meta["baseURL"].(string); ok && base != "" {
+			resolved, err := set.Resolve(&openapiclient.ServerSelection{BaseURL: base})
+			return resolved, adapterServerResolutionError(err)
+		}
 	}
-	if first == nil {
-		first = fmt.Errorf("the effective server list has no usable alternative")
-	}
-	return nil, first
+	resolved, err := set.Resolve(nil)
+	return resolved, adapterServerResolutionError(err)
 }
 
-// effectiveServers returns the OAS effective server list: operation servers,
-// else path-item servers, else document servers, else the OAS-defined
-// implied server of url "/".
-func effectiveServers(doc *openapi3.T, pathItem *openapi3.PathItem, op *openapi3.Operation) openapi3.Servers {
-	if op != nil && op.Servers != nil && len(*op.Servers) > 0 {
-		return *op.Servers
-	}
-	if pathItem != nil && len(pathItem.Servers) > 0 {
-		return pathItem.Servers
-	}
-	if doc != nil && len(doc.Servers) > 0 {
-		return doc.Servers
-	}
-	return openapi3.Servers{&openapi3.Server{URL: "/"}}
-}
-
-// resolveServerConfig applies one configured `server` value against the
-// effective list, returning the (possibly still relative) server URL.
-func resolveServerConfig(raw any, servers openapi3.Servers, version string) (string, *openapi3.Server, error) {
-	switch v := raw.(type) {
+func adapterServerSelection(raw any, servers openapi3.Servers) (*openapiclient.ServerSelection, error) {
+	switch value := raw.(type) {
 	case string:
-		if srv := serverByURL(servers, v); srv != nil {
-			resolved, err := substituteServerVariablesFor(srv, nil, version)
-			return resolved, srv, err
+		for _, server := range servers {
+			if server != nil && server.URL == value {
+				return &openapiclient.ServerSelection{URL: value}, nil
+			}
 		}
-		if denotesTargetBase(v) {
-			return v, nil, nil
+		if openapiclient.IsServerBaseURL(value) {
+			return &openapiclient.ServerSelection{BaseURL: value}, nil
 		}
-		return "", nil, fmt.Errorf("configuration.server %q matches no declared server entry and is not an absolute base URL", v)
+		return nil, fmt.Errorf("configuration.server %q matches no declared server entry and is not an absolute base URL", value)
 	case map[string]any:
-		if base, ok := v["baseUrl"].(string); ok && base != "" {
-			if !denotesTargetBase(base) {
-				return "", nil, fmt.Errorf("configuration.server.baseUrl %q is not an absolute URL", base)
-			}
-			return base, nil, nil
+		if base, ok := value["baseUrl"].(string); ok && base != "" {
+			return &openapiclient.ServerSelection{BaseURL: base}, nil
 		}
-		if len(servers) == 0 {
-			return "", nil, fmt.Errorf("configuration.server cannot select from an empty effective server list")
-		}
-		srv := servers[0]
-		if entryURL, ok := v["url"].(string); ok && entryURL != "" {
-			srv = serverByURL(servers, entryURL)
-			if srv == nil {
-				return "", nil, fmt.Errorf("configuration.server.url %q matches no declared server entry", entryURL)
+		selection := &openapiclient.ServerSelection{}
+		if entryURL, ok := value["url"].(string); ok && entryURL != "" {
+			selection.URL = entryURL
+		} else if rawIndex, ok := value["index"]; ok {
+			index, ok := configIndex(rawIndex)
+			if !ok {
+				return nil, fmt.Errorf("configuration.server.index %v is not an integer", rawIndex)
 			}
-		} else if idxRaw, ok := v["index"]; ok {
-			idx, ok := configIndex(idxRaw)
-			if !ok || idx < 0 || idx >= len(servers) {
-				return "", nil, fmt.Errorf("configuration.server.index %v is not a valid index into the effective server list (%d entries)", idxRaw, len(servers))
-			}
-			srv = servers[idx]
+			selection.Index = &index
 		}
-		var vars map[string]string
-		if rawVars, ok := v["variables"].(map[string]any); ok {
-			vars = make(map[string]string, len(rawVars))
-			for name, val := range rawVars {
-				s, ok := val.(string)
+		if rawVariables, ok := value["variables"].(map[string]any); ok {
+			selection.Variables = make(map[string]string, len(rawVariables))
+			for name, rawValue := range rawVariables {
+				text, ok := rawValue.(string)
 				if !ok {
-					return "", nil, fmt.Errorf("configuration.server.variables[%q] must be a string, got %T", name, val)
+					return nil, fmt.Errorf("configuration.server.variables[%q] must be a string, got %T", name, rawValue)
 				}
-				vars[name] = s
+				selection.Variables[name] = text
 			}
 		}
-		resolved, err := substituteServerVariablesFor(srv, vars, version)
-		return resolved, srv, err
+		return selection, nil
 	default:
-		return "", nil, fmt.Errorf("configuration.server must be a string or an object, got %T", raw)
+		return nil, fmt.Errorf("configuration.server must be a string or an object, got %T", raw)
 	}
 }
 
-// serverByURL selects the declared entry whose url template matches exactly.
-func serverByURL(servers openapi3.Servers, u string) *openapi3.Server {
-	for _, srv := range servers {
-		if srv != nil && srv.URL == u {
-			return srv
-		}
+func adapterServerResolutionError(err error) error {
+	var required *openapiclient.ServerResolutionRequiredError
+	if !errors.As(err, &required) {
+		return err
 	}
-	return nil
+	durable := (*bool)(nil)
+	if required.Path == "/url" {
+		durable = &serverChoiceDurable
+	}
+	return &configRequired{
+		point: "server", path: required.Path, description: required.Description,
+		schema: enumSchema(required.Enum), durable: durable,
+	}
+}
+
+// eligibleServers is retained for synthesis coverage; the eligibility
+// decision itself is client-owned.
+func eligibleServers(servers openapi3.Servers, edition, sourceLocation string) (openapi3.Servers, error) {
+	set, err := openapiclient.NewServerSet(servers, edition, sourceLocation)
+	if err != nil {
+		return nil, err
+	}
+	return set.Servers(), nil
 }
 
 func configIndex(raw any) (int, bool) {
-	switch n := raw.(type) {
+	switch number := raw.(type) {
 	case int:
-		return n, true
+		return number, true
 	case float64:
-		if n == float64(int(n)) {
-			return int(n), true
+		if number == float64(int(number)) {
+			return int(number), true
 		}
 	}
 	return 0, false
 }
 
-// substituteServerVariables substitutes each declared server variable with
-// the supplied value or its declared default. A variable with neither a
-// supplied value nor a declared default, and a supplied variable the entry
-// does not declare, are loud errors. A declared enum constrains substitution
-// values exactly as the artifact declares; the separate complete-base-URL
-// override is an explicit configuration choice, not permission to weaken the
-// selected Server Object.
-func substituteServerVariables(srv *openapi3.Server, supplied map[string]string) (string, error) {
-	return substituteServerVariablesFor(srv, supplied, "")
-}
-
-func substituteServerVariablesFor(srv *openapi3.Server, supplied map[string]string, version string) (string, error) {
-	if srv == nil {
-		return "", fmt.Errorf("the selected Server Object is absent")
-	}
-	u := srv.URL
-	if strings.ContainsAny(u, "?#") {
-		return "", fmt.Errorf("server URL %q contains a query or fragment", srv.URL)
-	}
-	names := make([]string, 0, len(srv.Variables))
-	for name := range srv.Variables {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		v := srv.Variables[name]
-		if v == nil {
-			return "", fmt.Errorf("server %q variable %q is not a Server Variable Object", srv.URL, name)
-		}
-		expression := "{" + name + "}"
-		if count := strings.Count(u, expression); count != 1 {
-			return "", fmt.Errorf("server %q variable %q must occur exactly once in its URL template (found %d)", srv.URL, name, count)
-		}
-		defaultPresent := v.Default != "" || extensionBool(v.Extensions, serverVariableDefaultMarker)
-		enumPresent := v.Enum != nil || extensionBool(v.Extensions, serverVariableEnumMarker)
-		if enumPresent && len(v.Enum) == 0 {
-			return "", fmt.Errorf("server %q variable %q declares an empty enum", srv.URL, name)
-		}
-		if strings.HasPrefix(version, "3.0.") && !defaultPresent {
-			return "", fmt.Errorf("server %q variable %q omits its required default", srv.URL, name)
-		}
-		if enumPresent && defaultPresent && !containsServerVariableValue(v.Enum, v.Default) {
-			return "", fmt.Errorf("server %q variable %q default %q is outside its declared enum", srv.URL, name, v.Default)
-		}
-		val, ok := supplied[name]
-		if !ok {
-			if !defaultPresent {
-				return "", &configRequired{
-					point:       "server",
-					path:        "/variables/" + escapeJSONPointerSegment(name),
-					description: fmt.Sprintf("server %q: variable %q has no supplied value and no declared default", srv.URL, name),
-					schema:      enumSchema(v.Enum),
-				}
-			}
-			val = v.Default
-		}
-		if enumPresent {
-			if !containsServerVariableValue(v.Enum, val) {
-				return "", fmt.Errorf("server %q variable %q value %q is outside its declared enum", srv.URL, name, val)
-			}
-		}
-		u = strings.Replace(u, expression, val, 1)
-	}
-	for name := range supplied {
-		if _, declared := srv.Variables[name]; !declared {
-			return "", fmt.Errorf("server %q declares no variable %q", srv.URL, name)
-		}
-	}
-	if strings.ContainsAny(u, "{}") {
-		return "", fmt.Errorf("server URL %q contains an unresolved template variable", srv.URL)
-	}
-	return u, nil
-}
-
-func containsServerVariableValue(values []string, wanted string) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
-}
-
-func extensionBool(extensions map[string]any, name string) bool {
-	value, _ := extensions[name].(bool)
-	return value
-}
-
-func declaringDocumentLocation(server *openapi3.Server, fallback string) string {
-	if server != nil && server.Extensions != nil {
-		if location, ok := server.Extensions[serverDocumentMarker].(string); ok && location != "" {
-			return location
-		}
-	}
-	return fallback
-}
-
-// absolutizeServerURL resolves a (possibly relative) server URL to an
-// absolute target base: a URL that already denotes a target address passes
-// through; a relative reference resolves against its declaring document's
-// base URI per RFC 3986. A server URL that cannot
-// resolve to an absolute URL is the §9.3 pre-dispatch refusal. The returned
-// URL spelling is retained verbatim, including any trailing slash; the
-// transport bridge appends the operation path without slash normalization.
-//
-// Whether a string denotes a target address is decided by denotesTargetBase
-// (target_base.go), which reads RFC 3986's URI production and RFC 9110's
-// non-empty-host requirement for the http and https schemes, rather than by
-// net/url. See that file for why the host parser was the wrong authority.
-func absolutizeServerURL(serverURL, sourceLocation string) (string, error) {
-	if err := validateServerBaseSpelling(serverURL); err != nil {
-		return "", err
-	}
-	if denotesTargetBase(serverURL) {
-		return serverURL, nil
-	}
-	// Only a relative reference can be completed by a base URI. A string
-	// carrying a scheme has already named an address, so failing the
-	// predicate means that address does not exist and no base can supply it.
-	if !hasURIScheme(serverURL) && sourceLocation != "" && denotesTargetBase(sourceLocation) {
-		base, berr := url.Parse(sourceLocation)
-		ref, rerr := url.Parse(serverURL)
-		if berr == nil && rerr == nil {
-			resolved := base.ResolveReference(ref).String()
-			if validateServerBaseSpelling(resolved) == nil && denotesTargetBase(resolved) {
-				return resolved, nil
-			}
-		}
-	}
-	return "", &configRequired{
-		point:       "server",
-		path:        "/url",
-		description: fmt.Sprintf("server URL %q cannot resolve to an absolute URL: supply a base URL at the server configuration point", serverURL),
-	}
-}
-
-func validateServerBaseSpelling(value string) error {
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return fmt.Errorf("server URL %q does not parse under RFC 3986: %w", value, err)
-	}
-	if parsed.ForceQuery || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Contains(value, "#") {
-		return fmt.Errorf("server URL %q contains a query or fragment", value)
-	}
-	return nil
-}
-
-// configRequired is the typed signal a resolution helper returns when a named
-// configuration point cannot resolve because a value is absent (no default,
-// no supplied value) — a resolvable-missing value, not a malformed one. The
-// invoke path turns it into a config.value CONTEXT_REQUIRED challenge
-// (retryable after resolution, R1a) rather than a terminal
-// ERR_SOURCE_CONFIG_ERROR. It implements error so it rides the existing
-// (…, error) returns unchanged. Configuration may be sensitive according to
-// its meaning; consumers decide whether the challenge target is sufficient
-// for any stored-value release.
+// configRequired is adapter vocabulary for a missing OpenBindings
+// configuration point. OpenAPI-native resolution errors are translated into
+// this shape only at this boundary.
 type configRequired struct {
 	point       string
 	path        string
 	description string
-	// schema is the engine-asserted JSON Schema for the missing value --
-	// artifact-derived where the artifact speaks (a declared enum becomes
-	// {"enum": [...]}), nil where it does not (absent = unconstrained).
-	schema  map[string]any
-	durable *bool
+	schema      map[string]any
+	durable     *bool
 }
-
-var serverChoiceDurable = true
 
 func (c *configRequired) Error() string { return c.description }
 
-// enumSchema lifts an artifact-declared closed value set into the
-// engine-asserted schema shape ({"enum": [...]}); an empty set asserts
-// nothing (nil = absent = unconstrained).
 func enumSchema(values []string) map[string]any {
 	if len(values) == 0 {
 		return nil
@@ -405,3 +139,5 @@ func enumSchema(values []string) map[string]any {
 	}
 	return map[string]any{"enum": members}
 }
+
+var serverChoiceDurable = true
