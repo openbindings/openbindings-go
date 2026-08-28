@@ -381,14 +381,14 @@ func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 }
 
 type runtimeOperationModel struct {
-	artifact         *openapiclient.Artifact
-	document         *openapi3.T
-	pathItem         *openapi3.PathItem
-	operation        *openapi3.Operation
-	parameters       openapi3.Parameters
-	plans            []*bodyPlan
-	routes           abstractInputRoutes
-	preStartBodyGate bool
+	artifact          *openapiclient.Artifact
+	document          *openapi3.T
+	pathItem          *openapi3.PathItem
+	operation         *openapi3.Operation
+	parameters        openapi3.Parameters
+	plans             []*bodyPlan
+	routes            abstractInputRoutes
+	preStartInputGate bool
 }
 
 func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocationArgs, client *http.Client, bindingSpec string) (*runtimeOperationModel, error) {
@@ -537,7 +537,7 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	// declaration before handing the operation to the standalone engine keeps
 	// ignored declarations from becoming accidental required-input gates.
 	bodyForbidden := requestBodyIgnoredForBindingSpec(bindingSpec, method)
-	preStartBodyGate := bodyForbidden
+	preStartInputGate := bodyForbidden || bindingSpec == BindingSpecOpenAPI32
 	if bodyForbidden {
 		operation.RequestBody = nil
 		plans = nil
@@ -555,7 +555,7 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	return &runtimeOperationModel{
 		artifact: artifact, document: document, pathItem: pathItem, operation: operation,
 		parameters: callerParameters, plans: plans, routes: routes,
-		preStartBodyGate: preStartBodyGate,
+		preStartInputGate: preStartInputGate,
 	}, nil
 }
 
@@ -878,7 +878,7 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	var preReadValue any
 	var preReadErr error
 	preRead := false
-	if model.preStartBodyGate {
+	if model.preStartInputGate {
 		preReadValue, preReadErr = inv.ReadInput(bridgeCtx)
 		preRead = true
 		if preReadErr != nil && !errors.Is(preReadErr, io.EOF) {
@@ -886,7 +886,14 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		}
 		if preReadErr == nil {
 			envelope, envelopeErr := parseCallerEnvelope(preReadValue)
-			if envelopeErr != nil || envelope.bodyPresent {
+			selectedPlans := model.plans
+			if envelopeErr == nil && envelope.bodyPresent {
+				selectedPlans, envelopeErr = configuredRequestPlansFor(model.document, model.operation, model.plans, args.Context, bindingSpec)
+			}
+			if envelopeErr == nil {
+				_, envelopeErr = engineInputForCallerEnvelope(preReadValue, model.parameters, selectedPlans, model.routes, options.Profile)
+			}
+			if envelopeErr != nil {
 				return invoke.NewInvocationError(openapiclient.CodeRefused)
 			}
 		}

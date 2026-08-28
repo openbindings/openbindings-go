@@ -187,6 +187,14 @@ func TestRequestBodyMethodDispositionIsFamilySpecific(t *testing.T) {
 	if !requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI31, "trace") {
 		t.Error("3.1 TRACE requestBody was not ignored")
 	}
+	for _, method := range []string{"get", "head", "delete", "options", "post", "put", "patch", "query", "COPY"} {
+		if requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI32, method) {
+			t.Errorf("3.2 %s requestBody was ignored", method)
+		}
+	}
+	if !requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI32, "trace") {
+		t.Error("3.2 TRACE requestBody was not ignored")
+	}
 
 	for _, testCase := range []struct {
 		token, edition string

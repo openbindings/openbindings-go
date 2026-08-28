@@ -68,7 +68,7 @@ func duplicateEffectiveParameterIdentity(params openapi3.Parameters) string {
 // disposition before either invocation or synthesis constructs its input.
 func requestBodyIgnoredForBindingSpec(bindingSpec, method string) bool {
 	method = strings.ToLower(method)
-	if bindingSpec == BindingSpecOpenAPI31 {
+	if bindingSpec == BindingSpecOpenAPI31 || bindingSpec == BindingSpecOpenAPI32 {
 		return method == "trace"
 	}
 	if bindingSpec != BindingSpecOpenAPI30 {
