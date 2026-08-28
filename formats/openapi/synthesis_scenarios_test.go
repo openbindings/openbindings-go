@@ -66,7 +66,7 @@ func TestSynthesisScenarios(t *testing.T) {
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
-	for _, family := range []string{"openapi-3.0", "openapi-3.1"} {
+	for _, family := range []string{"openapi-3.0", "openapi-3.1", "openapi-3.2"} {
 		family := family
 		t.Run(family, func(t *testing.T) {
 			file, err := synthesisscenarios.Load(root, family)
@@ -94,6 +94,8 @@ func TestSynthesisScenarios(t *testing.T) {
 			prefix := "OAPI30-"
 			if family == "openapi-3.1" {
 				prefix = "OAPI31-"
+			} else if family == "openapi-3.2" {
+				prefix = "OAPI32-"
 			}
 			for id := range pendingSynthesisScenarioReasons {
 				if strings.HasPrefix(id, prefix) && !seenPending[id] {

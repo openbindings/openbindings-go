@@ -99,8 +99,8 @@ func hasSchemaOmittedOAS30ByteCarriage(bindingSpec string) bool {
 }
 
 // isImplementedOpenAPIBindingSpec remains the response-complete warranting
-// gate consumed by synthesis and checkBindingSpecs. The 3.2 request lane must
-// not enter it before M6 removes every named response seam.
+// gate consumed by capability advertisement and checkBindingSpecs. The 3.2
+// request lane must not enter it before M6 removes every named response seam.
 func isImplementedOpenAPIBindingSpec(bindingSpec string) bool {
 	registration, ok := openAPIBindingSpecRegistry[bindingSpec]
 	return ok && registration.responseComplete
@@ -382,6 +382,7 @@ func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 
 type runtimeOperationModel struct {
 	artifact          *openapiclient.Artifact
+	target            *openapiclient.OperationTarget
 	document          *openapi3.T
 	pathItem          *openapi3.PathItem
 	operation         *openapi3.Operation
@@ -449,6 +450,7 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 		return nil, &invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed}
 	}
 	var path, method, selector string
+	var operationTarget *openapiclient.OperationTarget
 	var pathItem *openapi3.PathItem
 	var operation *openapi3.Operation
 	if artifact != nil {
@@ -474,6 +476,12 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 			}
 			return nil, &invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound}
 		}
+		target = adapterOpenAPI32SecurityTarget(target)
+		bridged := openAPI32UnaryResponseBridgeOperation(target.Operation)
+		if bridged != nil {
+			target.Operation = bridged
+		}
+		operationTarget = target
 		path, method, selector = reference.Path, reference.Method, reference.Ref
 		document = target.Document
 		pathItem, operation = target.PathItem, target.Operation
@@ -561,10 +569,25 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	callerParameters := cloneEffectiveParameters(parameters)
 	routes := planAbstractInputRoutes(callerParameters, plans)
 	return &runtimeOperationModel{
-		artifact: artifact, document: document, pathItem: pathItem, operation: operation,
+		artifact: artifact, target: operationTarget, document: document, pathItem: pathItem, operation: operation,
 		parameters: callerParameters, plans: plans, routes: routes,
 		preStartInputGate: preStartInputGate,
 	}, nil
+}
+
+func adapterOpenAPI32SecurityTarget(target *openapiclient.OperationTarget) *openapiclient.OperationTarget {
+	if target == nil || target.Operation == nil || len(target.ReferringSecuritySchemes) == 0 {
+		return target
+	}
+	copyTarget := *target
+	copyOperation := *target.Operation
+	copyOperation.Extensions = make(map[string]any, len(target.Operation.Extensions)+1)
+	for name, value := range target.Operation.Extensions {
+		copyOperation.Extensions[name] = value
+	}
+	copyOperation.Extensions[referringSecuritySchemesMarker] = target.ReferringSecuritySchemes
+	copyTarget.Operation = &copyOperation
+	return &copyTarget
 }
 
 func cloneOpenAPIOperation(operation *openapi3.Operation) *openapi3.Operation {
@@ -868,7 +891,15 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		return invoke.NewContextRequiredError(propertyDetails)
 	}
 	if model.artifact != nil {
-		options.Source = openapiclient.Source{Location: args.Source.Location, Artifact: model.artifact}
+		preparedTarget := *model.target
+		preparedTarget.Document = model.document
+		preparedTarget.PathItem = model.pathItem
+		preparedTarget.Operation = model.operation
+		preparedArtifact, preparedErr := model.artifact.WithOperationTarget(&preparedTarget)
+		if preparedErr != nil {
+			return invoke.NewInvocationError(openapiclient.CodeRefused)
+		}
+		options.Source = openapiclient.Source{Location: args.Source.Location, Artifact: preparedArtifact}
 	} else {
 		options.Source = openapiclient.Source{Location: args.Source.Location, Document: model.document}
 	}
@@ -1268,7 +1299,7 @@ func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.Bi
 
 // SynthesizeInterface converts an OpenAPI document to an OpenBindings interface.
 func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
-	iface, _, _, err := c.synthesizeObserved(ctx, in, nil)
+	iface, _, _, _, err := c.synthesizeObserved(ctx, in, nil)
 	return iface, err
 }
 
@@ -1284,31 +1315,31 @@ func (c *Synthesizer) SynthesizeInterface(ctx context.Context, in *synthesize.Sy
 // (SynthesizeInterface) is unchanged.
 func (c *Synthesizer) SynthesizeInterfaceWithCoverage(ctx context.Context, in *synthesize.SynthesizeInput) (*synthesize.SynthesizeResult, error) {
 	unrealizable := map[string]unrealizableTarget{}
-	iface, doc, floor, err := c.synthesizeObserved(ctx, in, func(target unrealizableTarget) {
+	iface, doc, artifact, floor, err := c.synthesizeObserved(ctx, in, func(target unrealizableTarget) {
 		unrealizable[target.selector] = target
 	})
 	if err != nil {
 		return nil, err
 	}
-	entries := openAPISynthesisCoverage(doc, iface, unrealizable, floor)
+	entries := openAPISynthesisCoverage(doc, artifact, iface, unrealizable, floor)
 	return synthesize.NewSynthesisResult(iface, entries, true)
 }
 
-func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.SynthesizeInput, onUnrealizable func(unrealizableTarget)) (*openbindings.Interface, *openapi3.T, *acceptanceFloor, error) {
+func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.SynthesizeInput, onUnrealizable func(unrealizableTarget)) (*openbindings.Interface, *openapi3.T, *openapiclient.Artifact, *acceptanceFloor, error) {
 	if len(in.Sources) == 0 {
 		skeleton, err := synthesize.SynthesisSkeleton(in)
-		return &skeleton, nil, nil, err
+		return &skeleton, nil, nil, nil, err
 	}
 	if len(in.Sources) > 1 {
-		return nil, nil, nil, synthesize.ErrMultipleSources
+		return nil, nil, nil, nil, synthesize.ErrMultipleSources
 	}
 	src := in.Sources[0]
-	if !isImplementedOpenAPIBindingSpec(src.BindingSpec) {
-		return nil, nil, nil, fmt.Errorf("%s: binding specification %q is not implemented", ErrCodeUnsupportedBindingSpec, src.BindingSpec)
+	if !isRequestImplementedOpenAPIBindingSpec(src.BindingSpec) {
+		return nil, nil, nil, nil, fmt.Errorf("%s: binding specification %q is not implemented", ErrCodeUnsupportedBindingSpec, src.BindingSpec)
 	}
 	if src.OutputLocation != "" {
 		if err := validateDocumentAddress(src.OutputLocation); err != nil {
-			return nil, nil, nil, fmt.Errorf("outputLocation: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("outputLocation: %w", err)
 		}
 	}
 	// Authoring convenience: a bare filesystem path loads and is emitted as
@@ -1317,17 +1348,35 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 	// refuse under OAPI-D-02.
 	loadLocation, err := absolutizeArtifactLocation(src.Location)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	artifactContent := src.Content
 	if src.Embed && artifactContent == nil {
 		data, embedErr := readAuthoringArtifact(ctx, c.resolverClient(), loadLocation)
 		if embedErr != nil {
-			return nil, nil, nil, fmt.Errorf("embed OpenAPI source: %w", embedErr)
+			return nil, nil, nil, nil, fmt.Errorf("embed OpenAPI source: %w", embedErr)
 		}
 		artifactContent = openbindings.TextContent(string(data))
 	}
-	doc, schemaOverlays, entryBytes, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, artifactContent)
+	var artifact *openapiclient.Artifact
+	var doc *openapi3.T
+	var schemaOverlays *rawSchemaOverlayCollector
+	var entryBytes []byte
+	if src.BindingSpec == BindingSpecOpenAPI32 {
+		var content []byte
+		if artifactContent != nil {
+			content, err = openbindings.ContentToBytes(artifactContent)
+		}
+		if err == nil {
+			artifact, err = openapiclient.LoadArtifact(ctx, openapiclient.Source{Location: loadLocation, Content: content}, openapiclient.ArtifactLoadOptions{HTTPClient: c.resolverClient(), AllowExternalRefs: true})
+		}
+		if artifact != nil {
+			doc = artifact.Document
+			entryBytes = artifact.EntryBytes()
+		}
+	} else {
+		doc, schemaOverlays, entryBytes, err = loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, artifactContent)
+	}
 	// The invalid-artifact acceptance floor (the registered OpenAPI binding family §3),
 	// computed over the entry document's raw image. Part 2's single derived
 	// whole-source refusal fires here, on every synthesis surface -- and it
@@ -1335,16 +1384,16 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 	// artifact's raw image and not over anything the loader produced.
 	floor := computeAcceptanceFloorFromBytes(entryBytes)
 	if floor != nil && floor.Refusal != "" {
-		return nil, nil, nil, errors.New(floor.Refusal)
+		return nil, nil, nil, nil, errors.New(floor.Refusal)
 	}
 	if floor != nil && floor.SourceExclusion != "" {
-		return nil, nil, nil, errors.New(floor.SourceExclusion)
+		return nil, nil, nil, nil, errors.New(floor.SourceExclusion)
 	}
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
 	if err := checkAcceptedOpenAPIVersionForBindingSpec(doc, src.BindingSpec); err != nil {
-		return nil, nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
 	// kin-openapi resolves external SchemaRefs into Value but intentionally
 	// retains their artifact-relative Ref spelling. That spelling would dangle
@@ -1352,15 +1401,19 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 	// Internalize the already-resolved closure before projection so the
 	// existing self-contained-schema pass can materialize every reachable
 	// schema without exposing artifact reference semantics in the OBI.
-	schemaOverlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
+	if schemaOverlays != nil {
+		schemaOverlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
+	} else {
+		internalizeExternalRefs(ctx, doc)
+	}
 	warn := func(w synthesize.SynthesizerWarning) {
 		if in.OnWarning != nil {
 			in.OnWarning(w)
 		}
 	}
-	iface, err := convertDocToInterfaceWithOverlay(doc, loadLocation, src.BindingSpec, warn, onUnrealizable, schemaOverlays, floor)
+	iface, err := convertArtifactToInterfaceWithOverlay(doc, artifact, loadLocation, src.BindingSpec, warn, onUnrealizable, schemaOverlays, floor)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	// Content is authoritative and remains byte-for-byte in the synthesized
 	// source. A co-present location is its base/provenance, not permission to
@@ -1372,9 +1425,9 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 		}
 	}
 	if err := synthesize.FinalizeSynthesis(&iface, in, DefaultSourceName, src.BindingSpec); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return &iface, doc, floor, nil
+	return &iface, doc, artifact, floor, nil
 }
 
 // internalizeExternalRefs internalizes the already-resolved external closure

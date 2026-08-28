@@ -195,6 +195,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		Context:  scenarioContext(scenario),
 	}
 	joined := strings.HasPrefix(scenario.ID, "OAPI-FI-")
+	processor := scenarioOpenAPIInvoker(client, scenario)
 	var call invoke.Invocation[any, any]
 	if joined {
 		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
@@ -205,7 +206,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		if err != nil {
 			t.Fatal(err)
 		}
-		op := invoke.NewOperationInvoker(NewInvokerWithClient(client))
+		op := invoke.NewOperationInvoker(processor)
 		op.TransformEvaluator = openAPIJSONataEvaluator{}
 		call = invoke.Invoke(
 			context.Background(), op, iface,
@@ -213,7 +214,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			invoke.WithContext(scenarioContext(scenario)),
 		)
 	} else {
-		call = NewInvokerWithClient(client).InvokeBinding(context.Background(), args)
+		call = processor.InvokeBinding(context.Background(), args)
 	}
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		if err := call.Write(context.Background(), scenario.Given.Invocation["input"]); err != nil {
@@ -260,6 +261,25 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	phase := openAPIErrorPhase(terminal, len(roundTripper.dispatches) > 0)
 	data["error"] = normalizedError
 	return processorscenarios.Observation{Disposition: disposition, Phase: phase, Data: data}
+}
+
+func scenarioOpenAPIInvoker(client *http.Client, scenario processorscenarios.Scenario) *Invoker {
+	options := RuntimeOptions{HTTPClient: client}
+	if declared, ok := scenario.Given.Runtime["requestContentCodings"].(map[string]any); ok {
+		options.RequestContentCodings = map[string]ContentEncoder{}
+		for token, raw := range declared {
+			if raw == "reverse" {
+				options.RequestContentCodings[token] = func(input []byte) ([]byte, error) {
+					output := append([]byte(nil), input...)
+					for left, right := 0, len(output)-1; left < right; left, right = left+1, right-1 {
+						output[left], output[right] = output[right], output[left]
+					}
+					return output, nil
+				}
+			}
+		}
+	}
+	return NewInvokerWithOptions(options)
 }
 
 func openAPIFidelityOperationID(scenarioID string) string {

@@ -9,9 +9,15 @@ import (
 	"github.com/openbindings/openbindings-go/synthesize"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	openapiclient "github.com/openbindings/openapi-client/go"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
+
+type synthesisBindingIdentity struct {
+	operationKey string
+	selector     string
+}
 
 // openAPISynthesisCoverage inventories the interaction units that matter to
 // OpenAPI synthesis fidelity in revision 1:
@@ -24,23 +30,19 @@ import (
 //
 // Incorporated parameter serialization and response selection are behavior of
 // a represented target, not independently addressable units.
-func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, unrealizable map[string]unrealizableTarget, floor *acceptanceFloor) []synthesize.SynthesisCoverageEntry {
+func openAPISynthesisCoverage(doc *openapi3.T, artifact *openapiclient.Artifact, iface *openbindings.Interface, unrealizable map[string]unrealizableTarget, floor *acceptanceFloor) []synthesize.SynthesisCoverageEntry {
 	if doc == nil || iface == nil {
 		return []synthesize.SynthesisCoverageEntry{}
 	}
 
-	type bindingIdentity struct {
-		operationKey string
-		selector     string
-	}
-	bySelector := make(map[string]bindingIdentity, len(iface.Bindings))
+	bySelector := make(map[string]synthesisBindingIdentity, len(iface.Bindings))
 	for _, binding := range iface.Bindings {
-		bySelector[binding.Selector] = bindingIdentity{operationKey: binding.Operation, selector: binding.Selector}
+		bySelector[binding.Selector] = synthesisBindingIdentity{operationKey: binding.Operation, selector: binding.Selector}
 	}
 	sourceLocation := ""
 	bindingSpec := ""
 	for _, source := range iface.Sources {
-		if isImplementedOpenAPIBindingSpec(source.BindingSpec) {
+		if isRequestImplementedOpenAPIBindingSpec(source.BindingSpec) {
 			sourceLocation = source.Location
 			bindingSpec = source.BindingSpec
 			break
@@ -48,6 +50,9 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 	}
 	if bindingSpec == "" {
 		return []synthesize.SynthesisCoverageEntry{}
+	}
+	if artifact != nil && artifact.Edition.IsOpenAPI32() {
+		return openAPI32SynthesisCoverage(artifact, bySelector, unrealizable, floor, sourceLocation, bindingSpec)
 	}
 
 	// The walk is driven from the UNION of the loaded document's path×method
@@ -172,6 +177,85 @@ func openAPISynthesisCoverage(doc *openapi3.T, iface *openbindings.Interface, un
 	}
 	if bindingSpec == BindingSpecOpenAPI31 {
 		entries = append(entries, openAPIWebhookCoverage(doc)...)
+	}
+	return entries
+}
+
+func openAPI32SynthesisCoverage(
+	artifact *openapiclient.Artifact,
+	bySelector map[string]synthesisBindingIdentity,
+	unrealizable map[string]unrealizableTarget,
+	floor *acceptanceFloor,
+	sourceLocation, bindingSpec string,
+) []synthesize.SynthesisCoverageEntry {
+	var entries []synthesize.SynthesisCoverageEntry
+	for _, disposition := range artifact.OperationInventory() {
+		selector := disposition.Reference.Ref
+		verdict := floor.opVerdict(selector)
+		if verdict != nil && verdict.Disposition == "invalid" {
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: selector, Scope: synthesize.SynthesisCoverageTarget,
+				Status: synthesize.SynthesisInvalid, ReasonCode: invalidUnitReasonCode,
+				Message: floorInvalidTargetMessage(len(verdict.Defects)), Details: map[string]any{"defects": floorDefectDetails(verdict.Defects)},
+			})
+			entries = append(entries, floorProjectionEntries(verdict)...)
+			continue
+		}
+		identity, represented := bySelector[selector]
+		if disposition.Err != nil || !represented {
+			if skipped, recorded := unrealizable[selector]; recorded {
+				entries = append(entries, synthesize.SynthesisCoverageEntry{
+					SourceIndex: 0, SourceRef: selector, Scope: synthesize.SynthesisCoverageTarget,
+					Status: synthesize.SynthesisExcluded, ReasonCode: skipped.reasonCode, Rule: skipped.rule, Message: skipped.message,
+				})
+			} else if disposition.Err != nil {
+				entries = append(entries, synthesize.SynthesisCoverageEntry{
+					SourceIndex: 0, SourceRef: selector, Scope: synthesize.SynthesisCoverageTarget,
+					Status: synthesize.SynthesisExcluded, ReasonCode: "openapi.target_excluded", Rule: openAPIRule(bindingSpec, "P-01"), Message: disposition.Err.Error(),
+				})
+			} else {
+				entries = append(entries, synthesize.SynthesisCoverageEntry{
+					SourceIndex: 0, SourceRef: selector, Scope: synthesize.SynthesisCoverageTarget,
+					Status: synthesize.SynthesisImplementationUnsupported, ReasonCode: "openapi.missing_emitted_binding",
+					Message: "the synthesizer returned without emitting this admitted paths operation",
+				})
+			}
+			entries = append(entries, floorInvalidAlternativeEntries(verdict)...)
+			entries = append(entries, floorProjectionEntries(verdict)...)
+			continue
+		}
+		target := disposition.Target
+		if target == nil {
+			continue
+		}
+		operation := target.Operation
+		if len(target.ReferringSecuritySchemes) > 0 {
+			copyOperation := *operation
+			copyOperation.Extensions = make(map[string]any, len(operation.Extensions)+1)
+			for name, value := range operation.Extensions {
+				copyOperation.Extensions[name] = value
+			}
+			copyOperation.Extensions[referringSecuritySchemesMarker] = target.ReferringSecuritySchemes
+			operation = &copyOperation
+		}
+		params := effectiveParameters(target.PathItem, operation)
+		requirements := openAPIServerRequirements(target.Document, target.PathItem, operation, sourceLocation)
+		requirements = append(requirements, openAPISecurityRequirements(target.Document, operation, params)...)
+		if !requestBodyIgnoredForBindingSpec(bindingSpec, disposition.Reference.Method) {
+			requirements = append(requirements, openAPIRequestMediaRequirements(target.Document, target.PathItem, operation, bindingSpec)...)
+		}
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
+			SourceIndex: 0, SourceRef: selector, Scope: synthesize.SynthesisCoverageTarget,
+			Status: synthesize.SynthesisRepresented, OperationKey: identity.operationKey,
+			BindingSelector: identity.selector, Requirements: requirements,
+		})
+		entries = append(entries, openAPIServerAlternativeCoverage(target.Document, target.PathItem, operation, selector, identity.operationKey, bindingSpec, sourceLocation)...)
+		entries = append(entries, openAPISecurityAlternativeCoverage(target.Document, operation, params, selector, identity.operationKey, bindingSpec)...)
+		if !requestBodyIgnoredForBindingSpec(bindingSpec, disposition.Reference.Method) {
+			entries = append(entries, openAPIRequestMediaCoverage(target.Document, operation, target.PathItem, identity, bindingSpec, verdict)...)
+		}
+		entries = append(entries, floorProjectionEntries(verdict)...)
+		// Callback/webhook dependency contracts are an explicit M6 seam.
 	}
 	return entries
 }
