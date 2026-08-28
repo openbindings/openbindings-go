@@ -241,7 +241,7 @@ func TestProcessorScenarios(t *testing.T) {
 				t.Fatalf("ran %d and deferred %d of %d processor scenarios", ran, deferred, len(file.Scenarios))
 			}
 			if deferred > 0 {
-				t.Logf("executed %d of %d request-surface processor scenarios (%d M6 response scenario deferred)", ran, ran, deferred)
+				t.Logf("executed %d of %d active processor scenarios (%d sequential-response scenario deferred)", ran, ran, deferred)
 			} else {
 				t.Logf("executed %d of %d processor scenarios", ran, len(file.Scenarios))
 			}

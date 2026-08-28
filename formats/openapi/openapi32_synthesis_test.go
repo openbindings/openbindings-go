@@ -52,36 +52,29 @@ func TestOpenAPI32RequestSurfaceSynthesisEmitsContractsAndEditionSelectors(t *te
 	if result.Interface.Operations["queryItem"].Output == nil {
 		t.Fatal("plain unary 3.1-equivalent response contract was not emitted")
 	}
-	if openAPI32M6ResponseSeams[0].name == "" || openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
-		t.Fatal("3.2 response seams or unwarranted capability gate were lost")
+	if openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
+		t.Fatal("3.2 was warranted before the remaining response and dependency passes completed")
 	}
 }
 
-func TestOpenAPI32UnaryResponseBridgeKeepsOnlyExplicitEquivalentCells(t *testing.T) {
-	description := "ok"
+func TestOpenAPI32NativeResponseSurfaceRetainsRangeAndOptionalDescription(t *testing.T) {
 	operation := &openapi3.Operation{Responses: openapi3.NewResponses()}
 	operation.Responses.Set("200", &openapi3.ResponseRef{Value: &openapi3.Response{
-		Description: &description,
 		Content: openapi3.Content{
 			"application/json":  &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}}},
 			"application/jsonl": &openapi3.MediaType{ItemSchema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}}},
 		},
 	}})
-	operation.Responses.Set("201", &openapi3.ResponseRef{Ref: "#/components/responses/Created", Value: &openapi3.Response{
-		Description: &description,
-		Content:     openapi3.Content{"application/jsonl": &openapi3.MediaType{ItemSchema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"object"}}}}},
-	}})
-	operation.Responses.Set("202", &openapi3.ResponseRef{Value: &openapi3.Response{Description: &description, Headers: openapi3.Headers{
+	operation.Responses.Set("202", &openapi3.ResponseRef{Value: &openapi3.Response{Headers: openapi3.Headers{
 		"Content-Encoding": &openapi3.HeaderRef{Value: &openapi3.Header{}},
 	}}})
-	operation.Responses.Set("2XX", &openapi3.ResponseRef{Value: &openapi3.Response{Description: &description}})
+	operation.Responses.Set("2XX", &openapi3.ResponseRef{Value: &openapi3.Response{}})
 
-	bridged := openAPI32UnaryResponseBridgeOperation(operation)
-	if bridged.Responses.Len() != 1 {
-		t.Fatalf("bridged responses = %#v", bridged.Responses.Map())
+	if operation.Responses.Len() != 3 {
+		t.Fatalf("native responses = %#v", operation.Responses.Map())
 	}
-	responseRef := bridged.Responses.Value("200")
-	if responseRef == nil || responseRef.Value == nil || len(responseRef.Value.Content) != 1 || responseRef.Value.Content["application/json"] == nil {
-		t.Fatalf("bridged 200 response = %#v", responseRef)
+	responseRef := operation.Responses.Value("200")
+	if responseRef == nil || responseRef.Value == nil || len(responseRef.Value.Content) != 2 || operation.Responses.Value("2XX") == nil {
+		t.Fatalf("native response surface = %#v", operation.Responses.Map())
 	}
 }

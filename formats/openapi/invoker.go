@@ -378,10 +378,9 @@ func enginePrepareOptions(args *invoke.BindingInvocationArgs, client *http.Clien
 
 func engineProfile(bindingSpec string) (openapiclient.Profile, bool) {
 	if isRequestImplementedOpenAPIBindingSpec(bindingSpec) {
-		// OpenAPI 3.2 response behavior reaches this profile only through the
-		// explicit plain-unary 3.1-equivalence bridge. Sequential media, SSE,
-		// response-header deltas, range keys, and every other 3.2 response cell
-		// remain named M6 seams; responseComplete stays false above.
+		// OpenAPI 3.2 uses its native artifact lane for request and response
+		// governance. responseComplete remains false until the later coding,
+		// sequential, identity, and dependency passes are committed.
 		return openapiclient.FullProfile(), true
 	}
 	return openapiclient.Profile{}, false
@@ -484,10 +483,6 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 			return nil, &invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound}
 		}
 		target = adapterOpenAPI32SecurityTarget(target)
-		bridged := openAPI32UnaryResponseBridgeOperation(target.Operation)
-		if bridged != nil {
-			target.Operation = bridged
-		}
 		operationTarget = target
 		path, method, selector = reference.Path, reference.Method, reference.Ref
 		document = target.Document

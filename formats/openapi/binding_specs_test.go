@@ -64,9 +64,6 @@ func TestOpenAPI32RequestImplementationRemainsUnwarrantedUntilM6(t *testing.T) {
 	if !seen20 {
 		t.Fatal("openbindings.openapi-2.0@1 must remain warranted after the M4 merge")
 	}
-	if len(openAPI32M6ResponseSeams) != 5 {
-		t.Fatalf("named M6 response seams = %d, want 5", len(openAPI32M6ResponseSeams))
-	}
 }
 
 func TestBindingInvokerRequiresAnExactFamilyToken(t *testing.T) {

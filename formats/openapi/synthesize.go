@@ -72,7 +72,7 @@ func synthesisOperationTargets(doc *openapi3.T, artifact *openapiclient.Artifact
 			if err != nil {
 				continue
 			}
-			operation := openAPI32UnaryResponseBridgeOperation(target.Operation)
+			operation := target.Operation
 			if len(target.ReferringSecuritySchemes) > 0 {
 				copyOperation := *operation
 				copyOperation.Extensions = make(map[string]any, len(operation.Extensions)+1)
