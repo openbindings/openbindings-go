@@ -24,31 +24,19 @@ import (
 	"github.com/openbindings/openbindings-go/processorscenarios"
 )
 
-// TestOpenAPINativeDifferential is the independent-client gate for the first
-// OpenAPI fidelity slice. The native side uses net/http against a real server;
-// the OpenBindings side synthesizes the same artifact and invokes it through
-// the operation layer. The comparison deliberately does not reuse the
-// OpenAPI invoker's response decoder or failure-evidence builder.
+// TestOpenAPINativeDifferential is the independent-client gate for the
+// partitioned OpenAPI fidelity slices. The native side uses net/http against
+// a real server; the OpenBindings side synthesizes the same artifact and
+// invokes it through the operation layer. The comparison deliberately does
+// not reuse the OpenAPI invoker's response decoder or failure-evidence builder.
 func TestOpenAPINativeDifferential(t *testing.T) {
-	t.Skip("N10/M7 migrates the invocation-fidelity corpus from the retired OpenAPI token")
 	root := os.Getenv("OB_SPEC_CORPUS")
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
-	file, err := processorscenarios.LoadPath(
-		filepath.Join(root, "invocation-fidelity", "openapi.json"),
-		"openapi",
-		"openbindings.invocation-fidelity-scenarios@1",
-	)
-	if err != nil {
-		if os.Getenv("OB_CORPUS_REQUIRED") != "" {
-			t.Fatal(err)
-		}
-		t.Skip(err)
-	}
 
-	for _, scenario := range file.Scenarios {
-		scenario := scenario
+	for _, entry := range loadOpenAPIFidelityScenarios(t, root) {
+		scenario := entry.Scenario
 		t.Run(scenario.ID, func(t *testing.T) {
 			peerBody := differentialPeerBody(t, scenario.Given.Peer)
 			status, ok := numberAsInt(scenario.Given.Peer["status"])
@@ -71,7 +59,7 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 			var nativeRequestBody io.Reader
 			nativeContentType := ""
 			switch scenario.ID {
-			case "OAPI-FI-06":
+			case "OAPI30-FI-06":
 				input, _ := scenario.Given.Invocation["input"].(map[string]any)
 				encoded, _ := input[syntheticBodyProperty].(string)
 				decoded, decodeErr := base64.StdEncoding.DecodeString(encoded)
@@ -80,7 +68,7 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 				}
 				nativeRequestBody = bytes.NewReader(decoded)
 				nativeContentType = "image/png"
-			case "OAPI-FI-07":
+			case "OAPI31-FI-07":
 				encoded, encodeErr := json.Marshal(scenario.Given.Invocation["input"])
 				if encodeErr != nil {
 					t.Fatal(encodeErr)
@@ -107,7 +95,7 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 
 			iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
 				Sources: []synthesize.SynthesizeSource{{
-					BindingSpec: file.BindingSpec,
+					BindingSpec: entry.BindingSpec,
 					Content:     content,
 				}},
 			})
@@ -164,8 +152,18 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 				t.Fatalf("failure emitted operation outputs: %#v", outputs)
 			}
 			terminalError := invoke.AsInvocationError(terminal)
-			if terminalError.Code != invoke.ErrCodeExecutionFailed {
-				t.Fatalf("native unsuccessful completion mapped to %q", terminalError.Code)
+			wantCode := invoke.ErrCodeExecutionFailed
+			for _, alternative := range scenario.Expected {
+				for _, assertion := range alternative.Assertions {
+					if assertion.Path == "/error/code" {
+						if code, ok := assertion.Equals.(string); ok {
+							wantCode = code
+						}
+					}
+				}
+			}
+			if terminalError.Code != wantCode {
+				t.Fatalf("native unsuccessful completion mapped to %q, want %q", terminalError.Code, wantCode)
 			}
 		})
 	}

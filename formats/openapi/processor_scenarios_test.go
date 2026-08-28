@@ -237,31 +237,49 @@ func TestProcessorScenarios(t *testing.T) {
 }
 
 func TestInvocationFidelityScenarios(t *testing.T) {
-	t.Skip("N10/M7 migrates the invocation-fidelity corpus from the retired OpenAPI token")
 	root := os.Getenv("OB_SPEC_CORPUS")
 	if root == "" {
 		root = filepath.Join("..", "..", "..", "spec", "conformance")
 	}
-	file, err := processorscenarios.LoadPath(
-		filepath.Join(root, "invocation-fidelity", "openapi.json"),
-		"openapi",
-		"openbindings.invocation-fidelity-scenarios@1",
-	)
-	if err != nil {
-		if os.Getenv("OB_CORPUS_REQUIRED") != "" {
-			t.Fatal(err)
-		}
-		t.Skip(err)
-	}
-	for _, scenario := range file.Scenarios {
-		scenario := scenario
+	for _, entry := range loadOpenAPIFidelityScenarios(t, root) {
+		scenario := entry.Scenario
 		t.Run(scenario.ID, func(t *testing.T) {
-			observation := runOpenAPIProcessorScenario(t, scenario, file.BindingSpec)
+			observation := runOpenAPIProcessorScenario(t, scenario, entry.BindingSpec)
 			if _, err := processorscenarios.Match(scenario, observation); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
+}
+
+type openAPIFidelityScenario struct {
+	processorscenarios.Scenario
+	BindingSpec string
+}
+
+func loadOpenAPIFidelityScenarios(t *testing.T, root string) []openAPIFidelityScenario {
+	t.Helper()
+	var scenarios []openAPIFidelityScenario
+	for _, family := range []string{"openapi-3.0", "openapi-3.1"} {
+		file, err := processorscenarios.LoadPath(
+			filepath.Join(root, "invocation-fidelity", family+".json"),
+			family,
+			"openbindings.invocation-fidelity-scenarios@1",
+		)
+		if err != nil {
+			if os.Getenv("OB_CORPUS_REQUIRED") != "" {
+				t.Fatal(err)
+			}
+			t.Skip(err)
+		}
+		for _, scenario := range file.Scenarios {
+			scenarios = append(scenarios, openAPIFidelityScenario{
+				Scenario:    scenario,
+				BindingSpec: file.BindingSpec,
+			})
+		}
+	}
+	return scenarios
 }
 
 func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scenario, bindingSpec string) processorscenarios.Observation {
@@ -293,7 +311,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	if limit, ok := scenario.Given.Runtime["maxDeliveryUnitBytes"].(float64); ok {
 		args.MaxDeliveryUnitBytes = int64(limit)
 	}
-	joined := strings.HasPrefix(scenario.ID, "OAPI-FI-")
+	joined := isOpenAPIFidelityScenario(scenario.ID)
 	processor := scenarioOpenAPIInvoker(client, scenario)
 	var call invoke.Invocation[any, any]
 	if joined {
@@ -410,19 +428,22 @@ func scenarioOpenAPIInvoker(client *http.Client, scenario processorscenarios.Sce
 
 func openAPIFidelityOperationID(scenarioID string) string {
 	return map[string]string{
-		"OAPI-FI-01": "fidelityJobs",
-		"OAPI-FI-02": "fidelityItems",
-		"OAPI-FI-03": "fidelityBinary",
-		"OAPI-FI-04": "fidelitySlow",
-		"OAPI-FI-05": "fidelitySSEFailure",
-		"OAPI-FI-06": "fidelityUploadImage",
-		"OAPI-FI-07": "fidelityCreateItem",
-		"OAPI-FI-08": "fidelityCreateItemWithContext",
-		"OAPI-FI-09": "fidelityImage",
-		"OAPI-FI-10": "fidelityDynamicItem",
-		"OAPI-FI-11": "fidelityWholeJSON",
-		"OAPI-FI-12": "fidelityStoreArchive",
+		"OAPI30-FI-06": "fidelityUploadImage",
+		"OAPI30-FI-10": "fidelityDynamicItem",
+		"OAPI30-FI-12": "fidelityStoreArchive",
+		"OAPI31-FI-01": "fidelityJobs",
+		"OAPI31-FI-02": "fidelityItems",
+		"OAPI31-FI-03": "fidelityBinary",
+		"OAPI31-FI-04": "fidelitySlow",
+		"OAPI31-FI-07": "fidelityCreateItem",
+		"OAPI31-FI-08": "fidelityCreateItemWithContext",
+		"OAPI31-FI-11": "fidelityWholeJSON",
 	}[scenarioID]
+}
+
+func isOpenAPIFidelityScenario(scenarioID string) bool {
+	return strings.HasPrefix(scenarioID, "OAPI30-FI-") ||
+		strings.HasPrefix(scenarioID, "OAPI31-FI-")
 }
 
 func normalizedInvocationError(t *testing.T, terminal *invoke.InvocationError) map[string]any {
