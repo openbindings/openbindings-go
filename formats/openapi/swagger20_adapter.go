@@ -27,18 +27,23 @@ func (e *Runtime) runSwagger20(ctx context.Context, args *invoke.BindingInvocati
 			return &invoke.InvocationError{Code: invoke.ErrCodeSourceLoadFailed}
 		}
 	}
-	server, emptyValueForm, configErr := swagger20ParameterConfiguration(args.Context)
+	configuration, configErr := swagger20Configuration(args.Context)
 	prepared, err := e.engine.PrepareSwagger20(ctx, openapiclient.Swagger20PrepareOptions{
 		Source: openapiclient.Swagger20Source{
 			Location: args.Source.Location,
 			Content:  content,
 		},
-		Ref:                args.Selector,
-		Context:            args.Context,
-		HTTPClient:         e.client,
-		Server:             server,
-		ParameterConverter: e.parameterConvert,
-		EmptyValueForm:     emptyValueForm,
+		Ref:                    args.Selector,
+		Context:                args.Context,
+		HTTPClient:             e.client,
+		Server:                 configuration.server,
+		RequestMedia:           configuration.requestMedia,
+		PropertyMedia:          configuration.propertyMedia,
+		ParameterConverter:     e.parameterConvert,
+		EmptyValueForm:         configuration.emptyValueForm,
+		RequestContentCodings:  e.requestCodings,
+		ResponseContentCodings: e.responseCodings,
+		MaxDeliveryUnitBytes:   args.MaxDeliveryUnitBytes,
 	})
 	if err != nil {
 		return bridgeExecutionError(err)
@@ -99,34 +104,68 @@ func (e *Runtime) runSwagger20(ctx context.Context, args *invoke.BindingInvocati
 	return nil
 }
 
-func swagger20ParameterConfiguration(bindCtx map[string]any) (string, openapiclient.Swagger20EmptyValueForm, error) {
+type swagger20RuntimeConfiguration struct {
+	server         string
+	requestMedia   string
+	propertyMedia  map[string]string
+	emptyValueForm openapiclient.Swagger20EmptyValueForm
+}
+
+func swagger20Configuration(bindCtx map[string]any) (swagger20RuntimeConfiguration, error) {
 	configuration := invoke.ContextConfiguration(bindCtx)
-	var server string
+	var result swagger20RuntimeConfiguration
 	if raw, present := configuration["server"]; present {
 		switch typed := raw.(type) {
 		case string:
-			server = typed
+			result.server = typed
 		case map[string]any:
 			if len(typed) != 1 {
-				return "", "", fmt.Errorf("configuration.server object must contain only baseUrl")
+				return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.server object must contain only baseUrl")
 			}
-			server, _ = typed["baseUrl"].(string)
+			result.server, _ = typed["baseUrl"].(string)
 		default:
-			return "", "", fmt.Errorf("configuration.server must be a complete URL string or baseUrl object")
+			return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.server must be a complete URL string or baseUrl object")
 		}
-		if server == "" {
-			return "", "", fmt.Errorf("configuration.server must contain a nonempty complete URL")
+		if result.server == "" {
+			return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.server must contain a nonempty complete URL")
 		}
 	}
-	var emptyValueForm openapiclient.Swagger20EmptyValueForm
+	if raw, present := configuration["requestMedia"]; present {
+		text, ok := raw.(string)
+		if !ok || text == "" {
+			return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.requestMedia must be a nonempty string")
+		}
+		result.requestMedia = text
+	}
+	if raw, present := configuration["propertyMedia"]; present {
+		values := map[string]any{}
+		switch typed := raw.(type) {
+		case map[string]any:
+			values = typed
+		case map[string]string:
+			for name, value := range typed {
+				values[name] = value
+			}
+		default:
+			return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.propertyMedia must be an object")
+		}
+		result.propertyMedia = make(map[string]string, len(values))
+		for name, rawValue := range values {
+			text, ok := rawValue.(string)
+			if name == "" || !ok || text == "" {
+				return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.propertyMedia values must map nonempty names to nonempty strings")
+			}
+			result.propertyMedia[name] = text
+		}
+	}
 	if raw, present := configuration["emptyValueForm"]; present {
 		text, ok := raw.(string)
 		if !ok || (text != string(openapiclient.Swagger20EmptyValueNameOnly) && text != string(openapiclient.Swagger20EmptyValueEmpty)) {
-			return "", "", fmt.Errorf("configuration.emptyValueForm must be name-only or empty")
+			return swagger20RuntimeConfiguration{}, fmt.Errorf("configuration.emptyValueForm must be name-only or empty")
 		}
-		emptyValueForm = openapiclient.Swagger20EmptyValueForm(text)
+		result.emptyValueForm = openapiclient.Swagger20EmptyValueForm(text)
 	}
-	return server, emptyValueForm, nil
+	return result, nil
 }
 
 func swagger20InputForCallerEnvelope(input any, parameters []openapiclient.Swagger20ParameterInfo) (openapiclient.Swagger20Input, error) {
