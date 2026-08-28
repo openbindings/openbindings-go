@@ -176,10 +176,9 @@ type SecurityHandler = openapiclient.SecurityHandler
 type RuntimeOptions struct {
 	HTTPClient       *http.Client
 	SecurityHandlers map[string]SecurityHandler
-	// ParameterConversion is the OpenAPI 3.0/3.1 bindings' §8.1 configuration
-	// point. It is consulted only for supplied JSON booleans and numbers on
-	// schema/style serialization paths; strings pass unchanged and nil means no
-	// conversion is configured.
+	// ParameterConversion is the OpenAPI bindings' deterministic non-string
+	// scalar conversion point. Swagger 2.0 also consults it for null; strings
+	// pass unchanged and nil means no conversion is configured.
 	ParameterConversion    ParameterConversion
 	RequestContentCodings  map[string]ContentEncoder
 	ResponseContentCodings map[string]ContentDecoder
@@ -725,7 +724,7 @@ func (e *Runtime) invokeBinding(ctx context.Context, args *invoke.BindingInvocat
 
 func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) error {
 	if args != nil && args.Source.BindingSpec == BindingSpecOpenAPI20 {
-		return e.runSwagger20Pass1(ctx, args)
+		return e.runSwagger20(ctx, args, inv)
 	}
 	options, err := enginePrepareOptions(args, e.client, e.securityHandlers, e.parameterConvert, e.requestCodings, e.responseCodings)
 	if err != nil {

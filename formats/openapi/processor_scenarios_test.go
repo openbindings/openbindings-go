@@ -1,9 +1,11 @@
 package openapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -106,6 +108,26 @@ func TestProcessorScenarios(t *testing.T) {
 				"OAPI20-PS-04": true,
 				"OAPI20-PS-05": true,
 				"OAPI20-PS-06": true,
+				"OAPI20-PS-07": true,
+				"OAPI20-PS-08": true,
+				"OAPI20-PS-09": true,
+				"OAPI20-PS-10": true,
+				"OAPI20-PS-11": true,
+				"OAPI20-PS-12": true,
+				"OAPI20-PS-13": true,
+				"OAPI20-PS-14": true,
+				"OAPI20-PS-15": true,
+				"OAPI20-PS-16": true,
+				"OAPI20-PS-17": true,
+				"OAPI20-PS-18": true,
+				"OAPI20-PS-19": true,
+				"OAPI20-PS-20": true,
+				"OAPI20-PS-21": true,
+				"OAPI20-PS-22": true,
+				"OAPI20-PS-23": true,
+				"OAPI20-PS-24": true,
+				"OAPI20-PS-25": true,
+				"OAPI20-PS-26": true,
 			},
 		},
 		{name: "openapi-3.0"},
@@ -113,7 +135,7 @@ func TestProcessorScenarios(t *testing.T) {
 	} {
 		family := family
 		t.Run(family.name, func(t *testing.T) {
-			file, err := processorscenarios.LoadPath(
+			file, err := loadOpenAPIProcessorScenarioFile(
 				filepath.Join(root, "binding-specs", "processor", family.name+".json"),
 				family.name,
 				"openbindings.binding-spec-processor-scenarios@2",
@@ -223,7 +245,9 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 			invoke.WithContext(scenarioContext(scenario)),
 		)
 	} else {
-		call = NewInvokerWithClient(client).InvokeBinding(context.Background(), args)
+		call = NewInvokerWithOptions(RuntimeOptions{
+			HTTPClient: client, ParameterConversion: scenarioParameterConversion(scenario),
+		}).InvokeBinding(context.Background(), args)
 	}
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
 		if err := call.Write(context.Background(), scenario.Given.Invocation["input"]); err != nil {
@@ -344,8 +368,47 @@ func numberAsInt(value any) (int, bool) {
 		return number, true
 	case float64:
 		return int(number), number == float64(int(number))
+	case json.Number:
+		integer, err := number.Int64()
+		return int(integer), err == nil && int64(int(integer)) == integer
 	default:
 		return 0, false
+	}
+}
+
+func loadOpenAPIProcessorScenarioFile(path, family, format string) (*processorscenarios.File, error) {
+	file, err := processorscenarios.LoadPath(path, family, format)
+	if err != nil || family != "openapi-2.0" {
+		return file, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var exact processorscenarios.File
+	if err := decoder.Decode(&exact); err != nil {
+		return nil, err
+	}
+	return &exact, nil
+}
+
+func scenarioParameterConversion(scenario processorscenarios.Scenario) ParameterConversion {
+	raw, ok := scenario.Given.Configuration["parameterConversion"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return func(value any) (string, error) {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return "", err
+		}
+		converted, present := raw[string(encoded)].(string)
+		if !present {
+			return "", fmt.Errorf("parameterConversion has no result for %s", encoded)
+		}
+		return converted, nil
 	}
 }
 
