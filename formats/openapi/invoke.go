@@ -1,19 +1,16 @@
 package openapi
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"mime"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/openbindings/openbindings-go/invoke"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	openapiclient "github.com/openbindings/openapi-client/go"
 )
 
 func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindingSpec string, bindCtx map[string]any) (*invoke.ContextRequiredDetails, error) {
@@ -143,99 +140,37 @@ func containsEquivalentContextRequirement(requirements []invoke.ContextRequireme
 	return false
 }
 
-// BuiltinClassify is the openapi builtin result classifier (OAPI-P-08):
+// BuiltinClassify maps openbindings.openapi-3.0@1 §9.5 and
+// openbindings.openapi-3.1@1 §9.5 into the SDK classifier vocabulary:
 // success iff the final HTTP status is 2xx (declared responses refine
 // application failure DATA only, never classification).
 func BuiltinClassify(_ invoke.InvokeSite, raw invoke.RawResult) (bool, error) {
 	return raw.Status != nil && *raw.Status >= 200 && *raw.Status < 300, nil
 }
 
-// decodeByContentTypeFor returns the builtin decoder implementing the header
-// rule (OAPI-P-07) for the exact binding family token in scope: strict JSON
+// decodeByContentTypeFor adapts the client-owned decoder specified by
+// openbindings.openapi-3.0@1 §9.5 and openbindings.openapi-3.1@1 §9.5: strict JSON
 // for application/json and +json suffixes (a declared-JSON body that fails to
 // parse is a lying server — a loud ErrCodeResponseError, never a silent
 // string); the text lane otherwise — bytes become a string per the header's
 // charset parameter, defaulting to UTF-8, with invalid sequences a loud decode
 // error. An empty body (204 included) yields null.
 func decodeByContentTypeFor(contentType, bindingSpec string) invoke.OutputDecoder {
-	isJSON := isJSONContentTypeFor(contentType, bindingSpec)
 	return func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
-		if len(raw.Body) == 0 {
-			return nil, nil
-		}
-		if isJSON {
-			var parsed any
-			if err := json.Unmarshal(raw.Body, &parsed); err != nil {
-				return nil, &invoke.InvocationError{
-					Code: invoke.ErrCodeResponseError,
-				}
-			}
-			return parsed, nil
-		}
 		return decodeTextLaneFor(contentType, raw.Body, bindingSpec)
 	}
 }
 
-// decodeTextLaneFor decodes response bytes as text per the Content-Type
-// header's charset parameter, defaulting to UTF-8 (OAPI-P-07). Invalid
-// sequences, and charsets this implementation cannot decode, are loud
-// decode errors — a consumer needing another charset overrides at the
-// decode configuration point.
+// decodeTextLaneFor retains the adapter's existing internal call shape while
+// delegating the OpenAPI response lane to the standalone client.
 func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any, error) {
-	charset := "utf-8"
-	if contentType != "" {
-		if hasMediaFidelity(bindingSpec) {
-			if parsed, err := parseRevision3MediaType(contentType); err == nil {
-				if cs, present := parsed.params["charset"]; present {
-					charset = cs
-				}
-			}
-		} else if _, params, err := mime.ParseMediaType(contentType); err == nil {
-			if cs := params["charset"]; cs != "" {
-				charset = cs
-			}
-		}
-	}
-	switch strings.ToLower(charset) {
-	case "utf-8", "utf8":
-		if !utf8.Valid(body) {
-			return nil, &invoke.InvocationError{
-				Code: invoke.ErrCodeResponseError,
-			}
-		}
-		return string(body), nil
-	case "us-ascii", "ascii":
-		for i := 0; i < len(body); i++ {
-			if body[i] >= 0x80 {
-				return nil, &invoke.InvocationError{
-					Code: invoke.ErrCodeResponseError,
-				}
-			}
-		}
-		return string(body), nil
-	case "iso-8859-1", "iso8859-1", "latin-1", "latin1":
-		runes := make([]rune, len(body))
-		for i, b := range body {
-			runes[i] = rune(b)
-		}
-		return string(runes), nil
-	default:
+	value, err := openapiclient.DecodeResponseBody(contentType, body)
+	if err != nil {
 		return nil, &invoke.InvocationError{
 			Code: invoke.ErrCodeResponseError,
 		}
 	}
-}
-
-// isJSONContentTypeFor reports whether a Content-Type header declares a JSON
-// body for the exact binding family token in scope: application/json or any
-// +json structured-suffix type. Absent or unparseable headers are NOT JSON
-// (the text lane) — never sniffed.
-func isJSONContentTypeFor(contentType, bindingSpec string) bool {
-	if hasMediaFidelity(bindingSpec) {
-		parsed, err := parseRevision3MediaType(contentType)
-		return err == nil && isJSONMediaType(parsed.base)
-	}
-	return isJSONMediaType(normalizeMediaType(contentType))
+	return value, nil
 }
 
 // requiredContext derives the operation's authentication requirements from
@@ -471,7 +406,7 @@ func viableSecurityPlansWithContext(doc *openapi3.T, op *openapi3.Operation, bin
 	}
 	viable := make([]securityPlan, 0, len(plans))
 	for _, plan := range plans {
-		if err := checkCredentialCollisions(credentialDestinations(plan), params, nil); err == nil {
+		if err := securityPlanCarriageError(plan, params); err == nil {
 			viable = append(viable, plan)
 		}
 	}
@@ -513,7 +448,7 @@ func electSecurityAlternative(doc *openapi3.T, op *openapi3.Operation, bindCtx m
 		if plan.authoredIndex != selected {
 			continue
 		}
-		if err := checkCredentialCollisions(credentialDestinations(plan), params, nil); err == nil {
+		if err := securityPlanCarriageError(plan, params); err == nil {
 			selectedPlans = append(selectedPlans, plan)
 		}
 	}
@@ -604,7 +539,7 @@ func viableSecurityPlansAtScope(doc *openapi3.T, op *openapi3.Operation, bindCtx
 	plans := securityPlansWithContext(doc, op, baseURL, scoped)
 	viable := make([]securityPlan, 0, len(plans))
 	for _, plan := range plans {
-		if plan.authoredIndex == authoredIndex && checkCredentialCollisions(credentialDestinations(plan), params, nil) == nil {
+		if plan.authoredIndex == authoredIndex && securityPlanCarriageError(plan, params) == nil {
 			viable = append(viable, plan)
 		}
 	}
@@ -688,100 +623,6 @@ func securityPlanHasRuntimeHandler(plan securityPlan, handlers map[string]Securi
 	return false
 }
 
-type credentialWirePolicy struct {
-	query []credentialPlacement
-}
-
-func validateSelectedCredentials(plans []securityPlan, bindCtx map[string]any) (*credentialWirePolicy, error) {
-	for _, plan := range plans {
-		if len(plan.context.Requirements) > 0 && !invoke.ContextSatisfies(bindCtx, &invoke.ContextRequiredDetails{Alternatives: []invoke.ContextAlternative{plan.context}}) {
-			continue
-		}
-		placements := credentialValues(plan, bindCtx)
-		policy := &credentialWirePolicy{}
-		for _, named := range plan.schemes {
-			scheme := named.scheme
-			switch scheme.Type {
-			case "http":
-				switch strings.ToLower(scheme.Scheme) {
-				case "basic":
-					user, password, ok := invoke.ContextBasicAuthFor(bindCtx, named.name)
-					if ok {
-						if strings.Contains(user, ":") || !validBasicCredentialText(user) || !validBasicCredentialText(password) {
-							return nil, fmt.Errorf("basic credential %q violates RFC 7617 user-id or character-encoding constraints", named.name)
-						}
-					}
-				case "bearer":
-					if token := invoke.ContextBearerTokenFor(bindCtx, named.name); token != "" && !validBearerToken(token) {
-						return nil, fmt.Errorf("bearer credential %q is not an RFC 6750 b64token", named.name)
-					}
-				}
-			case "oauth2", "openIdConnect":
-				token := invoke.ContextAccessTokenFor(bindCtx, named.name)
-				if token == "" {
-					token = invoke.ContextBearerToken(bindCtx)
-				}
-				if token != "" && !validBearerToken(token) {
-					return nil, fmt.Errorf("access token for %q is not an RFC 6750 b64token", named.name)
-				}
-			}
-		}
-		for _, placement := range placements {
-			switch placement.channel {
-			case "cookie":
-				if !validRFC6265CookieValue(placement.value) {
-					return nil, fmt.Errorf("cookie credential %q cannot be carried as an RFC 6265 cookie-value", placement.name)
-				}
-			case "query":
-				policy.query = append(policy.query, placement)
-			}
-		}
-		return policy, nil
-	}
-	return &credentialWirePolicy{}, nil
-}
-
-func validBasicCredentialText(value string) bool {
-	for index := 0; index < len(value); index++ {
-		if value[index] < 0x20 || value[index] > 0x7e {
-			return false
-		}
-	}
-	return true
-}
-
-func validBearerToken(value string) bool {
-	if value == "" {
-		return false
-	}
-	padding := false
-	payload := false
-	for _, char := range value {
-		if char == '=' {
-			padding = true
-			continue
-		}
-		if padding {
-			return false
-		}
-		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || strings.ContainsRune("-._~+/", char)) {
-			return false
-		}
-		payload = true
-	}
-	return payload
-}
-
-func validRFC6265CookieValue(value string) bool {
-	for index := 0; index < len(value); index++ {
-		char := value[index]
-		if char != 0x21 && !(char >= 0x23 && char <= 0x2b) && !(char >= 0x2d && char <= 0x3a) && !(char >= 0x3c && char <= 0x5b) && !(char >= 0x5d && char <= 0x7e) {
-			return false
-		}
-	}
-	return true
-}
-
 // securityAlternativesCollision reports an ownership conflict only when every
 // complete runtime alternative is unusable. A later channel-safe alternative
 // remains selectable and is the only one surfaced during context negotiation.
@@ -792,7 +633,7 @@ func securityAlternativesCollision(doc *openapi3.T, op *openapi3.Operation, base
 	}
 	var first error
 	for _, plan := range plans {
-		err := checkCredentialCollisions(credentialDestinations(plan), params, nil)
+		err := securityPlanCarriageError(plan, params)
 		if err == nil {
 			return nil
 		}
@@ -801,6 +642,16 @@ func securityAlternativesCollision(doc *openapi3.T, op *openapi3.Operation, base
 		}
 	}
 	return first
+}
+
+func securityPlanCarriageError(plan securityPlan, parameters openapi3.Parameters) error {
+	requirement := openapi3.SecurityRequirement{}
+	schemes := openapi3.SecuritySchemes{}
+	for _, named := range plan.schemes {
+		requirement[named.name] = nil
+		schemes[named.name] = &openapi3.SecuritySchemeRef{Value: named.scheme}
+	}
+	return openapiclient.ValidateSecurityRequirementCarriage(requirement, schemes, parameters)
 }
 
 // schemeToRequirement maps an OpenAPI security scheme to a context
@@ -1033,209 +884,4 @@ func encodePathValue(s string) string {
 		}
 	}
 	return b.String()
-}
-
-// ---------------------------------------------------------------------------
-// Credentials and channel assembly (openbindings.openapi-3.0@1 §11;
-// openbindings.openapi-3.1@1 §11).
-// ---------------------------------------------------------------------------
-
-// credentialPlacement is one credential's wire application: which channel
-// it rides (header, query, or cookie) under which name.
-type credentialPlacement struct {
-	channel string
-	name    string
-	value   string
-}
-
-// selectCredentialPlacements chooses one complete, satisfiable OpenAPI
-// Security Requirement Object in artifact order. Security Requirement Objects
-// are alternatives (OR); schemes inside one object are conjunctive (AND).
-// Consequently credentials are never pooled across alternatives. A
-// collision makes that alternative unusable but does not prevent selecting a
-// later complete alternative. No declared security means no credential wire
-// application, even when unrelated credentials exist in context.
-func selectCredentialPlacements(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters, populated map[string]map[string]bool) ([]credentialPlacement, error) {
-	for _, plan := range viableSecurityPlans(doc, op, baseURL, params) {
-		if len(plan.context.Requirements) == 0 {
-			return nil, nil // this complete alternative explicitly allows anonymous access
-		}
-		if !invoke.ContextSatisfies(bindCtx, &invoke.ContextRequiredDetails{
-			Alternatives: []invoke.ContextAlternative{plan.context},
-		}) {
-			continue
-		}
-		placements := credentialValues(plan, bindCtx)
-		if err := checkCredentialCollisions(placements, params, populated); err != nil {
-			return nil, err
-		}
-		return placements, nil
-	}
-	// requiredContext prevents dispatch when no alternative is satisfied. This
-	// path is therefore defensive for invalid or extension-only artifacts; it
-	// must still not leak unrelated credentials onto the wire.
-	return nil, nil
-}
-
-// credentialValues applies every scheme in exactly one selected security
-// plan. It deliberately retains duplicate wire destinations so collision
-// checks can refuse an impossible AND rather than silently dropping one.
-func credentialValues(plan securityPlan, bindCtx map[string]any) []credentialPlacement {
-	placements := make([]credentialPlacement, 0, len(plan.schemes))
-	for _, named := range plan.schemes {
-		s := named.scheme
-		switch s.Type {
-		case "apiKey":
-			val := invoke.ContextAPIKeyFor(bindCtx, named.name)
-			if val == "" {
-				continue
-			}
-			switch s.In {
-			case "header", "query", "cookie":
-				placements = append(placements, credentialPlacement{channel: s.In, name: s.Name, value: val})
-			}
-		case "http":
-			switch strings.ToLower(s.Scheme) {
-			case "bearer":
-				if token := invoke.ContextBearerTokenFor(bindCtx, named.name); token != "" {
-					placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Bearer " + token})
-				}
-			case "basic":
-				if u, p, ok := invoke.ContextBasicAuthFor(bindCtx, named.name); ok {
-					placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Basic " + base64.StdEncoding.EncodeToString([]byte(u+":"+p))})
-				}
-			}
-		case "oauth2", "openIdConnect":
-			token := invoke.ContextAccessTokenFor(bindCtx, named.name)
-			if token == "" {
-				token = invoke.ContextBearerToken(bindCtx)
-			}
-			if token != "" {
-				placements = append(placements, credentialPlacement{channel: "header", name: "Authorization", value: "Bearer " + token})
-			}
-		}
-	}
-	return placements
-}
-
-// credentialDestinations is the artifact-only wire footprint of one security
-// plan. It lets context negotiation discard alternatives that collide under
-// openbindings.openapi-3.0@1 §11 / openbindings.openapi-3.1@1 §11
-// before credentials exist, so an unusable alternative is never challenged.
-func credentialDestinations(plan securityPlan) []credentialPlacement {
-	placements := make([]credentialPlacement, 0, len(plan.schemes))
-	for _, named := range plan.schemes {
-		s := named.scheme
-		switch s.Type {
-		case "apiKey":
-			switch s.In {
-			case "header", "query", "cookie":
-				if s.Name != "" {
-					placements = append(placements, credentialPlacement{channel: s.In, name: s.Name})
-				}
-			}
-		case "http":
-			switch strings.ToLower(s.Scheme) {
-			case "basic", "bearer":
-				placements = append(placements, credentialPlacement{channel: "header", name: "Authorization"})
-			}
-		case "oauth2", "openIdConnect":
-			placements = append(placements, credentialPlacement{channel: "header", name: "Authorization"})
-		}
-	}
-	return placements
-}
-
-// checkCredentialCollisions enforces openbindings.openapi-3.0@1 §11 /
-// openbindings.openapi-3.1@1 §11: a name collision
-// between a credential and a caller-populated declared parameter on the same
-// channel is refused before dispatch — loud, never a silent overwrite in
-// either direction. Header names compare case-insensitively.
-func checkCredentialCollisions(placements []credentialPlacement, params openapi3.Parameters, populated map[string]map[string]bool) error {
-	declared := map[string]map[string]bool{"header": {}, "query": {}, "cookie": {}, "path": {}}
-	for _, ref := range params {
-		if ref == nil || ref.Value == nil {
-			continue
-		}
-		name := ref.Value.Name
-		if ref.Value.In == openapi3.ParameterInHeader {
-			name = http.CanonicalHeaderKey(name)
-		}
-		declared[ref.Value.In][name] = true
-	}
-	ownedHeaders := map[string]bool{"Host": true, "Content-Length": true, "Content-Type": true, "Accept": true}
-	hasRawCookieOwner := populated != nil && populated[openapi3.ParameterInHeader]["Cookie"]
-	hasStructuredCookieOwner := populated != nil && len(populated[openapi3.ParameterInCookie]) > 0
-	for _, placement := range placements {
-		if placement.channel == "header" && http.CanonicalHeaderKey(placement.name) == "Cookie" {
-			hasRawCookieOwner = true
-		}
-		if placement.channel == "cookie" {
-			hasStructuredCookieOwner = true
-		}
-	}
-	if hasRawCookieOwner && hasStructuredCookieOwner {
-		return fmt.Errorf("raw Cookie header source collides with structured cookie assembly (OAPI-P-10)")
-	}
-	seen := map[string]bool{}
-	for _, pl := range placements {
-		name := pl.name
-		if pl.channel == "header" {
-			name = http.CanonicalHeaderKey(name)
-			if ownedHeaders[name] {
-				return fmt.Errorf("credential %q collides with processor-owned request field %s (OAPI-P-10)", pl.name, name)
-			}
-		}
-		if declared[pl.channel][name] || populated[pl.channel][name] {
-			return fmt.Errorf("credential %q collides with an effective %s parameter of the same name (OAPI-P-10: refused before dispatch, never a silent overwrite in either direction)", pl.name, pl.channel)
-		}
-		key := pl.channel + "\x00" + name
-		if seen[key] {
-			return fmt.Errorf("two credentials collide at %s %q (OAPI-P-10)", pl.channel, pl.name)
-		}
-		seen[key] = true
-	}
-	return nil
-}
-
-// contextChannelCollision keeps the context transport-hint channel from
-// overwriting the structured Cookie assembly. Cookie is one HTTP field with
-// two intentionally distinct caller surfaces (`headers.Cookie` and
-// `cookies`); ambiguous ownership is refused before dispatch.
-func contextChannelCollision(bindCtx map[string]any, params openapi3.Parameters, placements []credentialPlacement) error {
-	rawContextCookie := false
-	for name := range invoke.ContextHeaders(bindCtx) {
-		if http.CanonicalHeaderKey(name) == "Cookie" {
-			rawContextCookie = true
-			break
-		}
-	}
-	hasRawCookieOwner := false
-	hasStructuredCookie := len(invoke.ContextCookies(bindCtx)) > 0
-	for _, ref := range params {
-		if ref == nil || ref.Value == nil {
-			continue
-		}
-		if ref.Value.In == openapi3.ParameterInHeader && http.CanonicalHeaderKey(ref.Value.Name) == "Cookie" {
-			hasRawCookieOwner = true
-		}
-		if ref.Value.In == openapi3.ParameterInCookie {
-			hasStructuredCookie = true
-		}
-	}
-	for _, placement := range placements {
-		if placement.channel == "header" && http.CanonicalHeaderKey(placement.name) == "Cookie" {
-			hasRawCookieOwner = true
-		}
-		if placement.channel == "cookie" {
-			hasStructuredCookie = true
-		}
-	}
-	if rawContextCookie && (hasRawCookieOwner || hasStructuredCookie) {
-		return fmt.Errorf("raw Cookie context header collides with another raw or structured cookie source (OAPI-P-10: refused before dispatch, never a silent overwrite)")
-	}
-	if hasRawCookieOwner && len(invoke.ContextCookies(bindCtx)) > 0 {
-		return fmt.Errorf("raw Cookie header source collides with structured context cookies (OAPI-P-10: refused before dispatch, never a silent overwrite)")
-	}
-	return nil
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/openbindings/openbindings-go/synthesize"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	openapiclient "github.com/openbindings/openapi-client/go"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -130,7 +131,7 @@ func convertDocToInterfaceWithOverlay(doc *openapi3.T, location, bindingSpec str
 			usedKeys[opKey] = true
 
 			params := effectiveParameters(pathItem, op)
-			if _, serverErr := eligibleServers(effectiveServers(doc, pathItem, op), doc.OpenAPI, location); serverErr != nil {
+			if _, serverErr := openapiclient.EffectiveServerSet(doc, pathItem, op, location); serverErr != nil {
 				reason := serverErr.Error()
 				if onUnrealizable != nil {
 					onUnrealizable(unrealizableTarget{
