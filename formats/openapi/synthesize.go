@@ -1065,8 +1065,8 @@ func cloneURL(u *url.URL) *url.URL {
 }
 
 // checkAcceptedOpenAPIVersion applies the union load gate used by the shared
-// typed loader. Binding dispatch immediately follows it with the token-local
-// gate below; no caller-visible path may use this union as a support claim.
+// 3.0/3.1 synthesis loader. The 3.2 request lane classifies through the
+// client-owned Artifact loader before reference resolution instead.
 func checkAcceptedOpenAPIVersion(doc *openapi3.T) error {
 	v := doc.OpenAPI
 	if v == "" {
@@ -1086,6 +1086,8 @@ func bindingSpecForOpenAPIEdition(edition string) string {
 		return BindingSpecOpenAPI30
 	case openAPIBindingSpecRegistry[BindingSpecOpenAPI31].editions[edition]:
 		return BindingSpecOpenAPI31
+	case openAPIBindingSpecRegistry[BindingSpecOpenAPI32].editions[edition]:
+		return BindingSpecOpenAPI32
 	default:
 		return ""
 	}
@@ -1093,7 +1095,7 @@ func bindingSpecForOpenAPIEdition(edition string) string {
 
 func checkAcceptedOpenAPIVersionForBindingSpec(doc *openapi3.T, bindingSpec string) error {
 	registration, registered := openAPIBindingSpecRegistry[bindingSpec]
-	if !registered || !registration.implemented {
+	if !registered || !registration.requestImplemented {
 		return fmt.Errorf("%s: binding specification %q is not implemented", ErrCodeUnsupportedBindingSpec, bindingSpec)
 	}
 	edition := ""

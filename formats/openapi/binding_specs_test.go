@@ -13,27 +13,36 @@ import (
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
-func TestRegisteredOpenAPIFamiliesIncludeUnimplementedTokens(t *testing.T) {
-	want := map[string]bool{
+func TestRegisteredOpenAPIFamilyCapabilities(t *testing.T) {
+	wantRequest := map[string]bool{
 		BindingSpecOpenAPI20: false,
 		BindingSpecOpenAPI30: true,
 		BindingSpecOpenAPI31: true,
-		BindingSpecOpenAPI32: false,
+		BindingSpecOpenAPI32: true,
 	}
-	if len(openAPIBindingSpecRegistry) != len(want) {
-		t.Fatalf("registry size = %d, want %d", len(openAPIBindingSpecRegistry), len(want))
+	if len(openAPIBindingSpecRegistry) != len(wantRequest) {
+		t.Fatalf("registry size = %d, want %d", len(openAPIBindingSpecRegistry), len(wantRequest))
 	}
-	for token, implemented := range want {
+	for token, implemented := range wantRequest {
 		registration, present := openAPIBindingSpecRegistry[token]
-		if !present || registration.implemented != implemented {
-			t.Errorf("registration %q = %#v, want implemented=%v", token, registration, implemented)
+		if !present || registration.requestImplemented != implemented {
+			t.Errorf("registration %q = %#v, want requestImplemented=%v", token, registration, implemented)
 		}
+	}
+	if openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
+		t.Fatal("OpenAPI 3.2 must remain response-incomplete and unwarranted until M6")
+	}
+	if !usesRoutedInput(BindingSpecOpenAPI32) || !hasMediaFidelity(BindingSpecOpenAPI32) {
+		t.Fatal("OpenAPI 3.2 request capabilities must use the routed 3.1-trunk substrate")
+	}
+	if hasResponseFidelity(BindingSpecOpenAPI32) {
+		t.Fatal("OpenAPI 3.2 response-divergent cells must remain behind the M6 seam")
 	}
 	wantEditions := map[string]map[string]bool{
 		BindingSpecOpenAPI20: nil,
 		BindingSpecOpenAPI30: {"3.0.0": true, "3.0.1": true, "3.0.2": true, "3.0.3": true, "3.0.4": true},
 		BindingSpecOpenAPI31: {"3.1.0": true, "3.1.1": true, "3.1.2": true},
-		BindingSpecOpenAPI32: nil,
+		BindingSpecOpenAPI32: {"3.2.0": true},
 	}
 	for token, editions := range wantEditions {
 		if got := openAPIBindingSpecRegistry[token].editions; !reflect.DeepEqual(got, editions) {
@@ -42,8 +51,19 @@ func TestRegisteredOpenAPIFamiliesIncludeUnimplementedTokens(t *testing.T) {
 	}
 }
 
+func TestOpenAPI32RequestImplementationRemainsUnwarrantedUntilM6(t *testing.T) {
+	for _, info := range openAPIBindingSpecInfos() {
+		if info.BindingSpec == BindingSpecOpenAPI32 {
+			t.Fatal("openbindings.openapi-3.2@1 was warranted before M6 completed its response seams")
+		}
+	}
+	if len(openAPI32M6ResponseSeams) != 5 {
+		t.Fatalf("named M6 response seams = %d, want 5", len(openAPI32M6ResponseSeams))
+	}
+}
+
 func TestUnimplementedOpenAPIFamiliesRefuseBeforeArtifactParsing(t *testing.T) {
-	for _, token := range []string{BindingSpecOpenAPI20, BindingSpecOpenAPI32} {
+	for _, token := range []string{BindingSpecOpenAPI20} {
 		t.Run(token, func(t *testing.T) {
 			args := &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: token, Content: openbindings.TextContent("not an OpenAPI artifact")},

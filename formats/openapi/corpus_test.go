@@ -23,6 +23,8 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	openapiclient "github.com/openbindings/openapi-client/go"
+	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func bindingSpecCorpusDir(t *testing.T, family string) string {
@@ -81,7 +83,7 @@ func TestBindingSpecCorpus(t *testing.T) {
 	for _, family := range []struct {
 		name        string
 		bindingSpec string
-	}{{"openapi-3.0", BindingSpecOpenAPI30}, {"openapi-3.1", BindingSpecOpenAPI31}} {
+	}{{"openapi-3.0", BindingSpecOpenAPI30}, {"openapi-3.1", BindingSpecOpenAPI31}, {"openapi-3.2", BindingSpecOpenAPI32}} {
 		family := family
 		t.Run(family.name, func(t *testing.T) {
 			dir := bindingSpecCorpusDir(t, family.name)
@@ -149,12 +151,28 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 		// must be the parsed document object or its source text. Fixture
 		// artifacts are self-contained, so the load performs no I/O.
 		var doc *openapi3.T
+		var artifact *openapiclient.Artifact
 		if src.Content != nil {
-			d, err := loadDocumentForBindingSpec("", src.Content, bindingSpec)
-			if err != nil {
-				return err
+			if bindingSpec == BindingSpecOpenAPI32 {
+				data, err := openbindings.ContentToBytes(src.Content)
+				if err != nil {
+					return err
+				}
+				artifact, err = openapiclient.LoadArtifact(t.Context(), openapiclient.Source{Content: data}, openapiclient.ArtifactLoadOptions{})
+				if err != nil {
+					return err
+				}
+				if artifact.Edition != openapiclient.EditionOpenAPI320 {
+					return fmt.Errorf("document edition %q is not admitted by binding specification %q", artifact.Edition, bindingSpec)
+				}
+				doc = artifact.Document
+			} else {
+				d, err := loadDocumentForBindingSpec("", src.Content, bindingSpec)
+				if err != nil {
+					return err
+				}
+				doc = d
 			}
-			doc = d
 		}
 
 		// Location lane (OAPI-D-02): grammar only, never dereferenced.
@@ -176,6 +194,18 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 			selector := ""
 			if b.Selector != nil {
 				selector = *b.Selector
+			}
+			if bindingSpec == BindingSpecOpenAPI32 {
+				if _, err := openapiclient.ParseOperationReference(selector, openapiclient.EditionOpenAPI320); err != nil {
+					return err
+				}
+				if artifact == nil {
+					continue
+				}
+				if _, err := artifact.ResolveOperation(selector); err != nil {
+					return err
+				}
+				continue
 			}
 			pathTemplate, method, err := parseSelector(selector)
 			if err != nil {

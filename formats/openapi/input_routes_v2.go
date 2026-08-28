@@ -146,7 +146,7 @@ func (r abstractInputRoutes) hasInput() bool {
 }
 
 func usesRoutedInput(bindingSpec string) bool {
-	return isImplementedOpenAPIBindingSpec(bindingSpec)
+	return hasRoutedInputs(bindingSpec)
 }
 
 func qualifiedParameterMode(params openapi3.Parameters) bool {
