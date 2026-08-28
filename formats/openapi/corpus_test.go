@@ -15,6 +15,7 @@ package openapi
 // when absent.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,7 +85,12 @@ func TestBindingSpecCorpus(t *testing.T) {
 	for _, family := range []struct {
 		name        string
 		bindingSpec string
-	}{{"openapi-3.0", BindingSpecOpenAPI30}, {"openapi-3.1", BindingSpecOpenAPI31}, {"openapi-3.2", BindingSpecOpenAPI32}} {
+	}{
+		{"openapi-2.0", BindingSpecOpenAPI20},
+		{"openapi-3.0", BindingSpecOpenAPI30},
+		{"openapi-3.1", BindingSpecOpenAPI31},
+		{"openapi-3.2", BindingSpecOpenAPI32},
+	} {
 		family := family
 		t.Run(family.name, func(t *testing.T) {
 			dir := bindingSpecCorpusDir(t, family.name)
@@ -153,8 +159,20 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 		// artifacts are self-contained, so the load performs no I/O.
 		var doc *openapi3.T
 		var artifact *openapiclient.Artifact
+		var swagger20 *openapiclient.Swagger20Document
 		if src.Content != nil {
-			if bindingSpec == BindingSpecOpenAPI32 {
+			switch bindingSpec {
+			case BindingSpecOpenAPI20:
+				content, err := openbindings.ContentToBytes(src.Content)
+				if err != nil {
+					return err
+				}
+				loaded, err := openapiclient.LoadSwagger20(context.Background(), openapiclient.Swagger20Source{Content: content}, openapiclient.ClientOptions{})
+				if err != nil {
+					return err
+				}
+				swagger20 = loaded.Document()
+			case BindingSpecOpenAPI32:
 				data, err := openbindings.ContentToBytes(src.Content)
 				if err != nil {
 					return err
@@ -167,7 +185,7 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 					return fmt.Errorf("document edition %q is not admitted by binding specification %q", artifact.Edition, bindingSpec)
 				}
 				doc = artifact.Document
-			} else {
+			default:
 				d, err := loadDocumentForBindingSpec("", src.Content, bindingSpec)
 				if err != nil {
 					return err
@@ -196,7 +214,21 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 			if b.Selector != nil {
 				selector = *b.Selector
 			}
-			if bindingSpec == BindingSpecOpenAPI32 {
+			switch bindingSpec {
+			case BindingSpecOpenAPI20:
+				if err := openapiclient.ValidateSwagger20Selector(selector); err != nil {
+					return err
+				}
+				if swagger20 == nil {
+					continue // location-only source: grammar-checked alone
+				}
+				if _, err := openapiclient.NewEngine(nil).PrepareSwagger20(context.Background(), openapiclient.Swagger20PrepareOptions{
+					Source: openapiclient.Swagger20Source{Document: swagger20}, Ref: selector,
+				}); err != nil {
+					return err
+				}
+				continue
+			case BindingSpecOpenAPI32:
 				if _, err := openapiclient.ParseOperationReference(selector, openapiclient.EditionOpenAPI320); err != nil {
 					return err
 				}

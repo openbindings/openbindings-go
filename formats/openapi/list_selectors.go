@@ -13,6 +13,9 @@ import (
 // InspectSource returns all bindable targets (path+method combinations) from
 // an OpenAPI document. Each selector is a JSON Pointer into the paths object.
 func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
+	if source != nil && source.BindingSpec == BindingSpecOpenAPI20 {
+		return c.inspectSwagger20Source(ctx, source)
+	}
 	// Authoring convenience: a bare filesystem path loads as its file://
 	// spelling (the strict loader refuses bare paths, OAPI-D-02).
 	loadLocation, err := absolutizeArtifactLocation(source.Location)
@@ -56,6 +59,27 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	}
 	sort.Slice(targets, func(i, j int) bool { return targets[i].Selector < targets[j].Selector })
 
+	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
+}
+
+func (c *Synthesizer) inspectSwagger20Source(ctx context.Context, source *openbindings.Source) (*synthesize.SourceInspection, error) {
+	in := &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
+		BindingSpec: source.BindingSpec,
+		Location:    source.Location,
+		Content:     source.Content,
+	}}}
+	iface, _, _, err := c.synthesizeSwagger20(ctx, in, true)
+	if err != nil {
+		return nil, err
+	}
+	var targets []synthesize.BindableTarget
+	for _, binding := range iface.Bindings {
+		operation := iface.Operations[binding.Operation]
+		targets = append(targets, synthesize.BindableTarget{
+			Selector: binding.Selector, OperationKey: binding.Operation, Operation: &operation,
+		})
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Selector < targets[j].Selector })
 	return &synthesize.SourceInspection{Targets: targets, Exhaustive: true}, nil
 }
 

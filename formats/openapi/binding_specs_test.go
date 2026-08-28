@@ -15,7 +15,7 @@ import (
 
 func TestRegisteredOpenAPIFamilyCapabilities(t *testing.T) {
 	wantRequest := map[string]bool{
-		BindingSpecOpenAPI20: false,
+		BindingSpecOpenAPI20: true,
 		BindingSpecOpenAPI30: true,
 		BindingSpecOpenAPI31: true,
 		BindingSpecOpenAPI32: true,
@@ -39,7 +39,7 @@ func TestRegisteredOpenAPIFamilyCapabilities(t *testing.T) {
 		t.Fatal("OpenAPI 3.2 response-divergent cells must remain behind the M6 seam")
 	}
 	wantEditions := map[string]map[string]bool{
-		BindingSpecOpenAPI20: nil,
+		BindingSpecOpenAPI20: {"2.0": true},
 		BindingSpecOpenAPI30: {"3.0.0": true, "3.0.1": true, "3.0.2": true, "3.0.3": true, "3.0.4": true},
 		BindingSpecOpenAPI31: {"3.1.0": true, "3.1.1": true, "3.1.2": true},
 		BindingSpecOpenAPI32: {"3.2.0": true},
@@ -52,42 +52,20 @@ func TestRegisteredOpenAPIFamilyCapabilities(t *testing.T) {
 }
 
 func TestOpenAPI32RequestImplementationRemainsUnwarrantedUntilM6(t *testing.T) {
+	seen20 := false
 	for _, info := range openAPIBindingSpecInfos() {
+		if info.BindingSpec == BindingSpecOpenAPI20 {
+			seen20 = true
+		}
 		if info.BindingSpec == BindingSpecOpenAPI32 {
 			t.Fatal("openbindings.openapi-3.2@1 was warranted before M6 completed its response seams")
 		}
 	}
+	if !seen20 {
+		t.Fatal("openbindings.openapi-2.0@1 must remain warranted after the M4 merge")
+	}
 	if len(openAPI32M6ResponseSeams) != 5 {
 		t.Fatalf("named M6 response seams = %d, want 5", len(openAPI32M6ResponseSeams))
-	}
-}
-
-func TestUnimplementedOpenAPIFamiliesRefuseBeforeArtifactParsing(t *testing.T) {
-	for _, token := range []string{BindingSpecOpenAPI20} {
-		t.Run(token, func(t *testing.T) {
-			args := &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: token, Content: openbindings.TextContent("not an OpenAPI artifact")},
-				Selector: "#/paths/~1x/get",
-			}
-			call := NewInvoker().InvokeBinding(context.Background(), args)
-			_, invocationErr := driveSingle(t, call, nil)
-			if invocationErr == nil || invocationErr.Code != ErrCodeUnsupportedBindingSpec {
-				t.Fatalf("invocation error = %#v, want %s", invocationErr, ErrCodeUnsupportedBindingSpec)
-			}
-
-			_, synthesisErr := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-				Sources: []synthesize.SynthesizeSource{{BindingSpec: token, Content: openbindings.TextContent("not an OpenAPI artifact")}},
-			})
-			if synthesisErr == nil || !strings.Contains(synthesisErr.Error(), ErrCodeUnsupportedBindingSpec) {
-				t.Fatalf("synthesis error = %v, want %s", synthesisErr, ErrCodeUnsupportedBindingSpec)
-			}
-
-			_, prepareErr := NewInvoker().PrepareBinding(context.Background(), args)
-			var prepareInvocationErr *invoke.InvocationError
-			if !errors.As(prepareErr, &prepareInvocationErr) || prepareInvocationErr.Code != ErrCodeUnsupportedBindingSpec {
-				t.Fatalf("prepare error = %#v, want %s", prepareErr, ErrCodeUnsupportedBindingSpec)
-			}
-		})
 	}
 }
 
