@@ -1217,6 +1217,13 @@ func buildInputSchema(op *openapi3.Operation, allParams openapi3.Parameters, req
 			requestPlan.media.Schema != nil && schemaAssertsNothing(requestPlan.media.Schema.Value)
 		if requestPlan.media != nil && requestPlan.media.Schema != nil && !assertionFreeByteLane {
 			bodySchema = graph.declaredForm(requestPlan.media.Schema, schemaOverlays)
+		} else if requestPlan.media != nil && requestPlan.media.ItemSchema != nil &&
+			(requestPlan.family == familySequential || requestPlan.family == familyMultipart ||
+				requestPlan.mediaRange && requestPlan.bindingSpec == BindingSpecOpenAPI32) {
+			bodySchema = map[string]any{
+				"type":  "array",
+				"items": graph.declaredForm(requestPlan.media.ItemSchema, schemaOverlays),
+			}
 		} else if requestPlan.rawBoundary {
 			bodySchema = map[string]any{"type": "string", "contentEncoding": "base64"}
 		} else if hasMediaFidelity(requestPlan.bindingSpec) && requestPlan.synthetic {

@@ -526,7 +526,15 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 	if operation.RequestBody != nil && operation.RequestBody.Value != nil {
 		plans, err = planRequestBodiesFor(document, operation, bindingSpec)
 		if err != nil {
-			return nil, invoke.NewInvocationError(invoke.ErrCodeSourceConfigError)
+			if bindingSpec == BindingSpecOpenAPI32 && !operation.RequestBody.Value.Required {
+				// A body-free 3.2 invocation bypasses request-media selection.
+				// Keeping no body route preserves that usable operation while a
+				// later invocation that tries to reach the unavailable optional
+				// body still refuses before dispatch.
+				plans = nil
+			} else {
+				return nil, invoke.NewInvocationError(invoke.ErrCodeSourceConfigError)
+			}
 		}
 		plans = filterLadderInvalidAlternatives(plans, verdict, selector)
 	}

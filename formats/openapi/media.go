@@ -60,6 +60,7 @@ const (
 	familyURLEncoded = "urlencoded"
 	familyText       = "text"
 	familyOctets     = "octets"
+	familySequential = "sequential"
 )
 
 // bodyPlan is the pre-dispatch answer to the request-carriage questions: the
@@ -588,7 +589,17 @@ func planRequestBodiesFor(doc *openapi3.T, op *openapi3.Operation, bindingSpec s
 			requiresWholeJSONCarriage(mediaSchema(media), map[*openapi3.Schema]bool{}, oas30)
 		var plan *bodyPlan
 		var err error
-		if wholeJSON {
+		if candidate.family == familySequential || candidate.family == familyMultipart && doc != nil && doc.OpenAPI == "3.2.0" && openAPI32PositionalMultipart(media) {
+			plan = &bodyPlan{
+				declared:  true,
+				required:  rb.Required,
+				mediaKey:  candidate.key,
+				mediaType: candidate.parsed.canonical,
+				media:     media,
+				family:    candidate.family,
+				synthetic: true,
+			}
+		} else if wholeJSON {
 			plan = &bodyPlan{
 				declared:    true,
 				required:    rb.Required,
@@ -760,12 +771,29 @@ func applyRevision3BodyShape(plan *bodyPlan) {
 }
 
 func exactRequestFamily(doc *openapi3.T, parsed parsedMediaType, media *openapi3.MediaType, bindingSpec string) (string, bool, error) {
+	if doc != nil && doc.OpenAPI == "3.2.0" {
+		if sequential, selected, err := openAPI32SequentialRequestKind(parsed.base, media); selected || err != nil {
+			if err != nil {
+				return "", false, err
+			}
+			if sequential == "multipart" {
+				return familyMultipart, false, nil
+			}
+			return familySequential, false, nil
+		}
+	}
 	switch {
 	case isJSONMediaType(parsed.base):
 		return familyJSON, false, nil
-	case parsed.base == "multipart/form-data":
+	case parsed.base == "multipart/form-data" || doc != nil && doc.OpenAPI == "3.2.0" && strings.HasPrefix(parsed.base, "multipart/"):
 		if hasMediaFidelity(bindingSpec) {
-			if err := validateRevision3MultipartMedia(doc, media); err != nil {
+			var err error
+			if doc != nil && doc.OpenAPI == "3.2.0" {
+				err = validateOpenAPI32MultipartMedia(doc, media)
+			} else {
+				err = validateRevision3MultipartMedia(doc, media)
+			}
+			if err != nil {
 				return "", false, err
 			}
 		}
@@ -775,7 +803,13 @@ func exactRequestFamily(doc *openapi3.T, parsed parsedMediaType, media *openapi3
 			return "", false, fmt.Errorf("schema-omitted form media has no application-value caller route")
 		}
 		if hasMediaFidelity(bindingSpec) {
-			if err := validateRevision3URLEncodedMedia(doc, media); err != nil {
+			var err error
+			if doc != nil && doc.OpenAPI == "3.2.0" {
+				err = validateOpenAPI32URLEncodedMedia(doc, media)
+			} else {
+				err = validateRevision3URLEncodedMedia(doc, media)
+			}
+			if err != nil {
 				return "", false, err
 			}
 		}
@@ -812,7 +846,8 @@ func exactRequestFamily(doc *openapi3.T, parsed parsedMediaType, media *openapi3
 	// lane authors no correspondence. Scoped by the declaration: the supplied
 	// value's type never selects a lane.
 	oas30 := doc != nil && isOpenAPI30(majorMinor(doc.OpenAPI))
-	if isCharacterDataMedia(parsed.base) && resolveDeclaration(mediaSchema(media), oas30).admitsStringAsSoleNonNullType() {
+	declaration := resolveDeclaration(mediaSchema(media), oas30)
+	if isCharacterDataMedia(parsed.base) && (declaration.admitsStringAsSoleNonNullType() || doc != nil && doc.OpenAPI == "3.2.0" && openAPI32NonJSONTextSchema(mediaSchema(media))) {
 		if err := supportedTextCharset(parsed); err != nil {
 			return "", false, err
 		}
@@ -1955,9 +1990,25 @@ func selectRevision3RequestPlan(doc *openapi3.T, op *openapi3.Operation, plans [
 	if family == "" {
 		return nil, fmt.Errorf("configured requestMedia %q selects range %q but no existing request carriage family supports that concrete type", wanted.canonical, selected.key)
 	}
-	plan, err := buildBodyPlanFromMedia(op.RequestBody.Value, selected.key, wanted, family, op.RequestBody.Value.Content[selected.key])
-	if err != nil {
-		return nil, err
+	media := op.RequestBody.Value.Content[selected.key]
+	var plan *bodyPlan
+	var err error
+	if doc != nil && doc.OpenAPI == "3.2.0" &&
+		(family == familySequential || family == familyMultipart && openAPI32PositionalMultipart(media)) {
+		plan = &bodyPlan{
+			declared:  true,
+			required:  op.RequestBody.Value.Required,
+			mediaKey:  selected.key,
+			mediaType: wanted.canonical,
+			media:     media,
+			family:    family,
+			synthetic: true,
+		}
+	} else {
+		plan, err = buildBodyPlanFromMedia(op.RequestBody.Value, selected.key, wanted, family, media)
+		if err != nil {
+			return nil, err
+		}
 	}
 	plan.mediaRange = true
 	plan.mediaType = wanted.canonical
