@@ -128,6 +128,7 @@ func convertArtifactToInterfaceWithOverlay(doc *openapi3.T, artifact *openapicli
 	iface := openbindings.Interface{
 		OpenBindings: openbindings.MaxTestedVersion,
 		Operations:   map[string]openbindings.Operation{},
+		Dependencies: map[string]openbindings.DependencyEntry{},
 		Bindings:     map[string]openbindings.BindingEntry{},
 		Sources: map[string]openbindings.Source{
 			DefaultSourceName: sourceEntry,
@@ -472,6 +473,14 @@ func convertArtifactToInterfaceWithOverlay(doc *openapi3.T, artifact *openapicli
 			binding.InputTransform = &openbindings.TransformOrRef{Inline: routes.transformExpression(params)}
 		}
 		iface.Bindings[bindingKey] = binding
+	}
+
+	if err := synthesizeInboundDependencies(
+		&iface, doc, artifact, bindingSpec, formatVersion, usedKeys,
+		refRegistry, &requestGraph, &responseGraph, namer,
+		schemaOverlays, onUnrealizable,
+	); err != nil {
+		return iface, err
 	}
 
 	return iface, nil

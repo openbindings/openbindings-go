@@ -52,8 +52,61 @@ func TestOpenAPI32RequestSurfaceSynthesisEmitsContractsAndEditionSelectors(t *te
 	if result.Interface.Operations["queryItem"].Output == nil {
 		t.Fatal("plain unary 3.1-equivalent response contract was not emitted")
 	}
-	if openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
-		t.Fatal("3.2 was warranted before the remaining response and dependency passes completed")
+	if !openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
+		t.Fatal("3.2 was not warranted after response and dependency convergence")
+	}
+}
+
+func TestOpenAPI32SynthesisEmitsTargetlessInboundDependencies(t *testing.T) {
+	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
+		Sources: []synthesize.SynthesizeSource{{
+			BindingSpec: BindingSpecOpenAPI32,
+			Content: openbindings.TextContent(`{
+  "openapi":"3.2.0",
+  "info":{"title":"dependencies","version":"1"},
+  "servers":[{"url":"https://api.example"}],
+  "paths":{"/jobs":{"post":{"operationId":"createJob","callbacks":{"done":{"{$request.body#/url}":{
+    "post":{"operationId":"receiveDone","requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}}}},"responses":{"200":{"content":{"application/json":{"schema":{"type":"string"}}}}}},
+    "additionalOperations":{"REPORT":{"operationId":"reportDone","responses":{"204":{}}}}
+  }}},"responses":{"202":{}}}}},
+  "webhooks":{"changed":{"query":{"operationId":"queryChange","responses":{"200":{}}}}}
+}`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(result.Interface.Dependencies); got != 3 {
+		t.Fatalf("dependencies = %d, want 3", got)
+	}
+	for key, dependency := range result.Interface.Dependencies {
+		if len(dependency.BindingSpecs) != 0 {
+			t.Errorf("dependency %q bindingSpecs = %#v, want absent", key, dependency.BindingSpecs)
+		}
+		if _, bound := result.Interface.Bindings[dependency.Operation+"."+DefaultSourceName]; bound {
+			t.Errorf("dependency operation %q acquired a binding", dependency.Operation)
+		}
+	}
+	input, _ := result.Interface.Operations["receiveDone"].Input.(map[string]any)
+	properties, _ := input["properties"].(map[string]any)
+	id, _ := properties["id"].(map[string]any)
+	if id["type"] != "string" {
+		t.Fatalf("callback request contract = %#v", input)
+	}
+	if output, _ := result.Interface.Operations["receiveDone"].Output.(map[string]any); output["type"] != "string" {
+		t.Fatalf("callback response contract = %#v", output)
+	}
+	dependencyCoverage := 0
+	for _, entry := range result.Coverage.Entries {
+		if entry.Scope == synthesize.SynthesisCoverageDependency {
+			dependencyCoverage++
+			if entry.OperationKey != "" || entry.BindingSelector != "" {
+				t.Errorf("dependency coverage leaked target identity: %#v", entry)
+			}
+		}
+	}
+	if dependencyCoverage != 3 {
+		t.Fatalf("dependency coverage entries = %d, want 3", dependencyCoverage)
 	}
 }
 

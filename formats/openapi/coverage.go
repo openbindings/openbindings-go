@@ -52,7 +52,7 @@ func openAPISynthesisCoverage(doc *openapi3.T, artifact *openapiclient.Artifact,
 		return []synthesize.SynthesisCoverageEntry{}
 	}
 	if artifact != nil && artifact.Edition.IsOpenAPI32() {
-		return openAPI32SynthesisCoverage(artifact, bySelector, unrealizable, floor, sourceLocation, bindingSpec)
+		return openAPI32SynthesisCoverage(artifact, iface, bySelector, unrealizable, floor, sourceLocation, bindingSpec)
 	}
 
 	// The walk is driven from the UNION of the loaded document's path×method
@@ -171,18 +171,16 @@ func openAPISynthesisCoverage(doc *openapi3.T, artifact *openapiclient.Artifact,
 					entries = append(entries, openAPIRequestMediaCoverage(doc, op, pathItem, identity, bindingSpec, verdict)...)
 				}
 				entries = append(entries, floorProjectionEntries(verdict)...)
-				entries = append(entries, openAPICallbackCoverage(op, selector)...)
 			}
 		}
 	}
-	if bindingSpec == BindingSpecOpenAPI31 {
-		entries = append(entries, openAPIWebhookCoverage(doc)...)
-	}
+	entries = append(entries, openAPIInboundDependencyCoverage(doc, nil, iface, unrealizable, bindingSpec)...)
 	return entries
 }
 
 func openAPI32SynthesisCoverage(
 	artifact *openapiclient.Artifact,
+	iface *openbindings.Interface,
 	bySelector map[string]synthesisBindingIdentity,
 	unrealizable map[string]unrealizableTarget,
 	floor *acceptanceFloor,
@@ -264,8 +262,8 @@ func openAPI32SynthesisCoverage(
 			})
 		}
 		entries = append(entries, floorProjectionEntries(verdict)...)
-		// Callback/webhook dependency contracts are an explicit M6 seam.
 	}
+	entries = append(entries, openAPIInboundDependencyCoverage(artifact.Document, artifact, iface, unrealizable, bindingSpec)...)
 	return entries
 }
 
@@ -521,89 +519,58 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 	return entries
 }
 
-func openAPICallbackCoverage(op *openapi3.Operation, parentRef string) []synthesize.SynthesisCoverageEntry {
-	if len(op.Callbacks) == 0 {
+func openAPIInboundDependencyCoverage(doc *openapi3.T, artifact *openapiclient.Artifact, iface *openbindings.Interface, unrealizable map[string]unrealizableTarget, bindingSpec string) []synthesize.SynthesisCoverageEntry {
+	inventory := openAPIInboundOperationInventory(doc, artifact)
+	if len(inventory) == 0 {
 		return nil
 	}
-	callbackNames := make([]string, 0, len(op.Callbacks))
-	for name := range op.Callbacks {
-		callbackNames = append(callbackNames, name)
+	usedOperationKeys := map[string]bool{}
+	for _, binding := range iface.Bindings {
+		usedOperationKeys[binding.Operation] = true
 	}
-	sort.Strings(callbackNames)
+	dependencyOperations := map[string]bool{}
+	for _, dependency := range iface.Dependencies {
+		dependencyOperations[dependency.Operation] = true
+	}
 	var entries []synthesize.SynthesisCoverageEntry
-	for _, name := range callbackNames {
-		callbackRef := op.Callbacks[name]
-		if callbackRef == nil || callbackRef.Value == nil {
-			continue
-		}
-		expressions := make([]string, 0, callbackRef.Value.Len())
-		for expression := range callbackRef.Value.Map() {
-			expressions = append(expressions, expression)
-		}
-		sort.Strings(expressions)
-		for _, expression := range expressions {
-			pathItem := callbackRef.Value.Value(expression)
-			if pathItem == nil {
-				continue
+	for _, disposition := range inventory {
+		if disposition.Err != nil || disposition.Target == nil {
+			message := "inbound OpenAPI operation is unresolvable"
+			if disposition.Err != nil {
+				message = disposition.Err.Error()
 			}
-			for _, method := range httpMethods {
-				if pathItem.GetOperation(strings.ToUpper(method)) == nil {
-					continue
-				}
-				entries = append(entries, excludedReverseOpenAPIInteraction(
-					parentRef+"/callbacks/"+escapeJSONPointerToken(name)+"/"+escapeJSONPointerToken(expression)+"/"+method,
-				))
-			}
-		}
-	}
-	return entries
-}
-
-func openAPIWebhookCoverage(doc *openapi3.T) []synthesize.SynthesisCoverageEntry {
-	if len(doc.Webhooks) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(doc.Webhooks))
-	for name := range doc.Webhooks {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var entries []synthesize.SynthesisCoverageEntry
-	for _, name := range names {
-		pathItem := doc.Webhooks[name]
-		if pathItem == nil {
 			entries = append(entries, synthesize.SynthesisCoverageEntry{
-				SourceIndex: 0,
-				SourceRef:   "#/webhooks/" + escapeJSONPointerToken(name),
-				Scope:       synthesize.SynthesisCoverageTarget,
-				Status:      synthesize.SynthesisInvalid,
-				ReasonCode:  "openapi.invalid_webhook",
-				Message:     "webhook path item is not an object",
+				SourceIndex: 0, SourceRef: disposition.Reference.Ref,
+				Scope: synthesize.SynthesisCoverageTarget, Status: synthesize.SynthesisExcluded,
+				ReasonCode: "openapi.inbound_dependency_excluded", Rule: openAPIRule(bindingSpec, "P-01"), Message: message,
 			})
 			continue
 		}
-		for _, method := range httpMethods {
-			if pathItem.GetOperation(strings.ToUpper(method)) == nil {
-				continue
-			}
-			entries = append(entries, excludedReverseOpenAPIInteraction(
-				"#/webhooks/"+escapeJSONPointerToken(name)+"/"+method,
-			))
+		opKey := deriveInboundOperationKey(disposition.Target, usedOperationKeys)
+		usedOperationKeys[opKey] = true
+		if skipped, ok := unrealizable[disposition.Reference.Ref]; ok {
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: disposition.Reference.Ref,
+				Scope: synthesize.SynthesisCoverageTarget, Status: synthesize.SynthesisExcluded,
+				ReasonCode: skipped.reasonCode, Rule: skipped.rule, Message: skipped.message,
+			})
+			continue
 		}
+		if dependencyOperations[opKey] {
+			entries = append(entries, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: disposition.Reference.Ref,
+				Scope: synthesize.SynthesisCoverageDependency, Status: synthesize.SynthesisRepresented,
+			})
+			continue
+		}
+		entries = append(entries, synthesize.SynthesisCoverageEntry{
+			SourceIndex: 0, SourceRef: disposition.Reference.Ref,
+			Scope: synthesize.SynthesisCoverageTarget, Status: synthesize.SynthesisImplementationUnsupported,
+			ReasonCode: "openapi.missing_emitted_dependency", Rule: openAPIRule(bindingSpec, "S-01"),
+			Message: "the synthesizer returned without emitting this supported inbound dependency contract",
+		})
 	}
 	return entries
-}
-
-func excludedReverseOpenAPIInteraction(sourceRef string) synthesize.SynthesisCoverageEntry {
-	return synthesize.SynthesisCoverageEntry{
-		SourceIndex: 0,
-		SourceRef:   sourceRef,
-		Scope:       synthesize.SynthesisCoverageTarget,
-		Status:      synthesize.SynthesisExcluded,
-		ReasonCode:  "openapi.reverse_direction",
-		Rule:        "OAPI-D-03",
-		Message:     "callbacks and webhooks describe service-to-consumer requests outside the registered OpenAPI binding family",
-	}
 }
 
 func escapeJSONPointerToken(value string) string {

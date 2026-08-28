@@ -174,6 +174,27 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		}
 	}
 
+	// Validate named consumption points. Dependency keys share the document
+	// identifier grammar (OBI-D-03), and operation values resolve only against
+	// literal operation-map keys, never aliases (OBI-D-19). The structural
+	// requirements for each entry and bindingSpecs are enforced by the embedded
+	// document schema below (OBI-D-02).
+	depKeys := make([]string, 0, len(i.Dependencies))
+	for k := range i.Dependencies {
+		depKeys = append(depKeys, k)
+	}
+	sort.Strings(depKeys)
+	for _, k := range depKeys {
+		validateIdent(&errs, "dependencies key", k)
+		dependency := i.Dependencies[k]
+		if _, ok := i.Operations[dependency.Operation]; !ok {
+			errs = append(errs, fmt.Sprintf("dependencies[%q].operation: references unknown operation key %q (OBI-D-19)", k, dependency.Operation))
+		}
+		if o.rejectUnknownTypedFields {
+			appendUnknownFieldProblems(&errs, fmt.Sprintf("dependencies[%q]", k), dependency.Unknown)
+		}
+	}
+
 	// Validate sources.
 	srcKeys := make([]string, 0, len(i.Sources))
 	for k := range i.Sources {

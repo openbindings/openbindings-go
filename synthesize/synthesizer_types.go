@@ -151,6 +151,9 @@ const (
 	// SynthesisCoverageProjection is a source contract projection into an OBI
 	// schema or operation framing.
 	SynthesisCoverageProjection SynthesisCoverageScope = "projection"
+	// SynthesisCoverageDependency is an inbound source interaction represented
+	// as a targetless Core dependency rather than as a binding.
+	SynthesisCoverageDependency SynthesisCoverageScope = "dependency"
 )
 
 // SynthesisCoverageStatus is the durable disposition of one observed source
@@ -158,8 +161,8 @@ const (
 type SynthesisCoverageStatus string
 
 const (
-	// SynthesisRepresented means the emitted OBI carries an operation and
-	// binding path for the unit.
+	// SynthesisRepresented means the emitted OBI carries either an operation
+	// and binding path for the unit or, at dependency scope, a Core dependency.
 	SynthesisRepresented SynthesisCoverageStatus = "represented"
 	// SynthesisExcluded means the governing binding-specification revision
 	// explicitly excludes the upstream-valid unit.

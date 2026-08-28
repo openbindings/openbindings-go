@@ -212,8 +212,21 @@ func checkAssertions(s Scenario, iface *openbindings.Interface) error {
 }
 
 func operationKeys(iface *openbindings.Interface) []string {
+	dependencyOnly := make(map[string]bool, len(iface.Dependencies))
+	for _, dependency := range iface.Dependencies {
+		dependencyOnly[dependency.Operation] = true
+	}
+	for _, binding := range iface.Bindings {
+		delete(dependencyOnly, binding.Operation)
+	}
 	out := make([]string, 0, len(iface.Operations))
 	for key := range iface.Operations {
+		// Dependency contracts have implementation-policy key spellings. The
+		// portable corpus identifies them by dependency-scope sourceRef instead;
+		// retain an operation here only when it is also a bound target.
+		if dependencyOnly[key] {
+			continue
+		}
 		out = append(out, key)
 	}
 	sort.Strings(out)
