@@ -7,7 +7,7 @@ import (
 )
 
 // BindingInvoker invokes bindings whose sources are governed by specific
-// binding specifications (e.g., openbindings.openapi@1, openbindings.mcp@1).
+// binding specifications (e.g., openbindings.openapi-3.1@1, openbindings.mcp@1).
 //
 // InvokeBinding returns the Invocation handle synchronously; creation is
 // inert (no I/O during construction). The binding's work is scheduled on its

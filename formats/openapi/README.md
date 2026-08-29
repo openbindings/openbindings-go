@@ -5,7 +5,7 @@ Thin OpenAPI binding-invoker and interface-synthesizer adapters for the
 the standalone [`openapi-client/go`](https://github.com/openbindings/openapi-client)
 module; this package maps OpenBindings contracts onto it.
 
-This package enables OpenBindings to invoke operations against OpenAPI specs and synthesize OBI documents from them. It reads OpenAPI 3.x documents, constructs HTTP requests, applies credentials via security schemes, and yields results through the SDK's cardinality-agnostic `Invocation` handle.
+This package enables OpenBindings to invoke operations against OpenAPI specs and synthesize OBI documents from them. It reads Swagger 2.0 and OpenAPI 3.x documents, constructs HTTP requests, applies credentials via security schemes, and yields results through the SDK's cardinality-agnostic `Invocation` handle.
 
 See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 
@@ -56,13 +56,12 @@ import (
 opInv := openbindings.NewOperationInvoker(openapi.NewInvoker())
 ```
 
-The invoker declares the unreleased first `openbindings.openapi@1` candidate.
-No OpenAPI binding specification has been published and there are no
-compatibility revisions. It handles exactly OpenAPI 3.0.0–3.0.4 and
-3.1.0–3.1.2 documents. The candidate includes collision-preserving routed
-inputs, raw-octet request and response carriage, configured media ranges,
-dynamic-object carriage, declaration-complex exact JSON carriage, and exact
-schema-omitted OAS 3.0 byte carriage.
+The invoker declares four exact sibling candidates:
+`openbindings.openapi-2.0@1`, `openbindings.openapi-3.0@1`,
+`openbindings.openapi-3.1@1`, and `openbindings.openapi-3.2@1`. They accept
+Swagger 2.0, OpenAPI 3.0.0–3.0.4, OpenAPI 3.1.0–3.1.2, and OpenAPI 3.2.0
+respectively. One source names exactly one sibling; the artifact's own version
+must fall within that sibling's finite range.
 
 ### Invoke a binding
 
@@ -73,7 +72,7 @@ invoker := openapi.NewInvoker()
 
 inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
     Source: openbindings.InvocationSource{
-        BindingSpec: openapi.BindingSpec, // "openbindings.openapi@1"
+        BindingSpec: openapi.BindingSpecOpenAPI31,
         Location:    "https://api.example.com/openapi.json",
     },
     Selector: "#/paths/~1users/get",
@@ -81,7 +80,9 @@ inv := invoker.InvokeBinding(ctx, &openbindings.BindingInvocationArgs{
 })
 
 // Input flows through the handle, not the args.
-if err := inv.Write(ctx, map[string]any{"limit": 10}); err != nil {
+if err := inv.Write(ctx, map[string]any{
+    "parameters": map[string]any{"limit": 10},
+}); err != nil {
     log.Fatal(err)
 }
 
@@ -107,7 +108,7 @@ consumers below the adapter boundary.
 synth := openapi.NewSynthesizer()
 iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
     Sources: []openbindings.SynthesizeSource{{
-        BindingSpec: openapi.BindingSpec,
+        BindingSpec: openapi.BindingSpecOpenAPI31,
         Location:    "https://api.example.com/openapi.json",
     }},
 })
@@ -116,17 +117,23 @@ iface, err := synth.SynthesizeInterface(ctx, &openbindings.SynthesizeInput{
 
 ## Behavior
 
-This package implements the unreleased first
-[`openbindings.openapi@1` candidate](https://github.com/openbindings/spec/blob/main/binding-specs/openapi/openbindings.openapi.md).
-That document defines routed input mapping, OAS serialization, request and
-response media selection, server resolution, interaction shape, and channel
-assembly for qualification before publication.
+This package implements the four sibling specifications under
+[`binding-specs/openapi-*`](https://github.com/openbindings/spec/tree/main/binding-specs).
+They define caller-envelope mapping, edition-specific OAS serialization,
+request and response media selection, server resolution, interaction shape,
+and channel assembly.
 
 ### Binding specification identifier
 
-`openbindings.openapi@1` (exact and opaque). It accepts exactly OpenAPI
-3.0.0–3.0.4 and 3.1.0–3.1.2 documents, discriminated by the artifact's own
-`openapi` field.
+| Identifier | Accepted artifact editions |
+| --- | --- |
+| `openbindings.openapi-2.0@1` | Swagger/OpenAPI 2.0 |
+| `openbindings.openapi-3.0@1` | OpenAPI 3.0.0–3.0.4 |
+| `openbindings.openapi-3.1@1` | OpenAPI 3.1.0–3.1.2 |
+| `openbindings.openapi-3.2@1` | OpenAPI 3.2.0 |
+
+Identifiers are exact and opaque. A source uses one identifier, and the
+artifact declares the edition checked against its finite range.
 
 ### Selector format
 
@@ -144,7 +151,7 @@ Path separators are escaped per RFC 6901: `/` becomes `~1`, `~` becomes `~0`. Th
 
 ### Request media and raw bytes
 
-The candidate defines declaration-led lanes without adding HTTP fields to the
+The sibling specifications define declaration-led lanes without adding HTTP fields to the
 operation contract. An OAS 3.0 non-JSON governing selection whose resolved
 schema is `type: string, format: binary`, or an OAS 3.1 non-JSON governing
 selection with no schema, exposes a canonical Base64 string at the JSON
@@ -170,8 +177,9 @@ operation values.
 
 An object body that explicitly declares `additionalProperties` or
 `patternProperties` remains one application object under the synthesized
-protocol-neutral `payload` property. A binding-private `inputTransform` routes
-that value whole, so arbitrary runtime member names never collide with path,
+protocol-neutral `payload` property. The synthesized binding's Core JSONata
+`inputTransform` maps that value into the caller envelope's `body`, so
+arbitrary runtime member names never collide with path,
 query, header, cookie, or other operation fields. Form and multipart members
 resolve exact, pattern, additional-property, and `allOf` schemas before using
 the OAS carriage rules; finite named object bodies retain their flat
@@ -182,8 +190,9 @@ application-property surface.
 An exact JSON-family body whose top-level schema uses combinators,
 conditionals, dependent schemas, or explicit `unevaluatedProperties` remains
 one complete application value under the synthesized protocol-neutral
-`payload` property. The binding-private route carries that value whole: it
-does not choose a schema branch or expose a media or HTTP wrapper. Non-JSON
+`payload` property. The emitted transform carries that value as the caller
+envelope's whole `body`: it does not choose a schema branch or expose a media
+or HTTP wrapper. Non-JSON
 candidates still require an independently defined faithful carriage lane.
 
 ### Server selection
@@ -289,11 +298,13 @@ Connect, GraphQL, MCP) do not consult the seam.
 
 ### Interface synthesis
 
-Deterministic generation of OBI documents is a synthesis concern outside the binding specification (`openbindings.openapi@1` §10); these are this package's conventions, chosen so both reference SDKs emit an identical OBI for the same artifact:
+Deterministic generation of OBI documents is a synthesis concern outside the
+four binding specifications; these are this package's conventions, chosen so
+both reference SDKs emit an identical OBI for the same artifact:
 
 - **Operation keys** come from `operationId` when present, sanitized to the OBI key grammar (non-key characters become `_`, leading/trailing `_` trimmed, a leading non-letter gets an `_` prefix). An `operationId` whose sanitized key is already taken falls through to path+method derivation: template segments (`{id}`) dropped, remaining segments joined with `.`, the lowercased method appended (`/users/{id}` + `GET` → `users.get`), then deduplicated deterministically with `_2`, `_3`, … suffixes.
 - **Iteration order is fixed**: paths alphabetically, methods in the order get, put, post, delete, options, head, patch, trace.
-- **Input schemas** merge effective path-level and operation-level parameters from every supported location (path, query, header, cookie) with each realizable request-media candidate's own body surface. Distinct finite declarations keep their application names when unique; collisions receive deterministic neutral suffixes and a binding-private `inputTransform` carries the exact protocol route. An explicitly dynamic object or declaration-complex exact JSON body is preserved as one full schema under a protocol-neutral `payload` property and privately routed whole, so runtime members cannot collide with independent parameters and no schema branch is selected by the binding. Distinct candidate surfaces are preserved with `anyOf`; parameter-only and non-JSON surfaces are closed against fields the invoker would refuse, while flattened JSON object candidates remain open for the binding's declared passthrough rule.
+- **Input schemas** merge effective path-level and operation-level parameters from every supported location with each realizable request-media candidate's body surface. Distinct finite declarations keep their application names when unique; collisions receive deterministic neutral suffixes. Every synthesized binding emits ordinary Core JSONata that maps those operation fields into the public `{parameters?, body?}` caller envelope. An explicitly dynamic object or declaration-complex exact JSON body is preserved as one full schema under a protocol-neutral `payload` property and mapped to the whole `body`, so runtime members cannot collide with independent parameters and no schema branch is selected by the binding. Distinct candidate surfaces are preserved with `anyOf`; parameter-only and non-JSON surfaces are closed against fields the invoker would refuse, while finite JSON object candidates retain the specification's declared passthrough rule.
 - **Output schemas** conservatively union every value-bearing success lane that can govern a 2xx response: exact 2xx entries, `2XX`, and an unshadowed `default`. Exact and ranged JSON declarations contribute their schemas, text/SSE declarations contribute strings, artifact-authorized raw-byte lanes contribute canonical Base64 strings, and a schema-less JSON lane leaves output unspecified rather than inventing a shape.
 - **Schema projection** targets JSON Schema 2020-12 (spec OBI-D-06), keyed on the artifact's declared `openapi` version and operation direction. OpenAPI 3.0.x schemas are translated from their subset dialect and ignore Reference Object siblings; 3.1.x Schema Object `$ref` siblings compose under JSON Schema semantics before typed resolution, while legal non-schema Reference Object descriptions remain local to each reference site. A per-load synthesis sidecar preserves authored null, empty, zero, false, and `x-*` Schema Object values that the typed parser otherwise cannot distinguish from absence; typed OpenAPI objects remain authoritative for structure and invocation never consults the sidecar. Request and response contracts preserve `readOnly` and `writeOnly` annotations and their members; those annotations do not authorize the binding to delete application data. An operation whose projected contract inherits a custom 3.1 schema dialect that cannot be losslessly projected to 2020-12 is excluded by tolerant synthesis and fails strict synthesis explicitly; schema-free operations and supported per-schema overrides remain available, and the dialect does not by itself prevent artifact-native invocation.
 - **Unrealizable targets fail synthesis**: declaration-complex form, multipart, text, raw, and media-range schemas without one artifact-defined carriage; case-colliding HTTP header declarations; and required bodies with no supported media candidate make the whole strict synthesis call fail. Exact JSON-family declaration-complex bodies use whole-value carriage. An optional body may be omitted with a warning only when the remaining no-body operation is still faithfully invocable.
@@ -303,16 +314,21 @@ Deterministic generation of OBI documents is a synthesis concern outside the bin
 
 ### Invocation flow
 
-1. Loads and caches the OpenAPI document (JSON or YAML, local or remote), discriminating the exact accepted 3.0.0–3.0.4 and 3.1.0–3.1.2 editions
+1. Loads and caches the OpenAPI document (JSON or YAML, local or remote), checking Swagger 2.0, OpenAPI 3.0.0–3.0.4, 3.1.0–3.1.2, or 3.2.0 against the exact sibling named by the source
 2. Parses the selector as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)
 3. Resolves the server (effective list + variables + the `server` configuration point)
-4. Routes application fields to their artifact declarations — using the binding-private routed representation when names collide — serializes parameters per OAS style/explode rules, and selects an artifact-declared request media candidate
+4. Accepts the public `{parameters?, body?}` caller envelope, lowers it internally to the standalone client's routes, serializes parameters per the governing edition, and selects an artifact-declared request media candidate
 5. Selects one complete, satisfiable Security Requirement alternative and applies only that alternative's credentials with the artifact-declared placement, refusing channel collisions pre-dispatch
 6. Makes the HTTP request; one HTTP response body produces at most one operation value (including `text/event-stream`), successful non-empty results emit through the invocation handle, empty results emit none, and unsuccessful completion carries only the binding-owned abstract code plus explicitly admitted application-authored failure data, when present
 
 ### Interface synthesis
 
-Converts an OpenAPI 3.x document into an OBI: operations extracted from each path + method combination, input/output schemas from parameters, request bodies, and success responses, and a JSON Pointer selector per binding. The derivation conventions (key derivation, iteration order, media selection, schema translation) are specified under [Behavior → Interface synthesis](#interface-synthesis) above.
+Converts a governed Swagger 2.0 or OpenAPI 3.x document into an OBI:
+operations extracted from each path + method combination, input/output schemas
+from parameters, request bodies, and success responses, an emitted envelope
+transform, and a JSON Pointer selector per binding. The derivation conventions
+(key derivation, iteration order, media selection, schema translation) are
+specified under [Behavior → Interface synthesis](#interface-synthesis) above.
 
 ## Resource bounds
 

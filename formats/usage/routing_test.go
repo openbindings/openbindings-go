@@ -373,7 +373,7 @@ func TestHookTable_Hooks(t *testing.T) {
 	if _, err := decoder(usageSite("other"), invoke.RawResult{Body: []byte("x")}); !errors.Is(err, invoke.ErrUseDefault) {
 		t.Error("decoder: an op without a JSON row must decline to the default")
 	}
-	if _, err := decoder(invoke.InvokeSite{BindingSpec: "openbindings.openapi@1", Operation: "emit"}, invoke.RawResult{Body: []byte("x")}); !errors.Is(err, invoke.ErrUseDefault) {
+	if _, err := decoder(invoke.InvokeSite{BindingSpec: "openbindings.openapi-3.1@1", Operation: "emit"}, invoke.RawResult{Body: []byte("x")}); !errors.Is(err, invoke.ErrUseDefault) {
 		t.Error("decoder: a non-usage site must decline")
 	}
 

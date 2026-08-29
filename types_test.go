@@ -193,7 +193,7 @@ func TestOperation_OmitsEmptyTags(t *testing.T) {
 
 func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 	in := []byte(`{
-  "bindingSpec": "openbindings.openapi@1",
+  "bindingSpec": "openbindings.openapi-3.1@1",
   "location": "./openapi.json",
   "x-extensionField": "extensionFieldValue",
   "unknownField": {"value": "unknownFieldValue"}
@@ -203,7 +203,7 @@ func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 	outMap := mustRoundTripToMap(t, in, &bs)
 	assertPreservedExtensionAndUnknown(t, outMap)
 
-	if outMap["bindingSpec"] != "openbindings.openapi@1" {
+	if outMap["bindingSpec"] != "openbindings.openapi-3.1@1" {
 		t.Fatalf("expected bindingSpec preserved, got %#v", outMap["bindingSpec"])
 	}
 	if outMap["location"] != "./openapi.json" {
@@ -213,7 +213,7 @@ func TestSource_LosslessRoundTrip_PreservesExtensionsAndUnknown(t *testing.T) {
 
 func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	s := Source{
-		BindingSpec: "openbindings.openapi@1",
+		BindingSpec: "openbindings.openapi-3.1@1",
 		Location:    "./typed-location.json",
 		LosslessFields: LosslessFields{
 			Unknown: map[string]json.RawMessage{
@@ -229,7 +229,7 @@ func TestSource_Marshal_KnownFieldsWinOverUnknown(t *testing.T) {
 	out := mustMarshalJSON(t, s)
 	outMap := mustUnmarshalToMap(t, out)
 
-	if outMap["bindingSpec"] != "openbindings.openapi@1" {
+	if outMap["bindingSpec"] != "openbindings.openapi-3.1@1" {
 		t.Fatalf("expected typed bindingSpec to win, got %#v", outMap["bindingSpec"])
 	}
 	if outMap["location"] != "./typed-location.json" {
@@ -314,7 +314,7 @@ func TestInterface_LosslessRoundTrip_PreservesNestedOperationBindingFields(t *te
   },
   "sources": {
     "src": {
-      "bindingSpec": "openbindings.openapi@1",
+      "bindingSpec": "openbindings.openapi-3.1@1",
       "location": "./openapi.json",
       "x-extensionField": "extensionFieldValue",
       "unknownField": {"value": "unknownFieldValue"}
@@ -664,7 +664,7 @@ func TestInterface_WithTransforms(t *testing.T) {
   },
   "sources": {
     "stripe": {
-      "bindingSpec": "openbindings.openapi@1",
+      "bindingSpec": "openbindings.openapi-3.1@1",
       "location": "./stripe.json"
     }
   },

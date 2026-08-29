@@ -212,7 +212,7 @@
         "bindingSpec": {
           "type": "string",
           "minLength": 1,
-          "description": "Binding specification identifier: exact, opaque, non-empty string denoting the binding specification governing this source and its bindings (e.g., openbindings.openapi@1). Never implicitly dereferenced; no version algebra."
+          "description": "Binding specification identifier: exact, opaque, non-empty string denoting the binding specification governing this source and its bindings (e.g., openbindings.openapi-3.1@1). Never implicitly dereferenced; no version algebra."
         },
         "location": {
           "type": "string",
