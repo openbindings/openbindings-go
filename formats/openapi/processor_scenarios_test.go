@@ -196,6 +196,7 @@ func TestProcessorScenarios(t *testing.T) {
 				"OAPI20-PS-91": true,
 				"OAPI20-PS-92": true,
 				"OAPI20-PS-93": true,
+				"OAPI20-PS-94": true,
 			},
 		},
 		{name: "openapi-3.0"},
