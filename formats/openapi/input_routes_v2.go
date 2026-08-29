@@ -217,7 +217,13 @@ func (r abstractInputRoutes) transformExpression(params openapi3.Parameters) str
 	for _, route := range r.parameters {
 		excluded[route.Field] = true
 	}
-	for _, field := range r.bodyFields {
+	bodyNames := make([]string, 0, len(r.bodyFields))
+	for name := range r.bodyFields {
+		bodyNames = append(bodyNames, name)
+	}
+	sort.Strings(bodyNames)
+	for _, name := range bodyNames {
+		field := r.bodyFields[name]
 		excluded[field] = true
 		bodyPresence = append(bodyPresence, "$exists("+jsonataLookup(field)+")")
 	}
