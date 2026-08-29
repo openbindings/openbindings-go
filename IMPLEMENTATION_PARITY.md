@@ -22,10 +22,12 @@ also guards the public role and family correspondence.
 | all compatible, invocable matches | `MatchOperationRequirement(...)` | `matchOperationRequirement(...)` |
 | conservative route-to-one resolution | `ResolveOperationRequirement(...)` | `resolveOperationRequirement(...)` |
 
-All seven first-release artifact/protocol binding candidates implement
-invocation, synthesis, and source inspection in both SDKs: OpenAPI, AsyncAPI,
-MCP, gRPC, Connect, usage, and GraphQL. None of these binding specifications
-has been published yet.
+All seven artifact/protocol families implement invocation, synthesis, and
+source inspection in both SDKs: OpenAPI, AsyncAPI, MCP, gRPC, Connect, usage,
+and GraphQL. The OpenAPI family declares four exact sibling tokens:
+`openbindings.openapi-2.0@1`, `openbindings.openapi-3.0@1`,
+`openbindings.openapi-3.1@1`, and `openbindings.openapi-3.2@1`. They govern
+Swagger 2.0, OpenAPI 3.0.0–3.0.4, 3.1.0–3.1.2, and 3.2.0 respectively.
 
 Parity means the same behavior at the OpenBindings boundary: exact
 `bindingSpec` support, resolution and refusal decisions, input/output values,
@@ -55,11 +57,12 @@ through the module's own artifact, location, and selector lanes. Family authorin
 tests then exercise artifact loading, inspection, synthesis, and
 synthesized-document validation. Both SDKs execute the same portable synthesis
 scenarios from `spec/conformance/binding-specs/synthesis/`, comparing exact
-emitted target identities and exhaustive artifact dispositions. They then
-execute the same 109 portable processor scenarios from
-`spec/conformance/binding-specs/processor/`, covering all 52 published P-rules.
-Protocol integration tests exercise actual request framing and response
-decoding. Passing only one boundary is not sufficient release evidence.
+emitted target identities, input transforms, and exhaustive artifact
+dispositions. The current shared battery contains 105 synthesis scenarios,
+529 processor scenarios, and 10 OpenAPI native-fidelity scenarios, all
+executed by both SDKs under the strict verifier. Protocol integration tests
+exercise actual request framing and response decoding. Passing only one
+boundary is not sufficient release evidence.
 
 | Family | Go authoring evidence | TypeScript authoring evidence | Shared synthesis evidence | Shared invocation evidence |
 |---|---|---|---|---|
@@ -70,6 +73,11 @@ decoding. Passing only one boundary is not sufficient release evidence.
 | Connect | `formats/connect/synthesize_test.go`, `list_selectors_test.go` | `packages/connect/src/authoring.test.ts` | `synthesis/connect.json` | `processor/connect.json` |
 | usage | `formats/usage/synthesize_interface_test.go`, `list_selectors_test.go` | `packages/usage/src/authoring.test.ts` | `synthesis/usage.json` | `processor/usage.json` |
 | GraphQL | `formats/graphql/synthesize_test.go`, `list_selectors_test.go` | `packages/graphql/src/synthesize.test.ts`, `invoker.test.ts` | `synthesis/graphql.json` | `processor/graphql.json` |
+
+Both OpenAPI adapters sit over the standalone OpenAPI client for their
+language. Synthesized bindings expose ordinary Core JSONata `inputTransform`
+expressions that map operation input into the public `{parameters?, body?}`
+caller envelope; engine-private routing does not enter an OBI document.
 
 The authoring invariant is creation-time soundness plus explicit completeness:
 inspection and synthesis apply the same target eligibility used by invocation;

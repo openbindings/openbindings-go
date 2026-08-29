@@ -22,9 +22,9 @@ func TestLoadRefusesAnUnimplementedCorpusRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := func(format string) string {
-		return `{` + format + `"bindingSpec":"openbindings.openapi@1","family":"openapi",` +
+		return `{` + format + `"bindingSpec":"openbindings.openapi-3.1@1","family":"openapi",` +
 			`"description":"one scenario","scenarios":[{"id":"OAPI-SS-99","description":"x",` +
-			`"source":{"bindingSpec":"openbindings.openapi@1","content":{}},` +
+			`"source":{"bindingSpec":"openbindings.openapi-3.1@1","content":{}},` +
 			`"expected":{"outcome":"refused","rules":["OAPI-P-03"]}}]}`
 	}
 	for _, unsupported := range []string{

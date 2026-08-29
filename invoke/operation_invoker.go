@@ -941,7 +941,7 @@ func selectBinding(iface *openbindings.Interface, opKey string, availableSpecs m
 }
 
 // familyName extracts the lowercase family name from a binding-specification
-// identifier ("openbindings.openapi@1" → "openapi"). Identifiers themselves
+// identifier ("openbindings.openapi-3.1@1" → "openapi"). Identifiers themselves
 // stay exact and opaque for matching (core §6); this is a display/dispatch
 // convenience only. A pre-promotion draft token ("graphql") passes through.
 func familyName(identifier string) string {

@@ -292,7 +292,7 @@ directly on OpenBindings concepts. See the binding-specification guide's
 
 ```go
 opInv := invoke.NewOperationInvoker(
-    openapi.NewInvoker(),   // unreleased openbindings.openapi@1 candidate
+    openapi.NewInvoker(),   // four exact OpenAPI sibling candidates
     asyncapi.NewInvoker(),  // openbindings.asyncapi@1
     grpc.NewInvoker(),      // openbindings.grpc@1
 )
@@ -300,7 +300,10 @@ opInv := invoke.NewOperationInvoker(
 
 | Module | Binding specification | Synthesizes OBIs? |
 |--------|-----------------|-------------------|
-| `formats/openapi` | `openbindings.openapi@1` candidate | yes |
+| `formats/openapi` | `openbindings.openapi-2.0@1` | yes |
+| `formats/openapi` | `openbindings.openapi-3.0@1` | yes |
+| `formats/openapi` | `openbindings.openapi-3.1@1` | yes |
+| `formats/openapi` | `openbindings.openapi-3.2@1` | yes |
 | `formats/asyncapi` | `openbindings.asyncapi@1` | yes |
 | `formats/graphql` | `openbindings.graphql@1` candidate | yes |
 | `formats/grpc` | `openbindings.grpc@1` | yes |
@@ -313,6 +316,14 @@ Every listed binding specification is an unreleased first `@1` candidate.
 None has an older published meaning or compatibility revision. Exact opaque
 identifier routing is exercised during development so each candidate and its
 conformance evidence can be qualified before publication.
+
+The four OpenAPI siblings govern Swagger 2.0, OpenAPI 3.0.0–3.0.4,
+3.1.0–3.1.2, and 3.2.0 respectively; one source names exactly one sibling.
+`formats/openapi` adapts the standalone
+[`openapi-client/go`](https://github.com/openbindings/openapi-client/tree/main/go)
+engine to OpenBindings. Synthesis emits ordinary Core JSONata
+`inputTransform` expressions that map operation input to the public
+`{parameters?, body?}` caller envelope.
 
 Invokers implement `BindingInvoker`. Interface synthesizers implement
 `InterfaceSynthesizer`; synthesizers that can return durable, explicitly

@@ -965,7 +965,7 @@ func TestParseDocument_TransformRefWithExtensionKeyValidates_OBI_T_03(t *testing
 		"openbindings": "0.2.0",
 		"operations": {"op": {}},
 		"transforms": {"t": "$.payload"},
-		"sources": {"api": {"bindingSpec": "openbindings.openapi@1", "location": "https://api.example.com/api.json"}},
+		"sources": {"api": {"bindingSpec": "openbindings.openapi-3.1@1", "location": "https://api.example.com/api.json"}},
 		"bindings": {
 			"op.api": {
 				"operation": "op",
