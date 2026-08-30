@@ -116,6 +116,7 @@ const (
 	floorD12  = "D12"
 	floorD13  = "D13"
 	floorD15  = "D15"
+	floorD16  = "D16"
 	floorURef = "URef"
 )
 
@@ -171,6 +172,11 @@ func floorAuthority(class, line string) string {
 			return "OAS 3.0 line, Schema Object: a keyword's value carries the JSON type the governing dialect declares for it -- `items` Value MUST be an object and not an array; `properties` definitions MUST be a Schema Object; `required` and `enum` are taken directly from JSON Schema, where `required` is an array of unique elements and `enum` is an array"
 		}
 		return "OAS 3.1 line, §4.8.24.1: absent `jsonSchemaDialect` the OAS dialect schema id MUST be used for Schema Objects, and the value fails that dialect (https://spec.openapis.org/oas/3.1/dialect/base)"
+	case floorD16:
+		if is30 {
+			return "OAS 3.0 line, Response Object: `description` is a string, `content` is a map of Media Type Objects, `headers` a map of Header Objects, `links` a map of Link Objects; a fixed field carrying another JSON kind, or a `headers` member that is not a Header Object, violates the Response Object's fixed-field constraints"
+		}
+		return "OAS 3.1 line, Response Object: `description` is a string, `content` is a map of Media Type Objects, `headers` a map of Header Objects, `links` a map of Link Objects; a fixed field carrying another JSON kind, or a `headers` member that is not a Header Object, violates the Response Object's fixed-field constraints"
 	case floorURef:
 		if is30 {
 			return "OAS 3.0 line, Reference Object: $ref follows JSON Reference; its fragment is a JSON Pointer (RFC 6901) and identifies no location in the entry document"
@@ -249,6 +255,15 @@ type acceptanceFloor struct {
 	// ResponseMemberDefects is the set of D7 positions -- a Responses Object
 	// member whose value cannot be read as a Response Object.
 	ResponseMemberDefects map[string]bool
+	// ResponseFixedFieldDefects carries the D16 defects a Responses Object
+	// member owns, keyed by that MEMBER's pointer rather than by the defective
+	// position, because the rung that reads them asks a question about the
+	// member: does this governing Response Object violate the Response Object's
+	// fixed-field constraints? The defects themselves are positioned at the
+	// offending field (or, for a `$ref`ed response, inside the referenced
+	// Response Object), which is not derivable from the member pointer, so the
+	// two cannot be collapsed.
+	ResponseFixedFieldDefects map[string][]floorDefect
 	// ConformantSchemaComponents is the set of `components.responses` members
 	// D6 hits AND that are Schema-shaped in the decidable sense
 	// `isFloorSchemaShaped` states, so that a schema-position reference to one
@@ -442,7 +457,19 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 	case floorEditions31[edition]:
 		line = "3.1"
 	default:
-		return nil // the edition gate (part 1) owns every other value
+		// The edition gate (part 1) owns every other value.
+		//
+		// THE 2.0 AND 3.2 LANES HAVE NO LADDER, and that is debt rather than
+		// design. Both reach their declaration verdicts ad hoc -- 3.2 over its
+		// raw overlay, 2.0 in its native lane -- so where they happen to agree
+		// with this instrument they agree for a different reason, and where an
+		// edition genuinely differs (OAS 3.2.0 dropped `REQUIRED` from the
+		// Response Object's `description`; see
+		// `openAPI32ResponseDescriptionDefect`) nothing here records that it is
+		// an edition difference rather than an unexplained divergence. Round R
+		// measured the cost of the gap in both directions and queued Round R2 to
+		// close it: an acceptance floor for 2.0 and one for 3.2.
+		return nil
 	}
 
 	f := &acceptanceFloor{
@@ -452,6 +479,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 		Attributed:                 map[string]string{},
 		SchemaPositions:            map[string]bool{},
 		ResponseMemberDefects:      map[string]bool{},
+		ResponseFixedFieldDefects:  map[string][]floorDefect{},
 		ConformantSchemaComponents: map[string]bool{},
 		ClimbingURefSites:          map[string]bool{},
 	}
@@ -624,7 +652,7 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 						addDefect(defect(floorD10, parameter.ptr))
 					}
 				}
-				// Responses: D7 / D9 / D8 / D12.
+				// Responses: D7 / D9 / D16 / D8 / D12.
 				if responses, isM := opMap["responses"].(map[string]any); isM {
 					for _, code := range floorKeys(responses) {
 						if strings.HasPrefix(code, "x-") {
@@ -637,6 +665,19 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 							if res.resolved && !isFloorResponseObject(target) {
 								addDefect(defect(floorD7, rptr))
 								f.ResponseMemberDefects[rptr] = true
+								continue
+							}
+							// A `$ref`ed Response Object governs its referencing
+							// target exactly as an inline one does, so its
+							// fixed-field constraints are read at the position
+							// they actually occupy -- inside the referenced
+							// object -- and owned by every member that denotes
+							// it.
+							if res.resolved {
+								for _, d := range floorResponseFixedFieldDefects(target, refString(rv), line) {
+									addDefect(d)
+									f.ResponseFixedFieldDefects[rptr] = append(f.ResponseFixedFieldDefects[rptr], d)
+								}
 							}
 							continue
 						}
@@ -648,6 +689,10 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 						}
 						if !isFloorResponseObject(rv) {
 							addDefect(defect(floorD9, rptr))
+						}
+						for _, d := range floorResponseFixedFieldDefects(rv, rptr, line) {
+							addDefect(d)
+							f.ResponseFixedFieldDefects[rptr] = append(f.ResponseFixedFieldDefects[rptr], d)
 						}
 						if content, isC := rvm["content"].(map[string]any); isC {
 							for _, mediaKey := range floorKeys(content) {
@@ -1102,11 +1147,15 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 			rptr := op.Ref + "/responses/" + floorEsc(code)
 			rv := responses[code]
 			respDefect, respDefective := isDefective(rptr)
+			fixedFieldDefects := f.ResponseFixedFieldDefects[rptr]
 			if !isSuccess(code) {
 				// Non-success responses never climb; classification is the 2xx
 				// rule (OAPI-P-08), so no success contract is lost.
 				if respDefective {
 					addProjection(op.Ref, respDefect)
+				}
+				for _, d := range fixedFieldDefects {
+					addProjection(op.Ref, d)
 				}
 				continue
 			}
@@ -1128,6 +1177,35 @@ func computeAcceptanceFloor(root map[string]any) *acceptanceFloor {
 					rvContent = content
 					declared = floorKeys(content)
 				}
+			}
+			// An upstream-invalid GOVERNING Response Object excludes the selected
+			// target before any actual response is inspected: response governance
+			// is target-level (`openbindings.openapi-3.1@1` §9.5 and its restored
+			// siblings). Two of the three response-rung classes are that defect,
+			// and they climb with no further question asked:
+			//
+			//   D7  -- the member is not a Response Object at all, so there is no
+			//          governing declaration to read.
+			//   D16 -- the member IS a Response Object and violates the fixed-field
+			//          constraints the same sentence names.
+			//
+			// D9 is deliberately NOT here, and its declared-content gate below is
+			// unchanged. A Response Object that omits its REQUIRED `description`
+			// while declaring no content loses no representation: nothing about the
+			// response body is misdeclared, so the target still carries everything
+			// it ever carried. That is the `{}` carve-out the documents state in the
+			// same sentence, and it is the whole difference between S1 (invalid) and
+			// a bare `{}` (represented).
+			if respDefective && respDefect.Class == floorD7 {
+				addClimb(respDefect) // P2
+				continue
+			}
+			if len(fixedFieldDefects) > 0 {
+				if respDefective {
+					addClimb(respDefect)
+				}
+				addClimb(fixedFieldDefects...) // P2
+				continue
 			}
 			if respDefective && len(declared) == 0 {
 				addProjection(op.Ref, respDefect)
@@ -1310,6 +1388,62 @@ func isFloorResponseObject(v any) bool {
 // so is not a Schema Object: no accepted edition's Schema Object dialect
 // declares any of them.
 var floorResponseObjectFixedFields = []string{"content", "headers", "links"}
+
+// floorResponseFixedFieldDefects reports the D16 defects a Response Object
+// owns: a fixed field carrying a JSON kind the OAS does not declare for it, or
+// a `headers` member that is not a Header Object.
+//
+// It is a DECIDABLE test and deliberately not a validator. Each of `content`,
+// `headers`, and `links` is a MAP in every accepted edition, so a present
+// non-map is a violation no edition disjunction can rescue; a `headers` member
+// is a Header Object or a Reference Object, so a present non-object is the same
+// kind of proof. Nothing here inspects a Header Object's own fields, because
+// that is a declaration question the response rungs already own and a wrong
+// answer would cost a target its representation.
+//
+// `base` is the pointer of the Response Object itself, which is the response
+// member's pointer for an inline response and the referenced object's pointer
+// for a `$ref`ed one: a defect is positioned where it actually is.
+func floorResponseFixedFieldDefects(value any, base, line string) []floorDefect {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	var out []floorDefect
+	// `description` is REQUIRED and its value MUST be a string. ABSENCE is D9's
+	// finding and keeps D9's declared-content gate -- that is the `{}`
+	// carve-out. A PRESENT `description` of another kind is not the carve-out:
+	// it is a fixed-field violation like any other and excludes the target.
+	if raw, present := m["description"]; present {
+		if _, isString := raw.(string); !isString {
+			out = append(out, floorDefect{Class: floorD16, Position: base + "/description", Authority: floorAuthority(floorD16, line)})
+		}
+	}
+	for _, field := range floorResponseObjectFixedFields {
+		raw, present := m[field]
+		if !present {
+			continue
+		}
+		members, isMap := raw.(map[string]any)
+		if !isMap {
+			out = append(out, floorDefect{Class: floorD16, Position: base + "/" + field, Authority: floorAuthority(floorD16, line)})
+			continue
+		}
+		if field != "headers" {
+			continue
+		}
+		for _, name := range floorKeys(members) {
+			if strings.HasPrefix(name, "x-") {
+				continue
+			}
+			if _, isObject := members[name].(map[string]any); !isObject {
+				out = append(out, floorDefect{Class: floorD16, Position: base + "/headers/" + floorEsc(name), Authority: floorAuthority(floorD16, line)})
+			}
+		}
+	}
+	sortFloorDefects(out)
+	return out
+}
 
 // floorSchemaKeywords is the union of the Schema Object vocabularies of the
 // accepted editions -- the 3.0 line's JSON Schema subset plus its own

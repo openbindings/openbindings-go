@@ -20,7 +20,7 @@ import (
 // generated from. A change to any of these is a change to the shared answer
 // and must land in every engine simultaneously.
 const (
-	acceptanceFloorCaseTableSHA256 = "3eebb54e2d035a11c3b8373fd5cdf55c0712c7985c6a451bc345d028aa0de61e"
+	acceptanceFloorCaseTableSHA256 = "53d53b3f43e3ca88e0788e3cff2d45be9b9c50cc90eb0d4702f9712a51e277a1"
 	oasShapeTableSHA256            = "4e8f5393e48868e2a9468d7232921e1c2f3b33efd941f605b9e328b23191d456"
 )
 

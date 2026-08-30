@@ -575,6 +575,38 @@ func loadDocumentForSynthesis(ctx context.Context, client *http.Client, location
 		// standing where it used to leave a confined document that then
 		// reached this refusal one line later. The refusal was riding on the
 		// confinement pass succeeding, which was never what decided it.
+		//
+		// Round R's last fallback, reached only here -- the typed load failed
+		// AND the confinement pass inside it declined. Load each operation in
+		// isolation and keep the artifact restricted to the ones that can be
+		// represented, so a Response Object kin-openapi cannot decode costs its
+		// own target and no sibling. It authors nothing (see
+		// `target_restriction.go`), so it needs no emission gate; the excluded
+		// targets keep their accounting in the ladder, which is computed over
+		// the raw image and never consults this document.
+		if raw, parsed := parseRawResource(entryBytes); parsed {
+			if root, isObject := raw.(map[string]any); isObject {
+				if floor := computeAcceptanceFloor(root); floor != nil {
+					image, restricted := restrictedSurvivingImage(root, floor, func(data []byte) error {
+						_, probeErr := loadDocumentWithResolverInternal(ctx, client, location, data, nil)
+						return probeErr
+					})
+					if restricted {
+						// The overlays the failed attempt collected describe a
+						// load that did not finish, so the surviving image is
+						// loaded through the COLLECTING entry with a fresh
+						// collector: the lane state must describe the document
+						// this call hands back.
+						survivingOverlays := newRawSchemaOverlayCollector()
+						surviving, survivingErr := loadDocumentWithResolverEntry(ctx, client, location, image, survivingOverlays, nil)
+						if survivingErr == nil {
+							survivingOverlays.bindDocument(surviving)
+							return surviving, survivingOverlays, entryBytes, nil
+						}
+					}
+				}
+			}
+		}
 		return nil, nil, entryBytes, err
 	}
 	overlays.bindDocument(doc)
