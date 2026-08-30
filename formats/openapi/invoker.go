@@ -489,6 +489,20 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 		if err != nil {
 			return nil, &invoke.InvocationError{Code: invoke.ErrCodeInvalidSelector}
 		}
+		selector = buildJSONPointerSelector(path, method)
+		// The ladder's verdict is asked BEFORE the typed document is consulted,
+		// and that order is load-bearing rather than cosmetic. An excluded
+		// target is excluded by a property of the artifact's RAW image, which
+		// the floor decided without the typed loader's help; whether the typed
+		// loader could represent it is a different question with a different
+		// answer. Round R made the difference observable: the per-target
+		// restriction leaves an operation kin-openapi cannot decode out of the
+		// document it hands back, so asking the document first would report a
+		// target the artifact plainly declares as SELECTOR_NOT_FOUND instead of
+		// the exclusion it is.
+		if verdict := floor.opVerdict(selector); verdict != nil && verdict.Disposition == "invalid" {
+			return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
+		}
 		if document.Paths == nil {
 			return nil, &invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound}
 		}
@@ -500,7 +514,6 @@ func loadRuntimeOperationModel(ctx context.Context, args *invoke.BindingInvocati
 		if operation == nil {
 			return nil, &invoke.InvocationError{Code: invoke.ErrCodeSelectorNotFound}
 		}
-		selector = buildJSONPointerSelector(path, method)
 	}
 	verdict := floor.opVerdict(selector)
 	if verdict != nil && verdict.Disposition == "invalid" {
