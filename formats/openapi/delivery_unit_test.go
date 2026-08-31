@@ -74,8 +74,8 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	if ierr == nil {
 		t.Fatal("expected an overflow error, got none")
 	}
-	if ierr.Code != invoke.ErrCodeResponseError {
-		t.Errorf("error code = %q, want %q", ierr.Code, invoke.ErrCodeResponseError)
+	if ierr.Code != invoke.ErrCodeExecutionFailed {
+		t.Errorf("error code = %q, want %q", ierr.Code, invoke.ErrCodeExecutionFailed)
 	}
 	if ierr.HasData() {
 		t.Errorf("native size-limit evidence crossed as abstract data: %#v", ierr.Data)
@@ -105,8 +105,8 @@ func TestDeliveryUnitBound_SSEIsOneCumulativeUnit(t *testing.T) {
 	if ierr == nil || len(vals) != 0 {
 		t.Fatalf("oversized unary SSE = outputs %d, error %v", len(vals), ierr)
 	}
-	if ierr.Code != invoke.ErrCodeResponseError {
-		t.Fatalf("error code = %q, want %q", ierr.Code, invoke.ErrCodeResponseError)
+	if ierr.Code != invoke.ErrCodeExecutionFailed {
+		t.Fatalf("error code = %q, want %q", ierr.Code, invoke.ErrCodeExecutionFailed)
 	}
 }
 
@@ -132,10 +132,10 @@ func TestDeliveryUnitBound_SSETinyBoundRefusesLoudly(t *testing.T) {
 	if ierr == nil {
 		t.Fatal("expected an overflow error, got none")
 	}
-	if ierr.Code != invoke.ErrCodeResponseError {
-		t.Errorf("error code = %q, want %q", ierr.Code, invoke.ErrCodeResponseError)
+	if ierr.Code != invoke.ErrCodeExecutionFailed {
+		t.Errorf("error code = %q, want %q", ierr.Code, invoke.ErrCodeExecutionFailed)
 	}
-	if ierr.Error() != invoke.ErrCodeResponseError {
+	if ierr.Error() != invoke.ErrCodeExecutionFailed {
 		t.Errorf("error text = %q, want the abstract code", ierr.Error())
 	}
 }

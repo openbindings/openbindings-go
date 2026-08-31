@@ -151,7 +151,7 @@ func BuiltinClassify(_ invoke.InvokeSite, raw invoke.RawResult) (bool, error) {
 // decodeByContentTypeFor adapts the client-owned decoder specified by
 // openbindings.openapi-3.0@1 §9.5 and openbindings.openapi-3.1@1 §9.5: strict JSON
 // for application/json and +json suffixes (a declared-JSON body that fails to
-// parse is a lying server — a loud ErrCodeResponseError, never a silent
+// parse is a lying server — a loud generic unsuccessful completion, never a silent
 // string); the text lane otherwise — bytes become a string per the header's
 // charset parameter, defaulting to UTF-8, with invalid sequences a loud decode
 // error. An empty body (204 included) yields null.
@@ -167,7 +167,7 @@ func decodeTextLaneFor(contentType string, body []byte, bindingSpec string) (any
 	value, err := openapiclient.DecodeResponseBody(contentType, body)
 	if err != nil {
 		return nil, &invoke.InvocationError{
-			Code: invoke.ErrCodeResponseError,
+			Code: invoke.ErrCodeExecutionFailed,
 		}
 	}
 	return value, nil

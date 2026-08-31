@@ -993,7 +993,7 @@ func TestInvoke_UndeclaredSSEIsProtocolError(t *testing.T) {
 	defer srv.Close()
 
 	_, ierr := invokeWith(t, widgetSpec(srv.URL), "#/paths/~1session/get", nil)
-	if ierr == nil || ierr.Code != invoke.ErrCodeProtocol {
+	if ierr == nil || ierr.Code != invoke.ErrCodeExecutionFailed {
 		t.Fatalf("expected ERR_PROTOCOL for an undeclared event-stream response, got %v", ierr)
 	}
 }

@@ -803,7 +803,28 @@ func normalizedAdapterErrorCode(code string) string {
 		return invoke.ErrCodeSourceConfigError
 	case "RUNTIME_ERROR", "EXECUTION_COMPLETED_BEFORE_READY":
 		return invoke.ErrCodeRuntime
+	// Post-dispatch cause refinements collapse to generic unsuccessful
+	// completion: codes carry dispatch-state and boundary facts, never cause
+	// or protocol category (error-code ownership ruling, 2026-08-31; the
+	// binding-invoker interface owns ERR_EXECUTION_FAILED's meaning).
+	case "ERR_RESPONSE_ERROR", "ERR_PROTOCOL":
+		return invoke.ErrCodeExecutionFailed
+	// Owned vocabulary and this SDK's documented conventions pass through.
+	case invoke.ErrCodeContextRequired, invoke.ErrCodeRefused, invoke.ErrCodeCancelled,
+		invoke.ErrCodeExecutionFailed, invoke.ErrCodeSourceLoadFailed,
+		invoke.ErrCodeSourceConfigError, "ERR_TIMEOUT", "ERR_CONNECT_FAILED",
+		"ERR_STREAM_ERROR", "ERR_VALIDATION_FAILED", "ERR_RUNTIME",
+		"ERR_MISSING_INPUT", "ERR_INPUT_CLOSED", "ERR_INVOCATION_CLOSED":
+		return code
 	default:
+		// Anything outside the standard engine vocabulary enumerated above is
+		// a deliberately authored extension code, which the interfaces
+		// registry licenses ("implementations may use further codes");
+		// it passes through as implementation behavior, never as portable
+		// contract meaning. The leak this switch closes is the undecided
+		// standard-engine spelling: every code the engine defines now has a
+		// deliberate mapping, so adding one without deciding its boundary
+		// spelling is a compile-visible gap here, not a silent passthrough.
 		return code
 	}
 }

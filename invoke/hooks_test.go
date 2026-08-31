@@ -93,8 +93,8 @@ func TestInvokeHooks_ReturnedPlainError(t *testing.T) {
 	}, hookSlots{})
 	_, err := h.DecodeOutput(testSite(), RawResult{}, nil)
 	var ie *InvocationError
-	if !errors.As(err, &ie) || ie.Code != ErrCodeResponseError {
-		t.Fatalf("plain decode error must wrap as ErrCodeResponseError, got %v", err)
+	if !errors.As(err, &ie) || ie.Code != ErrCodeExecutionFailed {
+		t.Fatalf("plain decode error must wrap as generic unsuccessful completion, got %v", err)
 	}
 
 	h = newInvokeHooks(hookSlots{

@@ -57,7 +57,7 @@ func (t HookTable) Hooks() (invoke.OutputDecoder, invoke.ResultClassifier, invok
 		var v any
 		if err := json.Unmarshal(raw.Body, &v); err != nil {
 			return nil, &invoke.InvocationError{
-				Code: invoke.ErrCodeResponseError,
+				Code: invoke.ErrCodeExecutionFailed,
 			}
 		}
 		return v, nil
