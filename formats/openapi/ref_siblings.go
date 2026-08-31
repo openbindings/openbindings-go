@@ -1,8 +1,11 @@
 package openapi
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strconv"
 	"strings"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/oasdiff/yaml"
+	yaml3 "github.com/oasdiff/yaml3"
 )
 
 // rawRefSiblingNormalizer preserves the source edition's reference semantics
@@ -103,6 +107,30 @@ func (n *rawRefSiblingNormalizer) implicitSecuritySchemes(resource *url.URL) map
 // objects known to occupy Schema Object positions, and returns the original
 // bytes when no rewrite was necessary. Returning the original bytes preserves
 // loader origin information for the overwhelmingly common no-sibling case.
+
+// requireSingleYAMLDocument refuses a multi-document YAML stream. A byte
+// pre-check keeps the second decode off the common path: a stream with no
+// document-marker line cannot hold two documents.
+func requireSingleYAMLDocument(data []byte) error {
+	if !bytes.Contains(data, []byte("---")) {
+		return nil
+	}
+	decoder := yaml3.NewDecoder(bytes.NewReader(data))
+	decoder.DisableTimestamps(true)
+	var first any
+	if err := decoder.Decode(&first); err != nil {
+		// Malformed streams keep their own diagnostic from the parser proper.
+		return nil
+	}
+	var second any
+	if err := decoder.Decode(&second); err == nil {
+		return fmt.Errorf("OpenAPI YAML stream must contain exactly one document")
+	} else if !errors.Is(err, io.EOF) {
+		return nil
+	}
+	return nil
+}
+
 func (n *rawRefSiblingNormalizer) normalizeResource(data []byte, resource *url.URL) ([]byte, error) {
 	return n.normalizeResourceAt(data, resource, resource)
 }
@@ -112,6 +140,17 @@ func (n *rawRefSiblingNormalizer) normalizeResource(data []byte, resource *url.U
 // for target lookup, while JSON Schema base-URI and nested-reference semantics
 // must use the latter.
 func (n *rawRefSiblingNormalizer) normalizeResourceAt(data []byte, requested, retrieval *url.URL) ([]byte, error) {
+	// The 3.0/3.1 grammar gate admits exactly one YAML document, and the
+	// retrieval-decode rule applies the same gate to every document this
+	// binding retrieves -- the primary location dereference and every
+	// secondarily retrieved reference document alike
+	// (openbindings.openapi-3.0@1 / -3.1@1 §§3.1, 5.1). oasdiff/yaml
+	// silently decodes the first stream document, so the stream is
+	// inspected here, at the seam every entry and external resource
+	// passes through, with the same underlying YAML implementation.
+	if err := requireSingleYAMLDocument(data); err != nil {
+		return nil, err
+	}
 	var root any
 	if _, err := yaml.Unmarshal(data, &root, yaml.DecodeOpts{DisableTimestamps: true}); err != nil {
 		// Preserve kin-openapi's own combined JSON/YAML diagnostic for malformed

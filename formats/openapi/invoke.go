@@ -435,28 +435,35 @@ func electSecurityAlternative(doc *openapi3.T, op *openapi3.Operation, bindCtx m
 	if requirements == nil || len(*requirements) == 0 {
 		return nil, nil
 	}
+	usableIndexes, usableByIndex := usableSecurityAlternatives(doc, op, baseURL, bindCtx, params)
 	selected := 0
 	rawSelection, configured := invoke.ContextConfiguration(bindCtx)["security"]
-	if len(*requirements) > 1 && (!configured || rawSelection == nil) {
-		return nil, fmt.Errorf("the effective security list has %d alternatives; configuration.security must select one", len(*requirements))
-	}
-	if configured && rawSelection != nil {
+	switch {
+	case configured && rawSelection != nil:
 		index, ok := securityConfigurationIndex(rawSelection)
 		if !ok || index < 0 || index >= len(*requirements) {
 			return nil, fmt.Errorf("configuration.security must select an effective alternative by zero-based index")
 		}
 		selected = index
+	case securityRequirementNamesUndefinedScheme(doc, op, requirements, bindCtx):
+		// A Security Requirement naming a scheme the document never defines
+		// is an unresolvable reference reached by the selected operation,
+		// and it refuses the target outright -- unlike a PRESENT-but-
+		// malformed Security Scheme Object, which only excludes the
+		// alternatives naming it.
+		return nil, fmt.Errorf("a security requirement names an undefined Security Scheme Object")
+	case len(usableIndexes) == 1:
+		// The Security Scheme Object exclusion removes every alternative
+		// naming a malformed scheme before any runtime credential is
+		// inspected; every remaining complete alternative survives, and an
+		// alternative left sole selects itself (openbindings.openapi-3.x@1
+		// §11). The explicit-choice requirement is over the surviving
+		// alternatives, not the authored count.
+		selected = usableIndexes[0]
+	case len(*requirements) > 1:
+		return nil, fmt.Errorf("the effective security list has %d usable alternatives; configuration.security must select one", len(usableIndexes))
 	}
-	plans := securityPlansWithContext(doc, op, baseURL, bindCtx)
-	selectedPlans := make([]securityPlan, 0, len(plans))
-	for _, plan := range plans {
-		if plan.authoredIndex != selected {
-			continue
-		}
-		if err := securityPlanCarriageError(plan, params); err == nil {
-			selectedPlans = append(selectedPlans, plan)
-		}
-	}
+	selectedPlans := usableByIndex[selected]
 	if len(selectedPlans) == 0 {
 		return nil, fmt.Errorf("selected security alternative %d is unusable", selected)
 	}
@@ -464,11 +471,45 @@ func electSecurityAlternative(doc *openapi3.T, op *openapi3.Operation, bindCtx m
 	return selectedPlans, nil
 }
 
+// securityRequirementNamesUndefinedScheme reports whether any effective
+// security requirement names a scheme the document never defines.
+func securityRequirementNamesUndefinedScheme(doc *openapi3.T, op *openapi3.Operation, requirements *openapi3.SecurityRequirements, bindCtx map[string]any) bool {
+	if requirements == nil {
+		return false
+	}
+	for _, secReq := range *requirements {
+		for schemeName := range secReq {
+			if _, ok := securitySchemeForOperation(doc, op, schemeName, bindCtx); !ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// usableSecurityAlternatives reports, in authored order, the effective
+// security alternatives that survive the Security Scheme Object exclusion
+// and the credential-carriage rules, with the expanded plans each carries.
+func usableSecurityAlternatives(doc *openapi3.T, op *openapi3.Operation, baseURL string, bindCtx map[string]any, params openapi3.Parameters) ([]int, map[int][]securityPlan) {
+	byIndex := map[int][]securityPlan{}
+	var order []int
+	for _, plan := range securityPlansWithContext(doc, op, baseURL, bindCtx) {
+		if err := securityPlanCarriageError(plan, params); err != nil {
+			continue
+		}
+		if _, seen := byIndex[plan.authoredIndex]; !seen {
+			order = append(order, plan.authoredIndex)
+		}
+		byIndex[plan.authoredIndex] = append(byIndex[plan.authoredIndex], plan)
+	}
+	return order, byIndex
+}
+
 // requiredSecuritySelectionContext exposes the binding's security election as
 // a typed, preflightable configuration requirement. It intentionally carries
 // authored indexes: the value chooses a complete Security Requirement Object,
 // never one of the runtime expansions of an OAuth flow.
-func requiredSecuritySelectionContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, target string) (*invoke.ContextRequiredDetails, bool, error) {
+func requiredSecuritySelectionContext(doc *openapi3.T, op *openapi3.Operation, bindCtx map[string]any, baseURL string, params openapi3.Parameters, target string) (*invoke.ContextRequiredDetails, bool, error) {
 	requirements := effectiveSecurityRequirements(doc, op)
 	if requirements == nil || len(*requirements) <= 1 {
 		return nil, false, nil
@@ -481,9 +522,16 @@ func requiredSecuritySelectionContext(doc *openapi3.T, op *openapi3.Operation, b
 		}
 		return nil, false, nil
 	}
-	values := make([]any, len(*requirements))
-	for index := range values {
-		values[index] = index
+	// A choice is genuinely required only among the alternatives that
+	// survive the Security Scheme Object exclusion; an alternative left
+	// sole selects itself and asks nothing.
+	usableIndexes, _ := usableSecurityAlternatives(doc, op, baseURL, bindCtx, params)
+	if len(usableIndexes) <= 1 {
+		return nil, false, nil
+	}
+	values := make([]any, len(usableIndexes))
+	for position, index := range usableIndexes {
+		values[position] = index
 	}
 	durable := true
 	requirement := invoke.NewConfigValueRequirement(
