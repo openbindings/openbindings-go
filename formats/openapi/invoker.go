@@ -1160,7 +1160,7 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 				if selectionTarget == "" {
 					selectionTarget = args.Source.Location
 				}
-				selectionDetails, selectionPending, selectionErr := requiredSecuritySelectionContext(document, operation, args.Context, selectionTarget)
+				selectionDetails, selectionPending, selectionErr := requiredSecuritySelectionContext(document, operation, args.Context, serverBase, parameters, selectionTarget)
 				if selectionErr != nil {
 					return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
 				}
