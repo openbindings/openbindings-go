@@ -1520,7 +1520,7 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 		Source: invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}, Selector: "#/paths/~1x/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
-	if ierr == nil || ierr.Code != invoke.ErrCodeProtocol {
+	if ierr == nil || ierr.Code != invoke.ErrCodeExecutionFailed {
 		t.Fatalf("duplicate Content-Type error = %v", ierr)
 	}
 	emptyTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
@@ -1540,7 +1540,7 @@ func TestFullProfileResponseContentTypeMustBeSingleton(t *testing.T) {
 		Source: invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)}, Selector: "#/paths/~1x/get",
 	})
 	_, ierr = driveOutputs(context.Background(), call, nil)
-	if ierr == nil || ierr.Code != invoke.ErrCodeProtocol || ierr.HasData() {
+	if ierr == nil || ierr.Code != invoke.ErrCodeExecutionFailed || ierr.HasData() {
 		t.Fatalf("nonempty response without a governing Response Object = %v, want protocol error", ierr)
 	}
 	emptyFailureTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {

@@ -84,8 +84,8 @@ var ErrUseDefault = errors.New("openbindings: use default")
 // transport exchange into an output value. Return ErrUseDefault to
 // decline. Any other returned error is the invocation's DELIBERATE
 // terminal (data failures are not bugs); return an *InvocationError to
-// choose the code, else the seam wraps it as ErrCodeResponseError with
-// tier provenance.
+// choose the code, else the seam wraps it as generic unsuccessful
+// completion (ErrCodeExecutionFailed) with tier provenance.
 type OutputDecoder func(site InvokeSite, raw RawResult) (any, error)
 
 // ResultClassifier decides whether a completed transport exchange is a
@@ -330,7 +330,10 @@ func runDecodeHook(tier string, fn OutputDecoder, site InvokeSite, raw RawResult
 	if errors.Is(herr, ErrUseDefault) {
 		return nil, herr
 	}
-	return nil, hookTerminal(tier, ErrCodeResponseError, herr)
+	// A decode failure is a post-dispatch cause refinement; the portable
+	// boundary carries generic unsuccessful completion (error-code
+	// ownership ruling, 2026-08-31). Cause stays in the wrapped error.
+	return nil, hookTerminal(tier, ErrCodeExecutionFailed, herr)
 }
 
 // Classify runs the classify chain with the same tiering and channels;

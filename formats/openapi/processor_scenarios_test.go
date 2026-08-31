@@ -411,6 +411,7 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		disposition = "error"
 	}
 	phase := openAPIErrorPhase(terminal, len(roundTripper.dispatches) > 0)
+	normalizedError["code"] = portableErrorCode(terminal.Code, len(roundTripper.dispatches) > 0)
 	data["error"] = normalizedError
 	return processorscenarios.Observation{Disposition: disposition, Phase: phase, Data: data}
 }
@@ -492,6 +493,32 @@ func normalizedInvocationError(t *testing.T, terminal *invoke.InvocationError) m
 		t.Fatal(err)
 	}
 	return normalized
+}
+
+// portableErrorCode presents an SDK error code in the owned portable
+// vocabulary the corpus asserts (error-code ownership ruling, 2026-08-31):
+// the binding-invoker and operation-invoker interfaces own the only codes
+// with portable semantics, and no binding specification defines one. The
+// SDK's granular refusal codes (ERR_SOURCE_LOAD_FAILED,
+// ERR_SELECTOR_NOT_FOUND, ...) are documented implementation conventions
+// that carry the phase evidence this runner reads separately; the portable
+// spelling of every provably-undispatched refusal is ERR_REFUSED, and of
+// every other unsuccessful completion ERR_EXECUTION_FAILED.
+func portableErrorCode(code string, dispatched bool) string {
+	switch code {
+	case invoke.ErrCodeContextRequired, invoke.ErrCodeCancelled,
+		"ERR_FRAME_PROTOCOL", "ERR_TRANSPORT_CLOSED",
+		invoke.ErrCodeRefused, invoke.ErrCodeExecutionFailed,
+		"ERR_OPERATION_NOT_FOUND", "ERR_BINDING_NOT_FOUND",
+		"ERR_BINDING_SELECTION_REQUIRED", "ERR_UNKNOWN_SOURCE",
+		"ERR_OPERATION_VALIDATION_FAILED", "ERR_SCHEMA_UNRESOLVED",
+		"ERR_TRANSFORM_ERROR":
+		return code
+	}
+	if !dispatched {
+		return invoke.ErrCodeRefused
+	}
+	return invoke.ErrCodeExecutionFailed
 }
 
 func scenarioContext(scenario processorscenarios.Scenario) map[string]any {
