@@ -912,14 +912,14 @@ func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	selectedServer := openapi3.Servers{&openapi3.Server{URL: serverBase}}
 	model.operation.Servers = &selectedServer
 	options.Context = contextWithoutConfigurationPoints(args.Context, "server", "security", "implicitConnectionScope")
-	mediaDetails, mediaErr := requiredRequestMediaContext(model.document, model.operation, bindingSpec, args.Context)
+	mediaDetails, mediaErr := requiredRequestMediaContext(model.document, model.operation, bindingSpec, args.Context, serverBase)
 	if mediaErr != nil {
 		return invoke.NewInvocationError(openapiclient.CodeRefused)
 	}
 	if mediaDetails != nil {
 		return invoke.NewContextRequiredError(mediaDetails)
 	}
-	propertyDetails, propertyErr := requiredPropertyMediaContext(model.document, model.operation, bindingSpec, args.Context)
+	propertyDetails, propertyErr := requiredPropertyMediaContext(model.document, model.operation, bindingSpec, args.Context, serverBase)
 	if propertyErr != nil {
 		return invoke.NewInvocationError(openapiclient.CodeRefused)
 	}
@@ -1184,12 +1184,12 @@ func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvoca
 				if requestBodyIgnoredForBindingSpec(bindingSpec, method) {
 					operation.RequestBody = nil
 				}
-				mediaDetails, mediaErr := requiredRequestMediaContext(document, operation, bindingSpec, args.Context)
+				mediaDetails, mediaErr := requiredRequestMediaContext(document, operation, bindingSpec, args.Context, selectionTarget)
 				if mediaErr != nil {
 					return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
 				}
 				localDetails = mergeContextRequirements(localDetails, mediaDetails)
-				propertyDetails, propertyErr := requiredPropertyMediaContext(document, operation, bindingSpec, args.Context)
+				propertyDetails, propertyErr := requiredPropertyMediaContext(document, operation, bindingSpec, args.Context, selectionTarget)
 				if propertyErr != nil {
 					return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
 				}

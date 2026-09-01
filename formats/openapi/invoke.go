@@ -13,7 +13,15 @@ import (
 	openapiclient "github.com/openbindings/openapi-client/go"
 )
 
-func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindingSpec string, bindCtx map[string]any) (*invoke.ContextRequiredDetails, error) {
+// The `target` both builders take is the SAME context scope the security
+// requirements use -- the resolved server base, falling back to the source
+// location. Without it these two configuration points arrived with an empty
+// Target, which cost a consumer twice: the challenge could not say WHERE the
+// choice applies, and a runtime keying context by target could not offer the
+// command that satisfies it. `ob` renders exactly that: its context hint is
+// suppressed on an empty target, so `propertyMedia` and `requestMedia` were
+// the only requirements it could name but not tell you how to supply.
+func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindingSpec string, bindCtx map[string]any, target string) (*invoke.ContextRequiredDetails, error) {
 	if !hasMediaFidelity(bindingSpec) || op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
 		return nil, nil
 	}
@@ -35,11 +43,12 @@ func requiredRequestMediaContext(doc *openapi3.T, op *openapi3.Operation, bindin
 		nil, &durable,
 	)
 	return &invoke.ContextRequiredDetails{
+		Target:       target,
 		Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{requirement}}},
 	}, nil
 }
 
-func requiredPropertyMediaContext(doc *openapi3.T, op *openapi3.Operation, bindingSpec string, bindCtx map[string]any) (*invoke.ContextRequiredDetails, error) {
+func requiredPropertyMediaContext(doc *openapi3.T, op *openapi3.Operation, bindingSpec string, bindCtx map[string]any, target string) (*invoke.ContextRequiredDetails, error) {
 	if !hasMediaFidelity(bindingSpec) || op == nil || op.RequestBody == nil || op.RequestBody.Value == nil || !op.RequestBody.Value.Required {
 		return nil, nil
 	}
@@ -95,6 +104,7 @@ func requiredPropertyMediaContext(doc *openapi3.T, op *openapi3.Operation, bindi
 		return nil, nil
 	}
 	return &invoke.ContextRequiredDetails{
+		Target:       target,
 		Alternatives: []invoke.ContextAlternative{{Requirements: requirements}},
 	}, nil
 }

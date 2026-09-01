@@ -78,14 +78,31 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 			requirements[requirement] = struct{}{}
 		}
 
+		// Scope names what the source unit IS; status names what became of
+		// it. A dependency unit therefore carries any status a target does --
+		// it is still a dependency-kind unit when an exclusion removes it --
+		// and only the REPRESENTED ones answer to the emitted `dependencies`
+		// map. The published interface-synthesizer contract states both rules.
 		if entry.Scope == SynthesisCoverageDependency {
-			if entry.Status != SynthesisRepresented {
-				return nil, fmt.Errorf("dependency synthesis coverage entry %d must be represented", index)
+			if entry.Status == SynthesisRepresented {
+				if entry.OperationKey != "" || entry.BindingKey != "" || entry.BindingSelector != "" || entry.SourceKey != "" || entry.ReasonCode != "" {
+					return nil, fmt.Errorf("represented dependency synthesis coverage entry %d must not carry operation or binding identity", index)
+				}
+				representedDependencies++
+				continue
 			}
-			if entry.OperationKey != "" || entry.BindingKey != "" || entry.BindingSelector != "" || entry.SourceKey != "" || entry.ReasonCode != "" {
-				return nil, fmt.Errorf("represented dependency synthesis coverage entry %d must not carry operation or binding identity", index)
+			if !synthesisReasonCodePattern.MatchString(entry.ReasonCode) {
+				return nil, fmt.Errorf("synthesis coverage entry %d has invalid reasonCode %q", index, entry.ReasonCode)
 			}
-			representedDependencies++
+			if entry.Message == "" {
+				return nil, fmt.Errorf("synthesis coverage entry %d requires a message", index)
+			}
+			// A removed dependency clears FullyRepresented for the same reason
+			// a removed target does: it is an inventoried unit the emitted OBI
+			// does not represent. Returning early here would let evidence
+			// claim full representation while a consumption point went
+			// unaccounted.
+			fullyRepresented = false
 			continue
 		}
 

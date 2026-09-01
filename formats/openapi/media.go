@@ -949,6 +949,16 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 		if encodingRequiresPropertyMedia(enc) {
 			continue
 		}
+		// R4 (ratified 2026-09-01): an array riding this lane whole, whose
+		// item-type default defines no serialization for a container, stays an
+		// ADMISSIBLE candidate carrying a required `propertyMedia` choice.
+		// Rejecting the media candidate here would make the operation
+		// unreachable where the specification says one consumer choice makes
+		// it dispatchable, and would state a whole-source verdict on a cell
+		// that has a stated remedy.
+		if (enc == nil || enc.ContentType == "") && urlencodedArrayNeedsPropertyMedia(propertySchema, is30) {
+			continue
+		}
 		contentType, err := revision3PartContentType(propertySchema, enc, is30)
 		if err != nil {
 			return fmt.Errorf("urlencoded property %q: %w", name, err)
@@ -1058,6 +1068,18 @@ func requiredPropertyMediaNames(plan *bodyPlan) []string {
 		if contentType != "" {
 			members, err := splitHTTPList(contentType)
 			if err == nil && (len(members) != 1 || isMediaRange(members[0])) {
+				requiresChoice = true
+			}
+		} else if plan.family == familyURLEncoded {
+			// R4: on the urlencoded content lane an array rides one field
+			// whole, so an item-derived default that defines no container
+			// serialization makes the property need a choice. The requirement
+			// is reported here, before dispatch, so a caller sees it in the
+			// same preflight as every other propertyMedia requirement rather
+			// than only on emission.
+			authored := resolvedMultipartProperty(mediaSchema(plan.media), name, map[*openapi3.Schema]bool{})
+			authored, _ = effectiveRevision3PartSchema(authored, plan.oas30)
+			if urlencodedArrayNeedsPropertyMedia(authored, plan.oas30) {
 				requiresChoice = true
 			}
 		}
@@ -1503,6 +1525,10 @@ func revision3PartContentType(schema *openapi3.Schema, enc *openapi3.Encoding, i
 // a declared non-string keeps its own row. No accepted edition states a
 // refusal for that combination.
 func defaultRevision3PartContentType(schema *openapi3.Schema, is30 bool) (string, bool) {
+	return defaultRevision3PartContentTypeAt(schema, is30, 0)
+}
+
+func defaultRevision3PartContentTypeAt(schema *openapi3.Schema, is30 bool, depth int) (string, bool) {
 	declaration := resolveDeclaration(schema, is30)
 	switch {
 	case !is30 && declaration.typeless():
@@ -1523,11 +1549,69 @@ func defaultRevision3PartContentType(schema *openapi3.Schema, is30 bool) (string
 		schemaTypeIs(schema, "integer", map[*openapi3.Schema]bool{}),
 		schemaTypeIs(schema, "boolean", map[*openapi3.Schema]bool{}):
 		return "text/plain", true
-	case schemaTypeIs(schema, "object", map[*openapi3.Schema]bool{}), schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{}):
+	case schemaTypeIs(schema, "object", map[*openapi3.Schema]bool{}):
 		return "application/json", true
+	case schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{}):
+		// The edition's default table gives an `array` "the item-type
+		// default", not its container's application/json: the type that
+		// decides is the resolved `items` declaration. On multipart this is
+		// invisible because an array property expands into one part per item,
+		// each already carrying the item's own schema; on the content-based
+		// urlencoded lane the whole array rides one field, and reading
+		// application/json off the container there would author bytes the
+		// edition never selected. R4 (ratified 2026-09-01) reads the table
+		// literally, and the urlencoded lane refuses-or-configures where the
+		// item-derived selection defines no serialization for a container.
+		if depth > 8 {
+			return "", false
+		}
+		items := resolvedMultipartItems(schema, map[*openapi3.Schema]bool{})
+		if items == nil {
+			return "", false
+		}
+		return defaultRevision3PartContentTypeAt(items, is30, depth+1)
 	default:
 		return "", false
 	}
+}
+
+// urlencodedArrayNeedsPropertyMedia reports the content-based urlencoded
+// lane's ungoverned cell: an `array` property, riding one field as a whole
+// compound, whose item-derived default selects a media type that defines no
+// serialization for a container. application/json does define one and is
+// therefore governed; text/plain and application/octet-stream do not, and this
+// specification authors no bytes there -- the property needs an explicit
+// Encoding `contentType` or the `propertyMedia` choice. A container with no
+// resolvable item-type default at all is a different cell that no choice
+// repairs, so it is not reported here.
+func urlencodedArrayNeedsPropertyMedia(schema *openapi3.Schema, is30 bool) bool {
+	if schema == nil || !schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{}) {
+		return false
+	}
+	items := resolvedMultipartItems(schema, map[*openapi3.Schema]bool{})
+	if items == nil {
+		return false
+	}
+	// A typeless item declaration has no default concrete type on either
+	// edition line, which is the same "selection yields no single concrete
+	// media type" cell §9.3's configuration point already names.
+	if resolveDeclaration(items, is30).typeless() {
+		return true
+	}
+	selected, ok := defaultRevision3PartContentType(schema, is30)
+	if !ok {
+		// No item-type default resolves at all -- a choice applicator that
+		// supplies no single resolved member, or a union that does not
+		// collapse. Section 5.2 leaves that property with no resolved member
+		// declaration, so no media choice repairs it and the ordinary refusal
+		// stands.
+		return false
+	}
+	parsed, err := parseMediaType(selected)
+	if err != nil {
+		return false
+	}
+	return !isJSONMediaType(parsed.base)
 }
 
 type revision3PropertyCarriageMode uint8
@@ -3231,6 +3315,23 @@ func buildURLEncodedBodyForRevision(doc *openapi3.T, media *openapi3.MediaType, 
 			propertySchema, propertyNullable = effectiveRevision3PartSchema(propertySchema, is30)
 			if propertyNullable && fields[name] == nil {
 				continue // §9.2: a JSON null value elides the nullable optional field
+			}
+			// R4 (ratified 2026-09-01). On this lane the whole compound rides
+			// one field, so the media type the default table selects has to
+			// define the bytes of the CONTAINER. The item-type default can
+			// select one that does not -- text/plain for primitive items,
+			// application/octet-stream for encoded-string items -- and no
+			// accepted edition says what an array looks like there. This
+			// specification authors no bytes for that cell: the property needs
+			// an explicit single concrete Encoding `contentType` in the
+			// artifact or the `propertyMedia` choice, and without one the
+			// invocation refuses before dispatch as the context-required
+			// species.
+			if (enc == nil || enc.ContentType == "") && urlencodedArrayNeedsPropertyMedia(propertySchema, is30) {
+				selected, _ := defaultRevision3PartContentType(propertySchema, is30)
+				return "", fmt.Errorf(
+					"form field %q is an array whose item-type default %s defines no serialization for the whole value; configuration.propertyMedia.%s is required",
+					name, selected, name)
 			}
 			contentType, err := revision3PartContentType(propertySchema, enc, is30)
 			if err != nil {

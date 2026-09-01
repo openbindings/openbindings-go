@@ -48,6 +48,28 @@ package openapi
 //     urlencoded cells still refuse because that lane has no octet boundary.
 //     `empty-array` remains refused on the narrower ground that its explicit
 //     empty type set admits no instance.
+// R4 (ratified 2026-09-01): TWO cells moved from admitted to
+// missing-required-choice -- 3.1.2|urlencoded|array-null on both spellings. A
+// `type: ["array", "null"]` property collapses to `array`, and on the content
+// lane the whole array rides one field. The editions derive an array's default
+// from its ITEMS, here text/plain, under which no edition states an array's
+// bytes; the prior application/json emission read the default off the
+// container instead. The remedy is the section 9.3 `propertyMedia` choice,
+// which this table supplies for no cell. The multipart sibling is unaffected:
+// there the array expands into one part per item.
+// KNOWN TWIN DIVERGENCE, left open deliberately on 2026-09-01, on exactly one
+// cell: 3.1.2|multipart/form-data|boolean-true|plain. These engines admit
+// `anyOf: [{}, {not: {}}]` as a typeless part and reach an emission error; the
+// TypeScript engine refuses it. Section 5.2 of both 3.x documents skips only a
+// branch "whose resolved declaration declares only `null`" and supplies a
+// single resolved member "only when exactly one candidate remains", and `{}`
+// and `{not: {}}` are two candidates -- so refusing is the reading the
+// documents state and these engines are the side that is wrong. This map is
+// also internally inconsistent about it: the |contentEncoding twin already
+// refuses, which the header rule above says cannot differ. The repair touches
+// choice resolution for every ambiguous branch, so it is queued as its own
+// change rather than folded into R4, and this cell is the only entry in this
+// table that the two languages do not share.
 var unionTypeCarriageExpectations = map[string]string{
 	"3.0.4|application/x-www-form-urlencoded|absent-type|contentEncoding":    "refused",
 	"3.0.4|application/x-www-form-urlencoded|absent-type|plain":              "refused",
@@ -107,8 +129,8 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.0.4|multipart/form-data|string|plain":                                 "admitted;value=text/plain:x;null=text/plain:",
 	"3.1.2|application/x-www-form-urlencoded|absent-type|contentEncoding":    "refused",
 	"3.1.2|application/x-www-form-urlencoded|absent-type|plain":              "refused",
-	"3.1.2|application/x-www-form-urlencoded|array-null|contentEncoding":     "admitted;value=p=%5B%22a%22%5D;null=elided",
-	"3.1.2|application/x-www-form-urlencoded|array-null|plain":               "admitted;value=p=%5B%22a%22%5D;null=elided",
+	"3.1.2|application/x-www-form-urlencoded|array-null|contentEncoding":     "missing-required-choice",
+	"3.1.2|application/x-www-form-urlencoded|array-null|plain":               "missing-required-choice",
 	"3.1.2|application/x-www-form-urlencoded|boolean-true|contentEncoding":   "refused",
 	"3.1.2|application/x-www-form-urlencoded|boolean-true|plain":             "refused",
 	"3.1.2|application/x-www-form-urlencoded|empty-array|contentEncoding":    "refused",

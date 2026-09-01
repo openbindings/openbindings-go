@@ -14,7 +14,7 @@ import (
 // identical file is executed by openbindings-go/formats/openapi and by
 // openapi-client/typescript/src (and carried by openbindings-ts's openapi
 // package); changing it in one engine without the others fails here.
-const urlencodedContentPathCasesDigest = "25b8052eabb45a8934f09ce5c61be95fcaf736a9d4cde6638a8d6bb918d690c0"
+const urlencodedContentPathCasesDigest = "e2e3e7588fb319147e51784215b61487ff121f33bb343d915e409acaa0be71e7"
 
 type urlencodedContentPathCase struct {
 	Name           string         `json:"name"`
@@ -102,8 +102,16 @@ func urlencodedContentPathDecision(t *testing.T, c urlencodedContentPathCase) st
 	if item == nil || item.Post == nil {
 		t.Fatalf("%s: loaded document has no form operation", c.Name)
 	}
-	if _, err := planRequestBodiesFor(doc, item.Post, BindingSpec); err != nil {
+	plans, err := planRequestBodiesFor(doc, item.Post, BindingSpec)
+	if err != nil {
 		return "refused"
+	}
+	// R4: a cell whose item-type default defines no serialization for the
+	// container is dispatchable once one `propertyMedia` choice is supplied.
+	// This table supplies none, so the cell is reported as the required choice
+	// rather than collapsed into an undifferentiated build error.
+	if plansRequirePropertyMedia(plans) {
+		return "missing-required-choice"
 	}
 	media := item.Post.RequestBody.Value.Content["application/x-www-form-urlencoded"]
 	if media == nil {
