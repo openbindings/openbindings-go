@@ -28,7 +28,7 @@ func TestLoadRefusesAnUnimplementedCorpusRevision(t *testing.T) {
 			`"expected":{"outcome":"refused","rules":["OAPI-P-03"]}}]}`
 	}
 	for _, unsupported := range []string{
-		`"format":"openbindings.binding-spec-synthesis-scenarios@4",`,
+		`"format":"openbindings.binding-spec-synthesis-scenarios@3",`,
 		`"format":"openbindings.binding-spec-synthesis-scenarios@6",`,
 		``,
 	} {

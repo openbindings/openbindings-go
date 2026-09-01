@@ -18,11 +18,19 @@ import (
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
-// Format is the exact portable synthesis-scenario format this runner
-// implements. A file naming any other revision is refused rather than run:
-// a runner that silently skips what it does not understand reports green
-// having verified none of it.
+// Format is the newest portable synthesis-scenario format this runner
+// implements. Revision 5 is additive over revision 4 (it adds targetless
+// dependency coverage), so a revision-4 file runs under exactly the same
+// semantics; the corpus schema pins the OpenAPI families to @5 and every
+// other family to @4 until a revision of its own warrants the bump. A file
+// naming any OTHER revision is refused rather than run: a runner that
+// silently skips what it does not understand reports green having
+// verified none of it.
 const Format = "openbindings.binding-spec-synthesis-scenarios@5"
+
+// LegacyFormat is the prior revision this runner also accepts, on the terms
+// above and matching the TypeScript twin's loader.
+const LegacyFormat = "openbindings.binding-spec-synthesis-scenarios@4"
 
 type File struct {
 	Format      string     `json:"format"`
@@ -85,7 +93,7 @@ func Load(root, family string) (*File, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return nil, err
 	}
-	if file.Format != Format {
+	if file.Format != Format && file.Format != LegacyFormat {
 		return nil, fmt.Errorf("%s: unsupported synthesis scenario format %q", family, file.Format)
 	}
 	if file.Family != family || len(file.Scenarios) == 0 {
