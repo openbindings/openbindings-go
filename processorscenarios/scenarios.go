@@ -6,6 +6,7 @@
 package processorscenarios
 
 import (
+	"slices"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,7 +126,16 @@ func Load(root, family string) (*File, error) {
 // LoadPath reads a scenario file from an explicit path. It lets stronger
 // project profiles reuse the same language-neutral harness without claiming
 // that their assertions are published binding-specification conformance.
-func LoadPath(path, family, format string) (*File, error) {
+//
+// More than one format may be accepted, and a reader that understands the
+// newest one should say so for its predecessors too when the revisions are
+// additive: revision 3 only ADDS the `notContains` assertion to revision 2,
+// so a revision-3 reader interprets a revision-2 file exactly as a revision-2
+// reader would. Naming a single format instead couples the corpus and the
+// engines into lockstep — neither repository's CI can be green until both
+// merge — for a difference that changes nothing about how the older file
+// reads.
+func LoadPath(path, family string, formats ...string) (*File, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -134,7 +144,7 @@ func LoadPath(path, family, format string) (*File, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return nil, err
 	}
-	if file.Format != format {
+	if !slices.Contains(formats, file.Format) {
 		return nil, fmt.Errorf("%s: unsupported scenario format %q", family, file.Format)
 	}
 	if file.Family != family || len(file.Scenarios) == 0 {

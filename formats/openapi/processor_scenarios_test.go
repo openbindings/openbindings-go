@@ -241,7 +241,11 @@ func TestProcessorScenarios(t *testing.T) {
 			file, err := loadOpenAPIProcessorScenarioFile(
 				filepath.Join(root, "binding-specs", "processor", family.name+".json"),
 				family.name,
+				// Revision 3 adds `notContains`; a revision-3 reader reads a
+				// revision-2 file identically, so both are accepted and the
+				// corpus and the engines can merge in either order.
 				"openbindings.binding-spec-processor-scenarios@3",
+				"openbindings.binding-spec-processor-scenarios@2",
 			)
 			if err != nil {
 				if os.Getenv("OB_CORPUS_REQUIRED") != "" {
@@ -574,8 +578,8 @@ func numberAsInt(value any) (int, bool) {
 	}
 }
 
-func loadOpenAPIProcessorScenarioFile(path, family, format string) (*processorscenarios.File, error) {
-	file, err := processorscenarios.LoadPath(path, family, format)
+func loadOpenAPIProcessorScenarioFile(path, family string, formats ...string) (*processorscenarios.File, error) {
+	file, err := processorscenarios.LoadPath(path, family, formats...)
 	if err != nil || family != "openapi-2.0" {
 		return file, err
 	}
