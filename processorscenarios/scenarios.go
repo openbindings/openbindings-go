@@ -64,12 +64,17 @@ type Assertion struct {
 	OneOf     []any  `json:"oneOf,omitempty"`
 	SetEquals []any  `json:"setEquals,omitempty"`
 	Contains  any    `json:"contains,omitempty"`
+	// NotContains pins the ABSENCE of a substring or member: a header never
+	// emitted, a field never serialized. Corpus revision 3.
+	NotContains any `json:"notContains,omitempty"`
 
-	equalsPresent   bool
-	containsPresent bool
+	equalsPresent      bool
+	containsPresent    bool
+	notContainsPresent bool
 }
 
-// UnmarshalJSON preserves presence for equals:null and contains:null.
+// UnmarshalJSON preserves presence for equals:null, contains:null, and
+// notContains:null.
 func (a *Assertion) UnmarshalJSON(data []byte) error {
 	type wire Assertion
 	var raw map[string]json.RawMessage
@@ -83,6 +88,7 @@ func (a *Assertion) UnmarshalJSON(data []byte) error {
 	*a = Assertion(decoded)
 	_, a.equalsPresent = raw["equals"]
 	_, a.containsPresent = raw["contains"]
+	_, a.notContainsPresent = raw["notContains"]
 	return nil
 }
 
@@ -205,6 +211,10 @@ func CheckAssertions(root any, assertions []Assertion) error {
 		case assertion.containsPresent:
 			if !contains(value, assertion.Contains) {
 				return fmt.Errorf("%s = %s, want to contain %s", assertion.Path, printable(value), printable(assertion.Contains))
+			}
+		case assertion.notContainsPresent:
+			if contains(value, assertion.NotContains) {
+				return fmt.Errorf("%s = %s, want NOT to contain %s", assertion.Path, printable(value), printable(assertion.NotContains))
 			}
 		default:
 			return fmt.Errorf("%s has no comparison operator", assertion.Path)

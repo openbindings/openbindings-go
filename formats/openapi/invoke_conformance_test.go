@@ -36,6 +36,22 @@ func invokeWithParameterConversion(t *testing.T, spec, selector string, input an
 	return driveSingle(t, call, input)
 }
 
+// invokeWithParameterConversionAndContext drives one invocation with both a
+// converter and binding context, which the propertyMedia probes need: the
+// choice is context and the sibling scalar still routes through the converter.
+func invokeWithParameterConversionAndContext(t *testing.T, spec, selector string, bindingContext map[string]any, input any) (any, *invoke.InvocationError) {
+	t.Helper()
+	spec = withDeclaredJSONResponses(t, spec)
+	call := NewInvokerWithOptions(RuntimeOptions{ParameterConversion: func(value any) (string, error) {
+		return fmt.Sprint(value), nil
+	}}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
+		Selector: selector,
+		Context:  bindingContext,
+	})
+	return driveSingle(t, call, input)
+}
+
 func invokeWithContext(t *testing.T, spec, selector string, bindingContext map[string]any, input any) (any, *invoke.InvocationError) {
 	t.Helper()
 	spec = withDeclaredJSONResponses(t, spec)
@@ -845,15 +861,43 @@ func TestInvoke_URLEncodedBodyOnTheWire(t *testing.T) {
 	    "responses": {"200": {"description": "ok"}}
 	  }}}
 	}`, srv.URL)
-	_, ierr := invokeWithParameterConversion(t, spec, "#/paths/~1form/post", map[string]any{"body": map[string]any{
+	input := map[string]any{"body": map[string]any{
 		"name": "a b", "ids": []any{float64(1), float64(2)},
-	}})
-	if ierr != nil {
+	}}
+
+	// R4 (ratified 2026-09-01): `ids` is an array of integers on the CONTENT
+	// lane, so it rides one field as a whole compound and its item-type
+	// default is text/plain, under which no accepted edition defines an
+	// array's bytes. With no `propertyMedia` choice the invocation refuses
+	// before dispatch as the context-required species. Before R4 this emitted
+	// `ids=%5B%221%22%2C%222%22%5D` -- container JSON no edition selected,
+	// with the integers stringified on the way through.
+	if _, ierr := invokeWithParameterConversion(t, spec, "#/paths/~1form/post", input); ierr == nil {
+		t.Fatal("invoke without a propertyMedia choice succeeded, want the context-required refusal")
+	} else if ierr.Code != "CONTEXT_REQUIRED" {
 		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
+	}
+
+	// With the choice supplied the operation dispatches, and the chosen lane
+	// -- not a container default -- decides the bytes.
+	_, ierr := invokeWithParameterConversionAndContext(t, spec, "#/paths/~1form/post", map[string]any{
+		"configuration": map[string]any{"propertyMedia": map[string]any{"ids": "application/json"}},
+	}, input)
+	if ierr != nil {
+		t.Fatalf("invoke: %s: %#v", ierr.Code, ierr)
 	}
 	if gotCT != "application/x-www-form-urlencoded" {
 		t.Errorf("Content-Type = %q", gotCT)
 	}
+	// The array's items reach the wire as `["1","2"]`, not `[1,2]`: this
+	// adapter runs the parameterConversion converter over them before the
+	// engine sees the value. Given the same document and input the engine
+	// alone emits `ids=%5B1%2C2%5D`. Section 9.3's pin says the converter is
+	// "scoped to the `schema`-form and RFC 6570-style paths", which the
+	// content lane is not, so the adapter is the side that looks wrong -- but
+	// the behavior predates R4 and is unchanged by it, so this assertion
+	// records what ships today rather than asserting a fix this change did not
+	// make. Queued separately.
 	if string(gotBody) != "ids=%5B%221%22%2C%222%22%5D&name=a+b" {
 		t.Errorf("body = %q", gotBody)
 	}

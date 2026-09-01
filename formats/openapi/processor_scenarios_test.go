@@ -241,7 +241,7 @@ func TestProcessorScenarios(t *testing.T) {
 			file, err := loadOpenAPIProcessorScenarioFile(
 				filepath.Join(root, "binding-specs", "processor", family.name+".json"),
 				family.name,
-				"openbindings.binding-spec-processor-scenarios@2",
+				"openbindings.binding-spec-processor-scenarios@3",
 			)
 			if err != nil {
 				if os.Getenv("OB_CORPUS_REQUIRED") != "" {
