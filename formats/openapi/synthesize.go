@@ -287,6 +287,25 @@ func convertArtifactToInterfaceWithOverlay(doc *openapi3.T, artifact *openapicli
 			}
 			return iface, unrealizableOperation(opKey, reason)
 		}
+		// The serialization-validity check formerly ran INSIDE the content
+		// check above and inherited its reason code and message -- false
+		// evidence for a style-lane parameter, which declares no content.
+		// It is its own exclusion, spelled as the TS twin already spells it
+		// (SS-46's recorded disagreement, resolved 2026-08-31).
+		if parameter, serErr := invalidParameterSerializationFor(params, bindingSpec); parameter != "" {
+			reason := serErr
+			if onUnrealizable != nil {
+				onUnrealizable(unrealizableTarget{
+					selector:     selector,
+					operationKey: opKey,
+					reasonCode:   "openapi.parameter_serialization_excluded",
+					rule:         openAPIRule(bindingSpec, "P-02"),
+					message:      reason,
+				})
+				continue
+			}
+			return iface, unrealizableOperation(opKey, reason)
+		}
 
 		// A style-lane parameter declaring a member with no defined
 		// expansion can never be populated faithfully: every value
@@ -1601,17 +1620,31 @@ func schemaWithParameterDescription(schema map[string]any, description string) m
 // Creation-time soundness requires excluding the target rather than emitting
 // an operation that is statically guaranteed to refuse when that parameter is
 // populated.
+
+// invalidParameterSerializationFor reports the first effective parameter
+// whose declared serialization method the governing edition defines no
+// expansion for, with the validator's own message as the evidence.
+func invalidParameterSerializationFor(params openapi3.Parameters, bindingSpec string) (string, string) {
+	if !hasMediaFidelity(bindingSpec) || bindingSpec == BindingSpecOpenAPI32 {
+		return "", ""
+	}
+	for _, ref := range params {
+		if ref == nil || ref.Value == nil {
+			continue
+		}
+		if err := validateRevision3ParameterSerialization(ref.Value, bindingSpec == BindingSpecOpenAPI30); err != nil {
+			return ref.Value.Name, fmt.Sprintf("parameter %q: %s", ref.Value.Name, err.Error())
+		}
+	}
+	return "", ""
+}
+
 func unsupportedParameterContentFor(params openapi3.Parameters, bindingSpec string) string {
 	for _, ref := range params {
 		if ref == nil || ref.Value == nil {
 			continue
 		}
 		param := ref.Value
-		if hasMediaFidelity(bindingSpec) && bindingSpec != BindingSpecOpenAPI32 {
-			if err := validateRevision3ParameterSerialization(param, bindingSpec == BindingSpecOpenAPI30); err != nil {
-				return param.Name
-			}
-		}
 		if len(param.Content) == 0 {
 			continue
 		}
