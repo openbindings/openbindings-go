@@ -520,6 +520,11 @@ func openAPIRequestMediaCoverage(doc *openapi3.T, op *openapi3.Operation, pathIt
 }
 
 func openAPIInboundDependencyCoverage(doc *openapi3.T, artifact *openapiclient.Artifact, iface *openbindings.Interface, unrealizable map[string]unrealizableTarget, bindingSpec string) []synthesize.SynthesisCoverageEntry {
+	// Every unit this function reports comes from the INBOUND inventory --
+	// callbacks and webhooks -- so all of them are dependency-kind units
+	// whatever became of them. Scope names what the source unit is; status
+	// names its disposition. Filing the removed ones under `target` said they
+	// were addressable operations, which they never were.
 	inventory := openAPIInboundOperationInventory(doc, artifact)
 	if len(inventory) == 0 {
 		return nil
@@ -541,7 +546,7 @@ func openAPIInboundDependencyCoverage(doc *openapi3.T, artifact *openapiclient.A
 			}
 			entries = append(entries, synthesize.SynthesisCoverageEntry{
 				SourceIndex: 0, SourceRef: disposition.Reference.Ref,
-				Scope: synthesize.SynthesisCoverageTarget, Status: synthesize.SynthesisExcluded,
+				Scope: synthesize.SynthesisCoverageDependency, Status: synthesize.SynthesisExcluded,
 				ReasonCode: "openapi.inbound_dependency_excluded", Rule: openAPIRule(bindingSpec, "P-01"), Message: message,
 			})
 			continue
@@ -551,7 +556,7 @@ func openAPIInboundDependencyCoverage(doc *openapi3.T, artifact *openapiclient.A
 		if skipped, ok := unrealizable[disposition.Reference.Ref]; ok {
 			entries = append(entries, synthesize.SynthesisCoverageEntry{
 				SourceIndex: 0, SourceRef: disposition.Reference.Ref,
-				Scope: synthesize.SynthesisCoverageTarget, Status: synthesize.SynthesisExcluded,
+				Scope: synthesize.SynthesisCoverageDependency, Status: synthesize.SynthesisExcluded,
 				ReasonCode: skipped.reasonCode, Rule: skipped.rule, Message: skipped.message,
 			})
 			continue
@@ -565,7 +570,7 @@ func openAPIInboundDependencyCoverage(doc *openapi3.T, artifact *openapiclient.A
 		}
 		entries = append(entries, synthesize.SynthesisCoverageEntry{
 			SourceIndex: 0, SourceRef: disposition.Reference.Ref,
-			Scope: synthesize.SynthesisCoverageTarget, Status: synthesize.SynthesisImplementationUnsupported,
+			Scope: synthesize.SynthesisCoverageDependency, Status: synthesize.SynthesisImplementationUnsupported,
 			ReasonCode: "openapi.missing_emitted_dependency", Rule: openAPIRule(bindingSpec, "S-01"),
 			Message: "the synthesizer returned without emitting this supported inbound dependency contract",
 		})
