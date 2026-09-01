@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/getkin/kin-openapi/openapi3"
+	openapiclient "github.com/openbindings/openapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -22,7 +24,34 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	if err != nil {
 		return nil, err
 	}
-	doc, schemaOverlays, entryBytes, err := loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, source.Content)
+	// The 3.2 line loads through the client-owned Artifact loader, exactly as
+	// synthesizeObserved does. loadDocumentForSynthesis is the shared 3.0/3.1
+	// loader and its union gate refuses 3.2 outright, BEFORE the
+	// per-binding-spec gate below -- which admits it -- is ever consulted.
+	// Inspection had no branch here at all, so `ob inspect` was the one
+	// command in the CLI that could not read a 3.2 document while every other
+	// one could, synthesis and invocation included.
+	var (
+		doc            *openapi3.T
+		artifact       *openapiclient.Artifact
+		schemaOverlays *rawSchemaOverlayCollector
+		entryBytes     []byte
+	)
+	if source.BindingSpec == BindingSpecOpenAPI32 {
+		var content []byte
+		if source.Content != nil {
+			content, err = openbindings.ContentToBytes(source.Content)
+		}
+		if err == nil {
+			artifact, err = openapiclient.LoadArtifact(ctx, openapiclient.Source{Location: loadLocation, Content: content}, openapiclient.ArtifactLoadOptions{HTTPClient: c.resolverClient(), AllowExternalRefs: true})
+		}
+		if artifact != nil {
+			doc = artifact.Document
+			entryBytes = artifact.EntryBytes()
+		}
+	} else {
+		doc, schemaOverlays, entryBytes, err = loadDocumentForSynthesis(ctx, c.resolverClient(), loadLocation, source.Content)
+	}
 	// Inspection shares synthesis's acceptance floor: a ladder-invalid target
 	// is not advertised as bindable, and a whole-source refusal (§3 part 2)
 	// refuses inspection the same way it refuses synthesis -- including when
@@ -37,7 +66,13 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	if err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
-	schemaOverlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
+	// The 3.2 lane carries no overlay collector: its artifact loader resolves
+	// the closure itself. Mirrors synthesizeObserved.
+	if schemaOverlays != nil {
+		schemaOverlays.setExternalComponents(internalizeExternalRefs(ctx, doc))
+	} else {
+		internalizeExternalRefs(ctx, doc)
+	}
 
 	// Inspection and synthesis share the same realizability filter: an OAS
 	// operation whose synthesizable operation boundary cannot be represented is
@@ -48,7 +83,10 @@ func (c *Synthesizer) InspectSource(ctx context.Context, source *openbindings.So
 	if err := checkAcceptedOpenAPIVersionForBindingSpec(doc, bindingSpec); err != nil {
 		return nil, fmt.Errorf("load OpenAPI document: %w", err)
 	}
-	iface, err := convertDocToInterfaceWithOverlay(doc, source.Location, bindingSpec, nil, func(unrealizableTarget) {}, schemaOverlays, floor)
+	// Pass the artifact through: convertDocToInterfaceWithOverlay is a wrapper
+	// that hands the converter a nil artifact, which is right for 3.0/3.1 and
+	// loses the 3.2 lane's resolved artifact.
+	iface, err := convertArtifactToInterfaceWithOverlay(doc, artifact, source.Location, bindingSpec, nil, func(unrealizableTarget) {}, schemaOverlays, floor)
 	if err != nil {
 		return nil, err
 	}
