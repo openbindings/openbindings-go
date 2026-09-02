@@ -935,6 +935,9 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 				continue
 			}
 		}
+		if resolveDeclaration(propertySchema, is30).admitsNoInstance() {
+			continue // §5.2's empty intersection: the boolean false's resolved form, same accounting
+		}
 		propertySchema, _ = effectiveRevision3PartSchema(propertySchema, is30)
 		var enc *openapi3.Encoding
 		if media != nil {
@@ -992,6 +995,9 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 			if !literal {
 				continue // an unsatisfiable property has no admissible runtime value
 			}
+		}
+		if resolveDeclaration(partSchema, is30).admitsNoInstance() {
+			continue // §5.2's empty intersection: the boolean false's resolved form — an unreachable defect, not a routed field (§3.2)
 		}
 		partSchema, _ = effectiveRevision3PartSchema(partSchema, is30)
 		var enc *openapi3.Encoding

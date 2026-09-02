@@ -45,8 +45,11 @@ func (d resolvedDeclaration) admitsStringAsSoleNonNullType() bool {
 	return d.inner.AdmitsStringAsSoleNonNullType()
 }
 
-func (d resolvedDeclaration) typeless() bool   { return d.inner.Typeless() }
-func (d resolvedDeclaration) admitsNull() bool { return d.inner.AdmitsNull() }
+func (d resolvedDeclaration) typeless() bool { return d.inner.Typeless() }
+
+// admitsNoInstance: a boolean false conjunct or §5.2's empty intersection (delegated to the client engine).
+func (d resolvedDeclaration) admitsNoInstance() bool { return d.inner.AdmitsNoInstance() }
+func (d resolvedDeclaration) admitsNull() bool       { return d.inner.AdmitsNull() }
 func (d resolvedDeclaration) soleNonNullType() (string, bool) {
 	return d.inner.SoleNonNullType()
 }
