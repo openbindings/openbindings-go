@@ -13,10 +13,11 @@ import (
 
 func TestSwagger20AdapterOwnsExactLoadAndSelectorGates(t *testing.T) {
 	tests := []struct {
-		name     string
-		artifact string
-		selector string
-		wantCode string
+		name      string
+		artifact  string
+		selector  string
+		wantCode  string
+		wantPoint string
 	}{
 		{
 			name: "exact edition",
@@ -40,11 +41,18 @@ func TestSwagger20AdapterOwnsExactLoadAndSelectorGates(t *testing.T) {
 			wantCode: openapiclient.CodeRefused,
 		},
 		{
+			// A self-contained document with no host and no retrieval location
+			// leaves the target unresolved, and §10 names the recovery in its
+			// own words: "a complete configured URL below remains the available
+			// recovery". A refusal with a stated recovery through a named §12.1
+			// point is §3.2's context-required species, so this row asserts the
+			// point rather than a bare code the caller cannot act on.
 			name: "prepared target needs pass-two server override",
 			artifact: `{"swagger":"2.0","info":{"title":"valid","version":"1"},` +
 				`"paths":{"/pets":{"get":{"responses":{"204":{"description":"ok"}}}}}}`,
-			selector: "#/paths/~1pets/get",
-			wantCode: openapiclient.CodeRefused,
+			selector:  "#/paths/~1pets/get",
+			wantCode:  invoke.ErrCodeContextRequired,
+			wantPoint: "server",
 		},
 	}
 	for _, testCase := range tests {
@@ -59,6 +67,12 @@ func TestSwagger20AdapterOwnsExactLoadAndSelectorGates(t *testing.T) {
 			_, invocationErr := driveSingle(t, call, nil)
 			if invocationErr == nil || invocationErr.Code != testCase.wantCode {
 				t.Fatalf("invocation error = %#v, want %s", invocationErr, testCase.wantCode)
+			}
+			if testCase.wantPoint == "" {
+				return
+			}
+			if requirement := swagger20RequirementByPoint(invoke.ContextRequiredFrom(invocationErr), testCase.wantPoint); requirement == nil {
+				t.Fatalf("challenge = %#v, want a config.value requirement at %q", invocationErr.Data, testCase.wantPoint)
 			}
 		})
 	}
