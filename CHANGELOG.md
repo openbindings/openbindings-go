@@ -456,21 +456,6 @@
 
 ### Fixed
 
-- **Coverage validation keys an alternative or projection entry on its
-  operation and binding, not on its source unit alone.** The published
-  interface-synthesizer contract defines a unit as an independently selectable
-  alternative "whose omission would remove a source-permitted invocation
-  path", so one source declaration inherited by several operations (an OAS 2.0
-  root-level `consumes` member; a root-level `servers` or `security` member on
-  any line) is one unit per operation. `NewSynthesisResult` previously keyed
-  duplicates on `(sourceIndex, scope, sourceRef)` and failed the whole coverage
-  call on any 2.0 document with two body operations inheriting root `consumes`,
-  and on any 3.x document with two operations sharing an unusable root server or
-  security requirement. Target and dependency scopes keep their source-unit
-  key; the adapters' `sourceRef` is unchanged. Pinned by
-  `OAPI20-SS-12` and `OAPI32-SS-12`; the TypeScript SDK enforces the identical
-  key.
-
 - **Compatibility checking now handles the boolean `false` schema — the
   spec's spelling for "carries no caller input" / "emits no output".**
   `CheckInterfaceCompatibility` previously rewrote `false` to its object
