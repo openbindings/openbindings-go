@@ -147,11 +147,8 @@ func (e *Runtime) prepareSwagger20Binding(ctx context.Context, args *invoke.Bind
 	if err != nil || operation.Excluded {
 		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
 	}
-	// The asserted scope is the client's own: the resolved server base once it
-	// resolves, else the source location, the same two scopes the 3.x preflight
-	// asserts (`serverBase`, falling back to `args.Source.Location`).
-	target := prepared.ContextTarget()
-	details := swagger20ConfigurationRequirements(operation, args.Context, e, target)
+	target := args.Source.Location
+	details := swagger20ConfigurationRequirements(operation, args.Context, e)
 	securityDetails, err := swagger20SecurityRequirements(operation, configuration.securityAlternative, args.Context, target)
 	if err != nil {
 		return nil, invoke.NewInvocationError(openapiclient.CodeRefused)
@@ -159,7 +156,7 @@ func (e *Runtime) prepareSwagger20Binding(ctx context.Context, args *invoke.Bind
 	return mergeContextRequirements(details, securityDetails), nil
 }
 
-func swagger20ConfigurationRequirements(operation openapiclient.Swagger20SynthesisOperation, bindCtx map[string]any, runtime *Runtime, target string) *invoke.ContextRequiredDetails {
+func swagger20ConfigurationRequirements(operation openapiclient.Swagger20SynthesisOperation, bindCtx map[string]any, runtime *Runtime) *invoke.ContextRequiredDetails {
 	configured := invoke.ContextConfiguration(bindCtx)
 	durable := true
 	var requirements []invoke.ContextRequirement
@@ -215,7 +212,7 @@ func swagger20ConfigurationRequirements(operation openapiclient.Swagger20Synthes
 	if len(requirements) == 0 {
 		return nil
 	}
-	return &invoke.ContextRequiredDetails{Target: target, Alternatives: []invoke.ContextAlternative{{Requirements: requirements}}}
+	return &invoke.ContextRequiredDetails{Alternatives: []invoke.ContextAlternative{{Requirements: requirements}}}
 }
 
 func swagger20SynthesisParameterIsFile(parameter openapiclient.Swagger20SynthesisParameter) bool {
@@ -243,20 +240,23 @@ func swagger20SecurityRequirements(operation openapiclient.Swagger20SynthesisOpe
 	if alternative.Anonymous {
 		return nil, nil
 	}
-	// The requirement is the client's own builder, the same one its invocation
-	// challenge uses, so the two surfaces carry one payload (type, name,
-	// scopes, and the durable flag) by construction rather than by two
-	// hand-written copies staying in step.
 	requirements := make([]invoke.ContextRequirement, 0, len(alternative.Schemes))
 	for _, scheme := range alternative.Schemes {
-		built, ok := openapiclient.Swagger20CredentialRequirement(scheme.Type, scheme.Name, scheme.Scopes)
-		if !ok {
+		requirement := invoke.ContextRequirement{Name: scheme.Name}
+		switch scheme.Type {
+		case "basic":
+			requirement.Type = "auth.basic"
+		case "apiKey":
+			requirement.Type = "auth.apiKey"
+		case "oauth2":
+			requirement.Type = "auth.oauth2"
+			if len(scheme.Scopes) > 0 {
+				requirement.Extra = map[string]any{"scopes": append([]string(nil), scheme.Scopes...)}
+			}
+		default:
 			return nil, fmt.Errorf("unknown Swagger 2.0 security scheme type %q", scheme.Type)
 		}
-		requirements = append(requirements, invoke.ContextRequirement{
-			Type: built.Type, Name: built.Name, Durable: built.Durable,
-			Description: built.Description, Extra: built.Extra,
-		})
+		requirements = append(requirements, requirement)
 	}
 	details := &invoke.ContextRequiredDetails{Target: target, Alternatives: []invoke.ContextAlternative{{Requirements: requirements}}}
 	if invoke.ContextSatisfies(bindCtx, details) {
