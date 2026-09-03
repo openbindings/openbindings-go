@@ -47,12 +47,6 @@ func (d resolvedDeclaration) admitsStringAsSoleNonNullType() bool {
 
 func (d resolvedDeclaration) typeless() bool { return d.inner.Typeless() }
 
-// determinesNoDefault: the editions' default contentType table states no row
-// for the declaration (typeless on 3.0; a multi-type set on 3.1/3.2), so the
-// propertyMedia point supplies the part or field media type (delegated to the
-// client engine, whose doc comment states the per-edition basis).
-func (d resolvedDeclaration) determinesNoDefault() bool { return d.inner.DeterminesNoDefault() }
-
 // admitsNoInstance: a boolean false conjunct or §5.2's empty intersection (delegated to the client engine).
 func (d resolvedDeclaration) admitsNoInstance() bool { return d.inner.AdmitsNoInstance() }
 func (d resolvedDeclaration) admitsNull() bool       { return d.inner.AdmitsNull() }

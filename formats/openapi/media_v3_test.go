@@ -1335,16 +1335,8 @@ func TestRevision3URLEncodedNullableChoiceProperties(t *testing.T) {
 
 // §9.2's type-absent part cell on the urlencoded lane, both lines. It pinned
 // the deleted 3.0-line value-keyed convention until 2026-08-20 (escalation
-// M2), then a refusal on both lines. Since OA-F8 (2026-09-03) the lines
-// answer from their own text: the 3.0 editions state NO default-contentType
-// row for a declaration carrying no `type`, and openbindings.openapi-3.0@1
-// §9.3 requires propertyMedia "on the content-based form-urlencoded path and
-// for a multipart part alike", so the 3.0 line ADMITS the property as a
-// represented unit carrying that requirement — a body still cannot be built
-// without the choice — while the 3.1 editions state application/octet-stream
-// for the row and this revision defines no JSON-to-octet boundary on this
-// lane, so the 3.1 line refuses.
-func TestRevision3URLEncodedTypeAbsentPropertyDecidesPerLine(t *testing.T) {
+// M2); the two lines now refuse alike, each naming its own ground.
+func TestRevision3URLEncodedTypeAbsentPropertyRefusesOnEveryEdition(t *testing.T) {
 	media := &openapi3.MediaType{Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{
 		Type: &openapi3.Types{"object"},
 		Properties: openapi3.Schemas{
@@ -1353,11 +1345,11 @@ func TestRevision3URLEncodedTypeAbsentPropertyDecidesPerLine(t *testing.T) {
 	}}}
 	for _, edition := range []string{"3.0.0", "3.0.1", "3.0.2", "3.0.3", "3.0.4"} {
 		doc := &openapi3.T{OpenAPI: edition}
-		if err := validateRevision3URLEncodedMedia(doc, media); err != nil {
-			t.Fatalf("%s type-absent urlencoded property admission = %v, want admitted for the propertyMedia choice", edition, err)
+		if err := validateRevision3URLEncodedMedia(doc, media); err == nil {
+			t.Fatalf("%s type-absent urlencoded property admission = %v", edition, err)
 		}
 		if _, err := buildURLEncodedBodyForRevision(doc, media, map[string]any{"note": "x y"}, BindingSpec); err == nil {
-			t.Fatalf("%s type-absent urlencoded property encoded a body without a propertyMedia choice", edition)
+			t.Fatalf("%s type-absent urlencoded property encoded a body", edition)
 		}
 	}
 	for _, edition := range []string{"3.1.0", "3.1.1", "3.1.2"} {

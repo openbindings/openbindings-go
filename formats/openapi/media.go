@@ -952,9 +952,6 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 		if encodingRequiresPropertyMedia(enc) {
 			continue
 		}
-		if (enc == nil || enc.ContentType == "") && contentPropertyDeterminesNoDefault(propertySchema, is30) {
-			continue // invocation supplies propertyMedia; synthesis keeps the alternative
-		}
 		// R4 (ratified 2026-09-01): an array riding this lane whole, whose
 		// item-type default defines no serialization for a container, stays an
 		// ADMISSIBLE candidate carrying a required `propertyMedia` choice.
@@ -974,28 +971,6 @@ func validateRevision3URLEncodedMedia(doc *openapi3.T, media *openapi3.MediaType
 		}
 	}
 	return nil
-}
-
-// contentPropertyDeterminesNoDefault reports a content-based form or multipart
-// property whose ENCODED UNIT — the resolved items declaration of an array
-// property, the property's own resolved declaration otherwise — reaches no row
-// of the accepted editions' default contentType table (see
-// resolvedDeclaration.determinesNoDefault). Such a property is not a defect:
-// it is a represented unit carrying the propertyMedia requirement, admitted
-// here and refused before dispatch, as the context-required species, only when
-// a value reaches it without that choice.
-func contentPropertyDeterminesNoDefault(schema *openapi3.Schema, is30 bool) bool {
-	if schema == nil {
-		return false
-	}
-	unit := schema
-	if schemaTypeIs(schema, "array", map[*openapi3.Schema]bool{}) {
-		unit = resolvedMultipartItems(schema, map[*openapi3.Schema]bool{})
-		if unit == nil {
-			return false
-		}
-	}
-	return resolveDeclaration(unit, is30).determinesNoDefault()
 }
 
 func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType) error {
@@ -1050,7 +1025,7 @@ func validateRevision3MultipartMedia(doc *openapi3.T, media *openapi3.MediaType)
 				return fmt.Errorf("multipart part %q: %w", name, err)
 			}
 		}
-		if (enc == nil || enc.ContentType == "") && contentPropertyDeterminesNoDefault(contentSchema, is30) {
+		if is30 && resolveDeclaration(contentSchema, true).typeless() && (enc == nil || enc.ContentType == "") {
 			continue // invocation supplies propertyMedia; synthesis keeps the alternative
 		}
 		contentType, err := revision3PartContentType(contentSchema, enc, is30)
@@ -1095,19 +1070,7 @@ func requiredPropertyMediaNames(plan *bodyPlan) []string {
 		if encoding != nil {
 			contentType = encoding.ContentType
 		}
-		// A resolved declaration the editions' default-contentType table
-		// states no row for — typeless on the 3.0 line, a multi-type set on
-		// the 3.1 and 3.2 lines — determines no part or field media type on
-		// EITHER content-based lane, and §9.3 names propertyMedia as the
-		// missing choice. (This planner is a fork of openapi-client/go's;
-		// the same change lands there, and the shared twin tables pin both.)
-		// The 3.0 typeless clause keeps its declaration-only reading (an
-		// explicit single concrete contentType does not lift it; the shared
-		// part-content-encoding table pins that in both engines); the 3.1/3.2
-		// multi-type clause applies where no explicit contentType fixes the
-		// part type, since an explicit single concrete value fixes it under
-		// the preceding rules and no default is then consulted.
-		requiresChoice := plan.oas30 && property.typeless() || contentType == "" && property.determinesNoDefault()
+		requiresChoice := plan.oas30 && plan.family == familyMultipart && property.typeless()
 		if contentType != "" {
 			members, err := splitHTTPList(contentType)
 			if err == nil && (len(members) != 1 || isMediaRange(members[0])) {
@@ -1710,19 +1673,10 @@ func revision3PropertyCarriage(schema *openapi3.Schema, contentType parsedMediaT
 		return 0, fmt.Errorf("a typeless property has no defined urlencoded octet boundary")
 	}
 	if contentType.base == "text/plain" {
-		// The declaration must BE a type text/plain carries. A resolved set
-		// whose every non-null member is such a type — a 3.1/3.2 multi-type
-		// set reached under an explicit or configured text/plain — is carried
-		// by the one lane the media type names: a string as its characters, a
-		// number or boolean as its shortest RFC 8259 lexical form (§9.3's
-		// text/plain pin); the media type selects the lane and the lane
-		// spells every scalar it admits. A 3.0 array-valued `type` never
-		// resolves to a type set and is refused by its own rule.
 		if schemaTypeIs(schema, "string", map[*openapi3.Schema]bool{}) ||
 			schemaTypeIs(schema, "number", map[*openapi3.Schema]bool{}) ||
 			schemaTypeIs(schema, "integer", map[*openapi3.Schema]bool{}) ||
-			schemaTypeIs(schema, "boolean", map[*openapi3.Schema]bool{}) ||
-			declaration.declaresOnly("string", "number", "integer", "boolean", "null") {
+			schemaTypeIs(schema, "boolean", map[*openapi3.Schema]bool{}) {
 			return revision3PropertyText, nil
 		}
 	}

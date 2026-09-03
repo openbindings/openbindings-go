@@ -14,7 +14,7 @@ import (
 // identical file is executed by openbindings-go/formats/openapi and by
 // openapi-client/typescript/src (and carried by openbindings-ts's openapi
 // package); changing it in one engine without the others fails here.
-const urlencodedContentPathCasesDigest = "9e7c5b52d2d775b470ea5892da54e31a15ab75434a9d55bc8a53e342138ffb86"
+const urlencodedContentPathCasesDigest = "e2e3e7588fb319147e51784215b61487ff121f33bb343d915e409acaa0be71e7"
 
 type urlencodedContentPathCase struct {
 	Name           string         `json:"name"`
@@ -193,28 +193,18 @@ func TestURLEncodedContentPathDecidesIdenticallyOnBothLines(t *testing.T) {
 		t.Fatalf("covered %d shapes, want 10", len(byShape))
 	}
 	for shape, byLine := range byShape {
-		if typeAbsent[shape] {
-			continue // decided per line on each line's own ground; asserted below
-		}
 		if byLine["3.0"] != byLine["3.1"] {
-			t.Fatalf("shape %q: 3.0 line emits %q and 3.1 line emits %q; no typed shape on this lane may differ between the lines",
+			t.Fatalf("shape %q: 3.0 line emits %q and 3.1 line emits %q; no shape on this lane may differ between the lines",
 				shape, byLine["3.0"], byLine["3.1"])
 		}
 	}
-	// The type-absent shapes are the one place the lines answer from different
-	// text (OA-F8, 2026-09-03): the 3.0 editions state NO default-contentType
-	// row for a declaration carrying no `type`, and openbindings.openapi-3.0@1
-	// §9.3 requires propertyMedia on the content-based form-urlencoded path as
-	// for a multipart part, so the 3.0 line reports the missing choice; the
-	// 3.1 editions state application/octet-stream for that row and this
-	// revision defines no JSON-to-octet boundary on this lane, so the 3.1 line
-	// refuses. Neither line widened toward the other.
+	// And the converged answer for the type-absent shapes is the refusal, not
+	// some other agreement reached by widening one line.
 	for shape := range typeAbsent {
-		if byShape[shape]["3.0"] != "missing-required-choice" {
-			t.Fatalf("shape %q on the 3.0 line = %q, want missing-required-choice (no stated row; §9.3's propertyMedia point supplies the media type)", shape, byShape[shape]["3.0"])
-		}
-		if byShape[shape]["3.1"] != "refused" {
-			t.Fatalf("shape %q on the 3.1 line = %q, want refused (an octet-stream row with no boundary defined on this lane)", shape, byShape[shape]["3.1"])
+		for _, line := range []string{"3.0", "3.1"} {
+			if byShape[shape][line] != "refused" {
+				t.Fatalf("shape %q on the %s line = %q, want refused (a resolved part schema declaring no `type` refuses on every accepted edition)", shape, line, byShape[shape][line])
+			}
 		}
 	}
 }
