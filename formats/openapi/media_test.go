@@ -504,11 +504,13 @@ func TestRequestStringCarriage_DeclarationScoped(t *testing.T) {
 }
 
 // booleanTrueSchemaRef builds the JSON Schema boolean `true` literal in the
-// structural form kin-openapi round-trips it through.
+// form the loader's boolean-schema lift hands kin-openapi: the structural
+// shape plus the lift's marker. The bare structure without the marker is an
+// authored two-candidate choice under §5.2, not a literal.
 func booleanTrueSchemaRef(t *testing.T) *openapi3.SchemaRef {
 	t.Helper()
 	schema := &openapi3.Schema{}
-	if err := json.Unmarshal([]byte(`{"anyOf":[{},{"not":{}}]}`), schema); err != nil {
+	if err := json.Unmarshal([]byte(`{"anyOf":[{},{"not":{}}],"`+liftedBooleanLiteralMarker+`":true}`), schema); err != nil {
 		t.Fatalf("build boolean schema: %v", err)
 	}
 	if _, boolean := booleanSchemaLiteral(schema); !boolean {
