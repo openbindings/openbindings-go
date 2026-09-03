@@ -238,6 +238,23 @@ func TestProcessorScenarios(t *testing.T) {
 				"OAPI20-PS-133": true,
 				"OAPI20-PS-134": true,
 				"OAPI20-PS-135": true,
+				"OAPI20-PS-136": true,
+				"OAPI20-PS-137": true,
+				"OAPI20-PS-138": true,
+				"OAPI20-PS-139": true,
+				"OAPI20-PS-140": true,
+				"OAPI20-PS-141": true,
+				"OAPI20-PS-142": true,
+				"OAPI20-PS-143": true,
+				"OAPI20-PS-144": true,
+				"OAPI20-PS-145": true,
+				"OAPI20-PS-146": true,
+				"OAPI20-PS-147": true,
+				"OAPI20-PS-148": true,
+				"OAPI20-PS-149": true,
+				"OAPI20-PS-150": true,
+				"OAPI20-PS-151": true,
+				"OAPI20-PS-152": true,
 			},
 		},
 		{name: "openapi-3.0"},
@@ -540,9 +557,25 @@ func scenarioContext(scenario processorscenarios.Scenario) map[string]any {
 	}
 	if credentials, ok := scenario.Given.Runtime["credentials"].(map[string]any); ok {
 		ctx["apiKeys"] = credentials
-		if strings.HasPrefix(scenario.ID, "OAPI20-") {
-			ctx["credentials"] = credentials
+		// The corpus spells a basic credential's user-id as `userId` on every
+		// family (OAPI20-PS-65, OAPI31-PS-120); the 3.x engines read the
+		// client's named-credential shape, whose key is `username`.
+		named := map[string]any{}
+		for name, credential := range credentials {
+			if object, ok := credential.(map[string]any); ok {
+				if userID, present := object["userId"]; present {
+					copied := make(map[string]any, len(object)+1)
+					for key, value := range object {
+						copied[key] = value
+					}
+					copied["username"] = userID
+					named[name] = copied
+					continue
+				}
+			}
+			named[name] = credential
 		}
+		ctx["credentials"] = named
 	}
 	return ctx
 }
