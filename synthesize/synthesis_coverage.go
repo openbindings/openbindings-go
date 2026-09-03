@@ -47,7 +47,6 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 	}
 
 	normalizedEntries := append([]SynthesisCoverageEntry(nil), entries...)
-	seen := make(map[string]struct{}, len(normalizedEntries))
 	fullyRepresented := exhaustive
 	representedDependencies := 0
 	for index := range normalizedEntries {
@@ -61,12 +60,6 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 		if entry.Scope != SynthesisCoverageTarget && entry.Scope != SynthesisCoverageAlternative && entry.Scope != SynthesisCoverageProjection && entry.Scope != SynthesisCoverageDependency {
 			return nil, fmt.Errorf("synthesis coverage entry %d has invalid scope %q", index, entry.Scope)
 		}
-		key := fmt.Sprintf("%d\x00%s\x00%s", entry.SourceIndex, entry.Scope, entry.SourceRef)
-		if _, duplicate := seen[key]; duplicate {
-			return nil, fmt.Errorf("duplicate synthesis coverage entry for source %d %s %q", entry.SourceIndex, entry.Scope, entry.SourceRef)
-		}
-		seen[key] = struct{}{}
-
 		requirements := make(map[string]struct{}, len(entry.Requirements))
 		for _, requirement := range entry.Requirements {
 			if requirement == "" {
@@ -163,6 +156,9 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 	if representedDependencies != len(iface.Dependencies) {
 		return nil, fmt.Errorf("dependency synthesis coverage represents %d source interactions for %d emitted dependencies", representedDependencies, len(iface.Dependencies))
 	}
+	if err := rejectDuplicateCoverageUnits(normalizedEntries); err != nil {
+		return nil, err
+	}
 
 	return &SynthesizeResult{
 		Interface: iface,
@@ -173,6 +169,42 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 			Limitation:       limitation,
 		},
 	}, nil
+}
+
+// rejectDuplicateCoverageUnits enforces the published interface-synthesizer
+// contract's "one disposition for every interaction unit" over the normalized
+// entries, keyed by the identity of the unit each entry is about.
+//
+// The contract defines a unit as "an addressable target or an independently
+// selectable alternative whose omission would remove a source-permitted
+// invocation path", so an alternative is a unit AT ITS OPERATION: the same
+// source declaration inherited by several operations (an OAS 2.0 root-level
+// `consumes` member, a root-level `servers` or `security` member) is one
+// alternative per invocation path it can be omitted from, and each of those
+// carries its own disposition. A target or dependency scope is identified by
+// its source unit alone; an alternative or projection scope is identified by
+// its source unit together with the operation and binding it is about, so an
+// inherited root-level alternative appears once per operation. The adapters'
+// sourceRef stays the source unit ("#/consumes/0"); it is not made per-operation
+// to satisfy this check. Two entries with the same source unit and no
+// operation identity are still indistinguishable, and are still duplicates.
+// The check runs after normalization so an inferred bindingKey participates.
+func rejectDuplicateCoverageUnits(entries []SynthesisCoverageEntry) error {
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		key := fmt.Sprintf("%d\x00%s\x00%s", entry.SourceIndex, entry.Scope, entry.SourceRef)
+		if entry.Scope == SynthesisCoverageAlternative || entry.Scope == SynthesisCoverageProjection {
+			key += fmt.Sprintf("\x00%s\x00%s", entry.OperationKey, entry.BindingKey)
+		}
+		if _, duplicate := seen[key]; duplicate {
+			if entry.OperationKey == "" && entry.BindingKey == "" {
+				return fmt.Errorf("duplicate synthesis coverage entry for source %d %s %q", entry.SourceIndex, entry.Scope, entry.SourceRef)
+			}
+			return fmt.Errorf("duplicate synthesis coverage entry for source %d %s %q at operation %q binding %q", entry.SourceIndex, entry.Scope, entry.SourceRef, entry.OperationKey, entry.BindingKey)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
 }
 
 // RepresentedCoverageEntries returns one target-level represented entry per
