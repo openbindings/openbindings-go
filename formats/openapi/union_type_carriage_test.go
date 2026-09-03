@@ -56,9 +56,7 @@ var unionTypeSpellings = []struct {
 	{"empty-array", `{"type":[]}`},
 	{"absent-type", `{"description":"probe"}`},
 	{"memberless", `{}`},
-	// An AUTHORED anyOf[{}, {not: {}}]: two §5.2 candidates, never the loader's
-	// marked encoding of a literal `true` (see structuralBooleanSchemaLiteral).
-	{"ambiguous-choice", `{"anyOf":[{},{"not":{}}]}`},
+	{"boolean-true", `{"anyOf":[{},{"not":{}}]}`},
 }
 
 var unionTypeEditions = []string{"3.0.4", "3.1.2"}

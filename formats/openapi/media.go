@@ -1862,37 +1862,11 @@ func booleanSchemaLiteral(schema *openapi3.Schema) (bool, bool) {
 	return structuralBooleanSchemaLiteral(raw)
 }
 
-// structuralBooleanSchemaLiteral recognizes the loader's encoding of a
-// literal boolean Schema Object: the semantics-equivalent structure the
-// boolean-schema lift writes (anyOf[{}, {not: {}}] for true, allOf[{}, {not:
-// {}}] for false) carrying the lift's own marker. An authored
-// `anyOf: [{}, {not: {}}]` is deliberately NOT a literal: under §5.2 of the
-// 3.x binding specifications a choice skips only a branch whose resolved
-// declaration declares only `null`, `not` never participates in resolution,
-// and the choice supplies a single member declaration only when exactly one
-// candidate remains -- `{}` and `{not: {}}` are two candidates, so the
-// declaration resolves to no single member and a supplied value at that
-// position refuses before dispatch, exactly as `oneOf: [{type: string},
-// {type: integer}]` does. The unmarked allOf spelling is still read as the
-// false literal: an authored `allOf: [{}, {not: {}}]` is not an ambiguous
-// choice, and that reading is recorded as a separate residue rather than
-// changed here.
 func structuralBooleanSchemaLiteral(schema map[string]any) (bool, bool) {
-	marked, hasMarker := schema[liftedBooleanLiteralMarker].(bool)
-	if hasMarker {
-		if len(schema) != 2 {
-			return false, false
-		}
-	} else if len(schema) != 1 {
+	if len(schema) != 1 {
 		return false, false
 	}
 	for keyword, literal := range map[string]bool{"anyOf": true, "allOf": false} {
-		if hasMarker && literal != marked {
-			continue
-		}
-		if !hasMarker && literal {
-			continue // the authored anyOf spelling is a two-candidate choice
-		}
 		members, ok := schema[keyword].([]any)
 		if !ok || len(members) != 2 {
 			continue

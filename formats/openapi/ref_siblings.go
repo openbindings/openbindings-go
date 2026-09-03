@@ -60,11 +60,6 @@ const (
 	serverVariableEnumMarker       = "x-openapi-client-internal-server-enum-present"
 	operationDocumentMarker        = "x-openbindings-internal-operation-document"
 	referringSecuritySchemesMarker = "x-openbindings-internal-referring-security-schemes"
-	// liftedBooleanLiteralMarker stamps the object the boolean-schema lift
-	// writes in place of a literal `true`/`false` Schema Object, so the typed
-	// engine can tell the loader's own encoding from an author's structure.
-	// The spelling is shared with openapi-client/go, whose lift this forks.
-	liftedBooleanLiteralMarker = "x-openapi-client-internal-boolean-literal"
 )
 
 const (
@@ -411,24 +406,15 @@ func (s *rawBooleanLiftState) schema(value any, atPropertiesMember bool) (any, b
 		if s.propertiesOnly && !atPropertiesMember {
 			return value, false, nil
 		}
-		// The lifted object keeps the semantics-equivalent JSON Schema shape
-		// (anyOf[true,false] is true; allOf[true,false] is false) so every
-		// shape-reading consumer sees what it always saw, and it carries the
-		// loader's marker so booleanSchemaLiteral can tell this encoding from
-		// an author's own structure. The two are NOT read alike: under the
-		// binding specifications' §5.2 an authored `anyOf: [{}, {not: {}}]` is
-		// a choice with two candidates -- `not` never participates in
-		// resolution, so `{not: {}}` is typeless and is not the skipped
-		// null-only branch -- and no single member declaration results. Only
-		// a literal boolean written in the source is the always-true schema.
+		// Use ordinary, semantics-equivalent JSON Schema rather than a private
+		// extension sentinel: anyOf[true,false] is true; allOf[true,false] is
+		// false. An author who writes the same structure gets the same meaning,
+		// so there is no reserved-name collision or observable mutation.
 		keyword := "anyOf"
 		if !literal {
 			keyword = "allOf"
 		}
-		lifted := map[string]any{
-			keyword:                    []any{map[string]any{}, map[string]any{"not": map[string]any{}}},
-			liftedBooleanLiteralMarker: literal,
-		}
+		lifted := map[string]any{keyword: []any{map[string]any{}, map[string]any{"not": map[string]any{}}}}
 		return lifted, true, nil
 	}
 	object, _ := value.(map[string]any)
