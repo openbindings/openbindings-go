@@ -1,10 +1,13 @@
 package openapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -898,17 +901,88 @@ func TestInvoke_URLEncodedBodyOnTheWire(t *testing.T) {
 	if gotCT != "application/x-www-form-urlencoded" {
 		t.Errorf("Content-Type = %q", gotCT)
 	}
-	// The array's items reach the wire as `["1","2"]`, not `[1,2]`: this
-	// adapter runs the parameterConversion converter over them before the
-	// engine sees the value. Given the same document and input the engine
-	// alone emits `ids=%5B1%2C2%5D`. Section 9.3's pin says the converter is
-	// "scoped to the `schema`-form and RFC 6570-style paths", which the
-	// content lane is not, so the adapter is the side that looks wrong -- but
-	// the behavior predates R4 and is unchanged by it, so this assertion
-	// records what ships today rather than asserting a fix this change did not
-	// make. Queued separately.
-	if string(gotBody) != "ids=%5B%221%22%2C%222%22%5D&name=a+b" {
+	// The array's items reach the wire as their JSON image `[1,2]`, with the
+	// configured converter never consulted: openbindings.openapi-3.0@1 §8.1
+	// names the converter for a §9.3 property only where it "must convert a
+	// JSON scalar to a string", and §9.3 routes the property through §9.2's
+	// lane for its selected media type -- here the JSON lane, which
+	// "serializes the supplied value as strict JSON". Until 2026-09-03 the
+	// client's content-lane preparation converted by declaration instead, and
+	// this test recorded `ids=%5B%221%22%2C%222%22%5D` as what shipped
+	// (OA-F9; tools/detectors/oaf9).
+	if string(gotBody) != "ids=%5B1%2C2%5D&name=a+b" {
 		t.Errorf("body = %q", gotBody)
+	}
+}
+
+// The content-lane converter reaches exactly the text/plain lane on the 3.0
+// line, and only there. One multipart document carries all three cells: an
+// integer array and a boolean whose Encoding `contentType` names
+// `application/json` ride as their JSON images (`1`, `2`, `true`), and an
+// integer with no Encoding Object takes §9.3's text/plain default, which is
+// the one site §8.1's converter governs -- the part carries the converter's
+// spelling. The converter is deliberately visible (`n` + the scalar's own
+// spelling) so a converted scalar cannot be mistaken for a JSON image.
+func TestInvoke_ContentLaneConverterReachesOnlyTextPlain(t *testing.T) {
+	var gotCT string
+	var gotBody []byte
+	srv, _ := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	spec := fmt.Sprintf(`{
+	  "openapi": "3.0.4", "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": %q}],
+	  "paths": {"/form": {"post": {
+	    "operationId": "postForm",
+	    "requestBody": {"required": true, "content": {"multipart/form-data": {
+	      "schema": {"type": "object", "properties": {
+	        "ids": {"type": "array", "items": {"type": "integer"}},
+	        "flag": {"type": "boolean"},
+	        "count": {"type": "integer"}
+	      }},
+	      "encoding": {"ids": {"contentType": "application/json"}, "flag": {"contentType": "application/json"}}
+	    }}},
+	    "responses": {"200": {"description": "ok"}}
+	  }}}
+	}`, srv.URL)
+	call := NewInvokerWithOptions(RuntimeOptions{ParameterConversion: func(value any) (string, error) {
+		return "n" + fmt.Sprint(value), nil
+	}}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI30, Content: openbindings.TextContent(withDeclaredJSONResponses(t, spec))},
+		Selector: "#/paths/~1form/post",
+	})
+	if _, ierr := driveSingle(t, call, map[string]any{"body": map[string]any{
+		"ids": []any{float64(1), float64(2)}, "flag": true, "count": float64(7),
+	}}); ierr != nil {
+		t.Fatalf("invoke: %s: %s", ierr.Code, ierr.Error())
+	}
+	_, params, err := mime.ParseMediaType(gotCT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]string{}
+	reader := multipart.NewReader(bytes.NewReader(gotBody), params["boundary"])
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(part)
+		got[part.FormName()] = append(got[part.FormName()], part.Header.Get("Content-Type")+"|"+string(data))
+	}
+	want := map[string][]string{
+		"ids":   {"application/json|1", "application/json|2"},
+		"flag":  {"application/json|true"},
+		"count": {"text/plain|n7"},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("parts = %v, want %v", got, want)
 	}
 }
 
