@@ -134,6 +134,12 @@ func TestSwagger20PreflightAndChallengeStateOneBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatalf("preflight error: %v", err)
 			}
+			// Both surfaces assert one scope: the resolved §10 server base
+			// (never the source location once the server resolves), as the
+			// 3.x lane's two surfaces do.
+			if challenge == nil || challenge.Target != "https://api.example" || preflight == nil || preflight.Target != challenge.Target {
+				t.Fatalf("targets differ or are not the resolved server base: challenge=%q preflight=%q", challenge.Target, preflight.Target)
+			}
 			var fromChallenge, fromPreflight *invoke.ContextRequirement
 			if testCase.point != "" {
 				fromChallenge = swagger20RequirementByPoint(challenge, testCase.point)
