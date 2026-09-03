@@ -6,6 +6,30 @@
 
 ### Changed
 
+- **OpenAPI: a content-based form or multipart property whose resolved
+  declaration determines no default Encoding `contentType` is a represented
+  unit carrying the `propertyMedia` requirement, on both lanes** (OA-F8,
+  2026-09-03). Two cells move from a plain refusal (`ERR_SOURCE_CONFIG_ERROR`)
+  to the context-required species naming point `propertyMedia`, path
+  `/<property>`: a typeless declaration on the 3.0 line's content-based
+  form-urlencoded path, which `openbindings.openapi-3.0@1` §9.3 had always
+  required "for a multipart part alike" but the planner gated to multipart;
+  and a multi-type resolved set (`type: ["string", "integer"]`) on the 3.1 and
+  3.2 lines' multipart and form-urlencoded lanes, which no row of those
+  editions' default-`contentType` table reaches. With the choice supplied the
+  value rides the chosen media type through the existing `propertyMedia` lane
+  (a scalar union under `text/plain`, any value under `application/json`).
+  Synthesis follows: a 3.1/3.2 multi-type multipart or urlencoded alternative
+  is `represented` with `configuration.propertyMedia` rather than excluded
+  (`OAPI31-SS-20` revised), which also closes the 3.2 represented/excluded
+  twin split for that class. The planner in this module is a fork of
+  openapi-client/go's and the change lands in both; the pre-input challenge
+  runs through this planner and dispatch through the client's, so each is
+  load-bearing on the shipped path. Shared twin tables:
+  `array-items-part-default`, `part-content-encoding`,
+  `part-default-type-absent`, `urlencoded-content-path` and the union-type
+  expectations move exactly the cells named in their bases.
+
 - **Post-dispatch decode and response-interpretation failures now surface as
   generic `ERR_EXECUTION_FAILED`, never `ERR_RESPONSE_ERROR` or
   `ERR_PROTOCOL`** (breaking; the error-code ownership ruling, 2026-08-31).

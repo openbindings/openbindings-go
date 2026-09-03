@@ -19,7 +19,7 @@ import (
 // openapi-client/typescript, and by openbindings-ts/packages/openapi against
 // that package's BUILT dist; changing it in one engine without the others
 // fails here.
-const partDefaultTypeAbsentCasesDigest = "c6494b3b833f03d13e1e7e5cb83547f484b0e20f8f77b70f5f893075eb04e46c"
+const partDefaultTypeAbsentCasesDigest = "0b7d98d4aaa2372f538b27857619a3b996e2967157ca81fc65816a03ed75a3f2"
 
 type partDefaultTypeAbsentTable struct {
 	Comment string                      `json:"$comment"`
@@ -194,6 +194,14 @@ func TestTypeAbsentPartUsesTheFamilyDecision(t *testing.T) {
 		case c.Media == "multipart/form-data" && strings.HasPrefix(c.OpenAPI, "3.1"):
 			want = "admitted"
 		case c.Media == "multipart/form-data" && strings.HasPrefix(c.OpenAPI, "3.0") && c.Kind != "boolean-literal-true":
+			want = "missing-required-choice"
+		case c.Media == "application/x-www-form-urlencoded" && strings.HasPrefix(c.OpenAPI, "3.0") && c.Kind != "boolean-literal-true":
+			// OA-F8: the 3.0 line states no row for a typeless declaration on
+			// either content-based lane, and openbindings.openapi-3.0@1 §9.3
+			// requires propertyMedia "on the content-based form-urlencoded
+			// path and for a multipart part alike". The 3.1 line keeps its
+			// refusal on this lane on its own ground (an octet-stream row with
+			// no boundary defined here).
 			want = "missing-required-choice"
 		default:
 			want = "refused"

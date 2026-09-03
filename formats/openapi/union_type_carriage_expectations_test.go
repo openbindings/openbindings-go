@@ -30,8 +30,19 @@ package openapi
 //     value of contentEncoding is irrelevant". Each now reads exactly as its
 //     |plain twin, which is what that note means.
 //   - Every spelling with two or more non-"null" members — string-object,
-//     string-integer — refuses under both lines: value-dependent
-//     alternatives leave no single faithful form carriage.
+//     string-integer — is, under the 3.1 line, a resolved type set the
+//     editions' default-contentType table states no row for (every row is
+//     keyed on ONE `type`), so it determines no part or field media type and
+//     §9.3 names the propertyMedia choice as the missing fact: the part is
+//     represented and reads missing-required-choice here, because this
+//     harness supplies no configuration (OA-F8, 2026-09-03; EIGHT cells moved
+//     from refused — 3.1.2 x {string-integer, string-object} x both media x
+//     both keyword spellings, the contentEncoding sibling being inert on a
+//     set that is not `string` alone). With a concrete choice the value rides
+//     the chosen lane: text/plain spells every scalar member, application/json
+//     any value. The earlier "value-dependent alternatives leave no single
+//     faithful form carriage" reading stopped at the refusal rung of the
+//     deference order; the exposed choice ranks above it.
 //   - Every multi-member spelling refuses under the 3.0 line whatever its
 //     members, because all five 3.0 editions state "type - Value MUST be a
 //     string. Multiple types via an array are not supported."
@@ -45,9 +56,16 @@ package openapi
 //     reaches an invocation error after admission. A typeless 3.0 multipart
 //     part remains represented but requires configuration.propertyMedia; this
 //     harness supplies none and records missing-required-choice. Typeless
-//     urlencoded cells still refuse because that lane has no octet boundary.
+//     urlencoded cells on the 3.1 line still refuse because that lane has no
+//     octet boundary; on the 3.0 line they read missing-required-choice since
+//     OA-F8 (2026-09-03), because the 3.0 editions state no row for a typeless
+//     declaration and §9.3 requires propertyMedia "on the content-based
+//     form-urlencoded path and for a multipart part alike" — FOUR more cells
+//     moved from refused (3.0.4|urlencoded x {absent-type, memberless} x both
+//     keyword spellings).
 //     `empty-array` remains refused on the narrower ground that its explicit
 //     empty type set admits no instance.
+//
 // R4 (ratified 2026-09-01): TWO cells moved from admitted to
 // missing-required-choice -- 3.1.2|urlencoded|array-null on both spellings. A
 // `type: ["array", "null"]` property collapses to `array`, and on the content
@@ -71,8 +89,8 @@ package openapi
 // change rather than folded into R4, and this cell is the only entry in this
 // table that the two languages do not share.
 var unionTypeCarriageExpectations = map[string]string{
-	"3.0.4|application/x-www-form-urlencoded|absent-type|contentEncoding":    "refused",
-	"3.0.4|application/x-www-form-urlencoded|absent-type|plain":              "refused",
+	"3.0.4|application/x-www-form-urlencoded|absent-type|contentEncoding":    "missing-required-choice",
+	"3.0.4|application/x-www-form-urlencoded|absent-type|plain":              "missing-required-choice",
 	"3.0.4|application/x-www-form-urlencoded|array-null|contentEncoding":     "refused",
 	"3.0.4|application/x-www-form-urlencoded|array-null|plain":               "refused",
 	"3.0.4|application/x-www-form-urlencoded|boolean-true|contentEncoding":   "refused",
@@ -81,8 +99,8 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.0.4|application/x-www-form-urlencoded|empty-array|plain":              "refused",
 	"3.0.4|application/x-www-form-urlencoded|integer-null|contentEncoding":   "refused",
 	"3.0.4|application/x-www-form-urlencoded|integer-null|plain":             "refused",
-	"3.0.4|application/x-www-form-urlencoded|memberless|contentEncoding":     "refused",
-	"3.0.4|application/x-www-form-urlencoded|memberless|plain":               "refused",
+	"3.0.4|application/x-www-form-urlencoded|memberless|contentEncoding":     "missing-required-choice",
+	"3.0.4|application/x-www-form-urlencoded|memberless|plain":               "missing-required-choice",
 	"3.0.4|application/x-www-form-urlencoded|null-only|contentEncoding":      "refused",
 	"3.0.4|application/x-www-form-urlencoded|null-only|plain":                "refused",
 	"3.0.4|application/x-www-form-urlencoded|null-string|contentEncoding":    "refused",
@@ -147,12 +165,12 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.1.2|application/x-www-form-urlencoded|object-null|plain":              "admitted;value=p=%7B%22k%22%3A%22v%22%7D;null=elided",
 	"3.1.2|application/x-www-form-urlencoded|string-array-1|contentEncoding": "admitted;value=p=x;null=error",
 	"3.1.2|application/x-www-form-urlencoded|string-array-1|plain":           "admitted;value=p=x;null=p=",
-	"3.1.2|application/x-www-form-urlencoded|string-integer|contentEncoding": "refused",
-	"3.1.2|application/x-www-form-urlencoded|string-integer|plain":           "refused",
+	"3.1.2|application/x-www-form-urlencoded|string-integer|contentEncoding": "missing-required-choice",
+	"3.1.2|application/x-www-form-urlencoded|string-integer|plain":           "missing-required-choice",
 	"3.1.2|application/x-www-form-urlencoded|string-null|contentEncoding":    "admitted;value=p=x;null=elided",
 	"3.1.2|application/x-www-form-urlencoded|string-null|plain":              "admitted;value=p=x;null=elided",
-	"3.1.2|application/x-www-form-urlencoded|string-object|contentEncoding":  "refused",
-	"3.1.2|application/x-www-form-urlencoded|string-object|plain":            "refused",
+	"3.1.2|application/x-www-form-urlencoded|string-object|contentEncoding":  "missing-required-choice",
+	"3.1.2|application/x-www-form-urlencoded|string-object|plain":            "missing-required-choice",
 	"3.1.2|application/x-www-form-urlencoded|string|contentEncoding":         "admitted;value=p=x;null=error",
 	"3.1.2|application/x-www-form-urlencoded|string|plain":                   "admitted;value=p=x;null=p=",
 	"3.1.2|multipart/form-data|absent-type|contentEncoding":                  "admitted;value=error;null=error",
@@ -175,12 +193,12 @@ var unionTypeCarriageExpectations = map[string]string{
 	"3.1.2|multipart/form-data|object-null|plain":                            "admitted;value=application/json:{\"k\":\"v\"};null=elided",
 	"3.1.2|multipart/form-data|string-array-1|contentEncoding":               "admitted;value=application/octet-stream:x;null=error",
 	"3.1.2|multipart/form-data|string-array-1|plain":                         "admitted;value=text/plain:x;null=text/plain:",
-	"3.1.2|multipart/form-data|string-integer|contentEncoding":               "refused",
-	"3.1.2|multipart/form-data|string-integer|plain":                         "refused",
+	"3.1.2|multipart/form-data|string-integer|contentEncoding":               "missing-required-choice",
+	"3.1.2|multipart/form-data|string-integer|plain":                         "missing-required-choice",
 	"3.1.2|multipart/form-data|string-null|contentEncoding":                  "admitted;value=application/octet-stream:x;null=elided",
 	"3.1.2|multipart/form-data|string-null|plain":                            "admitted;value=text/plain:x;null=elided",
-	"3.1.2|multipart/form-data|string-object|contentEncoding":                "refused",
-	"3.1.2|multipart/form-data|string-object|plain":                          "refused",
+	"3.1.2|multipart/form-data|string-object|contentEncoding":                "missing-required-choice",
+	"3.1.2|multipart/form-data|string-object|plain":                          "missing-required-choice",
 	"3.1.2|multipart/form-data|string|contentEncoding":                       "admitted;value=application/octet-stream:x;null=error",
 	"3.1.2|multipart/form-data|string|plain":                                 "admitted;value=text/plain:x;null=text/plain:",
 }
