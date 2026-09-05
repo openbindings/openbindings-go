@@ -18,7 +18,7 @@ import (
 // runNative is the complete OpenBindings lifecycle translation over the
 // supported standalone client surface. It owns no OpenAPI request, security,
 // target, response, or stream mechanics.
-func (e *Runtime) runNative(ctx context.Context, args *invoke.BindingInvocationArgs, outer *invoke.InvocationImpl[any, any]) error {
+func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvocationArgs, outer *invoke.InvocationImpl[any, any]) error {
 	if err := assertNativeBindingSpec(args); err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func (e *Runtime) runNative(ctx context.Context, args *invoke.BindingInvocationA
 	return nil
 }
 
-func (e *Runtime) prepareNativeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+func (e *invokerRuntime) prepareNativeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	if err := assertNativeBindingSpec(args); err != nil {
 		return nil, err
 	}
@@ -205,7 +205,7 @@ func (e *Runtime) prepareNativeBinding(ctx context.Context, args *invoke.Binding
 	return nativeBindingRequirements(requirements)
 }
 
-func (e *Runtime) loadNativeClient(ctx context.Context, args *invoke.BindingInvocationArgs, allowDocumentFetch bool) (*openapiclient.Client, error) {
+func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.BindingInvocationArgs, allowDocumentFetch bool) (*openapiclient.Client, error) {
 	if args == nil {
 		return nil, &openapiclient.ClientError{Kind: openapiclient.ErrorSource, Code: "SOURCE_LOAD_FAILED", Message: "OpenAPI invocation arguments are nil"}
 	}
@@ -273,7 +273,7 @@ func nativeLocationClientKey(args *invoke.BindingInvocationArgs) string {
 	return args.Source.BindingSpec + "\x00" + args.Source.Location
 }
 
-func (e *Runtime) cachedNativeClient(args *invoke.BindingInvocationArgs) (*openapiclient.Client, bool) {
+func (e *invokerRuntime) cachedNativeClient(args *invoke.BindingInvocationArgs) (*openapiclient.Client, bool) {
 	key := nativeLocationClientKey(args)
 	if key == "" {
 		return nil, false
@@ -302,7 +302,7 @@ func checkAcceptedOpenAPIVersionForBindingSpecValue(edition, bindingSpec string)
 	return nil
 }
 
-func (e *Runtime) nativeCallOptions(args *invoke.BindingInvocationArgs) (openapiclient.CallOptions, error) {
+func (e *invokerRuntime) nativeCallOptions(args *invoke.BindingInvocationArgs) (openapiclient.CallOptions, error) {
 	configuration := invoke.ContextConfiguration(args.Context)
 	server, err := nativeServerSelection(configuration)
 	if err != nil {
@@ -478,7 +478,7 @@ func requirementsAlternatives(requirements *openapiclient.ConfigurationRequireme
 	return requirements.Alternatives
 }
 
-func (e *Runtime) nativeHandlerCredentials() openapiclient.Credentials {
+func (e *invokerRuntime) nativeHandlerCredentials() openapiclient.Credentials {
 	if len(e.securityHandlers) == 0 {
 		return nil
 	}
@@ -491,7 +491,7 @@ func (e *Runtime) nativeHandlerCredentials() openapiclient.Credentials {
 	return result
 }
 
-func (e *Runtime) nativeCredentials(bindCtx map[string]any, selected map[string]string, base openapiclient.Credentials) (openapiclient.Credentials, error) {
+func (e *invokerRuntime) nativeCredentials(bindCtx map[string]any, selected map[string]string, base openapiclient.Credentials) (openapiclient.Credentials, error) {
 	credentials, _ := nativeAnyMap(bindCtx["credentials"])
 	apiKeys, _ := nativeAnyMap(bindCtx["apiKeys"])
 	result := make(openapiclient.Credentials, len(base)+len(selected))

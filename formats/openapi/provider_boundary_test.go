@@ -12,6 +12,7 @@ import (
 // a second OpenAPI planner or executor in the OpenBindings adapter.
 func TestProviderBoundaryContainsOnlyReviewedAdapterFiles(t *testing.T) {
 	want := []string{
+		"adapter.go",
 		"input_routes_v2.go",
 		"invoke.go",
 		"invoker.go",

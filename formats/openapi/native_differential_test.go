@@ -350,7 +350,7 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 	if _, present := properties["body"]; present {
 		t.Fatalf("synthesized input invented a body wrapper: %#v", properties)
 	}
-	nativeRuntime := NewRuntimeWithClient(server.Client())
+	nativeRuntime := newInvokerRuntime(InvokerOptions{HTTPClient: server.Client()})
 	nativeClient, err := nativeRuntime.loadNativeClient(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
 		Selector: "#/paths/~1upload/post",

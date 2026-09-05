@@ -28,6 +28,7 @@ subdirectory is its own module:
   invoke/                  ← .../invoke (binding-invoker / operation-invoker runtime)
   synthesize/              ← .../synthesize (interface synthesis, source inspection, discovery)
   compare/                 ← .../compare (interface/operation compatibility checking)
+  sdk/                     ← .../sdk (optional protocol-neutral composition facade)
 formats/
   openapi/                 ← .../formats/openapi
   asyncapi/                ← .../formats/asyncapi
@@ -92,6 +93,7 @@ draft-only `replace` directives to an application intended for release.
 - **`FetchInterface`** for resolving OBIs from URLs: well-known discovery, then synthesis from raw OpenAPI / AsyncAPI / etc. via supplied synthesizers
 - **Exhaustiveness-qualified synthesis accounting** through `CoverageSynthesizer`, pairing a creation-time-sound OBI with durable dispositions and an explicit claim about whether the upstream interaction inventory is complete
 - **`OperationInvoker`** that dispatches operations to binding-spec implementations and applies transforms
+- **`sdk.Runtime`** as an optional instance-scoped composition root over explicitly registered binding providers
 - **Context contracts** for caller-supplied or resolved invocation context, with requirement-scoped provisioning and no assumption that non-credential fields are public
 
 The SDK is the foundation layer. It defines the contracts that binding invokers (OpenAPI, AsyncAPI, gRPC, etc.) implement but does not contain any binding-spec-specific logic itself.
@@ -137,17 +139,21 @@ for name, op := range iface.Operations {
 ```go
 import (
     "github.com/openbindings/openbindings-go/invoke"
-    "github.com/openbindings/openbindings-go/synthesize"
+    obsdk "github.com/openbindings/openbindings-go/sdk"
     openapi "github.com/openbindings/openbindings-go/formats/openapi"
 )
 
-// Wire up an operation invoker with the binding implementation(s) you need.
-opInv := invoke.NewOperationInvoker(openapi.NewInvoker())
+// One explicit adapter supplies invocation, synthesis, and source inspection.
+runtime, err := obsdk.New(obsdk.RuntimeOptions{
+    Providers: []obsdk.BindingProvider{openapi.NewAdapter()},
+})
+if err != nil {
+    log.Fatal(err)
+}
 
 // Resolve an OBI from a URL (well-known discovery, with synthesis as the
 // fallback when the target only exposes a raw spec such as an OpenAPI doc).
-fetched, err := synthesize.FetchInterface(ctx, "https://api.example.com",
-    synthesize.WithSynthesizers(openapi.NewSynthesizer()))
+fetched, err := runtime.Resolve(ctx, "https://api.example.com")
 if err != nil {
     log.Fatal(err)
 }
@@ -156,8 +162,7 @@ iface := fetched.Interface
 // Invoke. One cardinality-agnostic handle serves every operation; a unary call
 // writes one input and reads one output. Options are rarely needed; the common
 // call passes none.
-call := invoke.Invoke(ctx, opInv, iface,
-    invoke.NewOperationSignature[any, any]("listItems"))
+call := runtime.Invoke(ctx, iface, "listItems")
 if err := call.Write(ctx, map[string]any{"limit": 10}); err != nil {
     log.Fatal(err)
 }
@@ -168,7 +173,10 @@ if err != nil {
 fmt.Println(out)
 ```
 
-For compile-time-typed operations, run `ob codegen <obi> --lang go` to generate an `OperationSignatures` namespace, one typed `OperationSignature[In, Out]` per operation, that you pass to this same `Invoke` for fully-typed input and output.
+For compile-time-typed operations, run `ob codegen <obi> --lang go` to generate
+an `OperationSignatures` namespace. Pass its typed signature to
+`invoke.Invoke(ctx, runtime.OperationInvoker(), iface, signature)`; the dynamic
+runtime convenience and typed lower-level call share the same registry.
 
 ### Check compatibility
 

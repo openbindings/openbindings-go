@@ -409,7 +409,7 @@ func TestIntegration_PreStoredCredentialsSucceed(t *testing.T) {
 		t.Fatalf("store.Set failed: %v", err)
 	}
 
-	binv := NewInvokerWithOptions(RuntimeOptions{ParameterConversion: func(value any) (string, error) {
+	binv := NewInvokerWithOptions(InvokerOptions{ParameterConversion: func(value any) (string, error) {
 		return fmt.Sprint(value), nil
 	}})
 	invoker := invoke.NewOperationInvoker(binv).WithRuntime(invoke.StoreContextResolver(store))
@@ -1192,7 +1192,7 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 	  }
 	}`, srv.URL)
 
-	call := NewInvokerWithOptions(RuntimeOptions{ParameterConversion: func(value any) (string, error) {
+	call := NewInvokerWithOptions(InvokerOptions{ParameterConversion: func(value any) (string, error) {
 		return fmt.Sprint(value), nil
 	}}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},

@@ -89,19 +89,6 @@ func TestBindingInvokerRequiresAnExactFamilyToken(t *testing.T) {
 	}
 	assertExactTokenError(t, prepareInvocationErr)
 
-	runtimeArgs := &RuntimeInvocationArgs{
-		Source:   RuntimeSource{Content: openbindings.TextContent("not an OpenAPI artifact")},
-		Selector: "#/paths/~1x/get",
-	}
-	_, runtimeInvocationErr := driveSingle(t, NewRuntime().Invoke(context.Background(), runtimeArgs), nil)
-	assertExactTokenError(t, runtimeInvocationErr)
-
-	_, runtimePrepareErr := NewRuntime().Prepare(context.Background(), runtimeArgs)
-	var runtimePrepareInvocationErr *invoke.InvocationError
-	if !errors.As(runtimePrepareErr, &runtimePrepareInvocationErr) {
-		t.Fatalf("runtime prepare error = %#v, want invocation error", runtimePrepareErr)
-	}
-	assertExactTokenError(t, runtimePrepareInvocationErr)
 }
 
 func TestOpenAPIFamilyTokenMustMatchArtifactEdition(t *testing.T) {

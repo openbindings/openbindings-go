@@ -51,6 +51,11 @@ immutable analysis projection. The adapter owns only OpenBindings contract and
 coverage translation; it contains no second OpenAPI declaration planner or
 wire executor.
 
+`NewAdapter` is the primary SDK registration: one instance implements
+`BindingInvoker`, `CoverageSynthesizer`, and `SourceInspector`. The lower-level
+`NewInvoker` and `NewSynthesizer` constructors remain available when an
+application intentionally composes those contracts separately.
+
 ### Register with OperationInvoker
 
 ```go
@@ -233,7 +238,7 @@ it does not add protocol fields to the OBI or change the built-in schemes'
 Core context resolution:
 
 ```go
-invoker := openapi.NewInvokerWithOptions(openapi.RuntimeOptions{
+invoker := openapi.NewInvokerWithOptions(openapi.InvokerOptions{
     HTTPClient: client,
     SecurityHandlers: map[string]openapi.SecurityHandler{
         "digestAuth": func(req *http.Request, scheme openapi.SecurityHandlerContext) error {

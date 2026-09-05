@@ -531,7 +531,7 @@ func scenarioUTF16String(units []uint16) string {
 }
 
 func scenarioOpenAPIInvoker(client *http.Client, scenario processorscenarios.Scenario) *Invoker {
-	options := RuntimeOptions{
+	options := InvokerOptions{
 		HTTPClient:          client,
 		ParameterConversion: scenarioParameterConversion(scenario),
 	}

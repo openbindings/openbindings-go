@@ -81,7 +81,7 @@ func TestSwagger20AdapterOwnsExactLoadAndSelectorGates(t *testing.T) {
 func TestSwagger20AdapterMapsQualifiedKeysAndConfiguration(t *testing.T) {
 	roundTripper := &scenarioRoundTripper{peer: map[string]any{"status": 204}}
 	client := &http.Client{Transport: roundTripper}
-	call := NewInvokerWithOptions(RuntimeOptions{
+	call := NewInvokerWithOptions(InvokerOptions{
 		HTTPClient: client,
 		ParameterConversion: func(value any) (string, error) {
 			if value == true {

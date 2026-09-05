@@ -109,12 +109,11 @@
   named credentials remain scheme-scoped. The Core OBI document model is
   unchanged.
 
-- **The OpenAPI module now exposes a standalone artifact runtime.** Direct
-  callers can use `openapi.Runtime` without constructing an OBI, while
-  `openapi.Invoker` remains the thin SDK adapter and `openapi.Synthesizer`
-  owns OBI construction. The extraction preserves the complete unreleased
-  first `openbindings.openapi@1` candidate behavior; it changes neither Core
-  nor the candidate's meaning.
+- **OpenAPI artifact invocation now lives in the independently published
+  native client.** `openapi.Invoker` remains the thin invocation adapter,
+  `openapi.Synthesizer` owns OBI construction, and `openapi.Adapter` provides
+  one cohesive registration for the optional protocol-neutral `sdk.Runtime`.
+  OpenAPI-only callers use `openapi-client/go` without constructing an OBI.
 
 - **The OpenAPI module now defaults to `openbindings.openapi@1`.** Exact
   schema-omitted OAS 3.0 non-JSON request and response representations cross

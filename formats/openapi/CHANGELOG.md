@@ -6,10 +6,10 @@
 
 - **Standalone OpenAPI artifact engine integration.** `Invoker` now adapts
   Core invocations to `github.com/openbindings/openapi-client/go`; the former
-  local HTTP/SSE execution loop has been retired. `Runtime`, `RuntimeSource`,
-  and `RuntimeInvocationArgs` remain as compatibility façades, while new
-  OpenAPI-only applications can use the standalone native client without an
-  OpenBindings dependency.
+  local HTTP/SSE execution loop has been retired. The pre-release direct
+  `Runtime` facade has been removed: OpenAPI-only applications use the
+  standalone native client, while OpenBindings applications register the
+  cohesive `Adapter` or the lower-level `Invoker` and `Synthesizer` contracts.
 
 - **Current `openbindings.openapi@1` preserves exact schema-omitted OAS 3.0
   non-JSON bytes without changing Core.** Request and response octets cross the
@@ -110,8 +110,7 @@
 
 - **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
   `bindings[*].selector`): bindings ride
-  `invoke.BindingInvocationArgs.Selector`, `RuntimeInvocationArgs.Selector`
-  replaces `RuntimeInvocationArgs.Ref`, and refusals use
+  `invoke.BindingInvocationArgs.Selector`, and refusals use
   `ERR_INVALID_SELECTOR` / `ERR_SELECTOR_NOT_FOUND` (the openapi-client
   adapter's ref-flavored codes normalize to the selector-flavored SDK codes
   at the bridge). OpenAPI `$ref` resolution, ref-sibling semantics, and the

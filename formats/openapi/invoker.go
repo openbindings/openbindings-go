@@ -168,14 +168,14 @@ func newDefaultHTTPClient() *http.Client {
 	}
 }
 
-// Runtime is a Core-invocation-shaped compatibility facade over the
-// standalone OpenAPI client engine. New OpenAPI-only applications should use
-// github.com/openbindings/openapi-client/go directly.
+// invokerRuntime owns the state needed by the thin OpenBindings adapter.
+// OpenAPI-only applications use github.com/openbindings/openapi-client/go
+// directly; this type is deliberately not another public artifact runtime.
 //
-// Each Runtime owns an HTTP client and the standalone artifact engine.
+// Each invokerRuntime owns an HTTP client and the standalone artifact engine.
 // *http.Client and the engine's per-instance document cache are safe for
 // concurrent use.
-type Runtime struct {
+type invokerRuntime struct {
 	client             *http.Client
 	nativeClientsMu    sync.RWMutex
 	nativeClients      map[string]*openapiclient.Client
@@ -205,9 +205,9 @@ type SecurityHandlerContext = openapiclient.SecurityHandlerContext
 // built-in OpenAPI credential adapter does not implement.
 type SecurityHandler = openapiclient.SecurityHandler
 
-// RuntimeOptions configures the OpenBindings bridge without changing Core
+// InvokerOptions configures the OpenBindings bridge without changing Core
 // invocation context or the synthesized OBI contract.
-type RuntimeOptions struct {
+type InvokerOptions struct {
 	HTTPClient       *http.Client
 	SecurityHandlers map[string]SecurityHandler
 	// ParameterConversion is the OpenAPI bindings' deterministic non-string
@@ -221,31 +221,10 @@ type RuntimeOptions struct {
 	Redirect                   openapiclient.RedirectPolicy
 }
 
-// RuntimeSource identifies an OpenAPI artifact without requiring an OBI.
-type RuntimeSource struct {
-	// BindingSpec selects the exact OpenBindings OpenAPI binding candidate.
-	// It must name an implemented family token exactly.
-	BindingSpec string
-	Location    string
-	Content     json.RawMessage
-}
-
-// RuntimeInvocationArgs invoke a directly selected OpenAPI operation. Input
-// values flow through the returned cardinality-agnostic Invocation handle.
-type RuntimeInvocationArgs struct {
-	Source               RuntimeSource
-	Selector             string
-	Context              map[string]any
-	Hooks                *invoke.InvokeHooks
-	Site                 *invoke.InvokeSite
-	MaxDeliveryUnitBytes int64
-}
-
-// Invoker is the thin OpenBindings binding-invoker adapter over Runtime.
-// Embedding keeps the existing direct binding API source-compatible while the
-// artifact-centric Invoke and Prepare methods remain independently usable.
+// Invoker is the thin OpenBindings binding-invoker adapter over the standalone
+// OpenAPI client. It intentionally exposes only OpenBindings contracts.
 type Invoker struct {
-	*Runtime
+	runtime *invokerRuntime
 }
 
 var (
@@ -253,25 +232,12 @@ var (
 	_ invoke.BindingPreparer = (*Invoker)(nil)
 )
 
-// NewRuntime creates the compatibility runtime with the binding's default
-// HTTP client and redirect policy.
-func NewRuntime() *Runtime {
-	return NewRuntimeWithOptions(RuntimeOptions{})
-}
-
-// NewRuntimeWithClient creates a standalone OpenAPI runtime using client.
-func NewRuntimeWithClient(client *http.Client) *Runtime {
-	return NewRuntimeWithOptions(RuntimeOptions{HTTPClient: client})
-}
-
-// NewRuntimeWithOptions creates the compatibility runtime with explicit
-// artifact-level extension handlers and transport configuration.
-func NewRuntimeWithOptions(options RuntimeOptions) *Runtime {
+func newInvokerRuntime(options InvokerOptions) *invokerRuntime {
 	client := options.HTTPClient
 	if client == nil {
 		client = newDefaultHTTPClient()
 	}
-	return &Runtime{
+	return &invokerRuntime{
 		client:             client,
 		nativeClients:      map[string]*openapiclient.Client{},
 		securityHandlers:   cloneSecurityHandlers(options.SecurityHandlers),
@@ -299,7 +265,7 @@ func cloneSecurityHandlers(handlers map[string]SecurityHandler) map[string]Secur
 // client. Use NewInvokerWithClient to inject a custom client (e.g., for
 // tests, or to add a transport layer for tracing or auth).
 func NewInvoker() *Invoker {
-	return &Invoker{Runtime: NewRuntime()}
+	return NewInvokerWithOptions(InvokerOptions{})
 }
 
 // NewInvokerWithClient creates an Invoker that uses the supplied
@@ -308,21 +274,21 @@ func NewInvoker() *Invoker {
 // behavior. No overall request timeout should be set on the client because
 // the caller controls cancellation via context.
 func NewInvokerWithClient(client *http.Client) *Invoker {
-	return &Invoker{Runtime: NewRuntimeWithClient(client)}
+	return NewInvokerWithOptions(InvokerOptions{HTTPClient: client})
 }
 
 // NewInvokerWithOptions creates an OpenBindings adapter with explicit
 // artifact-level security handlers and transport configuration.
-func NewInvokerWithOptions(options RuntimeOptions) *Invoker {
-	return &Invoker{Runtime: NewRuntimeWithOptions(options)}
+func NewInvokerWithOptions(options InvokerOptions) *Invoker {
+	return &Invoker{runtime: newInvokerRuntime(options)}
 }
 
 // BindingSpecs returns the binding-spec identifiers this invoker supports.
-func (e *Runtime) BindingSpecs() []openbindings.BindingSpecInfo {
+func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return openAPIBindingSpecInfos()
 }
 
-func (e *Runtime) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
 	return openbindings.CheckBindingSpecs(bindingSpecs, openAPIBindingSpecInfos())
 }
 
@@ -332,36 +298,6 @@ func openAPIBindingSpecInfos() []openbindings.BindingSpecInfo {
 		{BindingSpec: BindingSpecOpenAPI30, Description: "OpenAPI 3.0 HTTP APIs"},
 		{BindingSpec: BindingSpecOpenAPI31, Description: "OpenAPI 3.1 HTTP APIs"},
 		{BindingSpec: BindingSpecOpenAPI32, Description: "OpenAPI 3.2 HTTP APIs"},
-	}
-}
-
-// Invoke runs a directly selected OpenAPI operation without requiring an OBI
-// document or OpenBindings operation-selection machinery.
-func (e *Runtime) Invoke(ctx context.Context, args *RuntimeInvocationArgs) invoke.Invocation[any, any] {
-	return e.invokeBinding(ctx, runtimeBindingArgs(args))
-}
-
-// Prepare inspects a directly selected operation's runtime prerequisites
-// without network I/O.
-func (e *Runtime) Prepare(ctx context.Context, args *RuntimeInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	return e.prepareBinding(ctx, runtimeBindingArgs(args))
-}
-
-func runtimeBindingArgs(args *RuntimeInvocationArgs) *invoke.BindingInvocationArgs {
-	if args == nil {
-		args = &RuntimeInvocationArgs{}
-	}
-	return &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{
-			BindingSpec: args.Source.BindingSpec,
-			Location:    args.Source.Location,
-			Content:     args.Source.Content,
-		},
-		Selector:             args.Selector,
-		Context:              args.Context,
-		Hooks:                args.Hooks,
-		Site:                 args.Site,
-		MaxDeliveryUnitBytes: args.MaxDeliveryUnitBytes,
 	}
 }
 
@@ -416,7 +352,7 @@ func toCoreMetadata(metadata openapiclient.Metadata) invoke.Metadata {
 
 // InvokeBinding adapts the SDK binding invocation to the artifact runtime.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	return e.Runtime.invokeBinding(ctx, args)
+	return e.runtime.invokeBinding(ctx, args)
 }
 
 // invokeBinding invokes an HTTP request based on an OpenAPI binding. The
@@ -425,7 +361,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 // the handle's Write channel. All pre-dispatch failures (bad selector, missing
 // server URL, unresolvable operation, missing context) terminate the handle
 // BEFORE any network side effect.
-func (e *Runtime) invokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
+func (e *invokerRuntime) invokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
 	inv := invoke.NewInvocationImpl[any, any](ctx)
 	go func() {
 		if err := e.run(ctx, args, inv); err != nil {
@@ -435,13 +371,13 @@ func (e *Runtime) invokeBinding(ctx context.Context, args *invoke.BindingInvocat
 	return inv
 }
 
-func (e *Runtime) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) error {
+func (e *invokerRuntime) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) error {
 	return e.runNative(ctx, args, inv)
 }
 
 // PrepareBinding adapts the SDK binding preflight to the artifact runtime.
 func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
-	return e.Runtime.prepareBinding(ctx, args)
+	return e.runtime.prepareBinding(ctx, args)
 }
 
 // prepareBinding is the side-effect-free preflight (the prepareBinding
@@ -454,7 +390,7 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvoca
 // fetches. When the document would have to be fetched to learn its security
 // schemes, it reports no requirement and lets the invocation raise the
 // challenge instead.
-func (e *Runtime) prepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+func (e *invokerRuntime) prepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	return e.prepareNativeBinding(ctx, args)
 }
 
@@ -626,7 +562,7 @@ func readAuthoringArtifact(ctx context.Context, client *http.Client, location st
 // decoder follows the delivery unit's declared Content-Type header (read
 // from raw.Meta — wire framing, never payload sniffing); the classifier
 // is the 2xx convention floor.
-func (e *Runtime) BuiltinHooks() (invoke.OutputDecoder, invoke.ResultClassifier) {
+func (e *Invoker) BuiltinHooks() (invoke.OutputDecoder, invoke.ResultClassifier) {
 	decode := func(site invoke.InvokeSite, raw invoke.RawResult) (any, error) {
 		ct := ""
 		if vs := raw.Meta["Content-Type"]; len(vs) > 0 {
