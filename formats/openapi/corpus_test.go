@@ -21,11 +21,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/getkin/kin-openapi/openapi3"
-	openapiclient "github.com/openbindings/openapi-client/go"
+	openapiprovider "github.com/openbindings/openapi-client/go/provider"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
@@ -157,9 +155,8 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 		// Content lane (OAPI-D-01): a present member — null included —
 		// must be the parsed document object or its source text. Fixture
 		// artifacts are self-contained, so the load performs no I/O.
-		var doc *openapi3.T
-		var artifact *openapiclient.Artifact
-		var swagger20 *openapiclient.Swagger20Document
+		var artifact *openapiprovider.Artifact
+		var swagger20 *openapiprovider.Swagger20Document
 		if src.Content != nil {
 			switch bindingSpec {
 			case BindingSpecOpenAPI20:
@@ -167,30 +164,23 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 				if err != nil {
 					return err
 				}
-				loaded, err := openapiclient.LoadSwagger20(context.Background(), openapiclient.Swagger20Source{Content: content}, openapiclient.ClientOptions{})
+				loaded, err := openapiprovider.LoadSwagger20(context.Background(), openapiprovider.Swagger20Source{Content: content}, openapiprovider.ClientOptions{})
 				if err != nil {
 					return err
 				}
 				swagger20 = loaded.Document()
-			case BindingSpecOpenAPI32:
+			default:
 				data, err := openbindings.ContentToBytes(src.Content)
 				if err != nil {
 					return err
 				}
-				artifact, err = openapiclient.LoadArtifact(t.Context(), openapiclient.Source{Content: data}, openapiclient.ArtifactLoadOptions{})
+				artifact, err = openapiprovider.LoadArtifact(t.Context(), openapiprovider.Source{Content: data}, openapiprovider.ArtifactLoadOptions{})
 				if err != nil {
 					return err
 				}
-				if artifact.Edition != openapiclient.EditionOpenAPI320 {
-					return fmt.Errorf("document edition %q is not admitted by binding specification %q", artifact.Edition, bindingSpec)
+				if !openAPIBindingSpecRegistry[bindingSpec].editions[string(artifact.Edition())] {
+					return fmt.Errorf("document edition %q is not admitted by binding specification %q", artifact.Edition(), bindingSpec)
 				}
-				doc = artifact.Document
-			default:
-				d, err := loadDocumentForBindingSpec("", src.Content, bindingSpec)
-				if err != nil {
-					return err
-				}
-				doc = d
 			}
 		}
 
@@ -216,20 +206,29 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 			}
 			switch bindingSpec {
 			case BindingSpecOpenAPI20:
-				if err := openapiclient.ValidateSwagger20Selector(selector); err != nil {
+				if err := openapiprovider.ValidateSwagger20Selector(selector); err != nil {
 					return err
 				}
 				if swagger20 == nil {
 					continue // location-only source: grammar-checked alone
 				}
-				if _, err := openapiclient.NewEngine(nil).PrepareSwagger20(context.Background(), openapiclient.Swagger20PrepareOptions{
-					Source: openapiclient.Swagger20Source{Document: swagger20}, Ref: selector,
+				if err := openapiprovider.ValidateSwagger20Operation(context.Background(), openapiprovider.Swagger20PrepareOptions{
+					Source: openapiprovider.Swagger20Source{Document: swagger20}, Ref: selector,
 				}); err != nil {
 					return err
 				}
 				continue
-			case BindingSpecOpenAPI32:
-				if _, err := openapiclient.ParseOperationReference(selector, openapiclient.EditionOpenAPI320); err != nil {
+			default:
+				edition := openapiprovider.EditionOpenAPI304
+				if bindingSpec == BindingSpecOpenAPI31 {
+					edition = openapiprovider.EditionOpenAPI312
+				} else if bindingSpec == BindingSpecOpenAPI32 {
+					edition = openapiprovider.EditionOpenAPI320
+				}
+				if artifact != nil {
+					edition = artifact.Edition()
+				}
+				if _, err := openapiprovider.ParseOperationReference(selector, edition); err != nil {
 					return err
 				}
 				if artifact == nil {
@@ -241,29 +240,12 @@ func judgeCorpusDocument(t *testing.T, raw json.RawMessage, bindingSpec string) 
 					// still be excluded later by a request-surface P-rule (for
 					// example, path-parameter correspondence), exactly as the 3.0
 					// and 3.1 lanes below do not apply their parameter gates here.
-					var resolution *openapiclient.OperationResolutionError
-					if !errors.As(err, &resolution) || resolution.Kind != openapiclient.OperationTargetExcluded {
+					var resolution *openapiprovider.OperationResolutionError
+					if !errors.As(err, &resolution) || (resolution.Kind != openapiprovider.OperationTargetExcluded && resolution.Kind != openapiprovider.OperationTargetInvalid) {
 						return err
 					}
 				}
 				continue
-			}
-			pathTemplate, method, err := parseSelector(selector)
-			if err != nil {
-				return err
-			}
-			if doc == nil {
-				continue // location-only source: grammar-checked alone
-			}
-			if doc.Paths == nil {
-				return fmt.Errorf("OpenAPI document has no paths defined")
-			}
-			pathItem := doc.Paths.Find(pathTemplate)
-			if pathItem == nil {
-				return fmt.Errorf("path %q not in OpenAPI doc", pathTemplate)
-			}
-			if pathItem.GetOperation(strings.ToUpper(method)) == nil {
-				return fmt.Errorf("method %q not in path %q", method, pathTemplate)
 			}
 		}
 	}

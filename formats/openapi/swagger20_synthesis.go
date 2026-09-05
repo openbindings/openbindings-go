@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	openapiclient "github.com/openbindings/openapi-client/go"
+	openapiprovider "github.com/openbindings/openapi-client/go/provider"
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -17,7 +17,7 @@ import (
 // closure, effective declarations, and lane usability remain client work;
 // this file owns only flat Core contracts, the public envelope transform, and
 // durable OpenBindings coverage vocabulary.
-func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.SynthesizeInput, tolerant bool) (*openbindings.Interface, *openapiclient.Swagger20SynthesisDocument, []synthesize.SynthesisCoverageEntry, error) {
+func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.SynthesizeInput, tolerant bool) (*openbindings.Interface, *openapiprovider.Swagger20SynthesisDocument, []synthesize.SynthesisCoverageEntry, error) {
 	if in == nil || len(in.Sources) == 0 {
 		skeleton, err := synthesize.SynthesisSkeleton(in)
 		return &skeleton, nil, nil, err
@@ -53,10 +53,10 @@ func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.Sy
 			return nil, nil, nil, fmt.Errorf("load Swagger 2.0 document: %w", err)
 		}
 	}
-	client, err := openapiclient.LoadSwagger20(ctx, openapiclient.Swagger20Source{
+	client, err := openapiprovider.LoadSwagger20(ctx, openapiprovider.Swagger20Source{
 		Location: loadLocation,
 		Content:  content,
-	}, openapiclient.ClientOptions{HTTPClient: c.resolverClient()})
+	}, openapiprovider.ClientOptions{HTTPClient: c.resolverClient()})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load Swagger 2.0 document: %w", err)
 	}
@@ -88,10 +88,18 @@ func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.Sy
 			if !tolerant {
 				return nil, nil, nil, fmt.Errorf("cannot synthesize Swagger 2.0 operation at %q: %s", operation.Ref, operation.Reason)
 			}
+			status := synthesize.SynthesisExcluded
+			if operation.Disposition == "invalid" {
+				status = synthesize.SynthesisInvalid
+			}
+			rule := operation.Rule
+			if rule == "" && status == synthesize.SynthesisExcluded {
+				rule = swagger20TargetRule(operation.Reason)
+			}
 			coverage = append(coverage, synthesize.SynthesisCoverageEntry{
 				SourceIndex: 0, SourceRef: operation.Ref, Scope: synthesize.SynthesisCoverageTarget,
-				Status: synthesize.SynthesisExcluded, ReasonCode: swagger20TargetReasonCode(operation.Reason),
-				Rule: swagger20TargetRule(operation.Reason), Message: operation.Reason,
+				Status: status, ReasonCode: swagger20TargetReasonCode(operation.Reason),
+				Rule: rule, Message: operation.Reason,
 			})
 			continue
 		}
@@ -138,7 +146,7 @@ func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.Sy
 	return &iface, model, coverage, nil
 }
 
-func swagger20OperationKey(operation openapiclient.Swagger20SynthesisOperation, used map[string]bool) string {
+func swagger20OperationKey(operation openapiprovider.Swagger20SynthesisOperation, used map[string]bool) string {
 	if operation.OperationID != "" {
 		key := synthesize.SanitizeKey(operation.OperationID)
 		if !used[key] {
@@ -160,7 +168,7 @@ type swagger20ProjectionLoss struct {
 	sourceRef, reasonCode, message string
 }
 
-func projectSwagger20Operation(operation openapiclient.Swagger20SynthesisOperation) (openbindings.Operation, string, []swagger20ProjectionLoss, error) {
+func projectSwagger20Operation(operation openapiprovider.Swagger20SynthesisOperation) (openbindings.Operation, string, []swagger20ProjectionLoss, error) {
 	result := openbindings.Operation{
 		Description: operation.Description,
 		Deprecated:  operation.Deprecated,
@@ -169,7 +177,7 @@ func projectSwagger20Operation(operation openapiclient.Swagger20SynthesisOperati
 	properties := map[string]any{}
 	required := []string{}
 	parameterFields := map[string]string{}
-	locations := map[string]openapiclient.Swagger20ParameterLocation{}
+	locations := map[string]openapiprovider.Swagger20ParameterLocation{}
 	qualified := false
 	for _, parameter := range operation.Parameters {
 		if previous, present := locations[parameter.Name]; present && previous != parameter.In {
@@ -398,14 +406,30 @@ func projectSwagger20SchemaValue(value any, request bool, sourceRef string) (any
 	return result, losses, nil
 }
 
-func swagger20AlternativeCoverage(operation openapiclient.Swagger20SynthesisOperation, operationKey, bindingKey string) []synthesize.SynthesisCoverageEntry {
+func swagger20AlternativeCoverage(operation openapiprovider.Swagger20SynthesisOperation, operationKey, bindingKey string) []synthesize.SynthesisCoverageEntry {
 	var result []synthesize.SynthesisCoverageEntry
+	hasUsableServer := false
+	hasInvalidServer := false
+	for _, alternative := range operation.Alternatives {
+		hasUsableServer = hasUsableServer || alternative.Kind == "server" && alternative.Usable
+		hasInvalidServer = hasInvalidServer || alternative.Kind == "server" && alternative.Disposition == "invalid"
+	}
+	for _, projection := range operation.ParameterCoverage {
+		result = append(result, synthesize.SynthesisCoverageEntry{
+			SourceIndex: 0, SourceRef: projection.SourceRef, Scope: synthesize.SynthesisCoverageProjection,
+			Status: synthesize.SynthesisCoverageStatus(projection.Status), Rule: projection.Rule,
+			ReasonCode: "openapi20.parameter_projection_" + projection.Status, Message: projection.Reason,
+		})
+	}
 	for _, alternative := range operation.Alternatives {
 		if alternative.Kind == "security" {
 			continue
 		}
-		if alternative.Kind == "server" && alternative.Usable {
-			continue
+		if alternative.Kind == "server" {
+			isWebSocket := strings.Contains(alternative.Reason, `scheme "ws"`) || strings.Contains(alternative.Reason, `scheme "wss"`)
+			if alternative.Usable && !hasInvalidServer || isWebSocket && !hasUsableServer {
+				continue
+			}
 		}
 		entry := synthesize.SynthesisCoverageEntry{
 			SourceIndex: 0, SourceRef: alternative.SourceRef, Scope: synthesize.SynthesisCoverageAlternative,
@@ -416,8 +440,19 @@ func swagger20AlternativeCoverage(operation openapiclient.Swagger20SynthesisOper
 			entry.Status = synthesize.SynthesisRepresented
 		} else {
 			entry.Status = synthesize.SynthesisExcluded
-			entry.ReasonCode = "openapi20." + alternative.Kind + "_excluded"
-			entry.Rule = swagger20AlternativeRule(alternative.Kind)
+			if alternative.Disposition == "invalid" {
+				entry.Status = synthesize.SynthesisInvalid
+			}
+			kind := strings.ReplaceAll(alternative.Kind, "requestMedia", "request_media")
+			kind = strings.ReplaceAll(kind, "responseMedia", "response_media")
+			entry.ReasonCode = "openapi20." + kind + "_excluded"
+			entry.Rule = alternative.Rule
+			if entry.Rule == "" {
+				entry.Rule = swagger20AlternativeRule(alternative.Kind)
+			}
+			if alternative.Kind == "requestMedia" && strings.Contains(alternative.Reason, "cannot safely represent form parameter name") {
+				entry.Rule = "OAPI20-P-25"
+			}
 			entry.Message = alternative.Reason
 			entry.OperationKey, entry.BindingKey, entry.BindingSelector = "", "", ""
 		}
@@ -433,12 +468,35 @@ func swagger20AlternativeCoverage(operation openapiclient.Swagger20SynthesisOper
 		}
 		entry.Status = synthesize.SynthesisExcluded
 		entry.ReasonCode = "openapi20.security_alternative_excluded"
-		entry.Rule = "OAPI20-P-04"
+		entry.Rule = security.Rule
+		if entry.Rule == "" {
+			entry.Rule = "OAPI20-P-04"
+		}
 		entry.Message = security.Reason
 		entry.OperationKey, entry.BindingKey, entry.BindingSelector = "", "", ""
 		result = append(result, entry)
 	}
 	for _, response := range operation.Responses {
+		if len(operation.Responses) == 1 && response.Key == "default" && response.SchemaPresent && response.Usable {
+			result = append(result, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: response.SourceRef + "/schema", Scope: synthesize.SynthesisCoverageProjection,
+				Status: synthesize.SynthesisRepresented, OperationKey: operationKey, BindingSelector: operation.Ref,
+			})
+		}
+		if !response.CanSucceed && response.Reason != "" {
+			result = append(result, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: response.SourceRef, Scope: synthesize.SynthesisCoverageProjection,
+				Status: synthesize.SynthesisInvalid, ReasonCode: "openapi20.invalid_declaration",
+				Rule: "OAPI20-P-07", Message: response.Reason,
+			})
+		}
+		if response.SchemaPresent && (response.Key == "204" || response.Key == "205" || response.Key == "304") {
+			result = append(result, synthesize.SynthesisCoverageEntry{
+				SourceIndex: 0, SourceRef: response.SourceRef + "/schema", Scope: synthesize.SynthesisCoverageProjection,
+				Status: synthesize.SynthesisExcluded, ReasonCode: "openapi20.excluded_declaration",
+				Rule: "OAPI20-S-03", Message: "response " + response.Key + " cannot carry response content",
+			})
+		}
 		for _, header := range response.Headers {
 			entry := synthesize.SynthesisCoverageEntry{
 				SourceIndex: 0, SourceRef: header.SourceRef, Scope: synthesize.SynthesisCoverageProjection,
@@ -448,8 +506,13 @@ func swagger20AlternativeCoverage(operation openapiclient.Swagger20SynthesisOper
 				entry.Status = synthesize.SynthesisRepresented
 			} else {
 				entry.Status = synthesize.SynthesisExcluded
+				if strings.Contains(header.Reason, "not admitted") || strings.Contains(header.Reason, "not an object") {
+					entry.Status = synthesize.SynthesisInvalid
+				}
 				entry.ReasonCode = "openapi20.response_header_excluded"
-				entry.Rule = "OAPI20-P-03"
+				if strings.Contains(header.Reason, "field name") {
+					entry.Rule = "OAPI20-S-04"
+				}
 				entry.Message = header.Reason
 				entry.OperationKey, entry.BindingKey, entry.BindingSelector = "", "", ""
 			}

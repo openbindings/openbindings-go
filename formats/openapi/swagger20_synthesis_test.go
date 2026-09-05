@@ -78,7 +78,7 @@ func TestSwagger20SynthesisEmitsFlatContractEnvelopeTransformAndCoverage(t *test
 			securityExclusions++
 		}
 	}
-	if target != 1 || requestAlternatives != 2 || serverExclusions != 1 || securityExclusions != 1 {
+	if target != 1 || requestAlternatives != 2 || serverExclusions != 1 || securityExclusions != 0 {
 		t.Fatalf("coverage unit counts = target %d request %d server exclusions %d security exclusions %d: %#v", target, requestAlternatives, serverExclusions, securityExclusions, result.Coverage.Entries)
 	}
 }

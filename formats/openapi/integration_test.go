@@ -103,24 +103,44 @@ func TestIntegration_MultipartFormData(t *testing.T) {
 	var receivedFile []byte
 	var receivedDesc string
 	var receivedContentType string
+	var multipartReadError string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/upload" && r.Method == "POST" {
 			receivedContentType = r.Header.Get("Content-Type")
-			if err := r.ParseMultipartForm(10 << 20); err != nil {
-				w.WriteHeader(400)
-				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-				return
-			}
-			receivedDesc = r.FormValue("description")
-			file, _, err := r.FormFile("file")
+			reader, err := r.MultipartReader()
 			if err != nil {
+				multipartReadError = err.Error()
 				w.WriteHeader(400)
 				json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 				return
 			}
-			defer file.Close()
-			receivedFile, _ = io.ReadAll(file)
+			for {
+				part, nextErr := reader.NextPart()
+				if errors.Is(nextErr, io.EOF) {
+					break
+				}
+				if nextErr != nil {
+					multipartReadError = nextErr.Error()
+					w.WriteHeader(400)
+					json.NewEncoder(w).Encode(map[string]any{"error": nextErr.Error()})
+					return
+				}
+				value, readErr := io.ReadAll(part)
+				_ = part.Close()
+				if readErr != nil {
+					multipartReadError = readErr.Error()
+					w.WriteHeader(400)
+					json.NewEncoder(w).Encode(map[string]any{"error": readErr.Error()})
+					return
+				}
+				switch part.FormName() {
+				case "file":
+					receivedFile = value
+				case "description":
+					receivedDesc = string(value)
+				}
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 			return
@@ -192,7 +212,7 @@ func TestIntegration_MultipartFormData(t *testing.T) {
 		"description": "my upload",
 	}})
 	if ierr != nil {
-		t.Fatalf("unexpected error: %s: %s", ierr.Code, ierr.Error())
+		t.Fatalf("unexpected error: %s: %s (multipart read: %s)", ierr.Code, ierr.Error(), multipartReadError)
 	}
 
 	if !strings.Contains(receivedContentType, "multipart/form-data") {
@@ -812,8 +832,8 @@ func TestIntegration_SSEResponse_FiniteStreamIsOneUnaryValue(t *testing.T) {
 		"event: progress\nid: 42\ndata: {\"id\":\"3\",\"msg\":\"third\"}\n\n" +
 		": this is a comment, should be ignored\n\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if accept := r.Header.Get("Accept"); accept != "" {
-			t.Errorf("Accept header = %q, want absent", accept)
+		if accept := r.Header.Get("Accept"); accept != "application/json, text/event-stream" {
+			t.Errorf("Accept header = %q, want deterministic declared-media union", accept)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)

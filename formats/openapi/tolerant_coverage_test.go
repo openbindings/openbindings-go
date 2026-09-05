@@ -100,8 +100,8 @@ func TestCoverageSynthesisReturnsSoundPartialOBI(t *testing.T) {
 	if conditional.ReasonCode != "openapi.unresolvable_request_body" && conditional.ReasonCode != "openapi.media_schema_mismatch" {
 		t.Fatalf("conditional reasonCode = %q", conditional.ReasonCode)
 	}
-	if conditional.Rule != "OAPI30-P-03" {
-		t.Fatalf("conditional rule = %q; want OAPI30-P-03", conditional.Rule)
+	if conditional.Rule != "OAPI30-S-22" {
+		t.Fatalf("conditional rule = %q; want OAPI30-S-22", conditional.Rule)
 	}
 
 	collide, ok := targets["#/paths/~1collide/get"]
@@ -117,22 +117,6 @@ func TestCoverageSynthesisReturnsSoundPartialOBI(t *testing.T) {
 	}
 	if result.Coverage.FullyRepresented {
 		t.Fatal("coverage must honestly report not fully represented")
-	}
-}
-
-func TestOpenAPICoverageMakesNoClaimWithoutAMatchedFamilyToken(t *testing.T) {
-	doc, err := loadDocument("", json.RawMessage(mixedDoc))
-	if err != nil {
-		t.Fatal(err)
-	}
-	iface := &openbindings.Interface{
-		Sources: map[string]openbindings.Source{
-			"foreign": {BindingSpec: "example.foreign@1"},
-		},
-	}
-	entries := openAPISynthesisCoverage(doc, nil, iface, nil, nil)
-	if len(entries) != 0 {
-		t.Fatalf("coverage entries = %+v, want no OpenAPI claim without a matched family token", entries)
 	}
 }
 

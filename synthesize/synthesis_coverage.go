@@ -58,7 +58,7 @@ func NewSynthesisResultWithLimitation(iface *openbindings.Interface, entries []S
 		if entry.SourceRef == "" {
 			return nil, fmt.Errorf("synthesis coverage entry %d has empty sourceRef", index)
 		}
-		if entry.Scope != SynthesisCoverageTarget && entry.Scope != SynthesisCoverageAlternative && entry.Scope != SynthesisCoverageProjection && entry.Scope != SynthesisCoverageDependency {
+		if entry.Scope != SynthesisCoverageSource && entry.Scope != SynthesisCoverageTarget && entry.Scope != SynthesisCoverageAlternative && entry.Scope != SynthesisCoverageProjection && entry.Scope != SynthesisCoverageDependency {
 			return nil, fmt.Errorf("synthesis coverage entry %d has invalid scope %q", index, entry.Scope)
 		}
 		key := fmt.Sprintf("%d\x00%s\x00%s", entry.SourceIndex, entry.Scope, entry.SourceRef)

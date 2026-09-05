@@ -6,13 +6,17 @@
 package processorscenarios
 
 import (
-	"slices"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -68,10 +72,14 @@ type Assertion struct {
 	// NotContains pins the ABSENCE of a substring or member: a header never
 	// emitted, a field never serialized. Corpus revision 3.
 	NotContains any `json:"notContains,omitempty"`
+	// SemanticEquals interprets a complete wire representation before exact
+	// JSON comparison. Corpus revision 5.
+	SemanticEquals any `json:"semanticEquals,omitempty"`
 
 	equalsPresent      bool
 	containsPresent    bool
 	notContainsPresent bool
+	semanticPresent    bool
 }
 
 // UnmarshalJSON preserves presence for equals:null, contains:null, and
@@ -90,6 +98,7 @@ func (a *Assertion) UnmarshalJSON(data []byte) error {
 	_, a.equalsPresent = raw["equals"]
 	_, a.containsPresent = raw["contains"]
 	_, a.notContainsPresent = raw["notContains"]
+	_, a.semanticPresent = raw["semanticEquals"]
 	return nil
 }
 
@@ -226,6 +235,15 @@ func CheckAssertions(root any, assertions []Assertion) error {
 			if contains(value, assertion.NotContains) {
 				return fmt.Errorf("%s = %s, want NOT to contain %s", assertion.Path, printable(value), printable(assertion.NotContains))
 			}
+		case assertion.semanticPresent:
+			interpreted, err := semanticValue(value, assertion.SemanticEquals)
+			if err != nil {
+				return fmt.Errorf("%s: %w", assertion.Path, err)
+			}
+			semantic, ok := assertion.SemanticEquals.(map[string]any)
+			if !ok || !jsonEqual(interpreted, semantic["value"]) {
+				return fmt.Errorf("%s semantic value = %s, want %s", assertion.Path, printable(interpreted), printable(semantic["value"]))
+			}
 		default:
 			return fmt.Errorf("%s has no comparison operator", assertion.Path)
 		}
@@ -316,6 +334,267 @@ func contains(actual, needle any) bool {
 		}
 	}
 	return false
+}
+
+type semanticUnit struct {
+	name        string
+	value       string
+	contentType string
+}
+
+func semanticValue(actual, raw any) (any, error) {
+	assertion, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("semanticEquals must be an object")
+	}
+	kind, _ := assertion["as"].(string)
+	switch kind {
+	case "json-lines":
+		text, ok := actual.(string)
+		if !ok || text == "" || !strings.HasSuffix(text, "\n") {
+			return nil, fmt.Errorf("invalid JSON Lines framing")
+		}
+		lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+		values := make([]any, len(lines))
+		for index, line := range lines {
+			if err := decodeSemanticJSON([]byte(line), &values[index]); err != nil {
+				return nil, err
+			}
+		}
+		return values, nil
+	case "json-sequence":
+		text, ok := actual.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid JSON sequence body")
+		}
+		values := []any{}
+		for len(text) > 0 {
+			if text[0] != 0x1e {
+				return nil, fmt.Errorf("JSON sequence frame omits RS")
+			}
+			end := strings.IndexByte(text[1:], '\n')
+			if end < 0 {
+				return nil, fmt.Errorf("JSON sequence frame omits LF")
+			}
+			end++
+			var value any
+			if err := decodeSemanticJSON([]byte(text[1:end]), &value); err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+			text = text[end+1:]
+		}
+		return values, nil
+	case "querystring-json":
+		text, ok := actual.(string)
+		if !ok {
+			return nil, fmt.Errorf("querystring assertion requires a string")
+		}
+		mark := strings.IndexByte(text, '?')
+		if mark < 0 {
+			return nil, fmt.Errorf("URL has no query component")
+		}
+		decoded, err := semanticPercentDecode(text[mark+1:], false)
+		if err != nil {
+			return nil, err
+		}
+		var value any
+		return value, decodeSemanticJSON([]byte(decoded), &value)
+	case "query-json-parameter", "form-json-field":
+		text, ok := actual.(string)
+		if !ok {
+			return nil, fmt.Errorf("named assertion requires a string")
+		}
+		if kind == "query-json-parameter" {
+			mark := strings.IndexByte(text, '?')
+			if mark < 0 {
+				return nil, fmt.Errorf("URL has no query")
+			}
+			text = text[mark+1:]
+		}
+		units, err := semanticNamedUnits(text, kind == "form-json-field")
+		if err != nil {
+			return nil, err
+		}
+		if err := semanticCheckNames(units, assertion); err != nil {
+			return nil, err
+		}
+		unit, err := semanticSelectedUnit(units, assertion["name"])
+		if err != nil {
+			return nil, err
+		}
+		var value any
+		return value, decodeSemanticJSON([]byte(unit.value), &value)
+	case "multipart-json-part":
+		dispatch, ok := actual.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("multipart assertion requires a dispatch object")
+		}
+		headers, _ := dispatch["headers"].(map[string]any)
+		contentType := fmt.Sprint(headers["content-type"])
+		boundary := semanticBoundary(contentType)
+		body, _ := dispatch["body"].(string)
+		if boundary == "" || body == "" {
+			return nil, fmt.Errorf("invalid multipart wrapper")
+		}
+		parts, err := semanticMultipartParts(body, boundary)
+		if err != nil {
+			return nil, err
+		}
+		if err := semanticCheckNames(parts, assertion); err != nil {
+			return nil, err
+		}
+		part, err := semanticSelectedUnit(parts, assertion["name"])
+		if err != nil {
+			return nil, err
+		}
+		if part.contentType != "application/json" {
+			return nil, fmt.Errorf("multipart JSON part has wrong Content-Type %q", part.contentType)
+		}
+		var value any
+		return value, decodeSemanticJSON([]byte(part.value), &value)
+	default:
+		return nil, fmt.Errorf("unknown semantic interpreter %q", kind)
+	}
+}
+
+func decodeSemanticJSON(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("JSON representation contains more than one value")
+		}
+		return err
+	}
+	return nil
+}
+
+func semanticNamedUnits(raw string, plusAsSpace bool) ([]semanticUnit, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	result := []semanticUnit{}
+	for _, rawUnit := range strings.Split(raw, "&") {
+		name, value := rawUnit, ""
+		if split := strings.IndexByte(rawUnit, '='); split >= 0 {
+			name, value = rawUnit[:split], rawUnit[split+1:]
+		}
+		decodedName, err := semanticPercentDecode(name, plusAsSpace)
+		if err != nil {
+			return nil, err
+		}
+		decodedValue, err := semanticPercentDecode(value, plusAsSpace)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, semanticUnit{name: decodedName, value: decodedValue})
+	}
+	return result, nil
+}
+
+func semanticPercentDecode(value string, plusAsSpace bool) (string, error) {
+	for index := 0; index < len(value); index++ {
+		if value[index] != '%' {
+			continue
+		}
+		if index+2 >= len(value) || !strings.ContainsRune("0123456789ABCDEF", rune(value[index+1])) || !strings.ContainsRune("0123456789ABCDEF", rune(value[index+2])) {
+			return "", fmt.Errorf("percent triplets must use uppercase hex")
+		}
+		index += 2
+	}
+	if plusAsSpace {
+		value = strings.ReplaceAll(value, "+", " ")
+	}
+	return url.PathUnescape(value)
+}
+
+func semanticBoundary(contentType string) string {
+	for _, part := range strings.Split(contentType, ";") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(strings.ToLower(part), "boundary=") {
+			return strings.Trim(strings.TrimSpace(part[len("boundary="):]), "\"")
+		}
+	}
+	return ""
+}
+
+var semanticPartName = regexp.MustCompile(`(?i); name="((?:[^"\\]|\\.)*)"$`)
+
+func semanticMultipartParts(body, boundary string) ([]semanticUnit, error) {
+	delimiter := "--" + boundary
+	if !strings.HasPrefix(body, delimiter+"\r\n") || !strings.HasSuffix(body, delimiter+"--\r\n") {
+		return nil, fmt.Errorf("multipart body does not consume the exact wrapper")
+	}
+	rawParts := strings.Split(body, delimiter)
+	result := []semanticUnit{}
+	for _, raw := range rawParts[1:] {
+		if raw == "--\r\n" {
+			continue
+		}
+		if !strings.HasPrefix(raw, "\r\n") || !strings.HasSuffix(raw, "\r\n") {
+			return nil, fmt.Errorf("malformed multipart delimiter framing")
+		}
+		raw = strings.TrimPrefix(raw, "\r\n")
+		split := strings.Index(raw, "\r\n\r\n")
+		if split < 0 {
+			return nil, fmt.Errorf("multipart part has no header boundary")
+		}
+		headers := strings.Split(raw[:split], "\r\n")
+		disposition, contentType := "", ""
+		for _, header := range headers {
+			switch {
+			case strings.HasPrefix(strings.ToLower(header), "content-disposition:"):
+				disposition = header
+			case strings.HasPrefix(strings.ToLower(header), "content-type:"):
+				contentType = strings.TrimSpace(header[len("content-type:"):])
+			}
+		}
+		match := semanticPartName.FindStringSubmatch(disposition)
+		if len(match) != 2 || strings.Contains(strings.ToLower(disposition), "filename=") || strings.Contains(strings.ToLower(disposition), "filename*=") {
+			return nil, fmt.Errorf("multipart part name is not exact generated form")
+		}
+		value := strings.TrimSuffix(raw[split+4:], "\r\n")
+		name := strings.NewReplacer(`\"`, `"`, `\\`, `\`).Replace(match[1])
+		result = append(result, semanticUnit{name: name, value: value, contentType: contentType})
+	}
+	return result, nil
+}
+
+func semanticCheckNames(units []semanticUnit, assertion map[string]any) error {
+	wantedRaw, _ := assertion["names"].([]any)
+	wanted := make([]string, len(wantedRaw))
+	for index := range wantedRaw {
+		wanted[index] = fmt.Sprint(wantedRaw[index])
+	}
+	actual := make([]string, len(units))
+	for index := range units {
+		actual[index] = units[index].name
+	}
+	sort.Strings(actual)
+	sort.Strings(wanted)
+	if !reflect.DeepEqual(actual, wanted) {
+		return fmt.Errorf("contribution names = %v, want %v", actual, wanted)
+	}
+	return nil
+}
+
+func semanticSelectedUnit(units []semanticUnit, rawName any) (semanticUnit, error) {
+	name := fmt.Sprint(rawName)
+	selected := []semanticUnit{}
+	for _, unit := range units {
+		if unit.name == name {
+			selected = append(selected, unit)
+		}
+	}
+	if len(selected) != 1 {
+		return semanticUnit{}, fmt.Errorf("expected one %q contribution, got %d", name, len(selected))
+	}
+	return selected[0], nil
 }
 
 func printable(v any) string {

@@ -32,7 +32,7 @@ func TestRegisteredOpenAPIFamilyCapabilities(t *testing.T) {
 	if !openAPIBindingSpecRegistry[BindingSpecOpenAPI32].responseComplete {
 		t.Fatal("OpenAPI 3.2 must be response-complete after M6")
 	}
-	if !usesRoutedInput(BindingSpecOpenAPI32) || !hasMediaFidelity(BindingSpecOpenAPI32) {
+	if !hasRoutedInputs(BindingSpecOpenAPI32) || !hasMediaFidelity(BindingSpecOpenAPI32) {
 		t.Fatal("OpenAPI 3.2 request capabilities must use the routed 3.1-trunk substrate")
 	}
 	if !hasResponseFidelity(BindingSpecOpenAPI32) {
@@ -133,41 +133,18 @@ func TestOpenAPIFamilyTokenMustMatchArtifactEdition(t *testing.T) {
 				t.Fatalf("synthesis error = %v, want token/edition refusal", synthesisErr)
 			}
 
-			_, prepareErr := NewInvoker().PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
+			prepareDetails, prepareErr := NewInvoker().PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
 				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: openbindings.TextContent(artifact)},
 				Selector: "#/paths/~1x/get",
 			})
-			var prepareInvocationErr *invoke.InvocationError
-			if !errors.As(prepareErr, &prepareInvocationErr) || prepareInvocationErr.Code != invoke.ErrCodeSourceLoadFailed {
-				t.Fatalf("prepare error = %#v, want %s", prepareErr, invoke.ErrCodeSourceLoadFailed)
+			if prepareErr != nil || prepareDetails != nil {
+				t.Fatalf("prepare = (%#v, %#v), want advisory no-op before source acquisition", prepareDetails, prepareErr)
 			}
 		})
 	}
 }
 
 func TestRequestBodyMethodDispositionIsFamilySpecific(t *testing.T) {
-	for _, method := range []string{"get", "head", "delete", "options", "trace"} {
-		if !requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI30, method) {
-			t.Errorf("3.0 %s requestBody was not ignored", method)
-		}
-	}
-	for _, method := range []string{"get", "head", "delete", "options", "post", "put", "patch"} {
-		if requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI31, method) {
-			t.Errorf("3.1 %s requestBody was ignored", method)
-		}
-	}
-	if !requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI31, "trace") {
-		t.Error("3.1 TRACE requestBody was not ignored")
-	}
-	for _, method := range []string{"get", "head", "delete", "options", "post", "put", "patch", "query", "COPY"} {
-		if requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI32, method) {
-			t.Errorf("3.2 %s requestBody was ignored", method)
-		}
-	}
-	if !requestBodyIgnoredForBindingSpec(BindingSpecOpenAPI32, "trace") {
-		t.Error("3.2 TRACE requestBody was not ignored")
-	}
-
 	for _, testCase := range []struct {
 		token, edition string
 		wantInput      bool

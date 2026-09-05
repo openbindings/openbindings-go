@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	openapiclient "github.com/openbindings/openapi-client/go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
 
@@ -61,7 +62,7 @@ func TestOpenAPINativeDifferential(t *testing.T) {
 			switch scenario.ID {
 			case "OAPI30-FI-06":
 				input, _ := scenario.Given.Invocation["input"].(map[string]any)
-				encoded, _ := input[syntheticBodyProperty].(string)
+				encoded, _ := input["body"].(string)
 				decoded, decodeErr := base64.StdEncoding.DecodeString(encoded)
 				if decodeErr != nil {
 					t.Fatal(decodeErr)
@@ -288,25 +289,19 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 		transaction string
 		fileName    string
 		file        []byte
+		hasFilename bool
 		hasBodyPart bool
 	}
-	observations := make(chan observation, 1)
+	observations := make(chan observation, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
 			t.Errorf("parse multipart request: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		file, _, err := r.FormFile("file")
-		if err != nil {
-			t.Errorf("read multipart file: %v (values=%#v files=%#v)", err, r.MultipartForm.Value, r.MultipartForm.File)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		fileBytes, err := io.ReadAll(file)
-		_ = file.Close()
-		if err != nil {
-			t.Errorf("read multipart file bytes: %v", err)
+		fileValues := r.MultipartForm.Value["file"]
+		if len(fileValues) != 1 {
+			t.Errorf("read multipart raw part: values=%#v files=%#v", r.MultipartForm.Value, r.MultipartForm.File)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -315,7 +310,8 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 		observations <- observation{
 			transaction: r.FormValue("transaction"),
 			fileName:    r.FormValue("fileName"),
-			file:        fileBytes,
+			file:        []byte(fileValues[0]),
+			hasFilename: len(r.MultipartForm.File["file"]) > 0,
 			hasBodyPart: bodyValue || bodyFile,
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -354,6 +350,32 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 	if _, present := properties["body"]; present {
 		t.Fatalf("synthesized input invented a body wrapper: %#v", properties)
 	}
+	nativeRuntime := NewRuntimeWithClient(server.Client())
+	nativeClient, err := nativeRuntime.loadNativeClient(context.Background(), &invoke.BindingInvocationArgs{
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
+		Selector: "#/paths/~1upload/post",
+	}, true)
+	if err != nil {
+		t.Fatalf("load native analysis: %v", err)
+	}
+	analysis, err := nativeClient.AnalyzeOperation(openapiclient.OperationRef("#/paths/~1upload/post"))
+	if err != nil {
+		t.Fatalf("analyze multipart operation: %v", err)
+	}
+	if len(analysis.RequestBodies) != 1 || !reflect.DeepEqual(analysis.RequestBodies[0].Base64Properties, []string{"file"}) {
+		t.Fatalf("multipart raw-boundary analysis = %#v, want file", analysis.RequestBodies)
+	}
+	direct, err := nativeClient.Call(context.Background(), openapiclient.OperationRef("#/paths/~1upload/post"), openapiclient.Input{
+		BodyPresent: true,
+		Body:        map[string]any{"transaction": "tx-1", "fileName": "a.bin", "file": "AQID"},
+	})
+	if err != nil || !direct.OK {
+		t.Fatalf("native multipart call = (%#v, %v)", direct, err)
+	}
+	want := observation{transaction: "tx-1", fileName: "a.bin", file: []byte{1, 2, 3}, hasFilename: false}
+	if got := <-observations; !reflect.DeepEqual(got, want) {
+		t.Fatalf("native multipart request\ngot:  %#v\nwant: %#v", got, want)
+	}
 
 	opInvoker := invoke.NewOperationInvoker(NewInvokerWithClient(server.Client()))
 	opInvoker.TransformEvaluator = openAPIJSONataEvaluator{}
@@ -377,7 +399,6 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 		t.Fatalf("unexpected outputs: %#v", outputs)
 	}
 	got := <-observations
-	want := observation{transaction: "tx-1", fileName: "a.bin", file: []byte{1, 2, 3}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("multipart allOf differential\ngot:  %#v\nwant: %#v", got, want)
 	}

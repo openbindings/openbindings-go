@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/synthesize"
 )
 
 func TestInspectSource_BasicSelectors(t *testing.T) {
@@ -149,16 +150,6 @@ func TestInspectSource_DescriptionFromSummary(t *testing.T) {
 }
 
 func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
-	doc := minimalDoc()
-	iface := mustConvertDocToInterface(t, doc, BindingSpecOpenAPI30)
-
-	// Collect binding selectors from SynthesizeInterface.
-	createSelectors := map[string]bool{}
-	for _, b := range iface.Bindings {
-		createSelectors[b.Selector] = true
-	}
-
-	// InspectSource should produce the same selectors.
 	content := `{
   "openapi": "3.0.3",
   "info": {"title": "Test API", "version": "2.0.0"},
@@ -177,6 +168,17 @@ func TestInspectSource_SelectorsMatchSynthesizeInterface(t *testing.T) {
     }
   }
 }`
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
+		BindingSpec: BindingSpecOpenAPI30,
+		Content:     openbindings.TextContent(content),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createSelectors := map[string]bool{}
+	for _, b := range iface.Bindings {
+		createSelectors[b.Selector] = true
+	}
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
@@ -215,11 +217,13 @@ func TestInspectSource_KeysMatchSynthesizeInterface(t *testing.T) {
   }
 }`
 
-	doc, err := loadDocument("", openbindings.TextContent(content))
+	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{Sources: []synthesize.SynthesizeSource{{
+		BindingSpec: BindingSpecOpenAPI30,
+		Content:     openbindings.TextContent(content),
+	}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	iface := mustConvertDocToInterface(t, doc, BindingSpecOpenAPI30)
 
 	// Map each selector to the operation key SynthesizeInterface assigned it.
 	createKeyBySelector := map[string]string{}

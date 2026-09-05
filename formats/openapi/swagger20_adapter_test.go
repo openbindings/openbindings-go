@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	openapiclient "github.com/openbindings/openapi-client/go"
+	openapiprovider "github.com/openbindings/openapi-client/go/provider"
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 )
@@ -38,7 +38,7 @@ func TestSwagger20AdapterOwnsExactLoadAndSelectorGates(t *testing.T) {
 			artifact: `{"swagger":"2.0","info":{"title":"cycle","version":"1"},` +
 				`"a":{"$ref":"#/b"},"b":{"$ref":"#/a"},"paths":{"/pets":{"$ref":"#/a"}}}`,
 			selector: "#/paths/~1pets/get",
-			wantCode: openapiclient.CodeRefused,
+			wantCode: openapiprovider.CodeRefused,
 		},
 		{
 			// A self-contained document with no host and no retrieval location
@@ -75,21 +75,6 @@ func TestSwagger20AdapterOwnsExactLoadAndSelectorGates(t *testing.T) {
 				t.Fatalf("challenge = %#v, want a config.value requirement at %q", invocationErr.Data, testCase.wantPoint)
 			}
 		})
-	}
-}
-
-func TestSwagger20ConfigurationSelections(t *testing.T) {
-	configuration, err := swagger20Configuration(map[string]any{"configuration": map[string]any{
-		"server": map[string]any{"index": float64(1)}, "security": map[string]any{"index": float64(2)},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if configuration.serverSchemeIndex == nil || *configuration.serverSchemeIndex != 1 {
-		t.Fatalf("server scheme index = %#v, want 1", configuration.serverSchemeIndex)
-	}
-	if configuration.securityAlternative == nil || *configuration.securityAlternative != 2 {
-		t.Fatalf("security alternative = %#v, want 2", configuration.securityAlternative)
 	}
 }
 
@@ -171,8 +156,8 @@ func TestSwagger20AdapterRefusesEnvelopeAndBodyBeforeDispatch(t *testing.T) {
 				Context:  map[string]any{"configuration": map[string]any{"server": "https://peer.example"}},
 			})
 			_, invocationErr := driveOutputs(context.Background(), call, testCase.input)
-			if invocationErr == nil || invocationErr.Code != openapiclient.CodeRefused {
-				t.Fatalf("error = %#v, want %s", invocationErr, openapiclient.CodeRefused)
+			if invocationErr == nil || invocationErr.Code != openapiprovider.CodeRefused {
+				t.Fatalf("error = %#v, want %s", invocationErr, openapiprovider.CodeRefused)
 			}
 			if len(roundTripper.dispatches) != 0 {
 				t.Fatalf("dispatched %d requests", len(roundTripper.dispatches))

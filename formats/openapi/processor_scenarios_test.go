@@ -12,7 +12,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf16"
+	"unicode/utf8"
 
+	openapiclient "github.com/openbindings/openapi-client/go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/processorscenarios"
 	"github.com/openbindings/openbindings-go/synthesize"
@@ -63,24 +66,36 @@ func (r *scenarioRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	status := 599
 	body := []byte{}
 	headers := http.Header{}
-	if r.peer != nil {
-		if value, ok := numberAsInt(r.peer["status"]); ok {
+	peer := r.peer
+	if responses, ok := r.peer["responses"].([]any); ok {
+		index := len(r.dispatches) - 1
+		if index >= 0 && index < len(responses) {
+			peer, _ = responses[index].(map[string]any)
+		}
+	}
+	if peer != nil {
+		if value, ok := numberAsInt(peer["status"]); ok {
 			status = value
 		}
-		if value, ok := r.peer["bodyBase64"].(string); ok {
+		if value, ok := peer["bodyBase64"].(string); ok {
 			if decoded, err := base64.StdEncoding.DecodeString(value); err == nil {
 				body = decoded
 			}
-		} else if value, ok := r.peer["body"].(string); ok {
+		} else if value, ok := peer["body"].(string); ok {
 			body = []byte(value)
 		}
-		if raw, ok := r.peer["headers"].(map[string]any); ok {
+		if raw, ok := peer["headers"].(map[string]any); ok {
 			for name, value := range raw {
 				if text, ok := value.(string); ok {
 					headers.Set(name, text)
 				}
 			}
 		}
+	}
+	// net/http exposes HEAD response metadata but never payload octets to a
+	// client, even when the scripted peer includes bytes.
+	if req.Method == http.MethodHead {
+		body = nil
 	}
 	return &http.Response{
 		StatusCode: status,
@@ -247,11 +262,19 @@ func TestProcessorScenarios(t *testing.T) {
 		{name: "openapi-3.1"},
 		{name: "openapi-3.2"},
 	} {
+		// The standalone client now warrants the complete Swagger 2.0 family;
+		// the historical incremental allowlist is no longer a gate.
+		if family.name == "openapi-2.0" {
+			family.wanted = nil
+		}
 		family := family
 		t.Run(family.name, func(t *testing.T) {
 			file, err := loadOpenAPIProcessorScenarioFile(
 				filepath.Join(root, "binding-specs", "processor", family.name+".json"),
 				family.name,
+				// Revision 5 adds semantic wire interpreters; the reader remains
+				// backward compatible with the additive earlier revisions.
+				"openbindings.binding-spec-processor-scenarios@5",
 				// Revision 3 adds `notContains`; a revision-3 reader reads a
 				// revision-2 file identically, so both are accepted and the
 				// corpus and the engines can merge in either order.
@@ -384,7 +407,11 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 		call = processor.InvokeBinding(context.Background(), args)
 	}
 	if present, _ := scenario.Given.Invocation["inputPresent"].(bool); present {
-		if err := call.Write(context.Background(), scenario.Given.Invocation["input"]); err != nil {
+		input, materializeErr := scenarioInputValue(scenario)
+		if materializeErr != nil {
+			t.Fatal(materializeErr)
+		}
+		if err := call.Write(context.Background(), input); err != nil {
 			// The output terminal remains authoritative and is read below.
 		}
 	}
@@ -431,10 +458,85 @@ func runOpenAPIProcessorScenario(t *testing.T, scenario processorscenarios.Scena
 	return processorscenarios.Observation{Disposition: disposition, Phase: phase, Data: data}
 }
 
+func scenarioInputValue(scenario processorscenarios.Scenario) (any, error) {
+	raw, err := json.Marshal(scenario.Given.Invocation["input"])
+	if err != nil {
+		return nil, err
+	}
+	var input any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&input); err != nil {
+		return nil, err
+	}
+	for _, value := range anySliceValue(scenario.Given.Invocation["inputMaterializations"]) {
+		materialization, _ := value.(map[string]any)
+		path, _ := materialization["path"].(string)
+		units := anySliceValue(materialization["codeUnits"])
+		codeUnits := make([]uint16, len(units))
+		for index, unit := range units {
+			integer, _ := numberAsInt(unit)
+			codeUnits[index] = uint16(integer)
+		}
+		if err := setScenarioPointer(input, path, scenarioUTF16String(codeUnits)); err != nil {
+			return nil, err
+		}
+	}
+	return input, nil
+}
+
+func anySliceValue(value any) []any {
+	values, _ := value.([]any)
+	return values
+}
+
+func setScenarioPointer(root any, path string, replacement any) error {
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	current := root
+	for index, raw := range parts {
+		part := strings.ReplaceAll(strings.ReplaceAll(raw, "~1", "/"), "~0", "~")
+		if index == len(parts)-1 {
+			object, ok := current.(map[string]any)
+			if !ok {
+				return fmt.Errorf("input materialization path %q is not an object path", path)
+			}
+			object[part] = replacement
+			return nil
+		}
+		object, ok := current.(map[string]any)
+		if !ok {
+			return fmt.Errorf("invalid input materialization path %q", path)
+		}
+		current = object[part]
+	}
+	return nil
+}
+
+func scenarioUTF16String(units []uint16) string {
+	result := []byte{}
+	for index := 0; index < len(units); index++ {
+		unit := units[index]
+		if 0xD800 <= unit && unit <= 0xDBFF && index+1 < len(units) && 0xDC00 <= units[index+1] && units[index+1] <= 0xDFFF {
+			result = utf8.AppendRune(result, utf16.DecodeRune(rune(unit), rune(units[index+1])))
+			index++
+			continue
+		}
+		if 0xD800 <= unit && unit <= 0xDFFF {
+			result = append(result, byte(0xE0|unit>>12), byte(0x80|(unit>>6)&0x3F), byte(0x80|unit&0x3F))
+			continue
+		}
+		result = utf8.AppendRune(result, rune(unit))
+	}
+	return string(result)
+}
+
 func scenarioOpenAPIInvoker(client *http.Client, scenario processorscenarios.Scenario) *Invoker {
 	options := RuntimeOptions{
 		HTTPClient:          client,
 		ParameterConversion: scenarioParameterConversion(scenario),
+	}
+	if scenario.Given.Runtime["redirectPolicy"] == "follow" {
+		options.Redirect = openapiclient.RedirectFollow
 	}
 	if declared, ok := scenario.Given.Runtime["requestContentCodings"].(map[string]any); ok {
 		options.RequestContentCodings = map[string]ContentEncoder{}
@@ -471,6 +573,28 @@ func scenarioOpenAPIInvoker(client *http.Client, scenario processorscenarios.Sce
 					}
 					return append([]byte(nil), input[len(prefix):len(input)-1]...), nil
 				}
+			}
+		}
+	}
+	if declared, ok := scenario.Given.Runtime["requestCharacterEncodings"].(map[string]any); ok {
+		options.RequestCharacterEncodings = map[string]CharacterEncoder{}
+		for charset, raw := range declared {
+			switch raw {
+			case "identity":
+				options.RequestCharacterEncodings[charset] = func(input string) ([]byte, error) { return []byte(input), nil }
+			case "fail":
+				options.RequestCharacterEncodings[charset] = func(string) ([]byte, error) { return nil, fmt.Errorf("configured request character encoder failed") }
+			}
+		}
+	}
+	if declared, ok := scenario.Given.Runtime["responseCharacterEncodings"].(map[string]any); ok {
+		options.ResponseCharacterEncodings = map[string]CharacterDecoder{}
+		for charset, raw := range declared {
+			switch raw {
+			case "identity":
+				options.ResponseCharacterEncodings[charset] = func(input []byte) (string, error) { return string(input), nil }
+			case "fail":
+				options.ResponseCharacterEncodings[charset] = func([]byte) (string, error) { return "", fmt.Errorf("configured response character decoder failed") }
 			}
 		}
 	}

@@ -199,7 +199,7 @@ paths:
 	for _, entry := range result.Coverage.Entries {
 		if entry.SourceRef == "#/paths/~1x/get/responses/200/content/application~1json" {
 			found = true
-			if entry.Scope != synthesize.SynthesisCoverageAlternative || entry.Status != synthesize.SynthesisExcluded ||
+			if entry.Scope != synthesize.SynthesisCoverageAlternative || entry.Status != synthesize.SynthesisInvalid ||
 				entry.ReasonCode != "openapi.response_media_excluded" || entry.Rule != "OAPI32-P-01" {
 				t.Fatalf("response media coverage = %#v", entry)
 			}

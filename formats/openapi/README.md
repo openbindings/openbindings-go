@@ -5,7 +5,11 @@ Thin OpenAPI binding-invoker and interface-synthesizer adapters for the
 the standalone [`openapi-client/go`](https://github.com/openbindings/openapi-client)
 module; this package maps OpenBindings contracts onto it.
 
-This package enables OpenBindings to invoke operations against OpenAPI specs and synthesize OBI documents from them. It reads Swagger 2.0 and OpenAPI 3.x documents, constructs HTTP requests, applies credentials via security schemes, and yields results through the SDK's cardinality-agnostic `Invocation` handle.
+This package enables OpenBindings to invoke operations against OpenAPI specs
+and synthesize OBI documents from them. The standalone client owns Swagger 2.0
+and OpenAPI 3.x loading, request construction, credentials, HTTP, and response
+behavior; this package projects OBI documents and translates the SDK's
+cardinality-agnostic `Invocation` lifecycle.
 
 See the [spec](https://github.com/openbindings/spec) and the [invocation pattern](https://openbindings.com/spec/invocation-pattern) for how binding invokers and interface synthesizers fit into the OpenBindings architecture.
 
@@ -25,10 +29,10 @@ Use the standalone client when an application needs OpenAPI without an OBI or
 OpenBindings SDK dependency:
 
 ```go
-client, err := openapiclient.Load(ctx, openapiclient.Source{
-    Location: "https://api.example.com/openapi.json",
-}, openapiclient.ClientOptions{
-    Auth: map[string]any{"session": "tok_123"},
+client, err := openapiclient.Load(ctx, openapiclient.FromURL(
+    "https://api.example.com/openapi.json",
+), openapiclient.Options{
+    Auth: openapiclient.Credentials{"session": openapiclient.Token("tok_123")},
 })
 if err != nil {
     log.Fatal(err)
@@ -40,10 +44,12 @@ result, err := client.Call(ctx, openapiclient.OperationRef(
 })
 ```
 
-`Runtime` remains as a Core-invocation-shaped compatibility façade, but it now
-delegates to that same engine. New standalone applications should use
-`openapiclient.Client`; `Invoker` is the OpenBindings bridge and `Synthesizer`
-constructs OBI documents.
+Standalone applications use `openapiclient.Client`; `Invoker` is the thin
+OpenBindings lifecycle bridge. `Synthesizer` currently produces the same
+binding-specification-governed results from the standalone provider's detached,
+immutable analysis projection. The adapter owns only OpenBindings contract and
+coverage translation; it contains no second OpenAPI declaration planner or
+wire executor.
 
 ### Register with OperationInvoker
 

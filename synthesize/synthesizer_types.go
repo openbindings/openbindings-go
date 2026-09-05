@@ -143,6 +143,9 @@ type SynthesizerWarning struct {
 type SynthesisCoverageScope string
 
 const (
+	// SynthesisCoverageSource is the complete source artifact when a binding
+	// defines a source-scope exclusion that is distinct from load refusal.
+	SynthesisCoverageSource SynthesisCoverageScope = "source"
 	// SynthesisCoverageTarget is an addressable source interaction.
 	SynthesisCoverageTarget SynthesisCoverageScope = "target"
 	// SynthesisCoverageAlternative is an independently selectable alternative

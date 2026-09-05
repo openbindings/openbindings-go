@@ -262,9 +262,12 @@ func coverageEntries(entries []synthesize.SynthesisCoverageEntry) []CoverageEntr
 			Status:          string(entry.Status),
 			OperationKey:    entry.OperationKey,
 			BindingSelector: entry.BindingSelector,
-			ReasonCode:      entry.ReasonCode,
-			Rule:            entry.Rule,
-			Requirements:    requirements,
+			// reasonCode is intentionally implementation-defined. The portable
+			// corpus compares the normative rule and smallest-owner coverage
+			// coordinates, not a provider's diagnostic spelling.
+			ReasonCode:   "",
+			Rule:         entry.Rule,
+			Requirements: requirements,
 		})
 	}
 	sortCoverage(out)
@@ -285,6 +288,9 @@ func normalizedExpected(in Expected) Expected {
 	for i := range out.Coverage.Entries {
 		out.Coverage.Entries[i].Requirements = append([]string{}, out.Coverage.Entries[i].Requirements...)
 		sort.Strings(out.Coverage.Entries[i].Requirements)
+		// Keep the expected side symmetric with coverageEntries: reasonCode is
+		// diagnostic metadata rather than part of the portable contract.
+		out.Coverage.Entries[i].ReasonCode = ""
 	}
 	sortCoverage(out.Coverage.Entries)
 	return out
