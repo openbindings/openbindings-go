@@ -32,7 +32,7 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 	if _, err := client.Operation(openapiclient.OperationRef(args.Selector)); err != nil {
 		return nativeSelectionInvocationError(args, err)
 	}
-	options, err := e.nativeCallOptions(args)
+	options, err := e.nativeCallOptions(args, client)
 	if err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func (e *invokerRuntime) prepareNativeBinding(ctx context.Context, args *invoke.
 		}
 		return nil, nil
 	}
-	options, err := e.nativeCallOptions(args)
+	options, err := e.nativeCallOptions(args, client)
 	if err != nil {
 		return nil, err
 	}
@@ -302,9 +302,9 @@ func checkAcceptedOpenAPIVersionForBindingSpecValue(edition, bindingSpec string)
 	return nil
 }
 
-func (e *invokerRuntime) nativeCallOptions(args *invoke.BindingInvocationArgs) (openapiclient.CallOptions, error) {
+func (e *invokerRuntime) nativeCallOptions(args *invoke.BindingInvocationArgs, client *openapiclient.Client) (openapiclient.CallOptions, error) {
 	configuration := invoke.ContextConfiguration(args.Context)
-	server, err := nativeServerSelection(configuration)
+	server, err := nativeServerSelection(configuration, client, openapiclient.OperationRef(args.Selector))
 	if err != nil {
 		return openapiclient.CallOptions{}, err
 	}
@@ -343,7 +343,7 @@ func (e *invokerRuntime) nativeCallOptions(args *invoke.BindingInvocationArgs) (
 	}, nil
 }
 
-func nativeServerSelection(configuration map[string]any) (openapiclient.ServerSelection, error) {
+func nativeServerSelection(configuration map[string]any, client *openapiclient.Client, selector openapiclient.OperationSelector) (openapiclient.ServerSelection, error) {
 	value, present := configuration["server"]
 	if !present {
 		return nil, nil
@@ -364,6 +364,21 @@ func nativeServerSelection(configuration map[string]any) (openapiclient.ServerSe
 			return nil, invoke.NewInvocationError(invoke.ErrCodeRefused)
 		}
 		return openapiclient.ServerURL(base), nil
+	}
+	if entryURL, ok := object["url"].(string); ok && entryURL != "" {
+		if len(object) > 2 || len(object) == 2 && !variablesPresent || client == nil {
+			return nil, invoke.NewInvocationError(invoke.ErrCodeRefused)
+		}
+		operation, analysisErr := client.AnalyzeOperation(selector)
+		if analysisErr != nil {
+			return nil, invoke.NewInvocationError(invoke.ErrCodeRefused)
+		}
+		for _, alternative := range operation.Servers {
+			if alternative.Usable && alternative.URL == entryURL {
+				return openapiclient.Server(alternative.Index, variables), nil
+			}
+		}
+		return nil, invoke.NewInvocationError(invoke.ErrCodeRefused)
 	}
 	if raw, exists := object["index"]; exists {
 		index, valid := nativeConfigIndex(raw)
