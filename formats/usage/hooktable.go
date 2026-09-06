@@ -48,7 +48,7 @@ func (t HookTable) Hooks() (invoke.OutputDecoder, invoke.ResultClassifier, invok
 	}
 
 	decoder := func(site invoke.InvokeSite, raw invoke.RawResult) (any, error) {
-		if site.FamilyName() != "usage" || !decodeJSON[site.Operation] {
+		if site.BindingSpec != BindingSpec || !decodeJSON[site.Operation] {
 			return nil, invoke.ErrUseDefault
 		}
 		if len(raw.Body) == 0 {
@@ -64,7 +64,7 @@ func (t HookTable) Hooks() (invoke.OutputDecoder, invoke.ResultClassifier, invok
 	}
 
 	classifier := func(site invoke.InvokeSite, raw invoke.RawResult) (bool, error) {
-		if site.FamilyName() != "usage" || raw.Status == nil {
+		if site.BindingSpec != BindingSpec || raw.Status == nil {
 			return false, invoke.ErrUseDefault
 		}
 		oks, has := t.OKExits[site.Operation]
@@ -75,7 +75,7 @@ func (t HookTable) Hooks() (invoke.OutputDecoder, invoke.ResultClassifier, invok
 	}
 
 	router := func(site invoke.InvokeSite, field string, _ any) string {
-		if site.FamilyName() != "usage" {
+		if site.BindingSpec != BindingSpec {
 			return ""
 		}
 		routes, has := t.Routes[site.Operation]

@@ -89,10 +89,10 @@ func (r *PreparedRealization) Preflight(ctx context.Context, opts ...InvokeOptio
 // PreparedProvider is an immutable provider catalog with a bounded, lazy
 // realization-closure cache and explicit lifecycle.
 type PreparedProvider struct {
-	Key               string
-	Label             string
-	Interface         *openbindings.PreparedInterface
-	SelectRealization RealizationSelector
+	key               string
+	label             string
+	interfaceSnapshot *openbindings.PreparedInterface
+	selectRealization RealizationSelector
 
 	mu          sync.RWMutex
 	runtime     ProviderRuntime
@@ -164,10 +164,10 @@ func PrepareProvider(options PreparedProviderOptions) (*PreparedProvider, error)
 		closures[bindingKey] = &realizationClosure{}
 	}
 	return &PreparedProvider{
-		Key:               options.Key,
-		Label:             options.Label,
-		Interface:         options.Interface,
-		SelectRealization: options.SelectRealization,
+		key:               options.Key,
+		label:             options.Label,
+		interfaceSnapshot: options.Interface,
+		selectRealization: options.SelectRealization,
 		runtime:           options.Runtime,
 		snapshot:          snapshot,
 		specs:             specs,
@@ -175,6 +175,24 @@ func PrepareProvider(options PreparedProviderOptions) (*PreparedProvider, error)
 		byOperation:       byOperation,
 		closures:          closures,
 	}, nil
+}
+
+// Key returns the immutable application-owned provider key.
+func (p *PreparedProvider) Key() string { return p.key }
+
+// Label returns the immutable display label supplied at preparation time.
+func (p *PreparedProvider) Label() string { return p.label }
+
+// PreparedInterface returns the immutable prepared interface revision owned
+// by this provider.
+func (p *PreparedProvider) PreparedInterface() *openbindings.PreparedInterface {
+	return p.interfaceSnapshot
+}
+
+// RealizationSelector returns the immutable application selector, if one was
+// supplied at preparation time.
+func (p *PreparedProvider) RealizationSelector() RealizationSelector {
+	return p.selectRealization
 }
 
 // BindingSpecs returns a private copy of installed capability metadata.
@@ -201,7 +219,7 @@ func (p *PreparedProvider) Realization(bindingKey string) (ProviderRealizationDe
 
 // RealizationsForOperation returns binding-key ordered descriptor copies.
 func (p *PreparedProvider) RealizationsForOperation(operationIdentifier string) []ProviderRealizationDescriptor {
-	op, ok := p.Interface.Operation(operationIdentifier)
+	op, ok := p.interfaceSnapshot.Operation(operationIdentifier)
 	if !ok {
 		return nil
 	}
@@ -215,12 +233,12 @@ func (p *PreparedProvider) CloseRealization(ctx context.Context, bindingKey stri
 	p.mu.Lock()
 	if p.disposed {
 		p.mu.Unlock()
-		return nil, &ProviderDisposedError{ProviderKey: p.Key}
+		return nil, &ProviderDisposedError{ProviderKey: p.key}
 	}
 	descriptor, ok := p.descriptors[bindingKey]
 	if !ok || !descriptor.Supported {
 		p.mu.Unlock()
-		return nil, &RealizationNotFoundError{ProviderKey: p.Key, BindingKey: bindingKey}
+		return nil, &RealizationNotFoundError{ProviderKey: p.key, BindingKey: bindingKey}
 	}
 	closure := p.closures[bindingKey]
 	p.closeWG.Add(1)
@@ -255,17 +273,17 @@ func (p *PreparedProvider) CloseRealization(ctx context.Context, bindingKey stri
 	var behavior CompiledRealizationBehavior
 	var compileErr error
 	if compiler, ok := p.runtime.(ProviderRuntimeSnapshotCompiler); ok {
-		behavior, compileErr = compiler.CompileRealizationSnapshot(ctx, p.Interface, p.snapshot, descriptor.binding)
+		behavior, compileErr = compiler.CompileRealizationSnapshot(ctx, p.interfaceSnapshot, p.snapshot, descriptor.binding)
 	} else {
-		behavior, compileErr = p.runtime.CompileRealization(ctx, p.Interface, descriptor.binding)
+		behavior, compileErr = p.runtime.CompileRealization(ctx, p.interfaceSnapshot, descriptor.binding)
 	}
 	if compileErr == nil && behavior == nil {
 		compileErr = fmt.Errorf("openbindings: provider runtime returned nil realization behavior")
 	}
 	if compileErr == nil {
 		attempt.realization = &PreparedRealization{
-			ProviderKey:       p.Key,
-			InterfaceRevision: p.Interface.Revision(),
+			ProviderKey:       p.key,
+			InterfaceRevision: p.interfaceSnapshot.Revision(),
 			OperationKey:      descriptor.OperationKey,
 			BindingKey:        descriptor.BindingKey,
 			SourceKey:         descriptor.SourceKey,
@@ -312,7 +330,7 @@ func (p *PreparedProvider) assertActive() error {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.disposed {
-		return &ProviderDisposedError{ProviderKey: p.Key}
+		return &ProviderDisposedError{ProviderKey: p.key}
 	}
 	return nil
 }

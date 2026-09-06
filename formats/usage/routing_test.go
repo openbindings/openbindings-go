@@ -73,7 +73,7 @@ func TestRouting_DirectLaneNonObjectRefused(t *testing.T) {
 func routerDriver(routes map[string]string, decodeJSON bool) driver {
 	return hooked(func(op *invoke.OperationInvoker) {
 		op.FieldRouter = func(site invoke.InvokeSite, field string, _ any) string {
-			if site.FamilyName() != "usage" {
+			if site.BindingSpec != BindingSpec {
 				return ""
 			}
 			return routes[field]

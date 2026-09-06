@@ -133,7 +133,7 @@ func TestRuntimeComposesProviderCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if providerFromSnapshot.Interface != preparedInterface {
+	if providerFromSnapshot.PreparedInterface() != preparedInterface {
 		t.Fatal("prepared provider did not retain the caller's immutable snapshot")
 	}
 }

@@ -74,7 +74,6 @@ func (c *DiagnosticCollector) recordValidation(
 	if !errors.As(err, &validationError) {
 		return
 	}
-	records := validationDiagnostics(phase, operationKey, bindingKey, validationError)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	limit := c.limit
@@ -86,20 +85,24 @@ func (c *DiagnosticCollector) recordValidation(
 		c.truncated = true
 		return
 	}
-	if len(records) > remaining {
-		c.records = append(c.records, records[:remaining]...)
-		c.truncated = true
-		return
-	}
+	records, truncated := validationDiagnostics(phase, operationKey, bindingKey, validationError, remaining)
 	c.records = append(c.records, records...)
+	if truncated {
+		c.truncated = true
+	}
 }
 
 func validationDiagnostics(
 	phase ValidationPhase,
 	operationKey, bindingKey string,
 	err *jsonschema.ValidationError,
-) []InvocationDiagnostic {
-	leaves := validationLeaves(err)
+	limit int,
+) ([]InvocationDiagnostic, bool) {
+	leaves := validationLeaves(err, limit+1)
+	truncated := len(leaves) > limit
+	if truncated {
+		leaves = leaves[:limit]
+	}
 	records := make([]InvocationDiagnostic, 0, len(leaves))
 	for _, leaf := range leaves {
 		var keywordPath []string
@@ -129,7 +132,7 @@ func validationDiagnostics(
 		}
 		return records[i].Keyword < records[j].Keyword
 	})
-	return records
+	return records, truncated
 }
 
 func schemaLocationTokens(schemaURL string, keywordPath []string) []string {
@@ -165,8 +168,8 @@ func safeInstancePointer(instance, schema []string) string {
 	return jsonPointer(safe)
 }
 
-func validationLeaves(err *jsonschema.ValidationError) []*jsonschema.ValidationError {
-	if err == nil {
+func validationLeaves(err *jsonschema.ValidationError, limit int) []*jsonschema.ValidationError {
+	if err == nil || limit <= 0 {
 		return nil
 	}
 	if len(err.Causes) == 0 {
@@ -174,7 +177,10 @@ func validationLeaves(err *jsonschema.ValidationError) []*jsonschema.ValidationE
 	}
 	var leaves []*jsonschema.ValidationError
 	for _, cause := range err.Causes {
-		leaves = append(leaves, validationLeaves(cause)...)
+		leaves = append(leaves, validationLeaves(cause, limit-len(leaves))...)
+		if len(leaves) >= limit {
+			break
+		}
 	}
 	return leaves
 }

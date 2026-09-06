@@ -284,17 +284,45 @@ func nativeSourceClientKey(args *invoke.BindingInvocationArgs) string {
 		if err != nil {
 			return ""
 		}
+		if !nativeSelfContainedCacheSource(content) {
+			return ""
+		}
 		digest := sha256.Sum256(content)
 		return fmt.Sprintf("%s\x00location\x00%s\x00content\x00%x", args.Source.BindingSpec, args.Source.Location, digest)
-	}
-	if args.Source.Location != "" {
-		return nativeLocationClientPrefix(args) + "location-only"
 	}
 	return ""
 }
 
-func nativeLocationClientPrefix(args *invoke.BindingInvocationArgs) string {
-	return args.Source.BindingSpec + "\x00location\x00" + args.Source.Location + "\x00content\x00"
+// Cache only JSON entry documents whose reference closure is covered by the
+// entry digest. Other sources are loaded normally by the native provider.
+func nativeSelfContainedCacheSource(content []byte) bool {
+	var document map[string]any
+	if json.Unmarshal(content, &document) != nil || document == nil {
+		return false
+	}
+	pending := []any{document}
+	for len(pending) > 0 {
+		value := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		switch value := value.(type) {
+		case map[string]any:
+			for key, member := range value {
+				if key == "$id" || key == "$self" {
+					return false
+				}
+				if key == "$ref" || key == "$dynamicRef" {
+					ref, ok := member.(string)
+					if !ok || !strings.HasPrefix(ref, "#") {
+						return false
+					}
+				}
+				pending = append(pending, member)
+			}
+		case []any:
+			pending = append(pending, value...)
+		}
+	}
+	return true
 }
 
 func (e *invokerRuntime) cachedNativeClient(args *invoke.BindingInvocationArgs) (*openapiclient.Client, bool) {
@@ -304,16 +332,6 @@ func (e *invokerRuntime) cachedNativeClient(args *invoke.BindingInvocationArgs) 
 	}
 	e.nativeClientsMu.RLock()
 	client, present := e.nativeClients[key]
-	if args.Source.Content == nil && args.Source.Location != "" {
-		prefix := nativeLocationClientPrefix(args)
-		for index := len(e.nativeClientOrder) - 1; index >= 0; index-- {
-			candidate := e.nativeClientOrder[index]
-			if strings.HasPrefix(candidate, prefix) {
-				client, present = e.nativeClients[candidate]
-				break
-			}
-		}
-	}
 	e.nativeClientsMu.RUnlock()
 	return client, present
 }

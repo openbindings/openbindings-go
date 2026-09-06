@@ -1212,18 +1212,13 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 	}
 }
 
-// TestPrepareBinding_UsesCachePrimedFromContent pins the content+location
-// cache rule: an invocation with BOTH content and location primes the
-// location-keyed document cache, so a later location-only prepareBinding
-// (which never fetches) can report requirements from the warm cache
-// (TS is aligned TO this).
-func TestPrepareBinding_UsesCachePrimedFromContent(t *testing.T) {
+// Embedded content never supplies authority for a location-only source.
+func TestPrepareBinding_LocationOnlyDoesNotReuseEmbeddedContent(t *testing.T) {
 	spec, _ := json.Marshal(makeOpenAPISpec("https://api.example.com"))
 	location := "https://example.test/openapi.json"
 
 	binv := NewInvoker()
-	// Content+location invocation: no fetch happens (content is authoritative),
-	// but the parse must land in the location-keyed cache.
+	// Content+location invocation uses the authoritative embedded content.
 	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: location, Content: openbindings.TextContent(string(spec))},
 		Selector: "#/paths/~1items/get",
@@ -1233,7 +1228,7 @@ func TestPrepareBinding_UsesCachePrimedFromContent(t *testing.T) {
 		t.Fatalf("expected CONTEXT_REQUIRED, got %v", ierr)
 	}
 
-	// Location-only preflight: must be served from the warm cache.
+	// Location-only preflight remains unknown because it cannot retrieve.
 	details, err := binv.PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: location},
 		Selector: "#/paths/~1items/get",
@@ -1241,11 +1236,8 @@ func TestPrepareBinding_UsesCachePrimedFromContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareBinding: %v", err)
 	}
-	if details == nil {
-		t.Fatal("prepareBinding must see the cached document primed from content")
-	}
-	if details.Target != "https://api.example.com" {
-		t.Errorf("target = %q, want https://api.example.com", details.Target)
+	if details != nil {
+		t.Fatal("location-only preflight reused embedded content from a different source")
 	}
 }
 
@@ -1275,7 +1267,7 @@ func TestContentOnlySourceReusesNativeClientByContentRevision(t *testing.T) {
 	}
 }
 
-func TestChangedInlineContentAtOneLocationCreatesNewNativeRevision(t *testing.T) {
+func TestLocationAndInlineContentAtOneAddressRemainDistinctNativeRevisions(t *testing.T) {
 	invoker := NewInvoker()
 	locationServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{
@@ -1309,12 +1301,15 @@ func TestChangedInlineContentAtOneLocationCreatesNewNativeRevision(t *testing.T)
 	}
 	locationOnly := *args
 	locationOnly.Source.Content = nil
-	latest, err := invoker.runtime.loadNativeClient(t.Context(), &locationOnly, false)
+	fetched, err := invoker.runtime.loadNativeClient(t.Context(), &locationOnly, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest != second {
-		t.Fatal("location-only advisory lookup did not reuse the latest executable content revision")
+	if fetched == first {
+		t.Fatal("location-only source reused a stale retrieval")
+	}
+	if fetched == second {
+		t.Fatal("location-only source reused co-present embedded content solely because its URI matched")
 	}
 }
 

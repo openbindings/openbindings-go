@@ -195,7 +195,7 @@ func TestCompositionSessionSkipsLowerPreferenceInspectionTier(t *testing.T) {
 	low := compositionProvider(t, 1, map[string]any{"type": "string"}, compositionRuntime(), "low")
 	policy := &countingCompositionPolicy{
 		CompositionPolicy: ReferenceCompositionPolicy,
-		low:               low.Interface,
+		low:               low.PreparedInterface(),
 	}
 	session, err := NewCompositionSession(CompositionSessionOptions{
 		Consumer: consumer,

@@ -325,7 +325,7 @@ both reference SDKs emit an identical OBI for the same artifact:
 
 ### Invocation flow
 
-1. Loads and caches the OpenAPI document (JSON or YAML, local or remote), checking Swagger 2.0, OpenAPI 3.0.0–3.0.4, 3.1.0–3.1.2, or 3.2.0 against the exact sibling named by the source
+1. Loads the OpenAPI document (JSON or YAML, local or remote), checking Swagger 2.0, OpenAPI 3.0.0–3.0.4, 3.1.0–3.1.2, or 3.2.0 against the exact sibling named by the source. A bounded cache reuses only self-contained embedded JSON revisions. URL sources, YAML, and documents with external references or resource identifiers load afresh; location-only advisory preflight remains unknown.
 2. Parses the selector as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)
 3. Resolves the server (effective list + variables + the `server` configuration point)
 4. Accepts the public `{parameters?, body?}` caller envelope, lowers it internally to the standalone client's routes, serializes parameters per the governing edition, and selects an artifact-declared request media candidate

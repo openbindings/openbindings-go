@@ -163,7 +163,7 @@ func NewCompositionSession(options CompositionSessionOptions) (*CompositionSessi
 		if registration.Provider == nil {
 			return nil, fmt.Errorf("openbindings: prepared provider is required")
 		}
-		key := registration.Provider.Key
+		key := registration.Provider.Key()
 		if seen[key] {
 			return nil, fmt.Errorf("openbindings: duplicate prepared provider key: %q", key)
 		}
@@ -171,7 +171,7 @@ func NewCompositionSession(options CompositionSessionOptions) (*CompositionSessi
 		if math.IsNaN(registration.Preference) || math.IsInf(registration.Preference, 0) {
 			return nil, fmt.Errorf("openbindings: provider %q preference must be finite", key)
 		}
-		parts = append(parts, fmt.Sprintf("%s:%s:%g", key, registration.Provider.Interface.Revision(), registration.Preference))
+		parts = append(parts, fmt.Sprintf("%s:%s:%g", key, registration.Provider.PreparedInterface().Revision(), registration.Preference))
 	}
 	sort.Strings(parts[2:])
 	return &CompositionSession{
@@ -270,9 +270,9 @@ func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) 
 	registrationsByKey := make(map[string]ProviderRegistration, len(s.registrations))
 	policyCandidates := make([]ProviderPolicyCandidate, 0, len(s.registrations))
 	for _, registration := range s.registrations {
-		registrationsByKey[registration.Provider.Key] = registration
+		registrationsByKey[registration.Provider.Key()] = registration
 		policyCandidates = append(policyCandidates, ProviderPolicyCandidate{
-			ProviderKey: registration.Provider.Key,
+			ProviderKey: registration.Provider.Key(),
 			Preference:  registration.Preference,
 		})
 	}
@@ -316,6 +316,32 @@ func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) 
 			})
 		}
 		providerSelection := s.Policy.SelectProvider(eligibleCandidates)
+		validProvider := func(key string) bool {
+			for _, candidate := range eligibleCandidates {
+				if candidate.ProviderKey == key {
+					return true
+				}
+			}
+			return false
+		}
+		if providerSelection.Status != "selected" && providerSelection.Status != "ambiguous" && providerSelection.Status != "unavailable" {
+			return nil, fmt.Errorf("openbindings: composition policy returned an invalid provider selection status")
+		}
+		if providerSelection.Status == "selected" && (providerSelection.Provider == nil || !validProvider(providerSelection.Provider.ProviderKey)) {
+			return nil, fmt.Errorf("openbindings: composition policy selected an unknown provider")
+		}
+		if providerSelection.Status == "ambiguous" {
+			seen := make(map[string]bool)
+			for _, candidate := range providerSelection.Ambiguous {
+				if seen[candidate.ProviderKey] || !validProvider(candidate.ProviderKey) {
+					return nil, fmt.Errorf("openbindings: composition policy returned invalid provider ambiguity")
+				}
+				seen[candidate.ProviderKey] = true
+			}
+			if len(seen) < 2 {
+				return nil, fmt.Errorf("openbindings: composition policy returned invalid provider ambiguity")
+			}
+		}
 		switch providerSelection.Status {
 		case "unavailable":
 			continue
@@ -357,7 +383,33 @@ func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) 
 	for _, candidate := range selectedProvider.realizations {
 		descriptors = append(descriptors, candidate.descriptor)
 	}
-	realizationSelection := s.Policy.SelectRealization(descriptors, selectedProvider.provider.SelectRealization)
+	realizationSelection := s.Policy.SelectRealization(descriptors, selectedProvider.provider.RealizationSelector())
+	validRealization := func(key string) bool {
+		for _, candidate := range selectedProvider.realizations {
+			if candidate.descriptor.BindingKey == key {
+				return true
+			}
+		}
+		return false
+	}
+	if realizationSelection.Status != "selected" && realizationSelection.Status != "ambiguous" && realizationSelection.Status != "unavailable" {
+		return nil, fmt.Errorf("openbindings: composition policy returned an invalid realization selection status")
+	}
+	if realizationSelection.Status == "selected" && (realizationSelection.Realization == nil || !validRealization(realizationSelection.Realization.BindingKey)) {
+		return nil, fmt.Errorf("openbindings: composition policy selected an unknown realization")
+	}
+	if realizationSelection.Status == "ambiguous" {
+		seen := make(map[string]bool)
+		for _, candidate := range realizationSelection.Ambiguous {
+			if seen[candidate.BindingKey] || !validRealization(candidate.BindingKey) {
+				return nil, fmt.Errorf("openbindings: composition policy returned invalid realization ambiguity")
+			}
+			seen[candidate.BindingKey] = true
+		}
+		if len(seen) < 2 {
+			return nil, fmt.Errorf("openbindings: composition policy returned invalid realization ambiguity")
+		}
+	}
 	switch realizationSelection.Status {
 	case "ambiguous":
 		keySet := make(map[string]bool)
@@ -396,7 +448,7 @@ func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) 
 	if err != nil {
 		assessment := CompositionAssessment{
 			Code:         "realization_closure_failed",
-			ProviderKey:  selected.provider.Key,
+			ProviderKey:  selected.provider.Key(),
 			OperationKey: selected.correspondence.Provider.CanonicalKey,
 			BindingKey:   selected.descriptor.BindingKey,
 			BindingSpec:  selected.descriptor.BindingSpec,
@@ -417,7 +469,7 @@ func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) 
 			ConsumerRevision:         s.Consumer.Revision(),
 			DependencyKey:            required.Key,
 			RequiredOperationKey:     required.OperationKey,
-			ProviderKey:              selected.provider.Key,
+			ProviderKey:              selected.provider.Key(),
 			ProviderOperationKey:     selected.correspondence.Provider.CanonicalKey,
 			CorrespondenceIdentifier: selected.correspondence.Identifier,
 			BindingKey:               selected.descriptor.BindingKey,
@@ -449,19 +501,19 @@ func (s *CompositionSession) evaluateRegistrations(
 		}
 		provider := registration.Provider
 		if provider.Disposed() {
-			assessments = append(assessments, CompositionAssessment{Code: "provider_disposed", ProviderKey: provider.Key})
+			assessments = append(assessments, CompositionAssessment{Code: "provider_disposed", ProviderKey: provider.Key()})
 			continue
 		}
-		correspondences := s.Policy.Correspondences(requiredOperation, provider.Interface)
+		correspondences := s.Policy.Correspondences(requiredOperation, provider.PreparedInterface())
 		if len(correspondences) == 0 {
 			assessments = append(assessments, CompositionAssessment{
-				Code: "operation_missing", ProviderKey: provider.Key, OperationKey: required.OperationKey,
+				Code: "operation_missing", ProviderKey: provider.Key(), OperationKey: required.OperationKey,
 			})
 			continue
 		}
 		realizationMap := make(map[string]eligibleRealization)
 		for _, correspondence := range correspondences {
-			evidence, err := assessContractAbortable(ctx, s.Policy, s.Consumer, correspondence, provider.Interface)
+			evidence, err := assessContractAbortable(ctx, s.Policy, s.Consumer, correspondence, provider.PreparedInterface())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -472,28 +524,28 @@ func (s *CompositionSession) evaluateRegistrations(
 				}
 				copyEvidence := evidence
 				assessments = append(assessments, CompositionAssessment{
-					Code: code, ProviderKey: provider.Key, OperationKey: correspondence.Provider.CanonicalKey, Evidence: &copyEvidence,
+					Code: code, ProviderKey: provider.Key(), OperationKey: correspondence.Provider.CanonicalKey, Evidence: &copyEvidence,
 				})
 				continue
 			}
 			descriptors := provider.RealizationsForOperation(correspondence.Provider.CanonicalKey)
 			if len(descriptors) == 0 {
 				assessments = append(assessments, CompositionAssessment{
-					Code: "operation_unbound", ProviderKey: provider.Key, OperationKey: correspondence.Provider.CanonicalKey,
+					Code: "operation_unbound", ProviderKey: provider.Key(), OperationKey: correspondence.Provider.CanonicalKey,
 				})
 				continue
 			}
 			for _, descriptor := range descriptors {
 				if !bindingSpecAllowed(required, descriptor.BindingSpec) {
 					assessments = append(assessments, CompositionAssessment{
-						Code: "binding_spec_disallowed", ProviderKey: provider.Key, OperationKey: descriptor.OperationKey,
+						Code: "binding_spec_disallowed", ProviderKey: provider.Key(), OperationKey: descriptor.OperationKey,
 						BindingKey: descriptor.BindingKey, BindingSpec: descriptor.BindingSpec,
 					})
 					continue
 				}
 				if !descriptor.Supported {
 					assessments = append(assessments, CompositionAssessment{
-						Code: "binding_spec_unsupported", ProviderKey: provider.Key, OperationKey: descriptor.OperationKey,
+						Code: "binding_spec_unsupported", ProviderKey: provider.Key(), OperationKey: descriptor.OperationKey,
 						BindingKey: descriptor.BindingKey, BindingSpec: descriptor.BindingSpec,
 					})
 					continue
@@ -512,7 +564,7 @@ func (s *CompositionSession) evaluateRegistrations(
 				return realizations[i].descriptor.BindingKey < realizations[j].descriptor.BindingKey
 			})
 			providers = append(providers, eligibleProvider{
-				provider: provider, providerKey: provider.Key, preference: registration.Preference, realizations: realizations,
+				provider: provider, providerKey: provider.Key(), preference: registration.Preference, realizations: realizations,
 			})
 		}
 	}
@@ -534,7 +586,7 @@ func bindingSpecAllowed(dependency openbindings.PreparedDependencyDescriptor, bi
 
 func inspectRealization(candidate eligibleRealization) InspectedRealization {
 	return InspectedRealization{
-		ProviderKey:              candidate.provider.Key,
+		ProviderKey:              candidate.provider.Key(),
 		ProviderOperationKey:     candidate.correspondence.Provider.CanonicalKey,
 		CorrespondenceIdentifier: candidate.correspondence.Identifier,
 		BindingKey:               candidate.descriptor.BindingKey,

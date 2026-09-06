@@ -97,7 +97,7 @@ type OperationInvoker struct {
 	// consumer hooks (the middle precedence tier), consulted by format
 	// invokers through the seam. Set before concurrent use, like the other
 	// fields. Protocol-specific handling lives INSIDE the hook body
-	// (switch on site.FamilyName()); decline to fall through.
+	// (switch on the exact site.BindingSpec); decline to fall through.
 	OutputDecoder    OutputDecoder
 	ResultClassifier ResultClassifier
 	FieldRouter      FieldRouter
@@ -975,21 +975,6 @@ func selectBinding(iface *openbindings.Interface, opKey string, availableSpecs m
 			ErrBindingSelectionRequired, opKey, candidateCount)
 	}
 	return candidateKey, candidate, nil
-}
-
-// familyName extracts the lowercase family name from a binding-specification
-// identifier ("openbindings.openapi-3.1@1" → "openapi"). Identifiers themselves
-// stay exact and opaque for matching (core §6); this is a display/dispatch
-// convenience only. A pre-promotion draft token ("graphql") passes through.
-func familyName(identifier string) string {
-	name := strings.TrimSpace(identifier)
-	if at := strings.LastIndexByte(name, '@'); at > 0 {
-		name = name[:at]
-	}
-	if rest, ok := strings.CutPrefix(name, "openbindings."); ok {
-		name = rest
-	}
-	return strings.ToLower(name)
 }
 
 // applyTransformRef resolves a TransformOrRef and evaluates it.
