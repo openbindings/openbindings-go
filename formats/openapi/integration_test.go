@@ -1249,6 +1249,124 @@ func TestPrepareBinding_UsesCachePrimedFromContent(t *testing.T) {
 	}
 }
 
+func TestContentOnlySourceReusesNativeClientByContentRevision(t *testing.T) {
+	invoker := NewInvoker()
+	args := &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{
+			BindingSpec: BindingSpecOpenAPI31,
+			Content: json.RawMessage(`{
+				"openapi":"3.1.2",
+				"info":{"title":"Cache","version":"1"},
+				"paths":{"/ping":{"get":{"operationId":"ping","responses":{"204":{"description":"ok"}}}}}
+			}`),
+		},
+		Selector: "#/paths/~1ping/get",
+	}
+	first, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("content-identical source was reparsed instead of reusing its native client")
+	}
+}
+
+func TestChangedInlineContentAtOneLocationCreatesNewNativeRevision(t *testing.T) {
+	invoker := NewInvoker()
+	locationServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"openapi":"3.1.2",
+			"info":{"title":"Cache","version":"1"},
+			"paths":{}
+		}`)
+	}))
+	defer locationServer.Close()
+	args := &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{
+			BindingSpec: BindingSpecOpenAPI31,
+			Location:    locationServer.URL,
+		},
+	}
+	first, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args.Source.Content = json.RawMessage(`{
+		"openapi":"3.1.2",
+		"info":{"title":"Cache","version":"2"},
+		"paths":{}
+	}`)
+	second, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("changed inline content at one location reused a stale native client")
+	}
+	locationOnly := *args
+	locationOnly.Source.Content = nil
+	latest, err := invoker.runtime.loadNativeClient(t.Context(), &locationOnly, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest != second {
+		t.Fatal("location-only advisory lookup did not reuse the latest executable content revision")
+	}
+}
+
+func TestAdvisoryContentClientDoesNotPoisonExecutableCache(t *testing.T) {
+	invoker := NewInvoker()
+	args := &invoke.BindingInvocationArgs{
+		Source: invoke.InvocationSource{
+			BindingSpec: BindingSpecOpenAPI31,
+			Content: json.RawMessage(`{
+				"openapi":"3.1.2",
+				"info":{"title":"Advisory","version":"1"},
+				"paths":{}
+			}`),
+		},
+	}
+	advisory, err := invoker.runtime.loadNativeClient(t.Context(), args, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advisory == executable {
+		t.Fatal("side-effect-free advisory client entered the executable cache")
+	}
+}
+
+func TestNativeSourceCacheIsBounded(t *testing.T) {
+	invoker := NewInvoker()
+	for index := 0; index <= maxNativeSourceClients; index++ {
+		args := &invoke.BindingInvocationArgs{
+			Source: invoke.InvocationSource{
+				BindingSpec: BindingSpecOpenAPI31,
+				Content: json.RawMessage(fmt.Sprintf(`{
+					"openapi":"3.1.2",
+					"info":{"title":"Cache %d","version":"1"},
+					"paths":{}
+				}`, index)),
+			},
+		}
+		if _, err := invoker.runtime.loadNativeClient(t.Context(), args, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	invoker.runtime.nativeClientsMu.RLock()
+	defer invoker.runtime.nativeClientsMu.RUnlock()
+	if got := len(invoker.runtime.nativeClients); got != maxNativeSourceClients {
+		t.Fatalf("native source cache size = %d, want %d", got, maxNativeSourceClients)
+	}
+}
+
 // A parameter/body collision makes that request-media candidate
 // inadmissible. One caller value is never duplicated into independent wire
 // declarations.

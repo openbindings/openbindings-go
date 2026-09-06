@@ -115,6 +115,9 @@ draft-only `replace` directives to an application intended for release.
 - **`OperationInvoker`** that dispatches operations to binding-spec implementations and applies transforms
 - **`sdk.Runtime`** as an optional instance-scoped composition root over explicitly registered binding providers
 - **Prepared provider composition** that resolves named dependencies through an explicit policy into retained, SDK-identified routes
+- **Bounded process-local validation diagnostics** that identify contract
+  locations without placing rejected values, credentials, transport evidence,
+  or validator prose in portable invocation errors
 - **Context contracts** for caller-supplied or resolved invocation context, with requirement-scoped provisioning and no assumption that non-credential fields are public
 
 The SDK is the foundation layer. It defines the contracts that binding invokers (OpenAPI, AsyncAPI, gRPC, etc.) implement but does not contain any binding-spec-specific logic itself.
@@ -205,6 +208,20 @@ if err != nil {
 }
 fmt.Println(out)
 ```
+
+Repeated provider use should prepare one immutable interface revision and let
+the SDK index exact realization routes once. `sdk.Runtime.PrepareProvider`
+prepares a document; `PrepareProviderSnapshot` accepts an already prepared
+revision without reparsing it. Both use the runtime's cohesive provider
+registry—binding identifiers remain exact opaque capability tokens.
+
+For an interactive host that needs to explain
+`ERR_OPERATION_VALIDATION_FAILED`, create an `invoke.DiagnosticCollector` with
+`invoke.NewDiagnosticCollector` and attach it with
+`invoke.WithDiagnosticCollector`. Its bounded snapshot is process-local and
+safe to render as phase plus JSON Pointer/keyword evidence. The abstract
+`InvocationError` remains code-only; diagnostic evidence never rides its
+portable `Data` field.
 
 For compile-time-typed operations, run `ob codegen <obi> --lang go` to generate
 an `OperationSignatures` namespace. Pass its typed signature to

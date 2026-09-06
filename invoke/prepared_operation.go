@@ -63,6 +63,7 @@ func (b *compiledOperationBehavior) Invoke(ctx context.Context, opts ...InvokeOp
 	if b.inputValidator != nil {
 		caller.validateInput = func(input any) *InvocationError {
 			if err := b.inputValidator.Validate(input); err != nil {
+				cfg.diagnostics.recordValidation(ValidationPhaseInput, b.operationKey, b.bindingKey, err)
 				return NewInvocationError(ErrCodeOperationValidationFailed)
 			}
 			return nil
@@ -77,7 +78,7 @@ func (b *compiledOperationBehavior) Invoke(ctx context.Context, opts ...InvokeOp
 		b.invoker.runCompiled(
 			ctx, caller, b.interface_, b.operation, b.binding, b.bindingKey,
 			b.source, cfg.context, b.operationKey,
-			b.invoker.snapshotHooks(cfg.hooks), b.outputValidator, true,
+			b.invoker.snapshotHooks(cfg.hooks), cfg.diagnostics, b.outputValidator, true,
 			b.compiledBinding,
 		)
 	}()

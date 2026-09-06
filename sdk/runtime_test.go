@@ -81,6 +81,9 @@ func TestRuntimeComposesProviderCapabilities(t *testing.T) {
 	if got := runtime.BindingSpecs(); len(got) != 1 || got[0].BindingSpec != testBindingSpec {
 		t.Fatalf("binding specs = %#v", got)
 	}
+	if !runtime.SupportsBindingSpec(testBindingSpec) || runtime.SupportsBindingSpec("example.other@1") {
+		t.Fatal("exact support check disagreed with provider registration")
+	}
 	inspection, err := runtime.InspectSource(context.Background(), &openbindings.Source{BindingSpec: testBindingSpec})
 	if err != nil || len(inspection.Targets) != 1 || inspection.Targets[0].OperationKey != "ping" {
 		t.Fatalf("inspection = (%#v, %v)", inspection, err)
@@ -105,6 +108,33 @@ func TestRuntimeComposesProviderCapabilities(t *testing.T) {
 	}
 	if got := output.(map[string]any)["ok"]; got != true {
 		t.Fatalf("output = %#v", output)
+	}
+	preparedProvider, err := runtime.PrepareProvider("fixture", "Fixture", testInterface())
+	if err != nil {
+		t.Fatal(err)
+	}
+	realization, err := preparedProvider.CloseRealization(context.Background(), "ping.binding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedCall := realization.Invoke(context.Background())
+	if err := preparedCall.Close(); err != nil {
+		t.Fatal(err)
+	}
+	preparedOutput, err := invoke.Single(context.Background(), preparedCall.Outputs())
+	if err != nil || preparedOutput.(map[string]any)["ok"] != true {
+		t.Fatalf("prepared output = (%#v, %v)", preparedOutput, err)
+	}
+	preparedInterface, err := openbindings.PrepareInterface(testInterface())
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerFromSnapshot, err := runtime.PrepareProviderSnapshot("snapshot", "Snapshot", preparedInterface)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providerFromSnapshot.Interface != preparedInterface {
+		t.Fatal("prepared provider did not retain the caller's immutable snapshot")
 	}
 }
 

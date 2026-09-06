@@ -98,6 +98,41 @@ func (r *Runtime) CheckBindingSpecs(bindingSpecs []string) []openbindings.Bindin
 	return r.operationInvoker.CheckBindingSpecs(bindingSpecs)
 }
 
+// SupportsBindingSpec checks one exact, opaque binding-specification
+// identifier without interpreting its syntax.
+func (r *Runtime) SupportsBindingSpec(bindingSpec string) bool {
+	for _, provider := range r.providers {
+		for _, verdict := range provider.CheckBindingSpecs([]string{bindingSpec}) {
+			if verdict.BindingSpec == bindingSpec && verdict.Supported {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// PrepareProvider snapshots and indexes one immutable provider revision using
+// this runtime's exact registered binding capabilities. Realizations remain
+// lazy until selected.
+func (r *Runtime) PrepareProvider(key, label string, iface *openbindings.Interface) (*invoke.PreparedProvider, error) {
+	prepared, err := openbindings.PrepareInterface(iface)
+	if err != nil {
+		return nil, err
+	}
+	return r.PrepareProviderSnapshot(key, label, prepared)
+}
+
+// PrepareProviderSnapshot indexes an already-prepared immutable interface.
+// It lets hosts key their own revision caches without repeating preparation.
+func (r *Runtime) PrepareProviderSnapshot(key, label string, prepared *openbindings.PreparedInterface) (*invoke.PreparedProvider, error) {
+	return invoke.PrepareProvider(invoke.PreparedProviderOptions{
+		Key:       key,
+		Label:     label,
+		Interface: prepared,
+		Runtime:   r.operationInvoker,
+	})
+}
+
 // Resolve obtains an OBI directly, through well-known discovery, or through a
 // registered provider's synthesizer.
 func (r *Runtime) Resolve(ctx context.Context, target string) (*synthesize.FetchedInterface, error) {

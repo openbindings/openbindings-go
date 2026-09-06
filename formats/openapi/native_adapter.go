@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,8 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 )
+
+const maxNativeSourceClients = 64
 
 // runNative is the complete OpenBindings lifecycle translation over the
 // supported standalone client surface. It owns no OpenAPI request, security,
@@ -238,12 +241,18 @@ func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.Bind
 	if err != nil {
 		return nil, err
 	}
-	if key := nativeLocationClientKey(args); key != "" {
+	if key := nativeSourceClientKey(args); allowDocumentFetch && key != "" {
 		e.nativeClientsMu.Lock()
 		if present := e.nativeClients[key]; present != nil {
 			client = present
 		} else {
 			e.nativeClients[key] = client
+			e.nativeClientOrder = append(e.nativeClientOrder, key)
+			if len(e.nativeClientOrder) > maxNativeSourceClients {
+				oldest := e.nativeClientOrder[0]
+				e.nativeClientOrder = e.nativeClientOrder[1:]
+				delete(e.nativeClients, oldest)
+			}
 		}
 		e.nativeClientsMu.Unlock()
 	}
@@ -266,20 +275,45 @@ func assertNativeBindingSpec(args *invoke.BindingInvocationArgs) *invoke.Invocat
 	return nil
 }
 
-func nativeLocationClientKey(args *invoke.BindingInvocationArgs) string {
-	if args == nil || args.Source.Location == "" {
+func nativeSourceClientKey(args *invoke.BindingInvocationArgs) string {
+	if args == nil {
 		return ""
 	}
-	return args.Source.BindingSpec + "\x00" + args.Source.Location
+	if args.Source.Content != nil {
+		content, err := openbindings.ContentToBytes(args.Source.Content)
+		if err != nil {
+			return ""
+		}
+		digest := sha256.Sum256(content)
+		return fmt.Sprintf("%s\x00location\x00%s\x00content\x00%x", args.Source.BindingSpec, args.Source.Location, digest)
+	}
+	if args.Source.Location != "" {
+		return nativeLocationClientPrefix(args) + "location-only"
+	}
+	return ""
+}
+
+func nativeLocationClientPrefix(args *invoke.BindingInvocationArgs) string {
+	return args.Source.BindingSpec + "\x00location\x00" + args.Source.Location + "\x00content\x00"
 }
 
 func (e *invokerRuntime) cachedNativeClient(args *invoke.BindingInvocationArgs) (*openapiclient.Client, bool) {
-	key := nativeLocationClientKey(args)
+	key := nativeSourceClientKey(args)
 	if key == "" {
 		return nil, false
 	}
 	e.nativeClientsMu.RLock()
 	client, present := e.nativeClients[key]
+	if args.Source.Content == nil && args.Source.Location != "" {
+		prefix := nativeLocationClientPrefix(args)
+		for index := len(e.nativeClientOrder) - 1; index >= 0; index-- {
+			candidate := e.nativeClientOrder[index]
+			if strings.HasPrefix(candidate, prefix) {
+				client, present = e.nativeClients[candidate]
+				break
+			}
+		}
+	}
 	e.nativeClientsMu.RUnlock()
 	return client, present
 }
@@ -776,9 +810,13 @@ func nativeBindingRequirements(requirements *openapiclient.ConfigurationRequirem
 				translated.Extra = cloneNativeDetails(requirement.Details)
 			case openapiclient.RequirementInput, openapiclient.RequirementOption:
 				translated.Type = "config.value"
+				path := requirement.Path
+				if requirement.Kind == openapiclient.RequirementOption && requirement.Name == "SecurityAlternative" {
+					path = "/index"
+				}
 				translated.Extra = map[string]any{
 					"point": nativeContextPoint(requirement),
-					"path":  requirement.Path,
+					"path":  path,
 				}
 				if len(requirement.AllowedValues) > 0 {
 					translated.Extra["schema"] = map[string]any{"enum": requirement.AllowedValues}
