@@ -18,7 +18,9 @@ func TestProviderBoundaryContainsOnlyReviewedAdapterFiles(t *testing.T) {
 		"invoker.go",
 		"list_selectors.go",
 		"native_adapter.go",
+		"parameter_policy.go", // opt-in scalar policy; no parser or executor
 		"provider_projection.go",
+		"recognize.go", // maps native recognition to exact binding identifiers
 		"swagger20_synthesis.go",
 	}
 	entries, err := os.ReadDir(".")

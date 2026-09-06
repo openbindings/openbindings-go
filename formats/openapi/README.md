@@ -58,6 +58,16 @@ application intentionally composes those contracts separately.
 
 ### Register with OperationInvoker
 
+Non-string parameter conversion is an explicit host policy. Applications can
+opt in with `InvokerOptions{ParameterConversion: DecimalParameterConversion}`
+(or the `Invoker` field of `AdapterOptions`). This helper emits lowercase
+booleans and finite, non-exponent decimal numbers within the JavaScript-safe
+integer range, with negative zero normalized to zero. Strings are unchanged;
+null, compound values, non-finite and out-of-range numbers refuse. Native
+clients and default adapters still do not choose this policy implicitly.
+The TypeScript adapter's `decimalParameterConversion` uses the same shared-JSON
+test vectors. Go `json.Number` inputs additionally refuse precision loss.
+
 ```go
 import (
     openbindings "github.com/openbindings/openbindings-go"
