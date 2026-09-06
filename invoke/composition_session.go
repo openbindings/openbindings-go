@@ -140,12 +140,22 @@ func (r *PreparedDependencyRoute[I, O]) Preflight(ctx context.Context, opts ...I
 
 // CompositionSession owns immutable consumer/provider revisions and policy.
 type CompositionSession struct {
-	Consumer *openbindings.PreparedInterface
-	Policy   CompositionPolicy
-	Revision string
+	consumer *openbindings.PreparedInterface
+	policy   CompositionPolicy
+	revision string
 
 	registrations []ProviderRegistration
 }
+
+// Consumer returns the immutable consumer snapshot captured at construction.
+func (s *CompositionSession) Consumer() *openbindings.PreparedInterface { return s.consumer }
+
+// Policy returns the policy captured at construction. Custom policy behavior
+// must remain stable for the session lifetime, including any captured state.
+func (s *CompositionSession) Policy() CompositionPolicy { return s.policy }
+
+// Revision identifies the captured consumer, providers, and policy.
+func (s *CompositionSession) Revision() string { return s.revision }
 
 // NewCompositionSession validates and snapshots application registrations.
 func NewCompositionSession(options CompositionSessionOptions) (*CompositionSession, error) {
@@ -175,9 +185,9 @@ func NewCompositionSession(options CompositionSessionOptions) (*CompositionSessi
 	}
 	sort.Strings(parts[2:])
 	return &CompositionSession{
-		Consumer:      options.Consumer,
-		Policy:        policy,
-		Revision:      strings.Join(parts, "|"),
+		consumer:      options.Consumer,
+		policy:        policy,
+		revision:      strings.Join(parts, "|"),
 		registrations: registrations,
 	}, nil
 }
@@ -185,7 +195,7 @@ func NewCompositionSession(options CompositionSessionOptions) (*CompositionSessi
 // InspectDependency returns exhaustive static evidence without closing a
 // realization or running live preflight.
 func (s *CompositionSession) InspectDependency(ctx context.Context, dependencyKey string) (*DependencyInspection, error) {
-	required, ok := s.Consumer.Dependency(dependencyKey)
+	required, ok := s.consumer.Dependency(dependencyKey)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", openbindings.ErrDependencyNotFound, dependencyKey)
 	}
@@ -212,8 +222,8 @@ func (s *CompositionSession) InspectDependency(ctx context.Context, dependencyKe
 		return inspectedProviders[i].ProviderKey < inspectedProviders[j].ProviderKey
 	})
 	return &DependencyInspection{
-		SessionRevision:      s.Revision,
-		PolicyID:             s.Policy.ID(),
+		SessionRevision:      s.revision,
+		PolicyID:             s.policy.ID(),
 		DependencyKey:        dependencyKey,
 		RequiredOperationKey: required.OperationKey,
 		Providers:            inspectedProviders,
@@ -263,7 +273,7 @@ type untypedResolution struct {
 }
 
 func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) (*untypedResolution, error) {
-	required, ok := s.Consumer.Dependency(dependencyKey)
+	required, ok := s.consumer.Dependency(dependencyKey)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", openbindings.ErrDependencyNotFound, dependencyKey)
 	}
@@ -276,7 +286,7 @@ func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) 
 			Preference:  registration.Preference,
 		})
 	}
-	inspectionPlan := s.Policy.ProviderInspectionGroups(policyCandidates)
+	inspectionPlan := s.policy.ProviderInspectionGroups(policyCandidates)
 	planned := make(map[string]bool, len(s.registrations))
 	for _, group := range inspectionPlan {
 		for _, candidate := range group {
@@ -315,7 +325,7 @@ func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) 
 				Preference:  provider.preference,
 			})
 		}
-		providerSelection := s.Policy.SelectProvider(eligibleCandidates)
+		providerSelection := s.policy.SelectProvider(eligibleCandidates)
 		validProvider := func(key string) bool {
 			for _, candidate := range eligibleCandidates {
 				if candidate.ProviderKey == key {
@@ -383,7 +393,7 @@ func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) 
 	for _, candidate := range selectedProvider.realizations {
 		descriptors = append(descriptors, candidate.descriptor)
 	}
-	realizationSelection := s.Policy.SelectRealization(descriptors, selectedProvider.provider.RealizationSelector())
+	realizationSelection := s.policy.SelectRealization(descriptors, selectedProvider.provider.RealizationSelector())
 	validRealization := func(key string) bool {
 		for _, candidate := range selectedProvider.realizations {
 			if candidate.descriptor.BindingKey == key {
@@ -465,8 +475,8 @@ func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) 
 	return &untypedResolution{
 		status: DependencyAvailable,
 		route: &PreparedDependencyRoute[any, any]{
-			PolicyID:                 s.Policy.ID(),
-			ConsumerRevision:         s.Consumer.Revision(),
+			PolicyID:                 s.policy.ID(),
+			ConsumerRevision:         s.consumer.Revision(),
 			DependencyKey:            required.Key,
 			RequiredOperationKey:     required.OperationKey,
 			ProviderKey:              selected.provider.Key(),
@@ -494,7 +504,7 @@ func (s *CompositionSession) evaluateRegistrations(
 ) ([]eligibleProvider, []CompositionAssessment, error) {
 	providers := make([]eligibleProvider, 0)
 	assessments := make([]CompositionAssessment, 0)
-	requiredOperation, _ := s.Consumer.Operation(required.OperationKey)
+	requiredOperation, _ := s.consumer.Operation(required.OperationKey)
 	for _, registration := range registrations {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
@@ -504,7 +514,7 @@ func (s *CompositionSession) evaluateRegistrations(
 			assessments = append(assessments, CompositionAssessment{Code: "provider_disposed", ProviderKey: provider.Key()})
 			continue
 		}
-		correspondences := s.Policy.Correspondences(requiredOperation, provider.PreparedInterface())
+		correspondences := s.policy.Correspondences(requiredOperation, provider.PreparedInterface())
 		if len(correspondences) == 0 {
 			assessments = append(assessments, CompositionAssessment{
 				Code: "operation_missing", ProviderKey: provider.Key(), OperationKey: required.OperationKey,
@@ -513,7 +523,7 @@ func (s *CompositionSession) evaluateRegistrations(
 		}
 		realizationMap := make(map[string]eligibleRealization)
 		for _, correspondence := range correspondences {
-			evidence, err := assessContractAbortable(ctx, s.Policy, s.Consumer, correspondence, provider.PreparedInterface())
+			evidence, err := assessContractAbortable(ctx, s.policy, s.consumer, correspondence, provider.PreparedInterface())
 			if err != nil {
 				return nil, nil, err
 			}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -107,6 +108,42 @@ func compositionProvider(t *testing.T, bindings int, input openbindings.JSONSche
 
 func compositionRuntime() *compositionTestRuntime {
 	return &compositionTestRuntime{specs: []openbindings.BindingSpecInfo{{BindingSpec: compositionTestSpec}}}
+}
+
+func TestCompositionSessionCapturesImmutableConfiguration(t *testing.T) {
+	consumer := compositionConsumer(t, map[string]any{"type": "string"})
+	provider := compositionProvider(t, 1, map[string]any{"type": "string"}, compositionRuntime(), "primary")
+	options := CompositionSessionOptions{
+		Consumer:  consumer,
+		Policy:    ReferenceCompositionPolicy,
+		Providers: []ProviderRegistration{{Provider: provider}},
+	}
+	session, err := NewCompositionSession(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := session.Revision()
+	options.Consumer = compositionConsumer(t, map[string]any{"type": "number"})
+	options.Policy = invalidElectionPolicy{ReferenceCompositionPolicy, RealizationPolicySelection{Status: "invented"}}
+	options.Providers[0] = ProviderRegistration{}
+	if session.Consumer() != consumer || session.Policy() != ReferenceCompositionPolicy || session.Revision() != revision {
+		t.Fatal("constructor options altered retained session configuration")
+	}
+	result, err := session.resolve(t.Context(), "delivery")
+	if err != nil || result.status != DependencyAvailable {
+		t.Fatalf("resolution = %#v, %v", result, err)
+	}
+	inspection, err := session.InspectDependency(t.Context(), "delivery")
+	if err != nil || inspection.SessionRevision != revision {
+		t.Fatalf("inspection = %#v, %v", inspection, err)
+	}
+	// Prevent accidental reintroduction of caller-settable revision inputs.
+	typ := reflect.TypeOf(*session)
+	for index := 0; index < typ.NumField(); index++ {
+		if typ.Field(index).IsExported() {
+			t.Fatalf("mutable public session field: %s", typ.Field(index).Name)
+		}
+	}
 }
 
 func TestCompositionSessionResolvesWithoutLivePreflight(t *testing.T) {
