@@ -97,7 +97,7 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 		return nativeInvocationError(err)
 	}
 	if !result.OK {
-		if result.OpenAPI.Declared && result.OpenAPI.MediaType != "" && result.Error != nil {
+		if result.OpenAPI.Declared && result.OpenAPI.MediaType != "" && result.ErrorPresent {
 			return invoke.NewInvocationErrorWithData(invoke.ErrCodeExecutionFailed, nativePortableValue(result.Error))
 		}
 		return invoke.NewInvocationError(invoke.ErrCodeExecutionFailed)
