@@ -111,3 +111,87 @@ func TestTypedInvocationPreservesNativeJSONReference(t *testing.T) {
 	}
 	inner.Cancel()
 }
+
+func TestPreparedRealizationCollectsCodeOnlyValidationDiagnostics(t *testing.T) {
+	raw := &openbindings.Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]openbindings.Operation{
+			"echo": {
+				Input: map[string]any{
+					"type":     "object",
+					"required": []any{"name"},
+					"properties": map[string]any{
+						"name": map[string]any{"type": "string"},
+					},
+				},
+				Output: map[string]any{
+					"type":     "object",
+					"required": []any{"ok"},
+					"properties": map[string]any{
+						"ok": map[string]any{"type": "boolean"},
+					},
+				},
+			},
+		},
+		Sources: map[string]openbindings.Source{
+			"local": {BindingSpec: "example.prepared@1", Content: json.RawMessage(`{}`)},
+		},
+		Bindings: map[string]openbindings.BindingEntry{
+			"echo.binding": {Operation: "echo", Source: "local"},
+		},
+	}
+	prepared, err := openbindings.PrepareInterface(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, _ := prepared.Binding("echo.binding")
+	behavior, err := NewOperationInvoker(&preparedEchoBinding{}).CompileRealization(shortCtx(t), prepared, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inputDiagnostics := NewDiagnosticCollector(0)
+	invalidInput := behavior.Invoke(shortCtx(t), WithDiagnosticCollector(inputDiagnostics))
+	if err := invalidInput.Write(shortCtx(t), map[string]any{}); err == nil {
+		t.Fatal("missing required input was accepted")
+	} else if ie := AsInvocationError(err); ie.Code != ErrCodeOperationValidationFailed || ie.HasData() {
+		t.Fatalf("unexpected portable input error: %#v", ie)
+	}
+	inputRecords, truncated := inputDiagnostics.Snapshot()
+	if truncated || len(inputRecords) != 1 {
+		t.Fatalf("input diagnostics=%#v truncated=%v", inputRecords, truncated)
+	}
+	if got := inputRecords[0]; got.Phase != ValidationPhaseInput || got.OperationKey != "echo" || got.BindingKey != "echo.binding" || got.Keyword != "required" {
+		t.Fatalf("unexpected input diagnostic: %#v", got)
+	}
+
+	outputDiagnostics := NewDiagnosticCollector(1)
+	invalidOutput := behavior.Invoke(shortCtx(t), WithDiagnosticCollector(outputDiagnostics))
+	if err := invalidOutput.Write(shortCtx(t), map[string]any{"name": "Ada"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Single(shortCtx(t), invalidOutput.Outputs())
+	if ie := AsInvocationError(err); ie.Code != ErrCodeOperationValidationFailed || ie.HasData() {
+		t.Fatalf("unexpected portable output error: %#v", ie)
+	}
+	outputRecords, _ := outputDiagnostics.Snapshot()
+	if len(outputRecords) != 1 {
+		t.Fatalf("output diagnostics=%#v", outputRecords)
+	}
+	if got := outputRecords[0]; got.Phase != ValidationPhaseOutput || got.OperationKey != "echo" || got.BindingKey != "echo.binding" || got.Keyword != "required" {
+		t.Fatalf("unexpected output diagnostic: %#v", got)
+	}
+	if outputRecords[0].InstancePointer != "" {
+		t.Fatalf("diagnostic leaked or mis-addressed the rejected value: %#v", outputRecords[0])
+	}
+}
+
+func TestDiagnosticPointerRedactsDataDerivedMemberNames(t *testing.T) {
+	got := safeInstancePointer(
+		[]string{"orders", "17", "customer-secret"},
+		[]string{"$defs", "list", "properties", "orders", "items", "patternProperties", "^.+$", "type"},
+	)
+	if got != "/orders/*/*" {
+		t.Fatalf("safe instance pointer = %q, want /orders/*/*", got)
+	}
+}

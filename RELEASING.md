@@ -4,9 +4,33 @@ This is a Go multi-module monorepo: the core SDK at the repository root plus
 eight active sub-modules under `formats/`. Each module versions and tags
 independently.
 
-**Upstream tag prerequisites:** none outside this repository — the SDK
-depends on no other openbindings repo's tags. The only ordering constraint is
-internal: core before formats (below).
+**Upstream tag prerequisites:** native-client dependencies must be published
+before tagging their adapters. In particular, the OpenAPI and AsyncAPI adapters
+require the versions of `openapi-client/go` and `asyncapi-client/go` named in
+their respective manifests. The internal ordering is core before formats
+(below). The root SDK itself has no native-client dependency.
+
+## Pre-release OpenAPI candidate verification
+
+The checked-in adapter manifests keep the coordinated release targets even
+before those tags exist. To test an exact pushed candidate independently of a
+local Go workspace, run:
+
+```bash
+bash scripts/verify-openapi-candidate.sh CORE_PSEUDOVERSION CLIENT_PSEUDOVERSION
+```
+
+Supply full Go pseudo-versions for the pushed core and OpenAPI client commits.
+The verifier tests the current OpenAPI and usage adapter sources with temporary
+modfiles mapping the future versions to those exact remote candidates. It
+disables workspaces, resolves and tidies only temporary manifests, then runs
+readonly race tests and builds, checking that neither the temporary lock files
+nor the checked-in manifests changed during verification. The exact candidate
+spec corpus must be available beside this repository, or via `OB_SPEC_CORPUS`.
+The caller records that corpus's clean commit in the candidate ledger; this
+script checks corpus availability, not its Git identity.
+This proves candidate dependency integrity, not installation of unpublished
+release versions. The post-tag external-consumer gate below remains mandatory.
 
 ## Tags
 
@@ -57,7 +81,9 @@ GOWORK=off go list -m github.com/openbindings/openbindings-go@vX.Y.Z
 If this fails, the required core tag does not exist yet (or is not pushed) —
 stop and cut the core tag first.
 
-Note: `go.mod` tidying that depends on the new core tag happens at tag time.
+Note: once the required core and native-client tags are published, run
+`GOWORK=off go mod tidy` in each affected adapter and commit its manifest and
+checksum changes **before creating that adapter's tag**.
 During development the `go.work` workspace masks module resolution, so a
 format module's requirement on a new core version only resolves (and
 `go mod tidy` only runs meaningfully) once the core tag is published.

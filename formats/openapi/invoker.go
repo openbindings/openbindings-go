@@ -179,6 +179,7 @@ type invokerRuntime struct {
 	client             *http.Client
 	nativeClientsMu    sync.RWMutex
 	nativeClients      map[string]*openapiclient.Client
+	nativeClientOrder  []string
 	securityHandlers   map[string]SecurityHandler
 	parameterConvert   ParameterConversion
 	requestCodings     map[string]ContentEncoder

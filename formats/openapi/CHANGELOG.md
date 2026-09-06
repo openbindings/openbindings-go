@@ -4,6 +4,11 @@
 
 ### Added
 
+- **OpenAPI adapter preparation now reuses bounded, content-addressed native
+  client revisions.** Identical source content reuses one executable analysis;
+  changed inline content at the same location creates a distinct revision;
+  and advisory no-fetch analysis cannot enter or poison the executable cache.
+
 - **Standalone OpenAPI artifact engine integration.** `Invoker` now adapts
   Core invocations to `github.com/openbindings/openapi-client/go`; the former
   local HTTP/SSE execution loop has been retired. The pre-release direct

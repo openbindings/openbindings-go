@@ -52,12 +52,6 @@ type InvokeSite struct {
 	seamStamped     bool
 }
 
-// FamilyName returns the bare family name of the site's binding
-// specification ("openbindings.usage@1" → "usage"; a pre-promotion draft
-// token like "graphql" passes through), so hook bodies never string-match
-// identifiers.
-func (s InvokeSite) FamilyName() string { return familyName(s.BindingSpec) }
-
 // RawResult is ONE DELIVERY UNIT of a completed transport exchange, as the
 // decode and classify hooks see it.
 //

@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,8 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 )
+
+const maxNativeSourceClients = 64
 
 // runNative is the complete OpenBindings lifecycle translation over the
 // supported standalone client surface. It owns no OpenAPI request, security,
@@ -94,7 +97,7 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 		return nativeInvocationError(err)
 	}
 	if !result.OK {
-		if result.OpenAPI.Declared && result.OpenAPI.MediaType != "" && result.Error != nil {
+		if result.OpenAPI.Declared && result.OpenAPI.MediaType != "" && result.ErrorPresent {
 			return invoke.NewInvocationErrorWithData(invoke.ErrCodeExecutionFailed, nativePortableValue(result.Error))
 		}
 		return invoke.NewInvocationError(invoke.ErrCodeExecutionFailed)
@@ -238,12 +241,18 @@ func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.Bind
 	if err != nil {
 		return nil, err
 	}
-	if key := nativeLocationClientKey(args); key != "" {
+	if key := nativeSourceClientKey(args); allowDocumentFetch && key != "" {
 		e.nativeClientsMu.Lock()
 		if present := e.nativeClients[key]; present != nil {
 			client = present
 		} else {
 			e.nativeClients[key] = client
+			e.nativeClientOrder = append(e.nativeClientOrder, key)
+			if len(e.nativeClientOrder) > maxNativeSourceClients {
+				oldest := e.nativeClientOrder[0]
+				e.nativeClientOrder = e.nativeClientOrder[1:]
+				delete(e.nativeClients, oldest)
+			}
 		}
 		e.nativeClientsMu.Unlock()
 	}
@@ -266,15 +275,58 @@ func assertNativeBindingSpec(args *invoke.BindingInvocationArgs) *invoke.Invocat
 	return nil
 }
 
-func nativeLocationClientKey(args *invoke.BindingInvocationArgs) string {
-	if args == nil || args.Source.Location == "" {
+func nativeSourceClientKey(args *invoke.BindingInvocationArgs) string {
+	if args == nil {
 		return ""
 	}
-	return args.Source.BindingSpec + "\x00" + args.Source.Location
+	if args.Source.Content != nil {
+		content, err := openbindings.ContentToBytes(args.Source.Content)
+		if err != nil {
+			return ""
+		}
+		if !nativeSelfContainedCacheSource(content) {
+			return ""
+		}
+		digest := sha256.Sum256(content)
+		return fmt.Sprintf("%s\x00location\x00%s\x00content\x00%x", args.Source.BindingSpec, args.Source.Location, digest)
+	}
+	return ""
+}
+
+// Cache only JSON entry documents whose reference closure is covered by the
+// entry digest. Other sources are loaded normally by the native provider.
+func nativeSelfContainedCacheSource(content []byte) bool {
+	var document map[string]any
+	if json.Unmarshal(content, &document) != nil || document == nil {
+		return false
+	}
+	pending := []any{document}
+	for len(pending) > 0 {
+		value := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		switch value := value.(type) {
+		case map[string]any:
+			for key, member := range value {
+				if key == "$id" || key == "$self" {
+					return false
+				}
+				if key == "$ref" || key == "$dynamicRef" {
+					ref, ok := member.(string)
+					if !ok || !strings.HasPrefix(ref, "#") {
+						return false
+					}
+				}
+				pending = append(pending, member)
+			}
+		case []any:
+			pending = append(pending, value...)
+		}
+	}
+	return true
 }
 
 func (e *invokerRuntime) cachedNativeClient(args *invoke.BindingInvocationArgs) (*openapiclient.Client, bool) {
-	key := nativeLocationClientKey(args)
+	key := nativeSourceClientKey(args)
 	if key == "" {
 		return nil, false
 	}
@@ -776,9 +828,13 @@ func nativeBindingRequirements(requirements *openapiclient.ConfigurationRequirem
 				translated.Extra = cloneNativeDetails(requirement.Details)
 			case openapiclient.RequirementInput, openapiclient.RequirementOption:
 				translated.Type = "config.value"
+				path := requirement.Path
+				if requirement.Kind == openapiclient.RequirementOption && requirement.Name == "SecurityAlternative" {
+					path = "/index"
+				}
 				translated.Extra = map[string]any{
 					"point": nativeContextPoint(requirement),
-					"path":  requirement.Path,
+					"path":  path,
 				}
 				if len(requirement.AllowedValues) > 0 {
 					translated.Extra["schema"] = map[string]any{"enum": requirement.AllowedValues}

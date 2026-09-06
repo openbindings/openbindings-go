@@ -58,6 +58,16 @@ application intentionally composes those contracts separately.
 
 ### Register with OperationInvoker
 
+Non-string parameter conversion is an explicit host policy. Applications can
+opt in with `InvokerOptions{ParameterConversion: DecimalParameterConversion}`
+(or the `Invoker` field of `AdapterOptions`). This helper emits lowercase
+booleans and finite, non-exponent decimal numbers within the JavaScript-safe
+integer range, with negative zero normalized to zero. Strings are unchanged;
+null, compound values, non-finite and out-of-range numbers refuse. Native
+clients and default adapters still do not choose this policy implicitly.
+The TypeScript adapter's `decimalParameterConversion` uses the same shared-JSON
+test vectors. Go `json.Number` inputs additionally refuse precision loss.
+
 ```go
 import (
     openbindings "github.com/openbindings/openbindings-go"
@@ -325,7 +335,7 @@ both reference SDKs emit an identical OBI for the same artifact:
 
 ### Invocation flow
 
-1. Loads and caches the OpenAPI document (JSON or YAML, local or remote), checking Swagger 2.0, OpenAPI 3.0.0–3.0.4, 3.1.0–3.1.2, or 3.2.0 against the exact sibling named by the source
+1. Loads the OpenAPI document (JSON or YAML, local or remote), checking Swagger 2.0, OpenAPI 3.0.0–3.0.4, 3.1.0–3.1.2, or 3.2.0 against the exact sibling named by the source. A bounded cache reuses only self-contained embedded JSON revisions. URL sources, YAML, and documents with external references or resource identifiers load afresh; location-only advisory preflight remains unknown.
 2. Parses the selector as a JSON Pointer (`#/paths/~1users/get` -> path `/users`, method `get`)
 3. Resolves the server (effective list + variables + the `server` configuration point)
 4. Accepts the public `{parameters?, body?}` caller envelope, lowers it internally to the standalone client's routes, serializes parameters per the governing edition, and selects an artifact-declared request media candidate

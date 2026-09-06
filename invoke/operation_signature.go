@@ -50,9 +50,10 @@ type InvokeOption func(*invokeConfig)
 
 // invokeConfig is the resolved set of per-call options applied to one Invoke.
 type invokeConfig struct {
-	context    map[string]any
-	bindingKey string
-	hooks      hookSlots
+	context     map[string]any
+	bindingKey  string
+	hooks       hookSlots
+	diagnostics *DiagnosticCollector
 }
 
 // WithContext supplies a per-call OB invocation-context override (auth/credentials
@@ -68,6 +69,12 @@ func WithContext(values map[string]any) InvokeOption {
 // binding must belong to the resolved operation.
 func WithBindingKey(key string) InvokeOption {
 	return func(c *invokeConfig) { c.bindingKey = key }
+}
+
+// WithDiagnosticCollector attaches bounded, process-local operation-validation
+// evidence. Collection never changes the portable error or invocation result.
+func WithDiagnosticCollector(collector *DiagnosticCollector) InvokeOption {
+	return func(c *invokeConfig) { c.diagnostics = collector }
 }
 
 // WithOutputDecoder attaches a per-invocation decode hook (the highest
@@ -130,7 +137,7 @@ func Invoke[I, O any](
 	}
 
 	caller := NewInvocationImpl[any, any](ctx)
-	caller.validateInput = makeInputValidator(op, obi, binding.Operation)
+	caller.validateInput = makeInputValidator(op, obi, binding.Operation, bindingKey, cfg.diagnostics)
 
 	go func() {
 		// A panicking third-party invoker must not kill the process: it
@@ -142,7 +149,7 @@ func Invoke[I, O any](
 				})
 			}
 		}()
-		invoker.run(ctx, caller, obi, op, binding, bindingKey, source, cfg.context, sig.key, invoker.snapshotHooks(cfg.hooks))
+		invoker.run(ctx, caller, obi, op, binding, bindingKey, source, cfg.context, sig.key, invoker.snapshotHooks(cfg.hooks), cfg.diagnostics)
 	}()
 
 	return NewTypedInvocation[I, O](caller)

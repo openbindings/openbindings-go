@@ -6,6 +6,13 @@
 
 ### Changed
 
+- **The SDK can now prepare immutable provider revisions and expose bounded,
+  process-local operation-validation diagnostics.** `Runtime` performs exact,
+  opaque binding-capability checks and prepares providers from raw or already
+  prepared interfaces. Optional diagnostic collectors identify only the input
+  or output phase and safe contract locations; they never alter portable error
+  codes/data or retain rejected values, protocol facts, or credentials.
+
 - **Post-dispatch decode and response-interpretation failures now surface as
   generic `ERR_EXECUTION_FAILED`, never `ERR_RESPONSE_ERROR` or
   `ERR_PROTOCOL`** (breaking; the error-code ownership ruling, 2026-08-31).

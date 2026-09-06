@@ -97,7 +97,7 @@ type OperationInvoker struct {
 	// consumer hooks (the middle precedence tier), consulted by format
 	// invokers through the seam. Set before concurrent use, like the other
 	// fields. Protocol-specific handling lives INSIDE the hook body
-	// (switch on site.FamilyName()); decline to fall through.
+	// (switch on the exact site.BindingSpec); decline to fall through.
 	OutputDecoder    OutputDecoder
 	ResultClassifier ResultClassifier
 	FieldRouter      FieldRouter
@@ -385,8 +385,9 @@ func (e *OperationInvoker) run(
 	initialContext map[string]any,
 	invokedAs string,
 	hooks *InvokeHooks,
+	diagnostics *DiagnosticCollector,
 ) {
-	e.runCompiled(ctx, caller, iface, op, binding, bindingKey, source, initialContext, invokedAs, hooks, nil, false, nil)
+	e.runCompiled(ctx, caller, iface, op, binding, bindingKey, source, initialContext, invokedAs, hooks, diagnostics, nil, false, nil)
 }
 
 // runCompiled drives one already-selected binding. When outputPrepared is
@@ -403,6 +404,7 @@ func (e *OperationInvoker) runCompiled(
 	initialContext map[string]any,
 	invokedAs string,
 	hooks *InvokeHooks,
+	diagnostics *DiagnosticCollector,
 	compiledOutput *jsonschema.Schema,
 	outputPrepared bool,
 	compiledBinding CompiledBindingInvoker,
@@ -630,8 +632,8 @@ func (e *OperationInvoker) runCompiled(
 		}()
 
 		surface, retryChallenge := e.runOutputs(
-			innerCtx, caller, inner, binding, iface,
-			compiledOutput, closeRetryWindow,
+			innerCtx, caller, inner, binding, bindingKey, iface,
+			compiledOutput, diagnostics, closeRetryWindow,
 			func() bool { retryMu.Lock(); defer retryMu.Unlock(); return retryEligible },
 		)
 		var retryDetails *ContextRequiredDetails
@@ -748,8 +750,10 @@ func (e *OperationInvoker) runOutputs(
 	caller *InvocationImpl[any, any],
 	inner Invocation[any, any],
 	binding *openbindings.BindingEntry,
+	bindingKey string,
 	iface *openbindings.Interface,
 	compiledOutput *jsonschema.Schema,
+	diagnostics *DiagnosticCollector,
 	closeRetryWindow func(),
 	retryEligible func() bool,
 ) (surface, retryChallenge *InvocationError) {
@@ -786,6 +790,7 @@ func (e *OperationInvoker) runOutputs(
 		if compiledOutput != nil {
 			if verr := compiledOutput.Validate(data); verr != nil {
 				inner.Cancel()
+				diagnostics.recordValidation(ValidationPhaseOutput, binding.Operation, bindingKey, verr)
 				return NewInvocationError(ErrCodeOperationValidationFailed), nil
 			}
 		}
@@ -817,7 +822,7 @@ func (e *OperationInvoker) resolveContext(ctx context.Context, details *ContextR
 // reachable schema graph, `format` as annotation, applied per value — a
 // mismatch is ERR_OPERATION_VALIDATION_FAILED; a graph that cannot be established is
 // ERR_SCHEMA_UNRESOLVED, never partial validation.
-func makeInputValidator(op *openbindings.Operation, iface *openbindings.Interface, operationName string) func(any) *InvocationError {
+func makeInputValidator(op *openbindings.Operation, iface *openbindings.Interface, operationName, bindingKey string, diagnostics *DiagnosticCollector) func(any) *InvocationError {
 	if op.Input == nil {
 		return nil
 	}
@@ -841,6 +846,7 @@ func makeInputValidator(op *openbindings.Operation, iface *openbindings.Interfac
 			return compileError
 		}
 		if verr := compiled.Validate(input); verr != nil {
+			diagnostics.recordValidation(ValidationPhaseInput, operationName, bindingKey, verr)
 			return NewInvocationError(ErrCodeOperationValidationFailed)
 		}
 		return nil
@@ -969,21 +975,6 @@ func selectBinding(iface *openbindings.Interface, opKey string, availableSpecs m
 			ErrBindingSelectionRequired, opKey, candidateCount)
 	}
 	return candidateKey, candidate, nil
-}
-
-// familyName extracts the lowercase family name from a binding-specification
-// identifier ("openbindings.openapi-3.1@1" → "openapi"). Identifiers themselves
-// stay exact and opaque for matching (core §6); this is a display/dispatch
-// convenience only. A pre-promotion draft token ("graphql") passes through.
-func familyName(identifier string) string {
-	name := strings.TrimSpace(identifier)
-	if at := strings.LastIndexByte(name, '@'); at > 0 {
-		name = name[:at]
-	}
-	if rest, ok := strings.CutPrefix(name, "openbindings."); ok {
-		name = rest
-	}
-	return strings.ToLower(name)
 }
 
 // applyTransformRef resolves a TransformOrRef and evaluates it.

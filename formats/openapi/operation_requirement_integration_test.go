@@ -7,10 +7,29 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	openapiclient "github.com/openbindings/openapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
+
+func TestNativeSecuritySelectionRequirementUsesBindingContextShape(t *testing.T) {
+	requirements, err := nativeBindingRequirements(&openapiclient.ConfigurationRequirements{
+		Target: "https://api.example.test",
+		Alternatives: []openapiclient.ConfigurationAlternative{{Requirements: []openapiclient.ConfigurationRequirement{{
+			Kind:          openapiclient.RequirementOption,
+			Name:          "SecurityAlternative",
+			AllowedValues: []any{0, 1},
+		}}}},
+	})
+	if err != nil || requirements == nil || len(requirements.Alternatives) != 1 || len(requirements.Alternatives[0].Requirements) != 1 {
+		t.Fatalf("translated requirements = %#v, err=%v", requirements, err)
+	}
+	requirement := requirements.Alternatives[0].Requirements[0]
+	if requirement.Type != "config.value" || requirement.Extra["point"] != "security" || requirement.Extra["path"] != "/index" {
+		t.Fatalf("translated security requirement = %#v", requirement)
+	}
+}
 
 func TestPreparedDependencySynthesizedOpenAPI(t *testing.T) {
 	var gotMethod, gotPath string
@@ -52,7 +71,7 @@ func TestPreparedDependencySynthesizedOpenAPI(t *testing.T) {
 		Dependencies: map[string]openbindings.DependencyEntry{
 			"creation": {
 				Operation:    "example.tasks.create",
-				BindingSpecs: []string{BindingSpec},
+				BindingSpecs: []string{BindingSpecOpenAPI31},
 			},
 		},
 	}
