@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -901,6 +903,12 @@ func NewTypedInvocation[I, O any](inner Invocation[any, any]) *TypedInvocation[I
 }
 
 func (t *TypedInvocation[I, O]) Write(ctx context.Context, input I) error {
+	// The generic JSON-domain lane is already the operation layer's native
+	// representation. Validate it without cloning so in-process providers keep
+	// map/slice reference identity and pay no JSON serialization cost.
+	if raw := any(input); isNativeJSONValue(raw, nil, 0) {
+		return t.inner.Write(ctx, raw)
+	}
 	// Encode at the typed boundary, symmetric with the output decode:
 	// Input validation and format invokers operate on generic JSON values
 	// (maps/slices/primitives), not Go structs. For the untyped flavor (I = any)
@@ -916,6 +924,57 @@ func (t *TypedInvocation[I, O]) Write(ctx context.Context, input I) error {
 		return classifiedError(ErrCodeTypeMismatch)
 	}
 	return t.inner.Write(ctx, generic)
+}
+
+type nativeJSONVisit struct {
+	kind reflect.Kind
+	ptr  uintptr
+}
+
+func isNativeJSONValue(value any, seen map[nativeJSONVisit]bool, depth int) bool {
+	if depth > 512 {
+		return false
+	}
+	switch value := value.(type) {
+	case nil, bool, string:
+		return true
+	case float64:
+		return !math.IsNaN(value) && !math.IsInf(value, 0)
+	case []any:
+		if seen == nil {
+			seen = make(map[nativeJSONVisit]bool)
+		}
+		visit := nativeJSONVisit{kind: reflect.Slice, ptr: reflect.ValueOf(value).Pointer()}
+		if seen[visit] {
+			return false
+		}
+		seen[visit] = true
+		defer delete(seen, visit)
+		for _, member := range value {
+			if !isNativeJSONValue(member, seen, depth+1) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		if seen == nil {
+			seen = make(map[nativeJSONVisit]bool)
+		}
+		visit := nativeJSONVisit{kind: reflect.Map, ptr: reflect.ValueOf(value).Pointer()}
+		if seen[visit] {
+			return false
+		}
+		seen[visit] = true
+		defer delete(seen, visit)
+		for _, member := range value {
+			if !isNativeJSONValue(member, seen, depth+1) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func (t *TypedInvocation[I, O]) Close() error { return t.inner.Close() }

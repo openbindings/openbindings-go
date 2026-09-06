@@ -3,6 +3,7 @@ package openbindings
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"sort"
@@ -14,6 +15,7 @@ import (
 
 type validateOptions struct {
 	rejectUnknownTypedFields bool
+	skipDocumentSchema       bool
 }
 
 // Option configures Interface validation.
@@ -23,6 +25,10 @@ type ValidateOption func(*validateOptions)
 // Default behavior is forward-compatible (unknowns allowed/ignored), so this is an opt-in "strict" mode.
 func WithRejectUnknownTypedFields() ValidateOption {
 	return func(o *validateOptions) { o.rejectUnknownTypedFields = true }
+}
+
+func withoutDocumentSchemaValidation() ValidateOption {
+	return func(o *validateOptions) { o.skipDocumentSchema = true }
 }
 
 // Validate performs shape-level checks useful for tooling correctness.
@@ -37,6 +43,12 @@ func WithRejectUnknownTypedFields() ValidateOption {
 // MinSupportedVersion; processing a document under the wrong version's
 // rules misreads it both ways).
 func (i Interface) Validate(opts ...ValidateOption) error {
+	return i.validateWithDocument(nil, opts...)
+}
+
+// validateWithDocument reuses a generic view decoded from the exact same
+// canonical bytes when one is already available.
+func (i Interface) validateWithDocument(docView any, opts ...ValidateOption) error {
 	o := validateOptions{
 		rejectUnknownTypedFields: false,
 	}
@@ -67,10 +79,12 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 	// failure leaves docView nil, which skips the D-16 check rather than
 	// erroring: the lossless marshal of a decoded document does not fail in
 	// practice, and D-16 is a referential-integrity check, not a parse gate.
-	var docView any
-	if data, jerr := json.Marshal(i); jerr == nil {
-		_ = json.Unmarshal(data, &docView)
+	if docView == nil && interfaceHasDocumentSchemaRef(i) {
+		if data, jerr := json.Marshal(i); jerr == nil {
+			_ = json.Unmarshal(data, &docView)
+		}
 	}
+	validSchemaShapes := make(map[string]bool)
 
 	// Validate schemas: keys match identifier pattern (OBI-D-03); each schema
 	// is checked for well-formedness against the 2020-12 meta-schemas
@@ -84,7 +98,7 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 	sort.Strings(schKeys)
 	for _, k := range schKeys {
 		validateIdent(&errs, "schemas key", k)
-		validateSchemaWellFormedness(&errs, fmt.Sprintf("schemas[%q]", k), i.Schemas[k])
+		validateSchemaWellFormedness(&errs, fmt.Sprintf("schemas[%q]", k), i.Schemas[k], validSchemaShapes)
 		walkSchema(&errs, fmt.Sprintf("schemas[%q]", k), i.Schemas[k], docView, false)
 	}
 
@@ -148,12 +162,16 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		// Check operation input/output schemas for well-formedness (OBI-D-17)
 		// and walk them for OBI-D-05/D-06/D-07/D-16.
 		if op.Input != nil {
-			validateSchemaWellFormedness(&errs, fmt.Sprintf("operations[%q].input", k), op.Input)
+			validateSchemaWellFormedness(&errs, fmt.Sprintf("operations[%q].input", k), op.Input, validSchemaShapes)
 			walkSchema(&errs, fmt.Sprintf("operations[%q].input", k), op.Input, docView, false)
+		} else if op.InputPresent {
+			errs = append(errs, fmt.Sprintf("operations[%q].input: a schema is a JSON Schema 2020-12 object or boolean; got null (OBI-D-17)", k))
 		}
 		if op.Output != nil {
-			validateSchemaWellFormedness(&errs, fmt.Sprintf("operations[%q].output", k), op.Output)
+			validateSchemaWellFormedness(&errs, fmt.Sprintf("operations[%q].output", k), op.Output, validSchemaShapes)
 			walkSchema(&errs, fmt.Sprintf("operations[%q].output", k), op.Output, docView, false)
+		} else if op.OutputPresent {
+			errs = append(errs, fmt.Sprintf("operations[%q].output: a schema is a JSON Schema 2020-12 object or boolean; got null (OBI-D-17)", k))
 		}
 
 		// OBI-D-03: example keys must match the identifier pattern.
@@ -249,6 +267,9 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		// OBI-D-03: binding keys must match the identifier pattern.
 		validateIdent(&errs, "bindings key", k)
 		b := i.Bindings[k]
+		if b.Preference != nil && (math.IsNaN(*b.Preference) || math.IsInf(*b.Preference, 0) || math.Trunc(*b.Preference) != *b.Preference || math.Abs(*b.Preference) > 9007199254740991) {
+			errs = append(errs, fmt.Sprintf("bindings[%q].preference: must be a safe integer", k))
+		}
 		// OBI-D-08: bindings[*].operation must reference an existing operation.
 		if strings.TrimSpace(b.Operation) == "" {
 			errs = append(errs, fmt.Sprintf("bindings[%q].operation: required", k))
@@ -293,7 +314,14 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 	}
 
 	// OBI-D-02: validate the document against openbindings.schema.json.
-	validateAgainstOBISchema(&errs, i)
+	if !o.skipDocumentSchema {
+		if docView == nil {
+			if data, jerr := json.Marshal(i); jerr == nil {
+				_ = json.Unmarshal(data, &docView)
+			}
+		}
+		validateAgainstOBISchema(&errs, docView)
+	}
 
 	// OBI-D-11: validate every example's input/output against its operation's
 	// input/output schema, when the respective schema is specified.
@@ -303,6 +331,41 @@ func (i Interface) Validate(opts ...ValidateOption) error {
 		return nil
 	}
 	return &ValidationError{Problems: errs}
+}
+
+func interfaceHasDocumentSchemaRef(i Interface) bool {
+	for _, schema := range i.Schemas {
+		if schemaHasDocumentRef(schema) {
+			return true
+		}
+	}
+	for _, operation := range i.Operations {
+		if schemaHasDocumentRef(operation.Input) || schemaHasDocumentRef(operation.Output) {
+			return true
+		}
+	}
+	return false
+}
+
+func schemaHasDocumentRef(value any) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		if ref, ok := value["$ref"].(string); ok && strings.HasPrefix(ref, "#") {
+			return true
+		}
+		for _, child := range value {
+			if schemaHasDocumentRef(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if schemaHasDocumentRef(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func appendUnknownFieldProblems(errs *[]string, prefix string, unknown map[string]json.RawMessage) {

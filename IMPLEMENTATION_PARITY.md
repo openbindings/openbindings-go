@@ -17,7 +17,14 @@ also guards the public role and family correspondence.
 | inspect bindable targets | `SourceInspector.InspectSource(...)` | `SourceInspector.inspectSource(...)` |
 | source-less scaffold | `SynthesisSkeleton(...)` | `synthesisSkeleton(...)` |
 | shared authoring directives + validation | `FinalizeSynthesis(...)` | `finalizeSynthesis(...)` |
-| one consumed operation contract | `NewOperationRequirement(...)` | `operationRequirement(...)` |
+| exact named dependency lookup | `LookupDependency(...)` | `lookupDependency(...)` |
+| immutable semantic OBI snapshot | `PrepareInterface(...)` | `prepareInterface(...)` |
+| generated dependency identity | `DependencySignatures.X` | `DependencySignatures.x` |
+| prepared provider catalog | `PrepareProvider(...)` | `prepareProvider(...)` |
+| application-scoped composition | `NewCompositionSession(...)` | `new CompositionSession(...)` |
+| typed dependency route | `ResolveDependency(...)` | `session.resolve(...)` |
+| native local provider | `PrepareLocalProvider(...)` | `prepareLocalProvider(...)` |
+| transitional consumed-operation wrapper | `NewOperationRequirement(...)` | `operationRequirement(...)` |
 | per-operation compatibility check | `CheckOperationCompatibility(...)` | `checkOperationCompatibility(...)` |
 | all compatible, invocable matches | `MatchOperationRequirement(...)` | `matchOperationRequirement(...)` |
 | conservative route-to-one resolution | `ResolveOperationRequirement(...)` | `resolveOperationRequirement(...)` |
@@ -46,14 +53,18 @@ allows: `grpc.Invoker` corresponds to `GrpcInvoker`, `SynthesizeInterface` to
 `synthesizeInterface`, and so on. A user moving between SDKs should recognize
 the role before learning its language-specific mechanics.
 
-Operation-requirement parity includes per-operation alias correspondence,
-directional schema comparison, side-effect-free invocability preflight,
-advisory context requirements, higher-preference ordering, stable input order
-across equal preferences when returning all matches, and refusal of a
-route-to-one tie as ambiguous. Neither SDK owns a persistent implementation or
-delegate registry or infers route-versus-aggregate semantics. The optional
-runtime's explicit, process-local provider set is caller-owned composition
-state and rejects duplicate exact identifiers listed by its providers.
+Prepared-composition parity includes exact dependency lookup, alias
+correspondence, exact complete-contract identity before directional schema
+comparison, tri-state evidence, provider preference, separate realization
+selection, deterministic ambiguity/refusal diagnostics, cancellation, and
+explicit provider disposal. Neither SDK infers fallback, aggregate, race, or
+fan-out semantics. Its explicit, process-local provider set is caller-owned
+composition state rather than a persistent implementation or delegate
+registry, and rejects duplicate exact identifiers listed by its providers.
+The transitional operation-requirement APIs retain their earlier observable
+parity—alias correspondence, directional schema comparison, side-effect-free
+preflight, advisory context requirements, preference ordering, and ambiguous
+route refusal—until removal.
 
 ## Implementation proof
 

@@ -199,6 +199,12 @@ type Operation struct {
 	Input      JSONSchema `json:"input,omitempty"`
 	Output     JSONSchema `json:"output,omitempty"`
 
+	// InputPresent and OutputPresent preserve authored member presence when a
+	// schema is explicit JSON null. Prepared contract identity distinguishes
+	// that spelling from an absent member even though both have a nil Go value.
+	InputPresent  bool `json:"-"`
+	OutputPresent bool `json:"-"`
+
 	// Examples contains named example input/output pairs.
 	Examples map[string]OperationExample `json:"examples,omitempty"`
 
@@ -239,6 +245,8 @@ func (o *Operation) UnmarshalJSON(b []byte) error {
 		Output:      w.Output,
 		Examples:    w.Examples,
 	}
+	_, o.InputPresent = raw["input"]
+	_, o.OutputPresent = raw["output"]
 
 	o.Extensions, o.Unknown = splitLossless(raw, knownOperationSet)
 	return nil
@@ -259,7 +267,17 @@ func (o Operation) MarshalJSON() ([]byte, error) {
 	// boolean schema from an absent one (contract unspecified). JSONSchema
 	// is interface-typed, so omitempty drops only nil (absent) values —
 	// {}, true, and false all round-trip without special handling.
-	return marshalLosslessWith(o.Unknown, o.Extensions, w, nil)
+	var overrides map[string]json.RawMessage
+	if o.InputPresent && o.Input == nil {
+		overrides = map[string]json.RawMessage{"input": json.RawMessage("null")}
+	}
+	if o.OutputPresent && o.Output == nil {
+		if overrides == nil {
+			overrides = map[string]json.RawMessage{}
+		}
+		overrides["output"] = json.RawMessage("null")
+	}
+	return marshalLosslessWith(o.Unknown, o.Extensions, w, overrides)
 }
 
 type Source struct {
@@ -470,7 +488,8 @@ func (be BindingEntry) MarshalJSON() ([]byte, error) {
 // DependencyEntry names an operation contract consumed at a local
 // composition point. BindingSpecs, when present, is an unordered any-of list
 // of exact binding-specification identifiers accepted at that point. A nil
-// slice leaves the dependency unconstrained by binding family.
+// slice leaves the dependency unconstrained by binding family. Operation is
+// the canonical key of an operation in the same document.
 type DependencyEntry struct {
 	Operation    string   `json:"operation"`
 	BindingSpecs []string `json:"bindingSpecs,omitempty"`
@@ -518,8 +537,10 @@ type Interface struct {
 	Version      string `json:"version,omitempty"`
 	Description  string `json:"description,omitempty"`
 
-	Schemas      map[string]JSONSchema      `json:"schemas,omitempty"`
-	Operations   map[string]Operation       `json:"operations"`
+	Schemas    map[string]JSONSchema `json:"schemas,omitempty"`
+	Operations map[string]Operation  `json:"operations"`
+	// Dependencies contains named consumption points. A dependency declaration
+	// does not assert that a realization is installed, selected, or live.
 	Dependencies map[string]DependencyEntry `json:"dependencies,omitempty"`
 
 	Sources  map[string]Source       `json:"sources,omitempty"`

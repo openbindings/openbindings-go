@@ -31,6 +31,24 @@
   `invoke.ErrCodeSelectorNotFound` (`ERR_SELECTOR_NOT_FOUND`). JSON Schema
   `$ref` handling is deliberately untouched everywhere: the rename covers the
   binding-target-selector concept, never JSON References.
+- **Core OBIs now carry named operation dependencies.** `Interface` adds the
+  optional `Dependencies` map of `DependencyEntry` values. Each entry names an
+  exact canonical local operation key and may constrain acceptable exact,
+  opaque binding specifications with an unordered non-empty `BindingSpecs`
+  any-of list. `LookupDependency` resolves an exact dependency key and its
+  operation without alias fallback. Lossless JSON, strict unknown-field
+  validation, the derived schema, and the complete OBI-D-19 Core corpus cover
+  the new shape. A dependency is a consumption declaration, not a provider
+  address, binding, liveness/readiness claim, or routing policy.
+
+- **Named OBI dependencies now have a prepared composition runtime.**
+  `PreparedInterface`, `PreparedProvider`, `CompositionSession`, generated
+  `DependencySignatures`, and opaque retained routes separate static closure
+  from live preflight and invocation. The versioned reference policy reports
+  provider and realization ambiguity separately and preserves exact or
+  tri-state compatibility evidence. `PrepareLocalProvider`, `LocalUnary`, and
+  `LocalStream` use the same verified route; generic JSON-domain values remain
+  native references. The older operation-requirement family is transitional.
 
 - **config.value requirements carry an engine-asserted `schema` instead of
   `choices`** (breaking; the 2026-08-20 working-draft amendment of the

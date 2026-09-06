@@ -1345,3 +1345,25 @@ func TestInterfaceValidate_DependencyContracts(t *testing.T) {
 		t.Fatalf("missing dependency operation validation = %v, want OBI-D-19", err)
 	}
 }
+
+func TestInterfaceValidate_StrictDependencyUnknownFields(t *testing.T) {
+	iface := Interface{
+		OpenBindings: "0.2.0",
+		Operations:   map[string]Operation{"deliver": {}},
+		Dependencies: map[string]DependencyEntry{
+			"delivery": {
+				Operation: "deliver",
+				LosslessFields: LosslessFields{
+					Unknown: map[string]json.RawMessage{"futurePolicy": json.RawMessage(`true`)},
+				},
+			},
+		},
+	}
+	if err := iface.Validate(); err != nil {
+		t.Fatalf("forward-compatible validation should accept unknown field: %v", err)
+	}
+	err := iface.Validate(WithRejectUnknownTypedFields())
+	if err == nil || !strings.Contains(err.Error(), `dependencies["delivery"]: unknown fields: futurePolicy`) {
+		t.Fatalf("strict validation did not report dependency field: %v", err)
+	}
+}

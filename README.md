@@ -2,7 +2,13 @@
 
 Go monorepo for the [OpenBindings](https://openbindings.com) Go ecosystem: the core SDK plus protocol-specific binding invokers, each as its own Go module. Parse, validate, resolve, and invoke OpenBindings interfaces from Go.
 
-OpenBindings is an open standard. **One interface. Any binding.** Describe what a service does separately from how you access it. An OBI (OpenBindings Interface) document describes what operations a service offers and how to reach them, independent of protocol. See the [spec](https://github.com/openbindings/spec) and [guides](https://github.com/openbindings/spec/tree/main/guides) for details.
+OpenBindings is an open standard. **One interface. Any binding.** Describe
+operation contracts separately from how they are realized or consumed. An OBI
+(OpenBindings Interface) document can declare operations it makes available
+through bindings and named dependencies whose implementations are supplied by
+its environment, independently of protocol. See the
+[spec](https://github.com/openbindings/spec) and
+[guides](https://github.com/openbindings/spec/tree/main/guides) for details.
 
 **Spec version:** implements OpenBindings 0.2. To ask whether this SDK will accept a document of a given version, call `openbindings.IsSupportedVersion(version)` — the OBI-T-04 acceptance oracle: it returns true exactly when `Validate` / `ParseDocument` would process (not refuse) that version, so it is patch-lenient within a supported minor line (a 0.2.0 SDK accepts 0.2.1, 0.2.99, …) and refuses a different major, a pre-1.0 different minor, and unsupported prereleases. `openbindings.MinSupportedVersion` / `openbindings.MaxTestedVersion` / `openbindings.SupportedRange()` are a distinct, narrower notion — the maintainer-*tested* range — and a version can be accepted without falling inside it.
 
@@ -12,7 +18,20 @@ OpenBindings is an open standard. **One interface. Any binding.** Describe what 
 > the released package path; they do not install this branch today. Use the
 > source-workspace instructions to evaluate 0.2 before release.
 
-**Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through OBI-D-12 and OBI-D-16 through OBI-D-18, plus the OBI-T-04 version-refusal rule. OBI-D-13 and the binding-specification-defined address cases of OBI-D-05 require knowledge of the exact governing binding specification; a core-only validator leaves those conclusions unverified rather than claiming conformity or non-conformity, per [§10.5](https://github.com/openbindings/spec/blob/main/openbindings.md#105-verification-conclusions). OBI-D-14 and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and OBI-D-17 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema); the core schema and locally required JSON Schema 2020-12 meta-schemas are embedded at build time. To exercise the core conformance corpus, check out the spec repo alongside this one (at `../spec`, or `./spec` inside the repo) and run `go test ./...` from the root module.
+**Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate
+object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through
+OBI-D-12 and OBI-D-16 through OBI-D-19, plus the OBI-T-04 version-refusal
+rule. OBI-D-13 and the binding-specification-defined address cases of OBI-D-05
+require knowledge of the exact governing binding specification; a core-only
+validator leaves those conclusions unverified rather than claiming conformity
+or non-conformity, per
+[§10.5](https://github.com/openbindings/spec/blob/main/openbindings.md#105-verification-conclusions).
+OBI-D-14 and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and
+OBI-D-17 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
+the core schema and locally required JSON Schema 2020-12 meta-schemas are
+embedded at build time. To exercise the core conformance corpus, check out the
+spec repo alongside this one (at `../spec`, or `./spec` inside the repo) and
+run `go test ./...` from the root module.
 
 The cross-SDK equivalence policy and corresponding public names are recorded
 in [`IMPLEMENTATION_PARITY.md`](IMPLEMENTATION_PARITY.md).
@@ -86,7 +105,8 @@ draft-only `replace` directives to an application intended for release.
 
 ## What this SDK does
 
-- **Core types** for the OpenBindings interface document: operations, bindings, sources, transforms, schemas
+- **Core types** for the OpenBindings interface document: operations,
+  dependencies, bindings, sources, transforms, and schemas
 - **Lossless JSON** round-tripping that preserves unknown fields and `x-*` extensions for forward compatibility
 - **Validation** with shape-level checks, strict mode for unknown fields, and exact binding-specification identifier validation
 - **Schema compatibility** checking under the OpenBindings Schema Compatibility Profile v0.1 (covariant outputs, contravariant inputs) with diagnostic reasons
@@ -94,6 +114,7 @@ draft-only `replace` directives to an application intended for release.
 - **Exhaustiveness-qualified synthesis accounting** through `CoverageSynthesizer`, pairing a creation-time-sound OBI with durable dispositions and an explicit claim about whether the upstream interaction inventory is complete
 - **`OperationInvoker`** that dispatches operations to binding-spec implementations and applies transforms
 - **`sdk.Runtime`** as an optional instance-scoped composition root over explicitly registered binding providers
+- **Prepared provider composition** that resolves named dependencies through an explicit policy into retained, SDK-identified routes
 - **Context contracts** for caller-supplied or resolved invocation context, with requirement-scoped provisioning and no assumption that non-credential fields are public
 
 The SDK is the foundation layer. It defines the contracts that binding invokers (OpenAPI, AsyncAPI, gRPC, etc.) implement but does not contain any binding-spec-specific logic itself.
@@ -132,6 +153,18 @@ fmt.Println(iface.Name, iface.Version)
 for name, op := range iface.Operations {
     fmt.Println(name, op.Description)
 }
+```
+
+Named dependencies resolve by exact dependency key and exact canonical local
+operation key; dependency keys and local references do not use operation alias
+resolution:
+
+```go
+dependency, ok := openbindings.LookupDependency(iface, "customerDelivery")
+if !ok {
+    log.Fatal(openbindings.ErrDependencyNotFound)
+}
+fmt.Println(dependency.OperationKey, dependency.Dependency.BindingSpecs)
 ```
 
 ### Resolve and invoke operations
@@ -187,48 +220,83 @@ for _, issue := range issues {
 }
 ```
 
-### Consume an operation contract
+### Satisfy a named interface dependency
 
-An operation requirement is one typed signature paired with the ordinary,
-typically unbound OBI contract a consumer expects. The application supplies
-concrete, invocable interfaces; the consumer does not choose their protocols:
+The consumer OBI's `dependencies` map is the contract authority. Prepare the
+consumer and providers once, compose them with explicit application-owned
+preference, and resolve the generated dependency signature:
 
 ```go
-requirement, err := invoke.NewOperationRequirement(
-    requiredInterface,
-    OperationSignatures.CreateTask,
-)
+consumer, err := openbindings.PrepareInterface(componentInterface)
 if err != nil {
     log.Fatal(err)
 }
+providerInterface, err := openbindings.PrepareInterface(tasksAPI)
+if err != nil {
+    log.Fatal(err)
+}
+provider, err := invoke.PrepareProvider(invoke.PreparedProviderOptions{
+    Key:       "tasks-api",
+    Interface: providerInterface,
+    Runtime:   invoke.NewOperationInvoker(openapi.NewInvoker()),
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer provider.Close()
 
-resolution, err := invoke.ResolveOperationRequirement(
-    ctx,
-    requirement,
-    []invoke.OperationImplementation{{
-        Interface: tasksAPI,
-        Invoker: invoke.NewOperationInvoker(openapi.NewInvoker()),
-        Label: "tasks-api",
-    }},
+session, err := invoke.NewCompositionSession(invoke.CompositionSessionOptions{
+    Consumer:  consumer,
+    Providers: []invoke.ProviderRegistration{{Provider: provider, Preference: 10}},
+})
+if err != nil {
+    log.Fatal(err)
+}
+resolution, err := invoke.ResolveDependency(
+    ctx, session, contracts.DependencySignatures.Creation,
 )
 if err != nil {
     log.Fatal(err)
 }
-if resolution.Status == invoke.OperationRequirementAvailable {
-    call := resolution.Match.Invoke(ctx)
+if resolution.Status == invoke.DependencyAvailable {
+    call := resolution.Route.Invoke(ctx)
     _ = call.Write(ctx, CreateTaskInput{Title: "Ship it"})
     task, err := invoke.Single(ctx, call.Outputs())
     // handle task / err
 }
 ```
 
-Matching is per operation, alias-aware, schema-checked, and verifies that the
-supplied invoker can resolve a binding without side effects. Route-to-one
-resolution uses only caller-owned preference and refuses an equal tie as
-`OperationRequirementAmbiguous`. `MatchOperationRequirement` returns every
-match without imposing route, aggregate, race, fan-out, or fallback semantics.
-The SDK owns no registry; applications retain and refresh their own
-interface/delegate state.
+Code generation derives each dependency's I/O types from its referenced
+operation. Dynamic lookup is explicitly `[any, any]`, while a separately named
+unsafe constructor is the only manual typed assertion. The reference policy
+distinguishes provider and realization ambiguity, preserves tri-state contract
+evidence, and performs no live network or credential preflight during static
+resolution. It inspects provider preference tiers from highest to lowest and
+stops after the first eligible tier; `InspectDependency` remains the deliberate
+exhaustive diagnostics path. Custom policies make that staging explicit with
+`ProviderInspectionGroups`.
+
+Native implementations use the same verified route and operation substrate,
+addressed only by exact OBI binding key. Generic JSON-domain maps and slices
+retain reference identity and are not serialized:
+
+```go
+local, err := invoke.PrepareLocalProvider(invoke.PrepareLocalProviderOptions{
+    Key:       "local-tasks",
+    Interface: providerInterface,
+    Implementations: map[string]invoke.LocalBindingImplementation{
+        "create.local": invoke.LocalUnary(
+            func(ctx context.Context, input map[string]any) (map[string]any, error) {
+                return repository.Create(ctx, input)
+            },
+        ),
+    },
+})
+```
+
+The older `OperationRequirement` family remains as a transitional compatibility
+surface while downstream callers migrate; new 0.2 wiring should use prepared
+composition.
 
 The core module imports no format module. An OpenAPI-only application depends
 only on the core module and `formats/openapi`; other binding implementations

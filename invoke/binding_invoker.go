@@ -36,3 +36,18 @@ type BindingInvoker interface {
 type BindingPreparer interface {
 	PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error)
 }
+
+// CompiledBindingInvoker is executable behavior captured for one exact
+// SDK-selected binding. It owns no route identity; the SDK supplies fresh
+// per-call args containing context and hooks.
+type CompiledBindingInvoker interface {
+	InvokeBinding(context.Context, *BindingInvocationArgs) Invocation[any, any]
+	PrepareBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error)
+}
+
+// BindingCompiler is the optional deterministic closure seam. Implementers
+// may capture an exact handler/artifact target once so retained routes do not
+// repeat registry or address lookup on every invocation.
+type BindingCompiler interface {
+	CompileBinding(*BindingInvocationArgs) (CompiledBindingInvoker, error)
+}

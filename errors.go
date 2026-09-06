@@ -21,3 +21,7 @@ func (e *ValidationError) Error() string {
 
 // ErrOperationNotFound is returned when the requested operation does not exist in the OBI.
 var ErrOperationNotFound = errors.New("openbindings: operation not found")
+
+// ErrDependencyNotFound is returned when a named dependency is absent or its
+// local operation reference cannot be resolved.
+var ErrDependencyNotFound = errors.New("openbindings: dependency not found or invalid")

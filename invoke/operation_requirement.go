@@ -15,6 +15,9 @@ import (
 // target, commonly unbound. This type adds no consumer fields or optionality
 // semantics to that document; it merely pairs the runtime contract with the
 // signature application code already invokes through.
+//
+// Deprecated: declare a core dependency and use PreparedInterface plus
+// CompositionSession. This compatibility family receives no new features.
 type OperationRequirement[I, O any] struct {
 	Interface *openbindings.Interface
 	Signature OperationSignature[I, O]
@@ -22,6 +25,8 @@ type OperationRequirement[I, O any] struct {
 
 // NewOperationRequirement pairs a required interface with one operation it
 // carries.
+//
+// Deprecated: use a generated DependencySignature and CompositionSession.
 func NewOperationRequirement[I, O any](iface *openbindings.Interface, signature OperationSignature[I, O]) (OperationRequirement[I, O], error) {
 	if _, _, ok := openbindings.ResolveOperation(iface, signature.Key()); !ok {
 		return OperationRequirement[I, O]{}, fmt.Errorf("%w: %s", openbindings.ErrOperationNotFound, signature.Key())
@@ -39,6 +44,8 @@ func NewOperationRequirement[I, O any](iface *openbindings.Interface, signature 
 // state. The SDK stores no registry. Label is diagnostic only and never
 // becomes interface identity. Higher preference wins; equal highest
 // preferences remain ambiguous.
+//
+// Deprecated: use PreparedProvider and ProviderRegistration.
 type OperationImplementation struct {
 	Interface  *openbindings.Interface
 	Invoker    *OperationInvoker
@@ -138,6 +145,8 @@ type preferredOperationMatch[I, O any] struct {
 //
 // The function owns no registry and performs no invocation. Applications call
 // it again whenever their interface/delegate state changes.
+//
+// Deprecated: use CompositionSession inspection or explanation.
 func MatchOperationRequirement[I, O any](
 	ctx context.Context,
 	requirement OperationRequirement[I, O],
@@ -255,6 +264,8 @@ func MatchOperationRequirement[I, O any](
 // invoker registration order as a hidden election. Applications with
 // aggregate/fan-out/race/fallback semantics use MatchOperationRequirement
 // directly.
+//
+// Deprecated: use ResolveDependency on a CompositionSession.
 func ResolveOperationRequirement[I, O any](
 	ctx context.Context,
 	requirement OperationRequirement[I, O],

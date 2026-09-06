@@ -386,6 +386,27 @@ func (e *OperationInvoker) run(
 	invokedAs string,
 	hooks *InvokeHooks,
 ) {
+	e.runCompiled(ctx, caller, iface, op, binding, bindingKey, source, initialContext, invokedAs, hooks, nil, false, nil)
+}
+
+// runCompiled drives one already-selected binding. When outputPrepared is
+// true, compiledOutput is the complete prepared-interface validator (or nil
+// because the operation declares no output schema); no document work occurs.
+func (e *OperationInvoker) runCompiled(
+	ctx context.Context,
+	caller *InvocationImpl[any, any],
+	iface *openbindings.Interface,
+	op *openbindings.Operation,
+	binding *openbindings.BindingEntry,
+	bindingKey string,
+	source *openbindings.Source,
+	initialContext map[string]any,
+	invokedAs string,
+	hooks *InvokeHooks,
+	compiledOutput *jsonschema.Schema,
+	outputPrepared bool,
+	compiledBinding CompiledBindingInvoker,
+) {
 	if (binding.InputTransform != nil || binding.OutputTransform != nil) && e.TransformEvaluator == nil {
 		caller.FireError(&InvocationError{
 			Code: ErrCodeTransformError,
@@ -398,8 +419,7 @@ func (e *OperationInvoker) run(
 	// schema graph. A graph that cannot be established is ERR_SCHEMA_UNRESOLVED —
 	// the claim could not be evaluated — never partial validation
 	// (OBI-T-16).
-	var compiledOutput *jsonschema.Schema
-	if op.Output != nil {
+	if !outputPrepared && op.Output != nil {
 		compiled, err := openbindings.CompileOperationSchema(iface, binding.Operation, "output")
 		if err != nil {
 			caller.FireError(&InvocationError{
@@ -508,7 +528,13 @@ func (e *OperationInvoker) run(
 	// Preflight (the binding-invoker contract's prepareBinding): collapse
 	// knowable-upfront context challenges into the clean no-input-consumed
 	// case before anything is forwarded.
-	details, err := e.invoker.prepareBinding(ctx, bindingArgs())
+	var details *ContextRequiredDetails
+	var err error
+	if compiledBinding != nil {
+		details, err = compiledBinding.PrepareBinding(ctx, bindingArgs())
+	} else {
+		details, err = e.invoker.prepareBinding(ctx, bindingArgs())
+	}
 	if err != nil {
 		caller.FireError(wireError(err))
 		return
@@ -570,7 +596,12 @@ func (e *OperationInvoker) run(
 		// innerCtx bounds this attempt's binding: it cancels when the caller
 		// handle terminates (cancel propagation) and when the attempt ends.
 		innerCtx, innerCancel := DoneContext(ctx, caller.Done())
-		inner := e.invoker.InvokeBinding(innerCtx, bindingArgs())
+		var inner Invocation[any, any]
+		if compiledBinding != nil {
+			inner = compiledBinding.InvokeBinding(innerCtx, bindingArgs())
+		} else {
+			inner = e.invoker.InvokeBinding(innerCtx, bindingArgs())
+		}
 
 		// The input pump reads the caller's buffer under attemptCtx so a
 		// retry swap can unpark it WITHOUT consuming an in-flight input.

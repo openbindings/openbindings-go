@@ -12,7 +12,7 @@ import (
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
-func TestOperationRequirementSynthesizedOpenAPI(t *testing.T) {
+func TestPreparedDependencySynthesizedOpenAPI(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -47,6 +47,12 @@ func TestOperationRequirementSynthesizedOpenAPI(t *testing.T) {
 			"example.tasks.create": {
 				Input:  inputSchema,
 				Output: outputSchema,
+			},
+		},
+		Dependencies: map[string]openbindings.DependencyEntry{
+			"creation": {
+				Operation:    "example.tasks.create",
+				BindingSpecs: []string{BindingSpec},
 			},
 		},
 	}
@@ -96,30 +102,43 @@ func TestOperationRequirementSynthesizedOpenAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	signature := invoke.NewOperationSignature[map[string]any, map[string]any]("example.tasks.create")
-	requirement, err := invoke.NewOperationRequirement(required, signature)
+	consumer, err := openbindings.PrepareInterface(required)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opInvoker := invoke.NewOperationInvoker(NewInvoker())
-	opInvoker.TransformEvaluator = openAPIJSONataEvaluator{}
-	resolution, err := invoke.ResolveOperationRequirement(
-		context.Background(),
-		requirement,
-		[]invoke.OperationImplementation{{
-			Interface: candidate,
-			Invoker:   opInvoker,
-			Label:     "tasks-api",
+	providerInterface, err := openbindings.PrepareInterface(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := invoke.PrepareProvider(invoke.PreparedProviderOptions{
+		Key:       "tasks-api",
+		Interface: providerInterface,
+		Runtime:   invoke.NewOperationInvoker(NewInvoker()),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	session, err := invoke.NewCompositionSession(invoke.CompositionSessionOptions{
+		Consumer: consumer,
+		Providers: []invoke.ProviderRegistration{{
+			Provider: provider,
 		}},
-	)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolution.Status != invoke.OperationRequirementAvailable {
+	operation := invoke.NewOperationSignature[map[string]any, map[string]any]("example.tasks.create")
+	dependency := invoke.NewDependencySignatureForOperation("creation", operation)
+	resolution, err := invoke.ResolveDependency(context.Background(), session, dependency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Status != invoke.DependencyAvailable {
 		t.Fatalf("resolution = %#v", resolution)
 	}
 
-	call := resolution.Match.Invoke(context.Background())
+	call := resolution.Route.Invoke(context.Background())
 	if err := call.Write(context.Background(), map[string]any{
 		"title": "Ship the operation layer",
 	}); err != nil {

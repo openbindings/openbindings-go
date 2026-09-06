@@ -72,14 +72,22 @@ func init() {
 // deliberately narrow, mirroring §5.2: unknown keywords, unparseable
 // `pattern` values, and unresolvable `$ref` targets all pass — they surface
 // when the schema is used, not here.
-func validateSchemaWellFormedness(errs *[]string, prefix string, schema JSONSchema) {
+func validateSchemaWellFormedness(errs *[]string, prefix string, schema JSONSchema, knownValid map[string]bool) {
 	switch v := schema.(type) {
 	case bool:
 		// Boolean schemas are always well-formed.
 	case map[string]any:
+		key := metaSchemaCacheKey(v)
+		if key != "" && knownValid[key] {
+			return
+		}
 		if verr := compiledMetaSchema.Validate(any(v)); verr != nil {
 			for _, line := range splitSchemaError(verr) {
 				*errs = append(*errs, fmt.Sprintf("%s: not a well-formed JSON Schema 2020-12 schema: %s (OBI-D-17)", prefix, line))
+			}
+		} else {
+			if key != "" {
+				knownValid[key] = true
 			}
 		}
 	default:
@@ -91,15 +99,9 @@ func validateSchemaWellFormedness(errs *[]string, prefix string, schema JSONSche
 // not validate against openbindings.schema.json. The Interface is
 // round-tripped through JSON to obtain a generic value
 // (map[string]any/[]any/scalars) that the schema validator accepts.
-func validateAgainstOBISchema(errs *[]string, i Interface) {
-	data, err := json.Marshal(i)
-	if err != nil {
-		*errs = append(*errs, fmt.Sprintf("schema validation: cannot marshal document: %v (OBI-D-02)", err))
-		return
-	}
-	var doc any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		*errs = append(*errs, fmt.Sprintf("schema validation: cannot re-parse document: %v (OBI-D-02)", err))
+func validateAgainstOBISchema(errs *[]string, doc any) {
+	if doc == nil {
+		*errs = append(*errs, "schema validation: generic document view unavailable (OBI-D-02)")
 		return
 	}
 	if verr := compiledOBISchema.Validate(doc); verr != nil {
@@ -107,6 +109,14 @@ func validateAgainstOBISchema(errs *[]string, i Interface) {
 			*errs = append(*errs, fmt.Sprintf("schema validation: %s (OBI-D-02)", line))
 		}
 	}
+}
+
+func metaSchemaCacheKey(schema map[string]any) string {
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // validateExamplesAgainstOpSchemas reports OBI-D-11 violations: every

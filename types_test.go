@@ -895,3 +895,70 @@ func TestOperation_BooleanSchemaRoundTrip(t *testing.T) {
 		t.Fatalf("expected output:false to survive round-trip, got %s", out)
 	}
 }
+
+func TestInterface_DependenciesLosslessRoundTrip(t *testing.T) {
+	in := []byte(`{
+  "openbindings":"0.2.0",
+  "operations":{"deliver":{"input":{"type":"object"}}},
+  "dependencies":{
+    "customerDelivery":{
+      "operation":"deliver",
+      "bindingSpecs":["openbindings.openapi@1","openbindings.grpc@1"],
+      "x-routing":"customer-owned",
+      "futurePolicy":{"mode":"strict"}
+    }
+  }
+}`)
+	var iface Interface
+	if err := json.Unmarshal(in, &iface); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	dependency := iface.Dependencies["customerDelivery"]
+	if dependency.Operation != "deliver" || len(dependency.BindingSpecs) != 2 {
+		t.Fatalf("unexpected dependency: %#v", dependency)
+	}
+	if _, ok := dependency.Extensions["x-routing"]; !ok {
+		t.Fatal("expected dependency extension to be preserved")
+	}
+	if _, ok := dependency.Unknown["futurePolicy"]; !ok {
+		t.Fatal("expected dependency unknown field to be preserved")
+	}
+
+	out, err := json.Marshal(iface)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(out, &round); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	got := round["dependencies"].(map[string]any)["customerDelivery"].(map[string]any)
+	if got["operation"] != "deliver" || got["x-routing"] != "customer-owned" {
+		t.Fatalf("dependency did not round-trip losslessly: %s", out)
+	}
+	if _, ok := got["futurePolicy"].(map[string]any); !ok {
+		t.Fatalf("unknown dependency field did not round-trip: %s", out)
+	}
+}
+
+func TestDependencyEntry_PresentEmptyBindingSpecsSurvivesRoundTrip(t *testing.T) {
+	in := []byte(`{"operation":"deliver","bindingSpecs":[]}`)
+	var dependency DependencyEntry
+	if err := json.Unmarshal(in, &dependency); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if dependency.BindingSpecs == nil || len(dependency.BindingSpecs) != 0 {
+		t.Fatalf("expected present empty bindingSpecs, got %#v", dependency.BindingSpecs)
+	}
+	out, err := json.Marshal(dependency)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round map[string]json.RawMessage
+	if err := json.Unmarshal(out, &round); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if got, ok := round["bindingSpecs"]; !ok || string(got) != "[]" {
+		t.Fatalf("expected bindingSpecs:[] to survive, got %s", out)
+	}
+}

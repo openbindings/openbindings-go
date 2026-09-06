@@ -4,10 +4,7 @@
   "title": "OpenBindings Interface Document (v0.2.0)",
   "description": "Derived JSON Schema for the OpenBindings interface document. Expresses the structural portion of the specification; where prose and schema conflict, the prose governs (see openbindings.md §10).",
   "type": "object",
-  "required": [
-    "openbindings",
-    "operations"
-  ],
+  "required": ["openbindings", "operations"],
   "properties": {
     "openbindings": {
       "type": "string",
@@ -39,7 +36,7 @@
     },
     "operations": {
       "type": "object",
-      "description": "Operation registry keyed by operation name.",
+      "description": "Protocol-independent operation contract registry keyed by operation name. Presence alone does not assert that a realization is available.",
       "propertyNames": {
         "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
       },
@@ -201,13 +198,8 @@
     },
     "Source": {
       "type": "object",
-      "required": [
-        "bindingSpec"
-      ],
-      "anyOf": [
-        { "required": ["location"] },
-        { "required": ["content"] }
-      ],
+      "required": ["bindingSpec"],
+      "anyOf": [{ "required": ["location"] }, { "required": ["content"] }],
       "properties": {
         "bindingSpec": {
           "type": "string",
@@ -231,10 +223,7 @@
     },
     "BindingEntry": {
       "type": "object",
-      "required": [
-        "operation",
-        "source"
-      ],
+      "required": ["operation", "source"],
       "properties": {
         "operation": {
           "type": "string",
@@ -248,7 +237,7 @@
         },
         "selector": {
           "type": "string",
-          "description": "Selector into the source's artifact identifying the specific target. Syntax and meaning are the governing binding specification's concern."
+          "description": "Selector identifying a specific target within the governed source, whether an artifact entry, live-surface member, or another target form. Syntax and meaning are the governing binding specification's concern."
         },
         "preference": {
           "type": "integer",
