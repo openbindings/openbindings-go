@@ -110,10 +110,12 @@ func TestPreparedDependencySynthesizedOpenAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	opInvoker := invoke.NewOperationInvoker(NewInvoker())
+	opInvoker.TransformEvaluator = openAPIJSONataEvaluator{}
 	provider, err := invoke.PrepareProvider(invoke.PreparedProviderOptions{
 		Key:       "tasks-api",
 		Interface: providerInterface,
-		Runtime:   invoke.NewOperationInvoker(NewInvoker()),
+		Runtime:   opInvoker,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -16,6 +16,10 @@ func (b *preparedEchoBinding) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: "example.prepared@1"}}
 }
 
+func (b *preparedEchoBinding) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, b.BindingSpecs())
+}
+
 func (b *preparedEchoBinding) PrepareBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	return nil, nil
 }

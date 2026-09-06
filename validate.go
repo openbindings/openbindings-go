@@ -205,8 +205,24 @@ func (i Interface) validateWithDocument(docView any, opts ...ValidateOption) err
 	for _, k := range depKeys {
 		validateIdent(&errs, "dependencies key", k)
 		dependency := i.Dependencies[k]
-		if _, ok := i.Operations[dependency.Operation]; !ok {
+		if strings.TrimSpace(dependency.Operation) == "" {
+			errs = append(errs, fmt.Sprintf("dependencies[%q].operation: required (OBI-D-02)", k))
+		} else if _, ok := i.Operations[dependency.Operation]; !ok {
 			errs = append(errs, fmt.Sprintf("dependencies[%q].operation: references unknown operation key %q (OBI-D-19)", k, dependency.Operation))
+		}
+		if dependency.BindingSpecs != nil {
+			if len(dependency.BindingSpecs) == 0 {
+				errs = append(errs, fmt.Sprintf("dependencies[%q].bindingSpecs: must contain at least one item (OBI-D-02)", k))
+			}
+			seen := make(map[string]bool, len(dependency.BindingSpecs))
+			for _, bindingSpec := range dependency.BindingSpecs {
+				if bindingSpec == "" {
+					errs = append(errs, fmt.Sprintf("dependencies[%q].bindingSpecs: must not contain an empty string (OBI-D-02)", k))
+				} else if seen[bindingSpec] {
+					errs = append(errs, fmt.Sprintf("dependencies[%q].bindingSpecs: %q is listed more than once (OBI-D-02)", k, bindingSpec))
+				}
+				seen[bindingSpec] = true
+			}
 		}
 		if o.rejectUnknownTypedFields {
 			appendUnknownFieldProblems(&errs, fmt.Sprintf("dependencies[%q]", k), dependency.Unknown)

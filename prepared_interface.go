@@ -39,7 +39,7 @@ type PreparedBindingDescriptor struct {
 	OperationKey  string
 	SourceKey     string
 	BindingSpec   string
-	Ref           string
+	Selector      string
 	HasTransforms bool
 }
 
@@ -138,7 +138,7 @@ func PrepareInterface(iface *Interface, opts ...ValidateOption) (*PreparedInterf
 			OperationKey:  binding.Operation,
 			SourceKey:     binding.Source,
 			BindingSpec:   source.BindingSpec,
-			Ref:           binding.Ref,
+			Selector:      binding.Selector,
 			HasTransforms: binding.InputTransform != nil || binding.OutputTransform != nil,
 		}
 	}

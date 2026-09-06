@@ -83,7 +83,7 @@ func compositionProvider(t *testing.T, bindings int, input openbindings.JSONSche
 	entries := make(map[string]openbindings.BindingEntry)
 	for index := 0; index < bindings; index++ {
 		bindingKey := "binding" + string(rune('a'+index))
-		entries[bindingKey] = openbindings.BindingEntry{Operation: "deliver", Source: "local", Ref: bindingKey}
+		entries[bindingKey] = openbindings.BindingEntry{Operation: "deliver", Source: "local", Selector: bindingKey}
 	}
 	prepared, err := openbindings.PrepareInterface(&openbindings.Interface{
 		OpenBindings: "0.2.0",

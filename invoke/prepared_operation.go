@@ -95,7 +95,7 @@ func (b *compiledOperationBehavior) Preflight(ctx context.Context, opts ...Invok
 			Location:    b.source.Location,
 			Content:     b.source.Content,
 		},
-		Ref:                  b.binding.Ref,
+		Selector:             b.binding.Selector,
 		Binding:              b.binding,
 		Context:              cfg.context,
 		Interface:            b.interface_,
@@ -108,7 +108,7 @@ func (b *compiledOperationBehavior) Preflight(ctx context.Context, opts ...Invok
 		InvokedAs:   b.operationKey,
 		BindingKey:  b.bindingKey,
 		BindingSpec: b.source.BindingSpec,
-		Ref:         b.binding.Ref,
+		Selector:    b.binding.Selector,
 	}
 	if runtime := b.invoker.invoker.findInvoker(b.source.BindingSpec); runtime != nil {
 		stampSite(args.Site, runtime)
@@ -198,7 +198,7 @@ func (e *OperationInvoker) CompileRealizationSnapshot(
 					Location:    source.Location,
 					Content:     source.Content,
 				},
-				Ref:         bindingEntry.Ref,
+				Selector:    bindingEntry.Selector,
 				Binding:     &bindingEntry,
 				Interface:   snapshot,
 				InputSchema: operation.Input,
@@ -207,7 +207,7 @@ func (e *OperationInvoker) CompileRealizationSnapshot(
 					InvokedAs:   binding.OperationKey,
 					BindingKey:  binding.Key,
 					BindingSpec: binding.BindingSpec,
-					Ref:         binding.Ref,
+					Selector:    binding.Selector,
 				},
 			}
 			stampSite(args.Site, runtime)

@@ -33,7 +33,7 @@ func preparedFixture() Interface {
 			"local": {BindingSpec: "example.local@1", Location: "app://delivery"},
 		},
 		Bindings: map[string]BindingEntry{
-			"local": {Operation: "deliver", Source: "local", Ref: "deliver"},
+			"local": {Operation: "deliver", Source: "local", Selector: "deliver"},
 		},
 	}
 }

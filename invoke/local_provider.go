@@ -172,6 +172,10 @@ func (i *localBindingInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
 	return []openbindings.BindingSpecInfo{{BindingSpec: i.spec}}
 }
 
+func (i *localBindingInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+	return openbindings.CheckBindingSpecs(bindingSpecs, i.BindingSpecs())
+}
+
 func (i *localBindingInvoker) CompileBinding(args *BindingInvocationArgs) (CompiledBindingInvoker, error) {
 	if args == nil || args.Site == nil {
 		return nil, fmt.Errorf("openbindings: local binding compiler requires an exact binding key")

@@ -30,7 +30,7 @@ type ProviderRealizationDescriptor struct {
 	BindingKey   string `json:"bindingKey"`
 	SourceKey    string `json:"sourceKey"`
 	BindingSpec  string `json:"bindingSpec"`
-	Ref          string `json:"ref"`
+	Selector     string `json:"selector"`
 	Supported    bool   `json:"supported"`
 
 	binding openbindings.PreparedBindingDescriptor
@@ -62,7 +62,7 @@ type PreparedRealization struct {
 	BindingKey        string `json:"bindingKey"`
 	SourceKey         string `json:"sourceKey"`
 	BindingSpec       string `json:"bindingSpec"`
-	Ref               string `json:"ref"`
+	Selector          string `json:"selector"`
 
 	provider *PreparedProvider
 	behavior CompiledRealizationBehavior
@@ -152,7 +152,7 @@ func PrepareProvider(options PreparedProviderOptions) (*PreparedProvider, error)
 			BindingKey:   binding.Key,
 			SourceKey:    binding.SourceKey,
 			BindingSpec:  binding.BindingSpec,
-			Ref:          binding.Ref,
+			Selector:     binding.Selector,
 			Supported:    supported,
 			binding:      binding,
 		}
@@ -270,7 +270,7 @@ func (p *PreparedProvider) CloseRealization(ctx context.Context, bindingKey stri
 			BindingKey:        descriptor.BindingKey,
 			SourceKey:         descriptor.SourceKey,
 			BindingSpec:       descriptor.BindingSpec,
-			Ref:               descriptor.Ref,
+			Selector:          descriptor.Selector,
 			provider:          p,
 			behavior:          behavior,
 		}

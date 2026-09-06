@@ -50,7 +50,7 @@ type InspectedRealization struct {
 	BindingKey               string           `json:"bindingKey"`
 	SourceKey                string           `json:"sourceKey"`
 	BindingSpec              string           `json:"bindingSpec"`
-	Ref                      string           `json:"ref"`
+	Selector                 string           `json:"selector"`
 	Evidence                 ContractEvidence `json:"evidence"`
 }
 
@@ -540,7 +540,7 @@ func inspectRealization(candidate eligibleRealization) InspectedRealization {
 		BindingKey:               candidate.descriptor.BindingKey,
 		SourceKey:                candidate.descriptor.SourceKey,
 		BindingSpec:              candidate.descriptor.BindingSpec,
-		Ref:                      candidate.descriptor.Ref,
+		Selector:                 candidate.descriptor.Selector,
 		Evidence:                 candidate.evidence,
 	}
 }
