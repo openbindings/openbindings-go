@@ -15,6 +15,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 candidate_dir="$(mktemp -d)"
 trap 'rm -rf "$candidate_dir"' EXIT
 export GOWORK=off
+export GOFLAGS=
 export OB_CORPUS_REQUIRED=1
 export OB_SPEC_CORPUS="${OB_SPEC_CORPUS:-$repo_dir/../spec/conformance}"
 if [[ ! -d "$OB_SPEC_CORPUS/binding-specs" ]]; then
@@ -50,6 +51,9 @@ for adapter in openapi usage; do
     fi
     cp "$candidate_mod" "$candidate_dir/$adapter.readonly.mod"
     cp "$candidate_dir/$adapter.sum" "$candidate_dir/$adapter.readonly.sum"
+    # Integration tests may build fixture executables in child Go processes.
+    # Keep those subprocesses on the same isolated, readonly candidate graph.
+    export GOFLAGS="-modfile=$candidate_mod -mod=readonly"
     go test -modfile="$candidate_mod" -mod=readonly -race -count=1 ./...
     go build -modfile="$candidate_mod" -mod=readonly ./...
     cmp "$candidate_mod" "$candidate_dir/$adapter.readonly.mod"
