@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // This file is the cardinality-agnostic operation invocation handle: one call
@@ -111,7 +113,7 @@ func (r *ContextRequirement) UnmarshalJSON(b []byte) error {
 		r.Extra = make(map[string]any, len(raw))
 		for key, valueRaw := range raw {
 			var value any
-			if err := json.Unmarshal(valueRaw, &value); err != nil {
+			if err := jsonvalue.Unmarshal(valueRaw, &value); err != nil {
 				return fmt.Errorf("context requirement %s: %w", key, err)
 			}
 			r.Extra[key] = value
@@ -906,21 +908,26 @@ func (t *TypedInvocation[I, O]) Write(ctx context.Context, input I) error {
 	// The generic JSON-domain lane is already the operation layer's native
 	// representation. Validate it without cloning so in-process providers keep
 	// map/slice reference identity and pay no JSON serialization cost.
-	if raw := any(input); isNativeJSONValue(raw, nil, 0) {
+	raw := any(input)
+	state := classifyNativeJSONValue(raw, nil, 0)
+	if state == invalidNumberJSON {
+		return classifiedError(ErrCodeTypeMismatch)
+	}
+	if state == nativeJSON {
 		return t.inner.Write(ctx, raw)
 	}
 	// Encode at the typed boundary, symmetric with the output decode:
 	// Input validation and format invokers operate on generic JSON values
 	// (maps/slices/primitives), not Go structs. For the untyped flavor (I = any)
-	// this normalizes the value through JSON (e.g. int -> float64), so a caller
+	// this normalizes the value through JSON (e.g. int -> json.Number), so a caller
 	// driving an [any, any] handle must hand it generic-JSON-shaped input; a
 	// non-JSON-encodable value is rejected here rather than reaching the binding.
-	b, err := json.Marshal(input)
+	b, err := jsonvalue.Marshal(input)
 	if err != nil {
 		return classifiedError(ErrCodeTypeMismatch)
 	}
 	var generic any
-	if err := json.Unmarshal(b, &generic); err != nil {
+	if err := jsonvalue.Unmarshal(b, &generic); err != nil {
 		return classifiedError(ErrCodeTypeMismatch)
 	}
 	return t.inner.Write(ctx, generic)
@@ -932,48 +939,82 @@ type nativeJSONVisit struct {
 }
 
 func isNativeJSONValue(value any, seen map[nativeJSONVisit]bool, depth int) bool {
+	return classifyNativeJSONValue(value, seen, depth) == nativeJSON
+}
+
+type nativeJSONState uint8
+
+const (
+	typedJSON nativeJSONState = iota // encoding/json owns this host-type conversion
+	nativeJSON
+	invalidNumberJSON
+)
+
+// Keep an invalid numeric carrier distinct from a typed Go value requiring
+// encoding. In particular, encoding/json marshals json.Number("") as 0;
+// that fallback must not repair a malformed generic JSON input silently.
+// Typed structs/custom encoders retain their explicit encoding/json contract.
+func classifyNativeJSONValue(value any, seen map[nativeJSONVisit]bool, depth int) nativeJSONState {
 	if depth > 512 {
-		return false
+		return typedJSON
 	}
 	switch value := value.(type) {
 	case nil, bool, string:
-		return true
+		return nativeJSON
 	case float64:
-		return !math.IsNaN(value) && !math.IsInf(value, 0)
+		if !math.IsNaN(value) && !math.IsInf(value, 0) {
+			return nativeJSON
+		}
+		return typedJSON
+	case json.Number:
+		if jsonvalue.IsNumber(value) {
+			return nativeJSON
+		}
+		return invalidNumberJSON
 	case []any:
 		if seen == nil {
 			seen = make(map[nativeJSONVisit]bool)
 		}
 		visit := nativeJSONVisit{kind: reflect.Slice, ptr: reflect.ValueOf(value).Pointer()}
 		if seen[visit] {
-			return false
+			return typedJSON
 		}
 		seen[visit] = true
 		defer delete(seen, visit)
+		state := nativeJSON
 		for _, member := range value {
-			if !isNativeJSONValue(member, seen, depth+1) {
-				return false
+			s := classifyNativeJSONValue(member, seen, depth+1)
+			if s == invalidNumberJSON {
+				return s
+			}
+			if s == typedJSON {
+				state = typedJSON
 			}
 		}
-		return true
+		return state
 	case map[string]any:
 		if seen == nil {
 			seen = make(map[nativeJSONVisit]bool)
 		}
 		visit := nativeJSONVisit{kind: reflect.Map, ptr: reflect.ValueOf(value).Pointer()}
 		if seen[visit] {
-			return false
+			return typedJSON
 		}
 		seen[visit] = true
 		defer delete(seen, visit)
+		state := nativeJSON
 		for _, member := range value {
-			if !isNativeJSONValue(member, seen, depth+1) {
-				return false
+			s := classifyNativeJSONValue(member, seen, depth+1)
+			if s == invalidNumberJSON {
+				return s
+			}
+			if s == typedJSON {
+				state = typedJSON
 			}
 		}
-		return true
+		return state
 	default:
-		return false
+		return typedJSON
 	}
 }
 
@@ -1005,10 +1046,10 @@ func (s *typedOutputStream[O]) Read(ctx context.Context) (O, error) {
 	}
 	// Decode at the typed boundary: the operation layer emits generic JSON
 	// values (maps/slices); round-trip them into the concrete O.
-	b, merr := json.Marshal(raw)
+	b, merr := jsonvalue.Marshal(raw)
 	if merr == nil {
 		var typed O
-		if uerr := json.Unmarshal(b, &typed); uerr == nil {
+		if uerr := jsonvalue.Unmarshal(b, &typed); uerr == nil {
 			return typed, nil
 		}
 	}

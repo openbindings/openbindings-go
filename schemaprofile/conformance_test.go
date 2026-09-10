@@ -347,25 +347,12 @@ func runIdenticalFixture(t *testing.T, entry manifestFile, fix fixture) {
 			t.Fatalf("normalize right %q: %v", opKey, err)
 		}
 
-		leftJSON, err := CanonicalString(normLeft)
+		identical, err := EqualNormalizedSchemas(normLeft, normRight)
 		if err != nil {
-			t.Fatalf("canonical left %q: %v", opKey, err)
+			t.Fatalf("structural identity %q: %v", opKey, err)
 		}
-		rightJSON, err := CanonicalString(normRight)
-		if err != nil {
-			t.Fatalf("canonical right %q: %v", opKey, err)
-		}
-
-		if entry.Verdict == "compatible" {
-			if leftJSON != rightJSON {
-				t.Fatalf("operation %q: schemas should be identical after normalization:\n  left:  %s\n  right: %s",
-					opKey, leftJSON, rightJSON)
-			}
-		} else {
-			if leftJSON == rightJSON {
-				t.Fatalf("operation %q: schemas should differ but are identical: %s",
-					opKey, leftJSON)
-			}
+		if identical != (entry.Verdict == "compatible") {
+			t.Fatalf("operation %q: unexpected structural identity %v", opKey, identical)
 		}
 	}
 }

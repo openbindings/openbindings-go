@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 
 	"github.com/openbindings/openbindings-go/canonicaljson"
@@ -366,22 +365,9 @@ func (n *Normalizer) normalizeAt(schema map[string]any, path string) (map[string
 				variants = append(variants, nv)
 			}
 
-			type scored struct {
-				canon string
-				v     map[string]any
-			}
-			sc := make([]scored, 0, len(variants))
-			for _, v := range variants {
-				c, err := CanonicalString(v)
-				if err != nil {
-					return nil, fmt.Errorf("%s.%s: canonicalize variant: %w", pathOrRoot(path), k, err)
-				}
-				sc = append(sc, scored{canon: c, v: v})
-			}
-			sort.Slice(sc, func(i, j int) bool { return sc[i].canon < sc[j].canon })
-			outArr := make([]any, 0, len(sc))
-			for _, s := range sc {
-				outArr = append(outArr, s.v)
+			outArr := make([]any, 0, len(variants))
+			for _, variant := range variants {
+				outArr = append(outArr, variant)
 			}
 			out[k] = outArr
 		}

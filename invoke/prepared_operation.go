@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // CompiledRealizationBehavior is executable behavior for one exact
@@ -49,8 +48,8 @@ type compiledOperationBehavior struct {
 	source          *openbindings.Source
 	operationKey    string
 	bindingKey      string
-	inputValidator  *jsonschema.Schema
-	outputValidator *jsonschema.Schema
+	inputValidator  *openbindings.CompiledSchema
+	outputValidator *openbindings.CompiledSchema
 	compiledBinding CompiledBindingInvoker
 }
 
@@ -64,7 +63,7 @@ func (b *compiledOperationBehavior) Invoke(ctx context.Context, opts ...InvokeOp
 		caller.validateInput = func(input any) *InvocationError {
 			if err := b.inputValidator.Validate(input); err != nil {
 				cfg.diagnostics.recordValidation(ValidationPhaseInput, b.operationKey, b.bindingKey, err)
-				return NewInvocationError(ErrCodeOperationValidationFailed)
+				return validationInvocationError(err)
 			}
 			return nil
 		}

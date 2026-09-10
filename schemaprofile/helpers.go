@@ -209,23 +209,3 @@ func decodeJSON(b []byte) (any, error) {
 	}
 	return v, nil
 }
-
-// toFloat64 converts a JSON numeric value to float64. It handles the types
-// produced by encoding/json (float64, json.Number) and Go integer types.
-// Returns 0 for unrecognised types; callers rely on this for absent/nil values
-// which are guarded by hasKey checks before reaching this function.
-func toFloat64(v any) float64 {
-	switch x := v.(type) {
-	case float64:
-		return x
-	case int:
-		return float64(x)
-	case int64:
-		return float64(x)
-	case json.Number:
-		f, _ := x.Float64()
-		return f
-	default:
-		return 0
-	}
-}

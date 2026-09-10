@@ -6,21 +6,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/recolabs/gnata"
+	"github.com/openbindings/jsonata/go/syntax"
 )
 
-// The Go SDK's COMPILE-LANE side of the JSONata transform differential gate
-// (spec/conformance/transforms). The SDK ships no evaluator — the evaluation
-// gate lives in ob (gnata) and the TS SDK (jsonata-js) by design — but it DOES
-// ship gnata's PARSE surface: validate.go's OBI-D-18 parse-check calls
-// gnata.Compile. This gate asserts that every NORMATIVE (agree) expression is
-// accepted by gnata.Compile, so a gnata parse-refusal skew that would make
-// Validate reject a spec-conformant document is caught by `go test ./...`
-// rather than only transitively through ob's evaluation gate.
-//
-// Scope is agree/ only: normative expressions must a fortiori parse;
-// known-divergence cases may legitimately refuse at parse (RE2 root cause),
-// and cataloguing those is ob's job.
+// Historical expressions remain syntax regression controls, not a normative
+// executable oracle. Use exactly the syntax-only surface used by validation;
+// runtime initialization or numeric work limits must not decide OBI validity.
+// Evaluation qualification belongs to the separately selected adapter.
 
 type transformGateCase struct {
 	ID   string `json:"id"`
@@ -29,6 +21,14 @@ type transformGateCase struct {
 
 type transformGateFile struct {
 	Cases []transformGateCase `json:"cases"`
+}
+
+func TestTransformRejectsUndocumentedPrefix(t *testing.T) {
+	for _, expression := range []string{`~$|{"x":1}|`, `{} ~> ~$|{"x":1}|`} {
+		if jsonataParses(expression) {
+			t.Errorf("OBI-D-18 syntax validator admitted %s", expression)
+		}
+	}
 }
 
 // transformAgreeDir locates spec/conformance/transforms/agree via
@@ -63,7 +63,7 @@ func transformAgreeDir(t *testing.T) string {
 }
 
 // TestTransformCompileGate runs every agree-corpus expression through
-// gnata.Compile — the exact surface validate.go ships for OBI-D-18 — and
+// syntax.Validate — the exact surface validate.go ships for OBI-D-18 — and
 // asserts acceptance.
 func TestTransformCompileGate(t *testing.T) {
 	dir := transformAgreeDir(t)
@@ -88,8 +88,8 @@ func TestTransformCompileGate(t *testing.T) {
 		for _, c := range gf.Cases {
 			total++
 			t.Run(c.ID, func(t *testing.T) {
-				if _, err := gnata.Compile(c.Expr); err != nil {
-					t.Fatalf("gnata.Compile rejected normative expr %q: %v", c.Expr, err)
+				if err := syntax.Validate(c.Expr); err != nil {
+					t.Fatalf("syntax.Validate rejected historical expr %q: %v", c.Expr, err)
 				}
 			})
 		}
@@ -97,5 +97,5 @@ func TestTransformCompileGate(t *testing.T) {
 	if total == 0 {
 		t.Fatalf("no agree cases loaded from %s", dir)
 	}
-	t.Logf("transform compile-lane gate: %d normative expressions accepted by gnata", total)
+	t.Logf("transform syntax regression: %d historical expressions accepted", total)
 }

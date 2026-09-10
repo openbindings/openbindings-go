@@ -21,7 +21,7 @@ func TestNormalize_FailsClosedOnOutOfProfileKeyword(t *testing.T) {
 	}
 }
 
-func TestNormalize_UnionOrderingDeterministic(t *testing.T) {
+func TestNormalize_UnionOrderingAuthored(t *testing.T) {
 	n := &Normalizer{Root: map[string]any{}}
 	in := map[string]any{
 		"oneOf": []any{
@@ -39,8 +39,8 @@ func TestNormalize_UnionOrderingDeterministic(t *testing.T) {
 	}
 	first := arr[0].(map[string]any)
 	props := first["properties"].(map[string]any)
-	if _, hasA := props["a"]; !hasA {
-		t.Fatalf("expected variant with property a to sort first, got %#v", arr[0])
+	if _, hasB := props["b"]; !hasB {
+		t.Fatalf("expected authored first variant with property b, got %#v", arr[0])
 	}
 }
 

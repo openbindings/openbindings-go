@@ -122,11 +122,11 @@ func TestCompositionSessionCapturesImmutableConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revision := session.Revision()
+	revision := session.SessionID()
 	options.Consumer = compositionConsumer(t, map[string]any{"type": "number"})
 	options.Policy = invalidElectionPolicy{ReferenceCompositionPolicy, RealizationPolicySelection{Status: "invented"}}
 	options.Providers[0] = ProviderRegistration{}
-	if session.Consumer() != consumer || session.Policy() != ReferenceCompositionPolicy || session.Revision() != revision {
+	if session.Consumer() != consumer || session.Policy() != ReferenceCompositionPolicy || session.SessionID() != revision {
 		t.Fatal("constructor options altered retained session configuration")
 	}
 	result, err := session.resolve(t.Context(), "delivery")
@@ -134,7 +134,7 @@ func TestCompositionSessionCapturesImmutableConfiguration(t *testing.T) {
 		t.Fatalf("resolution = %#v, %v", result, err)
 	}
 	inspection, err := session.InspectDependency(t.Context(), "delivery")
-	if err != nil || inspection.SessionRevision != revision {
+	if err != nil || inspection.SessionID != revision {
 		t.Fatalf("inspection = %#v, %v", inspection, err)
 	}
 	// Prevent accidental reintroduction of caller-settable revision inputs.

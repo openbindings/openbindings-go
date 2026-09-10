@@ -1,7 +1,6 @@
 package invoke
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // ---------------------------------------------------------------------------
@@ -213,14 +213,12 @@ func normalizeInvocationData(data any) (any, bool) {
 	if !validInvocationValue(reflect.ValueOf(data), map[visit]bool{}) {
 		return nil, false
 	}
-	raw, err := json.Marshal(data)
+	raw, err := jsonvalue.Marshal(data)
 	if err != nil || !json.Valid(raw) {
 		return nil, false
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
 	var normalized any
-	if err := decoder.Decode(&normalized); err != nil {
+	if err := jsonvalue.Unmarshal(raw, &normalized); err != nil {
 		return nil, false
 	}
 	return normalized, true
@@ -240,6 +238,10 @@ func validInvocationValue(value reflect.Value, ancestors map[visit]bool) bool {
 			return true
 		}
 		return validInvocationValue(value.Elem(), ancestors)
+	}
+	if value.Type() == reflect.TypeOf(json.Number("")) {
+		s := value.String()
+		return len(s) > 0 && (s[0] == '-' || s[0] >= '0' && s[0] <= '9') && json.Valid([]byte(s)) && strings.TrimSpace(s) == s
 	}
 	switch value.Kind() {
 	case reflect.Bool, reflect.String,
@@ -351,7 +353,7 @@ func (e InvocationError) MarshalJSON() ([]byte, error) {
 	if e.dataPresent || e.Data != nil {
 		out["data"] = e.Data
 	}
-	return json.Marshal(out)
+	return jsonvalue.Marshal(out)
 }
 
 func (e *InvocationError) UnmarshalJSON(raw []byte) error {
@@ -372,9 +374,7 @@ func (e *InvocationError) UnmarshalJSON(raw []byte) error {
 	dataRaw, dataPresent := envelope["data"]
 	e.dataPresent = dataPresent
 	if dataPresent && string(dataRaw) != "null" {
-		decoder := json.NewDecoder(bytes.NewReader(dataRaw))
-		decoder.UseNumber()
-		if err := decoder.Decode(&e.Data); err != nil {
+		if err := jsonvalue.Unmarshal(dataRaw, &e.Data); err != nil {
 			return err
 		}
 	}

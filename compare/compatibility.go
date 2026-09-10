@@ -1,11 +1,11 @@
 package compare
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/schemaprofile"
 )
 
@@ -252,12 +252,12 @@ func normalizedCompatible(reqNorm, provNorm *schemaprofile.Normalizer, req, prov
 // the interface cannot round-trip, leaving fragment refs unresolvable —
 // which then surfaces as the schema check's RefError.
 func interfaceDocView(i *openbindings.Interface) any {
-	data, err := json.Marshal(i)
+	data, err := jsonvalue.Marshal(i)
 	if err != nil {
 		return nil
 	}
 	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
+	if err := jsonvalue.Unmarshal(data, &v); err != nil {
 		return nil
 	}
 	return v

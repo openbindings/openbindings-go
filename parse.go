@@ -2,11 +2,13 @@ package openbindings
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
+	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // ParseDocument validates raw JSON bytes against the OBI schema, then unmarshals into an Interface.
@@ -23,7 +25,7 @@ func ParseDocument(data []byte) (*Interface, error) {
 	}
 
 	var raw any
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := jsonvalue.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse document: invalid JSON: %w", err)
 	}
 

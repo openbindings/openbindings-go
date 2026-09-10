@@ -1,9 +1,11 @@
 package openbindings
 
 import (
-	"encoding/json"
 	"fmt"
+	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 	"strings"
+
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // JSONSchema holds a JSON Schema 2020-12 value in either of its two forms:
@@ -149,7 +151,7 @@ func (e *OperationExample) UnmarshalJSON(b []byte) error {
 	}
 
 	var w operationExampleWire
-	if err := json.Unmarshal(b, &w); err != nil {
+	if err := jsonvalue.Unmarshal(b, &w); err != nil {
 		return err
 	}
 
@@ -231,7 +233,7 @@ func (o *Operation) UnmarshalJSON(b []byte) error {
 	}
 
 	var w operationWire
-	if err := json.Unmarshal(b, &w); err != nil {
+	if err := jsonvalue.Unmarshal(b, &w); err != nil {
 		return err
 	}
 
@@ -317,7 +319,7 @@ func (s *Source) UnmarshalJSON(b []byte) error {
 	}
 
 	var w sourceWire
-	if err := json.Unmarshal(b, &w); err != nil {
+	if err := jsonvalue.Unmarshal(b, &w); err != nil {
 		return err
 	}
 
@@ -452,7 +454,7 @@ func (be *BindingEntry) UnmarshalJSON(b []byte) error {
 	}
 
 	var w bindingEntryWire
-	if err := json.Unmarshal(b, &w); err != nil {
+	if err := jsonvalue.Unmarshal(b, &w); err != nil {
 		return err
 	}
 
@@ -509,7 +511,7 @@ func (d *DependencyEntry) UnmarshalJSON(b []byte) error {
 	}
 
 	var w dependencyEntryWire
-	if err := json.Unmarshal(b, &w); err != nil {
+	if err := jsonvalue.Unmarshal(b, &w); err != nil {
 		return err
 	}
 
@@ -575,7 +577,7 @@ func (i *Interface) UnmarshalJSON(b []byte) error {
 	}
 
 	var w interfaceWire
-	if err := json.Unmarshal(b, &w); err != nil {
+	if err := jsonvalue.Unmarshal(b, &w); err != nil {
 		return err
 	}
 

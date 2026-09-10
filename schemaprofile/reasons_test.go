@@ -2,20 +2,22 @@ package schemaprofile
 
 // Reason-string alignment table: pins the EXACT diagnostic each directional
 // check produces, byte-identical with the TypeScript SDK (the parity rule).
-// Mirrored in packages/sdk/src/schema-profile/reasons.test.ts — the two
+// Mirrored in packages/compare/src/schema-profile/reasons.test.ts — the two
 // tables carry the same fixtures and the same expected strings; a change on
 // one side must land on both.
 //
-// Conventions pinned here:
-//   - values and counts interpolate in JCS (RFC 8785) rendering — strings
-//     quoted, numbers in ECMAScript form (no %g exponent spellings);
+// Official SDK qualification, beyond the optional profile's keyword floor.
+// Conventions pinned here (the exact-value pack adds wider numeric cases):
+//   - values and counts render truthfully as JSON; these ordinary values
+//     retain their existing JCS-compatible spellings;
 //   - the const/enum prefix names the DECIDING keyword: the keyword whose
 //     constraint rejects the flowing value (input: the candidate's; output:
 //     the target's);
 //   - exclusive bounds are marked ("exclusive 0");
 //   - unions carry the real union key and the failing variant index;
-//   - multi-member faults (types, enum values, required, properties) name
+//   - multi-member faults (types, required, properties) name
 //     the lexicographically FIRST failing member;
+//   - enum values and union variants name the first failing authored element;
 //   - property/required member names interpolate in the same JCS rendering
 //     as values (quoted, JSON-string escaping) — visible only for names
 //     carrying quotes, backslashes, or control characters; plain names
@@ -74,17 +76,17 @@ var reasonCases = []reasonCase{
 	{"input single enum vs const mismatch", "input",
 		`{"enum":["a"]}`, `{"const":"b"}`,
 		`const: candidate const "b" not in target enum`},
-	{"input enum vs enum missing sorted", "input",
+	{"input enum vs enum missing authored", "input",
 		`{"enum":["b","a","c"]}`, `{"enum":["c"]}`,
-		`enum: target value "a" not in candidate enum`},
+		`enum: target value "b" not in candidate enum`},
 
 	// --- const/enum: output (deciding keyword = target's) ---
 	{"output enum vs const outside", "output",
 		`{"enum":["a"]}`, `{"const":"b"}`,
 		`enum: candidate const "b" not in target enum`},
-	{"output enum vs enum extra sorted", "output",
+	{"output enum vs enum extra authored", "output",
 		`{"enum":["a"]}`, `{"enum":["a","c","b"]}`,
-		`enum: candidate value "b" not in target enum`},
+		`enum: candidate value "c" not in target enum`},
 	{"output enum vs unconstrained", "output",
 		`{"enum":["a"]}`, `{"type":["string"]}`,
 		`enum: candidate is unconstrained but target has enum`},

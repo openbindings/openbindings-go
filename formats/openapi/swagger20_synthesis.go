@@ -9,6 +9,7 @@ import (
 
 	openapiprovider "github.com/openbindings/openapi-client/go/provider"
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -279,7 +280,7 @@ func swagger20EnvelopeTransform(parameters map[string]string, bodyField string) 
 
 func projectSwagger20Schema(raw json.RawMessage, request bool, sourceRef string) (any, []swagger20ProjectionLoss, error) {
 	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
+	if err := jsonvalue.Unmarshal(raw, &value); err != nil {
 		return nil, nil, fmt.Errorf("Swagger 2.0 schema at %s has no JSON image: %w", sourceRef, err)
 	}
 	projected, losses, err := projectSwagger20SchemaValue(value, request, sourceRef)

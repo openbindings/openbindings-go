@@ -14,6 +14,7 @@ import (
 	openapiclient "github.com/openbindings/openapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 const maxNativeSourceClients = 64
@@ -297,7 +298,7 @@ func nativeSourceClientKey(args *invoke.BindingInvocationArgs) string {
 // entry digest. Other sources are loaded normally by the native provider.
 func nativeSelfContainedCacheSource(content []byte) bool {
 	var document map[string]any
-	if json.Unmarshal(content, &document) != nil || document == nil {
+	if jsonvalue.Unmarshal(content, &document) != nil || document == nil {
 		return false
 	}
 	pending := []any{document}
@@ -857,7 +858,7 @@ func cloneNativeDetails(source map[string]any) map[string]any {
 		return nil
 	}
 	var result map[string]any
-	if json.Unmarshal(encoded, &result) != nil {
+	if jsonvalue.Unmarshal(encoded, &result) != nil {
 		return nil
 	}
 	return result
@@ -964,7 +965,7 @@ func nativeSelectorIsDeclared(args *invoke.BindingInvocationArgs) bool {
 		return false
 	}
 	var root map[string]any
-	if json.Unmarshal(content, &root) != nil {
+	if jsonvalue.Unmarshal(content, &root) != nil {
 		return false
 	}
 	const prefix = "#/paths/"

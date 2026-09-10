@@ -8,7 +8,7 @@ require (
 	github.com/openbindings/openapi-client/go v0.1.0
 	github.com/openbindings/openbindings-go v0.2.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	golang.org/x/text v0.38.0
+	golang.org/x/text v0.39.0
 )
 
 require (

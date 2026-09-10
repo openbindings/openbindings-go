@@ -10,7 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/recolabs/gnata"
+	"github.com/openbindings/openbindings-go/jsonvalue"
+	"github.com/openbindings/jsonata/go/syntax"
 )
 
 type validateOptions struct {
@@ -81,7 +82,7 @@ func (i Interface) validateWithDocument(docView any, opts ...ValidateOption) err
 	// practice, and D-16 is a referential-integrity check, not a parse gate.
 	if docView == nil && interfaceHasDocumentSchemaRef(i) {
 		if data, jerr := json.Marshal(i); jerr == nil {
-			_ = json.Unmarshal(data, &docView)
+			_ = jsonvalue.Unmarshal(data, &docView)
 		}
 	}
 	validSchemaShapes := make(map[string]bool)
@@ -259,7 +260,7 @@ func (i Interface) validateWithDocument(docView any, opts ...ValidateOption) err
 
 	// Validate transforms. OBI-D-18: every value in the transforms map parses
 	// as a syntactically valid expression of the pinned transform language
-	// (JSONata 2.1, jsonata-js 2.1.1 parse-acceptance tiebreak). Parse-only:
+	// (the incorporated JSONata 2.1 documentation). Parse-only:
 	// evaluation failures (undefined results, dynamic errors) remain invoke-
 	// time outcomes per OBI-T-10 / ERR_TRANSFORM_ERROR.
 	trKeys := make([]string, 0, len(i.Transforms))
@@ -333,7 +334,7 @@ func (i Interface) validateWithDocument(docView any, opts ...ValidateOption) err
 	if !o.skipDocumentSchema {
 		if docView == nil {
 			if data, jerr := json.Marshal(i); jerr == nil {
-				_ = json.Unmarshal(data, &docView)
+				_ = jsonvalue.Unmarshal(data, &docView)
 			}
 		}
 		validateAgainstOBISchema(&errs, docView)
@@ -443,8 +444,8 @@ func docPointerResolves(doc any, pointer string) bool {
 
 // validateTransformExpression reports an OBI-D-18 violation when expr does
 // not parse as a syntactically valid expression of the pinned transform
-// language (§5.5: JSONata 2.1, with jsonata-js 2.1.1's parse acceptance as
-// the normative tiebreak). Parse-only: membership in the language, not
+// language (§5.5: the incorporated JSONata 2.1 documentation).
+// Parse-only: membership in the language, not
 // success of evaluation — undefined results and dynamic errors remain
 // invoke-time outcomes.
 func validateTransformExpression(errs *[]string, prefix, expr string) {
@@ -454,8 +455,8 @@ func validateTransformExpression(errs *[]string, prefix, expr string) {
 }
 
 // jsonataParses reports whether expr parses under the bundled JSONata
-// parser (gnata, a JSONata 2.x engine — closer to the normative jsonata-js
-// 2.1.1 parse acceptance than the prior 1.5 port). The parser is only ever
+// syntax package, without importing the evaluator or initializing its
+// standard library. The parser is only ever
 // handed document-supplied strings, so a parser panic is treated as a parse
 // failure rather than crashing document validation.
 func jsonataParses(expr string) (ok bool) {
@@ -464,8 +465,7 @@ func jsonataParses(expr string) (ok bool) {
 			ok = false
 		}
 	}()
-	_, err := gnata.Compile(expr)
-	return err == nil
+	return syntax.Validate(expr) == nil
 }
 
 // validateTransformRef validates that a $ref resolves to a named transform per OBI-D-10.

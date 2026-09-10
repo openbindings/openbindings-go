@@ -44,8 +44,8 @@ func TestPreparedInterfaceContentSnapshotAndIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareInterface: %v", err)
 	}
-	if prepared.Revision() == "" || prepared.Prepared() != prepared {
-		t.Fatal("expected content revision and idempotent prepared receiver")
+	if prepared.SnapshotID() == "" || prepared.Prepared() != prepared {
+		t.Fatal("expected local correlation and idempotent prepared receiver")
 	}
 	operation, ok := prepared.Operation("send")
 	if !ok || operation.CanonicalKey != "deliver" || len(operation.BindingKeys) != 1 || len(operation.DependencyKeys) != 1 {
@@ -65,10 +65,18 @@ func TestPreparedInterfaceContentSnapshotAndIndexes(t *testing.T) {
 	if got, _ := prepared.Operation("deliver"); got.CanonicalKey != "deliver" {
 		t.Fatalf("prepared operation drifted: %#v", got)
 	}
-	canonical := prepared.CanonicalJSON()
+	export, err := prepared.ExportJCS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := export.Canonical
 	canonical[0] = 'x'
-	if bytes.Equal(canonical, prepared.CanonicalJSON()) {
-		t.Fatal("CanonicalJSON exposed internal bytes")
+	secondExport, err := prepared.ExportJCS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(canonical, secondExport.Canonical) {
+		t.Fatal("ExportJCS exposed internal bytes")
 	}
 }
 
@@ -135,7 +143,7 @@ func TestPreparedInterfaceBoundaryContractReachability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if irrelevantContract.Revision != contract.Revision {
+	if identity, err := CompareBoundaryContracts(irrelevantContract, contract); err != nil || identity != "equal" {
 		t.Fatal("unreachable schema changed boundary identity")
 	}
 
@@ -149,7 +157,7 @@ func TestPreparedInterfaceBoundaryContractReachability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if relevantContract.Revision == contract.Revision {
+	if identity, err := CompareBoundaryContracts(relevantContract, contract); err != nil || identity != "different" {
 		t.Fatal("reachable schema did not change boundary identity")
 	}
 }

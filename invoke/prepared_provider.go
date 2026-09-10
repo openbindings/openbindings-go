@@ -56,13 +56,13 @@ func (e *RealizationNotFoundError) Error() string {
 // PreparedRealization is an SDK-owned executable closure for one exact
 // provider binding. Runtime behavior cannot alter the exported identity.
 type PreparedRealization struct {
-	ProviderKey       string `json:"providerKey"`
-	InterfaceRevision string `json:"interfaceRevision"`
-	OperationKey      string `json:"operationKey"`
-	BindingKey        string `json:"bindingKey"`
-	SourceKey         string `json:"sourceKey"`
-	BindingSpec       string `json:"bindingSpec"`
-	Selector          string `json:"selector"`
+	ProviderKey         string `json:"providerKey"`
+	InterfaceSnapshotID string `json:"interfaceSnapshotId"`
+	OperationKey        string `json:"operationKey"`
+	BindingKey          string `json:"bindingKey"`
+	SourceKey           string `json:"sourceKey"`
+	BindingSpec         string `json:"bindingSpec"`
+	Selector            string `json:"selector"`
 
 	provider *PreparedProvider
 	behavior CompiledRealizationBehavior
@@ -282,15 +282,15 @@ func (p *PreparedProvider) CloseRealization(ctx context.Context, bindingKey stri
 	}
 	if compileErr == nil {
 		attempt.realization = &PreparedRealization{
-			ProviderKey:       p.key,
-			InterfaceRevision: p.interfaceSnapshot.Revision(),
-			OperationKey:      descriptor.OperationKey,
-			BindingKey:        descriptor.BindingKey,
-			SourceKey:         descriptor.SourceKey,
-			BindingSpec:       descriptor.BindingSpec,
-			Selector:          descriptor.Selector,
-			provider:          p,
-			behavior:          behavior,
+			ProviderKey:         p.key,
+			InterfaceSnapshotID: p.interfaceSnapshot.SnapshotID(),
+			OperationKey:        descriptor.OperationKey,
+			BindingKey:          descriptor.BindingKey,
+			SourceKey:           descriptor.SourceKey,
+			BindingSpec:         descriptor.BindingSpec,
+			Selector:            descriptor.Selector,
+			provider:            p,
+			behavior:            behavior,
 		}
 	} else {
 		attempt.err = compileErr
