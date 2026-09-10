@@ -2308,21 +2308,32 @@ func TestUnmarshalSyntax(t *testing.T) {
 type unexportedFields struct {
 	Name string
 	m    map[string]any `json:"-"`
-	m2   map[string]any `json:"abcd"`
+	m2   map[string]any
 
 	s []int `json:"-"`
 }
 
 func TestUnmarshalUnexported(t *testing.T) {
 	input := `{"Name": "Bob", "m": {"x": 123}, "m2": {"y": 456}, "abcd": {"z": 789}, "s": [2, 3]}`
-	want := &unexportedFields{Name: "Bob"}
-
-	out := &unexportedFields{}
+	// Build the deliberately tagged unexported field at runtime. This retains
+	// the upstream negative test without making go vet flag the fixture itself.
+	typ := reflect.TypeOf(unexportedFields{})
+	fields := make([]reflect.StructField, typ.NumField())
+	for i := range fields {
+		fields[i] = typ.Field(i)
+		if fields[i].Name == "m2" {
+			fields[i].Tag = reflect.StructTag(`json:"abcd"`)
+		}
+	}
+	typ = reflect.StructOf(fields)
+	want := reflect.New(typ)
+	want.Elem().FieldByName("Name").SetString("Bob")
+	out := reflect.New(typ).Interface()
 	err := Unmarshal([]byte(input), out)
 	if err != nil {
 		t.Errorf("Unmarshal error: %v", err)
 	}
-	if !reflect.DeepEqual(out, want) {
+	if !reflect.DeepEqual(out, want.Interface()) {
 		t.Errorf("Unmarshal:\n\tgot:  %+v\n\twant: %+v", out, want)
 	}
 }

@@ -5,6 +5,7 @@
 package json
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -56,8 +57,14 @@ type misnamedTag struct {
 	X string `jsom:"Misnamed"`
 }
 
-type badFormatTag struct {
-	Y string `:"BadFormat"`
+func badFormatTag(value string) any {
+	// The invalid tag is the input under test, not a mistyped production tag.
+	typ := reflect.StructOf([]reflect.StructField{{
+		Name: "Y", Type: reflect.TypeOf(""), Tag: reflect.StructTag(`:"BadFormat"`),
+	}})
+	result := reflect.New(typ).Elem()
+	result.Field(0).SetString(value)
+	return result.Interface()
 }
 
 type badCodeTag struct {
@@ -89,7 +96,7 @@ func TestStructTagObjectKey(t *testing.T) {
 		{Name(""), dashTag{"foo"}, "foo", "-"},
 		{Name(""), emptyTag{"Pour Moi"}, "Pour Moi", "W"},
 		{Name(""), misnamedTag{"Animal Kingdom"}, "Animal Kingdom", "X"},
-		{Name(""), badFormatTag{"Orfevre"}, "Orfevre", "Y"},
+		{Name(""), badFormatTag("Orfevre"), "Orfevre", "Y"},
 		{Name(""), badCodeTag{"Reliable Man"}, "Reliable Man", "Z"},
 		{Name(""), percentSlashTag{"brut"}, "brut", "text/html%"},
 		{Name(""), punctuationTag{"Union Rags"}, "Union Rags", "!#$%&()*+-./:;<=>?@[]^_{|}~ "},

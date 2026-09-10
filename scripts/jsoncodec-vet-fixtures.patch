@@ -1,0 +1,80 @@
+diff --git a/internal/thirdparty/jsoncodec/decode_test.go b/internal/thirdparty/jsoncodec/decode_test.go
+index 044911d..8316d2c 100644
+--- a/internal/thirdparty/jsoncodec/decode_test.go
++++ b/internal/thirdparty/jsoncodec/decode_test.go
+@@ -2308,21 +2308,32 @@ func TestUnmarshalSyntax(t *testing.T) {
+ type unexportedFields struct {
+ 	Name string
+ 	m    map[string]any `json:"-"`
+-	m2   map[string]any `json:"abcd"`
++	m2   map[string]any
+ 
+ 	s []int `json:"-"`
+ }
+ 
+ func TestUnmarshalUnexported(t *testing.T) {
+ 	input := `{"Name": "Bob", "m": {"x": 123}, "m2": {"y": 456}, "abcd": {"z": 789}, "s": [2, 3]}`
+-	want := &unexportedFields{Name: "Bob"}
+-
+-	out := &unexportedFields{}
++	// Build the deliberately tagged unexported field at runtime. This retains
++	// the upstream negative test without making go vet flag the fixture itself.
++	typ := reflect.TypeOf(unexportedFields{})
++	fields := make([]reflect.StructField, typ.NumField())
++	for i := range fields {
++		fields[i] = typ.Field(i)
++		if fields[i].Name == "m2" {
++			fields[i].Tag = reflect.StructTag(`json:"abcd"`)
++		}
++	}
++	typ = reflect.StructOf(fields)
++	want := reflect.New(typ)
++	want.Elem().FieldByName("Name").SetString("Bob")
++	out := reflect.New(typ).Interface()
+ 	err := Unmarshal([]byte(input), out)
+ 	if err != nil {
+ 		t.Errorf("Unmarshal error: %v", err)
+ 	}
+-	if !reflect.DeepEqual(out, want) {
++	if !reflect.DeepEqual(out, want.Interface()) {
+ 		t.Errorf("Unmarshal:\n\tgot:  %+v\n\twant: %+v", out, want)
+ 	}
+ }
+diff --git a/internal/thirdparty/jsoncodec/tagkey_test.go b/internal/thirdparty/jsoncodec/tagkey_test.go
+index d432cd7..a2efc00 100644
+--- a/internal/thirdparty/jsoncodec/tagkey_test.go
++++ b/internal/thirdparty/jsoncodec/tagkey_test.go
+@@ -5,6 +5,7 @@
+ package json
+ 
+ import (
++	"reflect"
+ 	"testing"
+ )
+ 
+@@ -56,8 +57,14 @@ type misnamedTag struct {
+ 	X string `jsom:"Misnamed"`
+ }
+ 
+-type badFormatTag struct {
+-	Y string `:"BadFormat"`
++func badFormatTag(value string) any {
++	// The invalid tag is the input under test, not a mistyped production tag.
++	typ := reflect.StructOf([]reflect.StructField{{
++		Name: "Y", Type: reflect.TypeOf(""), Tag: reflect.StructTag(`:"BadFormat"`),
++	}})
++	result := reflect.New(typ).Elem()
++	result.Field(0).SetString(value)
++	return result.Interface()
+ }
+ 
+ type badCodeTag struct {
+@@ -89,7 +96,7 @@ func TestStructTagObjectKey(t *testing.T) {
+ 		{Name(""), dashTag{"foo"}, "foo", "-"},
+ 		{Name(""), emptyTag{"Pour Moi"}, "Pour Moi", "W"},
+ 		{Name(""), misnamedTag{"Animal Kingdom"}, "Animal Kingdom", "X"},
+-		{Name(""), badFormatTag{"Orfevre"}, "Orfevre", "Y"},
++		{Name(""), badFormatTag("Orfevre"), "Orfevre", "Y"},
+ 		{Name(""), badCodeTag{"Reliable Man"}, "Reliable Man", "Z"},
+ 		{Name(""), percentSlashTag{"brut"}, "brut", "text/html%"},
+ 		{Name(""), punctuationTag{"Union Rags"}, "Union Rags", "!#$%&()*+-./:;<=>?@[]^_{|}~ "},
