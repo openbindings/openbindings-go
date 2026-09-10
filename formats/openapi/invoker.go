@@ -538,7 +538,11 @@ func readAuthoringArtifact(ctx context.Context, client *http.Client, location st
 	}
 	switch u.Scheme {
 	case "file":
-		return os.ReadFile(u.Path)
+		path, err := localArtifactPath(u)
+		if err != nil {
+			return nil, err
+		}
+		return os.ReadFile(path)
 	case "http", "https":
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
 		if err != nil {

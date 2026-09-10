@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -21,18 +22,48 @@ func unrealizableOperation(operationKey, reason string) error {
 }
 
 func absolutizeArtifactLocation(location string) (string, error) {
-	if location == "" || strings.Contains(location, "://") {
+	if location == "" {
 		return location, nil
 	}
-	abs := location
-	if !filepath.IsAbs(location) {
-		var err error
-		abs, err = filepath.Abs(location)
-		if err != nil {
-			return "", fmt.Errorf("resolve OpenAPI artifact path: %w", err)
+	drive := len(location) >= 2 && location[1] == ':' && ((location[0] >= 'A' && location[0] <= 'Z') || (location[0] >= 'a' && location[0] <= 'z'))
+	if !drive {
+		if parsed, err := url.Parse(location); err == nil && parsed.Scheme != "" {
+			return location, nil
 		}
 	}
-	return "file://" + abs, nil
+	if strings.HasPrefix(location, `\\`) || (drive && (runtime.GOOS != "windows" || !filepath.IsAbs(location))) {
+		return "", fmt.Errorf("artifact path must be a local rooted path, not a device, share or drive-relative path")
+	}
+	abs, err := filepath.Abs(location)
+	if err != nil {
+		return "", fmt.Errorf("resolve OpenAPI artifact path: %w", err)
+	}
+	path := filepath.ToSlash(abs)
+	if runtime.GOOS == "windows" && !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String(), nil
+}
+
+// URL.Path is already percent-decoded. Never unescape it a second time.
+func localArtifactPath(u *url.URL) (string, error) {
+	if !strings.EqualFold(u.Scheme, "file") || u.Opaque != "" || u.User != nil || (u.Host != "" && !strings.EqualFold(u.Host, "localhost")) {
+		return "", fmt.Errorf("only local file URIs are supported; remote file authorities and opaque paths are unavailable")
+	}
+	path := u.Path
+	if runtime.GOOS == "windows" {
+		if len(path) >= 4 && path[0] == '/' && path[2] == ':' && path[3] == '/' {
+			path = path[1:]
+		}
+		path = filepath.FromSlash(path)
+		if strings.HasPrefix(path, `\\`) {
+			return "", fmt.Errorf("remote file shares and device paths are unavailable")
+		}
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("file URI requires an absolute local path")
+	}
+	return path, nil
 }
 
 func validateDocumentAddress(location string) error {
