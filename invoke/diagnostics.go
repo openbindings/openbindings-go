@@ -7,12 +7,23 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
 )
 
 // ValidationPhase identifies the abstract operation boundary that rejected a
 // value. It deliberately carries no binding-native or transport semantics.
 type ValidationPhase string
+
+// Only a backend ValidationError establishes that the instance is invalid.
+// Resource/host capability failures use the existing runtime error envelope;
+// they must not be converted into failed schema predicates or leak input data.
+func validationInvocationError(err error) *InvocationError {
+	var mismatch *jsonschema.ValidationError
+	if errors.As(err, &mismatch) {
+		return NewInvocationError(ErrCodeOperationValidationFailed)
+	}
+	return NewInvocationError(ErrCodeRuntime)
+}
 
 const (
 	ValidationPhaseInput  ValidationPhase = "input"

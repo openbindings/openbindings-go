@@ -281,7 +281,7 @@ func (p *preparerMock) PrepareBinding(_ context.Context, args *BindingInvocation
 
 type exprEvaluator struct{}
 
-func (exprEvaluator) Evaluate(expr string, data any) (any, error) {
+func (exprEvaluator) Evaluate(_ context.Context, expr string, data any) (any, error) {
 	switch expr {
 	case "idToUserId":
 		id, _ := data.(map[string]any)["id"]

@@ -2,7 +2,6 @@ package synthesize
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // maxFetchBytes caps how much of a fetched interface document is read
@@ -187,7 +187,7 @@ func tryFetchOBI(ctx context.Context, client *http.Client, target string) (*open
 	}
 
 	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
+	if err := jsonvalue.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
 

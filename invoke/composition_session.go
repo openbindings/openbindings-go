@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
+	"sync/atomic"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -63,7 +63,7 @@ type InspectedProvider struct {
 
 // DependencyInspection is exhaustive static evidence for one dependency.
 type DependencyInspection struct {
-	SessionRevision      string                  `json:"sessionRevision"`
+	SessionID            string                  `json:"sessionId"`
 	PolicyID             string                  `json:"policyId"`
 	DependencyKey        string                  `json:"dependencyKey"`
 	RequiredOperationKey string                  `json:"requiredOperationKey"`
@@ -115,7 +115,7 @@ type eligibleProvider struct {
 // exact consumer dependency.
 type PreparedDependencyRoute[I, O any] struct {
 	PolicyID                 string `json:"policyId"`
-	ConsumerRevision         string `json:"consumerRevision"`
+	ConsumerSnapshotID       string `json:"consumerSnapshotId"`
 	DependencyKey            string `json:"dependencyKey"`
 	RequiredOperationKey     string `json:"requiredOperationKey"`
 	ProviderKey              string `json:"providerKey"`
@@ -154,8 +154,10 @@ func (s *CompositionSession) Consumer() *openbindings.PreparedInterface { return
 // must remain stable for the session lifetime, including any captured state.
 func (s *CompositionSession) Policy() CompositionPolicy { return s.policy }
 
-// Revision identifies the captured consumer, providers, and policy.
-func (s *CompositionSession) Revision() string { return s.revision }
+var nextSessionID atomic.Uint64
+
+// SessionID correlates this retained local session, never its document values.
+func (s *CompositionSession) SessionID() string { return s.revision }
 
 // NewCompositionSession validates and snapshots application registrations.
 func NewCompositionSession(options CompositionSessionOptions) (*CompositionSession, error) {
@@ -168,7 +170,6 @@ func NewCompositionSession(options CompositionSessionOptions) (*CompositionSessi
 	}
 	seen := make(map[string]bool)
 	registrations := append([]ProviderRegistration(nil), options.Providers...)
-	parts := []string{policy.ID(), options.Consumer.Revision()}
 	for _, registration := range registrations {
 		if registration.Provider == nil {
 			return nil, fmt.Errorf("openbindings: prepared provider is required")
@@ -181,13 +182,11 @@ func NewCompositionSession(options CompositionSessionOptions) (*CompositionSessi
 		if math.IsNaN(registration.Preference) || math.IsInf(registration.Preference, 0) {
 			return nil, fmt.Errorf("openbindings: provider %q preference must be finite", key)
 		}
-		parts = append(parts, fmt.Sprintf("%s:%s:%g", key, registration.Provider.PreparedInterface().Revision(), registration.Preference))
 	}
-	sort.Strings(parts[2:])
 	return &CompositionSession{
 		consumer:      options.Consumer,
 		policy:        policy,
-		revision:      strings.Join(parts, "|"),
+		revision:      fmt.Sprintf("session:%d", nextSessionID.Add(1)),
 		registrations: registrations,
 	}, nil
 }
@@ -222,7 +221,7 @@ func (s *CompositionSession) InspectDependency(ctx context.Context, dependencyKe
 		return inspectedProviders[i].ProviderKey < inspectedProviders[j].ProviderKey
 	})
 	return &DependencyInspection{
-		SessionRevision:      s.revision,
+		SessionID:            s.revision,
 		PolicyID:             s.policy.ID(),
 		DependencyKey:        dependencyKey,
 		RequiredOperationKey: required.OperationKey,
@@ -250,7 +249,7 @@ func ResolveDependency[I, O any](
 	if untyped.route != nil {
 		result.Route = &PreparedDependencyRoute[I, O]{
 			PolicyID:                 untyped.route.PolicyID,
-			ConsumerRevision:         untyped.route.ConsumerRevision,
+			ConsumerSnapshotID:       untyped.route.ConsumerSnapshotID,
 			DependencyKey:            untyped.route.DependencyKey,
 			RequiredOperationKey:     untyped.route.RequiredOperationKey,
 			ProviderKey:              untyped.route.ProviderKey,
@@ -476,7 +475,7 @@ func (s *CompositionSession) resolve(ctx context.Context, dependencyKey string) 
 		status: DependencyAvailable,
 		route: &PreparedDependencyRoute[any, any]{
 			PolicyID:                 s.policy.ID(),
-			ConsumerRevision:         s.consumer.Revision(),
+			ConsumerSnapshotID:       s.consumer.SnapshotID(),
 			DependencyKey:            required.Key,
 			RequiredOperationKey:     required.OperationKey,
 			ProviderKey:              selected.provider.Key(),

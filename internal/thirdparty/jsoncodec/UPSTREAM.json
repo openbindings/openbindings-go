@@ -1,0 +1,87 @@
+{
+  "source": "https://go.googlesource.com/go/+/refs/tags/go1.25.12/src/encoding/json/",
+  "version": "go1.25.12",
+  "status": "EXPERIMENTAL_NOT_ADOPTED",
+  "files": {
+    "decode.go": {
+      "upstreamSHA256": "4ac98dc49e11c21095aaaace0e828452e86225ec7c4d14f5954f2194a207beb4",
+      "relocatedSHA256": "b791ccf95daa7f1620bd909db8e928832ee20d4d2632880de9b3f1957e719465"
+    },
+    "encode.go": {
+      "upstreamSHA256": "533ae250cf46961fc4aded16b130981c25aef37063d00f5c5bf65d28e98f6e1e",
+      "relocatedSHA256": "46ac6856b8b4e30368d81096cf0e7a579c6aa99d0cf479f2d27cb6cf6ab9cce4"
+    },
+    "fold.go": {
+      "upstreamSHA256": "5b3c91bfbf6943e04d9aeb934031331a3f08a83b10079a0a7f0def3466b2f39e",
+      "relocatedSHA256": "3d9ba3aae556fb637d2d5dc6a9246a620379e96db254e1371b6a179667cdae11"
+    },
+    "indent.go": {
+      "upstreamSHA256": "9ef9eac29fc4cc9d94bf305976891eb5e78a2644acd4f07ed7a0c186991ac908",
+      "relocatedSHA256": "89c840dcb3980b5e3dc081a58748a3154e40dd441890ec7652f2034c65a30a5e"
+    },
+    "scanner.go": {
+      "upstreamSHA256": "2b16dd215274dfa8e0806b53cca144684d5b9c8a02319cf5ce10120c50e6eef2",
+      "relocatedSHA256": "d60b667a9f5fb7d29ecf17fc6e038e838868015037a0e69dc1141c97f1625abe"
+    },
+    "stream.go": {
+      "upstreamSHA256": "bb26b2442db6a686fc7f823ea9cc89babe26ac988ec7d8caf4a157aeb60d92f2",
+      "relocatedSHA256": "58acde07d549c544655bd546b2af38b068e3002913614fceff841ca44ee822ec"
+    },
+    "tables.go": {
+      "upstreamSHA256": "74f7f392e1cc22890b72959647b9e5facda591a890c81f8167b532d31adc561e",
+      "relocatedSHA256": "c8b1abd650a12bc447d479391da2827b7a45d4cc8ce07609153701fbaf44c3e2"
+    },
+    "tags.go": {
+      "upstreamSHA256": "e7300718fc8862f4dbc8bbdde33e4a0335124bb028e68062b52d3c042c374d6e",
+      "relocatedSHA256": "7a2dca05172514087590953ffb6dfd5db745a34737dd2a38aba9bd83cf9744e3"
+    },
+    "decode_test.go": {
+      "upstreamSHA256": "7f5e0a694cac8bf5e63526faaa497b83da9280e63e366652feda159f5157638d",
+      "relocatedSHA256": "cef7d9f9927a8a762565c40cf294102eb46c6d723a0595c31aaa410c205ee18b"
+    },
+    "encode_test.go": {
+      "upstreamSHA256": "f29e24f20175687c700c09a83a8770472d659445c99454ec903b7791abd64983",
+      "relocatedSHA256": "37fafa9cbeada5983d5e4cc6579a5c15c706d13fe598151112dfa669cea8aff9"
+    },
+    "example_marshaling_test.go": {
+      "upstreamSHA256": "33e4682d95d76d9c55a4214187fa89087e4576ee293c958688e773508ac5defd",
+      "relocatedSHA256": "6f112cb120f12a1c763006bfc67128c875e1712f81720940392ebfe593a67665"
+    },
+    "example_test.go": {
+      "upstreamSHA256": "2745c3eac5bf5aac2d0913f65cb1535edd6358530d72ce99bd8df206c559e54e",
+      "relocatedSHA256": "76b07cae2d92137aced1ab5f8b44e8a1a42c951078bf68c46dc7a9a634da85ce"
+    },
+    "example_text_marshaling_test.go": {
+      "upstreamSHA256": "529e0912b791e2b2dc4feaebeb306ac64ff68ec63b139e0083e717d60f091953",
+      "relocatedSHA256": "86e596010f622bf6c506541e88e0f215fa9e94b7f4bbfcaa4d0b4e682c6e9b1c"
+    },
+    "fold_test.go": {
+      "upstreamSHA256": "e1129bf04165ea8c664db796cc45f05af53da5142abeccae56b1b6e1fd8c019f",
+      "relocatedSHA256": "508103a63fbffa9d375ed876ab90792db59cc72619eb008c6bd1d1200b1320fe"
+    },
+    "fuzz_test.go": {
+      "upstreamSHA256": "4cc9a4efd84f83c209e61e239940f86b1d73fa94203b3856a714612b9a700a1b",
+      "relocatedSHA256": "9125cd8f67d6c7e3eab6c425338a4fab895656aceca9d20f055ccc2c0127c7a9"
+    },
+    "number_test.go": {
+      "upstreamSHA256": "1300807d38f66af414edd3d9d9e397abaf394df1e2db6732b39890265f99fe41",
+      "relocatedSHA256": "28cebadfa4e691d1e6c2b51e5f71da61922c31bbe1241ed25ea95ea9a23a86c9"
+    },
+    "scanner_test.go": {
+      "upstreamSHA256": "183f8e286412d19c97f3342d3a3abaf31c5d95775acd69f4707f6ba49ac5fd1e",
+      "relocatedSHA256": "fc50b9c718876f954292c03399a9201efdf3a5544fa39b8780a3b414ccb29228"
+    },
+    "stream_test.go": {
+      "upstreamSHA256": "69acb8a40f74ba9ac841e60b97df3f9f6f21ad018ac9b187a06498ef979575fc",
+      "relocatedSHA256": "67480780aa78efcc092e0c8a917f50e022eb45ea000398976338bf775beece7f"
+    },
+    "tagkey_test.go": {
+      "upstreamSHA256": "24051f99ca5a3c53e9ab84d19b9409dd7ed3cb927f4a746fc3996aadeb3610d0",
+      "relocatedSHA256": "003a0c47959eb8996ee94a5b4f48ec7dafdfbbec14f16d7820e3afedbb0fc652"
+    },
+    "tags_test.go": {
+      "upstreamSHA256": "ea2b2e2013ef2f9b8c83eeec82784236861fc694731630e075fff81a7c3ec2a7",
+      "relocatedSHA256": "8cd0da3b437b491292e855830641098b9cf306d7db5565594c9a7efba70a5e2a"
+    }
+  }
+}

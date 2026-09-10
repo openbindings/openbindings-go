@@ -12,6 +12,7 @@ import (
 
 	openapiprovider "github.com/openbindings/openapi-client/go/provider"
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -331,6 +332,6 @@ func cloneAnyMap(value map[string]any) map[string]any {
 	}
 	encoded, _ := json.Marshal(value)
 	var result map[string]any
-	_ = json.Unmarshal(encoded, &result)
+	_ = jsonvalue.Unmarshal(encoded, &result)
 	return result
 }

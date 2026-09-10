@@ -2,13 +2,13 @@ package invoke
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // LocalPreflight optionally reports current prerequisites for one native
@@ -140,8 +140,8 @@ func localTypedValue[T any](value any) (T, bool) {
 		return typed, true
 	}
 	var typed T
-	data, err := json.Marshal(value)
-	if err != nil || json.Unmarshal(data, &typed) != nil {
+	data, err := jsonvalue.Marshal(value)
+	if err != nil || jsonvalue.Unmarshal(data, &typed) != nil {
 		return typed, false
 	}
 	return typed, true
@@ -149,15 +149,19 @@ func localTypedValue[T any](value any) (T, bool) {
 
 func localGenericValue[T any](value T) (any, bool) {
 	raw := any(value)
-	if isNativeJSONValue(raw, nil, 0) {
+	state := classifyNativeJSONValue(raw, nil, 0)
+	if state == invalidNumberJSON {
+		return nil, false
+	}
+	if state == nativeJSON {
 		return raw, true
 	}
-	data, err := json.Marshal(value)
+	data, err := jsonvalue.Marshal(value)
 	if err != nil {
 		return nil, false
 	}
 	var generic any
-	if json.Unmarshal(data, &generic) != nil {
+	if jsonvalue.Unmarshal(data, &generic) != nil {
 		return nil, false
 	}
 	return generic, true

@@ -116,7 +116,7 @@ func TestSharedJSONBodyTriggerScopingSynthesis(t *testing.T) {
 				flatInput = map[string]any{"payload": map[string]any{"value": "whole"}}
 				wantBody = map[string]any{"value": "whole"}
 			}
-			transformed, transformErr := (openAPIJSONataEvaluator{}).Evaluate(binding.InputTransform.Inline, flatInput)
+			transformed, transformErr := (openAPIJSONataEvaluator{}).Evaluate(context.Background(), binding.InputTransform.Inline, flatInput)
 			if transformErr != nil {
 				t.Fatalf("evaluate input transform: %v", transformErr)
 			}

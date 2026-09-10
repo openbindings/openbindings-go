@@ -154,55 +154,55 @@ func compat(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 	}
 
 	// const/enum rules.
-	if ok, reason := compatConstEnum(tgt, cand, isInput); !ok {
-		return false, reason, nil
+	if ok, reason, err := compatConstEnum(tgt, cand, isInput); err != nil || !ok {
+		return false, reason, err
 	}
 
 	// Object rules if type includes object.
 	if hasType(tgt, "object") || hasType(cand, "object") {
-		ok, reason := compatObject(tgt, cand, isInput)
-		if !ok {
-			return false, reason, nil
+		ok, reason, err := compatObject(tgt, cand, isInput)
+		if err != nil || !ok {
+			return false, reason, err
 		}
 	}
 
 	// Array rules if type includes array.
 	if hasType(tgt, "array") || hasType(cand, "array") {
-		ok, reason := compatArray(tgt, cand, isInput)
-		if !ok {
-			return false, reason, nil
+		ok, reason, err := compatArray(tgt, cand, isInput)
+		if err != nil || !ok {
+			return false, reason, err
 		}
 	}
 
 	// Numeric bounds rules (when type includes number or integer).
 	if hasType(tgt, "number") || hasType(tgt, "integer") || hasType(cand, "number") || hasType(cand, "integer") {
-		ok, reason := compatNumericBounds(tgt, cand, isInput)
-		if !ok {
-			return false, reason, nil
+		ok, reason, err := compatNumericBounds(tgt, cand, isInput)
+		if err != nil || !ok {
+			return false, reason, err
 		}
 	}
 
 	// String bounds rules (when type includes string).
 	if hasType(tgt, "string") || hasType(cand, "string") {
-		ok, reason := compatStringBounds(tgt, cand, isInput)
-		if !ok {
-			return false, reason, nil
+		ok, reason, err := compatStringBounds(tgt, cand, isInput)
+		if err != nil || !ok {
+			return false, reason, err
 		}
 	}
 
 	// Array bounds rules (when type includes array).
 	if hasType(tgt, "array") || hasType(cand, "array") {
-		ok, reason := compatArrayBounds(tgt, cand, isInput)
-		if !ok {
-			return false, reason, nil
+		ok, reason, err := compatArrayBounds(tgt, cand, isInput)
+		if err != nil || !ok {
+			return false, reason, err
 		}
 	}
 
 	// Union rules.
 	if hasUnion(tgt) || hasUnion(cand) {
-		ok, reason := compatUnion(tgt, cand, isInput)
-		if !ok {
-			return false, reason, nil
+		ok, reason, err := compatUnion(tgt, cand, isInput)
+		if err != nil || !ok {
+			return false, reason, err
 		}
 	}
 
@@ -314,118 +314,25 @@ func hasUnion(schema map[string]any) bool {
 // sends, the candidate refuses), for outputs the TARGET's (the candidate
 // produces, the target refuses). Mirrored byte-for-byte in the TypeScript
 // SDK's compat.ts.
-func compatConstEnum(tgt, cand map[string]any, isInput bool) (bool, string) {
-	tgtConst, tgtHasConst := tgt["const"]
-	candConst, candHasConst := cand["const"]
-	tgtEnum, tgtHasEnum := enumSet(tgt)
-	candEnum, candHasEnum := enumSet(cand)
 
-	if isInput {
-		// If tgt uses const, cand must accept it.
-		if tgtHasConst {
-			if candHasConst {
-				if !equalJSONValue(tgtConst, candConst) {
-					return false, fmt.Sprintf("const: candidate const %s does not match target const %s", canonicalKey(candConst), canonicalKey(tgtConst))
-				}
-				return true, ""
-			}
-			if candHasEnum {
-				_, ok := candEnum[canonicalKey(tgtConst)]
-				if !ok {
-					return false, fmt.Sprintf("enum: target const %s not in candidate enum", canonicalKey(tgtConst))
-				}
-				return true, ""
-			}
-			// cand unconstrained w.r.t const/enum
-			return true, ""
-		}
-		// If tgt uses enum, cand must accept all values in tgt.
-		if tgtHasEnum {
-			if candHasConst {
-				// single const must cover all enum values
-				if len(tgtEnum) != 1 {
-					return false, fmt.Sprintf("const: candidate const %s cannot cover %d target enum values", canonicalKey(candConst), len(tgtEnum))
-				}
-				_, ok := tgtEnum[canonicalKey(candConst)]
-				if !ok {
-					return false, fmt.Sprintf("const: candidate const %s not in target enum", canonicalKey(candConst))
-				}
-				return true, ""
-			}
-			if candHasEnum {
-				for _, k := range sortedSetKeys(tgtEnum) {
-					if _, ok := candEnum[k]; !ok {
-						return false, fmt.Sprintf("enum: target value %s not in candidate enum", k)
-					}
-				}
-				return true, ""
-			}
-			return true, ""
-		}
-		return true, ""
-	}
+// If tgt uses const, cand must accept it.
 
-	// Outputs:
-	// If tgt uses enum, cand must only allow values within that enum (cand subset).
-	if tgtHasEnum {
-		if candHasConst {
-			_, ok := tgtEnum[canonicalKey(candConst)]
-			if !ok {
-				return false, fmt.Sprintf("enum: candidate const %s not in target enum", canonicalKey(candConst))
-			}
-			return true, ""
-		}
-		if candHasEnum {
-			for _, k := range sortedSetKeys(candEnum) {
-				if _, ok := tgtEnum[k]; !ok {
-					return false, fmt.Sprintf("enum: candidate value %s not in target enum", k)
-				}
-			}
-			return true, ""
-		}
-		// cand unconstrained but tgt constrained -> can emit values outside
-		return false, "enum: candidate is unconstrained but target has enum"
-	}
-	// If tgt uses const, cand must only allow that constant.
-	if tgtHasConst {
-		if candHasConst {
-			if !equalJSONValue(tgtConst, candConst) {
-				return false, fmt.Sprintf("const: candidate const %s does not match target const %s", canonicalKey(candConst), canonicalKey(tgtConst))
-			}
-			return true, ""
-		}
-		if candHasEnum {
-			if len(candEnum) != 1 {
-				return false, fmt.Sprintf("const: candidate enum has %d values but target allows only const %s", len(candEnum), canonicalKey(tgtConst))
-			}
-			_, ok := candEnum[canonicalKey(tgtConst)]
-			if !ok {
-				return false, fmt.Sprintf("const: candidate enum value does not match target const %s", canonicalKey(tgtConst))
-			}
-			return true, ""
-		}
-		// cand unconstrained but tgt const -> can emit others
-		return false, fmt.Sprintf("const: candidate is unconstrained but target requires const %s", canonicalKey(tgtConst))
-	}
-	// tgt unconstrained: ok
-	return true, ""
-}
+// cand unconstrained w.r.t const/enum
 
-func enumSet(schema map[string]any) (map[string]struct{}, bool) {
-	v, ok := schema["enum"]
-	if !ok {
-		return nil, false
-	}
-	arr, ok := asSlice(v)
-	if !ok {
-		return nil, true
-	}
-	set := map[string]struct{}{}
-	for _, it := range arr {
-		set[canonicalKey(it)] = struct{}{}
-	}
-	return set, true
-}
+// If tgt uses enum, cand must accept all values in tgt.
+
+// single const must cover all enum values
+
+// Outputs:
+// If tgt uses enum, cand must only allow values within that enum (cand subset).
+
+// cand unconstrained but tgt constrained -> can emit values outside
+
+// If tgt uses const, cand must only allow that constant.
+
+// cand unconstrained but tgt const -> can emit others
+
+// tgt unconstrained: ok
 
 // compatObject applies the object rules. Set and property iteration is
 // SORTED so the first-failing member named in the reason is deterministic
@@ -434,7 +341,7 @@ func enumSet(schema map[string]any) (map[string]struct{}, bool) {
 // same JCS rendering values get — so names carrying quotes, backslashes, or
 // control characters escape identically across the reference SDKs (plain
 // names render exactly as a bare quoted spelling).
-func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
+func compatObject(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 	tgtReq := stringSet(tgt["required"])
 	candReq := stringSet(cand["required"])
 
@@ -445,7 +352,7 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 		// required(cand) <= required(tgt)
 		for _, k := range sortedSetKeys(candReq) {
 			if _, ok := tgtReq[k]; !ok {
-				return false, fmt.Sprintf("required: candidate requires %s but target does not", canonicalKey(k))
+				return false, fmt.Sprintf("required: candidate requires %s but target does not", canonicalKey(k)), nil
 			}
 		}
 		// For each p in properties(tgt):
@@ -461,24 +368,23 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 				}
 				ok2, reason, err := compat(tvm, cvm, true)
 				if err != nil {
-					// Wrap error as reason (should not happen in practice).
-					return false, fmt.Sprintf("properties[%s]: error: %v", canonicalKey(p), err)
+					return false, "", fmt.Errorf("properties[%s]: %w", canonicalKey(p), err)
 				}
 				if !ok2 {
-					return false, fmt.Sprintf("properties[%s]: %s", canonicalKey(p), reason)
+					return false, fmt.Sprintf("properties[%s]: %s", canonicalKey(p), reason), nil
 				}
 			}
 			// If cand lacks property schema, treated as unconstrained (compatible).
 		}
 		// additionalProperties does not restrict input compatibility in v0.1.
-		return true, ""
+		return true, "", nil
 	}
 
 	// Outputs/payloads:
 	// required(tgt) <= required(cand)
 	for _, k := range sortedSetKeys(tgtReq) {
 		if _, ok := candReq[k]; !ok {
-			return false, fmt.Sprintf("required: target requires %s but candidate does not", canonicalKey(k))
+			return false, fmt.Sprintf("required: target requires %s but candidate does not", canonicalKey(k)), nil
 		}
 	}
 
@@ -490,7 +396,7 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 		// If p not in properties(tgt), then additionalProperties(tgt) MUST NOT be false.
 		if _, ok := tgtProps[p]; !ok {
 			if b, ok := tgtAP.(bool); ok && b == false {
-				return false, fmt.Sprintf("properties[%s]: target forbids additional properties", canonicalKey(p))
+				return false, fmt.Sprintf("properties[%s]: target forbids additional properties", canonicalKey(p)), nil
 			}
 		}
 		// If both present, OutputCompatible must hold.
@@ -505,10 +411,10 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 			}
 			ok2, reason, err := compat(tvm, cvm, false)
 			if err != nil {
-				return false, fmt.Sprintf("properties[%s]: error: %v", canonicalKey(p), err)
+				return false, "", fmt.Errorf("properties[%s]: %w", canonicalKey(p), err)
 			}
 			if !ok2 {
-				return false, fmt.Sprintf("properties[%s]: %s", canonicalKey(p), reason)
+				return false, fmt.Sprintf("properties[%s]: %s", canonicalKey(p), reason), nil
 			}
 		}
 	}
@@ -519,35 +425,35 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string) {
 		if apTgt == false {
 			if apCand, ok := cand["additionalProperties"].(bool); ok {
 				if apCand == false {
-					return true, ""
+					return true, "", nil
 				}
-				return false, "additionalProperties: target forbids but candidate allows"
+				return false, "additionalProperties: target forbids but candidate allows", nil
 			}
 			// if cand schema or missing, it's not guaranteed false
-			return false, "additionalProperties: target forbids but candidate allows"
+			return false, "additionalProperties: target forbids but candidate allows", nil
 		}
 	case map[string]any:
 		if apCand, ok := cand["additionalProperties"].(map[string]any); ok {
 			ok2, reason, err := compat(apTgt, apCand, false)
 			if err != nil {
-				return false, fmt.Sprintf("additionalProperties: error: %v", err)
+				return false, "", fmt.Errorf("additionalProperties: %w", err)
 			}
 			if !ok2 {
-				return false, fmt.Sprintf("additionalProperties: %s", reason)
+				return false, fmt.Sprintf("additionalProperties: %s", reason), nil
 			}
 		} else if apCand, ok := cand["additionalProperties"].(bool); ok && apCand == false {
 			// cand is false: more restrictive than tgt schema, allowed for output.
-			return true, ""
+			return true, "", nil
 		} else {
 			// cand AP is true or absent: less restrictive than tgt schema constraint.
-			return false, "additionalProperties: candidate is less restrictive than target"
+			return false, "additionalProperties: candidate is less restrictive than target", nil
 		}
 	}
 
-	return true, ""
+	return true, "", nil
 }
 
-func compatArray(tgt, cand map[string]any, isInput bool) (bool, string) {
+func compatArray(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 	tv, okTgt := asMap(tgt["items"])
 	cv, okCand := asMap(cand["items"])
 	if !okTgt || !okCand {
@@ -561,23 +467,23 @@ func compatArray(tgt, cand map[string]any, isInput bool) (bool, string) {
 	}
 	ok, reason, err := compat(tv, cv, isInput)
 	if err != nil {
-		return false, fmt.Sprintf("items: error: %v", err)
+		return false, "", fmt.Errorf("items: %w", err)
 	}
 	if !ok {
-		return false, fmt.Sprintf("items: %s", reason)
+		return false, fmt.Sprintf("items: %s", reason), nil
 	}
-	return true, ""
+	return true, "", nil
 }
 
-func compatUnion(tgt, cand map[string]any, isInput bool) (bool, string) {
+func compatUnion(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 	tgtVars, okTgt := unionVariants(tgt)
 	candVars, okCand := unionVariants(cand)
 	if !okTgt || !okCand {
 		// If only one side is a union, profile doesn't define cross-form rules; treat as incompatible.
 		if !okTgt {
-			return false, "oneOf: target is not a union but candidate is"
+			return false, "oneOf: target is not a union but candidate is", nil
 		}
-		return false, "oneOf: candidate is not a union but target is"
+		return false, "oneOf: candidate is not a union but target is", nil
 	}
 
 	unionKey := "oneOf"
@@ -592,7 +498,7 @@ func compatUnion(tgt, cand map[string]any, isInput bool) (bool, string) {
 			for _, w := range candVars {
 				ok, _, err := compat(v, w, true)
 				if err != nil {
-					return false, fmt.Sprintf("%s: error: %v", unionKey, err)
+					return false, "", fmt.Errorf("%s: %w", unionKey, err)
 				}
 				if ok {
 					found = true
@@ -600,10 +506,10 @@ func compatUnion(tgt, cand map[string]any, isInput bool) (bool, string) {
 				}
 			}
 			if !found {
-				return false, fmt.Sprintf("%s: target variant %d has no compatible candidate variant", unionKey, i)
+				return false, fmt.Sprintf("%s: target variant %d has no compatible candidate variant", unionKey, i), nil
 			}
 		}
-		return true, ""
+		return true, "", nil
 	}
 
 	// Outputs/payloads:
@@ -613,7 +519,7 @@ func compatUnion(tgt, cand map[string]any, isInput bool) (bool, string) {
 		for _, v := range tgtVars {
 			ok, _, err := compat(v, w, false)
 			if err != nil {
-				return false, fmt.Sprintf("%s: error: %v", unionKey, err)
+				return false, "", fmt.Errorf("%s: %w", unionKey, err)
 			}
 			if ok {
 				found = true
@@ -621,10 +527,10 @@ func compatUnion(tgt, cand map[string]any, isInput bool) (bool, string) {
 			}
 		}
 		if !found {
-			return false, fmt.Sprintf("%s: candidate variant %d has no compatible target variant", unionKey, i)
+			return false, fmt.Sprintf("%s: candidate variant %d has no compatible target variant", unionKey, i), nil
 		}
 	}
-	return true, ""
+	return true, "", nil
 }
 
 func unionVariants(schema map[string]any) ([]map[string]any, bool) {
@@ -689,8 +595,9 @@ func stringSet(v any) map[string]struct{} {
 	return set
 }
 
-func canonicalKey(v any) string {
-	// Use JCS for stable equivalence keys across primitive/object representations.
+func canonicalKey(v string) string {
+	// Diagnostic member-name quoting retains the established JCS string form.
+	// This helper never determines numerical equality or cache identity.
 	s, err := CanonicalString(v)
 	if err != nil {
 		// As a fallback, use a best-effort string.
@@ -699,115 +606,21 @@ func canonicalKey(v any) string {
 	return s
 }
 
-// fmtNum renders a numeric bound the way JCS (RFC 8785) serializes numbers
-// (ECMAScript Number::toString), so bound reasons are byte-identical across
-// the reference SDKs — the same rendering canonicalKey already gives
-// const/enum values.
-func fmtNum(v float64) string {
-	return canonicalKey(v)
-}
-
-func equalJSONValue(a, b any) bool {
-	return canonicalKey(a) == canonicalKey(b)
-}
-
 // compatNumericBounds checks minimum/maximum/exclusiveMinimum/exclusiveMaximum rules.
-func compatNumericBounds(tgt, cand map[string]any, isInput bool) (bool, string) {
-	// Lower bounds: minimum / exclusiveMinimum
-	tgtLo, tgtLoExcl := effectiveLowerBound(tgt)
-	candLo, candLoExcl := effectiveLowerBound(cand)
-	tgtHi, tgtHiExcl := effectiveUpperBound(tgt)
-	candHi, candHiExcl := effectiveUpperBound(cand)
 
-	tgtHasLo := hasKey(tgt, "minimum") || hasKey(tgt, "exclusiveMinimum")
-	tgtHasHi := hasKey(tgt, "maximum") || hasKey(tgt, "exclusiveMaximum")
-	candHasLo := hasKey(cand, "minimum") || hasKey(cand, "exclusiveMinimum")
-	candHasHi := hasKey(cand, "maximum") || hasKey(cand, "exclusiveMaximum")
+// Lower bounds: minimum / exclusiveMinimum
 
-	fmtBound := func(v float64, excl bool) string {
-		if excl {
-			return "exclusive " + fmtNum(v)
-		}
-		return fmtNum(v)
-	}
+// cand's lower bound MUST be <= tgt's (accept at least as low).
 
-	if isInput {
-		// cand's lower bound MUST be <= tgt's (accept at least as low).
-		if tgtHasLo && candHasLo {
-			if !lowerBoundLessOrEqual(candLo, candLoExcl, tgtLo, tgtLoExcl) {
-				return false, fmt.Sprintf("minimum: candidate minimum %s is greater than target minimum %s", fmtBound(candLo, candLoExcl), fmtBound(tgtLo, tgtLoExcl))
-			}
-		}
-		// cand's upper bound MUST be >= tgt's (accept at least as high).
-		if tgtHasHi && candHasHi {
-			if !upperBoundGreaterOrEqual(candHi, candHiExcl, tgtHi, tgtHiExcl) {
-				return false, fmt.Sprintf("maximum: candidate maximum %s is less than target maximum %s", fmtBound(candHi, candHiExcl), fmtBound(tgtHi, tgtHiExcl))
-			}
-		}
-	} else {
-		// cand's lower bound MUST be >= tgt's (return no lower).
-		if tgtHasLo {
-			if !candHasLo {
-				return false, fmt.Sprintf("minimum: target has minimum %s but candidate has none", fmtBound(tgtLo, tgtLoExcl))
-			}
-			if !lowerBoundGreaterOrEqual(candLo, candLoExcl, tgtLo, tgtLoExcl) {
-				return false, fmt.Sprintf("minimum: candidate minimum %s is less than target minimum %s", fmtBound(candLo, candLoExcl), fmtBound(tgtLo, tgtLoExcl))
-			}
-		}
-		// cand's upper bound MUST be <= tgt's (return no higher).
-		if tgtHasHi {
-			if !candHasHi {
-				return false, fmt.Sprintf("maximum: target has maximum %s but candidate has none", fmtBound(tgtHi, tgtHiExcl))
-			}
-			if !upperBoundLessOrEqual(candHi, candHiExcl, tgtHi, tgtHiExcl) {
-				return false, fmt.Sprintf("maximum: candidate maximum %s is greater than target maximum %s", fmtBound(candHi, candHiExcl), fmtBound(tgtHi, tgtHiExcl))
-			}
-		}
-	}
-	return true, ""
-}
+// cand's upper bound MUST be >= tgt's (accept at least as high).
+
+// cand's lower bound MUST be >= tgt's (return no lower).
+
+// cand's upper bound MUST be <= tgt's (return no higher).
 
 // effectiveLowerBound returns the effective lower bound value and whether it's exclusive.
-func effectiveLowerBound(schema map[string]any) (float64, bool) {
-	min, hasMin := schema["minimum"]
-	eMin, hasEMin := schema["exclusiveMinimum"]
-	if hasMin && hasEMin {
-		mv := toFloat64(min)
-		ev := toFloat64(eMin)
-		if ev >= mv {
-			return ev, true
-		}
-		return mv, false
-	}
-	if hasEMin {
-		return toFloat64(eMin), true
-	}
-	if hasMin {
-		return toFloat64(min), false
-	}
-	return 0, false
-}
 
 // effectiveUpperBound returns the effective upper bound value and whether it's exclusive.
-func effectiveUpperBound(schema map[string]any) (float64, bool) {
-	max, hasMax := schema["maximum"]
-	eMax, hasEMax := schema["exclusiveMaximum"]
-	if hasMax && hasEMax {
-		mv := toFloat64(max)
-		ev := toFloat64(eMax)
-		if ev <= mv {
-			return ev, true
-		}
-		return mv, false
-	}
-	if hasEMax {
-		return toFloat64(eMax), true
-	}
-	if hasMax {
-		return toFloat64(max), false
-	}
-	return 0, false
-}
 
 // Lower bound comparisons:
 // For lower bounds, exclusive means the bound is HIGHER (stricter).
@@ -815,34 +628,16 @@ func effectiveUpperBound(schema map[string]any) (float64, bool) {
 // So at equal values: exclusive > non-exclusive.
 
 // lowerBoundLessOrEqual returns true if lower bound a <= lower bound b.
-func lowerBoundLessOrEqual(a float64, aExcl bool, b float64, bExcl bool) bool {
-	if a < b {
-		return true
-	}
-	if a > b {
-		return false
-	}
-	// Equal values: exclusive is stricter (higher)
-	if aExcl && !bExcl {
-		return false // a is higher (stricter), so a > b
-	}
-	return true
-}
+
+// Equal values: exclusive is stricter (higher)
+
+// a is higher (stricter), so a > b
 
 // lowerBoundGreaterOrEqual returns true if lower bound a >= lower bound b.
-func lowerBoundGreaterOrEqual(a float64, aExcl bool, b float64, bExcl bool) bool {
-	if a > b {
-		return true
-	}
-	if a < b {
-		return false
-	}
-	// Equal values: exclusive is stricter (higher)
-	if bExcl && !aExcl {
-		return false // b is higher (stricter), so a < b
-	}
-	return true
-}
+
+// Equal values: exclusive is stricter (higher)
+
+// b is higher (stricter), so a < b
 
 // Upper bound comparisons:
 // For upper bounds, exclusive means the bound is LOWER (stricter).
@@ -850,81 +645,35 @@ func lowerBoundGreaterOrEqual(a float64, aExcl bool, b float64, bExcl bool) bool
 // So at equal values: exclusive < non-exclusive.
 
 // upperBoundLessOrEqual returns true if upper bound a <= upper bound b.
-func upperBoundLessOrEqual(a float64, aExcl bool, b float64, bExcl bool) bool {
-	if a < b {
-		return true
-	}
-	if a > b {
-		return false
-	}
-	// Equal values: exclusive is stricter (lower)
-	if bExcl && !aExcl {
-		return false // b is lower (stricter), so a > b
-	}
-	return true
-}
+
+// Equal values: exclusive is stricter (lower)
+
+// b is lower (stricter), so a > b
 
 // upperBoundGreaterOrEqual returns true if upper bound a >= upper bound b.
-func upperBoundGreaterOrEqual(a float64, aExcl bool, b float64, bExcl bool) bool {
-	if a > b {
-		return true
-	}
-	if a < b {
-		return false
-	}
-	// Equal values: exclusive is stricter (lower)
-	if aExcl && !bExcl {
-		return false // a is lower (stricter), so a < b
-	}
-	return true
-}
+
+// Equal values: exclusive is stricter (lower)
+
+// a is lower (stricter), so a < b
 
 // compatSimpleBounds checks a pair of min/max keywords that use simple integer
 // comparisons (no exclusivity). Used for minLength/maxLength and minItems/maxItems.
-func compatSimpleBounds(tgt, cand map[string]any, isInput bool, minKey, maxKey string) (bool, string) {
-	if isInput {
-		// min(cand) <= min(tgt). Absent cand = unconstrained (compatible).
-		if hasKey(tgt, minKey) && hasKey(cand, minKey) {
-			if toFloat64(cand[minKey]) > toFloat64(tgt[minKey]) {
-				return false, fmt.Sprintf("%s: candidate %s %s is greater than target %s %s", minKey, minKey, fmtNum(toFloat64(cand[minKey])), minKey, fmtNum(toFloat64(tgt[minKey])))
-			}
-		}
-		// max(cand) >= max(tgt). Absent cand = unconstrained (compatible).
-		if hasKey(tgt, maxKey) && hasKey(cand, maxKey) {
-			if toFloat64(cand[maxKey]) < toFloat64(tgt[maxKey]) {
-				return false, fmt.Sprintf("%s: candidate %s %s is less than target %s %s", maxKey, maxKey, fmtNum(toFloat64(cand[maxKey])), maxKey, fmtNum(toFloat64(tgt[maxKey])))
-			}
-		}
-	} else {
-		// min(cand) >= min(tgt). Absent cand when tgt present = incompatible.
-		if hasKey(tgt, minKey) {
-			if !hasKey(cand, minKey) {
-				return false, fmt.Sprintf("%s: target has %s %s but candidate has none", minKey, minKey, fmtNum(toFloat64(tgt[minKey])))
-			}
-			if toFloat64(cand[minKey]) < toFloat64(tgt[minKey]) {
-				return false, fmt.Sprintf("%s: candidate %s %s is less than target %s %s", minKey, minKey, fmtNum(toFloat64(cand[minKey])), minKey, fmtNum(toFloat64(tgt[minKey])))
-			}
-		}
-		// max(cand) <= max(tgt). Absent cand when tgt present = incompatible.
-		if hasKey(tgt, maxKey) {
-			if !hasKey(cand, maxKey) {
-				return false, fmt.Sprintf("%s: target has %s %s but candidate has none", maxKey, maxKey, fmtNum(toFloat64(tgt[maxKey])))
-			}
-			if toFloat64(cand[maxKey]) > toFloat64(tgt[maxKey]) {
-				return false, fmt.Sprintf("%s: candidate %s %s is greater than target %s %s", maxKey, maxKey, fmtNum(toFloat64(cand[maxKey])), maxKey, fmtNum(toFloat64(tgt[maxKey])))
-			}
-		}
-	}
-	return true, ""
-}
+
+// min(cand) <= min(tgt). Absent cand = unconstrained (compatible).
+
+// max(cand) >= max(tgt). Absent cand = unconstrained (compatible).
+
+// min(cand) >= min(tgt). Absent cand when tgt present = incompatible.
+
+// max(cand) <= max(tgt). Absent cand when tgt present = incompatible.
 
 // compatStringBounds checks minLength/maxLength rules.
-func compatStringBounds(tgt, cand map[string]any, isInput bool) (bool, string) {
+func compatStringBounds(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 	return compatSimpleBounds(tgt, cand, isInput, "minLength", "maxLength")
 }
 
 // compatArrayBounds checks minItems/maxItems rules.
-func compatArrayBounds(tgt, cand map[string]any, isInput bool) (bool, string) {
+func compatArrayBounds(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 	return compatSimpleBounds(tgt, cand, isInput, "minItems", "maxItems")
 }
 

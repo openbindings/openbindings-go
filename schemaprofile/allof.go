@@ -2,6 +2,7 @@ package schemaprofile
 
 import (
 	"fmt"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"sort"
 )
 
@@ -202,7 +203,10 @@ func mergeAllOfBranch(acc, branch map[string]any, path string) error {
 		}
 		if ae, ok := acc["enum"]; ok {
 			aEnum, _ := asSlice(ae)
-			inter := intersectValues(aEnum, bEnum)
+			inter, err := intersectValues(aEnum, bEnum)
+			if err != nil {
+				return err
+			}
 			if len(inter) == 0 {
 				return &SchemaError{Path: path, Message: "allOf enum intersection is empty"}
 			}
@@ -214,7 +218,11 @@ func mergeAllOfBranch(acc, branch map[string]any, path string) error {
 
 	if bc, ok := branch["const"]; ok {
 		if ac, ok := acc["const"]; ok {
-			if canonicalKey(ac) != canonicalKey(bc) {
+			same, err := jsonvalue.Equal(ac, bc)
+			if err != nil {
+				return err
+			}
+			if !same {
 				return &SchemaError{Path: path, Message: "allOf const conflict"}
 			}
 		} else {
@@ -247,10 +255,12 @@ func mergeAllOfBranch(acc, branch map[string]any, path string) error {
 	// Lower bounds: take the highest (most restrictive)
 	for _, k := range []string{"minimum", "exclusiveMinimum", "minLength", "minItems"} {
 		if bv, ok := branch[k]; ok {
-			bf := toFloat64(bv)
 			if av, ok := acc[k]; ok {
-				af := toFloat64(av)
-				if bf > af {
+				cmp, err := jsonvalue.CompareNumbers(bv, av)
+				if err != nil {
+					return err
+				}
+				if cmp > 0 {
 					acc[k] = bv
 				}
 			} else {
@@ -261,10 +271,12 @@ func mergeAllOfBranch(acc, branch map[string]any, path string) error {
 	// Upper bounds: take the lowest (most restrictive)
 	for _, k := range []string{"maximum", "exclusiveMaximum", "maxLength", "maxItems"} {
 		if bv, ok := branch[k]; ok {
-			bf := toFloat64(bv)
 			if av, ok := acc[k]; ok {
-				af := toFloat64(av)
-				if bf < af {
+				cmp, err := jsonvalue.CompareNumbers(bv, av)
+				if err != nil {
+					return err
+				}
+				if cmp < 0 {
 					acc[k] = bv
 				}
 			} else {
@@ -364,16 +376,20 @@ func unionStringSlices(a, b []any) []any {
 	return out
 }
 
-func intersectValues(a, b []any) []any {
-	bSet := map[string]any{}
-	for _, v := range b {
-		bSet[canonicalKey(v)] = v
-	}
+func intersectValues(a, b []any) ([]any, error) {
 	var out []any
+	set, err := jsonvalue.NewValueSet(b)
+	if err != nil {
+		return nil, err
+	}
 	for _, v := range a {
-		if _, ok := bSet[canonicalKey(v)]; ok {
+		found, err := set.Contains(v)
+		if err != nil {
+			return nil, err
+		}
+		if found {
 			out = append(out, v)
 		}
 	}
-	return out
+	return out, nil
 }

@@ -42,7 +42,7 @@ func TestSwagger20SynthesisEmitsFlatContractEnvelopeTransformAndCoverage(t *test
 	if binding.InputTransform == nil {
 		t.Fatal("missing inputTransform")
 	}
-	value, err := (openAPIJSONataEvaluator{}).Evaluate(binding.InputTransform.Inline, map[string]any{
+	value, err := (openAPIJSONataEvaluator{}).Evaluate(context.Background(), binding.InputTransform.Inline, map[string]any{
 		"path/id": "7", "query/id": "lookup", "body": map[string]any{"name": "Ada"},
 	})
 	if err != nil {

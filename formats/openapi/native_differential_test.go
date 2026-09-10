@@ -19,7 +19,7 @@ import (
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
 
-	"github.com/recolabs/gnata"
+	jsonataevaluator "github.com/openbindings/openbindings-go/invoke/jsonata"
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/processorscenarios"
@@ -406,31 +406,12 @@ func TestOpenAPIAllOfMultipartDifferential(t *testing.T) {
 
 type openAPIJSONataEvaluator struct{}
 
-func (openAPIJSONataEvaluator) Evaluate(expression string, data any) (any, error) {
-	compiled, err := gnata.Compile(expression)
+func (openAPIJSONataEvaluator) Evaluate(ctx context.Context, expression string, data any) (any, error) {
+	evaluator, err := jsonataevaluator.New(jsonataevaluator.Options{})
 	if err != nil {
 		return nil, err
 	}
-	input, err := json.Marshal(data)
-	if err != nil {
-		return nil, err
-	}
-	result, err := compiled.EvalBytes(context.Background(), input)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		return nil, invoke.ErrTransformUndefined
-	}
-	raw, err := json.Marshal(result)
-	if err != nil {
-		return nil, err
-	}
-	var normalized any
-	if err := json.Unmarshal(raw, &normalized); err != nil {
-		return nil, err
-	}
-	return normalized, nil
+	return evaluator.Evaluate(ctx, expression, data)
 }
 
 func differentialArtifact(t *testing.T, scenario processorscenarios.Scenario, serverURL string) json.RawMessage {

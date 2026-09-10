@@ -11,8 +11,6 @@ import (
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
-
-	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // maxContextRounds caps CONTEXT_REQUIRED resolve-and-retry rounds per
@@ -27,8 +25,15 @@ type BindingSelector func(iface *openbindings.Interface, opKey string) (string, 
 
 // TransformEvaluator evaluates transform expressions (e.g., JSONata) against input data.
 // Implementations are provided by callers to keep the core SDK dependency-free.
+// ctx is per evaluation, never expression data. Implementations should check it
+// before work and at cooperative checkpoints; it does not preempt host code.
+// Evaluators must distinguish their engine's JSON values from functions and
+// other internal values before conversion. A runtime value implementing
+// json.Marshaler is not necessarily a JSONata JSON value. Return nil, nil for
+// JSON null and ErrTransformUndefined for no result. Numerical conversion is
+// the selected evaluator's documented responsibility, not an SDK-wide policy.
 type TransformEvaluator interface {
-	Evaluate(expression string, data any) (any, error)
+	Evaluate(ctx context.Context, expression string, data any) (any, error)
 }
 
 // ErrTransformUndefined is the sentinel evaluators return (possibly wrapped)
@@ -44,7 +49,7 @@ var ErrTransformUndefined = errors.New("transform produced no result (undefined)
 // Invokers that need extra context check for this interface via type assertion.
 type TransformEvaluatorWithBindings interface {
 	TransformEvaluator
-	EvaluateWithBindings(expression string, data any, bindings map[string]any) (any, error)
+	EvaluateWithBindings(ctx context.Context, expression string, data any, bindings map[string]any) (any, error)
 }
 
 // ContextResolver resolves a CONTEXT_REQUIRED challenge into context data.
@@ -405,7 +410,7 @@ func (e *OperationInvoker) runCompiled(
 	invokedAs string,
 	hooks *InvokeHooks,
 	diagnostics *DiagnosticCollector,
-	compiledOutput *jsonschema.Schema,
+	compiledOutput *openbindings.CompiledSchema,
 	outputPrepared bool,
 	compiledBinding CompiledBindingInvoker,
 ) {
@@ -593,6 +598,9 @@ func (e *OperationInvoker) runCompiled(
 		return out
 	}
 
+	// A raw input whose transform was interrupted by attempt retirement must
+	// survive the retry. Only the pump owns it, and pumps are joined before reuse.
+	pending := &pendingTransformInput{}
 	rounds := 0
 	for {
 		// innerCtx bounds this attempt's binding: it cancels when the caller
@@ -628,7 +636,7 @@ func (e *OperationInvoker) runCompiled(
 				}
 			}()
 			e.pumpInputs(attemptCtx, innerCtx, caller, inner, binding, bindingKey, iface,
-				replay, recordIfEligible)
+				replay, recordIfEligible, pending)
 		}()
 
 		surface, retryChallenge := e.runOutputs(
@@ -679,6 +687,11 @@ func (e *OperationInvoker) runCompiled(
 // the replayed prefix, then live messages. It exits when the caller closes
 // input (forwarding the close), when the attempt ends (attemptCtx), or when
 // the inner invocation terminates.
+type pendingTransformInput struct {
+	value   any
+	present bool
+}
+
 func (e *OperationInvoker) pumpInputs(
 	attemptCtx, innerCtx context.Context,
 	caller *InvocationImpl[any, any],
@@ -688,6 +701,7 @@ func (e *OperationInvoker) pumpInputs(
 	iface *openbindings.Interface,
 	replay []any,
 	record func(any),
+	pending *pendingTransformInput,
 ) {
 	writeInner := func(v any) (stop bool) {
 		if err := inner.Write(innerCtx, v); err != nil {
@@ -714,7 +728,11 @@ func (e *OperationInvoker) pumpInputs(
 	for {
 		// Read from the caller's binding-side buffer. attemptCtx cancellation
 		// unparks WITHOUT consuming, so no input is lost across a retry swap.
-		v, err := caller.ReadInput(attemptCtx)
+		v := pending.value
+		var err error
+		if !pending.present {
+			v, err = caller.ReadInput(attemptCtx)
+		}
 		if err == io.EOF {
 			_ = inner.Close()
 			return
@@ -724,8 +742,12 @@ func (e *OperationInvoker) pumpInputs(
 		}
 
 		if binding.InputTransform != nil {
-			transformed, terr := applyTransformRef(e.TransformEvaluator, iface.Transforms, binding.InputTransform, v)
+			pending.value, pending.present = v, true
+			transformed, terr := applyTransformRef(attemptCtx, e.TransformEvaluator, iface.Transforms, binding.InputTransform, v)
 			if terr != nil {
+				if attemptCtx.Err() != nil {
+					return // caller terminal or retry retirement, not a transform failure
+				}
 				inner.Cancel()
 				caller.FireError(&InvocationError{
 					Code: ErrCodeTransformError,
@@ -735,6 +757,7 @@ func (e *OperationInvoker) pumpInputs(
 			v = transformed
 		}
 
+		pending.value, pending.present = nil, false
 		record(v)
 		if writeInner(v) {
 			return
@@ -752,7 +775,7 @@ func (e *OperationInvoker) runOutputs(
 	binding *openbindings.BindingEntry,
 	bindingKey string,
 	iface *openbindings.Interface,
-	compiledOutput *jsonschema.Schema,
+	compiledOutput *openbindings.CompiledSchema,
 	diagnostics *DiagnosticCollector,
 	closeRetryWindow func(),
 	retryEligible func() bool,
@@ -775,8 +798,11 @@ func (e *OperationInvoker) runOutputs(
 
 		data := v
 		if binding.OutputTransform != nil {
-			transformed, terr := applyTransformRef(e.TransformEvaluator, iface.Transforms, binding.OutputTransform, data)
+			transformed, terr := applyTransformRef(innerCtx, e.TransformEvaluator, iface.Transforms, binding.OutputTransform, data)
 			if terr != nil {
+				if innerCtx.Err() != nil {
+					return AsInvocationError(innerCtx.Err()), nil
+				}
 				inner.Cancel()
 				return &InvocationError{
 					Code: ErrCodeTransformError,
@@ -791,7 +817,7 @@ func (e *OperationInvoker) runOutputs(
 			if verr := compiledOutput.Validate(data); verr != nil {
 				inner.Cancel()
 				diagnostics.recordValidation(ValidationPhaseOutput, binding.Operation, bindingKey, verr)
-				return NewInvocationError(ErrCodeOperationValidationFailed), nil
+				return validationInvocationError(verr), nil
 			}
 		}
 
@@ -828,7 +854,7 @@ func makeInputValidator(op *openbindings.Operation, iface *openbindings.Interfac
 	}
 	var (
 		once         sync.Once
-		compiled     *jsonschema.Schema
+		compiled     *openbindings.CompiledSchema
 		compileError *InvocationError
 	)
 	return func(input any) *InvocationError {
@@ -847,7 +873,7 @@ func makeInputValidator(op *openbindings.Operation, iface *openbindings.Interfac
 		}
 		if verr := compiled.Validate(input); verr != nil {
 			diagnostics.recordValidation(ValidationPhaseInput, operationName, bindingKey, verr)
-			return NewInvocationError(ErrCodeOperationValidationFailed)
+			return validationInvocationError(verr)
 		}
 		return nil
 	}
@@ -978,7 +1004,10 @@ func selectBinding(iface *openbindings.Interface, opKey string, availableSpecs m
 }
 
 // applyTransformRef resolves a TransformOrRef and evaluates it.
-func applyTransformRef(eval TransformEvaluator, transforms map[string]openbindings.Transform, tor *openbindings.TransformOrRef, data any) (any, error) {
+func applyTransformRef(ctx context.Context, eval TransformEvaluator, transforms map[string]openbindings.Transform, tor *openbindings.TransformOrRef, data any) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if tor == nil {
 		return data, nil
 	}
@@ -995,5 +1024,19 @@ func applyTransformRef(eval TransformEvaluator, transforms map[string]openbindin
 		return nil, ErrEmptyTransformExpression
 	}
 
-	return eval.Evaluate(expr, data)
+	result, err := eval.Evaluate(ctx, expr, data)
+	if cancelled := ctx.Err(); cancelled != nil {
+		return nil, cancelled
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Core requires a JSON result even without an operation schema. The
+	// common generic-JSON case needs no encoding or copy. Other idiomatic Go
+	// carriers use the existing portable-value check, without replacing the
+	// result or coercing an exact json.Number to float64.
+	if !isNativeJSONValue(result, nil, 0) && !ValidInvocationData(result) {
+		return nil, fmt.Errorf("openbindings: transform result is not a JSON value")
+	}
+	return result, nil
 }

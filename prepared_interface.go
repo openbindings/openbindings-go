@@ -2,15 +2,16 @@ package openbindings
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
+	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/openbindings/openbindings-go/canonicaljson"
-	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // PreparedOperationDescriptor is the immutable, index-only view of one
@@ -47,44 +48,62 @@ type PreparedBindingDescriptor struct {
 // Complete is false when a reachable schema resource is not embedded in the
 // OBI; preparation never fetches ambient resources.
 type PreparedBoundaryContract struct {
-	Revision              string
-	Canonical             []byte
+	graph                 map[string]any
+	memo                  *boundaryComparisonMemo
+	complete              bool
 	Complete              bool
 	UnavailableReferences []string
 }
 
+// Pairwise evidence belongs to immutable private contract owners. It is not a
+// document hash, provider identity or policy decision. Only successful exact
+// comparisons are cached, and retained counterpart tokens are bounded.
+type boundaryComparisonMemo struct {
+	sync.Mutex
+	token   *boundaryComparisonToken
+	results map[*boundaryComparisonToken]string
+}
+
+// A non-zero-sized, reference-free identity token cannot retain a foreign
+// memo's own comparisons (or an arbitrarily long chain of them).
+type boundaryComparisonToken struct{ marker byte }
+
 type preparedInterfaceState struct {
 	snapshot     Interface
-	canonical    []byte
-	revision     string
+	snapshotID   string
 	operations   map[string]PreparedOperationDescriptor
 	identifiers  map[string]string
 	dependencies map[string]PreparedDependencyDescriptor
 	bindings     map[string]PreparedBindingDescriptor
 
 	mu                sync.Mutex
-	validators        map[string]*jsonschema.Schema
+	validators        map[string]*CompiledSchema
 	boundaryContracts map[string]PreparedBoundaryContract
 }
 
-// PreparedInterface is a validated, immutable, content-addressed semantic
+// PreparedInterface is a validated, immutable, privately owned semantic
 // snapshot of one OBI. Its document copy and mutable indexes are unexported;
 // callers receive copied descriptors while schema compilation is shared.
 type PreparedInterface struct {
 	state *preparedInterfaceState
 }
 
-// PrepareInterface validates, canonicalizes, snapshots, and indexes an OBI.
+var nextSnapshotID atomic.Uint64
+
+// PrepareInterface validates, snapshots, and indexes an OBI without requiring JCS.
 // It never freezes or retains the caller's maps.
 func PrepareInterface(iface *Interface, opts ...ValidateOption) (*PreparedInterface, error) {
 	if iface == nil {
 		return nil, fmt.Errorf("openbindings: interface is required")
 	}
-	canonical, err := canonicaljson.Marshal(iface)
+	encoded, err := jsonvalue.Marshal(iface)
 	if err != nil {
-		return nil, fmt.Errorf("openbindings: canonicalize interface: %w", err)
+		return nil, fmt.Errorf("openbindings: encode interface: %w", err)
 	}
-	snapshot := clonePreparedInterface(*iface)
+	var snapshot Interface
+	if err := jsonvalue.Unmarshal(encoded, &snapshot); err != nil {
+		return nil, fmt.Errorf("openbindings: snapshot interface: %w", err)
+	}
 	validationOptions := append(append([]ValidateOption(nil), opts...), withoutDocumentSchemaValidation())
 	if err := snapshot.validateWithDocument(nil, validationOptions...); err != nil {
 		return nil, err
@@ -143,16 +162,14 @@ func PrepareInterface(iface *Interface, opts ...ValidateOption) (*PreparedInterf
 		}
 	}
 
-	digest := sha256.Sum256(canonical)
 	return &PreparedInterface{state: &preparedInterfaceState{
 		snapshot:          snapshot,
-		canonical:         canonical,
-		revision:          fmt.Sprintf("sha256:%x", digest),
+		snapshotID:        fmt.Sprintf("snapshot:%d", nextSnapshotID.Add(1)),
 		operations:        operations,
 		identifiers:       identifiers,
 		dependencies:      dependencies,
 		bindings:          bindings,
-		validators:        make(map[string]*jsonschema.Schema),
+		validators:        make(map[string]*CompiledSchema),
 		boundaryContracts: make(map[string]PreparedBoundaryContract),
 	}}, nil
 }
@@ -275,7 +292,7 @@ func clonePreparedJSON(value any) any {
 		return clonePreparedEncodedJSON(value)
 	}
 	if _, ok := value.(json.Number); ok {
-		return clonePreparedEncodedJSON(value)
+		return value // immutable exact token; not a request for Float64 conversion
 	}
 
 	// JSON-bearing OBI fields are intentionally `any`. Accept named map/slice
@@ -335,7 +352,7 @@ func clonePreparedEncodedJSON(value any) any {
 		return value // unreachable after the successful whole-document JCS gate
 	}
 	var clone any
-	if err := json.Unmarshal(encoded, &clone); err != nil {
+	if err := jsonvalue.Unmarshal(encoded, &clone); err != nil {
 		return value // likewise defensive; never authority for valid preparation
 	}
 	return clone
@@ -345,20 +362,77 @@ func clonePreparedEncodedJSON(value any) any {
 // prepared value never snapshots or validates itself again.
 func (p *PreparedInterface) Prepared() *PreparedInterface { return p }
 
-// Revision returns sha256:<hex> over RFC 8785 canonical OBI JSON.
-func (p *PreparedInterface) Revision() string {
+// SnapshotID is local correlation, never equality or persistent identity.
+func (p *PreparedInterface) SnapshotID() string {
 	if p == nil || p.state == nil {
 		return ""
 	}
-	return p.state.revision
+	return p.state.snapshotID
 }
 
-// CanonicalJSON returns a copy of the canonical OBI bytes.
-func (p *PreparedInterface) CanonicalJSON() []byte {
+type JCSExport struct {
+	Canonical []byte
+	Revision  string
+}
+
+// ExportJCS is explicitly fallible. Failure does not invalidate the owner.
+func (p *PreparedInterface) ExportJCS() (JCSExport, error) {
 	if p == nil || p.state == nil {
-		return nil
+		return JCSExport{}, fmt.Errorf("openbindings: prepared interface is required")
 	}
-	return append([]byte(nil), p.state.canonical...)
+	canonical, err := canonicaljson.Marshal(&p.state.snapshot)
+	if err != nil {
+		return JCSExport{}, err
+	}
+	var candidate any
+	if err := jsonvalue.Unmarshal(canonical, &candidate); err != nil {
+		return JCSExport{}, err
+	}
+	equal, err := jsonvalue.Equal(&p.state.snapshot, candidate)
+	if err != nil {
+		return JCSExport{}, err
+	}
+	if !equal {
+		return JCSExport{}, fmt.Errorf("openbindings: JCS export would change a carried JSON value")
+	}
+	digest := sha256.Sum256(canonical)
+	return JCSExport{Canonical: canonical, Revision: fmt.Sprintf("sha256:%x", digest)}, nil
+}
+
+// CompareBoundaryContracts returns authored identity, not compatibility.
+// Unavailable closure is not equal even when the missing URLs match.
+func CompareBoundaryContracts(a, b PreparedBoundaryContract) (string, error) {
+	if a.graph == nil || b.graph == nil || !a.complete || !b.complete {
+		return "unavailable", nil
+	}
+	if a.memo != nil && b.memo != nil {
+		a.memo.Lock()
+		cached, found := a.memo.results[b.memo.token]
+		a.memo.Unlock()
+		if found {
+			return cached, nil
+		}
+	}
+	same, err := jsonvalue.Equal(a.graph, b.graph)
+	if err != nil {
+		return "", err
+	}
+	result := "different"
+	if same {
+		result = "equal"
+	}
+	if a.memo != nil && b.memo != nil {
+		a.memo.Lock()
+		if a.memo.results == nil {
+			a.memo.results = make(map[*boundaryComparisonToken]string)
+		}
+		if len(a.memo.results) >= 64 {
+			clear(a.memo.results)
+		}
+		a.memo.results[b.memo.token] = result
+		a.memo.Unlock()
+	}
+	return result, nil
 }
 
 // InterfaceSnapshot returns a private deep copy of the validated OBI snapshot.
@@ -448,7 +522,7 @@ func (p *PreparedInterface) BindingKeys() []string {
 
 // SchemaValidator compiles one operation boundary at most once. found is
 // false for an unknown operation or absent/null schema.
-func (p *PreparedInterface) SchemaValidator(operationIdentifier, position string) (validator *jsonschema.Schema, found bool, err error) {
+func (p *PreparedInterface) SchemaValidator(operationIdentifier, position string) (validator *CompiledSchema, found bool, err error) {
 	if p == nil || p.state == nil {
 		return nil, false, fmt.Errorf("openbindings: prepared interface is required")
 	}
@@ -513,7 +587,6 @@ func copyPreparedOperation(value PreparedOperationDescriptor) PreparedOperationD
 }
 
 func copyBoundaryContract(value PreparedBoundaryContract) PreparedBoundaryContract {
-	value.Canonical = append([]byte(nil), value.Canonical...)
 	value.UnavailableReferences = append([]string(nil), value.UnavailableReferences...)
 	return value
 }
@@ -551,7 +624,7 @@ func prepareBoundaryContract(iface *Interface, operationKey string) (PreparedBou
 		return PreparedBoundaryContract{}, err
 	}
 	var document any
-	if err := json.Unmarshal(data, &document); err != nil {
+	if err := jsonvalue.Unmarshal(data, &document); err != nil {
 		return PreparedBoundaryContract{}, err
 	}
 	op := iface.Operations[operationKey]
@@ -585,9 +658,7 @@ func prepareBoundaryContract(iface *Interface, operationKey string) (PreparedBou
 					visit(target)
 				}
 			}
-			for _, child := range node {
-				visit(child)
-			}
+			visitPreparedSchemaChildren(node, visit)
 		}
 	}
 	inputPresent := op.InputPresent || op.Input != nil
@@ -617,17 +688,34 @@ func prepareBoundaryContract(iface *Interface, operationKey string) (PreparedBou
 		"resources":             resources,
 		"unavailableReferences": unavailable,
 	}
-	canonical, err := canonicaljson.Marshal(graph)
-	if err != nil {
-		return PreparedBoundaryContract{}, err
-	}
-	digest := sha256.Sum256(canonical)
 	return PreparedBoundaryContract{
-		Revision:              fmt.Sprintf("sha256:%x", digest),
-		Canonical:             canonical,
+		graph:                 graph,
+		memo:                  &boundaryComparisonMemo{token: &boundaryComparisonToken{}},
+		complete:              len(unavailable) == 0,
 		Complete:              len(unavailable) == 0,
 		UnavailableReferences: unavailable,
 	}, nil
+}
+
+func visitPreparedSchemaChildren(node map[string]any, visit func(any)) {
+	for key, value := range node {
+		switch {
+		case schemaMapKeywords[key]:
+			if members, ok := value.(map[string]any); ok {
+				for _, member := range members {
+					visit(member)
+				}
+			}
+		case arraySchemaKeywords[key]:
+			if members, ok := value.([]any); ok {
+				for _, member := range members {
+					visit(member)
+				}
+			}
+		case singleSchemaKeywords[key]:
+			visit(value)
+		}
+	}
 }
 
 func collectSchemaAnchors(iface *Interface) map[string]any {
@@ -653,9 +741,7 @@ func collectSchemaAnchors(iface *Interface) map[string]any {
 					}
 				}
 			}
-			for _, child := range node {
-				visit(child)
-			}
+			visitPreparedSchemaChildren(node, visit)
 		}
 	}
 	for _, schema := range iface.Schemas {
@@ -723,10 +809,15 @@ func findPreparedAnchor(root any, name string) (any, bool) {
 		if node["$anchor"] == name || node["$dynamicAnchor"] == name {
 			return node, true
 		}
-		for _, child := range node {
-			if value, ok := findPreparedAnchor(child, name); ok {
-				return value, true
+		var found any
+		var present bool
+		visitPreparedSchemaChildren(node, func(child any) {
+			if !present {
+				found, present = findPreparedAnchor(child, name)
 			}
+		})
+		if present {
+			return found, true
 		}
 	}
 	return nil, false

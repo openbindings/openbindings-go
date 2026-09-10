@@ -1,7 +1,6 @@
 package invoke
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -154,9 +153,11 @@ func (referenceCompositionPolicy) AssessContract(
 	if err != nil || !found {
 		return ContractEvidence{}, fmt.Errorf("openbindings: provider boundary contract: %w", err)
 	}
-	if requiredContract.Complete && providerContract.Complete &&
-		requiredContract.Revision == providerContract.Revision &&
-		bytes.Equal(requiredContract.Canonical, providerContract.Canonical) {
+	identity, err := openbindings.CompareBoundaryContracts(requiredContract, providerContract)
+	if err != nil {
+		return ContractEvidence{}, err
+	}
+	if identity == "equal" {
 		return ContractEvidence{Verdict: ContractCompatible, Method: "exact", Issues: []compare.CompatibilityIssue{}}, nil
 	}
 	if err := ctx.Err(); err != nil {

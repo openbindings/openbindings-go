@@ -1,0 +1,139 @@
+diff --git a/compiler.go b/compiler.go
+index 4da7361..77a38e0 100644
+--- a/compiler.go
++++ b/compiler.go
+@@ -175,7 +175,8 @@ func (c *Compiler) MustCompile(loc string) *Schema {
+ }
+ 
+ // Compile compiles json-schema at given loc.
+-func (c *Compiler) Compile(loc string) (*Schema, error) {
++func (c *Compiler) Compile(loc string) (schema *Schema, err error) {
++	defer recoverNumericCapability(&err)
+ 	uf, err := absolute(loc)
+ 	if err != nil {
+ 		return nil, err
+diff --git b/numeric_work.go b/numeric_work.go
+new file mode 100644
+index 0000000..ebc671f
+--- /dev/null
++++ b/numeric_work.go
+@@ -0,0 +1,38 @@
++package jsonschema
++
++// OpenBindings Project correction: bound numeric work at its actual predicate
++// entry, not at JSON admission. The existing evaluator still owns all traversal,
++// branch selection, references and annotation state. A budget refusal aborts the
++// whole evaluation; it must not become a failed speculative branch.
++import "github.com/openbindings/openbindings-go/jsonvalue"
++
++func checkNumericWork(value any) {
++	if err := jsonvalue.CheckNumericWork(value); err != nil {
++		panic(numericWorkRefusal{err})
++	}
++}
++
++type numericWorkRefusal struct{ cause error }
++
++func recoverNumericCapability(err *error) {
++	if cause := recover(); cause != nil {
++		if refusal, ok := cause.(numericWorkRefusal); ok {
++			*err = refusal.cause
++			return
++		}
++		panic(cause) // never mask an unrelated backend bug or host panic
++	}
++}
++
++// Existing regex engines retain their bool-only contract. The SDK's bounded
++// engine provides this optional seam so timeout/refusal is not a false match.
++func matchRegexp(re Regexp, value string) bool {
++	if bounded, ok := re.(interface{ MatchStringError(string) (bool, error) }); ok {
++		matched, err := bounded.MatchStringError(value)
++		if err != nil {
++			panic(numericWorkRefusal{err})
++		}
++		return matched
++	}
++	return re.MatchString(value)
++}
+diff --git a/objcompiler.go b/objcompiler.go
+index d47efa8..741f59c 100644
+--- a/objcompiler.go
++++ b/objcompiler.go
+@@ -489,6 +489,7 @@ func (c *objCompiler) numVal(pname string) *big.Rat {
+ 	}
+ 	switch v.(type) {
+ 	case json.Number, float32, float64, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
++		checkNumericWork(v)
+ 		if n, ok := new(big.Rat).SetString(fmt.Sprint(v)); ok {
+ 			return n
+ 		}
+diff --git a/util.go b/util.go
+index 548dc86..05aa6d0 100644
+--- a/util.go
++++ b/util.go
+@@ -270,6 +270,7 @@ func strVal(obj map[string]any, prop string) (string, bool) {
+ }
+ 
+ func isInteger(num any) bool {
++	checkNumericWork(num)
+ 	rat, ok := new(big.Rat).SetString(fmt.Sprint(num))
+ 	return ok && rat.IsInt()
+ }
+@@ -323,6 +324,8 @@ func equals(v1, v2 any) (bool, ErrorKind) {
+ 		if typeOf(v2) != numberType {
+ 			return false, nil
+ 		}
++		checkNumericWork(v1)
++		checkNumericWork(v2)
+ 		num1, ok1 := new(big.Rat).SetString(fmt.Sprint(v1))
+ 		num2, ok2 := new(big.Rat).SetString(fmt.Sprint(v2))
+ 		return ok1 && ok2 && num1.Cmp(num2) == 0, nil
+@@ -395,6 +398,7 @@ func writeHash(v any, h *maphash.Hash) ErrorKind {
+ 		_, _ = h.WriteString(v)
+ 	case json.Number, float32, float64, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+ 		_ = h.WriteByte(5)
++		checkNumericWork(v)
+ 		num, _ := new(big.Rat).SetString(fmt.Sprint(v))
+ 		_, _ = h.Write(num.Num().Bytes())
+ 		_, _ = h.Write(num.Denom().Bytes())
+diff --git a/validator.go b/validator.go
+index 4fa5e76..2988a4d 100644
+--- a/validator.go
++++ b/validator.go
+@@ -12,7 +12,8 @@ import (
+ 	"golang.org/x/text/message"
+ )
+ 
+-func (sch *Schema) Validate(v any) error {
++func (sch *Schema) Validate(v any) (err error) {
++	defer recoverNumericCapability(&err)
+ 	return sch.validate(v, nil, nil, nil, false, nil)
+ }
+ 
+@@ -252,7 +253,7 @@ func (vd *validator) objValidate(obj map[string]any) {
+ 
+ 		// patternProperties --
+ 		for regex, sch := range s.PatternProperties {
+-			if regex.MatchString(pname) {
++			if matchRegexp(regex, pname) {
+ 				evaluated = true
+ 				vd.addErr(vd.validateVal(sch, pvalue, pname))
+ 			}
+@@ -454,7 +455,7 @@ func (vd *validator) strValidate(str string) {
+ 
+ 	// pattern --
+ 	if s.Pattern != nil {
+-		if !s.Pattern.MatchString(str) {
++		if !matchRegexp(s.Pattern, str) {
+ 			vd.addError(&kind.Pattern{Got: str, Want: s.Pattern.String()})
+ 		}
+ 	}
+@@ -518,6 +519,7 @@ func (vd *validator) numValidate(v any) {
+ 	var numVal *big.Rat
+ 	num := func() *big.Rat {
+ 		if numVal == nil {
++			checkNumericWork(v)
+ 			numVal, _ = new(big.Rat).SetString(fmt.Sprintf("%v", v))
+ 		}
+ 		return numVal

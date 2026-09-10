@@ -36,6 +36,14 @@ run `go test ./...` from the root module.
 The cross-SDK equivalence policy and corresponding public names are recorded
 in [`IMPLEMENTATION_PARITY.md`](IMPLEMENTATION_PARITY.md).
 
+**Value-carriage migration (development branch):** generic JSON values decoded
+by this Go SDK now retain `json.Number`, rather than incidentally round-tripping
+through `float64`. See [`jsonvalue`](jsonvalue/README.md) for caller migration and
+the deliberately narrower guarantee. The assembled Go/TypeScript candidate is
+qualified separately from shared release activation: JSONata-dependent edges
+remain held pending evaluator qualification. Native caller values cannot recover
+precision discarded before reaching the SDK.
+
 ## Layout
 
 This is a multi-module Go monorepo. The root module carries the core package
@@ -209,11 +217,27 @@ if err != nil {
 fmt.Println(out)
 ```
 
-Repeated provider use should prepare one immutable interface revision and let
+Repeated provider use should prepare one immutable interface snapshot and let
 the SDK index exact realization routes once. `sdk.Runtime.PrepareProvider`
 prepares a document; `PrepareProviderSnapshot` accepts an already prepared
-revision without reparsing it. Both use the runtime's cohesive provider
+snapshot without reparsing it. Both use the runtime's cohesive provider
 registry—binding identifiers remain exact opaque capability tokens.
+
+**Value-identity architecture:** preparation owns one detached, exact JSON snapshot independently of optional
+JCS export. Schema/realization caches belong to that immutable owner; any
+cross-snapshot reuse or exact boundary match must verify exact material, not
+merely equal lossy fingerprints. Authored boundary graphs preserve schema
+structure, array order, presence and reachable resource content; they are not
+the comparison profile's normalized schema identity.
+
+`SnapshotID()` is local correlation, not content equality. `ExportJCS()` returns
+an explicit canonical export and content revision, or an error if that export
+would change a retained value; the working snapshot remains usable. Use
+`CompareBoundaryContracts` for exact authored-boundary evidence. Successful
+comparisons between immutable owners may be reused internally. These SDK
+commitments are separate from Core/binding conformance and the
+optional schema-comparison profile; they do not change invocation/context
+patterns, mandate third-party fidelity, or qualify JSONata or persistent pins.
 
 For an interactive host that needs to explain
 `ERR_OPERATION_VALIDATION_FAILED`, create an `invoke.DiagnosticCollector` with
@@ -486,50 +510,38 @@ side-effect-free `BindingPreparer` preflight.
 
 ## Transforms (invoking tools only)
 
-OpenBindings mandates JSONata 2.1 as the transform language for tools that
-evaluate `inputTransform`/`outputTransform` (OBI-T-10). Document validation
-bundles a pinned JSONata 2.x parser ([`recolabs/gnata`](https://github.com/recolabs/gnata))
-to parse-check every transform expression for syntactic validity (OBI-D-18) —
-a validate-time check only. It does **not** bundle a JSONata *evaluation*
-runtime, and it does not pick a Go implementation to run transforms for you:
-to actually evaluate a transform when invoking, you supply any JSONata library
-behind the `TransformEvaluator` seam on `OperationInvoker`. A worked adapter
-(this one over the same `recolabs/gnata` engine the `ob` CLI uses — an example
-evaluator choice, not an endorsement; the bundled parser above uses it only to
-parse-check, never to run your transforms):
+OpenBindings 0.2.0 uses the documented JSONata 2.1 language for binding
+transforms. Document validation imports only the runtime family's syntax
+package: it does not initialize an evaluator or apply arithmetic budgets.
+
+Invocation remains explicitly dependency-injected. The official adapter uses
+the independent JSONata runtime's closed JSON-text boundary:
 
 ```go
-import "github.com/recolabs/gnata"
+import jsonataevaluator "github.com/openbindings/openbindings-go/invoke/jsonata"
 
-type jsonataEvaluator struct{}
-
-func (jsonataEvaluator) Evaluate(expression string, data any) (any, error) {
-	expr, err := gnata.Compile(expression)
-	if err != nil {
-		return nil, err
-	}
-	// EvalBytes (feed marshaled JSON) preserves object member order; Eval on a
-	// Go map re-sorts keys. gnata signals an undefined result as (nil, nil) —
-	// map it to your undefined sentinel if you drive operation-graph transforms.
-	input, err := json.Marshal(data)
-	if err != nil {
-		return nil, err
-	}
-	return expr.EvalBytes(context.Background(), input)
+evaluator, err := jsonataevaluator.New(jsonataevaluator.Options{})
+if err != nil {
+    return err
 }
-
-invoker.TransformEvaluator = jsonataEvaluator{}
+invoker.TransformEvaluator = evaluator
 ```
 
-Implement `TransformEvaluatorWithBindings` too if you evaluate
-operation-graph transforms (they receive `$input` and friends as
-variables). Two constraints an adapter must honor: the evaluation
-environment is **closed** — do not register host-reaching functions
-(filesystem, network, environment) for document-supplied expressions;
-OBI-T-10 makes that nonconformant, and it would make the same transform
-compute different values on different hosts — and where JSONata's
-documentation is ambiguous, follow the reference implementation's
-behavior (the spec's tiebreak).
+The adapter translates SDK values and errors; the standalone runtime owns
+compilation, work budgets and cooperative cancellation. Both the basic and
+named-binding invocation interfaces are implemented. Allowed variable names
+remain the responsibility of the invoking layer.
+
+This local candidate depends on the provisionally named
+`github.com/openbindings/jsonata-runtime/go` module. That module is not yet
+published. Evaluate it in the coordinated source workspace or from the
+qualification artifacts; do not release an application with an inaccessible
+private dependency.
+
+Other evaluators can implement the same interfaces. Their own numerical
+behavior is not automatically the official runtime's stronger fidelity policy.
+The closed environment and JSON result boundary still apply. Graph's separately
+pinned evaluator is unchanged; this example does not migrate graph expressions.
 
 ## Consumer configuration (hooks)
 

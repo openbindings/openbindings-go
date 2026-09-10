@@ -2,12 +2,14 @@ package openbindings
 
 import (
 	_ "embed"
-	"encoding/json"
+	"errors"
 	"fmt"
+	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 	neturl "net/url"
 	"strings"
 
-	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 )
@@ -45,8 +47,7 @@ func init() {
 	if err := json.Unmarshal(openbindingsSchemaJSON, &doc); err != nil {
 		panic(fmt.Sprintf("openbindings: embedded openbindings.schema.json is not valid JSON: %v", err))
 	}
-	c := jsonschema.NewCompiler()
-	c.UseRegexpEngine(ECMARegexpEngine)
+	c := exactCountCompiler()
 	if err := c.AddResource("openbindings:///schema", doc); err != nil {
 		panic(fmt.Sprintf("openbindings: cannot register OBI schema: %v", err))
 	}
@@ -56,8 +57,7 @@ func init() {
 	}
 	compiledOBISchema = s
 
-	mc := jsonschema.NewCompiler()
-	mc.UseRegexpEngine(ECMARegexpEngine)
+	mc := exactCountCompiler()
 	meta, err := mc.Compile(draft202012URI)
 	if err != nil {
 		panic(fmt.Sprintf("openbindings: cannot compile embedded 2020-12 meta-schema: %v", err))
@@ -140,7 +140,7 @@ func validateExamplesAgainstOpSchemas(errs *[]string, i Interface) {
 		if len(op.Examples) == 0 {
 			continue
 		}
-		var inputSchema, outputSchema *jsonschema.Schema
+		var inputSchema, outputSchema *CompiledSchema
 		if op.Input != nil && !defsExternal && !schemaHasExternalRef(op.Input) {
 			compiled, err := CompileOperationSchema(&i, opKey, "input")
 			if err != nil {
@@ -254,8 +254,7 @@ func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema
 	default:
 		return nil, fmt.Errorf("operation schema must be a JSON Schema object or boolean")
 	}
-	c := jsonschema.NewCompiler()
-	c.UseRegexpEngine(ECMARegexpEngine)
+	c := exactCountCompiler()
 	const url = "openbindings:///example-schema"
 	if err := c.AddResource(url, root); err != nil {
 		return nil, err
@@ -267,7 +266,7 @@ func compileExampleSchema(opSchema JSONSchema, defs map[string]any) (*jsonschema
 // canonical fragment inside the complete OBI document. The document, not an
 // extracted schema object, is the resolution root for same-document references
 // (OBI-D-16 / OBI-T-16).
-func CompileOperationSchema(i *Interface, operationName, position string) (*jsonschema.Schema, error) {
+func CompileOperationSchema(i *Interface, operationName, position string) (*CompiledSchema, error) {
 	if i == nil {
 		return nil, fmt.Errorf("interface is nil")
 	}
@@ -293,7 +292,7 @@ func CompileOperationSchema(i *Interface, operationName, position string) (*json
 		return nil, fmt.Errorf("marshal OBI document for schema compilation: %w", err)
 	}
 	var document map[string]any
-	if err := json.Unmarshal(data, &document); err != nil {
+	if err := jsonvalue.Unmarshal(data, &document); err != nil {
 		return nil, fmt.Errorf("decode OBI document for schema compilation: %w", err)
 	}
 	// The OBI root is a resolution container, not a schema. Unknown fields are
@@ -304,8 +303,7 @@ func CompileOperationSchema(i *Interface, operationName, position string) (*json
 	delete(document, "$anchor")
 	delete(document, "$dynamicAnchor")
 
-	c := jsonschema.NewCompiler()
-	c.UseRegexpEngine(ECMARegexpEngine)
+	c := exactCountCompiler()
 	const url = "openbindings:///document"
 	if err := registerInterfaceSchemaResources(c, i); err != nil {
 		return nil, err
@@ -315,7 +313,11 @@ func CompileOperationSchema(i *Interface, operationName, position string) (*json
 	}
 	escape := strings.NewReplacer("~", "~0", "/", "~1").Replace
 	fragment := "#/operations/" + escape(operationName) + "/" + position
-	return c.Compile(url + fragment)
+	compiled, err := c.Compile(url + fragment)
+	if err != nil {
+		return nil, err
+	}
+	return &CompiledSchema{backend: compiled}, nil
 }
 
 // registerInterfaceSchemaResources makes absolute `$id` resources embedded at
@@ -496,15 +498,12 @@ func ValidateOperationOutput(value any, iface *Interface, operationName string) 
 	return validateCompiledSchema(value, compiled, err)
 }
 
-func validateCompiledSchema(value any, compiled *jsonschema.Schema, err error) error {
+func validateCompiledSchema(value any, compiled interface{ Validate(any) error }, err error) error {
 	if err != nil {
 		return &SchemaGraphUnavailableError{Cause: err}
 	}
 	if verr := compiled.Validate(value); verr != nil {
-		// The library's Error() leads with the compiler's internal resource
-		// URI; the flattened per-leaf lines are the readable form. The raw
-		// error stays reachable through Unwrap for structured consumers.
-		return &schemaValidationError{lines: splitSchemaError(verr), cause: verr}
+		return projectSchemaValidationError(verr)
 	}
 	return nil
 }
@@ -534,13 +533,25 @@ func (e *SchemaGraphUnavailableError) Unwrap() error {
 	return e.Cause
 }
 
-// schemaValidationError renders a validation failure as its per-leaf lines
-// (the shape splitSchemaError produces) instead of the underlying library's
-// resource-URI-prefixed dump.
-type schemaValidationError struct {
+// SchemaValidationError is an established instance mismatch. Use errors.As to
+// distinguish it from a capability refusal or unavailable schema graph without
+// depending on the private backend. It renders readable per-leaf diagnostics.
+type SchemaValidationError struct {
 	lines []string
 	cause error
 }
 
-func (e *schemaValidationError) Error() string { return strings.Join(e.lines, "; ") }
-func (e *schemaValidationError) Unwrap() error { return e.cause }
+func (e *SchemaValidationError) Error() string { return strings.Join(e.lines, "; ") }
+func (e *SchemaValidationError) Unwrap() error { return e.cause }
+
+func projectSchemaValidationError(err error) error {
+	var projected *SchemaValidationError
+	if errors.As(err, &projected) {
+		return err
+	}
+	var mismatch *jsonschema.ValidationError
+	if errors.As(err, &mismatch) {
+		return &SchemaValidationError{lines: splitSchemaError(mismatch), cause: err}
+	}
+	return err
+}

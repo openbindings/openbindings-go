@@ -949,9 +949,11 @@ func (eng *engine) evalOrFail(
 		if rv, defined := eng.rootValue(ev.root); defined {
 			bindings["input"] = rv
 		}
-		result, err = eb.EvaluateWithBindings(expression, ev.data, bindings)
+		// Mechanical SDK signature migration only: Graph keeps its prior
+		// non-cancellable evaluator behavior until its separate redesign.
+		result, err = eb.EvaluateWithBindings(context.Background(), expression, ev.data, bindings)
 	} else {
-		result, err = eng.transform.Evaluate(expression, ev.data)
+		result, err = eng.transform.Evaluate(context.Background(), expression, ev.data)
 	}
 	if err != nil {
 		if errors.Is(err, invoke.ErrTransformUndefined) {

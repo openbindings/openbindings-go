@@ -1,7 +1,7 @@
 package openbindings
 
 import (
-	"encoding/json"
+	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 	"strings"
 )
 

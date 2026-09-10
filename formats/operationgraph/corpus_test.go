@@ -264,11 +264,11 @@ func matchMockResponse(op *mockOp, writes []any) *mockResponse {
 
 type jsonataEvaluator struct{}
 
-func (j *jsonataEvaluator) Evaluate(expression string, data any) (any, error) {
-	return j.EvaluateWithBindings(expression, data, nil)
+func (j *jsonataEvaluator) Evaluate(ctx context.Context, expression string, data any) (any, error) {
+	return j.EvaluateWithBindings(ctx, expression, data, nil)
 }
 
-func (j *jsonataEvaluator) EvaluateWithBindings(expression string, data any, bindings map[string]any) (any, error) {
+func (j *jsonataEvaluator) EvaluateWithBindings(ctx context.Context, expression string, data any, bindings map[string]any) (any, error) {
 	expr, err := gnata.Compile(expression)
 	if err != nil {
 		return nil, fmt.Errorf("compile jsonata: %w", err)
@@ -283,9 +283,9 @@ func (j *jsonataEvaluator) EvaluateWithBindings(expression string, data any, bin
 		for k, v := range bindings {
 			vars[k] = normalizeJSON(v)
 		}
-		result, err = expr.EvalBytesWithVars(context.Background(), input, vars)
+		result, err = expr.EvalBytesWithVars(ctx, input, vars)
 	} else {
-		result, err = expr.EvalBytes(context.Background(), input)
+		result, err = expr.EvalBytes(ctx, input)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("evaluate jsonata: %w", err)
