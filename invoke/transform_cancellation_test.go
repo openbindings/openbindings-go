@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	jsonataruntime "github.com/openbindings/jsonata-runtime/go"
+	jsonataruntime "github.com/openbindings/jsonata/go"
 	openbindings "github.com/openbindings/openbindings-go"
 )
 

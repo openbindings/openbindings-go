@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/openbindings/openbindings-go/jsonvalue"
-	"github.com/openbindings/jsonata-runtime/go/syntax"
+	"github.com/openbindings/jsonata/go/syntax"
 )
 
 type validateOptions struct {

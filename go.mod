@@ -20,5 +20,5 @@ require (
 require (
 	github.com/dlclark/regexp2 v1.12.0
 	github.com/dlclark/regexp2/v2 v2.7.1
-	github.com/openbindings/jsonata-runtime/go v0.0.0-dev
+	github.com/openbindings/jsonata/go v0.0.0-dev
 )

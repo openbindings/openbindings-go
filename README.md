@@ -533,7 +533,7 @@ named-binding invocation interfaces are implemented. Allowed variable names
 remain the responsibility of the invoking layer.
 
 This local candidate depends on the provisionally named
-`github.com/openbindings/jsonata-runtime/go` module. That module is not yet
+`github.com/openbindings/jsonata/go` module. That module is not yet
 published. Evaluate it in the coordinated source workspace or from the
 qualification artifacts; do not release an application with an inaccessible
 private dependency.

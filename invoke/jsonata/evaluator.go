@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 
-	runtime "github.com/openbindings/jsonata-runtime/go"
+	runtime "github.com/openbindings/jsonata/go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )

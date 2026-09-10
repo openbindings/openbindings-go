@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/openbindings/jsonata-runtime/go/syntax"
+	"github.com/openbindings/jsonata/go/syntax"
 )
 
 // Historical expressions remain syntax regression controls, not a normative

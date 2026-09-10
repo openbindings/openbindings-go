@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	gnata "github.com/openbindings/jsonata-runtime/go"
+	gnata "github.com/openbindings/jsonata/go"
 	"github.com/openbindings/openbindings-go/invoke"
 	jsonataevaluator "github.com/openbindings/openbindings-go/invoke/jsonata"
 	"github.com/openbindings/openbindings-go/jsonvalue"
