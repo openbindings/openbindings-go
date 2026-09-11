@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/openbindings/openbindings-go/invoke"
@@ -310,15 +309,14 @@ func bridgeHooks(args *invoke.BindingInvocationArgs, bindingSpec string) *openap
 		Decode: func(site openapiclient.HookSite, raw openapiclient.RawResult) (any, bool, error) {
 			coreSite := coreHookSite(args, bindingSpec, site.Target)
 			coreRaw := invoke.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
-			contentType := ""
-			for name, values := range raw.Meta {
-				if strings.EqualFold(name, "Content-Type") && len(values) > 0 {
-					contentType = values[0]
-					break
-				}
-			}
-			value, err := args.Hooks.DecodeOutput(coreSite, coreRaw, decodeByContentTypeFor(contentType, bindingSpec))
-			return value, true, err
+			// An empty or all-declining Core chain must preserve the native
+			// decoder selected from the governing response declaration.
+			handled := true
+			value, err := args.Hooks.DecodeOutput(coreSite, coreRaw, func(invoke.InvokeSite, invoke.RawResult) (any, error) {
+				handled = false
+				return nil, nil
+			})
+			return value, handled, err
 		},
 		Classify: func(site openapiclient.HookSite, raw openapiclient.RawResult) (bool, bool, error) {
 			coreSite := coreHookSite(args, bindingSpec, site.Target)
@@ -538,7 +536,11 @@ func readAuthoringArtifact(ctx context.Context, client *http.Client, location st
 	}
 	switch u.Scheme {
 	case "file":
-		return os.ReadFile(u.Path)
+		path, err := localArtifactPath(u)
+		if err != nil {
+			return nil, err
+		}
+		return os.ReadFile(path)
 	case "http", "https":
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
 		if err != nil {

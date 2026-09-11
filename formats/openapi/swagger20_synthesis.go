@@ -105,7 +105,7 @@ func (c *Synthesizer) synthesizeSwagger20(ctx context.Context, in *synthesize.Sy
 			continue
 		}
 		used[opKey] = true
-		obiOperation, inputTransform, losses, projectionErr := projectSwagger20Operation(operation)
+		obiOperation, inputTransform, losses, projectionErr := projectSwagger20Operation(operation, opKey)
 		if projectionErr != nil {
 			if !tolerant {
 				return nil, nil, nil, fmt.Errorf("cannot synthesize Swagger 2.0 operation at %q: %w", operation.Ref, projectionErr)
@@ -169,13 +169,14 @@ type swagger20ProjectionLoss struct {
 	sourceRef, reasonCode, message string
 }
 
-func projectSwagger20Operation(operation openapiprovider.Swagger20SynthesisOperation) (openbindings.Operation, string, []swagger20ProjectionLoss, error) {
+func projectSwagger20Operation(operation openapiprovider.Swagger20SynthesisOperation, operationKey string) (openbindings.Operation, string, []swagger20ProjectionLoss, error) {
 	result := openbindings.Operation{
 		Description: operation.Description,
 		Deprecated:  operation.Deprecated,
 		Tags:        append([]string(nil), operation.Tags...),
 	}
 	properties := map[string]any{}
+	position := "#/operations/" + escapeJSONPointerSegment(operationKey)
 	required := []string{}
 	parameterFields := map[string]string{}
 	locations := map[string]openapiprovider.Swagger20ParameterLocation{}
@@ -197,6 +198,7 @@ func projectSwagger20Operation(operation openapiprovider.Swagger20SynthesisOpera
 		if err != nil {
 			return result, "", nil, err
 		}
+		relocateSwagger20Schema(schema, position+"/input/properties/"+escapeJSONPointerSegment(field))
 		properties[field] = schema
 		parameterFields[callerKey] = field
 		if parameter.Required {
@@ -212,6 +214,7 @@ func projectSwagger20Operation(operation openapiprovider.Swagger20SynthesisOpera
 		if err != nil {
 			return result, "", nil, err
 		}
+		relocateSwagger20Schema(schema, position+"/input/properties/"+escapeJSONPointerSegment(bodyField))
 		properties[bodyField] = schema
 		projectionLosses = append(projectionLosses, losses...)
 		if operation.Body.Required {
@@ -226,6 +229,7 @@ func projectSwagger20Operation(operation openapiprovider.Swagger20SynthesisOpera
 		}
 		result.Input = input
 	}
+	var outputs []any
 	for _, response := range operation.Responses {
 		if !response.CanSucceed || !response.Usable || !response.SchemaPresent {
 			continue
@@ -235,19 +239,46 @@ func projectSwagger20Operation(operation openapiprovider.Swagger20SynthesisOpera
 			return result, "", nil, err
 		}
 		projectionLosses = append(projectionLosses, losses...)
-		if result.Output == nil {
-			result.Output = schema
-			continue
+		outputs = append(outputs, schema)
+	}
+	if len(outputs) == 1 {
+		relocateSwagger20Schema(outputs[0], position+"/output")
+		result.Output = outputs[0]
+	} else if len(outputs) > 1 {
+		for index, schema := range outputs {
+			relocateSwagger20Schema(schema, fmt.Sprintf("%s/output/anyOf/%d", position, index))
 		}
-		if union, ok := result.Output.(map[string]any); ok {
-			if branches, present := union["anyOf"].([]any); present {
-				union["anyOf"] = append(branches, schema)
-				continue
-			}
-		}
-		result.Output = map[string]any{"anyOf": []any{result.Output, schema}}
+		result.Output = map[string]any{"anyOf": outputs}
 	}
 	return result, swagger20EnvelopeTransform(parameterFields, bodyField), projectionLosses, nil
+}
+
+// Native Swagger schemas are detached, self-contained images. Their local
+// references must follow each image to its final position in the OBI. Only
+// projected schema locations are visited: defaults and enum values are data.
+func relocateSwagger20Schema(value any, position string) {
+	schema, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	if ref, ok := schema["$ref"].(string); ok && (ref == "#" || strings.HasPrefix(ref, "#/")) {
+		schema["$ref"] = position + ref[1:]
+	}
+	for _, keyword := range []string{"items", "additionalProperties"} {
+		relocateSwagger20Schema(schema[keyword], position)
+	}
+	for _, keyword := range []string{"properties", "$defs"} {
+		if children, ok := schema[keyword].(map[string]any); ok {
+			for _, child := range children {
+				relocateSwagger20Schema(child, position)
+			}
+		}
+	}
+	if branches, ok := schema["allOf"].([]any); ok {
+		for _, child := range branches {
+			relocateSwagger20Schema(child, position)
+		}
+	}
 }
 
 func uniqueSwagger20InputField(base string, used map[string]bool) string {
