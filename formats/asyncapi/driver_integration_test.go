@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -106,7 +105,7 @@ func TestLiveOpenBindingsAdapterUsesMQTTDriver(t *testing.T) {
 	// Retaining the publish makes this deterministic without exposing or
 	// polling protocol readiness through the abstract invocation handle.
 	publish := invoker.InvokeBinding(context.Background(), args("#/operations/publish"))
-	if err := publish.Write(context.Background(), map[string]any{"id": "through-openbindings"}); err != nil {
+	if err := publish.Write(context.Background(), map[string]any{"payload": map[string]any{"id": "through-openbindings"}}); err != nil {
 		t.Fatal(err)
 	}
 	_ = publish.Close()
@@ -160,7 +159,8 @@ func TestLiveOpenBindingsAdapterPreservesMQTTOutputBeforeConnectionLoss(t *testi
 	if !ok || value["id"] != "before-disconnect" {
 		t.Fatalf("output = %#v", output)
 	}
-	if _, err := outputs.Read(ctx); err == nil || !strings.Contains(strings.ToLower(err.Error()), "mqtt connection lost") {
+	var terminal *invoke.InvocationError
+	if _, err := outputs.Read(ctx); !errors.As(err, &terminal) || terminal.Code != "DRIVER_FAILED" || terminal.HasData() {
 		t.Fatalf("terminal error = %v", err)
 	}
 }
@@ -193,7 +193,7 @@ func TestLiveOpenBindingsAdapterUsesKafkaDriver(t *testing.T) {
 	}
 
 	publish := invoker.InvokeBinding(context.Background(), args("#/operations/publish"))
-	if err := publish.Write(context.Background(), map[string]any{"id": "through-openbindings-kafka"}); err != nil {
+	if err := publish.Write(context.Background(), map[string]any{"payload": map[string]any{"id": "through-openbindings-kafka"}}); err != nil {
 		t.Fatal(err)
 	}
 	_ = publish.Close()
@@ -240,7 +240,7 @@ func TestLiveOpenBindingsAdapterUsesKafkaSCRAMWithoutProtocolFields(t *testing.T
 		}
 	}
 	publish := invoker.InvokeBinding(context.Background(), args("#/operations/publish"))
-	if err := publish.Write(context.Background(), map[string]any{"id": "secured-through-openbindings"}); err != nil {
+	if err := publish.Write(context.Background(), map[string]any{"payload": map[string]any{"id": "secured-through-openbindings"}}); err != nil {
 		t.Fatal(err)
 	}
 	_ = publish.Close()
