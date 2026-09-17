@@ -107,7 +107,7 @@ func TestWSPool_WriteCancelDoesNotTearDownSiblings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sibling subscription was torn down by a sibling's cancel (C5f): %v", err)
 	}
-	if got.(map[string]any)["n"] != float64(7) {
+	if got.(map[string]any)["n"] != json.Number("7") {
 		t.Fatalf("sibling received %v, want the post-cancel echo {n:7}", got)
 	}
 }

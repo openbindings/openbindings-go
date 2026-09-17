@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -964,7 +965,7 @@ func TestOpenBindingsBridgePreservesWebSocketReplyValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(values) != 1 || values[0].(map[string]any)["accepted"] != float64(91) {
+	if len(values) != 1 || values[0].(map[string]any)["accepted"] != json.Number("91") {
 		t.Fatalf("outputs = %#v", values)
 	}
 }
@@ -1149,7 +1150,7 @@ func TestWebSocketStreamingMultipleEvents(t *testing.T) {
 		t.Fatalf("expected 5 events, got %d: %v", len(vals), vals)
 	}
 	for i, v := range vals {
-		if seq, _ := v.(map[string]any)["seq"].(float64); int(seq) != i+1 {
+		if seq, _ := v.(map[string]any)["seq"].(json.Number); seq != json.Number(strconv.Itoa(i+1)) {
 			t.Errorf("event %d: seq = %v, want %d", i, v, i+1)
 		}
 	}
