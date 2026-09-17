@@ -2,6 +2,15 @@
 
 ## 0.2.0 (working draft)
 
+### Fixed
+
+- The Go adapter preserves exact JSON payload numbers across the native client
+  boundary, including integers beyond binary64 precision and large or small
+  decimal exponents. This requires the matching native Go payload repair.
+- When both SDK decoding hook tiers decline, native content-type and delivery-unit
+  decoding remains active. An explicitly handled null stays a handled result.
+  This bounded Go repair does not certify TypeScript payload-fidelity parity.
+
 ### Changed
 
 - **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →

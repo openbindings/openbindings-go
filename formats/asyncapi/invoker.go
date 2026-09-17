@@ -262,11 +262,14 @@ func bridgeHooks(args *invoke.BindingInvocationArgs) *asyncapiclient.Hooks {
 	return &asyncapiclient.Hooks{Decode: func(site asyncapiclient.HookSite, raw asyncapiclient.RawResult) (any, bool, error) {
 		coreSite := coreHookSite(args, site.Target)
 		coreRaw := invoke.RawResult{Status: raw.Status, Body: append([]byte(nil), raw.Body...), Meta: toCoreMetadata(raw.Meta)}
-		contentType := ""
-		if values := raw.Meta["Content-Type"]; len(values) > 0 {
-			contentType = values[0]
-		}
-		value, err := args.Hooks.DecodeOutput(coreSite, coreRaw, builtinDecodeFor(contentType))
+		// Let the SDK consult both hook tiers, but leave fallback decoding to
+		// the native engine: it has the resolved message declaration and the
+		// transport's delivery-unit semantics, which raw metadata cannot supply.
+		declined := false
+		value, err := args.Hooks.DecodeOutput(coreSite, coreRaw, func(invoke.InvokeSite, invoke.RawResult) (any, error) {
+			declined = true
+			return nil, nil
+		})
 		if err != nil {
 			invocation := invoke.AsInvocationError(err)
 			execution := &asyncapiclient.ExecutionError{Code: invocation.Code, Message: err.Error(), Cause: err}
@@ -276,7 +279,7 @@ func bridgeHooks(args *invoke.BindingInvocationArgs) *asyncapiclient.Hooks {
 			}
 			return nil, true, execution
 		}
-		return value, true, nil
+		return value, !declined, nil
 	}}
 }
 

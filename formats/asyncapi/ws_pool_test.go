@@ -2,6 +2,7 @@ package asyncapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -282,7 +283,7 @@ func TestWSPool_SendAndReceiveShareConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if echoed.(map[string]any)["n"] != float64(1) {
+	if echoed.(map[string]any)["n"] != json.Number("1") {
 		t.Fatalf("subscription must observe the publish echoed on the shared socket, got %v", echoed)
 	}
 
