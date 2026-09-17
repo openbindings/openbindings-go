@@ -4,6 +4,15 @@
 
 > A 0.1.1 patch release was prepared 2026-04 but never tagged or published; its entries are folded into this section.
 
+### Fixed
+
+- **Usage hook-table machine lane keeps exact JSON values.** `HookTable.Hooks()`
+  decoded a JSON machine lane with `encoding/json` into `any`, collapsing every
+  number to float64 (2^53+1 and 1e400 could not survive a CLI round trip). The
+  decoder now uses the SDK's exact `jsonvalue` decode, so numbers keep their
+  token and trailing content after the value is refused, like every other
+  SDK decode boundary.
+
 ### Changed
 
 - **The SDK can now prepare immutable provider revisions and expose bounded,
