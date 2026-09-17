@@ -1,10 +1,10 @@
 package usage
 
 import (
-	"encoding/json"
 	"slices"
 
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // HookTable is the data-shaped consumer configuration for exec bindings —
@@ -54,8 +54,11 @@ func (t HookTable) Hooks() (invoke.OutputDecoder, invoke.ResultClassifier, invok
 		if len(raw.Body) == 0 {
 			return nil, nil
 		}
+		// The machine lane carries exact JSON values: numbers keep their
+		// token (json.Number) rather than collapsing to float64, exactly as
+		// every other SDK decode boundary does. Trailing content is not JSON.
 		var v any
-		if err := json.Unmarshal(raw.Body, &v); err != nil {
+		if err := jsonvalue.Unmarshal(raw.Body, &v); err != nil {
 			return nil, &invoke.InvocationError{
 				Code: invoke.ErrCodeExecutionFailed,
 			}

@@ -351,10 +351,19 @@ func TestHookTable_Hooks(t *testing.T) {
 		return invoke.InvokeSite{BindingSpec: BindingSpec, Operation: op}
 	}
 
-	// Decoder: a JSON-lane op parses; a non-JSON body is a loud error; an
-	// empty body is nil; an op without a row declines.
-	if v, err := decoder(usageSite("emit"), invoke.RawResult{Body: []byte(`{"n":1}`)}); err != nil || v.(map[string]any)["n"] != float64(1) {
+	// Decoder: a JSON-lane op parses exactly (numbers keep their token, so
+	// 2^53+1 and 1e400 survive); a non-JSON or multi-value body is a loud
+	// error; an empty body is nil; an op without a row declines.
+	if v, err := decoder(usageSite("emit"), invoke.RawResult{Body: []byte(`{"n":1}`)}); err != nil || v.(map[string]any)["n"] != json.Number("1") {
 		t.Errorf("decoder JSON: got (%v, %v)", v, err)
+	}
+	if v, err := decoder(usageSite("emit"), invoke.RawResult{Body: []byte(`{"big":9007199254740993,"huge":1e400,"frac":-1.25}`)}); err != nil {
+		t.Errorf("decoder exact JSON: %v", err)
+	} else if m := v.(map[string]any); m["big"] != json.Number("9007199254740993") || m["huge"] != json.Number("1e400") || m["frac"] != json.Number("-1.25") {
+		t.Errorf("decoder rounded the machine lane: %#v", m)
+	}
+	if _, err := decoder(usageSite("emit"), invoke.RawResult{Body: []byte(`{"n":1} {}`)}); err == nil {
+		t.Error("decoder: trailing content after the machine-lane value must be a loud error")
 	}
 	if _, err := decoder(usageSite("emit"), invoke.RawResult{Body: []byte("not json")}); err == nil {
 		t.Error("decoder: expected a loud error on a non-JSON machine lane")
