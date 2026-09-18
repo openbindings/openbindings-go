@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/recolabs/gnata"
+
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
@@ -418,25 +420,64 @@ func TestIntegration_InvalidSelector(t *testing.T) {
 	}
 }
 
-// TestIntegration_NoInputOperationConvention verifies the operation-layer
-// no-input convention: a binding carrying Binding != nil and InputSchema ==
-// nil runs the bare command without waiting for (or rejecting) a write.
-func TestIntegration_NoInputOperationConvention(t *testing.T) {
+// TestIntegration_NoInputOperationRunsBare pins the unchanged half: an
+// operation that declares no input, whose binding declares no input transform,
+// has nothing that could cross the boundary. The command runs bare without
+// waiting for (or rejecting) a write, so a caller may ignore the input side
+// entirely.
+func TestIntegration_NoInputOperationRunsBare(t *testing.T) {
 	invoker := NewInvoker()
 	ctx := context.Background()
 	call := invoker.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Source:   testSource(),
 		Selector: "mixed",
 		Binding:  &openbindings.BindingEntry{Operation: "mixed", Source: "s", Selector: "mixed"},
-		// InputSchema nil → no-input operation; the binding closes input itself.
+		// InputSchema nil and no input transform: nothing crosses.
 	})
 	// The caller writes nothing and does not close; the binding must still run.
 	out, err := invoke.Single(ctx, call.Outputs())
 	if err != nil {
-		t.Fatalf("no-input convention failed: %v", err)
+		t.Fatalf("bare run failed: %v", err)
 	}
 	if out != "stdout line" {
 		t.Fatalf("expected text output, got %#v", out)
+	}
+}
+
+// TestIntegration_NoInputOperationCarriesASuppliedValue is the half that
+// changed: when the binding declares an input transform, a value is meant to
+// cross even though the operation declares no input, so the binding must read
+// the caller's value rather than discard it. Core says an absent `input` makes
+// no portable claim at that boundary; it does not say the interaction carries
+// zero values, and the transform is where a binding says one does.
+func TestIntegration_NoInputOperationCarriesASuppliedValue(t *testing.T) {
+	ctx := context.Background()
+	call := jsonHooked().InvokeBinding(ctx, &invoke.BindingInvocationArgs{
+		Source:   testSource(),
+		Selector: "json",
+		Binding: &openbindings.BindingEntry{
+			Operation:      "json",
+			Source:         "s",
+			Selector:       "json",
+			InputTransform: &openbindings.TransformOrRef{Inline: "$"},
+		},
+	})
+	if err := call.Write(ctx, map[string]any{"pairs": []any{"name=alice"}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := call.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	out, err := invoke.Single(ctx, call.Outputs())
+	if err != nil {
+		t.Fatalf("supplied value was not realized: %v", err)
+	}
+	result, ok := out.(map[string]any)
+	if !ok {
+		t.Fatalf("expected the supplied pair to reach the command, got %#v", out)
+	}
+	if result["name"] != "alice" {
+		t.Fatalf("supplied value did not reach argv: %#v", result)
 	}
 }
 
@@ -469,4 +510,134 @@ func mapKeys[V any](m map[string]V) []string {
 		ks = append(ks, k)
 	}
 	return ks
+}
+
+// TestIntegration_NoInputOperationThroughOperationLayer drives an operation
+// that declares no input through the operation layer, which is the path a
+// consumer of a published OBI actually takes, and pins both halves against the
+// layer that installs the caller's close.
+//
+// The document declares no input and the binding declares an input transform
+// that injects the machine-lane flag. A caller that supplies a value must see
+// the transform applied to it; a caller that supplies nothing must still get
+// the bare command without touching the input side at all.
+func TestIntegration_NoInputOperationThroughOperationLayer(t *testing.T) {
+	iface := &openbindings.Interface{
+		OpenBindings: openbindings.MaxTestedVersion,
+		Name:         "no-input-operation-layer",
+		Operations: map[string]openbindings.Operation{
+			// No input declared: the boundary makes no portable claim.
+			"list": {},
+		},
+		Sources: map[string]openbindings.Source{
+			// The command answers either way, which is the shape of a real
+			// machine lane: a bare listing, or the same listing with a flag.
+			"cli": {BindingSpec: BindingSpec, Content: openbindings.TextContent(
+				"bin \"" + testBinary + "\"\ncmd \"json\" {\n    help \"Output JSON\"\n    arg \"[pairs]...\" help=\"key=value pairs\"\n}\n")},
+		},
+		Bindings: map[string]openbindings.BindingEntry{
+			"list.cli": {
+				Operation: "list",
+				Source:    "cli",
+				Selector:  "json",
+				// The transform injects the pair the command echoes back,
+				// which is only observable if a value crosses the boundary.
+				InputTransform: &openbindings.TransformOrRef{Inline: `{"pairs": ["name=alice"]}`},
+			},
+		},
+	}
+
+	engine := invoke.NewOperationInvoker(NewInvoker())
+	engine.TransformEvaluator = usageTestEvaluator{}
+	engine.OutputDecoder = func(_ invoke.InvokeSite, raw invoke.RawResult) (any, error) {
+		var v any
+		if len(raw.Body) == 0 {
+			return nil, nil
+		}
+		if err := json.Unmarshal(raw.Body, &v); err != nil {
+			return nil, invoke.ErrUseDefault
+		}
+		return v, nil
+	}
+
+	t.Run("supplied value carries the transform", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		call := invoke.Invoke(ctx, engine, iface, invoke.NewOperationSignature[any, any]("list"))
+		defer call.Cancel()
+		if err := call.Write(ctx, nil); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if err := call.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		out, err := invoke.Single(ctx, call.Outputs())
+		if err != nil {
+			t.Fatalf("the caller's value did not reach the command: %v", err)
+		}
+		result, ok := out.(map[string]any)
+		if !ok || result["name"] != "alice" {
+			t.Fatalf("input transform did not apply to the supplied value: %#v", out)
+		}
+	})
+
+	t.Run("supplying no value runs bare and applies no transform", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		call := invoke.Invoke(ctx, engine, iface, invoke.NewOperationSignature[any, any]("list"))
+		defer call.Cancel()
+		// A bare close is how a caller says it supplies nothing, exactly as
+		// it does for an operation that declares an input. Because no value
+		// crosses, the transform does not run and its pair is absent.
+		if err := call.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		out, err := invoke.Single(ctx, call.Outputs())
+		if err != nil {
+			t.Fatalf("bare run failed: %v", err)
+		}
+		result, ok := out.(map[string]any)
+		if !ok {
+			t.Fatalf("expected the bare command's JSON, got %#v", out)
+		}
+		if _, injected := result["name"]; injected {
+			t.Fatalf("a transform ran although no value crossed the boundary: %#v", result)
+		}
+	})
+}
+
+// usageTestEvaluator is the smallest JSONata evaluator these tests need: the
+// SDK never selects an engine of its own, so a consumer supplies one.
+type usageTestEvaluator struct{}
+
+func (usageTestEvaluator) Evaluate(ctx context.Context, expression string, data any) (any, error) {
+	return usageTestEvaluator{}.EvaluateWithBindings(ctx, expression, data, nil)
+}
+
+func (usageTestEvaluator) EvaluateWithBindings(ctx context.Context, expression string, data any, bindings map[string]any) (any, error) {
+	expr, err := gnata.Compile(expression)
+	if err != nil {
+		return nil, err
+	}
+	input, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	result, err := expr.EvalBytes(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, invoke.ErrTransformUndefined
+	}
+	// Return ordinary JSON-space values, the way a real evaluator adapter does.
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	var normalized any
+	if err := json.Unmarshal(encoded, &normalized); err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
