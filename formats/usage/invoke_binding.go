@@ -46,12 +46,21 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		return
 	}
 
-	// No-input convention: an operation-layer call for an operation that
-	// declares no input (InputSchema == nil) closes input on entry and runs
-	// the bare command. Otherwise read the single flag/arg object; a bare
-	// close (io.EOF) also runs bare (CLI flags are optional).
+	// Whether a value crosses this boundary is decided by the document, but
+	// not by the operation's `input` alone. Core says an absent `input` makes
+	// no portable claim at that boundary; it does not say the interaction
+	// carries zero values. A binding that declares an input transform has
+	// said the opposite in the only place that can say it: the transform
+	// exists to map a value into this command's flags and arguments, so a
+	// value is meant to cross and the caller is the one who supplies it.
+	//
+	// So: an operation-layer call for an operation that declares no input AND
+	// whose binding declares no input transform has nothing that could cross,
+	// and runs the bare command without waiting. Everything else reads the
+	// single flag/arg object; a bare close (io.EOF) still runs bare, because
+	// CLI flags are optional.
 	var input any
-	if args.Binding != nil && args.InputSchema == nil {
+	if args.Binding != nil && args.InputSchema == nil && args.Binding.InputTransform == nil {
 		_ = inv.CloseInput()
 	} else {
 		v, rerr := inv.ReadInput(bctx)
