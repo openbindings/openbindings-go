@@ -1,7 +1,8 @@
-# Native value migration plan
+# Value architecture evaluation and conditional migration
 
-Status: planned, 20 September 2026. No runtime change is activated by this
-document. Implementation begins with a bounded feasibility experiment.
+Status: comparative evaluation planned, 20 September 2026. Migration is not
+selected for implementation. No runtime change is activated by this document.
+The branch name records the original planning task, not a predetermined winner.
 
 Branch: `codex/native-value-migration`.
 Base: `origin/release/0.2` at
@@ -24,11 +25,68 @@ that applications adopt a policy engine, delegate manager or storage system.
 Applications must remain able to implement authorization, approvals, delegation
 and result disclosure around reusable invocation mechanics.
 
-The preferred approach is bounded common logical access in existing packages.
-Current codec-backed behavior remains the production baseline while it is
-qualified. A projection into ordinary maps/slices retaining native leaves is a
-serious comparison alternative. Do not build a general custom-type mapping
-registry or a new JSON repository as a prerequisite.
+Bounded common logical access is a candidate to evaluate, not an established
+improvement overall. Current codec-backed behavior remains the production
+baseline. A projection into ordinary maps/slices retaining native leaves is an
+equal comparison contender. Do not build a general custom-type mapping registry
+or a new JSON repository as a prerequisite.
+
+## Establish the advantage before selecting a migration
+
+The earlier architecture reviews supported the reasoning and readiness for
+investigation. They did not demonstrate comparative superiority. Broad use-case
+compatibility also does not show that a new implementation is worth its cost.
+The immediate deliverable is a comparative decision, not a rewritten SDK.
+
+Compare three concrete options against the same callers and workloads:
+
+| Option | What the comparison must credit and charge |
+| --- | --- |
+| A. Current implementation, with narrowly justified fixes | Existing generic fast paths, codec coverage and lower change risk; actual conversion costs and native-carriage limitations. |
+| B. Shared native access | Consistent interpretation and eligible backing retention; traversal, reflection, ownership, validation integration and API/maintenance costs. |
+| P. Project container shells while retaining native leaves | Simpler ordinary container consumption; complete projection/allocation cost, required leaf interpretation and lost container identity. |
+
+Start with source-based responsibility, compatibility and caller-code comparisons.
+Then implement only the disposable fixture paths needed to resolve uncertainties.
+The cost of that prototype is investigation, not authorization to replace the
+production paths. A schema/type check or an evaluator microbenchmark cannot
+stand in for an actual complete invocation.
+
+Before examining candidate performance results, freeze the workload sizes,
+required behaviors, comparison procedure, acceptable regressions and a bounded
+effort allowance for the experiment. Derive materiality from intended callers
+and baseline costs. Do not select thresholds after seeing which design wins.
+Where importance or a threshold is undecided, record the uncertainty rather
+than claiming objective superiority.
+
+The comparison must establish:
+
+1. Correct logical observations, outcomes, ownership and export for each
+   supported case. Record differing coverage explicitly; narrower prototype
+   coverage cannot masquerade as an easier equivalent implementation.
+2. A meaningful improvement in caller experience or measured complete-path cost,
+   with ordinary small calls included so a large-image win cannot hide a
+   common-path regression. Report required copies and retained memory too.
+3. A credible compatibility and maintenance case: changed consumers, public
+   contracts, custom-type recovery, testing burden and rollout effort. Fewer
+   conversions alone are not an overall win.
+4. Why the proposed choice beats the strongest simpler alternative for the
+   declared goals, including the option to retain A with targeted fixes.
+
+**Decision gate:** produce a report recommending A, B or P, or explicitly state
+that the evidence is inconclusive. Include raw measurements, caller examples,
+prototype scope, remaining risks and the cost of expansion. Only a demonstrated
+advantage justifies selecting the corresponding migration. An inconclusive
+comparison retains A; it does not authorize progressively rebuilding the SDK
+until the preferred proposal looks successful. If the bounded experiment cannot
+answer the question within its recorded scope/effort, stop and report that.
+
+Stages 0 through 4 below describe the bounded comparison. Stages 2 and 3 are
+candidate B's possible fixture work, not mandatory infrastructure to finish
+before testing alternatives. Keep A and P in the same harness from the start.
+No stable new public API, shared-path activation, broad backend rewrite, Graph
+migration or other-family rollout belongs before this comparative decision.
+Stages 5 and 6 are a conditional outline, to revise around whichever option wins.
 
 ## Responsibility boundaries
 
@@ -47,7 +105,7 @@ Keep ordinary Go caller shapes. A transform-free invocation still needs no
 evaluator. Applications select an evaluator once when composing their runtime;
 ordinary operation callers do not choose an engine for every invocation.
 
-Start the access work in the existing `jsonvalue` area. Reflection plans,
+If B earns implementation, start access work in the existing `jsonvalue` area. Reflection plans,
 traversal caches and ownership bookkeeping stay private. The minimal read-view
 contract needed by independently versioned adapters will require public API
 review before exposure; this plan deliberately does not invent its signatures.
@@ -113,8 +171,9 @@ to make the pilot look complete.
 
 Each numbered stage should produce a reviewable diff and evidence. A gate is
 not passed because its API exists or because a test double returned the desired
-value. Stage 0 can begin immediately. Stage 1 decides whether the native slice
-should proceed; it does not require completion or adoption of a new evaluator.
+value. Stage 0 can begin immediately. Stage 1 checks native-engine feasibility;
+it does not establish comparative advantage or select a migration. It does not
+require completion or adoption of a new evaluator.
 
 ### 0. Freeze the baseline and fixture ledger
 
@@ -156,13 +215,15 @@ behavior stops stages 2 through 4; unavailable evidence leaves the gate open.
 Investigate another adapter/engine or reconsider the native target explicitly.
 Do not start building a new evaluator to clear this gate.
 
-### 2. Build common access, construction and ownership in isolation
+### 2. Prototype only the native access needed by the comparison
 
-Owner: root SDK, after stage 1. Implement the fixed domain's shared access,
-complete admission, ordinary typed construction, detachment and explicit export.
-Evaluate minimal public read interfaces with real binding and evaluator callers
-before freezing them. No process-global registration or arbitrary constructor
-framework.
+Owner: isolated experiment, after stage 1. Implement only the fixed fixture
+domain's shared access, complete admission, ordinary typed construction,
+detachment and explicit export needed to compare B with A and P. Keep prototype
+interfaces disposable. If making the fixture credible requires a broad framework
+or backend rewrite, report that cost and stop expansion instead of implementing
+the migration to justify it. No process-global registration or arbitrary
+constructor framework.
 
 An application-private experimental assembly selects the native reader,
 validator, wrappers and providers together before preparing calls. This is a
@@ -183,10 +244,11 @@ aliasing cannot bypass a different logical mapping, failed construction is atomi
 and lifetime/resource behavior is demonstrated. Original-byte retrieval is a
 separate explicit operation from requesting a logical string or typed assignment.
 
-### 3. Integrate validation and one typed/local invocation path
+### 3. Exercise validation and one typed/local comparison path
 
-Owner: root SDK. Route admission, compiled validation, transform result checks,
-typed calls, local providers and error snapshots through the same interpretation.
+Owner: isolated experiment. For the selected fixture path, route admission,
+compiled validation, transform result checks, typed calls, local providers and
+error snapshots through the same interpretation.
 Preserve input validation before input transform and output transform before
 output validation. Complete admission still runs when a schema is absent.
 
@@ -202,6 +264,11 @@ JSON round trips; logical controls agree across each consumer; no-schema invalid
 values fail; validation and error lifecycle regressions stay green. Show the
 caller code, including custom-type refusal and explicit recovery. Do not claim
 Graph or protocol-wide coverage from this slice.
+
+All keywords in the fixture's complete governing schema must execute faithfully;
+do not stub validation or skip its costs to make a prototype win. Fixture success
+is not full backend qualification. Broader backend integration remains a cost
+and risk in the decision, not work to perform secretly inside this experiment.
 
 ### 4. Qualify the real OpenAPI PNG path and compare total cost
 
@@ -224,16 +291,18 @@ allocation, peak/retained memory and conversion counts. Use small ordinary value
 large images and nested values, with no-transform and string-observing transforms.
 Freeze fixture sizes and measurement procedure before comparing candidates.
 
-Acceptance: faithful complete behavior and a documented caller/performance
-benefit that justifies the added maintenance. No universal speed claim follows
-from fewer codec calls. If projection is simpler and meets actual requirements
-at better total cost, reconsider the strategy before expansion. Performance
-thresholds and supported workload claims are chosen from this evidence, not
-invented as unmeasured release promises.
+Acceptance: the comparative decision gate above is satisfied against the
+predeclared criteria. No universal speed claim follows from fewer codec calls.
+If projection is simpler and meets actual requirements at better total cost,
+select it rather than expanding B. If neither new approach earns its complexity,
+retain A and its justified focused fixes. Stage 4 ends with the comparative
+report; it does not automatically begin migration.
 
 ### 5. Expand lifecycle and protocol coverage in separate slices
 
-Owner: affected SDK modules, only after stage 4 justifies continuation.
+Owner: affected SDK modules, only after the comparison selects a migration.
+This outline assumes a native approach wins; revise it for the selected design
+and its demonstrated scope before implementation.
 
 | Slice | Required evidence before enabling its native path |
 | --- | --- |
@@ -335,14 +404,18 @@ unchanged. After activation, recovery uses a previously qualified package/cohort
 or a documented configuration, never an automatic retry of a possibly executed
 operation.
 
-## First implementation checkpoint
+## Immediate evaluation checkpoint
 
 - [x] Create isolated branch from the declared integration line.
 - [x] Record architecture, fixed pilot scope, code seams and stage gates.
+- [x] Make comparative advantage a prerequisite for selecting a migration.
 - [ ] Freeze implementation fixtures and exact baseline dependencies (stage 0).
+- [ ] Freeze comparison criteria and effort allowance before candidate results.
 - [ ] Qualify one pinned engine/adapter against the complete native observation
   and carriage gate (stage 1).
-- [ ] Proceed to the isolated reader/validation/local/OpenAPI slice only on pass.
+- [ ] Run the bounded A/B/P comparison and publish its decision, including the
+  outcome of retaining A if alternatives do not earn their cost.
+- [ ] Select and revise a migration outline only if that decision warrants one.
 
 This plan has not received the earlier architecture decision's cold-review
 grade. No runtime implementation, production activation, benchmark result or

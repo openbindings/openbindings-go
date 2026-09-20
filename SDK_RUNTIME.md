@@ -43,7 +43,7 @@ independently usable without the facade. OB CLI owns the concrete list of
 installed binding packages and is migrated only after this SDK boundary
 passes independently.
 
-The [native value migration plan](NATIVE_VALUE_MIGRATION.md) describes proposed
-work on shared value access, typed conversion, validation and explicit export.
-It preserves these package boundaries and evaluator injection. The plan's
-experimental stages do not activate new runtime behavior.
+The [value architecture evaluation plan](VALUE_ARCHITECTURE_PLAN.md) compares
+current handling, shared native access and container projection before selecting
+any migration. It preserves these package boundaries and evaluator injection.
+The comparison does not activate new runtime behavior.
