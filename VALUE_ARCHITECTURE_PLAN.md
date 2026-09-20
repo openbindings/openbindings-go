@@ -1,422 +1,225 @@
-# Value architecture evaluation and conditional migration
+# Value architecture: destination and qualification plan
 
-Status: comparative evaluation planned, 20 September 2026. Migration is not
-selected for implementation. No runtime change is activated by this document.
-The branch name records the original planning task, not a predetermined winner.
+Status: three comparative review rounds complete, 20 September 2026.
+**Projected containers with retained native leaves (P) are the leading
+destination to qualify.** No runtime migration is selected for activation.
+This is a design judgment, not measured proof of performance superiority.
 
 Branch: `codex/native-value-migration`.
 Base: `origin/release/0.2` at
 `71cbd964a8df7a5d2b2981756d351d3a59b86c5d`.
 The integration destination was checked against `openbindings/project` main
 at `6eceb5dc1e8d0e4c1182f230b83fa2080a8e7b3f`. Its catalog and working-loop
-records select `release/0.2`; the older `main` instructions in CONTRIBUTING.md
-do not select this work's destination.
+records select `release/0.2`; CONTRIBUTING.md's older `main` wording does not
+select this work's destination. The branch name records the original planning
+task; it does not require a particular implementation.
 
-## Outcome
+## Goal and decision
 
-Make supported native Go operation values behave consistently across admission,
-schema validation, transforms, typed calls and explicit JSON export, without
-serializing and reparsing merely to cross an internal boundary. Preserve eligible
-native leaves, including original image bytes, through shape-only transforms.
+Choose the ideal architecture for operation data, not the cheapest next patch.
+Keep natural Go calls, exact supported logical meaning, reliable results and
+convenient explicit JSON export. Remove serialization used merely to cross
+internal boundaries. Necessary protocol encoding, custom codec interpretation,
+requested string observations and ownership copies remain legitimate work.
 
-Keep the existing package architecture and application-supplied evaluator seam.
-This is a migration of value handling, not a replacement SDK or a requirement
-that applications adopt a policy engine, delegate manager or storage system.
-Applications must remain able to implement authorization, approvals, delegation
-and result disclosure around reusable invocation mechanics.
+The current SDK already supports exact PNG recovery through a real transform,
+typed invocation, export and reverse upload without caller-written invocation
+serialization. A migration must improve the resulting architecture, not claim
+to invent that existing usability. Preserving a particular backing buffer is
+an optimization; exact content recovery is a requirement.
 
-Bounded common logical access is a candidate to evaluate, not an established
-improvement overall. Current codec-backed behavior remains the production
-baseline. A projection into ordinary maps/slices retaining native leaves is an
-equal comparison contender. Do not build a general custom-type mapping registry
-or a new JSON repository as a prerequisite.
-
-## Establish the advantage before selecting a migration
-
-The earlier architecture reviews supported the reasoning and readiness for
-investigation. They did not demonstrate comparative superiority. Broad use-case
-compatibility also does not show that a new implementation is worth its cost.
-The immediate deliverable is a comparative decision, not a rewritten SDK.
-
-Compare three concrete options against the same callers and workloads:
-
-| Option | What the comparison must credit and charge |
+| Candidate | Architectural assessment |
 | --- | --- |
-| A. Current implementation, with narrowly justified fixes | Existing generic fast paths, codec coverage and lower change risk; actual conversion costs and native-carriage limitations. |
-| B. Shared native access | Consistent interpretation and eligible backing retention; traversal, reflection, ownership, validation integration and API/maintenance costs. |
-| P. Project container shells while retaining native leaves | Simpler ordinary container consumption; complete projection/allocation cost, required leaf interpretation and lost container identity. |
+| A: current machinery with targeted improvements | Maintained codec compatibility and useful generic fast lanes. Local consistency defects are repairable, but ordinary typed bridges and eager byte/string conversion remain. It has not been established as the ideal. |
+| B: shared logical reader over native containers | Can avoid projected shells and unify access to durable native views. Requires container-reader integration throughout consumers, and may still require a full admission walk. Remains a serious challenger. |
+| P: project ordinary container shells and retain eligible native leaves | Removes ordinary text bridges while keeping familiar object/array structures for consumers. Requires finite scalar integration, checked typed construction, faithful codec fallback and ownership. Leading destination to qualify. |
 
-Start with source-based responsibility, compatibility and caller-code comparisons.
-Then implement only the disposable fixture paths needed to resolve uncertainties.
-The cost of that prototype is investigation, not authorization to replace the
-production paths. A schema/type check or an evaluator microbenchmark cannot
-stand in for an actual complete invocation.
+P is preferred for its steady-state responsibility boundaries, not because it
+would be cheapest to implement. Host container interpretation occurs at admission
+and typed construction. Most consumers need not learn a universal native-object
+reader. B can overturn the choice if it simplifies total integration and removes
+meaningful shell cost. A can win if native handling's permanent obligations
+outweigh its architectural benefit. Retaining current behavior while qualifying
+the choice is an operational decision, not a verdict that A is ideal.
 
-Before examining candidate performance results, freeze the workload sizes,
-required behaviors, comparison procedure, acceptable regressions and a bounded
-effort allowance for the experiment. Derive materiality from intended callers
-and baseline costs. Do not select thresholds after seeing which design wins.
-Where importance or a threshold is undecided, record the uncertainty rather
-than claiming objective superiority.
+## Intended data flow
 
-The comparison must establish:
+1. An application supplies ordinary Go input or a binding produces a value in
+   its governing correspondence. Protocol decoding remains with that protocol.
+2. Admission establishes one logical meaning. Reuse compatible generic
+   containers where safe; project eligible typed objects/arrays into generic
+   shells without producing JSON text. Recognize codec-defined types before
+   ordinary reflection and produce one stable codec-defined snapshot instead.
+3. Validation, transforms and other consumers observe those containers and one
+   finite scalar contract. Eligible bytes can remain bytes with canonical Base64
+   string meaning. Consumer-specific guesses about the carrier are forbidden.
+4. Construct ordinary typed outputs directly with checked assignments. Honor
+   custom output decoders through faithful fallback. An existing generic caller's
+   promised string representation may require compatibility materialization;
+   count that work explicitly rather than silently returning a wrapper.
+5. Encode JSON for explicit export or a real protocol/storage need. Returned
+   values remain usable for the promised lifetime after invocation termination.
 
-1. Correct logical observations, outcomes, ownership and export for each
-   supported case. Record differing coverage explicitly; narrower prototype
-   coverage cannot masquerade as an easier equivalent implementation.
-2. A meaningful improvement in caller experience or measured complete-path cost,
-   with ordinary small calls included so a large-image win cannot hide a
-   common-path regression. Report required copies and retained memory too.
-3. A credible compatibility and maintenance case: changed consumers, public
-   contracts, custom-type recovery, testing burden and rollout effort. Fewer
-   conversions alone are not an overall win.
-4. Why the proposed choice beats the strongest simpler alternative for the
-   declared goals, including the option to retain A with targeted fixes.
-
-**Decision gate:** produce a report recommending A, B or P, or explicitly state
-that the evidence is inconclusive. Include raw measurements, caller examples,
-prototype scope, remaining risks and the cost of expansion. Only a demonstrated
-advantage justifies selecting the corresponding migration. An inconclusive
-comparison retains A; it does not authorize progressively rebuilding the SDK
-until the preferred proposal looks successful. If the bounded experiment cannot
-answer the question within its recorded scope/effort, stop and report that.
-
-Stages 0 through 4 below describe the bounded comparison. Stages 2 and 3 are
-candidate B's possible fixture work, not mandatory infrastructure to finish
-before testing alternatives. Keep A and P in the same harness from the start.
-No stable new public API, shared-path activation, broad backend rewrite, Graph
-migration or other-family rollout belongs before this comparative decision.
-Stages 5 and 6 are a conditional outline, to revise around whichever option wins.
+Projection allocates shells and can visit branches later discarded. Complete
+admission may require B to visit those branches too, but without shell allocation.
+Compare that difference with repeated field access, reflection plans, caches,
+typed construction and retained storage. Neither fewer codec calls nor a
+field-selection microbenchmark establishes whole-path superiority.
 
 ## Responsibility boundaries
 
-| Owner | Migration responsibility |
+| Owner | Responsibility |
 | --- | --- |
-| Root Core package | Document models, references, document validation and schema facade. Preserve syntax validation without selecting an execution engine. |
-| `jsonvalue` and private implementation helpers | One logical interpretation of supported carriers; read access, ordinary construction, detachment and explicit export. No dependency on invocation, binding modules or evaluators. |
-| `invoke` | Admission order, typed/local bridges, transformation result gates, stable outcomes, ownership and bounded retention. Preserve the evaluator injection interface. |
-| `formats/*` | Governing source correspondence, native client adaptation and protocol-specific value meanings. Preserve independent module usability and existing import paths. |
-| Optional `sdk` facade | Assemble explicitly supplied providers and evaluator; no default engine or binding imports. |
-| Application evaluator adapter | Engine-specific access/conversion, undefined/error translation, closed document-transform environment, result lifetime and integration qualification. |
-| Consuming application | Engine choice, authorization, credential-use policy, persistence, UI/export and release of results. |
-| Standalone native clients | Protocol loading, request/response and wire mechanics in their own vocabulary, without SDK invocation types. |
+| Root Core package | Document models, references, document validation and schema facade; syntax checking without selecting an execution engine. |
+| Existing `jsonvalue` area and private helpers | Bounded projection, common scalar meaning, codec fallback, ordinary construction, detachment and export. No invocation, binding or evaluator dependency. Public helper names remain undecided. |
+| `invoke` | Admission and delivery boundaries, transform/validation order, outcomes, retries and lifetime. Preserve evaluator injection. |
+| `formats/*` | Binding-defined correspondence and protocol adaptation; no blanket mapping that overrides a family's rules. |
+| Optional `sdk` facade | Assemble explicitly supplied providers/evaluator without choosing defaults. |
+| Application evaluator adapter | Engine-specific adaptation, undefined/error translation, closed document-expression semantics and result lifetime. |
+| Standalone protocol clients | Independently useful protocol APIs and wire mechanics, without SDK carrier or invocation types. |
+| Consuming application | Evaluator choice, authorization, approvals, delegation, persistence and UI/export policy. |
 
-Keep ordinary Go caller shapes. A transform-free invocation still needs no
-evaluator. Applications select an evaluator once when composing their runtime;
-ordinary operation callers do not choose an engine for every invocation.
+No new JSON repository, general mapping registry or arbitrary constructor
+framework is required. Keep current package boundaries and independently usable
+modules. A transform-free invocation requires no evaluator.
 
-If B earns implementation, start access work in the existing `jsonvalue` area. Reflection plans,
-traversal caches and ownership bookkeeping stay private. The minimal read-view
-contract needed by independently versioned adapters will require public API
-review before exposure; this plan deliberately does not invent its signatures.
-The maintained schema backend and JSON codec remain dependencies, not rewrite
-targets. Their adoption does not establish whole-pipeline native coverage.
+## Semantics that qualification must demonstrate
 
-## Baseline and change inventory
-
-The base already preserves ordinary generic map/slice references in some local
-calls. The earlier bounded public-API probe also observed two marshal and two
-unmarshal hooks in its matched custom-codec typed fixture. Those counters are
-evidence of that fixture's conversions, not a throughput measurement or proof
-that its custom codecs can be ignored.
-
-| Current location | Current behavior to address | Intended change and deletion condition |
-| --- | --- | --- |
-| [typed invocation](invoke/invocation.go), [local providers](invoke/local_provider.go) | Codec bridges outside the generic fast path; output assignment may use host type alone. | Direct read/construction for qualified carriers; native aliasing only when logical interpretation also agrees. Remove the replaced round trips only after caller compatibility tests pass. |
-| [transform admission](invoke/operation_invoker.go), [invocation data and errors](invoke/invoker_types.go) | Separate classifiers/codec checks can disagree with schema validation; errors use text for snapshots. | Common complete admission and native detachment. Preserve error isolation and public codes when removing text conversion. |
-| [schema facade](compiled_schema.go), [backend](internal/thirdparty/jsonschema/validator.go) | Concrete carrier assumptions throughout validation. | Shared logical access in traversal, scalar constraints, equality, sets and evaluated-member tracking. A front-door conversion or type switch alone is insufficient. |
-| [value helpers](jsonvalue/equality.go), [membership](jsonvalue/set.go) | Codec-based detachment and existing exact-number rules. | Preserve exact semantics and no-verdict errors while using the common reader where qualified. Canonical identity remains a different operation. |
-| [OpenAPI adaptation](formats/openapi/native_adapter.go) | Concrete input containers and eager byte/string adaptation. | Read qualified inputs natively; expose raw bytes with the binding's logical string interpretation. Cut eager Base64 only when the complete path is qualified. |
-| [Graph execution](formats/operationgraph/engine.go), [state](formats/operationgraph/state.go) | Separate validation, truthiness/container assumptions and conversion paths. | Migrate all observations coherently in a later slice, preserving graph semantics and bounded retention. |
-| [optional JSONata adapter](invoke/jsonata/evaluator.go) | Existing engine-specific text bridge. | Keep available during migration. Qualify application-owned adaptation separately; retire or relocate this package only with consumer migration and compatibility policy. |
+- A supported value means the same thing in admission, schemas, expressions,
+  equality, typed recovery and export. Distinguish absent, null, undefined and
+  failure. Inability to validate is not an ordinary schema non-match.
+- Nil ordinary host containers follow the selected codec-compatible null
+  meaning; nonnil empty containers remain containers. A binding's zero raw
+  octets still denote its empty logical string, even if stored in a nil buffer.
+- Byte leaves preserve canonical Base64 string observations, including length,
+  equality, substring, patterns and `$base64encode`. The latter encodes the
+  logical characters, not a host engine's alternate raw-byte extension.
+  Observation may materialize text without destroying the eligible carried leaf.
+- Preserve exact supported integers, valid number tokens and codec-compatible
+  float32 meaning. Invalid descendants, cycles and nonfinite values do not pass
+  merely because a transform never reads them. Custom encoders define the
+  logical content to inspect; private host internals do not replace that content.
+- Native eligibility preserves supported field selection and tags. Custom or
+  unusual types use the maintained codec once per admitted snapshot, not once
+  per field read. Honor custom output decoding; failures publish no partial
+  destination. A narrower prototype is a coverage deficit, not full parity.
+- Preserve input validation before input transforms and output validation after
+  output transforms. Preserve outcome classification, replay of accepted
+  post-transform inputs, retry eligibility, backpressure and accepted delivery.
+- Copied shells do not detach leaves. Define borrowing or ownership transfer,
+  required copies, producer-buffer reuse, post-completion access and release.
+  Measure small slices retaining large backing arrays and selected children
+  retaining whole parents. Do not claim heap bounds from logical size alone.
 
 The [codec maintenance record](internal/thirdparty/jsoncodec/MAINTENANCE.md)
-governs the adopted implementation. Do not replace it with `encoding/json`
-based on the stale experimental wording in the helper README. Correct that
-documentation in the relevant implementation slice without expanding its claim
-to unqualified evaluator or protocol paths.
+governs the adopted codec. Preserve its semantics; do not replace it with
+`encoding/json` based on stale experimental wording in a helper README.
 
-## Fixed initial domain
+## Evidence already collected
 
-This is the private experiment's domain, narrower than the existing public
-codec surface. It is not permission to narrow today's production API silently.
+Three rounds of three fresh reviewers compared the options using frozen inputs.
+Round 1 preferred bounded A work as an investment. After the user clarified the
+ideal-destination goal, round 2 split provisionally between B and P. The final
+panel independently preferred P, subject to qualification. Those reviews are
+design judgments, not nine performance validations; earlier A grades establish
+neither comparative superiority nor implementation readiness.
 
-| Carrier | Pilot interpretation or refusal |
-| --- | --- |
-| Nil interface, pointer, map or slice | Logical null; preserve distinction from missing and from a nonnil empty collection. |
-| Nonnil bytes | Canonical padded Base64 logical string. Retain eligible backing; materialize characters when an actual string observation requires them. |
-| Nil bytes / nonnil empty bytes | Null / empty string. A binding raw-octet value always follows the binding's string correspondence, including zero octets; physical nil storage must not accidentally turn it into null. |
-| Boolean and valid UTF-8 string | Corresponding logical scalar. Other string coverage is refused in the pilot, never silently repaired. |
-| Integer, finite float, valid `json.Number` | Current codec-compatible logical value, including float32's own-width representation and exact numeric tokens. No recovery of already-lost caller precision. |
-| String-keyed maps, slices, ordinary pointers and structs | Native logical access. Exported fields, exact JSON rename/ignore and `omitempty` match current codec observation. |
-| Embedded/conflicting fields, `,string`, custom codec types, `json.RawMessage`, `time.Time`, `big.Int` | Recognize before ordinary reflection and refuse in the pilot. Explicit application conversion is the initial recovery. Broader support requires its own compatibility decision. |
-| Engine or binding result view | Explicit durable read access over the six logical kinds, valid at nested edges. An opaque or expired handle is not a successful result. |
+The coordination workspace records the briefs, original reports, dispositions,
+source pins, executable probes and raw output under `design/sdk-value-comparison`.
+Its `RESULT.md` distinguishes findings, hypotheses and remaining qualification.
 
-Initial typed construction uses fresh structs/maps/slices/pointers with exact
-field names and no extra members. Missing leaves zero values; null follows the
-documented codec-compatible zero/nil behavior. Check numeric ranges before
-assignment. Refuse unknown members, case-only field matches, fixed arrays,
-float narrowing and implicit string/number coercion in the pilot. Failure must
-not publish a partial destination.
+- A valid 88-byte PNG passed real HTTP, the existing optional SDK evaluator,
+  schema checks, exact typed recovery, export after termination and reverse
+  upload. The SDK/adapter was this branch's base; native OpenAPI client was
+  `7b15d57e960faa6a9e010eb9cbea80fd83f0d02e`. The evaluator was the SDK's existing
+  `github.com/openbindings/jsonata/go` dependency at `e2a5e518e6b5`.
+- A disposable archive patch returned the normalized transform result already
+  computed by current admission. It corrected three schema inconsistencies in
+  38 cases without a shared reader. Observable result carriers changed, so this
+  is not production qualification. Its evaluator was a test double.
+- Eight further controls confirmed that patch leaves nil generic container
+  interpretation inconsistent with export. A small correction is not a complete
+  architectural answer.
+- Source inspection locates initial raw-response Base64 encoding in the native
+  client's runtime, before SDK streaming adaptation. Request-side repeated
+  conversion is separately improvable under any candidate.
 
-Freeze fixtures to tagged Request/Response with nested ordinary structs,
-`[]int`, `map[string]string`, matching generic containers, PNG bytes and the
-equivalent Base64 string, nil/empty controls, exact numbers, one explicit result
-view, and negative custom-codec/cycle/function/lifetime/resource cases. Use a
-nested custom Money example to demonstrate clear refusal before dispatch and
-successful explicit caller conversion. Do not expand host-type coverage merely
-to make the pilot look complete.
+No B/P implementation, comparative timing, allocation or retained-heap result
+is claimed. Experiments used pinned temporary assemblies and Go 1.27.1; this is
+not a project-wide cohort or declared-toolchain release qualification.
 
-## Work sequence and exit gates
+## Next: one bounded comparison before migration
 
-Each numbered stage should produce a reviewable diff and evidence. A gate is
-not passed because its API exists or because a test double returned the desired
-value. Stage 0 can begin immediately. Stage 1 checks native-engine feasibility;
-it does not establish comparative advantage or select a migration. It does not
-require completion or adoption of a new evaluator.
+Freeze exact revisions, payloads, ownership policy and measurement procedure
+before implementing or comparing candidates. Include a corrected A control
+with its actual proposed improvements, not a deliberately weak baseline.
 
-### 0. Freeze the baseline and fixture ledger
+First qualify the finite byte/scalar contract with one real application-selected
+evaluator and actual schema handling. Test movement, logical string observations,
+undefined/error translation and durable output together. Current engine gaps are
+implementation gaps, not architectural verdicts. Do not implement a new engine
+to clear this gate or introduce an SDK default evaluator.
 
-Record exact SDK, native-client, application/evaluator and corpus revisions,
-module replacements and toolchain. Bring the existing scenario evidence into
-a reproducible implementation fixture lane, retaining original baseline output
-separately. Separate five measurements: internal JSON encode/decode, Base64
-materialization, required ownership copies, container allocation and real wire
-encoding. Preserve a plain logical-value control for each native fixture.
+Then build a disposable P slice and a minimal B challenger through identical
+admission, validation, evaluation and typed delivery. Keep their ordinary host
+domain and stable codec fallback the same. Exercise:
 
-Acceptance: the baseline is reproducible without relying on ambient `go.work`;
-generic and typed fixtures represent the same values; unsupported cases and
-existing behavior are explicitly recorded. Prior cached Go 1.27.1 results do
-not replace verification on the modules' declared toolchain.
+1. Small generic/typed equivalents and a wide typed structure with narrow
+   selection and repeated field reads.
+2. Actual raw-image HTTP retrieval, movement and string observations, schema,
+   typed byte recovery, explicit export and reverse raw request.
+3. A business codec whose meaning differs from its fields, exact numbers,
+   nil/empty/missing controls, and hidden invalid descendants without a schema.
+4. One retained Graph/producer-reuse case and release after invocation ends,
+   including a small leaf backed by a much larger allocation.
 
-### 1. Qualify one real evaluator adapter before broader SDK work
+The native client must expose a useful native response/request path in its own
+vocabulary. An SDK adapter cannot restore backing discarded below it. All
+governing schema keywords in the fixture must really run; stubs cannot qualify
+an architecture. Preserve ordinary caller code and record any recovery burden.
 
-Owner: application/integration fixture, using a pinned existing candidate engine
-and minimal experimental value views. Do not commit an engine dependency into
-the SDK to run the experiment. Test the existing evaluator seam with the real
-adapter; a small standalone fixture can precede full reader implementation.
+Measure total latency/CPU, allocations, peak/retained memory, traversals,
+materializations, codec fallback and necessary copies. Enumerate lasting consumer
+contracts too. P fails its premise if host-specific exceptions spread through
+consumers or typed construction simply serializes everything again. B wins if
+its broader reader gives a better total design, not just a faster isolated lookup.
 
-For bytes `{1, 2}`, require all of these together:
+Bound work to this slice, one corrective pass per implementation and a repeat
+for reproducibility. Stop if credibility requires a broad framework, backend
+rewrite or new evaluator implementation. Report the gap rather than building a
+migration to justify itself. Semantic divergence stops a candidate's cost
+comparison until explained; incomplete integration does not disprove its design.
+Freeze any workload-derived materiality criteria before results. Reviewer-proposed
+percentages and engineering-day budgets have not been adopted as user requirements.
 
-- A field move and nested duplication preserve eligible original backing.
-- Logical type is string, length is 4, and equality with `"AQI="` is true.
-- Inspecting the string and subsequently moving the value preserves both
-  correct observations and eligible backing.
-- Missing is distinct from present null; undefined is translated correctly.
-- Cancellation is respected at the promised boundary and returned views remain
-  usable after evaluation ends.
+Exit with P qualified, a concrete reversal to B or A, or unresolved evidence.
+Only then select implementation scope. Broad migration is not the automatic
+next step after a favorable design review.
 
-Compare with ordinary logical-value controls. Record the engine's actual limits
-and environment; do not expose host functions to document expressions or infer
-byte provenance by matching Base64 strings back to input buffers.
+## Conditional implementation and independent repairs
 
-Acceptance: every required behavior passes together. Incorrect or unsupported
-behavior stops stages 2 through 4; unavailable evidence leaves the gate open.
-Investigate another adapter/engine or reconsider the native target explicitly.
-Do not start building a new evaluator to clear this gate.
+After qualification, integrate one reviewed path at a time: projection/admission,
+complete scalar/schema behavior, checked typed/local construction, actual OpenAPI
+carriage, then retries/streams/Graph and other protocol families. Record uncovered
+paths explicitly. Preserve each family's correspondence, including ProtoJSON;
+no single host byte or number rule governs every binding. TypeScript is deferred.
 
-### 2. Prototype only the native access needed by the comparison
+Publish a compatibility matrix covering caller-visible carriers, custom codecs,
+field selection, null/missing, scalars, ownership, errors and export before
+activation. Prefer current invocation signatures. Necessary public changes follow
+the pre-1.0 version policy and require normal release documentation. Do not
+activate a semantic change automatically because an evaluator/provider upgraded.
 
-Owner: isolated experiment, after stage 1. Implement only the fixed fixture
-domain's shared access, complete admission, ordinary typed construction,
-detachment and explicit export needed to compare B with A and P. Keep prototype
-interfaces disposable. If making the fixture credible requires a broad framework
-or backend rewrite, report that cost and stop expansion instead of implementing
-the migration to justify it. No process-global registration or arbitrary
-constructor framework.
+Transform normalization, nil consistency, Graph exact-number/error behavior and
+raw-request conversion can be repaired independently. They do not settle the
+destination or require completion of the new evaluator. The native client's SDK
+helper dependency is also a separate dependency-direction concern. Adapter
+packaging changes require their own consumer migration; they are not necessary
+to establish application evaluator ownership, which already exists.
 
-An application-private experimental assembly selects the native reader,
-validator, wrappers and providers together before preparing calls. This is a
-private test setup, not a new public `RuntimeOptions` flag. Baseline callers
-retain today's behavior. No silent per-value codec fallback or automatic
-activation on a provider/evaluator upgrade.
-
-Shared graphs are read-only while retained; detachment produces independent
-storage. Integration-owned buffers/views must report a conservative retained
-backing charge. A tiny slice into a large buffer or a child retaining an engine
-arena is charged for its backing, or detached within bounds, or refused.
-Caller-borrowed Go memory has limits the SDK cannot infer from slice headers;
-do not claim a heap bound from logical byte/node counters. Count observation,
-retention and encoded-output budgets separately.
-
-Acceptance: fixed positive/negative fixtures pass, nested interpretation survives,
-aliasing cannot bypass a different logical mapping, failed construction is atomic,
-and lifetime/resource behavior is demonstrated. Original-byte retrieval is a
-separate explicit operation from requesting a logical string or typed assignment.
-
-### 3. Exercise validation and one typed/local comparison path
-
-Owner: isolated experiment. For the selected fixture path, route admission,
-compiled validation, transform result checks, typed calls, local providers and
-error snapshots through the same interpretation.
-Preserve input validation before input transform and output transform before
-output validation. Complete admission still runs when a schema is absent.
-
-Validation includes all governing keywords for admitted carriers: string length
-and pattern, exact equality, `const`, `enum`, `uniqueItems`, object/array traversal
-and evaluated-member bookkeeping. An inability to observe/validate is not a
-negative instance verdict. Keep schema reference closure and `format` annotation
-behavior. Necessary error snapshots become native copies, not shared mutable
-references.
-
-Acceptance: the ordinary typed/local fixture completes without conversion-only
-JSON round trips; logical controls agree across each consumer; no-schema invalid
-values fail; validation and error lifecycle regressions stay green. Show the
-caller code, including custom-type refusal and explicit recovery. Do not claim
-Graph or protocol-wide coverage from this slice.
-
-All keywords in the fixture's complete governing schema must execute faithfully;
-do not stub validation or skip its costs to make a prototype win. Fixture success
-is not full backend qualification. Broader backend integration remains a cost
-and risk in the decision, not work to perform secretly inside this experiment.
-
-### 4. Qualify the real OpenAPI PNG path and compare total cost
-
-Owner: Go OpenAPI adapter plus separately coordinated native-client/application
-work where needed. Inspect the actual client result and request surfaces first;
-an adapter cannot restore backing after a lower layer discarded it. Any needed
-client change must remain useful in its native API and must not import SDK view
-or invocation types.
-
-Exercise actual HTTP raw PNG response, binding correspondence, real JSONata
-field movement, schema validation, retained byte retrieval, explicit JSON export
-after termination and a reverse raw-byte request. Include empty bodies, literal
-Base64 controls, incompatible mappings and response-buffer reuse. Required JSON
-request/response encoding remains at genuine protocol boundaries.
-
-Measure matched complete paths under the current implementation, the proposed
-reader and container projection retaining leaves. Include validation, typed
-construction, adaptation, retention and requested export; report latency,
-allocation, peak/retained memory and conversion counts. Use small ordinary values,
-large images and nested values, with no-transform and string-observing transforms.
-Freeze fixture sizes and measurement procedure before comparing candidates.
-
-Acceptance: the comparative decision gate above is satisfied against the
-predeclared criteria. No universal speed claim follows from fewer codec calls.
-If projection is simpler and meets actual requirements at better total cost,
-select it rather than expanding B. If neither new approach earns its complexity,
-retain A and its justified focused fixes. Stage 4 ends with the comparative
-report; it does not automatically begin migration.
-
-### 5. Expand lifecycle and protocol coverage in separate slices
-
-Owner: affected SDK modules, only after the comparison selects a migration.
-This outline assumes a native approach wins; revise it for the selected design
-and its demonstrated scope before implementation.
-
-| Slice | Required evidence before enabling its native path |
-| --- | --- |
-| Context retries and replay | Accepted post-transform values are not transformed twice; replay is complete; finite byte/node retention; cancellation and terminal races preserve delivery semantics. |
-| Streams | Stable output after subsequent buffer reuse and termination; backpressure, cancellation, bounded aggregate retention and no silent drops/early flushes. |
-| Operation Graph | All graph reads, filters, equality, validation and nested dispatch use the declared meanings; no-verdict is not false; cancellation propagation and intermediate retention are qualified. |
-| Usage and MCP | Native text/JSON decode boundaries and declared correspondence remain intact; native access does not eliminate required decoding. |
-| gRPC and Connect | Preserve incorporated ProtoJSON meanings, including numeric host carriers that logically represent strings. |
-| AsyncAPI and GraphQL | Preserve each supported family/encoding's own correspondence, framing, outcomes and resource behavior; no blanket byte/string conversion rule. |
-
-Keep a per-path coverage ledger. An unmigrated path remains explicitly legacy;
-there is no promise of a globally native SDK until it is true. Do not re-open
-accepted cache or import-path decisions as incidental cleanup.
-
-Application extensibility is a compatibility check, not a new SDK feature list.
-Verify that protected dispatch and result exposure can be wrapped and that
-governed Graph child calls can reach application control. Effective native
-request enforcement and Graph's concrete child-invoker dependency may need
-narrow seams when a real caller demonstrates the need. Keep policy semantics,
-approvals, credential authority and durable job management outside this migration.
-
-### 6. Choose the public migration and activate a qualified version
-
-Owner: SDK API/release work, with downstream consumers. The private pilot cannot
-become the production default while its narrower coverage silently breaks
-existing custom codecs, struct rules, string values or protocol mappings.
-
-Publish a before/after compatibility matrix covering observable carrier types,
-custom codec invocation, tags and field selection, null/missing, numbers/strings,
-mutation/lifetime, validation outcomes, errors and explicit export. Decide the
-minimal public access API and the final construction behavior from real caller
-examples. Reuse current invocation signatures wherever possible.
-
-If necessary differences remain, use a documented versioned migration with
-explicit application conversion or a separately selected legacy configuration.
-Do not hide a semantic choice in per-message fallback. Compatibility changes
-must fit the pre-1.0 version policy; no version number is selected by this plan.
-
-Acceptance: affected root/format modules and exact downstream application
-cohort pass; documentation and Changed/Removed entries explain all breakage;
-the chosen default and previous supported release are unambiguous. Release
-tags, publication and cohort promotion remain separate actions.
-
-## Independent cleanup and cross-repository dependencies
-
-These are separable work items, not gates requiring a larger rewrite:
-
-- The standalone OpenAPI client currently imports SDK JSON helpers for a small
-  amount of generic encoding/number handling. Investigate narrow local helpers
-  that preserve the maintained behavior. Extract a neutral shared dependency
-  only if demonstrated reuse outweighs the maintenance cost. This belongs in
-  that client's own branch, not a silent SDK-side replacement.
-- The existing optional evaluator adapter can stay while applications migrate.
-  If moving its used bridge into ob, preserve current engine and Graph routing,
-  test there, then retire the SDK package under normal compatibility rules.
-  Adapter packaging does not decide evaluator selection ownership.
-- Document parsing, explicit JSON transport/export, canonical hashing and
-  persistence have legitimate encoding needs. Their code is not removed merely
-  because it calls a codec.
-- TypeScript implementation is deferred. Record logical outcomes and boundary
-  cases in reusable fixtures so a later implementation can follow them without
-  copying Go reflection, pointer or concurrency mechanisms.
-
-The evaluator work proceeding elsewhere is not an all-or-nothing prerequisite.
-The exact requirement is a qualified real adapter for stage 1. Baseline planning,
-fixture capture and independent boundary cleanup can proceed without it. Shared
-reader rollout and byte-preserving transform claims cannot bypass that gate.
-
-## Verification and rollout discipline
-
-Use increasing scope as each slice warrants it:
-
-1. Focused semantic, lifetime, caller-recovery and negative-control tests for
-   the changed boundary, with instrumented conversion counters where relevant.
-2. Root module `go vet ./...` and `go test -race -short ./...`, using the declared
-   toolchain and required spec/interface corpora. Preserve the dedicated
-   accepted-output/terminal race lane from [CI](.github/workflows/ci.yml).
-3. The same checks in each affected format module, then all eight modules before
-   a shared value-path activation. Use explicit workspace/module selections;
-   the root test command does not include nested Go modules.
-4. Exact source-pinned native-client and application integration, including real
-   evaluator/HTTP examples and comparison measurements. Corpus locators use
-   `OB_CORPUS_REQUIRED=1`; missing corpora are failures, not skipped evidence.
-5. Before release, perform the independent candidate and external-consumer
-   checks in [RELEASING.md](RELEASING.md), in the documented dependency order.
-
-SDK tests may inject small evaluators to isolate SDK mechanics. They must label
-that evidence accordingly. Language fidelity and engine integration are tested
-with the actual application-selected engine, without creating a default engine
-dependency in the root SDK. A supplied context is not proof that arbitrary
-foreign callbacks are hard-preemptible.
-
-Keep experimental changes isolated until a complete path passes. Land additive
-helpers only when they have a demonstrated consumer and preserve baseline
-behavior; otherwise keep them on the experiment branch. Delete an old conversion
-path in the same reviewed activation slice that supplies its qualified
-replacement. Before activation, stopping the experiment leaves production
-unchanged. After activation, recovery uses a previously qualified package/cohort
-or a documented configuration, never an automatic retry of a possibly executed
-operation.
-
-## Immediate evaluation checkpoint
-
-- [x] Create isolated branch from the declared integration line.
-- [x] Record architecture, fixed pilot scope, code seams and stage gates.
-- [x] Make comparative advantage a prerequisite for selecting a migration.
-- [ ] Freeze implementation fixtures and exact baseline dependencies (stage 0).
-- [ ] Freeze comparison criteria and effort allowance before candidate results.
-- [ ] Qualify one pinned engine/adapter against the complete native observation
-  and carriage gate (stage 1).
-- [ ] Run the bounded A/B/P comparison and publish its decision, including the
-  outcome of retaining A if alternatives do not earn their cost.
-- [ ] Select and revise a migration outline only if that decision warrants one.
-
-This plan has not received the earlier architecture decision's cold-review
-grade. No runtime implementation, production activation, benchmark result or
-engine selection is claimed by these checked planning items.
+Validate changed slices with focused semantic and lifetime tests, then required
+root and affected-module checks. Before shared activation, run all format modules
+and exact downstream integration, including corpus-required and accepted-output
+race lanes. Follow [RELEASING.md](RELEASING.md) for candidate/external-consumer
+qualification. Root tests do not include nested modules. Publication, release
+tags and project cohort promotion remain separate actions.

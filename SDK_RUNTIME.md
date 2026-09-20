@@ -43,7 +43,8 @@ independently usable without the facade. OB CLI owns the concrete list of
 installed binding packages and is migrated only after this SDK boundary
 passes independently.
 
-The [value architecture evaluation plan](VALUE_ARCHITECTURE_PLAN.md) compares
-current handling, shared native access and container projection before selecting
-any migration. It preserves these package boundaries and evaluator injection.
-The comparison does not activate new runtime behavior.
+The [value architecture evaluation plan](VALUE_ARCHITECTURE_PLAN.md) identifies
+container projection with retained native leaves as the leading destination to
+qualify, with shared native access and improved current handling as challengers.
+It preserves these package boundaries and evaluator injection. Comparative
+reviews do not activate new runtime behavior or establish a performance win.
