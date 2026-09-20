@@ -42,3 +42,8 @@ root, `invoke`, or `synthesize` package, and a binding implementation remains
 independently usable without the facade. OB CLI owns the concrete list of
 installed binding packages and is migrated only after this SDK boundary
 passes independently.
+
+The [native value migration plan](NATIVE_VALUE_MIGRATION.md) describes proposed
+work on shared value access, typed conversion, validation and explicit export.
+It preserves these package boundaries and evaluator injection. The plan's
+experimental stages do not activate new runtime behavior.
