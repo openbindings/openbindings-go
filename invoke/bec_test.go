@@ -46,6 +46,42 @@ var bearerOrAPIKey = &ContextRequiredDetails{
 
 func testBoolPointer(value bool) *bool { return &value }
 
+func TestStoreContextResolverKeepsOriginalCredentialIdentity(t *testing.T) {
+	details := &ContextRequiredDetails{Target: "https://api.example.com", Alternatives: []ContextAlternative{
+		{Requirements: []ContextRequirement{{Type: "auth.bearer", Name: "one-shot"}}},
+		{Requirements: []ContextRequirement{{Type: "auth.bearer", Name: "durable", Durable: testBoolPointer(true)}}},
+	}}
+	store := testStore{"api.example.com": {"bearerToken": "ambiguous"}}
+	resolve := StoreContextResolver(store)
+	got, err := resolve(t.Context(), details)
+	if err != nil || got != nil {
+		t.Fatalf("durability filtering changed flat credential identity: %v, %v", got, err)
+	}
+	store["api.example.com"] = map[string]any{"credentials": map[string]any{"one-shot": "withheld", "durable": "allowed"}}
+	got, err = resolve(t.Context(), details)
+	if err != nil || !ContextSatisfies(got, details) || ContextNamedCredential(got, "durable") != "allowed" || ContextNamedCredential(got, "one-shot") != nil {
+		t.Fatalf("durable named resolution lost or broadened: %v, %v", got, err)
+	}
+}
+
+func TestStoreContextResolverPreservesAlternativeOrderAcrossKeys(t *testing.T) {
+	target := "https://api.example.com/artifact"
+	details := &ContextRequiredDetails{Target: target, Alternatives: []ContextAlternative{
+		{Requirements: []ContextRequirement{{Type: "auth.bearer", Durable: testBoolPointer(true)}}},
+		{Requirements: []ContextRequirement{NewConfigValueRequirement("server", "/url", "", nil, testBoolPointer(true))}},
+		{Requirements: []ContextRequirement{{Type: "auth.apiKey", Durable: testBoolPointer(true)}}},
+	}}
+	store := testStore{
+		"api.example.com": {"apiKey": "later-alternative"},
+		target:            {"configuration": map[string]any{"server": map[string]any{"url": "https://chosen.example"}}},
+	}
+	got, err := StoreContextResolver(store)(t.Context(), details)
+	index, ok := MatchContextAlternative(got, details)
+	if err != nil || !ok || index != 1 || got["apiKey"] != nil {
+		t.Fatalf("store-key grouping changed alternative preference: index=%d context=%v error=%v", index, got, err)
+	}
+}
+
 func TestContextSatisfies(t *testing.T) {
 	t.Run("any one alternative suffices (disjunctive)", func(t *testing.T) {
 		if !ContextSatisfies(map[string]any{"bearerToken": "t"}, bearerOrAPIKey) {

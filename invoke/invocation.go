@@ -330,6 +330,10 @@ func ContextRequiredFrom(err *InvocationError) *ContextRequiredDetails {
 // that blocking call; the invocation's lifetime is governed by the ctx passed
 // to Invoke/InvokeBinding (its cancellation converges with Cancel()).
 //
+// Producers may submit concurrently. Successful, non-overlapping submissions
+// from one producer preserve their order when delivered. Relative order across
+// producers or overlapping calls is unspecified.
+//
 // Bidi contract: under bounded backpressure a single goroutine interleaving
 // Write and Read deadlocks. Drive input and output from separate goroutines,
 // and `defer cancel()` when abandoning the output stream early (Go has no
@@ -389,7 +393,9 @@ type OutputStream[O any] interface {
 //     safely.
 //  2. Observe the EmitOutput result: it returns non-nil when the invocation
 //     terminated while the emit was parked; stop emitting on error.
-//  3. Do not add your own buffer; EmitOutput parking IS backpressure.
+//  3. EmitOutput parking supplies backpressure at this handoff. Avoid a redundant
+//     producer queue; any additional buffering or flow control required by the
+//     protocol belongs to the binding or protocol implementation.
 //  4. Terminate exactly once: CloseOutput() on normal completion or
 //     FireError() on terminal failure; never emit after either.
 //  5. Close input early when you can (no-input: on entry; unary: after the
@@ -431,16 +437,11 @@ type BindingHandle[I, O any] interface {
 // Reference implementation
 // ---------------------------------------------------------------------------
 
-// Buffer bounds. A capacity of one is structurally mandatory (the handle is
-// returned synchronously and a binding may emit before the caller reads; a
-// zero-capacity rendezvous would deadlock). Above one is pipelining slack:
-// the output side gets a little decode-ahead; the input side's slack is
-// already supplied by the transport's send window. Fixed internal defaults,
-// deliberately not configurable — delivery is always lossless, in-order,
-// exactly-once, with block-on-full backpressure in both directions. Together
-// with the per-value limits these capacities are the bound on what one
-// invocation retains: at most one queued input and four queued outputs, none
-// above ValueLimits.MaxValueUnits.
+// Private queue capacities provide limited scheduling slack between producers
+// and consumers, with blocking backpressure in both directions. They bound
+// queued values, not total retention: pending captures, blocked producers,
+// pipeline values, construction scratch and terminal data also consume memory.
+// No transport buffering or source flow-control behavior is assumed here.
 const (
 	outputBufferCapacity = 4
 	inputBufferCapacity  = 1

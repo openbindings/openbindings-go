@@ -18,6 +18,11 @@ invocation completes or is cancelled. Go garbage collection owns their lifetime.
 This changes the old generic local fast path: mutable reference identity is no
 longer preserved. There is no borrowing option or result-release API.
 
+Producers may submit concurrently. Successful, non-overlapping submissions from
+one producer preserve their order when delivered; relative order across
+producers or overlapping calls is unspecified. Acceptance is not a promise of
+delivery or operation success.
+
 ```go
 input := map[string]any{"label": "before"}
 if err := call.Write(ctx, input); err != nil {
@@ -91,19 +96,36 @@ call := invoke.Invoke(ctx, invoker, iface, signature,
     }))
 ```
 
-There is no separate live budget. What the core retains for one invocation is
-bounded by its fixed queue capacities together with the per-value limit: the
-input queue holds one value and the output queue holds four, none above
-`MaxValueUnits`, plus the terminal error's data. A binding that emits faster
-than the application reads parks on the full output queue; that parking is the
-backpressure. Whatever a binding retains on its own account is that binding's
-concern under its own specification.
+SDK handoff queues have bounded capacities, kept as implementation details.
+A full queue parks the producer until space becomes available or an applicable
+cancellation, closure or terminal condition intervenes. This bounds queued
+values, not total invocation memory. Pending captures, concurrent blocked
+handoffs, values held by pipeline stages, conversion and transform intermediates,
+and terminal records also retain data. Size, representation, concurrency and
+handle lifetimes all matter; there is no aggregate byte quota or queue-only
+retention formula. Core handoffs do not maintain replay history or add an
+unbounded producer queue.
+
+Backpressure begins at the SDK handoff boundary; it does not promise that a
+remote source can pause. Bindings own any additional buffering, scheduling or
+refusal policy required by their protocols. They may use the SDK's shared
+invocation implementation or provide a conforming implementation of their own.
 
 A value that exceeds the per-value or depth allowance ends the invocation with
 `ERR_RUNTIME`. Invalid input capture returns `ERR_TYPE_MISMATCH`; a rejected
 input is not accepted into the stream. Outputs already accepted still drain
 before the terminal error. `Cancel` preserves that accepted prefix, and
 `OutputStream.Stop` is exactly `Cancel`: it never discards terminal data.
+Completion or cancellation does not make a retained handle's queued values or
+terminal record unreachable. Reclamation follows ordinary Go object lifetimes
+and garbage collection; detached results remain owned by their callers.
+
+Input writes begun after input closure, and all handoffs begun after invocation
+termination, reject before invoking the submitted value's codec. Input closure
+alone still permits outputs. Cancellation wakes applicable queue waits. A state
+check does not prevent cancellation racing an already-started capture, and
+running user codecs or callbacks cannot be forcibly interrupted. State locks
+are not held across capture, user code or queue waits.
 
 A failed typed output conversion consumes that one logical output, returns a
 zero value and `*invoke.ValueConversionError`, and leaves subsequent outputs and

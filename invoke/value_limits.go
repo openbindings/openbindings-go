@@ -12,8 +12,9 @@ import (
 // ValueLimits bounds the SDK's work on any single value an invocation admits,
 // delivers, constructs or exports. Units are 64 per logical node plus escaped
 // string/key and number token lengths, not heap bytes. Zero inherits defaults:
-// 64 MiB per value, depth 256. How much one invocation retains follows from
-// these limits and the fixed queue capacities (one input, four outputs).
+// 64 Mi units per value, depth 256. These limits and the bounded handoff queues
+// do not establish a total invocation memory bound: pending handoffs, pipeline
+// values, construction scratch and terminal records also retain data.
 type ValueLimits struct {
 	MaxValueUnits int64
 	MaxDepth      int

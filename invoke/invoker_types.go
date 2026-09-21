@@ -559,31 +559,23 @@ func ContextAPIKeyFor(ctx map[string]any, name string) string {
 }
 
 // ContextBasicAuth returns the well-known basic auth fields from context.
+// Both members must be strings and at least one must be nonempty.
 func ContextBasicAuth(ctx map[string]any) (username, password string, ok bool) {
-	if ctx == nil {
-		return "", "", false
-	}
 	basic, _ := ctx["basic"].(map[string]any)
-	if basic == nil {
+	if !credentialValueSatisfies(basic, "auth.basic") {
 		return "", "", false
 	}
-	u, _ := basic["username"].(string)
-	p, _ := basic["password"].(string)
-	if u == "" && p == "" {
-		return "", "", false
-	}
-	return u, p, true
+	return basic["username"].(string), basic["password"].(string), true
 }
 
 // ContextBasicAuthFor returns a named basic credential, falling back to the
 // flat convenience used by an unnamed or unambiguous single scheme.
+// Both members must be strings; an explicitly empty member is allowed when
+// the other is nonempty. Missing or wrongly typed members are invalid.
 func ContextBasicAuthFor(ctx map[string]any, name string) (username, password string, ok bool) {
-	if basic, exists := ContextNamedCredential(ctx, name).(map[string]any); exists {
-		u, _ := basic["username"].(string)
-		p, _ := basic["password"].(string)
-		if u != "" || p != "" {
-			return u, p, true
-		}
+	basic, _ := ContextNamedCredential(ctx, name).(map[string]any)
+	if credentialValueSatisfies(basic, "auth.basic") {
+		return basic["username"].(string), basic["password"].(string), true
 	}
 	return ContextBasicAuth(ctx)
 }

@@ -32,6 +32,13 @@ func (i *InvocationImpl[I, O]) captureInput(ctx context.Context, input any) erro
 	return i.writePacket(ctx, p)
 }
 func (i *InvocationImpl[I, O]) captureOutput(output any) error {
+	// Avoid running a producer codec once the terminal is already known.
+	// emitPacket still checks state after capture to handle a racing terminal.
+	select {
+	case <-i.done:
+		return i.terminalOrClosedErr()
+	default:
+	}
 	p, err := valueio.Capture(context.Background(), i.limits, output)
 	if err != nil {
 		select {

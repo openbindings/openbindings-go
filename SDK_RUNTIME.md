@@ -11,15 +11,23 @@ delegates OpenAPI loading, declaration analysis, request construction, HTTP,
 response handling, and streams to `openapi-client/go`; it translates only
 OpenBindings contracts and lifecycle.
 
-The dependency rule is strict:
+For service-backed operations the execution path is:
 
 ```text
 application / OB CLI
-  -> sdk.Runtime
-     -> protocol-neutral contracts
-        -> openapi.Adapter
-           -> standalone OpenAPI client and provider projection
+  -> core invocation (optionally through sdk.Runtime)
+     -> application-registered binding adapter
+        -> protocol client
+           -> service
 ```
+
+Core calls protocol-neutral binding contracts; it imports no concrete binding
+implementation. Shared SDK invocation machinery owns its snapshots, bounded
+handoff queues and cancellation waits. An adapter may reuse that machinery or
+provide its own conforming invocation implementation. Bindings retain ownership
+of protocol-required buffering and scheduling; protocol clients own wire
+encoding and transport resources. A full SDK queue blocks its producer, without
+promising end-to-end source flow control or an aggregate invocation memory cap.
 
 The runtime may resolve or synthesize an interface, inspect a source, prepare
 an operation, and invoke it dynamically. Typed applications use
@@ -44,7 +52,7 @@ installed binding packages and is migrated only after this SDK boundary
 passes independently.
 
 The [value architecture decision](VALUE_ARCHITECTURE_PLAN.md) is implemented by
-private snapshot/construction support and shared invocation accounting. Ordinary
+private snapshot/construction support and per-value limits. Ordinary
 typed values cross SDK boundaries without JSON text; protocol codecs and explicit
 export remain. [Invocation values](INVOCATION_VALUES.md) explains the public
 ownership/limit changes. [Qualification](VALUE_MIGRATION_QUALIFICATION.md) records

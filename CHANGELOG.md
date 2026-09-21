@@ -6,6 +6,38 @@
 
 ### Fixed
 
+- **Context matching keeps the complete challenge's scheme identities.**
+  `MatchContextAlternative` exposes the same first-match decision used by
+  satisfaction and scoping so applications can retain it while applying a
+  resolution. Storage eligibility filtering no longer makes ambiguous flat
+  credentials appear to identify a single named scheme. Store-backed resolution
+  also preserves alternative order across storage keys while caching reads.
+- **Basic credential checks agree across representations and extraction.**
+  Both username and password must be strings; either may be explicitly empty
+  when the other is nonempty. Missing or wrongly typed members no longer pass
+  the flat or extraction paths when the named representation would reject them.
+- **Cancellation also reaches preflight and its context resolver.** Cancelling
+  an invocation after rejected input now cancels cooperative preparation and
+  resolution work, as well as binding execution.
+
+- **Named credential scoping preserves usable fallbacks.** Empty or malformed
+  named bearer, basic or OAuth credentials no longer suppress a valid flat
+  credential during `ScopeContext`. Admission shares the checks used to decide
+  which representation satisfies the challenge; valid named credentials keep
+  their precedence.
+
+- **Caller-owned context recovery example handles either challenge timing.**
+  It resolves challenges returned by a write or the output reader, reads the
+  outcome after input closure, retires every attempt, and merges scoped
+  resolution into existing context without discarding unrelated caller fields.
+  Requested configuration values and credentials are replaced whole, preserving
+  siblings while retiring stale credential aliases. Executable coverage also
+  checks ordinary failures, replacement boundaries and the single-redo limit.
+
+- **Output handoffs after termination skip capture.** A cancelled, completed or
+  failed invocation returns its existing outcome before invoking the submitted
+  value's codec. Accepted outputs and detached terminal details remain readable.
+
 - **Usage hook-table machine lane keeps exact JSON values.** `HookTable.Hooks()`
   decoded a JSON machine lane with `encoding/json` into `any`, collapsing every
   number to float64 (2^53+1 and 1e400 could not survive a CLI round trip). The
@@ -24,9 +56,10 @@
   with Base64 logical meaning. Every single admitted, delivered, constructed or
   exported value is bounded by `ValueLimits.MaxValueUnits` and `MaxDepth`; a
   value over the allowance ends the invocation with `ERR_RUNTIME`, and accepted
-  output drains before that failure. There is no invocation-wide live budget:
-  the fixed input (one) and output (four) queue capacities together with the
-  per-value limit bound what the core retains for one invocation.
+  output drains before that failure. Handoff queues are bounded and apply
+  blocking backpressure, but do not establish an aggregate memory bound:
+  concurrent pending handoffs, pipeline values, scratch and terminal data also
+  retain memory. Binding-specific buffering remains the binding's concern.
 - **A live `CONTEXT_REQUIRED` now ends the invocation instead of being
   replayed** (breaking, pre-1.0 minor-release change; the context-challenge
   replay removal ruling, 2026-09-21). The operation invoker still resolves

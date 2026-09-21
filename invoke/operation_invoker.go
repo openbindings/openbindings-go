@@ -537,12 +537,15 @@ func (e *OperationInvoker) runCompiled(
 	// Preflight (the binding-invoker contract's prepareBinding): collapse
 	// knowable-upfront context challenges into the clean no-input-consumed
 	// case before anything is forwarded.
+	// Preparation and resolution share the attempt's cancellation lifetime.
+	innerCtx, innerCancel := DoneContext(ctx, caller.Done())
+	defer innerCancel()
 	var details *ContextRequiredDetails
 	var err error
 	if compiledBinding != nil {
-		details, err = compiledBinding.PrepareBinding(ctx, bindingArgs())
+		details, err = compiledBinding.PrepareBinding(innerCtx, bindingArgs())
 	} else {
-		details, err = e.invoker.prepareBinding(ctx, bindingArgs())
+		details, err = e.invoker.prepareBinding(innerCtx, bindingArgs())
 	}
 	if err != nil {
 		caller.FireError(wireError(err))
@@ -553,7 +556,7 @@ func (e *OperationInvoker) runCompiled(
 			caller.FireError(NewInvocationError(ErrCodeRuntime))
 			return
 		}
-		resolved, resolveErr := e.resolveContext(ctx, details)
+		resolved, resolveErr := e.resolveContext(innerCtx, details)
 		if resolveErr != nil {
 			caller.FireError(NewInvocationError(ErrCodeRuntime))
 			return
@@ -571,7 +574,9 @@ func (e *OperationInvoker) runCompiled(
 
 	// One attempt. innerCtx bounds the binding: it cancels when the caller
 	// handle terminates (cancel propagation) and when the attempt is retired.
-	innerCtx, innerCancel := DoneContext(ctx, caller.Done())
+	if innerCtx.Err() != nil {
+		return
+	}
 	var inner Invocation[any, any]
 	if compiledBinding != nil {
 		inner = compiledBinding.InvokeBinding(innerCtx, bindingArgs())
