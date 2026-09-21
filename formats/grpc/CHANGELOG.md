@@ -6,6 +6,12 @@
 
 ### Changed
 
+- The live `CONTEXT_REQUIRED` for a generic credential that names no
+  metadata carriage (§9.5, GRPC-P-07) now carries `ContextRequiredDetails`
+  (the resolved target plus one `auth.apiKey` requirement) instead of a
+  bare code, so a resolver can act on it and it is identical to the
+  `PrepareBinding` answer.
+
 - **Breaking**: the project-wide binding-target rename (`bindings[*].ref` →
   `bindings[*].selector`): bindings ride
   `invoke.BindingInvocationArgs.Selector`, and refusals use
@@ -151,6 +157,15 @@ invoker concern.
   silent `undefined` on codegen clients.
 
 ### Added
+
+- **Preflight (`PrepareBinding`)**: the invoker implements the
+  `openbindings.binding-invoker` `prepareBinding` operation. It reports the
+  §9.5 / GRPC-P-07 challenge (a generic apiKey, bearer, or basic credential
+  naming no metadata carriage) before invocation, from the same in-memory
+  pre-dispatch gates (selector, target, transport determination) and the
+  same shared function as the live challenge, so the two cannot drift. It
+  never dials, reflects, or reads input; supplied context that the binding
+  can place narrows the result to nil.
 
 - Messages with multiple `oneof` groups emit a `grpc.multi_group_oneof`
   synthesizer warning. The emitted OBI is still valid and executable;

@@ -104,6 +104,7 @@ func connectBindingSpecInfos() []openbindings.BindingSpecInfo {
 }
 
 var _ invoke.BindingInvoker = (*Invoker)(nil)
+var _ invoke.BindingPreparer = (*Invoker)(nil)
 
 // InvokeBinding invokes a Connect binding and returns the invocation
 // handle synchronously; the HTTP work runs on its own goroutine. The
@@ -137,6 +138,92 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 	return inv
 }
 
+// PrepareBinding is the side-effect-free preflight (the prepareBinding
+// operation of the openbindings.binding-invoker interface). It walks the
+// same pre-dispatch gates the invocation walks — selector, target, and in
+// schema mode the embedded content's method resolution, all of which are
+// in-memory — and reports the context challenge the invocation would raise
+// for these arguments, or nil when it would proceed past context
+// application. It never dispatches, reads input, or touches the filesystem.
+//
+// Any gate the invocation would fail with a different error (an invalid
+// selector, a malformed target, unloadable content, an unresolvable or
+// unsupported method) is reported as no requirement: the invocation is the
+// authority for that refusal, and preflight is advisory.
+func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	svcName, methodName, err := parseSelector(args.Selector)
+	if err != nil {
+		return nil, nil
+	}
+	target, err := resolveTarget(args)
+	if err != nil {
+		return nil, nil
+	}
+	if args.Source.Content != nil {
+		disc, parseErr := discoverFromContent(ctx, args.Source.Content)
+		if parseErr != nil {
+			return nil, nil
+		}
+		m, ie := resolveMethod(disc, svcName, methodName)
+		if ie != nil {
+			return nil, nil
+		}
+		if ie := preflightMethod(m, e.fullDuplex); ie != nil {
+			return nil, nil
+		}
+	}
+	_, challenge, _ := resolveHeaders(target, args.Context)
+	return challenge, nil
+}
+
+// resolveTarget closes the target configuration point (§9.1): this
+// family's ONE named configuration point, consulted per-invocation
+// configuration → consumer-level configuration (both tiers merged into
+// context.configuration by the operation invoker) → the default, the
+// source's location. A configured target replaces the location entirely,
+// in the same §4 form. Nothing else is configurable. A missing,
+// non-string, blank, or non-conformant target is a source configuration
+// error.
+func resolveTarget(args *invoke.BindingInvocationArgs) (string, error) {
+	cfg := invoke.ContextConfiguration(args.Context)
+	target := strings.TrimSpace(args.Source.Location)
+	if raw, ok := cfg["target"]; ok && raw != nil {
+		s, isStr := raw.(string)
+		if !isStr || strings.TrimSpace(s) == "" {
+			return "", fmt.Errorf("configuration.target must be a non-blank string (openbindings.connect@1 §9.1)")
+		}
+		target = strings.TrimSpace(s)
+	}
+	if target == "" {
+		return "", fmt.Errorf("connect binding has no target: the source declares no location and configuration.target is absent (openbindings.connect@1 §9.1)")
+	}
+	if err := validateBaseURL(target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+// resolveHeaders applies the binding context to the outgoing header set
+// (§9.6) and is the ONE place the family's context challenge is built, so
+// the live invocation and PrepareBinding cannot drift. An inexpressible
+// credential (an apiKey with no consumer-named header, CONN-P-07) yields
+// the challenge; any other placement failure yields err.
+func resolveHeaders(target string, bindCtx map[string]any) (map[string]string, *invoke.ContextRequiredDetails, error) {
+	headers, err := buildHTTPHeaders(bindCtx)
+	if err == nil {
+		return headers, nil, nil
+	}
+	if _, ok := err.(*unplacedCredentialError); ok {
+		return nil, &invoke.ContextRequiredDetails{
+			Target: target,
+			Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{{
+				Type: "auth.apiKey", Description: "supply the credential through an explicitly named Connect metadata field",
+			}}}},
+		}, nil
+	}
+	return nil, nil, err
+}
+
 func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, inv *invoke.InvocationImpl[any, any]) {
 	// Bound all I/O to the invocation's lifetime: caller Cancel(), an
 	// abandoned output stream, or upstream ctx cancellation tears down any
@@ -153,31 +240,8 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		return
 	}
 
-	// Target configuration point (§9.1): this family's ONE named
-	// configuration point, consulted per-invocation configuration →
-	// consumer-level configuration (both tiers merged into
-	// context.configuration by the operation invoker) → the default, the
-	// source's location. A configured target replaces the location
-	// entirely, in the same §4 form. Nothing else is configurable.
-	cfg := invoke.ContextConfiguration(args.Context)
-	target := strings.TrimSpace(args.Source.Location)
-	if raw, ok := cfg["target"]; ok && raw != nil {
-		s, isStr := raw.(string)
-		if !isStr || strings.TrimSpace(s) == "" {
-			inv.FireError(&invoke.InvocationError{
-				Code: invoke.ErrCodeSourceConfigError,
-			})
-			return
-		}
-		target = strings.TrimSpace(s)
-	}
-	if target == "" {
-		inv.FireError(&invoke.InvocationError{
-			Code: invoke.ErrCodeSourceConfigError,
-		})
-		return
-	}
-	if err := validateBaseURL(target); err != nil {
+	target, err := resolveTarget(args)
+	if err != nil {
 		inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeSourceConfigError})
 		return
 	}
@@ -214,18 +278,14 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 	// Credentials ride ordinary HTTP header fields (§9.6, CONN-P-07). An
 	// inexpressible credential (an apiKey with no consumer-named header) is
 	// surfaced here — pre-dispatch AND before any input is consumed, so a
-	// no-input-consumed retry stays safe — never silently skipped.
-	headers, hdrErr := buildHTTPHeaders(args.Context)
+	// no-input-consumed retry stays safe — never silently skipped. The
+	// challenge is the one PrepareBinding reports for the same arguments.
+	headers, challenge, hdrErr := resolveHeaders(target, args.Context)
+	if challenge != nil {
+		inv.FireError(invoke.NewContextRequiredError(challenge))
+		return
+	}
 	if hdrErr != nil {
-		if _, ok := hdrErr.(*unplacedCredentialError); ok {
-			inv.FireError(invoke.NewContextRequiredError(&invoke.ContextRequiredDetails{
-				Target: target,
-				Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{{
-					Type: "auth.apiKey", Description: "supply the credential through an explicitly named Connect metadata field",
-				}}}},
-			}))
-			return
-		}
 		inv.FireError(&invoke.InvocationError{
 			Code: invoke.ErrCodeSourceConfigError,
 		})

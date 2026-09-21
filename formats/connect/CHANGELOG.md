@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Preflight (`PrepareBinding`)**: the invoker implements the
+  `openbindings.binding-invoker` `prepareBinding` operation. It reports the
+  §9.6 / CONN-P-07 challenge (an apiKey with no consumer-named header)
+  before invocation, from the same in-memory pre-dispatch gates (selector,
+  target, schema-mode method resolution) and the same shared function as the
+  live challenge, so the two cannot drift. It never dispatches, reads input,
+  or touches the filesystem; supplied context that the binding can place
+  narrows the result to nil.
+
 - **Configurable delivery-unit bound**: the unary response body and each
   streaming envelope payload honor
   `BindingInvocationArgs.MaxDeliveryUnitBytes` (default
