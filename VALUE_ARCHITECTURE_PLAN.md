@@ -1,11 +1,14 @@
 # Value architecture: decision and contracts
 
-Status: implementation direction selected, 21 September 2026.
+Status: implementation available on this branch, 21 September 2026.
+See [qualification](VALUE_MIGRATION_QUALIFICATION.md) and the
+[current caller contract](INVOCATION_VALUES.md).
 **Projected containers with retained native leaves (P) are the preferred
 direction for the tested SDK consumers.** The real-invocation comparison provides
 bounded performance evidence; production qualification and activation remain.
 The [migration plan](VALUE_MIGRATION_PLAN.md) defines implementation stages,
-compatibility changes and release gates. No runtime changes are activated here.
+compatibility changes and release gates. This branch changes runtime behavior;
+release/cohort activation remains gated.
 
 Branch: `codex/native-value-migration`.
 Base: `origin/release/0.2` at

@@ -43,10 +43,11 @@ independently usable without the facade. OB CLI owns the concrete list of
 installed binding packages and is migrated only after this SDK boundary
 passes independently.
 
-The [value architecture decision](VALUE_ARCHITECTURE_PLAN.md) selects container
-projection with retained native leaves for implementation based on the bounded
-real-invocation comparison. The [migration plan](VALUE_MIGRATION_PLAN.md) preserves
-these package boundaries and evaluator injection while specifying ownership,
-resource limits, compatibility changes and qualification across all format
-modules. The measured results cover the compared paths; neither document
-activates new runtime behavior or establishes a universal performance win.
+The [value architecture decision](VALUE_ARCHITECTURE_PLAN.md) is implemented by
+private snapshot/construction support and shared invocation accounting. Ordinary
+typed values cross SDK boundaries without JSON text; protocol codecs and explicit
+export remain. [Invocation values](INVOCATION_VALUES.md) explains the public
+ownership/limit changes. [Qualification](VALUE_MIGRATION_QUALIFICATION.md) records
+measurements and unresolved release gates; implementation on this branch is not
+release/cohort activation. [The language-neutral contract](INVOCATION_DATA_FLOW.md)
+provides the model for future SDK work.

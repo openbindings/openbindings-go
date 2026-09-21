@@ -102,4 +102,8 @@ jobs:
         # Linux race-detector lane with substantially more schedules than the
         # ordinary suite so an accepted EmitOutput can never silently vanish
         # behind a racing terminal transition.
-        run: go test -race -run '^TestAcceptedEmitNeverLostUnderRacingTerminal$' -count=10 .
+        run: go test -race -run '^TestAcceptedEmitNeverLostUnderRacingTerminal$' -count=10 ./invoke
+
+      - name: Stress snapshot ownership and resource cleanup
+        if: matrix.module == '.'
+        run: go test -race -run '^(TestProducerReuseAfterAcceptedWriteAndEmit|TestAcceptedOutputDrainsAfterCaptureLimitFailure|TestStopReleasesQueuedOutputsAfterTerminal|TestRetryRetentionUsesFiniteInvocationBudget)$' -count=10 ./invoke

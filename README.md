@@ -319,7 +319,9 @@ exhaustive diagnostics path. Custom policies make that staging explicit with
 
 Native implementations use the same verified route and operation substrate,
 addressed only by exact OBI binding key. Generic JSON-domain maps and slices
-retain reference identity and are not serialized:
+are snapshotted at public handoffs without a JSON text round trip. Handlers and
+callers own detached mutable values. See [invocation values](INVOCATION_VALUES.md)
+for byte recovery, limits, conversion failures and explicit export:
 
 ```go
 local, err := invoke.PrepareLocalProvider(invoke.PrepareLocalProviderOptions{

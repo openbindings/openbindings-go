@@ -15,6 +15,23 @@
 
 ### Changed
 
+- **Invocation values now have snapshot ownership and finite work/retention
+  limits** (breaking, pre-1.0 minor-release change). Ordinary typed/local paths
+  use private projection and checked construction instead of JSON text bridges.
+  Mutable producer storage can be reused after an accepted handoff; handlers,
+  evaluator callbacks and public readers receive detached values. Generic local
+  reference identity is no longer preserved. Bytes retain exact typed recovery
+  with Base64 logical meaning. Retries and Operation Graph descendants share
+  the live budget; accepted output drains before resource failure.
+- **Value configuration and export are explicit.** `invoke.ValueLimits`, runtime
+  and provider options, per-call `WithValueLimits`, low-level
+  `WithInvocationValueLimits`, local `ValueLimitError` causes and
+  `ValueConversionError` describe the new finite boundary. A failed output
+  conversion consumes only that result. `jsonvalue.MarshalWithOptions` supports
+  bounded, requested JSON display/export. Evaluator injection remains required.
+  See `INVOCATION_VALUES.md` and `VALUE_MIGRATION_QUALIFICATION.md`.
+
+
 - **The SDK can now prepare immutable provider revisions and expose bounded,
   process-local operation-validation diagnostics.** `Runtime` performs exact,
   opaque binding-capability checks and prepares providers from raw or already
@@ -63,8 +80,7 @@
   from live preflight and invocation. The versioned reference policy reports
   provider and realization ambiguity separately and preserves exact or
   tri-state compatibility evidence. `PrepareLocalProvider`, `LocalUnary`, and
-  `LocalStream` use the same verified route; generic JSON-domain values remain
-  native references. The older operation-requirement family is transitional.
+  `LocalStream` use the same verified route; generic JSON-domain values use native container shapes with snapshot ownership. The older operation-requirement family is transitional.
 
 - **config.value requirements carry an engine-asserted `schema` instead of
   `choices`** (breaking; the 2026-08-20 working-draft amendment of the
