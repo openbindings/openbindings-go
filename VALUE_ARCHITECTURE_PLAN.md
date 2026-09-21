@@ -1,9 +1,11 @@
-# Value architecture: destination and qualification plan
+# Value architecture: decision and contracts
 
-Status: resource policy refined for qualification, 20 September 2026.
-**Projected containers with retained native leaves (P) are the leading
-destination to qualify.** No runtime migration is selected for activation.
-This is a design judgment, not measured proof of performance superiority.
+Status: implementation direction selected, 21 September 2026.
+**Projected containers with retained native leaves (P) are the preferred
+direction for the tested SDK consumers.** The real-invocation comparison provides
+bounded performance evidence; production qualification and activation remain.
+The [migration plan](VALUE_MIGRATION_PLAN.md) defines implementation stages,
+compatibility changes and release gates. No runtime changes are activated here.
 
 Branch: `codex/native-value-migration`.
 Base: `origin/release/0.2` at
@@ -74,7 +76,7 @@ field-selection microbenchmark establishes whole-path superiority.
 | Owner | Responsibility |
 | --- | --- |
 | Root Core package | Document models, references, document validation and schema facade; syntax checking without selecting an execution engine. |
-| Existing `jsonvalue` area and private helpers | Bounded projection, common scalar meaning, codec fallback, ordinary construction, detachment and export. No invocation, binding or evaluator dependency. Public helper names remain undecided. |
+| Existing `jsonvalue` area and private helpers | Bounded projection, common scalar meaning, codec fallback, ordinary construction, detachment and export. No invocation, binding or evaluator dependency. The migration plan proposes the limited configuration/export additions. |
 | `invoke` | Admission and delivery boundaries, transform/validation order, outcomes, retries and lifetime. Preserve evaluator injection. |
 | `formats/*` | Binding-defined correspondence and protocol adaptation; no blanket mapping that overrides a family's rules. |
 | Optional `sdk` facade | Assemble explicitly supplied providers/evaluator without choosing defaults. |
@@ -485,78 +487,43 @@ The direct raw public output boundary, protocol request adaptation, aggregate
 resource accounting, Graph and broader retry/cancellation behavior remain outside
 this slice. The temporary owned marker/process selector is experiment machinery,
 not a proposed public API. Full codec parity and downstream qualification also
-remain required. The design contracts below and above are unchanged; the next
-checklist records the broader integration obligations rather than requiring
-another grade-seeking loop or a new evaluator.
+remain required. The comparison did not change the design contracts. The
+migration plan now records the broader integration obligations rather than
+requiring another grade-seeking loop or a new evaluator.
 
-## Next: one bounded comparison before migration
+## From comparison to implementation
 
-Freeze exact revisions, payloads and measurement procedure using the ownership
-policy above before implementing or comparing candidates. Include a corrected A control
-with its actual proposed improvements, not a deliberately weak baseline.
+The original bounded comparison brief has been executed in the mechanism and
+real-invocation slices recorded above. It supplied enough evidence to prefer P
+for implementation, with explicit limits on that conclusion. It did not qualify
+all production resource, Graph, codec, protocol or lifecycle obligations.
 
-Qualify the SDK's hook contract and actual schema handling: supported logical
-values, undefined/error translation, cancellation and result lifetime. Applications
-supply evaluator adapters; choosing or completing an engine is not a prerequisite
-for this architecture decision. Accommodate both adapters that materialize
-logical JSON values and adapters that preserve eligible native leaves. Count each
-selected adapter's actual work in invocation measurements. Engine-specific native
-optimizations require their own evidence, without becoming mandatory SDK features
-or a reason to bundle an evaluator.
+[VALUE_MIGRATION_PLAN.md](VALUE_MIGRATION_PLAN.md) now owns the remaining sequence:
+freeze compatibility, build bounded value and accounting primitives, complete a
+local/public vertical slice, integrate OpenAPI and Graph, qualify the other
+families and CLI, then qualify an exact release candidate. The plan includes a
+compatibility matrix and the concrete public/private output boundary that the
+prototype omitted. Its implementation details have not received the historical
+architecture grades above.
 
-Then build a disposable P slice and a minimal B challenger through identical
-admission, validation, evaluation and typed delivery. Keep their ordinary host
-domain and stable codec fallback the same. Exercise:
+Keep evaluator choice behind the application hook. The initial integration can
+present ordinary logical values to existing adapters; native-preserving adapter
+optimizations need their own evidence. The measured default HTTP path already
+supports exact byte recovery, so a native-client raw-carrier API is not a
+migration prerequisite. Retained backing identity is not the recovery contract.
 
-1. Small generic/typed equivalents and a wide typed structure with narrow
-   selection and repeated field reads.
-2. Actual raw-image HTTP retrieval, movement and string observations, schema,
-   typed byte recovery, explicit export and reverse raw request.
-3. A business codec whose meaning differs from its fields, exact numbers,
-   nil/empty/missing controls, and hidden invalid descendants without a schema.
-4. Input mutation after submission, producer reuse after emission, duplicate
-   output-field mutation, local handler mutation, retained Graph output and
-   release after invocation ends, including a small leaf backed by a much larger
-   allocation. Include failed/cancelled capture and custom-decoder controls.
-5. Resource exhaustion in captures, replay, Graph retention and duplicated
-   delivery, including preservation of already accepted outputs. Compare like
-   budgets and charge their accounting overhead separately from representation.
+Production measurements must include final accounting, ownership, fallback and
+materialization costs. Compare against current behavior and a fairly owned codec
+control, preserve actual schema/evaluator work, and report peak as well as
+retained memory. Revisit P if these results or consumer obligations undermine its
+premise; favorable earlier review grades do not waive production checks.
 
-The native client must expose a useful native response/request path in its own
-vocabulary. An SDK adapter cannot restore backing discarded below it. All
-governing schema keywords in the fixture must really run; stubs cannot qualify
-an architecture. Preserve ordinary caller code and record any recovery burden.
+## Implementation and independent repairs
 
-Compare P and B under the same snapshot/aliasing promises. Keep today's A as a
-compatibility/performance baseline and distinguish its generic reference behavior;
-also charge any snapshots needed for an A variant offering the new guarantees.
-Do not infer representation superiority by giving candidates different ownership
-obligations or by treating a necessary ownership copy as serialization waste.
-
-Measure total latency/CPU, allocations, peak/retained memory, traversals,
-materializations, codec fallback and necessary copies. Enumerate lasting consumer
-contracts too. P fails its premise if host-specific exceptions spread through
-consumers or typed construction simply serializes everything again. B wins if
-its broader reader gives a better total design, not just a faster isolated lookup.
-
-Bound work to this slice, one corrective pass per implementation and a repeat
-for reproducibility. Stop if credibility requires a broad framework, backend
-rewrite or new evaluator implementation. Report the gap rather than building a
-migration to justify itself. Semantic divergence stops a candidate's cost
-comparison until explained; incomplete integration does not disprove its design.
-Freeze any workload-derived materiality criteria before results. Reviewer-proposed
-percentages and engineering-day budgets have not been adopted as user requirements.
-
-Exit with P qualified, a concrete reversal to B or A, or unresolved evidence.
-Only then select implementation scope. Broad migration is not the automatic
-next step after a favorable design review.
-
-## Conditional implementation and independent repairs
-
-After qualification, integrate one reviewed path at a time: projection/admission,
-complete scalar/schema behavior, checked typed/local construction, actual OpenAPI
-carriage, then retries/streams/Graph and other protocol families. Record uncovered
-paths explicitly. Preserve each family's correspondence, including ProtoJSON;
+Follow the migration plan's dependency sequence and qualify each complete path.
+Retries and stream ownership belong in the first local/public integration; Graph
+and each protocol family then adopt that same boundary. Record uncovered paths
+explicitly. Preserve each family's correspondence, including ProtoJSON;
 no single host byte or number rule governs every binding. TypeScript is deferred.
 
 Publish a compatibility matrix covering caller-visible carriers, custom codecs,
