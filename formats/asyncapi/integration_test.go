@@ -735,39 +735,33 @@ func TestPrepareBindingNilWhenSatisfiedOrUndeclared(t *testing.T) {
 	}
 }
 
-func TestPrepareBindingNeverFetches(t *testing.T) {
+func TestPrepareBindingLoadsLocationOnlyDocument(t *testing.T) {
 	srv, requests := newHTTPFixture(t)
 	specURL := srv.URL + "/spec.json"
 
-	// Cold cache + location-only source: not knowable without I/O -> nil.
+	// Cold cache + location-only source: preflight performs the description
+	// load the invocation would perform anyway, and reports the requirement.
+	// That load is the only request; no operation request is dispatched.
 	cold := NewInvoker()
 	defer cold.Close()
 	before := requests.Load()
-	if d, err := cold.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
-		Selector: "#/operations/sendMessage",
-	}); err != nil || d != nil {
-		t.Fatalf("cold cache: expected (nil, nil), got (%+v, %v)", d, err)
-	}
-	if got := requests.Load(); got != before {
-		t.Fatalf("PrepareBinding must never fetch: %d requests dispatched", got-before)
-	}
-
-	// Warm the cache through a real invocation, then preflight answers.
-	call := cold.InvokeBinding(bg(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
-		Selector: "#/operations/sendMessage",
-		Context:  map[string]any{"bearerToken": testSecret},
-	})
-	if err := call.Write(bg(), map[string]any{"text": "warm"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := invoke.Single(shortCtx(t), call.Outputs()); err != nil {
-		t.Fatal(err)
-	}
-
-	warmBefore := requests.Load()
 	d, err := cold.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
+		Selector: "#/operations/sendMessage",
+	})
+	if err != nil || d == nil {
+		t.Fatalf("cold cache: expected details, got (%+v, %v)", d, err)
+	}
+	if d.Target != srv.URL || len(d.Alternatives) != 1 || d.Alternatives[0].Requirements[0].Type != "auth.bearer" {
+		t.Fatalf("cold cache: unexpected details %+v", d)
+	}
+	if got := requests.Load(); got != before+1 {
+		t.Fatalf("cold preflight must load the document exactly once and nothing else: %d requests dispatched", got-before)
+	}
+
+	// The load warmed the cache: a second preflight answers without any request.
+	warmBefore := requests.Load()
+	d, err = cold.PrepareBinding(bg(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: specURL},
 		Selector: "#/operations/sendMessage",
 	})

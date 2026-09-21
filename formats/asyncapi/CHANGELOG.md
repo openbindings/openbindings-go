@@ -2,6 +2,16 @@
 
 ## 0.2.0 (working draft)
 
+### Changed
+
+- **`PrepareBinding` loads a location-only document.** Preflight now performs
+  the same description load the invocation performs before any protocol I/O,
+  so a cold source reports its context requirements instead of deferring them
+  to a live challenge. This follows the 2026-09-21 ruling that removed live
+  `CONTEXT_REQUIRED` replay from the operation invoker: a configured resolver
+  is consulted at preflight only. Inline content and the warm document cache
+  behave as before.
+
 ### Fixed
 
 - The Go adapter preserves exact JSON payload numbers across the native client

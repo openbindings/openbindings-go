@@ -207,20 +207,28 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 }
 
 // PrepareBinding is the side-effect-free preflight: it reports the context
-// this binding would require, or nil when the binding can proceed (or the
-// answer is not knowable without network I/O). Only inline source content
-// and the warm doc cache are consulted; nothing is fetched.
+// this binding would require, or nil when the binding can proceed. It performs
+// the same document load the invocation performs before any protocol I/O, so a
+// cold location-only source reports its requirements here; reading the
+// description artifact touches no operation target. A live CONTEXT_REQUIRED
+// terminates the invocation for the caller to resolve, so a configured
+// resolver only ever sees the requirements this preflight reports.
 func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	options, err := enginePrepareOptions(args, e.httpClient)
 	if err != nil {
 		return nil, nil
 	}
+	// Inline content and a warm document cache answer without I/O; a cold
+	// location-only source is loaded once, which also warms the cache.
 	prepared, err := e.engine.PrepareCached(ctx, options)
 	if err != nil {
 		return nil, nil
 	}
 	if prepared == nil {
-		return nil, nil
+		prepared, err = e.engine.Prepare(ctx, options)
+		if err != nil || prepared == nil {
+			return nil, nil
+		}
 	}
 	return toCorePrerequisites(prepared.Prerequisites()), nil
 }
