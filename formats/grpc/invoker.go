@@ -37,6 +37,9 @@ type Invoker struct {
 	dialCfg dialConfig
 }
 
+var _ invoke.BindingInvoker = (*Invoker)(nil)
+var _ invoke.BindingPreparer = (*Invoker)(nil)
+
 // InvokerOption configures an Invoker.
 type InvokerOption func(*Invoker)
 
@@ -140,6 +143,82 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 	return inv
 }
 
+// PrepareBinding is the side-effect-free preflight (the prepareBinding
+// operation of the openbindings.binding-invoker interface). It walks the
+// pre-dispatch gates the invocation walks before its context challenge —
+// selector, target, and transport determination, all in-memory — and
+// reports the challenge the invocation would raise for these arguments, or
+// nil when it would proceed to dial. It never dials, reflects, reads input,
+// or touches the filesystem.
+//
+// A gate the invocation would fail with a different error (an invalid
+// selector, a malformed target, an undetermined transport) is reported as
+// no requirement: the invocation is the authority for that refusal, and
+// preflight is advisory. A location-only source's descriptors come from
+// Server Reflection after dialing (GRPC-P-01), but the family's only
+// context requirement is decided before that, so preflight is complete
+// without them.
+func (e *Invoker) PrepareBinding(_ context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	if _, _, err := parseSelector(args.Selector); err != nil {
+		return nil, nil
+	}
+	target, addr, err := resolveTarget(args)
+	if err != nil {
+		return nil, nil
+	}
+	if _, _, err := resolveTransport(invoke.ContextConfiguration(args.Context), e.dialCfg.creds, addr); err != nil {
+		return nil, nil
+	}
+	return unplacedCredentialChallenge(target, args.Context), nil
+}
+
+// resolveTarget closes the target configuration point (§9.3): the default
+// is the source's location; per-invocation/consumer configuration (context
+// configuration.target, both tiers merged by the operation invoker)
+// replaces it entirely, in the same §4 forms. It returns the resolved
+// target text and its parsed dial address; a missing, non-string, blank, or
+// malformed target is a source configuration error.
+func resolveTarget(args *invoke.BindingInvocationArgs) (string, dialAddress, error) {
+	cfg := invoke.ContextConfiguration(args.Context)
+	target := strings.TrimSpace(args.Source.Location)
+	if raw, ok := cfg["target"]; ok && raw != nil {
+		s, isStr := raw.(string)
+		if !isStr || strings.TrimSpace(s) == "" {
+			return "", dialAddress{}, fmt.Errorf("configuration.target must be a non-blank string (openbindings.grpc@1 §9.3)")
+		}
+		target = strings.TrimSpace(s)
+	}
+	if target == "" {
+		return "", dialAddress{}, fmt.Errorf("grpc binding has no target: the source declares no location and configuration.target is absent (openbindings.grpc@1 §9.3, GRPC-D-02)")
+	}
+	addr, err := parseDialAddress(target)
+	if err != nil {
+		return "", dialAddress{}, err
+	}
+	return target, addr, nil
+}
+
+// unplacedCredentialChallenge is the ONE place the family's context
+// challenge is built, so the live invocation and PrepareBinding cannot
+// drift. Protobuf and gRPC declare no application authentication scheme
+// and this specification invents none (§9.5, GRPC-P-07): a generic
+// runtime credential (apiKey, bearer, basic) that does not name its
+// metadata carriage via context.headers is surfaced for consumer
+// resolution, never silently mapped to `authorization`. It returns nil when
+// the context carries no such credential.
+func unplacedCredentialChallenge(target string, bindCtx map[string]any) *invoke.ContextRequiredDetails {
+	_, _, hasBasic := invoke.ContextBasicAuth(bindCtx)
+	if invoke.ContextAPIKey(bindCtx) == "" && invoke.ContextBearerToken(bindCtx) == "" && !hasBasic {
+		return nil
+	}
+	return &invoke.ContextRequiredDetails{
+		Target: target,
+		Alternatives: []invoke.ContextAlternative{{Requirements: []invoke.ContextRequirement{{
+			Type: "auth.apiKey", Description: "supply the credential through an explicitly named gRPC metadata field",
+		}}}},
+	}
+}
+
 // run resolves the selector to a method descriptor, reads the request from the
 // handle, and dispatches the RPC. All pre-dispatch refusals (bad selector,
 // missing or malformed target, configuration errors, descriptor load
@@ -162,28 +241,7 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 
 	cfg := invoke.ContextConfiguration(args.Context)
 
-	// Target configuration point (§9.3): the default is the source's
-	// location; per-invocation/consumer configuration (context
-	// configuration.target, both tiers merged by the operation invoker)
-	// replaces it entirely, in the same §4 forms.
-	target := strings.TrimSpace(args.Source.Location)
-	if raw, ok := cfg["target"]; ok && raw != nil {
-		s, isStr := raw.(string)
-		if !isStr || strings.TrimSpace(s) == "" {
-			inv.FireError(&invoke.InvocationError{
-				Code: invoke.ErrCodeSourceConfigError,
-			})
-			return
-		}
-		target = strings.TrimSpace(s)
-	}
-	if target == "" {
-		inv.FireError(&invoke.InvocationError{
-			Code: invoke.ErrCodeSourceConfigError,
-		})
-		return
-	}
-	addr, err := parseDialAddress(target)
+	target, addr, err := resolveTarget(args)
 	if err != nil {
 		inv.FireError(&invoke.InvocationError{
 			Code: invoke.ErrCodeSourceConfigError,
@@ -201,13 +259,12 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		return
 	}
 
-	// Credentials ride outgoing gRPC metadata (§9.5, GRPC-P-07); an
-	// unplaceable key is surfaced here, pre-dispatch.
-	_, _, hasBasic := invoke.ContextBasicAuth(args.Context)
-	if invoke.ContextAPIKey(args.Context) != "" || invoke.ContextBearerToken(args.Context) != "" || hasBasic {
-		inv.FireError(&invoke.InvocationError{
-			Code: invoke.ErrCodeContextRequired,
-		})
+	// Credentials ride outgoing gRPC metadata (§9.5, GRPC-P-07); a generic
+	// credential that names no metadata carriage is surfaced here,
+	// pre-dispatch, with the challenge PrepareBinding reports for the same
+	// arguments.
+	if challenge := unplacedCredentialChallenge(target, args.Context); challenge != nil {
+		inv.FireError(invoke.NewContextRequiredError(challenge))
 		return
 	}
 	rpcCtx, mdErr := applyGRPCContext(bctx, args.Context)

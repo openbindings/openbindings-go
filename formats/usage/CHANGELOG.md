@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Preflight (`PrepareBinding`)**: the invoker implements the
+  `openbindings.binding-invoker` `prepareBinding` operation. It reports the
+  §9.1 / USAGE-P-06 challenge (a generic apiKey naming no process
+  environment variable) before invocation, from the binding context alone
+  and through the same shared function as the live challenge, so the two
+  cannot drift. It never loads the descriptor, dereferences an exec
+  address, or spawns; supplied context that the binding can place narrows
+  the result to nil.
+
 - **Configurable delivery-unit bound**: the invocation lane's captured
   stdout honors `BindingInvocationArgs.MaxDeliveryUnitBytes` (default
   `openbindings.DefaultMaxDeliveryUnitBytes`, 10 MiB — the previous fixed

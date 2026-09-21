@@ -66,11 +66,12 @@ func (e *Invoker) run(ctx context.Context, args *invoke.BindingInvocationArgs, i
 		})
 		return
 	}
-	_, _, hasBasic := invoke.ContextBasicAuth(args.Context)
-	if invoke.ContextAPIKey(args.Context) != "" || hasBasic {
-		inv.FireError(&invoke.InvocationError{
-			Code: invoke.ErrCodeContextRequired,
-		})
+	// Credentials ride the Streamable HTTP requests as headers (§9.4,
+	// MCP-P-07); one without an expressible header destination is surfaced
+	// here, before the handshake, with the challenge PrepareBinding reports
+	// for the same arguments.
+	if challenge := unplacedCredentialChallenge(location, args.Context); challenge != nil {
+		inv.FireError(invoke.NewContextRequiredError(challenge))
 		return
 	}
 	for name := range invoke.ContextHeaders(args.Context) {
