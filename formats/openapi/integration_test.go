@@ -1254,11 +1254,11 @@ func TestContentOnlySourceReusesNativeClientByContentRevision(t *testing.T) {
 		},
 		Selector: "#/paths/~1ping/get",
 	}
-	first, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	first, err := invoker.runtime.loadNativeClient(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	second, err := invoker.runtime.loadNativeClient(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1283,7 +1283,7 @@ func TestLocationAndInlineContentAtOneAddressRemainDistinctNativeRevisions(t *te
 			Location:    locationServer.URL,
 		},
 	}
-	first, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	first, err := invoker.runtime.loadNativeClient(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1292,7 +1292,7 @@ func TestLocationAndInlineContentAtOneAddressRemainDistinctNativeRevisions(t *te
 		"info":{"title":"Cache","version":"2"},
 		"paths":{}
 	}`)
-	second, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
+	second, err := invoker.runtime.loadNativeClient(t.Context(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1301,7 +1301,7 @@ func TestLocationAndInlineContentAtOneAddressRemainDistinctNativeRevisions(t *te
 	}
 	locationOnly := *args
 	locationOnly.Source.Content = nil
-	fetched, err := invoker.runtime.loadNativeClient(t.Context(), &locationOnly, true)
+	fetched, err := invoker.runtime.loadNativeClient(t.Context(), &locationOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1310,31 +1310,6 @@ func TestLocationAndInlineContentAtOneAddressRemainDistinctNativeRevisions(t *te
 	}
 	if fetched == second {
 		t.Fatal("location-only source reused co-present embedded content solely because its URI matched")
-	}
-}
-
-func TestAdvisoryContentClientDoesNotPoisonExecutableCache(t *testing.T) {
-	invoker := NewInvoker()
-	args := &invoke.BindingInvocationArgs{
-		Source: invoke.InvocationSource{
-			BindingSpec: BindingSpecOpenAPI31,
-			Content: json.RawMessage(`{
-				"openapi":"3.1.2",
-				"info":{"title":"Advisory","version":"1"},
-				"paths":{}
-			}`),
-		},
-	}
-	advisory, err := invoker.runtime.loadNativeClient(t.Context(), args, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executable, err := invoker.runtime.loadNativeClient(t.Context(), args, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if advisory == executable {
-		t.Fatal("side-effect-free advisory client entered the executable cache")
 	}
 }
 
@@ -1351,7 +1326,7 @@ func TestNativeSourceCacheIsBounded(t *testing.T) {
 				}`, index)),
 			},
 		}
-		if _, err := invoker.runtime.loadNativeClient(t.Context(), args, true); err != nil {
+		if _, err := invoker.runtime.loadNativeClient(t.Context(), args); err != nil {
 			t.Fatal(err)
 		}
 	}

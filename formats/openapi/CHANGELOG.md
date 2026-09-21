@@ -2,12 +2,23 @@
 
 ## 0.2.0 (working draft)
 
+### Changed
+
+- **`PrepareBinding` loads a location-only document.** Preflight now performs
+  the same description load the invocation performs before any operation
+  request, so a cold source reports its context requirements instead of
+  deferring them to a live challenge. Reading the description artifact touches
+  no operation target. This follows the 2026-09-21 ruling that removed live
+  `CONTEXT_REQUIRED` replay from the operation invoker: a configured resolver
+  is consulted at preflight only, so preflight must be able to learn the
+  requirements. The advisory no-fetch load and its separate cache lane are
+  removed.
+
 ### Added
 
 - **OpenAPI adapter preparation now reuses bounded, content-addressed native
   client revisions.** Identical source content reuses one executable analysis;
-  changed inline content at the same location creates a distinct revision;
-  and advisory no-fetch analysis cannot enter or poison the executable cache.
+  changed inline content at the same location creates a distinct revision.
 
 - **Standalone OpenAPI artifact engine integration.** `Invoker` now adapts
   Core invocations to `github.com/openbindings/openapi-client/go`; the former

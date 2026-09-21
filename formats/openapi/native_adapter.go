@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 
 	openapiclient "github.com/openbindings/openapi-client/go"
@@ -26,7 +25,7 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 	if err := assertNativeBindingSpec(args); err != nil {
 		return err
 	}
-	client, err := e.loadNativeClient(ctx, args, true)
+	client, err := e.loadNativeClient(ctx, args)
 	if err != nil {
 		return nativeInvocationError(err)
 	}
@@ -153,15 +152,13 @@ func (e *invokerRuntime) prepareNativeBinding(ctx context.Context, args *invoke.
 	if err := assertNativeBindingSpec(args); err != nil {
 		return nil, err
 	}
-	// The Core preflight is explicitly side-effect-free. An inline source can
-	// be analyzed locally; a location-only source remains unknown until the
-	// authoritative invocation load.
-	if args.Source.Content == nil {
-		if _, present := e.cachedNativeClient(args); !present {
-			return nil, nil
-		}
-	}
-	client, err := e.loadNativeClient(ctx, args, false)
+	// Preflight performs the same document load the invocation performs before
+	// any operation request: resolving the description artifact is how this
+	// binding learns its requirements, and it touches no operation target.
+	// A live CONTEXT_REQUIRED now terminates the invocation for the caller to
+	// resolve, so a cold location-only source must be readable here or a
+	// configured resolver would never see the challenge.
+	client, err := e.loadNativeClient(ctx, args)
 	if err != nil {
 		mapped := nativeInvocationError(err)
 		if mapped.Code == invoke.ErrCodeRefused {
@@ -210,7 +207,7 @@ func (e *invokerRuntime) prepareNativeBinding(ctx context.Context, args *invoke.
 	return nativeBindingRequirements(requirements)
 }
 
-func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.BindingInvocationArgs, allowDocumentFetch bool) (*openapiclient.Client, error) {
+func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.BindingInvocationArgs) (*openapiclient.Client, error) {
 	if args == nil {
 		return nil, &openapiclient.ClientError{Kind: openapiclient.ErrorSource, Code: "SOURCE_LOAD_FAILED", Message: "OpenAPI invocation arguments are nil"}
 	}
@@ -225,12 +222,8 @@ func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.Bind
 			return nil, err
 		}
 	}
-	documentClient := e.client
-	if !allowDocumentFetch {
-		documentClient = &http.Client{Transport: nativeNoDocumentFetchTransport{}}
-	}
 	client, err := openapiclient.Load(ctx, openapiclient.Source{Location: args.Source.Location, Content: content}, openapiclient.Options{
-		DocumentHTTPClient:         documentClient,
+		DocumentHTTPClient:         e.client,
 		HTTPClient:                 e.client,
 		Auth:                       e.nativeHandlerCredentials(),
 		Redirect:                   e.redirect,
@@ -243,7 +236,7 @@ func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.Bind
 	if err != nil {
 		return nil, err
 	}
-	if key := nativeSourceClientKey(args); allowDocumentFetch && key != "" {
+	if key := nativeSourceClientKey(args); key != "" {
 		e.nativeClientsMu.Lock()
 		if present := e.nativeClients[key]; present != nil {
 			client = present
@@ -259,12 +252,6 @@ func (e *invokerRuntime) loadNativeClient(ctx context.Context, args *invoke.Bind
 		e.nativeClientsMu.Unlock()
 	}
 	return client, nil
-}
-
-type nativeNoDocumentFetchTransport struct{}
-
-func (nativeNoDocumentFetchTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	return nil, errors.New("PrepareBinding does not retrieve external OpenAPI resources")
 }
 
 func assertNativeBindingSpec(args *invoke.BindingInvocationArgs) *invoke.InvocationError {
