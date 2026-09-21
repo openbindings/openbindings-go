@@ -64,8 +64,9 @@ func (a *Adapter) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 	return a.invoker.InvokeBinding(ctx, args)
 }
 
-// PrepareBinding reports context the selected operation requires without
-// dispatching a request.
+// PrepareBinding loads and analyzes the source, retaining reusable analysis
+// under the invoker's cache policy, and reports known missing context. It may
+// fetch the description but never dispatches the selected operation.
 func (a *Adapter) PrepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	return a.invoker.PrepareBinding(ctx, args)
 }

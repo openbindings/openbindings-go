@@ -388,9 +388,9 @@ type OutputStream[O any] interface {
 // signalling lifecycle transitions. Callers never see this interface.
 //
 // Binding-author contract (the type system cannot enforce these):
-//  1. Raise terminal errors (notably CONTEXT_REQUIRED) BEFORE any observable
-//     side effect, so the caller can resolve the challenge and invoke again
-//     safely.
+//  1. Raise CONTEXT_REQUIRED or ERR_REFUSED only before output or observable
+//     effects of the requested operation. Setup I/O may already have occurred;
+//     other errors carry no safe-to-redo guarantee.
 //  2. Observe the EmitOutput result: it returns non-nil when the invocation
 //     terminated while the emit was parked; stop emitting on error.
 //  3. EmitOutput parking supplies backpressure at this handoff. Avoid a redundant

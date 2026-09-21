@@ -6,6 +6,10 @@
 
 ### Fixed
 
+- **Preparation failures remain visible.** OpenAPI now reports failed required
+  description loads, edition/selector checks and analysis during preparation,
+  including cancellation, instead of returning a successful unknown result.
+
 - **Context matching keeps the complete challenge's scheme identities.**
   `MatchContextAlternative` exposes the same first-match decision used by
   satisfaction and scoping so applications can retain it while applying a
@@ -46,6 +50,14 @@
   SDK decode boundary.
 
 ### Changed
+
+- **Optional preparation permits binding-owned setup.** `PrepareOperation`,
+  `PrepareBinding` and existing `Preflight` callbacks keep their signatures.
+  They may perform I/O and retain reusable state under the adapter/client's
+  existing policy, but never execute the requested operation. Early preparation
+  is optional and does not resolve context. Nil is not readiness; an error in
+  invocation's automatic preparation lane stops execution. Optional acceleration
+  uses the binding's normal valid fallback. See `PREPARATION.md`.
 
 - **Invocation values now have snapshot ownership and finite per-value
   limits** (breaking, pre-1.0 minor-release change). Ordinary typed/local paths
@@ -285,8 +297,8 @@
   pairs an ordinary required OBI with a typed operation signature; an
   application supplies concrete interfaces and its explicitly installed
   `OperationInvoker`s. Matching is alias-aware, checks only the requested
-  operation against both complete schema graphs, performs side-effect-free
-  binding preflight, and carries advisory context requirements. The neutral
+  operation against both complete schema graphs, offers binding-owned
+  preparation, and carries advisory context requirements. The neutral
   matcher returns every invocable match; the route-to-one convenience selects
   a unique highest caller preference and refuses a tie as
   `OperationRequirementAmbiguous`. Format modules remain optional and
@@ -494,12 +506,12 @@
   need missing runtime context fire `CONTEXT_REQUIRED` (details:
   `ContextRequiredDetails` — `Key` + disjunctive `Alternatives` over
   conjunctive `Requirements`, families
-  `auth.bearer`/`auth.apiKey`/`auth.basic`/`auth.oauth2`) BEFORE any observable
-  side effect. The `OperationInvoker` resolves challenges known at preflight
+  `auth.bearer`/`auth.apiKey`/`auth.basic`/`auth.oauth2`) before output or observable
+  effects of the requested operation. The `OperationInvoker` resolves challenges known at preflight
   via a composition-time `ContextResolver` (a live challenge surfaces to the
   caller; see the replay-removal entry above). Invokers that can derive
-  requirements from their source implement the side-effect-free `BindingPreparer`
-  preflight; `StoreContextResolver(store)`/`ContextSatisfies` compose the
+  requirements from their source implement optional `BindingPreparer`
+  preparation; `StoreContextResolver(store)`/`ContextSatisfies` compose the
   binding-invoker and context-store roles. `OperationInvoker.WithRuntime` now
   takes a `ContextResolver`.
 

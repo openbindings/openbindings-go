@@ -63,8 +63,8 @@ type OperationImplementationAssessment struct {
 
 // OperationMatch is a compatible, invocable realization of one requirement.
 //
-// KnownContextRequirements is the advisory result of side-effect-free
-// preflight. Nil means no requirement was knowable during resolution, not a
+// KnownContextRequirements is the advisory result of binding-owned preparation,
+// which may perform I/O. Nil means no requirement was reported, not a
 // guarantee that live invocation cannot raise CONTEXT_REQUIRED.
 type OperationMatch[I, O any] struct {
 	Requirement              OperationRequirement[I, O]
@@ -87,7 +87,7 @@ func (m *OperationMatch[I, O]) Invoke(ctx context.Context, opts ...InvokeOption)
 	return Invoke(ctx, m.Implementation.Invoker, m.Implementation.Interface, m.Requirement.Signature, opts...)
 }
 
-// Prepare repeats side-effect-free preflight, optionally with caller context
+// Prepare repeats optional binding preparation, optionally with caller context
 // or binding selection supplied through InvokeOption.
 func (m *OperationMatch[I, O]) Prepare(ctx context.Context, opts ...InvokeOption) (*ContextRequiredDetails, error) {
 	return m.Implementation.Invoker.PrepareOperation(
@@ -135,8 +135,8 @@ type preferredOperationMatch[I, O any] struct {
 // Matching is deliberately conservative:
 //  1. the required identifier must correspond by key or alias;
 //  2. its schemas must satisfy the reference comparison profile;
-//  3. the supplied operation invoker must resolve a concrete binding without
-//     side effects.
+//  3. the supplied operation invoker must resolve a concrete binding and its
+//     preparation must return without error. Preparation may perform I/O.
 //
 // The returned matches are ordered by caller-owned preference, but this
 // function selects nothing. Applications whose operation semantics aggregate,

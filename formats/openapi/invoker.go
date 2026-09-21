@@ -359,7 +359,7 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 // HTTP work is scheduled on its own goroutine. Input messages flow through
 // the handle's Write channel. All pre-dispatch failures (bad selector, missing
 // server URL, unresolvable operation, missing context) terminate the handle
-// BEFORE any network side effect.
+// before dispatch of the requested operation. Description retrieval may occur.
 func (e *invokerRuntime) invokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
 	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
 	select {
@@ -384,16 +384,11 @@ func (e *Invoker) PrepareBinding(ctx context.Context, args *invoke.BindingInvoca
 	return e.runtime.prepareBinding(ctx, args)
 }
 
-// prepareBinding is the side-effect-free preflight (the prepareBinding
-// operation of the openbindings.binding-invoker interface): it derives the
-// operation's auth requirements from the document's securitySchemes and
-// reports the context the invocation would require, or nil when it can
-// proceed.
-//
-// It uses the source content or a previously cached document; it never
-// fetches. When the document would have to be fetched to learn its security
-// schemes, it reports no requirement and lets the invocation raise the
-// challenge instead.
+// prepareBinding loads and analyzes the source to report known missing context
+// without dispatching the selected operation. Qualifying embedded descriptions
+// reuse the existing bounded client cache; location-only descriptions load
+// afresh. Required load and analysis errors are returned, not reported as an
+// unknown requirement. Nil details are not a guarantee of future success.
 func (e *invokerRuntime) prepareBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
 	return e.prepareNativeBinding(ctx, args)
 }

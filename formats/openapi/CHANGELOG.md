@@ -2,16 +2,22 @@
 
 ## 0.2.0 (working draft)
 
+### Fixed
+
+- **Required preparation failures are returned.** Failed description retrieval,
+  invalid descriptions, edition/selector checks and analysis no longer become
+  successful unknown results. Cancellation remains observable to the caller.
+  Preparation does not execute the selected operation or resolve credentials.
+
 ### Changed
 
 - **`PrepareBinding` loads a location-only document.** Preflight now performs
   the same description load the invocation performs before any operation
   request, so a cold source reports its context requirements instead of
-  deferring them to a live challenge. Reading the description artifact touches
-  no operation target. This follows the 2026-09-21 ruling that removed live
+  deferring them to a live challenge. Reading the description artifact does
+  not execute the selected operation. This follows the 2026-09-21 ruling that removed live
   `CONTEXT_REQUIRED` replay from the operation invoker: a configured resolver
-  is consulted at preflight only, so preflight must be able to learn the
-  requirements. The advisory no-fetch load and its separate cache lane are
+  is consulted at preparation only. The advisory no-fetch load and its separate cache lane are
   removed.
 
 ### Added

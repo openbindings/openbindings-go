@@ -104,7 +104,7 @@ type InvocationSource struct {
 //
 // Runtime prerequisites (credentials, configuration) travel in Context as
 // opaque well-known fields; a binding that needs context it wasn't given
-// terminates with CONTEXT_REQUIRED before any side effect, and resolution
+// terminates with CONTEXT_REQUIRED before output or observable effects of the requested operation, and resolution
 // happens above the binding (see OperationInvoker.ContextResolver).
 type BindingInvocationArgs struct {
 	ValueLimits ValueLimits      `json:"-"`

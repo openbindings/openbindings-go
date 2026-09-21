@@ -391,10 +391,21 @@ Client-streaming and bidirectional callers own `Close()` (and drive input and
 output from separate goroutines); `Cancel()` tears the invocation down.
 Protocol metadata remains inside artifact runtimes and binding-specific
 interpretation. Missing runtime context
-surfaces as a `CONTEXT_REQUIRED` terminal error raised before any side effect.
+surfaces as a `CONTEXT_REQUIRED` terminal error raised before output or observable effects of the requested operation.
 Requirements a binding can state up front are resolved at preflight by the
 operation invoker's `ContextResolver` when one is configured; a challenge
 raised during the attempt ends the invocation for the caller to resolve.
+
+## Preparing an operation
+
+Call `PrepareOperation` when an operation becomes likely to be used. Core routes
+to the selected binding, which may perform setup, including I/O, and report
+known missing context. It does not execute the operation or run the context
+resolver. Calling early is optional; ordinary invocation also calls the same
+hook. A preparation error in that invocation path stops execution. Bindings
+use normal valid fallbacks for optional acceleration, and own reusable resources.
+`nil, nil` is not a readiness guarantee. See [operation preparation](PREPARATION.md)
+for the caller flow, cancellation and ownership contract.
 
 ## Binding invokers
 
@@ -490,7 +501,7 @@ _ = store.Set(ctx, invoke.NormalizeContextKey("https://api.example.com"),
 ```
 
 A binding that needs context it wasn't given raises a `CONTEXT_REQUIRED`
-challenge before any side effect. Context resolution runs in one lane: before
+challenge before output or observable effects of the requested operation. Context resolution runs in one lane: before
 the attempt, the operation invoker asks the binding for its known requirements
 (`PrepareBinding`), consults its configured `ContextResolver`, and starts the
 one attempt with the merged context. A live `CONTEXT_REQUIRED` raised during
@@ -601,7 +612,7 @@ opInv := invoke.NewOperationInvoker(openapi.NewInvoker()).
 Apps that resolve interactively (prompts, browser redirects, keychains) supply
 their own resolver instead. Format invokers that can derive requirements from
 their source (e.g. OpenAPI `securitySchemes`) also implement the
-side-effect-free `BindingPreparer` preflight.
+optional `BindingPreparer` capability; see [operation preparation](PREPARATION.md).
 
 ## Transforms (invoking tools only)
 

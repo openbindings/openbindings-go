@@ -252,8 +252,9 @@ func (e *OperationInvoker) fillBindingArgs(args *BindingInvocationArgs) {
 	}
 }
 
-// PrepareBinding is the side-effect-free preflight for a resolved binding
-// (the openbindings.binding-invoker interface's prepareBinding).
+// PrepareBinding gives a resolved binding an opportunity to prepare without
+// executing the requested operation. See BindingPreparer for effects, results
+// and ownership. This call does not run ContextResolver.
 func (e *OperationInvoker) PrepareBinding(ctx context.Context, args *BindingInvocationArgs) (*ContextRequiredDetails, error) {
 	return e.invoker.prepareBinding(ctx, args)
 }
@@ -342,17 +343,16 @@ func (e *OperationInvoker) resolveBinding(obi *openbindings.Interface, operation
 	return op, bindingKey, binding, &src, nil
 }
 
-// PrepareOperation is the operation-layer side-effect-free preflight (the
-// openbindings.operation-invoker interface's prepareOperation), the
-// by-reference counterpart to
-// PrepareBinding. It resolves operation against obi to a concrete binding
-// (OBI-T-12 resolution + explicit selection or the sole-candidate rule) and
-// reports that binding's context requirements without invoking or causing any
-// side effect. A nil result means requirements could not be determined without
-// invoking (the always-satisfiable answer); WithContext narrows the result to
-// what that context leaves unsatisfied. It composes ResolveOperation, binding
-// selection, and PrepareBinding so callers preflight by operation without
-// resolving a binding themselves.
+// PrepareOperation resolves operation and offers the selected binding optional
+// advance preparation, using the same selection rules as invocation. It may
+// perform binding-owned I/O but does not execute the requested operation or run
+// ContextResolver. WithContext supplies context for this call; nil details and
+// nil error mean no unmet requirement is reported, not that invocation is ready.
+//
+// Early preparation is optional. Ordinary invocation calls the same capability
+// before context resolution and execution. Preparation does not pin future selection or
+// guarantee future success; callers must discard results for obsolete operation,
+// binding or context selections. See BindingPreparer for the full contract.
 func (e *OperationInvoker) PrepareOperation(ctx context.Context, obi *openbindings.Interface, operation string, opts ...InvokeOption) (*ContextRequiredDetails, error) {
 	var cfg invokeConfig
 	for _, opt := range opts {

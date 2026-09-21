@@ -38,6 +38,11 @@ listed implementations. As in the underlying contracts, `BindingSpecs` is
 discovery metadata while `CheckBindingSpecs` remains authoritative for dynamic
 support.
 
+Optional [operation preparation](PREPARATION.md) follows the same boundaries.
+Core routes the opportunity; the binding owns useful setup and reusable state.
+Preparation may perform I/O but does not execute the requested operation or
+resolve context interactively. It adds no core cache or new resource lifetime.
+
 Retrieval and transport policy remain explicit at their owning boundaries.
 `sdk.RuntimeOptions.HTTPClient` retrieves OBIs during resolution;
 `openapi.AdapterOptions` separately configures authoring reads and live API

@@ -77,8 +77,9 @@ func (r *PreparedRealization) Invoke(ctx context.Context, opts ...InvokeOption) 
 	return r.behavior.Invoke(ctx, opts...)
 }
 
-// Preflight evaluates current context without making a timeless liveness
-// claim.
+// Preflight offers optional binding-owned preparation and reports known missing
+// context under the BindingPreparer contract. It may perform I/O and does not
+// guarantee readiness or future success.
 func (r *PreparedRealization) Preflight(ctx context.Context, opts ...InvokeOption) (*ContextRequiredDetails, error) {
 	if err := r.provider.assertActive(); err != nil {
 		return nil, err

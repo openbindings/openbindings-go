@@ -10,8 +10,9 @@ import (
 	openbindings "github.com/openbindings/openbindings-go"
 )
 
-// LocalPreflight optionally reports current prerequisites for one native
-// implementation. It must remain side-effect free.
+// LocalPreflight optionally prepares one native implementation and reports
+// known missing context. It follows BindingPreparer, including its effects and
+// ownership rules; it must not execute the requested operation.
 type LocalPreflight func(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error)
 
 type localStreamHandler func(context.Context, BindingHandle[any, any], *BindingInvocationArgs)
@@ -26,7 +27,7 @@ type LocalBindingImplementation struct {
 // LocalImplementationOption configures one native implementation.
 type LocalImplementationOption func(*LocalBindingImplementation)
 
-// WithLocalPreflight attaches a side-effect-free live prerequisite check.
+// WithLocalPreflight attaches optional preparation under the BindingPreparer contract.
 func WithLocalPreflight(preflight LocalPreflight) LocalImplementationOption {
 	return func(implementation *LocalBindingImplementation) {
 		implementation.preflight = preflight

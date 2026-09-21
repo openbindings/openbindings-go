@@ -169,8 +169,9 @@ func (r *Runtime) SynthesizeInterfaceWithCoverage(ctx context.Context, input *sy
 	return coverage.SynthesizeInterfaceWithCoverage(ctx, input)
 }
 
-// PrepareOperation performs side-effect-free context preflight for one
-// operation through the same provider registry used by Invoke.
+// PrepareOperation offers optional binding-owned setup for one operation through
+// the same provider registry used by Invoke. It follows invoke.BindingPreparer:
+// setup may perform I/O but does not execute the operation or run the resolver.
 func (r *Runtime) PrepareOperation(ctx context.Context, iface *openbindings.Interface, operation string, options ...invoke.InvokeOption) (*invoke.ContextRequiredDetails, error) {
 	return r.operationInvoker.PrepareOperation(ctx, iface, operation, options...)
 }

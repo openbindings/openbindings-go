@@ -1215,7 +1215,13 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 // Embedded content never supplies authority for a location-only source.
 func TestPrepareBinding_LocationOnlyDoesNotReuseEmbeddedContent(t *testing.T) {
 	spec, _ := json.Marshal(makeOpenAPISpec("https://api.example.com"))
-	location := "https://example.test/openapi.json"
+	var fetches atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fetches.Add(1)
+		http.Error(w, "description unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	location := server.URL + "/openapi.json"
 
 	binv := NewInvoker()
 	// Content+location invocation uses the authoritative embedded content.
@@ -1228,16 +1234,15 @@ func TestPrepareBinding_LocationOnlyDoesNotReuseEmbeddedContent(t *testing.T) {
 		t.Fatalf("expected CONTEXT_REQUIRED, got %v", ierr)
 	}
 
-	// Location-only preflight remains unknown because it cannot retrieve.
+	// The location-only source must be retrieved; a failure cannot be hidden
+	// by either successful preparation or another source's embedded content.
 	details, err := binv.PrepareBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: location},
 		Selector: "#/paths/~1items/get",
 	})
-	if err != nil {
-		t.Fatalf("prepareBinding: %v", err)
-	}
-	if details != nil {
-		t.Fatal("location-only preflight reused embedded content from a different source")
+	var preparationErr *invoke.InvocationError
+	if details != nil || !errors.As(err, &preparationErr) || preparationErr.Code != invoke.ErrCodeSourceLoadFailed || fetches.Load() != 1 {
+		t.Fatalf("location-only prepare=(%v, %v), fetches=%d", details, err, fetches.Load())
 	}
 }
 

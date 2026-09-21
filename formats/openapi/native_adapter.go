@@ -149,32 +149,27 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 }
 
 func (e *invokerRuntime) prepareNativeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) (*invoke.ContextRequiredDetails, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := assertNativeBindingSpec(args); err != nil {
 		return nil, err
 	}
-	// Preflight performs the same document load the invocation performs before
-	// any operation request: resolving the description artifact is how this
-	// binding learns its requirements, and it touches no operation target.
-	// A live CONTEXT_REQUIRED now terminates the invocation for the caller to
-	// resolve, so a cold location-only source must be readable here or a
-	// configured resolver would never see the challenge.
+	// Loading the description is required for both preparation and invocation.
+	// Retain reusable analysis under the existing client-cache policy; this call
+	// never dispatches the selected operation or resolves missing context.
 	client, err := e.loadNativeClient(ctx, args)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err != nil {
-		mapped := nativeInvocationError(err)
-		if mapped.Code == invoke.ErrCodeRefused {
-			return nil, mapped
-		}
-		return nil, nil
+		return nil, nativeInvocationError(err)
 	}
 	if err := acceptedNativeEdition(args.Source.BindingSpec, client.Edition()); err != nil {
-		return nil, nil
+		return nil, err
 	}
 	if _, err := client.Operation(openapiclient.OperationRef(args.Selector)); err != nil {
-		mapped := nativeSelectionInvocationError(args, err)
-		if mapped.Code == invoke.ErrCodeRefused {
-			return nil, mapped
-		}
-		return nil, nil
+		return nil, nativeSelectionInvocationError(args, err)
 	}
 	options, err := e.nativeCallOptions(args, client)
 	if err != nil {
@@ -186,23 +181,18 @@ func (e *invokerRuntime) prepareNativeBinding(ctx context.Context, args *invoke.
 	}
 	names, err := nativeCredentialNames(ctx, client, args.Selector, configured, options)
 	if err != nil {
-		mapped := nativeSelectionInvocationError(args, err)
-		if mapped.Code == invoke.ErrCodeRefused {
-			return nil, mapped
-		}
-		return nil, nil
+		return nil, nativeSelectionInvocationError(args, err)
 	}
 	options.Auth, err = e.nativeCredentials(args.Context, names, options.Auth)
 	if err != nil {
 		return nil, err
 	}
 	requirements, err := client.Preflight(ctx, openapiclient.OperationRef(args.Selector), configured, options)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err != nil {
-		mapped := nativeSelectionInvocationError(args, err)
-		if mapped.Code == invoke.ErrCodeRefused {
-			return nil, mapped
-		}
-		return nil, nil
+		return nil, nativeSelectionInvocationError(args, err)
 	}
 	return nativeBindingRequirements(requirements)
 }

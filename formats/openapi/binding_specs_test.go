@@ -124,8 +124,9 @@ func TestOpenAPIFamilyTokenMustMatchArtifactEdition(t *testing.T) {
 				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: openbindings.TextContent(artifact)},
 				Selector: "#/paths/~1x/get",
 			})
-			if prepareErr != nil || prepareDetails != nil {
-				t.Fatalf("prepare = (%#v, %#v), want advisory no-op before source acquisition", prepareDetails, prepareErr)
+			var preparationErr *invoke.InvocationError
+			if prepareDetails != nil || !errors.As(prepareErr, &preparationErr) || preparationErr.Code != invoke.ErrCodeSourceLoadFailed {
+				t.Fatalf("prepare = (%#v, %#v), want source edition failure", prepareDetails, prepareErr)
 			}
 		})
 	}
