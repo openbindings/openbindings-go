@@ -21,7 +21,6 @@ func Construct[T any](ctx context.Context, s *Snapshot, options Options) (T, err
 	if err != nil {
 		return zero, err
 	}
-	defer w.release()
 	t := reflect.TypeFor[T]()
 	n, plain, err := estimate(w, s.root, t, 1)
 	if err != nil {
@@ -34,9 +33,7 @@ func Construct[T any](ctx context.Context, s *Snapshot, options Options) (T, err
 	if plain {
 		err = assign(s.root, dst)
 	} else {
-		account, release := w.scratch()
-		defer release()
-		raw, e := codec.MarshalBounded(w.ctx, s.root, codec.EncodeLimits{MaxBytes: w.options.Limits.MaxUnits, MaxNodes: w.options.Limits.MaxUnits / NodeUnits, MaxDepth: w.options.Limits.MaxDepth, Account: account})
+		raw, e := codec.MarshalBounded(w.ctx, s.root, codec.EncodeLimits{MaxBytes: w.options.Limits.MaxUnits, MaxNodes: w.options.Limits.MaxUnits / NodeUnits, MaxDepth: w.options.Limits.MaxDepth, Account: w.scratch()})
 		if e != nil {
 			return zero, e
 		}

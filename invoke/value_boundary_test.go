@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +12,6 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/internal/value"
-	"github.com/openbindings/openbindings-go/internal/valueio"
 )
 
 func TestRawAndTypedAnyOutputsAreDetachedLogicalValues(t *testing.T) {
@@ -43,13 +41,10 @@ func TestRawAndTypedAnyOutputsAreDetachedLogicalValues(t *testing.T) {
 		if _, err = out.Read(context.Background()); err != io.EOF {
 			t.Fatal(err)
 		}
-		if live, _ := i.scope.Usage(); live != 0 {
-			t.Fatalf("retained %d after drain", live)
-		}
 	}
 }
 func TestAcceptedOutputDrainsAfterCaptureLimitFailure(t *testing.T) {
-	i := NewInvocationImpl[any, any](context.Background(), WithInvocationValueLimits(ValueLimits{MaxValueUnits: 512, MaxLiveUnits: 4096}))
+	i := NewInvocationImpl[any, any](context.Background(), WithInvocationValueLimits(ValueLimits{MaxValueUnits: 512}))
 	if err := i.EmitOutput("accepted"); err != nil {
 		t.Fatal(err)
 	}
@@ -66,15 +61,25 @@ func TestAcceptedOutputDrainsAfterCaptureLimitFailure(t *testing.T) {
 	if _, err = out.Read(context.Background()); codeOf(t, err) != ErrCodeRuntime {
 		t.Fatal(err)
 	}
-	if live, _ := i.scope.Usage(); live != 0 {
-		t.Fatal(live)
+}
+func TestDepthLimitRefusesDeepValues(t *testing.T) {
+	i := NewInvocationImpl[any, any](context.Background(), WithInvocationValueLimits(ValueLimits{MaxDepth: 3}))
+	shallow := map[string]any{"a": map[string]any{"b": "leaf"}}
+	if err := i.Write(context.Background(), shallow); err != nil {
+		t.Fatal(err)
+	}
+	deep := map[string]any{"a": map[string]any{"b": map[string]any{"c": map[string]any{"d": "leaf"}}}}
+	err := i.Write(context.Background(), deep)
+	var limit *value.LimitError
+	if !errors.As(err, &limit) || limit.Kind != "depth" || codeOf(t, err) != ErrCodeRuntime {
+		t.Fatalf("depth refusal: %v", err)
 	}
 }
 func TestTypedConstructionFailureConsumesOneOutputOnly(t *testing.T) {
 	type padded struct {
 		Padding [4096]byte `json:"-"`
 	}
-	i := NewInvocationImpl[any, any](context.Background(), WithInvocationValueLimits(ValueLimits{MaxValueUnits: 512, MaxLiveUnits: 4096}))
+	i := NewInvocationImpl[any, any](context.Background(), WithInvocationValueLimits(ValueLimits{MaxValueUnits: 512}))
 	if err := i.EmitOutput(map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
@@ -93,52 +98,6 @@ func TestTypedConstructionFailureConsumesOneOutputOnly(t *testing.T) {
 	}
 	if _, err = out.Read(context.Background()); err != io.EOF {
 		t.Fatal(err)
-	}
-	if live, _ := i.scope.Usage(); live != 0 {
-		t.Fatal(live)
-	}
-}
-func TestStopReleasesQueuedOutputsAfterTerminal(t *testing.T) {
-	i := NewInvocationImpl[any, any](context.Background())
-	if err := i.EmitOutput([]byte{1, 2, 3}); err != nil {
-		t.Fatal(err)
-	}
-	i.CloseOutput()
-	if live, _ := i.scope.Usage(); live == 0 {
-		t.Fatal("queued output has no reservation")
-	}
-	i.Outputs().Stop()
-	if live, _ := i.scope.Usage(); live != 0 {
-		t.Fatalf("Stop retained %d", live)
-	}
-}
-func TestRetryRetentionUsesFiniteInvocationBudget(t *testing.T) {
-	mock := &mockBindingInvoker{}
-	op := newOpInvoker(mock, nil)
-	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("uploadChunks"), WithValueLimits(ValueLimits{MaxValueUnits: 512, MaxLiveUnits: 2048}))
-	accepted := 0
-	for ; accepted < 100; accepted++ {
-		if err := call.Write(shortCtx(t), map[string]any{"chunk": "x"}); err != nil {
-			break
-		}
-	}
-	if accepted == 100 {
-		t.Fatal("unbounded replay retention")
-	}
-	_, err := drainOutputs(t, call)
-	if codeOf(t, err) != ErrCodeRuntime {
-		t.Fatalf("wrong terminal: %v", err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for {
-		live, _ := valueio.From(call).Scope.Usage()
-		if live == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("replay retained %d after workers retired", live)
-		}
-		runtime.Gosched()
 	}
 }
 func TestInvalidLimitsPreventInvocationDispatch(t *testing.T) {
@@ -171,13 +130,6 @@ func TestTerminalDataIsIsolatedAndBounded(t *testing.T) {
 	if second.Code != ErrCodeExecutionFailed || second.Data.(map[string]any)["nested"].([]any)[0] != "before" {
 		t.Fatalf("shared terminal: %#v", second)
 	}
-	if live, _ := i.scope.Usage(); live == 0 {
-		t.Fatal("retained error was not charged")
-	}
-	out.Stop()
-	if live, _ := i.scope.Usage(); live != 0 {
-		t.Fatal(live)
-	}
 	for _, input := range []*InvocationError{NewInvocationError(ErrCodeExecutionFailed), NewInvocationErrorWithData(ErrCodeExecutionFailed, nil)} {
 		c := NewInvocationImpl[any, any](bg())
 		c.FireError(input)
@@ -186,32 +138,40 @@ func TestTerminalDataIsIsolatedAndBounded(t *testing.T) {
 			t.Fatal("lost data presence")
 		}
 	}
-	limited := NewInvocationImpl[any, any](bg(), WithInvocationValueLimits(ValueLimits{MaxValueUnits: 512, MaxLiveUnits: 100}))
-	limited.FireError(NewInvocationErrorWithData(ErrCodeExecutionFailed, "too much delivery reservation"))
+	// Terminal data is captured under the per-value limit like any other
+	// value; a refusal degrades the terminal to code-only ERR_RUNTIME.
+	limited := NewInvocationImpl[any, any](bg(), WithInvocationValueLimits(ValueLimits{MaxValueUnits: value.NodeUnits}))
+	limited.FireError(NewInvocationErrorWithData(ErrCodeExecutionFailed, "exceeds the per-value allowance"))
 	_, err = limited.Outputs().Read(bg())
 	if codeOf(t, err) != ErrCodeRuntime || AsInvocationError(err).HasData() {
 		t.Fatal(err)
 	}
-	if live, _ := limited.scope.Usage(); live != 0 {
-		t.Fatal(live)
-	}
 }
 
-func TestLowLevelPublicSessionDoesNotInheritAmbientBudget(t *testing.T) {
-	scope, _ := valueio.NewScope(valueio.Limits{MaxLiveUnits: 1024})
-	ctx := valueio.WithScope(bg(), scope)
-	public := NewInvocationImpl[any, any](ctx)
-	if public.scope == scope {
-		t.Fatal("unrelated public invocation inherited scope")
+// TestLiveChallengeTerminalSurvivesStop: Stop is exactly Cancel. It abandons
+// unread outputs by cancelling, never overwrites a real terminal, and does not
+// discard the terminal's data, so a caller that stopped reading can still
+// recover the challenge it needs to resolve.
+func TestLiveChallengeTerminalSurvivesStop(t *testing.T) {
+	i := NewInvocationImpl[any, any](bg())
+	if err := i.EmitOutput("unread"); err != nil {
+		t.Fatal(err)
 	}
-	bindingCtx := valueio.SessionContext(ctx)
-	binding := NewInvocationImpl[any, any](bindingCtx)
-	if binding.scope != scope {
-		t.Fatal("SDK binding lost scope")
+	i.FireError(NewContextRequiredError(bearerDetails))
+	out := i.Outputs()
+	out.Stop()
+	_, err := out.Read(bg())
+	if err == nil {
+		// The unread output drains first; the terminal follows.
+		_, err = out.Read(bg())
 	}
-	nestedPublic := NewInvocationImpl[any, any](bindingCtx)
-	if nestedPublic.scope == scope {
-		t.Fatal("application reused the internal binding permit")
+	details := ContextRequiredFrom(AsInvocationError(err))
+	if details == nil || details.Target != bearerDetails.Target {
+		t.Fatalf("terminal data lost after Stop: %v", err)
+	}
+	_, err = out.Read(bg())
+	if ContextRequiredFrom(AsInvocationError(err)) == nil {
+		t.Fatalf("terminal not sticky after Stop: %v", err)
 	}
 }
 
@@ -309,9 +269,6 @@ func TestProducerReuseAfterAcceptedWriteAndEmit(t *testing.T) {
 		t.Fatal(err)
 	}
 	workers.Wait()
-	if live, _ := i.scope.Usage(); live != 0 {
-		t.Fatal(live)
-	}
 }
 
 type panicValueEvaluator struct{}
@@ -320,6 +277,9 @@ func (panicValueEvaluator) Evaluate(context.Context, string, any) (any, error) {
 	panic("callback failure")
 }
 
+// TestTransformPanicRetiresOwnedAttempt: a panicking foreign evaluator on
+// either pump ends the one attempt loudly (ERR_RUNTIME) and the run returns,
+// with the input pump joined, rather than stranding a goroutine.
 func TestTransformPanicRetiresOwnedAttempt(t *testing.T) {
 	for _, phase := range []string{"input", "output"} {
 		t.Run(phase, func(t *testing.T) {
@@ -344,17 +304,6 @@ func TestTransformPanicRetiresOwnedAttempt(t *testing.T) {
 			_, err := call.Outputs().Read(shortCtx(t))
 			if codeOf(t, err) != ErrCodeRuntime {
 				t.Fatal(err)
-			}
-			deadline := time.Now().Add(time.Second)
-			for {
-				live, _ := valueio.From(call).Scope.Usage()
-				if live == 0 {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatalf("panic retained %d units", live)
-				}
-				runtime.Gosched()
 			}
 		})
 	}

@@ -15,14 +15,31 @@
 
 ### Changed
 
-- **Invocation values now have snapshot ownership and finite work/retention
+- **Invocation values now have snapshot ownership and finite per-value
   limits** (breaking, pre-1.0 minor-release change). Ordinary typed/local paths
   use private projection and checked construction instead of JSON text bridges.
   Mutable producer storage can be reused after an accepted handoff; handlers,
   evaluator callbacks and public readers receive detached values. Generic local
   reference identity is no longer preserved. Bytes retain exact typed recovery
-  with Base64 logical meaning. Retries and Operation Graph descendants share
-  the live budget; accepted output drains before resource failure.
+  with Base64 logical meaning. Every single admitted, delivered, constructed or
+  exported value is bounded by `ValueLimits.MaxValueUnits` and `MaxDepth`; a
+  value over the allowance ends the invocation with `ERR_RUNTIME`, and accepted
+  output drains before that failure. There is no invocation-wide live budget:
+  the fixed input (one) and output (four) queue capacities together with the
+  per-value limit bound what the core retains for one invocation.
+- **A live `CONTEXT_REQUIRED` now ends the invocation instead of being
+  replayed** (breaking, pre-1.0 minor-release change; the context-challenge
+  replay removal ruling, 2026-09-21). The operation invoker still resolves
+  requirements a binding states before the first attempt (`PrepareBinding`)
+  through its `ContextResolver` and starts the one attempt with the merged
+  context. A `CONTEXT_REQUIRED` raised during the attempt surfaces as the
+  terminal error with its `ContextRequiredDetails` intact, whether or not any
+  input was forwarded or any output was produced; the resolver is not consulted
+  for it and no second attempt is started. The replay log, retry window and
+  retry cap are gone. A `Write` the SDK accepted is accepted into exactly one
+  attempt. Callers that relied on the invisible redo add their own loop around
+  `Invoke` (see the README's context section); `StoreContextResolver` is
+  unaffected. `OutputStream.Stop` is exactly `Cancel` again.
 - **Value configuration and export are explicit.** `invoke.ValueLimits`, runtime
   and provider options, per-call `WithValueLimits`, low-level
   `WithInvocationValueLimits`, local `ValueLimitError` causes and
@@ -445,10 +462,9 @@
   `ContextRequiredDetails` — `Key` + disjunctive `Alternatives` over
   conjunctive `Requirements`, families
   `auth.bearer`/`auth.apiKey`/`auth.basic`/`auth.oauth2`) BEFORE any observable
-  side effect. The `OperationInvoker` resolves challenges via a
-  composition-time `ContextResolver`, re-driving the binding against the same
-  input buffer (the already-forwarded prefix is replayed; once a binding shows
-  observable progress the challenge surfaces instead). Invokers that can derive
+  side effect. The `OperationInvoker` resolves challenges known at preflight
+  via a composition-time `ContextResolver` (a live challenge surfaces to the
+  caller; see the replay-removal entry above). Invokers that can derive
   requirements from their source implement the side-effect-free `BindingPreparer`
   preflight; `StoreContextResolver(store)`/`ContextSatisfies` compose the
   binding-invoker and context-store roles. `OperationInvoker.WithRuntime` now

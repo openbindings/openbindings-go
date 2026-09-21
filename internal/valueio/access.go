@@ -3,13 +3,16 @@ package valueio
 import (
 	"context"
 	"reflect"
+
+	"github.com/openbindings/openbindings-go/internal/value"
 )
 
-// Endpoint is available only to SDK implementation packages. Send operations
-// consume their packet on either acceptance or rejection; Retain creates a
-// separate owner. ClaimOutput is exactly the public single-consumer claim.
+// Endpoint is available only to SDK implementation packages. Limits are the
+// resolved per-value limits every capture, delivery and construction on this
+// session uses. Send operations enqueue an already-admitted packet. ClaimOutput
+// is exactly the public single-consumer claim; Stop is exactly Cancel.
 type Endpoint struct {
-	Scope         *Scope
+	Limits        value.Limits
 	CaptureInput  func(context.Context, any) error
 	SendInput     func(context.Context, *Packet) error
 	ReadInput     func(context.Context) (*Packet, error)

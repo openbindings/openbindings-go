@@ -1,5 +1,16 @@
 # Invocation value migration qualification
 
+> **Superseded in part (2026-09-21).** The live value ledger, its shared
+> scope for retries and Operation Graph descendants, and the live
+> `CONTEXT_REQUIRED` replay this document describes were removed by two
+> project rulings before the branch landed:
+> `openbindings/project/records/history/live-value-ledger-removal-2026-09-21.md`
+> and
+> `openbindings/project/records/history/context-challenge-replay-removal-2026-09-21.md`.
+> Per-value and depth limits, snapshot ownership, bounded codec entry points
+> and explicit export stand as written. The body below is kept as history and
+> is not rewritten.
+
 The migration is implemented on this branch and in the coordinated CLI branch
 `codex/invocation-value-migration`. Local and Linux implementation checks and measurements
 are recorded below. SDK PR: [#115](https://github.com/openbindings/openbindings-go/pull/115);

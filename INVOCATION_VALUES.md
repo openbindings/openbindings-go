@@ -74,7 +74,6 @@ limits in `BindingInvocationArgs.ValueLimits`; low-level sessions use
 | Limit | Default |
 | --- | ---: |
 | One value / construction / codec scratch allowance | 64 Mi units |
-| Live SDK value retention within one invocation | 256 Mi units |
 | Logical nesting depth | 256 |
 
 Units are deterministic accounting allowances: 64 per logical node plus escaped
@@ -82,26 +81,29 @@ string/key and number token lengths, with conservative reservations for SDK
 containers, construction and codec buffers. They are not a byte-exact heap quota.
 Custom callbacks, evaluator engines, transport buffers, prepared documents and
 application-retained results have their own resource policies. Repeated aliases
-are charged per occurrence; each internal retained owner carries a full root
-charge even when immutable backing storage is shared.
+are charged per occurrence.
 
 ```go
 call := invoke.Invoke(ctx, invoker, iface, signature,
     invoke.WithValueLimits(invoke.ValueLimits{
         MaxValueUnits: 128 << 20,
-        MaxLiveUnits: 512 << 20,
         MaxDepth: 256,
     }))
 ```
 
-Retries and SDK Operation Graph descendants share the live budget. Internal
-retention refuses exhaustion that depends on its own progress to release space;
-independently readable public output can provide backpressure. Exhaustion ends
-the invocation with `ERR_RUNTIME`. Invalid input capture returns
-`ERR_TYPE_MISMATCH`; a rejected input is not accepted into the stream. Outputs
-already accepted still drain before the terminal error. `Cancel` preserves that
-accepted prefix; `OutputStream.Stop` explicitly discards unread outputs and
-releases the SDK's retained terminal data.
+There is no separate live budget. What the core retains for one invocation is
+bounded by its fixed queue capacities together with the per-value limit: the
+input queue holds one value and the output queue holds four, none above
+`MaxValueUnits`, plus the terminal error's data. A binding that emits faster
+than the application reads parks on the full output queue; that parking is the
+backpressure. Whatever a binding retains on its own account is that binding's
+concern under its own specification.
+
+A value that exceeds the per-value or depth allowance ends the invocation with
+`ERR_RUNTIME`. Invalid input capture returns `ERR_TYPE_MISMATCH`; a rejected
+input is not accepted into the stream. Outputs already accepted still drain
+before the terminal error. `Cancel` preserves that accepted prefix, and
+`OutputStream.Stop` is exactly `Cancel`: it never discards terminal data.
 
 A failed typed output conversion consumes that one logical output, returns a
 zero value and `*invoke.ValueConversionError`, and leaves subsequent outputs and

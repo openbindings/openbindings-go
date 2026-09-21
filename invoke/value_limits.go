@@ -9,22 +9,18 @@ import (
 	"github.com/openbindings/openbindings-go/internal/valueio"
 )
 
-// ValueLimits bounds one invocation's SDK-controlled value work and retention.
-// Units are 64 per logical node plus escaped string/key and number token lengths,
-// not heap bytes. Zero inherits defaults: 64 MiB/value, 256 MiB live, depth 256.
-// Retries and SDK Graph children share the resolved limits and live budget.
+// ValueLimits bounds the SDK's work on any single value an invocation admits,
+// delivers, constructs or exports. Units are 64 per logical node plus escaped
+// string/key and number token lengths, not heap bytes. Zero inherits defaults:
+// 64 MiB per value, depth 256. How much one invocation retains follows from
+// these limits and the fixed queue capacities (one input, four outputs).
 type ValueLimits struct {
-	MaxValueUnits, MaxLiveUnits int64
-	MaxDepth                    int
+	MaxValueUnits int64
+	MaxDepth      int
 }
 
 // Validate checks configuration without starting an invocation.
 func (l ValueLimits) Validate() error { _, err := l.resolve(); return err }
-
-func limitsFromScope(s *valueio.Scope) ValueLimits {
-	l := s.Limits()
-	return ValueLimits{MaxValueUnits: l.MaxValueUnits, MaxLiveUnits: l.MaxLiveUnits, MaxDepth: l.MaxDepth}
-}
 
 // InvocationValueOption propagates a binding call's process-local limits.
 func (a *BindingInvocationArgs) InvocationValueOption() InvocationOption {
@@ -34,16 +30,23 @@ func (a *BindingInvocationArgs) InvocationValueOption() InvocationOption {
 	return WithInvocationValueLimits(a.ValueLimits)
 }
 
-func (l ValueLimits) internal() valueio.Limits {
-	return valueio.Limits{MaxValueUnits: l.MaxValueUnits, MaxLiveUnits: l.MaxLiveUnits, MaxDepth: l.MaxDepth}
+func (l ValueLimits) internal() value.Limits {
+	return value.Limits{MaxUnits: l.MaxValueUnits, MaxDepth: l.MaxDepth}
 }
-func (l ValueLimits) resolve() (valueio.Limits, error) { return l.internal().Resolve() }
+func (l ValueLimits) resolve() (value.Limits, error) { return l.internal().Resolve() }
+func valueLimitsOf(l value.Limits) ValueLimits {
+	return ValueLimits{MaxValueUnits: l.MaxUnits, MaxDepth: l.MaxDepth}
+}
+
+// defaultValueLimits are the resolved defaults a foreign (non-SDK) invocation
+// handle is bridged with when no session limits are reachable.
+func defaultValueLimits() value.Limits {
+	l, _ := value.Limits{}.Resolve()
+	return l
+}
 func mergeValueLimits(base, override ValueLimits) ValueLimits {
 	if override.MaxValueUnits != 0 {
 		base.MaxValueUnits = override.MaxValueUnits
-	}
-	if override.MaxLiveUnits != 0 {
-		base.MaxLiveUnits = override.MaxLiveUnits
 	}
 	if override.MaxDepth != 0 {
 		base.MaxDepth = override.MaxDepth
@@ -64,8 +67,8 @@ func WithValueLimits(limits ValueLimits) InvokeOption {
 	return func(c *invokeConfig) { c.valueLimits = limits }
 }
 
-// ValueLimitError describes a local resource refusal without payload data.
-// It remains outside portable InvocationError.Data and JSON encoding.
+// ValueLimitError describes a local per-value or depth refusal without payload
+// data. It remains outside portable InvocationError.Data and JSON encoding.
 type ValueLimitError = value.LimitError
 
 // ValueConversionError is a failure to construct one public output. That logical

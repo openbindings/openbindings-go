@@ -152,43 +152,32 @@ func TestSnapshotsAndDuplicateConstructionOwnStorage(t *testing.T) {
 		t.Fatal("duplicate occurrences alias")
 	}
 }
-func TestLimitsAndFailureRelease(t *testing.T) {
-	var held int64
-	options := value.Options{Limits: value.Limits{MaxUnits: 512, MaxDepth: 8}, Adjust: func(n int64) error {
-		held += n
-		if held < 0 {
-			t.Fatal("negative account")
-		}
-		return nil
-	}}
+func TestPerValueLimitsRefuseOversizedWork(t *testing.T) {
+	options := value.Options{Limits: value.Limits{MaxUnits: 512, MaxDepth: 8}}
 	_, err := value.Capture(context.Background(), make([]any, 20), options)
 	var limit *value.LimitError
-	if !errors.As(err, &limit) || held != 0 {
-		t.Fatalf("limit/release: %v held=%d", err, held)
+	if !errors.As(err, &limit) {
+		t.Fatalf("oversized capture: %v", err)
 	}
 	s, err := value.Capture(context.Background(), map[string]any{}, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if held != s.Cost() {
-		t.Fatalf("held %d cost %d", held, s.Cost())
+	if s.Cost() < value.NodeUnits || s.Cost() > 512 {
+		t.Fatalf("cost %d outside the allowance", s.Cost())
 	}
 	type padded struct {
 		Ignored [1 << 20]byte `json:"-"`
 	}
 	_, err = value.Construct[padded](context.Background(), s, options)
-	if !errors.As(err, &limit) || held != s.Cost() {
-		t.Fatalf("padded destination: %v held=%d", err, held)
+	if !errors.As(err, &limit) {
+		t.Fatalf("padded destination: %v", err)
 	}
-	options.Adjust(-s.Cost())
 	cycle := map[string]any{}
 	cycle["x"] = cycle
 	for _, x := range []any{cycle, math.NaN(), map[string]any{"unread": json.Number("")}} {
 		if _, err = value.Capture(context.Background(), x, options); err == nil {
 			t.Fatal("invalid input admitted")
-		}
-		if held != 0 {
-			t.Fatalf("leaked %d", held)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())

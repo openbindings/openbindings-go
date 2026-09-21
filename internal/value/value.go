@@ -50,13 +50,11 @@ func (e *LimitError) Error() string {
 	return fmt.Sprintf("value %s exceeds %s allowance (%d)", e.Stage, e.Kind, e.Allowance)
 }
 
-// Options supplies a bounded accounting operation, not an invocation dependency.
-// Adjust reserves positive deltas before allocation and releases negative deltas.
-// A successful Capture leaves its Cost reserved; callers own that reservation.
-// Other operations release their SDK work reservation before returning.
+// Options carries the per-value limits one operation works under. Every
+// capture, delivery, construction and export is bounded on its own; nothing
+// is retained across operations.
 type Options struct {
 	Limits Limits
-	Adjust func(int64) error
 }
 
 type Snapshot struct {
@@ -107,11 +105,6 @@ func (w *work) add(n int64) error {
 	if n < 0 || n > w.options.Limits.MaxUnits-w.used {
 		return &LimitError{w.stage, "value", w.options.Limits.MaxUnits}
 	}
-	if w.options.Adjust != nil {
-		if err := w.options.Adjust(n); err != nil {
-			return err
-		}
-	}
 	w.used += n
 	return nil
 }
@@ -125,37 +118,25 @@ func (w *work) depth(d int) error {
 	}
 	return nil
 }
-func (w *work) release() {
-	if w.options.Adjust != nil && w.used != 0 {
-		_ = w.options.Adjust(-w.used)
-	}
-	w.used = 0
-}
-func (w *work) scratch() (func(int64) error, func()) {
+
+// scratch bounds the maintained codec's encoder scratch for one operation by
+// the same per-value allowance. The codec accounts growth before it happens
+// and releases what it drops.
+func (w *work) scratch() func(int64) error {
 	var held int64
 	return func(n int64) error {
-			if err := w.ctx.Err(); err != nil && n > 0 {
-				return err
-			}
-			if n > 0 && (n > w.options.Limits.MaxUnits || held > w.options.Limits.MaxUnits-n) {
-				return &LimitError{w.stage, "scratch", w.options.Limits.MaxUnits}
-			}
-			if n < -held {
-				panic("value: scratch release exceeds reservation")
-			}
-			if w.options.Adjust != nil {
-				if err := w.options.Adjust(n); err != nil {
-					return err
-				}
-			}
-			held += n
-			return nil
-		}, func() {
-			if w.options.Adjust != nil && held != 0 {
-				_ = w.options.Adjust(-held)
-			}
-			held = 0
+		if err := w.ctx.Err(); err != nil && n > 0 {
+			return err
 		}
+		if n > 0 && (n > w.options.Limits.MaxUnits || held > w.options.Limits.MaxUnits-n) {
+			return &LimitError{w.stage, "scratch", w.options.Limits.MaxUnits}
+		}
+		if n < -held {
+			panic("value: scratch release exceeds reservation")
+		}
+		held += n
+		return nil
+	}
 }
 
 func Capture(ctx context.Context, input any, options Options) (*Snapshot, error) {
@@ -163,15 +144,9 @@ func Capture(ctx context.Context, input any, options Options) (*Snapshot, error)
 	if err != nil {
 		return nil, err
 	}
-	accepted := false
-	defer func() {
-		if !accepted {
-			w.release()
-		}
-	}()
 	root, err := w.capture(reflect.ValueOf(input), map[visit]bool{}, 1, false, 0)
 	if errors.Is(err, fallback) {
-		w.release()
+		w.used = 0
 		w.native = false
 		w.height = 0
 		if w.options.Limits.MaxUnits < NodeUnits {
@@ -181,8 +156,7 @@ func Capture(ctx context.Context, input any, options Options) (*Snapshot, error)
 		if err := checkNumberCarriers(w.ctx, reflect.ValueOf(input), map[visit]bool{}, 1, w.options.Limits, &nodes); err != nil {
 			return nil, err
 		}
-		account, release := w.scratch()
-		defer release()
+		account := w.scratch()
 		raw, e := codec.MarshalBounded(w.ctx, input, codec.EncodeLimits{MaxBytes: w.options.Limits.MaxUnits, MaxNodes: w.options.Limits.MaxUnits / NodeUnits, MaxDepth: w.options.Limits.MaxDepth, Account: account})
 		if e != nil {
 			err = e
@@ -196,10 +170,8 @@ func Capture(ctx context.Context, input any, options Options) (*Snapshot, error)
 		err = w.ctx.Err()
 	}
 	if err != nil {
-		w.release()
 		return nil, err
 	}
-	accepted = true
 	return &Snapshot{root: root, cost: w.used, native: w.native, height: w.height}, nil
 }
 
@@ -435,7 +407,7 @@ func fieldValue(v reflect.Value, index []int, allocate bool) (reflect.Value, boo
 }
 
 // parse checks/charges each logical node before storing it. The encoded input
-// is already bounded and reserved; callbacks are never replayed while parsing.
+// is already bounded by the same allowance.
 func (w *work) parse(raw []byte) (any, error) {
 	d := codec.NewValueDecoder(raw)
 	v, err := w.parseValue(d, 1)
@@ -484,11 +456,7 @@ func (w *work) parseValue(d *codec.Decoder, depth int) (any, error) {
 				}
 				if old, exists := out[s]; exists {
 					oldCost, _ := logicalCost(old)
-					released := oldCost + codec.StringContentSize(s, false)
-					w.used -= released
-					if w.options.Adjust != nil {
-						_ = w.options.Adjust(-released)
-					}
+					w.used -= oldCost + codec.StringContentSize(s, false)
 				}
 				out[s] = v
 			}
@@ -531,7 +499,6 @@ func (s *Snapshot) Logical(ctx context.Context, options Options) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer w.release()
 	return w.logical(s.root, 1)
 }
 func (w *work) logical(v any, depth int) (any, error) {
@@ -597,13 +564,10 @@ func (s *Snapshot) Export(ctx context.Context, options Options) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer w.release()
 	if err = w.add(s.cost); err != nil {
 		return nil, err
 	}
-	account, release := w.scratch()
-	defer release()
-	return codec.MarshalBounded(w.ctx, exportRoot(s.root), codec.EncodeLimits{MaxBytes: w.options.Limits.MaxUnits, MaxNodes: w.options.Limits.MaxUnits / NodeUnits, MaxDepth: w.options.Limits.MaxDepth, Account: account})
+	return codec.MarshalBounded(w.ctx, exportRoot(s.root), codec.EncodeLimits{MaxBytes: w.options.Limits.MaxUnits, MaxNodes: w.options.Limits.MaxUnits / NodeUnits, MaxDepth: w.options.Limits.MaxDepth, Account: w.scratch()})
 }
 
 // []byte is already a codec-defined Base64 string. No tree conversion is needed.

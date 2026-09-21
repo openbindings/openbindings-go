@@ -275,12 +275,13 @@ func TestStoreContextResolver(t *testing.T) {
 	})
 }
 
-func TestStoreResolverDrivesRetryEndToEnd(t *testing.T) {
-	// Composition test: binding challenges, the store-backed resolver
-	// supplies the stored credential, the operation invoker replays.
+func TestStoreResolverDrivesPreflightEndToEnd(t *testing.T) {
+	// Composition test: the binding's preflight reports its requirement, the
+	// store-backed resolver supplies the stored credential, and the single
+	// attempt starts with it.
 	store := testStore{"api.example.com": {"bearerToken": "stored"}}
 
-	mock := &mockBindingInvoker{opts: mockOpts{requireBearer: true}}
+	mock := &preparerMock{&mockBindingInvoker{opts: mockOpts{requireBearer: true, preflight: true}}}
 	op := newOpInvoker(mock, StoreContextResolver(store))
 	call := Invoke(bg(), op, opTestInterface(), NewOperationSignature[any, any]("getUser"))
 	if err := call.Write(bg(), map[string]any{"id": "u1"}); err != nil {
@@ -293,8 +294,9 @@ func TestStoreResolverDrivesRetryEndToEnd(t *testing.T) {
 	if v.(map[string]any)["name"] != "Ada" {
 		t.Fatalf("got %v", v)
 	}
-	if _, _, _, contexts := mock.snapshot(); ContextBearerToken(contexts[1]) != "stored" {
-		t.Fatalf("retry context: %v", contexts[1])
+	attempts, _, _, contexts := mock.snapshot()
+	if attempts != 1 || ContextBearerToken(contexts[0]) != "stored" {
+		t.Fatalf("attempts=%d contexts=%v", attempts, contexts)
 	}
 }
 

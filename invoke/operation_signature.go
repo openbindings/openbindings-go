@@ -2,7 +2,6 @@ package invoke
 
 import (
 	"context"
-	"github.com/openbindings/openbindings-go/internal/valueio"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -43,8 +42,8 @@ func NewOperationSignature[I, O any](key string) OperationSignature[I, O] {
 }
 
 // InvokeOption configures a single Invoke call. Options are rarely needed:
-// invocation context is normally resolved by the invoker's ContextResolver via
-// the reactive CONTEXT_REQUIRED path, and the binding is normally selected by
+// invocation context is normally resolved by the invoker's ContextResolver at
+// preflight, and the binding is normally selected by
 // the operation-invoker contract's sole-candidate rule. The variadic-functional-option shape matches the rest of the SDK
 // (FetchOption, ValidateOption), so the common call passes no options at all.
 type InvokeOption func(*invokeConfig)
@@ -138,14 +137,12 @@ func Invoke[I, O any](
 		return fail(ierr)
 	}
 
-	ctx = valueio.RootContext(ctx)
 	caller := NewInvocationImpl[any, any](ctx, WithInvocationValueLimits(mergeValueLimits(invoker.ValueLimits, cfg.valueLimits)))
 	select {
 	case <-caller.Done():
 		return NewTypedInvocation[I, O](caller)
 	default:
 	}
-	ctx = valueio.WithScope(ctx, caller.scope)
 	caller.validateInput = makeInputValidator(op, obi, binding.Operation, bindingKey, cfg.diagnostics)
 
 	go func() {

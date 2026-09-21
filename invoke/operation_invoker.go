@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/openbindings/openbindings-go/internal/valueio"
 	"io"
 	"reflect"
 	"sort"
@@ -12,13 +11,9 @@ import (
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/internal/value"
+	"github.com/openbindings/openbindings-go/internal/valueio"
 )
-
-// maxContextRounds caps CONTEXT_REQUIRED resolve-and-retry rounds per
-// invocation. A binding that keeps challenging after resolution is either
-// mis-declaring its requirements or being fed an insufficient resolver;
-// surfacing beats looping.
-const maxContextRounds = 3
 
 // BindingSelector determines which binding to use for an operation.
 // Returns the binding key and the binding entry, or an error.
@@ -83,11 +78,14 @@ type ContextResolver func(ctx context.Context, details *ContextRequiredDetails) 
 //     it is emitted; a failure is terminal and the value is not emitted.
 //     Callers that need to inspect unvalidated payloads call InvokeBinding
 //     directly.
-//   - CONTEXT_REQUIRED negotiation: challenges raised by the binding before
-//     any input was consumed are resolved via ContextResolver and the
-//     binding is re-driven against the same input buffer (the
-//     already-forwarded prefix is replayed). Once the binding shows
-//     observable progress (a first output), challenges surface instead.
+//   - CONTEXT_REQUIRED negotiation: challenges a binding can state before
+//     the first attempt (its PrepareBinding preflight) are resolved via
+//     ContextResolver and the one attempt starts with the merged context. A
+//     live CONTEXT_REQUIRED raised by the binding during the attempt
+//     terminates the invocation with its ContextRequiredDetails intact,
+//     regardless of what was forwarded or produced; the invoker does not
+//     consult the resolver for it and starts no second attempt. The caller
+//     resolves the challenge and invokes again.
 //
 // Wiring errors (unknown operation, binding, or source; no invoker for the
 // format) surface as an already-errored handle with a local wiring code
@@ -193,7 +191,6 @@ func (e *OperationInvoker) availableBindingSpecs(iface *openbindings.Interface, 
 // BindingInvoker by source format, without operation-layer validation,
 // transforms, or context negotiation.
 func (e *OperationInvoker) InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any] {
-	ctx = valueio.RootContext(ctx)
 	e.fillBindingArgs(args)
 	return e.invoker.InvokeBinding(ctx, args)
 }
@@ -379,10 +376,10 @@ func (e *OperationInvoker) PrepareOperation(ctx context.Context, obi *openbindin
 	})
 }
 
-// run drives the binding-layer invocation(s) behind one caller-facing
-// handle: an input pump forwarding (transformed) caller inputs, an output
-// loop forwarding (transformed, T-16-validated) binding outputs, and the
-// CONTEXT_REQUIRED resolve-replay-retry machinery between attempts.
+// run drives the one binding-layer invocation behind a caller-facing handle:
+// preflight context resolution, an input pump forwarding (transformed) caller
+// inputs, and an output loop forwarding (transformed, T-16-validated) binding
+// outputs.
 func (e *OperationInvoker) run(
 	ctx context.Context,
 	caller *InvocationImpl[any, any],
@@ -455,7 +452,7 @@ func (e *OperationInvoker) runCompiled(
 			Interface:   iface,
 			InputSchema: op.Input,
 		}
-		a.ValueLimits = limitsFromScope(caller.scope)
+		a.ValueLimits = valueLimitsOf(caller.limits)
 		a.Hooks = hooks
 		a.MaxDeliveryUnitBytes = e.MaxDeliveryUnitBytes
 		site := &InvokeSite{
@@ -479,8 +476,8 @@ func (e *OperationInvoker) runCompiled(
 			merged[k] = v
 		}
 		for k, v := range resolved {
-			// The binding-invoker contract retries with the *augmented*
-			// context, not a replaced one. Top-level credential fields are
+			// The binding-invoker contract starts the attempt with the
+			// *augmented* context, not a replaced one. Top-level credential fields are
 			// leaf values, so an overwrite is correct — but `configuration`
 			// is a map keyed by configuration point, and a resolved
 			// config.value (R1a) names one point; overwriting the whole map
@@ -572,208 +569,64 @@ func (e *OperationInvoker) runCompiled(
 		}
 	}
 
-	// Inputs already forwarded to the binding, post-transform, recorded for
-	// replay while the retry window is open. The window closes at the
-	// binding's first output (observable progress: by the binding contract,
-	// CONTEXT_REQUIRED precedes any side effect, so a challenge after
-	// output cannot be retried safely).
-	var (
-		retryMu       sync.Mutex
-		replayLog     []*valueio.Packet
-		retryEligible = true
-	)
-	replayMetadata := valueio.From(caller).Scope.NewReservation()
-	closeRetryWindow := func() {
-		retryMu.Lock()
-		retryEligible = false
-		for _, p := range replayLog {
-			p.Release()
-		}
-		replayLog = nil
-		replayMetadata.Release()
-		retryMu.Unlock()
+	// One attempt. innerCtx bounds the binding: it cancels when the caller
+	// handle terminates (cancel propagation) and when the attempt is retired.
+	innerCtx, innerCancel := DoneContext(ctx, caller.Done())
+	var inner Invocation[any, any]
+	if compiledBinding != nil {
+		inner = compiledBinding.InvokeBinding(innerCtx, bindingArgs())
+	} else {
+		inner = e.invoker.InvokeBinding(innerCtx, bindingArgs())
 	}
-	defer closeRetryWindow()
-	recordIfEligible := func(v *valueio.Packet) error {
-		retryMu.Lock()
-		defer retryMu.Unlock()
-		if !retryEligible {
-			return nil
-		}
-		retained, err := v.Retain(ctx, caller.Done())
-		if err != nil {
-			return err
-		}
-		// Cover the pointer index, including spare/growing slice capacity.
-		if err := replayMetadata.Adjust(ctx, caller.Done(), 32); err != nil {
-			retained.Release()
-			return err
-		}
-		replayLog = append(replayLog, retained)
-		return nil
-	}
-	snapshotReplay := func() ([]*valueio.Packet, func(), error) {
-		retryMu.Lock()
-		defer retryMu.Unlock()
-		metadata := valueio.From(caller).Scope.NewReservation()
-		if err := metadata.Adjust(ctx, caller.Done(), int64(len(replayLog))*8); err != nil {
-			metadata.Release()
-			return nil, func() {}, err
-		}
-		out := make([]*valueio.Packet, 0, len(replayLog))
-		for _, p := range replayLog {
-			copy, err := p.Retain(ctx, caller.Done())
-			if err != nil {
-				for _, v := range out {
-					v.Release()
-				}
-				metadata.Release()
-				return nil, func() {}, err
-			}
-			out = append(out, copy)
-		}
-		return out, metadata.Release, nil
-	}
-
-	// A raw input whose transform was interrupted by attempt retirement must
-	// survive the retry. Only the pump owns it, and pumps are joined before reuse.
-	pending := &pendingTransformInput{}
-	defer func() { pending.value.Release() }()
-	// Also retire the current attempt if foreign evaluator/provider code panics.
-	// Join its input pump before pending/replay owners are released by our defers.
-	var activeAttemptCancel, activeSessionCancel context.CancelFunc
-	var activeInvocation Invocation[any, any]
-	var activePump <-chan struct{}
-	defer func() {
-		if activeAttemptCancel != nil {
-			activeAttemptCancel()
-		}
-		if activeSessionCancel != nil {
-			activeSessionCancel()
-		}
-		if activeInvocation != nil {
-			activeInvocation.Cancel()
-		}
-		if activePump != nil {
-			<-activePump
-		}
-	}()
-	rounds := 0
-	for {
-		// innerCtx bounds this attempt's binding: it cancels when the caller
-		// handle terminates (cancel propagation) and when the attempt ends.
-		innerCtx, innerCancel := DoneContext(ctx, caller.Done())
-		activeSessionCancel = innerCancel
-		activeAttemptCancel, activeInvocation, activePump = nil, nil, nil
-		var inner Invocation[any, any]
-		bindingCtx := valueio.SessionContext(innerCtx)
-		if compiledBinding != nil {
-			inner = compiledBinding.InvokeBinding(bindingCtx, bindingArgs())
-		} else {
-			inner = e.invoker.InvokeBinding(bindingCtx, bindingArgs())
-		}
-
-		activeInvocation = inner
-
-		// The input pump reads the caller's buffer under attemptCtx so a
-		// retry swap can unpark it WITHOUT consuming an in-flight input.
-		// The replay prefix is snapshotted BEFORE the attempt runs: this
-		// attempt's own first output closes the retry window and clears the
-		// shared log, which must not race the replay.
-		attemptCtx, attemptCancel := context.WithCancel(innerCtx)
-		activeAttemptCancel = attemptCancel
-		replay, releaseReplayIndex, replayErr := snapshotReplay()
-		if replayErr != nil {
-			attemptCancel()
-			inner.Cancel()
-			innerCancel()
-			caller.FireError(valueError(replayErr, "replay"))
-			return
-		}
-		pumpDone := make(chan struct{})
-		activePump = pumpDone
-		go func() {
-			defer close(pumpDone)
-			defer releaseReplayIndex()
-			// The pump calls foreign code (transform evaluators, third-party
-			// inner Invocation impls) on its own goroutine; the run
-			// goroutine's recover cannot reach it. Same no-process-kill
-			// promise applies here.
-			defer func() {
-				if r := recover(); r != nil {
-					inner.Cancel()
-					caller.FireError(&InvocationError{
-						Code: ErrCodeRuntime,
-					})
-				}
-			}()
-			e.pumpInputs(attemptCtx, innerCtx, caller, inner, binding, bindingKey, iface,
-				replay, recordIfEligible, pending)
-		}()
-
-		surface, retryChallenge := e.runOutputs(
-			innerCtx, caller, inner, binding, bindingKey, iface,
-			compiledOutput, diagnostics, closeRetryWindow,
-			func() bool { retryMu.Lock(); defer retryMu.Unlock(); return retryEligible },
-		)
-		var retryDetails *ContextRequiredDetails
-		if retryChallenge != nil {
-			retryDetails = ContextRequiredFrom(retryChallenge)
-		}
-
-		// Retire this attempt's pump before deciding next steps: the
-		// caller's input buffer must have exactly one reader at a time.
-		attemptCancel()
-		<-pumpDone
-
-		if retryDetails != nil && rounds < maxContextRounds {
-			resolved, resolveErr := e.resolveContext(ctx, retryDetails)
-			if resolveErr != nil {
-				surface = NewInvocationError(ErrCodeRuntime)
-			} else if resolved != nil && mergeResolved(resolved) {
-				rounds++
-				innerCancel()
-				continue
-			}
-		}
-		if retryDetails != nil && surface == nil {
-			// Decline or cap exhausted: surface the binding's ORIGINAL
-			// challenge unchanged.
-			surface = retryChallenge
-		}
-
-		// Ensure the inner is terminal (idempotent on clean close and an
-		// already-errored attempt).
-		inner.Cancel()
-		if surface != nil {
-			caller.FireError(surface)
-		} else {
-			caller.CloseOutput()
-		}
+	pumpDone := make(chan struct{})
+	// Retire the attempt on every exit, including a foreign evaluator or
+	// provider panic that the caller of runCompiled recovers: unpark and join
+	// the pump (the caller's input buffer has exactly one reader), then make
+	// sure the binding is terminal.
+	retire := func() {
 		innerCancel()
-		return
+		<-pumpDone
+		inner.Cancel()
+	}
+	defer retire()
+	go func() {
+		defer close(pumpDone)
+		// The pump calls foreign code (transform evaluators, third-party
+		// inner Invocation impls) on its own goroutine; the run
+		// goroutine's recover cannot reach it. Same no-process-kill
+		// promise applies here.
+		defer func() {
+			if r := recover(); r != nil {
+				inner.Cancel()
+				caller.FireError(&InvocationError{
+					Code: ErrCodeRuntime,
+				})
+			}
+		}()
+		e.pumpInputs(innerCtx, caller, inner, binding, bindingKey, iface)
+	}()
+
+	surface := e.runOutputs(innerCtx, caller, inner, binding, bindingKey, iface, compiledOutput, diagnostics)
+
+	// Join the pump before the caller's terminal: a terminal the pump raised
+	// (a failed input transform) must not lose to the inner cancellation it
+	// caused. A live CONTEXT_REQUIRED surfaces here unchanged, details intact.
+	retire()
+	if surface != nil {
+		caller.FireError(surface)
+	} else {
+		caller.CloseOutput()
 	}
 }
 
-// pumpInputs forwards caller inputs to the current binding attempt: first
-// the replayed prefix, then live messages. It exits when the caller closes
-// input (forwarding the close), when the attempt ends (attemptCtx), or when
-// the inner invocation terminates.
-type pendingTransformInput struct {
-	value   *valueio.Packet
-	present bool
-}
-
+// pumpInputs forwards caller inputs to the binding: it reads the caller's
+// buffer, applies the input transform, and writes to the inner invocation. It
+// exits when the caller closes input (forwarding the close), when the attempt
+// is retired (innerCtx), or when the inner invocation terminates.
 func (e *OperationInvoker) pumpInputs(
-	attemptCtx, innerCtx context.Context, caller *InvocationImpl[any, any], inner Invocation[any, any],
+	innerCtx context.Context, caller *InvocationImpl[any, any], inner Invocation[any, any],
 	binding *openbindings.BindingEntry, bindingKey string, iface *openbindings.Interface,
-	replay []*valueio.Packet, record func(*valueio.Packet) error, pending *pendingTransformInput,
 ) {
-	defer func() {
-		for _, p := range replay {
-			p.Release()
-		}
-	}()
 	writeInner := func(p *valueio.Packet) bool {
 		var err error
 		if ep := valueio.From(inner); ep != nil {
@@ -781,8 +634,7 @@ func (e *OperationInvoker) pumpInputs(
 		} else {
 			// Foreign implementations own their internal storage and lifetime.
 			var raw any
-			raw, err = valueio.Construct[any](innerCtx, p, true)
-			p.Release()
+			raw, err = valueio.Construct[any](innerCtx, p, caller.limits)
 			if err == nil {
 				err = inner.Write(innerCtx, raw)
 			}
@@ -796,18 +648,8 @@ func (e *OperationInvoker) pumpInputs(
 		}
 		return false
 	}
-	for index, p := range replay {
-		replay[index] = nil
-		if writeInner(p) {
-			return
-		}
-	}
 	for {
-		p := pending.value
-		var err error
-		if !pending.present {
-			p, err = caller.readInputPacket(attemptCtx)
-		}
+		p, err := caller.readInputPacket(innerCtx)
 		if err == io.EOF {
 			_ = inner.Close()
 			return
@@ -815,11 +657,10 @@ func (e *OperationInvoker) pumpInputs(
 		if err != nil {
 			return
 		}
-		pending.value, pending.present = p, true
 		if binding.InputTransform != nil {
-			transformed, err := transformPacket(attemptCtx, e.TransformEvaluator, iface.Transforms, binding.InputTransform, p)
+			transformed, err := transformPacket(innerCtx, e.TransformEvaluator, iface.Transforms, binding.InputTransform, p, caller.limits)
 			if err != nil {
-				if attemptCtx.Err() != nil {
+				if innerCtx.Err() != nil {
 					return
 				}
 				inner.Cancel()
@@ -830,16 +671,8 @@ func (e *OperationInvoker) pumpInputs(
 				caller.FireError(ie)
 				return
 			}
-			p.Release()
 			p = transformed
-			pending.value = p
 		}
-		if err := record(p); err != nil {
-			inner.Cancel()
-			caller.FireError(valueError(err, "replay"))
-			return
-		}
-		pending.value, pending.present = nil, false
 		if writeInner(p) {
 			return
 		}
@@ -850,8 +683,7 @@ func (e *OperationInvoker) runOutputs(
 	innerCtx context.Context, caller *InvocationImpl[any, any], inner Invocation[any, any],
 	binding *openbindings.BindingEntry, bindingKey string, iface *openbindings.Interface,
 	compiledOutput *openbindings.CompiledSchema, diagnostics *DiagnosticCollector,
-	closeRetryWindow func(), retryEligible func() bool,
-) (surface, retryChallenge *InvocationError) {
+) *InvocationError {
 	ep := valueio.From(inner)
 	var out OutputStream[any]
 	if ep != nil {
@@ -861,8 +693,6 @@ func (e *OperationInvoker) runOutputs(
 		out = inner.Outputs()
 		defer out.Stop()
 	}
-	var active *valueio.Packet
-	defer func() { active.Release() }()
 	for {
 		var p *valueio.Packet
 		var err error
@@ -872,79 +702,67 @@ func (e *OperationInvoker) runOutputs(
 			var raw any
 			raw, err = out.Read(innerCtx)
 			if err == nil {
-				p, err = valueio.Capture(innerCtx, caller.Done(), caller.scope, raw)
+				p, err = valueio.Capture(innerCtx, caller.limits, raw)
 			}
 		}
 		if errors.Is(err, io.EOF) {
-			return nil, nil
+			return nil
 		}
 		if err != nil {
-			ie := AsInvocationError(err)
+			// A live CONTEXT_REQUIRED is an ordinary terminal here: it
+			// propagates unchanged so the caller can resolve and invoke again.
 			if resourceFailure(err) {
-				ie = valueError(err, "binding output")
+				return valueError(err, "binding output")
 			}
-			if ContextRequiredFrom(ie) != nil && retryEligible() && e.ContextResolver != nil {
-				return nil, ie
-			}
-			return ie, nil
+			return AsInvocationError(err)
 		}
-		active = p
-		closeRetryWindow()
 		if binding.OutputTransform != nil {
-			transformed, err := transformPacket(innerCtx, e.TransformEvaluator, iface.Transforms, binding.OutputTransform, p)
-			p.Release()
+			transformed, err := transformPacket(innerCtx, e.TransformEvaluator, iface.Transforms, binding.OutputTransform, p, caller.limits)
 			if err != nil {
 				if innerCtx.Err() != nil {
-					return AsInvocationError(innerCtx.Err()), nil
+					return AsInvocationError(innerCtx.Err())
 				}
 				inner.Cancel()
 				if resourceFailure(err) {
-					return valueError(err, "output transform"), nil
+					return valueError(err, "output transform")
 				}
-				return &InvocationError{Code: ErrCodeTransformError}, nil
+				return &InvocationError{Code: ErrCodeTransformError}
 			}
 			p = transformed
-			active = p
 		}
 		if compiledOutput != nil {
-			logical, release, err := p.View(innerCtx, false)
+			logical, err := p.View(innerCtx, caller.limits, false)
 			if err != nil {
-				p.Release()
 				inner.Cancel()
-				return valueError(err, "output validation"), nil
+				return valueError(err, "output validation")
 			}
-			verr := func() error { defer release(); return compiledOutput.Validate(logical) }()
-			if verr != nil {
-				p.Release()
+			if verr := compiledOutput.Validate(logical); verr != nil {
 				inner.Cancel()
 				diagnostics.recordValidation(ValidationPhaseOutput, binding.Operation, bindingKey, verr)
-				return validationInvocationError(verr), nil
+				return validationInvocationError(verr)
 			}
 		}
-		active = nil // emitPacket consumes ownership on success or failure
 		if err := caller.emitPacket(p); err != nil {
 			inner.Cancel()
-			return nil, nil
+			return nil
 		}
 	}
 }
 
-func transformPacket(ctx context.Context, eval TransformEvaluator, transforms map[string]openbindings.Transform, tor *openbindings.TransformOrRef, p *valueio.Packet) (*valueio.Packet, error) {
-	logical, release, err := p.View(ctx, true)
+func transformPacket(ctx context.Context, eval TransformEvaluator, transforms map[string]openbindings.Transform, tor *openbindings.TransformOrRef, p *valueio.Packet, limits value.Limits) (*valueio.Packet, error) {
+	logical, err := p.View(ctx, limits, true)
 	if err != nil {
 		return nil, err
 	}
-	defer release()
 	result, err := evaluateTransform(ctx, eval, transforms, tor, logical)
 	if err != nil {
 		return nil, err
 	}
-	out, err := valueio.Capture(ctx, nil, p.Scope(), result)
+	out, err := valueio.Capture(ctx, limits, result)
 	if err != nil {
 		return nil, err
 	}
 	if !validInvocationValue(reflect.ValueOf(result), map[visit]bool{}) {
-		out.Release()
 		return nil, fmt.Errorf("openbindings: transform result is not a JSON value")
 	}
 	return out, nil
@@ -1157,19 +975,14 @@ func applyTransformRef(ctx context.Context, eval TransformEvaluator, transforms 
 	if tor == nil {
 		return data, nil
 	}
-	scope := valueio.ScopeFrom(ctx)
-	if scope == nil {
-		scope, _ = valueio.NewScope(valueio.Limits{})
-	}
-	p, err := valueio.Capture(ctx, nil, scope, data)
+	limits := defaultValueLimits()
+	p, err := valueio.Capture(ctx, limits, data)
 	if err != nil {
 		return nil, err
 	}
-	defer p.Release()
-	out, err := transformPacket(ctx, eval, transforms, tor, p)
+	out, err := transformPacket(ctx, eval, transforms, tor, p, limits)
 	if err != nil {
 		return nil, err
 	}
-	defer out.Release()
-	return valueio.Construct[any](ctx, out, true)
+	return valueio.Construct[any](ctx, out, limits)
 }

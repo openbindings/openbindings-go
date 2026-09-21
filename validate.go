@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/jsonata/go/syntax"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 type validateOptions struct {

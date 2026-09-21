@@ -391,8 +391,10 @@ Client-streaming and bidirectional callers own `Close()` (and drive input and
 output from separate goroutines); `Cancel()` tears the invocation down.
 Protocol metadata remains inside artifact runtimes and binding-specific
 interpretation. Missing runtime context
-surfaces as a `CONTEXT_REQUIRED` terminal error raised before any side effect,
-resolved by the operation invoker's `ContextResolver` when one is configured.
+surfaces as a `CONTEXT_REQUIRED` terminal error raised before any side effect.
+Requirements a binding can state up front are resolved at preflight by the
+operation invoker's `ContextResolver` when one is configured; a challenge
+raised during the attempt ends the invocation for the caller to resolve.
 
 ## Binding invokers
 
@@ -486,8 +488,39 @@ _ = store.Set(ctx, invoke.NormalizeContextKey("https://api.example.com"),
 ```
 
 A binding that needs context it wasn't given raises a `CONTEXT_REQUIRED`
-challenge before any side effect; the operation invoker resolves challenges
-through its configured `ContextResolver` and re-drives the binding.
+challenge before any side effect. Context resolution runs in one lane: before
+the attempt, the operation invoker asks the binding for its known requirements
+(`PrepareBinding`), consults its configured `ContextResolver`, and starts the
+one attempt with the merged context. A live `CONTEXT_REQUIRED` raised during
+the attempt terminates the invocation with its `ContextRequiredDetails` intact;
+the invoker never consults the resolver for it and never starts a second
+attempt on the caller's behalf. The caller owns the redo:
+
+```go
+given := map[string]any(nil)
+for attempt := 0; attempt < 2; attempt++ {
+    call := invoke.Invoke(ctx, opInv, iface, sig, invoke.WithContext(given))
+    if err := call.Write(ctx, input); err != nil {
+        return err
+    }
+    out, err := invoke.Single(ctx, call.Outputs())
+    if err == nil {
+        return use(out)
+    }
+    details := invoke.ContextRequiredFrom(invoke.AsInvocationError(err))
+    if details == nil || attempt == 1 {
+        return err
+    }
+    resolved, rerr := resolve(ctx, details) // prompt, keychain, store
+    if rerr != nil {
+        return rerr
+    }
+    given = invoke.ScopeContext(resolved, details)
+}
+```
+
+For a streaming call the caller re-runs its producer; nothing a `Write`
+accepted is ever replayed by the SDK.
 `invoke.StoreContextResolver(store)` is an optional store-backed
 realization of the published binding-invoker challenge. It treats a challenge
 as a scope, not a hint: via `ScopeContext` it returns only

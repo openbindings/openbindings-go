@@ -104,6 +104,6 @@ jobs:
         # behind a racing terminal transition.
         run: go test -race -run '^TestAcceptedEmitNeverLostUnderRacingTerminal$' -count=10 ./invoke
 
-      - name: Stress snapshot ownership and resource cleanup
+      - name: Stress snapshot ownership and attempt retirement
         if: matrix.module == '.'
-        run: go test -race -run '^(TestProducerReuseAfterAcceptedWriteAndEmit|TestAcceptedOutputDrainsAfterCaptureLimitFailure|TestStopReleasesQueuedOutputsAfterTerminal|TestRetryRetentionUsesFiniteInvocationBudget)$' -count=10 ./invoke
+        run: go test -race -run '^(TestProducerReuseAfterAcceptedWriteAndEmit|TestAcceptedOutputDrainsAfterCaptureLimitFailure|TestTerminalDataIsIsolatedAndBounded|TestTransformPanicRetiresOwnedAttempt|TestLiveChallengeTerminalSurvivesStop)$' -count=10 ./invoke

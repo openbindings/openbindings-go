@@ -10,7 +10,7 @@ about generic readers and configurable mapping registries.
 Applications select providers and transform evaluators and own policy,
 authorization, delegation, persistence and presentation. The SDK owns
 OpenBindings documents, operation selection, preparation, invocation lifecycle,
-validation order, context retry and binding contracts. Binding adapters preserve
+validation order, context preflight and binding contracts. Binding adapters preserve
 their governing protocol correspondence. Protocol implementations own actual
 wire encoding and decoding. A private value implementation supplies logical
 meaning and ownership within these boundaries; callers need no new value wrapper.
@@ -49,14 +49,15 @@ flowchart LR
 5. Evaluator selection belongs to the application. A missing evaluator for a
    required transform fails explicitly. Hooks receive ordinary logical values;
    the SDK never depends on a particular evaluator's private representation.
-6. Value size, depth, SDK scratch and retained data have finite allowances.
-   Retries and SDK-created descendants share the invocation budget. Count every
-   retained owner conservatively; bound metadata as well as payloads. Only
-   independently drainable public output can justify waiting for capacity.
+6. Every single value the SDK admits, delivers, constructs or exports has a
+   finite per-value and depth allowance, applied before allocation. There is no
+   invocation-wide live budget; the fixed queue capacities together with the
+   per-value allowance bound what the core retains for one invocation.
 7. The accepted output prefix drains before terminal failure. Explicit consumer
-   abandonment can discard it. Retry retains the exact post-transform input and
-   closes at the first binding output; it cannot reset limits or reapply a
-   completed transform to replayed input.
+   abandonment cancels the invocation without discarding its terminal. A value
+   a caller handed over is accepted into exactly one attempt and never replayed;
+   a live `CONTEXT_REQUIRED` terminates the invocation with its details for the
+   caller to resolve and invoke again.
 8. Public typed conversion validates shape/range and constructs a fresh result.
    Failure exposes no partial object, consumes that output only, and leaves
    subsequent output/terminal reads usable. Portable invocation errors remain

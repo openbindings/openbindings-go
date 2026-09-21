@@ -8,19 +8,6 @@ import (
 	"github.com/openbindings/openbindings-go/internal/valueio"
 )
 
-func acquireCapture(ctx context.Context, done <-chan struct{}, permit chan struct{}) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case permit <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-done:
-		return context.Canceled
-	}
-}
 func (i *InvocationImpl[I, O]) captureInput(ctx context.Context, input any) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -28,14 +15,7 @@ func (i *InvocationImpl[I, O]) captureInput(ctx context.Context, input any) erro
 	if err := i.writableErr(); err != nil {
 		return err
 	}
-	if err := acquireCapture(ctx, i.done, i.inputPermit); err != nil {
-		if state := i.writableErr(); state != nil {
-			return state
-		}
-		return err
-	}
-	defer func() { <-i.inputPermit }()
-	p, err := valueio.Capture(ctx, i.done, i.scope, input)
+	p, err := valueio.Capture(ctx, i.limits, input)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -52,11 +32,7 @@ func (i *InvocationImpl[I, O]) captureInput(ctx context.Context, input any) erro
 	return i.writePacket(ctx, p)
 }
 func (i *InvocationImpl[I, O]) captureOutput(output any) error {
-	if err := acquireCapture(context.Background(), i.done, i.outputPermit); err != nil {
-		return i.terminalOrClosedErr()
-	}
-	defer func() { <-i.outputPermit }()
-	p, err := valueio.Capture(context.Background(), i.done, i.scope, output)
+	p, err := valueio.Capture(context.Background(), i.limits, output)
 	if err != nil {
 		select {
 		case <-i.done:
@@ -80,8 +56,7 @@ func (i *InvocationImpl[I, O]) ReadInput(ctx context.Context) (I, error) {
 	if err != nil {
 		return zero, err
 	}
-	defer p.Release()
-	out, err := valueio.Construct[I](ctx, p, true)
+	out, err := valueio.Construct[I](ctx, p, i.limits)
 	if err != nil {
 		ie := valueError(err, "handler input")
 		i.FireError(ie)
@@ -100,56 +75,11 @@ func (s *outputStream[I, O]) Read(ctx context.Context) (O, error) {
 	if err != nil {
 		return zero, err
 	}
-	defer p.Release()
-	out, err := valueio.Construct[O](ctx, p, false)
+	out, err := valueio.Construct[O](ctx, p, s.impl.limits)
 	if err != nil {
 		return zero, &ValueConversionError{Stage: "typed delivery", Cause: valueError(err, "typed delivery")}
 	}
 	return out, nil
-}
-func (i *InvocationImpl[I, O]) stopOutputs() {
-	i.mu.Lock()
-	i.stopped = true
-	i.terminalData.Release()
-	i.terminalData = nil
-	if i.terminalErr != nil {
-		i.terminalErr.dataPresent = false
-	}
-	i.mu.Unlock()
-	i.Cancel()
-	i.discardStoppedOutputs()
-}
-func (i *InvocationImpl[I, O]) discardStoppedOutputs() {
-	i.mu.Lock()
-	stopped := i.stopped
-	i.mu.Unlock()
-	if !stopped {
-		return
-	}
-	for {
-		select {
-		case p := <-i.outputCh:
-			p.Release()
-		default:
-			return
-		}
-	}
-}
-func (i *InvocationImpl[I, O]) discardTerminalInputs() {
-	i.mu.Lock()
-	terminal := i.state != stateOpen
-	i.mu.Unlock()
-	if !terminal {
-		return
-	}
-	for {
-		select {
-		case p := <-i.inputCh:
-			p.Release()
-		default:
-			return
-		}
-	}
 }
 
 // readLocalInput keeps native leaves through checked local-handler construction.
@@ -160,8 +90,7 @@ func readLocalInput[T any](ctx context.Context, h BindingHandle[any, any]) (T, e
 		if err != nil {
 			return zero, err
 		}
-		defer p.Release()
-		x, err := valueio.Construct[T](ctx, p, true)
+		x, err := valueio.Construct[T](ctx, p, ep.Limits)
 		if err != nil {
 			return zero, valueError(err, "local input")
 		}
@@ -171,13 +100,12 @@ func readLocalInput[T any](ctx context.Context, h BindingHandle[any, any]) (T, e
 	if err != nil {
 		return zero, err
 	}
-	scope, _ := valueio.NewScope(valueio.Limits{})
-	p, err := valueio.Capture(ctx, nil, scope, raw)
+	limits := defaultValueLimits()
+	p, err := valueio.Capture(ctx, limits, raw)
 	if err != nil {
 		return zero, valueError(err, "local input")
 	}
-	defer p.Release()
-	x, err := valueio.Construct[T](ctx, p, true)
+	x, err := valueio.Construct[T](ctx, p, limits)
 	if err != nil {
 		return zero, valueError(err, "local input")
 	}
@@ -187,15 +115,14 @@ func emitLocalOutput[T any](h BindingHandle[any, any], output T) error {
 	if ep := valueio.From(h); ep != nil {
 		return ep.CaptureOutput(output)
 	}
-	scope, _ := valueio.NewScope(valueio.Limits{})
-	p, err := valueio.Capture(context.Background(), h.Done(), scope, output)
+	limits := defaultValueLimits()
+	p, err := valueio.Capture(context.Background(), limits, output)
 	if err != nil {
 		ie := valueError(err, "local output")
 		h.FireError(ie)
 		return ie
 	}
-	defer p.Release()
-	raw, err := valueio.Construct[any](context.Background(), p, true)
+	raw, err := valueio.Construct[any](context.Background(), p, limits)
 	if err != nil {
 		ie := valueError(err, "local output")
 		h.FireError(ie)
