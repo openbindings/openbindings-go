@@ -1,7 +1,9 @@
 # Go invocation value migration
 
-Status: implementation plan, 21 September 2026. No runtime changes or release
-activation are made by this document.
+Status: implementation plan executed on the migration branches, 21 September
+2026. See [qualification](VALUE_MIGRATION_QUALIFICATION.md) for implemented
+stages, measured tradeoffs and the remaining activation gates. This plan itself
+is not release authorization.
 
 This is the implementation companion to [the value architecture decision](VALUE_ARCHITECTURE_PLAN.md).
 That document owns the value, ownership and resource contracts; this plan fixes

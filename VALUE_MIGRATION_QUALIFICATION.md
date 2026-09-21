@@ -1,8 +1,9 @@
 # Invocation value migration qualification
 
 The migration is implemented on this branch and in the coordinated CLI branch
-`codex/invocation-value-migration`. Local implementation checks and measurements
-are recorded below. **Release/cohort activation remains blocked by the existing
+`codex/invocation-value-migration`. Local and Linux implementation checks and measurements
+are recorded below. SDK PR: [#115](https://github.com/openbindings/openbindings-go/pull/115);
+CLI PR: [#51](https://github.com/openbindings/ob/pull/51). **Release/cohort activation remains blocked by the existing
 GraphQL corpus mismatch and the remaining candidate/CI gates.** This is not an
 architecture grade or a claim that every workload becomes faster.
 
@@ -32,7 +33,7 @@ wire boundaries. Application evaluator injection remains required.
 
 ## Verification
 
-- Required-corpus normal and race runs pass for root and seven format modules:
+- Required-corpus local normal/race runs and the [Linux CI matrix](https://github.com/openbindings/openbindings-go/actions/runs/35603594733) pass for root and seven format modules:
   AsyncAPI, Connect, gRPC, MCP, OpenAPI, Operation Graph and Usage. Corpora are
   required, not silently skipped. All nine modules pass `go vet`.
 - GraphQL has exactly the same **162 failing test/package entries** on the
@@ -56,7 +57,8 @@ wire boundaries. Application evaluator injection remains required.
   finite replay, capture-limit draining and Stop. Ten repetitions of the
   accepted-output/terminal stress test pass in `./invoke`. The preexisting CI
   command incorrectly targeted root, where it ran zero tests; the workflow now
-  targets `./invoke` and includes the new ownership tests.
+  targets `./invoke` and includes the new ownership tests. Both lanes pass in
+  the root Linux CI job.
 - Two 15-second differential fuzz runs pass: 329,290 logical-value cases and
   124,875 typed projection/construction cases. These are bounded sampling runs,
   not exhaustive proofs. The maintained codec's race suite and repository vet
@@ -120,11 +122,20 @@ no threshold was selected retrospectively to declare these samples a pass.
 
 1. Resolve or explicitly qualify the pinned GraphQL spec/implementation mismatch.
    Baseline equivalence establishes attribution, not conformance.
-2. Run the Linux CI matrix and the corrected repeated race lanes on the exact
-   candidate commits. Local darwin checks do not substitute for Linux.
-3. Qualify externally resolvable SDK/format/CLI candidate dependency pins with
-   workspaces disabled and read-only module files. Workspace integration alone
-   does not establish package publication or a compatible release cohort.
+2. The SDK Linux matrix and corrected repeated race lanes have run on SDK
+   candidate `9a69a38acb5e14bf7724350ef1db6f233f13ad88`: core and seven formats
+   pass; GraphQL fails with the same introspection mismatch. Preserve these
+   checks for any runtime revision made to resolve the remaining gates.
+3. `verify-openapi-candidate.sh` passes for OpenAPI and Usage with workspaces
+   disabled and read-only temporary module files. Core candidate is
+   `v0.1.1-0.20260921130534-9a69a38acb5e`; OpenAPI client candidate is
+   `v0.0.0-20260918184113-7b15d57e960f`. The coordinated CLI consumer verifier
+   also selects all eight format modules at that same SDK candidate and the
+   AsyncAPI client at `v0.0.0-20260917182212-7326ce4e18c1`. Its build, vet and
+   full short race suite pass without local replacements, recorded in the CLI
+   migration report. A final CLI opening-context refusal fix passes the targeted
+   frame race suite. Candidate verification does not
+   establish a tagged release or a compatible promoted cohort.
 4. Review the completed snapshot, finite-accounting and failure/drain contracts
    and workload tradeoffs before merge/release. No release tags, cohort promotion
    or TypeScript parity changes are part of this branch.
