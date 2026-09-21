@@ -32,16 +32,17 @@ an optimization; exact content recovery is a requirement.
 | --- | --- |
 | A: current machinery with targeted improvements | Maintained codec compatibility and useful generic fast lanes. Local consistency defects are repairable, but ordinary typed bridges and eager byte/string conversion remain. It has not been established as the ideal. |
 | B: shared logical reader over native containers | Can avoid projected shells and unify access to durable native views. Requires container-reader integration throughout consumers, and may still require a full admission walk. Remains a serious challenger. |
-| P: project ordinary container shells and retain eligible native leaves | Removes ordinary text bridges while keeping familiar object/array structures for consumers. Requires finite scalar integration, checked typed construction, faithful codec fallback and ownership. Leading destination to qualify. |
+| P: project ordinary container shells and retain eligible native leaves | Removes ordinary text bridges while keeping familiar object/array structures for consumers. Requires finite scalar integration, checked typed construction, faithful codec fallback and ownership. Preferred direction for the tested integrated paths; broader qualification remains. |
 
-P remains a leading hypothesis for its steady-state responsibility boundaries:
-host container interpretation occurs at admission and typed construction, while
-most consumers need not learn a universal native-object reader. The bounded
-comparison now demonstrates improvements on eligible typed and byte paths, but
-does not establish P as the best overall destination. B remains a serious
-challenger, and A+ (targeted corrections with equivalent snapshot ownership)
-deserves a stronger generic control. Choosing the ideal remains unresolved;
-retaining current behavior during qualification does not declare A ideal.
+P is now the preferred implementation direction for the tested SDK consumers.
+A bounded real-invocation comparison strengthened A+'s generic control and ran
+actual schemas, an application evaluator adapter, local handlers and HTTP.
+P preserves substantial typed conversion benefits and avoids B's second container
+representation for those consumers. Generic performance is tied with A+; the
+large HTTP benefit is shared checked recovery, not evidence that native transport
+carriage or projection alone is essential. This selects an evidenced direction
+within existing responsibilities, not a universal optimum or permission to
+activate an incompletely qualified migration.
 
 ## Intended data flow
 
@@ -364,8 +365,9 @@ evidence. All gave semantics A, Go callers A, boundaries A-, runtime A- and
 concern projected container costs and maintaining codec-compatible construction.
 The review loop stops here rather than treating those tradeoffs as prose defects.
 
-All three find objective mechanism improvements on the tested typed/byte paths,
-while leaving overall superiority over stronger A+ and B unresolved. They
+At that stage, all three found objective mechanism improvements on the tested
+typed/byte paths, while leaving overall superiority over stronger A+ and B
+unresolved. They
 support bounded integration, not broad implementation. Evaluator completion or
 selection is not a gate; applications supply an adapter through the SDK hook.
 Original inputs, reports and grades are preserved in the coordination workspace
@@ -433,6 +435,59 @@ host, warmed plans, fixed ordering, pinned temporary assemblies and Go 1.27.1.
 There is no retained-heap measurement, project-wide cohort or declared-toolchain
 release qualification. The bounded mechanism stage is complete; the integrated
 comparison described next remains outstanding.
+
+## Integrated comparison and implementation direction
+
+The user subsequently authorized the representative real-invocation comparison.
+It is complete and recorded in the coordination workspace at
+`design/sdk-invocation-comparison/RESULT.md`, with frozen sources, raw results
+and independent pre-measurement and comparative reviews. The existing SDK and
+native client revisions remain pinned as above. All four strategies use one
+application-supplied adapter over cached gnata v0.4.2 through the existing hook;
+this is a fixture choice, not an SDK dependency or engine-adoption decision.
+
+Actual operation schemas, transform evaluation, local handler adaptation or
+loopback HTTP, queues, checked typed delivery and terminal drain are measured.
+A+ combines generic eligibility and copying; all owned candidates share that
+fast lane. Two runs in opposite strategy orders provide 200 timing samples:
+
+| Real steady-state call | Owned codec A+ | Projected P | Native reader B |
+| --- | --- | --- | --- |
+| Small typed local operation | 39.66 / 39.99 µs | 32.39 / 32.32 µs | 34.95 / 34.93 µs |
+| Small generic local operation | 31.08 / 31.42 µs | 31.16 / 31.14 µs | 32.18 / 31.78 µs |
+| Wide response, narrow selection | 2.592 / 2.585 ms | 1.728 / 1.735 ms | 2.688 / 2.693 ms |
+| HTTP PNG, transform and recovery | 12.53 / 12.41 ms | 4.84 / 4.76 ms | 4.79 / 4.74 ms |
+
+P's strongest representation-specific result is the wide return: about 33% less
+time than A+, 36% less than B, and about 0.93 MB allocated versus 1.93 MB and
+1.74 MB. The unchanged consumers need a materialized tree, so B incurs that
+conversion after native capture. A different reader-aware consumer could change
+this result and would carry its own integration obligations.
+
+The default HTTP client supplies Base64 text to all candidates. P/B's shared
+checked recovery avoids the extra JSON text bridge and supplies most of that
+path's benefit; the result does not uniquely justify projection. A separate raw
+carrier hook case is slower for every candidate: it still materializes the
+logical string and adds existing hook-body copies. Generic A+/P performance is
+effectively tied; current A's identity lane remains faster at about 23.4 µs.
+
+All fixture, rejection, ownership and race checks pass, including exact PNG
+recovery/export, actual image-schema failure, typed [any,any] delivery, producer
+reuse and duplicate-field independence. Sixty fresh-process retained-heap runs
+show equivalent image-result storage (about 8.45 MB for eight outputs), modest
+small-result differences and return near baseline after release. No transient
+peak, all-traffic weighting or production-wide heap guarantee is claimed.
+
+The independent comparative reader supports P as a defensible preference for
+these assembled paths, chiefly from typed local workloads. It preserves the
+shared-recovery explanation and does not claim every alternative is defeated.
+The direct raw public output boundary, protocol request adaptation, aggregate
+resource accounting, Graph and broader retry/cancellation behavior remain outside
+this slice. The temporary owned marker/process selector is experiment machinery,
+not a proposed public API. Full codec parity and downstream qualification also
+remain required. The design contracts below and above are unchanged; the next
+checklist records the broader integration obligations rather than requiring
+another grade-seeking loop or a new evaluator.
 
 ## Next: one bounded comparison before migration
 
