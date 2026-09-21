@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"os/exec"
 	"sort"
@@ -17,6 +18,7 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // run drives the invocation handle: it reads the single flag/arg object the
@@ -1013,6 +1015,19 @@ func formatFlagWithDef(name string, value any, flagDef Flag) ([]string, error) {
 		switch v := value.(type) {
 		case int:
 			count = v
+		case json.Number:
+			if err := jsonvalue.CheckNumericWork(v); err != nil {
+				return nil, fmt.Errorf("count flag %s: %w", flagName, err)
+			}
+			number, ok := new(big.Rat).SetString(string(v))
+			if !ok || !number.IsInt() || !number.Num().IsInt64() {
+				return nil, fmt.Errorf("count flag %s requires an in-range integer", flagName)
+			}
+			parsed := number.Num().Int64()
+			count = int(parsed)
+			if int64(count) != parsed {
+				return nil, fmt.Errorf("count flag %s requires an in-range integer", flagName)
+			}
 		case int64:
 			count = int(v)
 		case float64:

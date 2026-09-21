@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 
 	"github.com/coder/websocket"
 )
@@ -210,7 +211,7 @@ func doGraphQLHTTP(ctx context.Context, client *http.Client, endpointURL, query,
 		return nil, newGraphQLHTTPError(resp, respBody, mediaType, false, false, "")
 	}
 	var result any
-	if err := json.Unmarshal(respBody, &result); err != nil {
+	if err := jsonvalue.Unmarshal(respBody, &result); err != nil {
 		return nil, newGraphQLHTTPError(resp, respBody, mediaType, true, false, fmt.Sprintf("parse GraphQL response: %v", err))
 	}
 	envelope, ok := result.(map[string]any)
@@ -422,7 +423,7 @@ func streamSubscription(ctx context.Context, client *http.Client, target string,
 		switch msg.Type {
 		case "next":
 			var payload any
-			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			if err := jsonvalue.Unmarshal(msg.Payload, &payload); err != nil {
 				inv.FireError(&invoke.InvocationError{Code: invoke.ErrCodeResponseError})
 				return
 			}

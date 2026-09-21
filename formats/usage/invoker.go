@@ -310,7 +310,12 @@ func usageBindingSpecInfos() []openbindings.BindingSpecInfo {
 // as environment variables in the binding context (the well-known
 // "environment" field), not as a separate security mechanism.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go e.run(ctx, args, inv)
 	return inv
 }

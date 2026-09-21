@@ -119,7 +119,8 @@ func (e *invokerRuntime) runNative(ctx context.Context, args *invoke.BindingInvo
 		if !open {
 			break
 		}
-		output := nativePortableValue(event.Data)
+		// Admission retains native byte leaves; public logical views still use Base64.
+		output := event.Data
 		if event.SSE != nil && args.Source.BindingSpec != BindingSpecOpenAPI32 {
 			frame := map[string]any{"data": output}
 			if event.SSE.Event != "" {

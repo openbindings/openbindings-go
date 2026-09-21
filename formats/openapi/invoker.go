@@ -361,7 +361,12 @@ func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocat
 // server URL, unresolvable operation, missing context) terminate the handle
 // BEFORE any network side effect.
 func (e *invokerRuntime) invokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go func() {
 		if err := e.run(ctx, args, inv); err != nil {
 			inv.FireError(invoke.AsInvocationError(err))

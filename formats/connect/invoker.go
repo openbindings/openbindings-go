@@ -127,7 +127,12 @@ var _ invoke.BindingInvoker = (*Invoker)(nil)
 // schema load failures, schema-range and kind-coverage refusals, input
 // validation) terminate the handle before any network side effect.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go e.run(ctx, args, inv)
 	return inv
 }

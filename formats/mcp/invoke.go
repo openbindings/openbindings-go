@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -477,6 +478,8 @@ func emitToolResult(
 			if data, present := raw["structuredContent"]; present {
 				return invoke.NewInvocationErrorWithData(invoke.ErrCodeExecutionFailed, data), false
 			}
+		} else if result.StructuredContent != nil {
+			return invoke.NewInvocationErrorWithData(invoke.ErrCodeExecutionFailed, result.StructuredContent), false
 		}
 		return invoke.NewInvocationError(invoke.ErrCodeExecutionFailed), false
 	}
@@ -905,17 +908,9 @@ func completeMCPResult(capture *rawResultCapture, typed any) any {
 			return value
 		}
 	}
-	data, err := json.Marshal(typed)
-	if err != nil {
-		return typed
-	}
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	dec.UseNumber()
-	var value any
-	if dec.Decode(&value) != nil {
-		return typed
-	}
-	return value
+	// The invocation boundary captures this typed result once, using its codec
+	// semantics when necessary. No intermediate JSON text is needed here.
+	return typed
 }
 
 // siteFor builds the hook-consultation site for an MCP binding.
@@ -947,7 +942,7 @@ func toolResultValue(result *gomcp.CallToolResult, site invoke.InvokeSite, hooks
 		switch sc := result.StructuredContent.(type) {
 		case json.RawMessage:
 			var structured any
-			if json.Unmarshal(sc, &structured) == nil {
+			if jsonvalue.Unmarshal(sc, &structured) == nil {
 				return structured, "structuredContent", nil
 			}
 		default:

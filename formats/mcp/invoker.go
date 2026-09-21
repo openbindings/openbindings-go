@@ -156,7 +156,12 @@ func mcpBindingSpecInfos() []openbindings.BindingSpecInfo {
 // headers, cookies) as HTTP headers; an HTTP 401 from the server surfaces as
 // a terminal ERR_AUTH_REQUIRED.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go e.run(ctx, args, inv)
 	return inv
 }

@@ -124,7 +124,12 @@ func asyncAPIBindingSpecInfos() []openbindings.BindingSpecInfo {
 //     the adapter forwards application values and lifecycle without adding
 //     WebSocket-shaped fields to Core frames
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go func() {
 		if err := e.run(ctx, args, inv); err != nil {
 			inv.FireError(invoke.AsInvocationError(err))

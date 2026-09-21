@@ -125,7 +125,12 @@ var _ invoke.BindingPreparer = (*Invoker)(nil)
 // yield one output; subscriptions yield one output per event. The variables
 // object flows through the handle's Write channel.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go e.run(ctx, args, inv)
 	return inv
 }

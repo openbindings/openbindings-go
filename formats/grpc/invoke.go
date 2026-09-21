@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 
 	"github.com/jhump/protoreflect/v2/grpcdynamic"
 	"google.golang.org/grpc/codes"
@@ -368,7 +369,7 @@ func responseToJSON(resp proto.Message) (any, error) {
 		return nil, fmt.Errorf("marshal response: %w", err)
 	}
 	var result any
-	if err := json.Unmarshal(jsonBytes, &result); err != nil {
+	if err := jsonvalue.Unmarshal(jsonBytes, &result); err != nil {
 		return nil, fmt.Errorf("parse response JSON: %w", err)
 	}
 	return result, nil

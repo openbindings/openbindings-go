@@ -130,7 +130,12 @@ func grpcBindingSpecInfos() []openbindings.BindingSpecInfo {
 // server-streaming methods read one input and emit per received message.
 // Native gRPC metadata stays below the abstract invocation boundary.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	go e.run(ctx, args, inv)
 	return inv
 }
