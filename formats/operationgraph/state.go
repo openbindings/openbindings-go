@@ -9,7 +9,6 @@ import (
 
 	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
-	"github.com/openbindings/openbindings-go/internal/valueio"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
@@ -19,9 +18,11 @@ func msToDuration(ms int) time.Duration {
 }
 
 // noRoot marks an event whose lineage root is undefined: it descends from a
-// merge whose contributors disagree on a root (or had none), so $input is
-// unbound during expression evaluation.
-const noRoot = -1
+// merge whose contributors disagree on a root (or had none), or the graph
+// retains no roots at all, so $input is unbound during expression
+// evaluation. It is the zero value, so an event the engine assembles is
+// unrooted unless it is given a root. Roots are numbered from 1.
+const noRoot = 0
 
 // rootTracker accumulates the merged lineage root across contributing
 // events: defined if and only if every contributor shares one root.
@@ -62,11 +63,10 @@ func mergeMaxInto(dst map[string]int, src map[string]int) {
 // batch is one merge-node emission (a buffer flush's array or a combine
 // snapshot's object) plus the merged lineage and root of its contributors.
 type batch struct {
-	owners   []*event
-	assembly *valueio.Reservation
-	data     any
-	lineage  map[string]int
-	root     int
+	owners  []*event // the retained contributors, released after the batch is sent
+	data    any
+	lineage map[string]int
+	root    int
 }
 
 // bufferState tracks accumulated events for a buffer node: one accumulator
@@ -251,22 +251,9 @@ func (cs *combineState) refreshReady() {
 	cs.ready = true
 }
 
+// snapshot assembles the combined object over the retained latest events;
+// their holds keep the merged root alive while the emission is sent.
 func (cs *combineState) snapshot() *batch {
-	var assembly *valueio.Reservation
-	if cs.engine != nil {
-		units := int64(128)
-		for _, source := range cs.sources {
-			units += int64(128 + len(source))
-			for key := range cs.lineages[source] {
-				units += int64(64 + len(key))
-			}
-		}
-		assembly = cs.engine.scope.NewReservation()
-		if err := assembly.Adjust(cs.engine.ctx, nil, units); err != nil {
-			cs.engine.failValue(err)
-			return nil
-		}
-	}
 	obj := make(map[string]any, len(cs.sources))
 	lineage := map[string]int{}
 	roots := rootTracker{}
@@ -279,7 +266,7 @@ func (cs *combineState) snapshot() *batch {
 			obj[s] = nil
 		}
 	}
-	return &batch{data: obj, lineage: lineage, root: roots.merged(), assembly: assembly}
+	return &batch{data: obj, lineage: lineage, root: roots.merged()}
 }
 
 // schemaCache is a per-Invoker cache of compiled JSON schemas shared by
@@ -334,9 +321,6 @@ func (sc *schemaCache) match(schema *json.RawMessage, data any) (bool, error) {
 func (b *batch) release() {
 	for _, owner := range b.owners {
 		owner.release()
-	}
-	if b.assembly != nil {
-		b.assembly.Release()
 	}
 }
 func (bs *bufferState) release() {

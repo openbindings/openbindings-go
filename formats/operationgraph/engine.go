@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/openbindings/openbindings-go/internal/value"
 	"github.com/openbindings/openbindings-go/internal/valueio"
 	"github.com/openbindings/openbindings-go/invoke"
 )
@@ -27,15 +28,15 @@ const (
 
 // event is one value flowing through the graph.
 type event struct {
-	data        any
-	owner       *valueio.Packet
-	viewRelease func()
-	metadata    *valueio.Reservation
-	source      string         // node key that produced this event (combine keys on it)
-	root        int            // lineage root (index into engine.rootValues); noRoot = $input undefined
-	lineage     map[string]int // per-each-node invocation counts for maxIterations
-	complete    bool           // completion marker, not a data event
-	errorDepth  int            // onError chain depth (defense-in-depth cap)
+	data       any             // read-only logical view of packet (engine bookkeeping only)
+	packet     *valueio.Packet // immutable snapshot; nil until retained, nil for markers
+	held       bool            // this copy holds one reference on its root (see values.go)
+	eng        *engine         // the engine whose root the copy holds
+	source     string          // node key that produced this event (combine keys on it)
+	root       int             // lineage root (key into engine.roots); noRoot = $input undefined
+	lineage    map[string]int  // per-each-node invocation counts for maxIterations
+	complete   bool            // completion marker, not a data event
+	errorDepth int             // onError chain depth (defense-in-depth cap)
 
 	// fatal is a conduit-fatal terminal marker (not a data event). When set,
 	// the dispatcher fires it as the graph terminal — routed through the FIFO
@@ -43,12 +44,15 @@ type event struct {
 	fatal *invoke.InvocationError
 }
 
+// cloneEvent copies an event without its root reference; retainEvent takes
+// a reference for the copy.
 func cloneEvent(ev *event) *event {
 	lin := make(map[string]int, len(ev.lineage))
 	for k, v := range ev.lineage {
 		lin[k] = v
 	}
-	return &event{data: ev.data, source: ev.source, root: ev.root, lineage: lin, errorDepth: ev.errorDepth}
+	return &event{data: ev.data, packet: ev.packet, source: ev.source, root: ev.root, lineage: lin,
+		complete: ev.complete, errorDepth: ev.errorDepth, fatal: ev.fatal}
 }
 
 func copyLineage(m map[string]int) map[string]int {
@@ -71,8 +75,8 @@ type conduitState struct {
 	timeout   bool // a deadline context was attached (timeout field present)
 	opCtx     context.Context
 	lineage   map[string]int
-	metadata  *valueio.Reservation
 	roots     rootTracker
+	rootHeld  bool // the conduit holds a reference on its merged root
 }
 
 func newConduitState() *conduitState {
@@ -92,26 +96,39 @@ func (c *conduitState) setNonAccepting() {
 }
 
 // mergeEvent folds a written event into the conduit's merged lineage/root
-// (the invocation's outputs follow from every event written into it).
-func (c *conduitState) mergeEvent(eng *engine, ev *event) error {
+// (the invocation's outputs follow from every event written into it). While
+// the merged root is defined the conduit holds a reference on it, since an
+// output carrying that root can be emitted after every contributing write's
+// own event is gone; the hold is released when the root becomes undefined
+// (a conflicting contributor) or the output pump ends.
+func (c *conduitState) mergeEvent(eng *engine, ev *event) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.metadata == nil {
-		c.metadata = eng.scope.NewReservation()
-	}
-	var units int64
-	for key := range ev.lineage {
-		if _, exists := c.lineage[key]; !exists {
-			// Persistent merged lineage plus its transient output copy.
-			units += int64(128 + 2*len(key))
-		}
-	}
-	if err := c.metadata.Adjust(eng.ctx, nil, units); err != nil {
-		return err
-	}
 	mergeMaxInto(c.lineage, ev.lineage)
+	before := c.roots.merged()
 	c.roots.add(ev.root)
-	return nil
+	after := c.roots.merged()
+	if before == after {
+		return
+	}
+	if c.rootHeld {
+		eng.dropRoot(before)
+		c.rootHeld = false
+	}
+	if after != noRoot {
+		eng.holdRoot(after)
+		c.rootHeld = true
+	}
+}
+
+// releaseRoot gives up the conduit's reference on its merged root.
+func (c *conduitState) releaseRoot(eng *engine) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rootHeld {
+		eng.dropRoot(c.roots.merged())
+		c.rootHeld = false
+	}
 }
 
 func (c *conduitState) merged() (map[string]int, int) {
@@ -133,11 +150,16 @@ type engine struct {
 	inEdges  map[string][]string
 	inputKey string
 
-	rootMu     sync.Mutex
-	rootValues []*event
-	scope      *valueio.Scope
-	ctx        context.Context
-	workers    sync.WaitGroup
+	// Per-value limits for every capture, view and construction. Root
+	// values are retained only when usesInput (some expression can observe
+	// $input), keyed by lineage root and dropped with their last holder.
+	limits    value.Limits
+	usesInput bool
+	rootMu    sync.Mutex
+	roots     map[int]*rootRef
+	nextRoot  int
+	ctx       context.Context
+	workers   sync.WaitGroup
 
 	conduits map[string]*conduitState
 
@@ -183,6 +205,8 @@ func newEngine(g *Graph, invoker *invoke.OperationInvoker, args *invoke.BindingI
 		inEdges:        inE,
 		inputKey:       inputKey,
 		conduits:       conduits,
+		usesInput:      referencesInput(g),
+		roots:          make(map[int]*rootRef),
 		idle:           make(chan struct{}, 1),
 		completionSent: make(map[string]map[string]bool),
 	}
@@ -196,9 +220,8 @@ func newEngine(g *Graph, invoker *invoke.OperationInvoker, args *invoke.BindingI
 // at every generation of the cascade the descendants of earlier data stay
 // ahead of the descendants of later completion — a completion-triggered
 // buffer flush can never overtake an in-flight exit-bound event, on any
-// path. Admission charges the shared value scope before enqueueing. Internal
-// retention refuses capacity it cannot obtain without waiting on itself;
-// public outputs may independently drain. maxEvents also bounds amplification.
+// path. Every queued item is its own retained copy (see retainEvent); the
+// dispatcher releases it once processed. maxEvents bounds amplification.
 type workQueue struct {
 	mu    sync.Mutex
 	head  int
@@ -229,7 +252,7 @@ func (q *workQueue) pop() (queuedEvent, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.head == len(q.items) {
-		// Empty queues retain no uncharged high-water backing array.
+		// Empty queues retain no high-water backing array.
 		q.head = 0
 		q.items = nil
 		return queuedEvent{}, false
@@ -238,8 +261,8 @@ func (q *workQueue) pop() (queuedEvent, bool) {
 	q.items[q.head] = queuedEvent{} // release the event for GC
 	q.head++
 	if q.head >= len(q.items)-q.head {
-		// Bound obsolete slots by the still-charged events. Their metadata
-		// allowance covers both arrays during this amortized compaction.
+		// Bound obsolete slots by the still-queued events (amortized
+		// compaction).
 		q.items = append([]queuedEvent(nil), q.items[q.head:]...)
 		q.head = 0
 	}
@@ -260,26 +283,6 @@ func (eng *engine) decInflight() {
 		default:
 		}
 	}
-}
-
-func (eng *engine) addRoot(ev *event) int {
-	owned := eng.retainEvent(ev)
-	if owned == nil {
-		return noRoot
-	}
-	eng.rootMu.Lock()
-	defer eng.rootMu.Unlock()
-	eng.rootValues = append(eng.rootValues, owned)
-	return len(eng.rootValues) - 1
-}
-
-func (eng *engine) rootValue(root int) (*event, bool) {
-	if root == noRoot {
-		return nil, false
-	}
-	eng.rootMu.Lock()
-	defer eng.rootMu.Unlock()
-	return eng.rootValues[root], true
 }
 
 // errValue is the in-graph `error` value for a failure originating in an
@@ -310,12 +313,7 @@ func (eng *engine) execute(ctx context.Context, handle invoke.BindingHandle[any,
 			handle.FireError(invoke.NewInvocationError(invoke.ErrCodeRuntime))
 		}
 	}()
-	if ep := valueio.From(handle); ep != nil {
-		eng.scope = ep.Scope
-	} else {
-		eng.scope, _ = valueio.NewScope(valueio.Limits{})
-	}
-	ctx = valueio.WithScope(ctx, eng.scope)
+	eng.limits = resolvedLimits(handle)
 
 	// runCtx tears down all workers when the invocation terminates (caller
 	// Cancel, abandoned output stream, or upstream ctx cancellation).
@@ -368,8 +366,10 @@ func (eng *engine) run(ctx context.Context) {
 	defer func() {
 		cancel()
 		eng.workers.Wait()
+		// Every holder releases its own root references, so a completed or
+		// torn-down invocation retains no root value.
 		for _, c := range eng.conduits {
-			c.metadata.Release()
+			c.releaseRoot(eng)
 			c.lineage = nil
 		}
 		for {
@@ -385,10 +385,6 @@ func (eng *engine) run(ctx context.Context) {
 		for _, state := range combineStates {
 			state.release()
 		}
-		for _, root := range eng.rootValues {
-			root.release()
-		}
-		eng.rootValues = nil
 	}()
 
 	// Completion tracking for all nodes with incoming edges.
@@ -534,7 +530,7 @@ func (eng *engine) run(ctx context.Context) {
 		// Graph data is always generic JSON (input pump, transform/map/filter
 		// results, sub-op outputs are all maps/slices/primitives), so the [any,
 		// any] handle's JSON normalization on Write is a no-op here.
-		call := invoke.Invoke(valueio.ChildContext(opCtx), eng.invoker, eng.args.Interface,
+		call := invoke.Invoke(opCtx, eng.invoker, eng.args.Interface,
 			invoke.NewOperationSignature[any, any](node.Operation),
 			invoke.WithContext(eng.args.Context))
 		c.call = call
@@ -565,6 +561,9 @@ func (eng *engine) run(ctx context.Context) {
 					c.cancel()
 				}
 			}()
+			// No output can follow the pump, so the conduit's hold on its
+			// merged root ends with it.
+			defer c.releaseRoot(eng)
 			readOutput, stopOutput := eng.outputs(call)
 			defer stopOutput()
 			for {
@@ -711,11 +710,10 @@ func (eng *engine) run(ctx context.Context) {
 			select {
 			case inputTokens <- struct{}{}:
 			case <-ctx.Done():
-				v.release()
 				return
 			}
-			rid := eng.addRoot(v)
-			v.root, v.lineage = rid, map[string]int{}
+			eng.addRoot(v)
+			v.lineage = map[string]int{}
 			sendToNode(eng.inputKey, v)
 			v.release()
 		}
@@ -909,10 +907,7 @@ func (eng *engine) processConduitEvent(
 		return
 	}
 	startConduit(key, node)
-	if err := c.mergeEvent(eng, ev); err != nil {
-		eng.failValue(err)
-		return
-	}
+	c.mergeEvent(eng, ev)
 	if err := eng.writeChild(c.opCtx, c.call, ev); err != nil {
 		if isValueFailure(err) {
 			eng.failValue(err)
@@ -951,7 +946,7 @@ func (eng *engine) processEach(
 		defer opCancel()
 	}
 
-	call := invoke.Invoke(valueio.ChildContext(opCtx), eng.invoker, eng.args.Interface,
+	call := invoke.Invoke(opCtx, eng.invoker, eng.args.Interface,
 		invoke.NewOperationSignature[any, any](node.Operation),
 		invoke.WithContext(eng.args.Context))
 	// One write, then close: each fixes the graph's contribution at one
@@ -1057,9 +1052,12 @@ func (eng *engine) processMap(
 }
 
 // evalOrFail evaluates a node expression with the event as $ and the
-// lineage's root input as $input. An undefined result fails the node with
-// TRANSFORM_UNDEFINED; other evaluation failures fail it with their message.
-// failed=true means a per-event error was already routed (or dropped).
+// lineage's root input as $input. The evaluator receives its own mutable
+// trees: the event's and, when the root is defined and retained, the root's.
+// An undefined result fails the node with TRANSFORM_UNDEFINED; other
+// evaluation failures fail it with their message. The result is admitted as
+// a new unrooted event. failed=true means a per-event error was already
+// routed (or dropped).
 func (eng *engine) evalOrFail(
 	key, expression string, ev *event,
 	sendPerEventError func(string, any, *event, map[string]int),
@@ -1068,22 +1066,20 @@ func (eng *engine) evalOrFail(
 		sendPerEventError(key, ExpressionEvaluationFailed, ev, ev.lineage)
 		return nil, true
 	}
-	input, release, err := ev.owner.View(eng.ctx, true)
+	input, err := ev.packet.View(eng.ctx, eng.limits, true)
 	if err != nil {
 		eng.failValue(err)
 		return nil, true
 	}
-	defer release()
 	var result any
 	if eb, ok := eng.transform.(invoke.TransformEvaluatorWithBindings); ok {
 		bindings := map[string]any{}
-		if rv, defined := eng.rootValue(ev.root); defined {
-			root, releaseRoot, viewErr := rv.owner.View(eng.ctx, true)
+		if rp, defined := eng.rootPacket(ev.root); defined {
+			root, viewErr := rp.View(eng.ctx, eng.limits, true)
 			if viewErr != nil {
 				eng.failValue(viewErr)
 				return nil, true
 			}
-			defer releaseRoot()
 			bindings["input"] = root
 		}
 		result, err = eb.EvaluateWithBindings(eng.ctx, expression, input, bindings)
@@ -1101,7 +1097,7 @@ func (eng *engine) evalOrFail(
 		}
 		return nil, true
 	}
-	p, err := valueio.Capture(eng.ctx, nil, eng.scope, result)
+	p, err := valueio.Capture(eng.ctx, eng.limits, result)
 	if err != nil {
 		if isValueFailure(err) {
 			eng.failValue(err)
@@ -1110,13 +1106,11 @@ func (eng *engine) evalOrFail(
 		}
 		return nil, true
 	}
-	raw, releaseView, err := p.View(eng.ctx, false)
+	out, err := eng.packetEvent(eng.ctx, p)
 	if err != nil {
-		p.Release()
-		eng.failValue(err)
 		return nil, true
 	}
-	return &event{data: raw, owner: p, viewRelease: releaseView}, false
+	return out, false
 }
 
 // isTruthy implements JSONata 2.1's boolean cast ($boolean) for filter
