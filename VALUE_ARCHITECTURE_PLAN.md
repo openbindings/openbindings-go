@@ -1,6 +1,6 @@
 # Value architecture: destination and qualification plan
 
-Status: ownership refined and cold review complete, 20 September 2026.
+Status: resource policy refined for qualification, 20 September 2026.
 **Projected containers with retained native leaves (P) are the leading
 destination to qualify.** No runtime migration is selected for activation.
 This is a design judgment, not measured proof of performance superiority.
@@ -34,13 +34,14 @@ an optimization; exact content recovery is a requirement.
 | B: shared logical reader over native containers | Can avoid projected shells and unify access to durable native views. Requires container-reader integration throughout consumers, and may still require a full admission walk. Remains a serious challenger. |
 | P: project ordinary container shells and retain eligible native leaves | Removes ordinary text bridges while keeping familiar object/array structures for consumers. Requires finite scalar integration, checked typed construction, faithful codec fallback and ownership. Leading destination to qualify. |
 
-P is preferred for its steady-state responsibility boundaries, not because it
-would be cheapest to implement. Host container interpretation occurs at admission
-and typed construction. Most consumers need not learn a universal native-object
-reader. B can overturn the choice if it simplifies total integration and removes
-meaningful shell cost. A can win if native handling's permanent obligations
-outweigh its architectural benefit. Retaining current behavior while qualifying
-the choice is an operational decision, not a verdict that A is ideal.
+P remains a leading hypothesis for its steady-state responsibility boundaries:
+host container interpretation occurs at admission and typed construction, while
+most consumers need not learn a universal native-object reader. The bounded
+comparison now demonstrates improvements on eligible typed and byte paths, but
+does not establish P as the best overall destination. B remains a serious
+challenger, and A+ (targeted corrections with equivalent snapshot ownership)
+deserves a stronger generic control. Choosing the ideal remains unresolved;
+retaining current behavior during qualification does not declare A ideal.
 
 ## Intended data flow
 
@@ -132,7 +133,7 @@ ownership-selection flag is added.
 | Binding `EmitOutput` | Secure stable data before queue acceptance. The producer keeps its value stable during the call and may reuse its buffers after it returns, including on failure. An admitted internal snapshot can be forwarded without another copy. | Binding-facing invocation handoff; adapters detach protocol-owned storage when necessary. |
 | Evaluator or native-client integration | Borrow admitted input read-only for the documented call or attempt lifetime. If the library mutates or retains input beyond that interval, its adapter supplies a detached copy. Before returning a result, the adapter detaches reusable/expiring storage or hands over independently valid owned data. References to existing immutable SDK leaves may survive in results. | The integration adapter, preserving its library's independent API. |
 | Ordinary local application handler | Give the handler its own mutable input value. A unary return supplies independently valid result storage without producer-retained writable aliases; a handler keeping reusable source storage returns a detached copy. Stream emission follows `EmitOutput` capture-before-return. Mutating handler arguments cannot alter a retry log or another Graph branch. | The local-provider adapter and the handler's return contract, using ordinary construction and snapshot helpers. |
-| Public output `Read` | Deliver an independently usable mutable result, detached from invocation state, producer storage and other delivered results. It remains valid after completion, cancellation and later outputs. Ordinary callers require no release call. | Public/typed delivery, using checked construction and detachment. |
+| Public output `Read` | Successful reads deliver independently usable mutable results, detached from invocation state, producer storage and other delivered results. Results remain valid after completion, cancellation and later outputs. Typed recovery is a separately bounded, fallible caller conversion as specified below. Ordinary callers require no release call. | Public/typed delivery, using checked construction and detachment. |
 
 These are operation-data guarantees, not a new synchronous validation API.
 Keep schema checks, transforms and their failure ordering at their existing
@@ -186,8 +187,146 @@ until drained or explicitly abandoned. Invocation shutdown drops only internal
 references, never caller-owned outputs. Go-owned results follow ordinary garbage
 collection. Adapters release native handles/leases after detachment or the last
 permitted internal use; no integration-owned lease escapes in an ordinary result.
-This is a storage-lifetime policy, not a numerical heap guarantee. Existing flow
-limits still apply; comparisons charge copies, temporary peaks and retained heap.
+The resource policy below additionally bounds SDK value work and retention.
+Neither policy promises a whole-process heap bound. Comparisons still measure
+copies, temporary peaks and retained heap rather than substituting quota units.
+
+### Resource policy
+
+Invocation owns a finite value-work budget, shared by its retries and internal
+Graph descendants. It does not reset on an attempt, graph node or binding switch.
+Independent application invocations have separate budgets; application-wide
+concurrency and memory policy remain with the application. Value helpers receive
+private accounting operations from their caller, without depending on invocation
+types. This adds no public value wrapper, ownership mode or release obligation.
+
+The invoker supplies process-local limits, fixed for an invocation; a direct
+binding-layer invocation gets the same defaults. Optional positive overrides
+select larger or smaller finite limits. Zero/unset selects defaults; invalid
+negative or overflowing configuration fails before dispatch. No document or
+binding can increase its caller's budget. Initial defaults are 64 MiB of work
+units per logical value, 256 MiB of simultaneously live units per invocation,
+and logical nesting depth 256. These are explicit SDK defaults to qualify, not
+Core limits or a claim about allocated heap bytes. They are independent of the
+existing transport delivery-unit limit, and all applicable limits must hold.
+
+One value's cost is 64 units per logical node, plus the UTF-8 byte length of its
+JSON-escaped string/key contents and its supported number tokens. A byte leaf
+contributes its canonical Base64 length, computed without encoding. Counts use
+checked arithmetic. Repeated occurrences count repeatedly even when they share
+backing; null and empty values still have node cost. Field/tag and custom-codec
+meaning are resolved before charging the logical value. The budget walk stops
+at the first exceeded limit, respects the depth bound, and need not serialize.
+The node allowance bounds structural work and bookkeeping; string accounting
+also bounds the ordinary encoded form. Existing numeric-operation limits remain
+in force. Cost is a conservative work measure, not an exact allocator model.
+
+Public input and output handoffs acquire separate per-direction capture permits
+before copying; each holds its permit through enqueue acceptance or rejection.
+Other producers wait without making SDK snapshots, respecting their call context
+and invocation termination. Input and output permits are independent and never
+span transform or handler execution. This preserves bounded queue backpressure
+without allowing arbitrary concurrent producers to build waiting snapshots.
+
+The live ledger covers in-progress SDK capture/projection, admitted inputs,
+transforms' admitted results, replay logs, queues, Graph events/root history/
+buffers, and internal SDK construction or encoding scratch. Reserve before allocating
+or retaining that work, incrementally if needed; a partial construction cannot
+grow uncharged while waiting to enqueue. Scratch bookkeeping is bounded and
+charged too. An independently retained root is charged its full logical cost;
+two owners retaining a shared root both charge it. This conservative accounting
+avoids a global alias registry. A transfer can move its reservation when the
+previous owner stops retaining it. Release only after that owner's readers and
+cleanup finish; cancellation releases rejected work after access quiesces.
+
+Before accepting an output, reserve three times its expanded logical cost:
+one share for the retained value, one for logical delivery and one for private
+codec scratch. The escaped-string and node charges bound compact encoded work
+without generating that encoding. Helpers must keep their charged scratch
+within those reservations. Keep them with the queued output. New
+input, replay and Graph work cannot spend them. Logical delivery uses that reserved
+capacity, then releases SDK reservations when delivery finishes; values retained
+by the caller thereafter are outside the invocation budget. This makes draining
+accepted logical outputs possible after a resource failure. It does not promise
+that every requested Go destination type can be constructed. The expanded-occurrence
+charge rejects, for example, thousands of independent image copies before they
+are queued, even if their internal source shares a single byte slice.
+
+Live reservations distinguish capacity committed to publicly drainable outputs
+from persistent replay, Graph and active work. If the next bounded reservation
+fits after those public outputs drain, wait before allocating more, under the
+call context and invocation termination. The consumer can drain them using
+their already reserved delivery capacity. If draining them cannot make it fit,
+fail immediately. Internal Graph queues are not presumed independently drainable;
+do not wait on retention whose release may depend on this same blocked work.
+Thus a slow public consumer produces backpressure, while an ever-growing replay
+or Graph history reaches an explicit failure. No replay eviction is permitted.
+
+An exhausted per-value/depth limit, or live limit that cannot be relieved as
+above, terminates the invocation through the existing ERR_RUNTIME channel.
+The failing Write/EmitOutput does not accept
+its value, no partial result escapes, and resource exhaustion does not trigger
+context-resolution retry. The established terminal-race and call-context rules
+still apply. Stop new work, quiesce readers and release rejected/internal work;
+previously accepted logical outputs drain before the terminal error. A local
+resource diagnostic identifies the stage, limit kind and configured allowance;
+it contains no payload and is not portable InvocationError.Data. Queue-full
+backpressure is unchanged.
+
+### Bounded host construction
+
+Logical-size accounting does not bound a Go destination's storage. A thousand
+empty objects can target a slice of structs containing large ignored fixed-size
+fields. Every SDK-controlled ordinary construction therefore checks destination
+layout and cardinalities before allocating: complete struct/array size, including
+ignored fields and array zero-fill; slice backing; map/key/value storage under a
+conservative host allocation estimate; pointed-to objects; and temporary encoded
+input. Checked arithmetic and the depth limit apply. The construction charge is
+the greater of logical work and that host-storage/work estimate, plus separately
+live scratch. It uses the configured per-value ceiling. Uncertain ordinary codec
+construction requires a safe preflight/bounded decoder or a loud refusal before
+allocation; an unchecked codec call is not a resource-limit fallback. Fresh
+outer destinations for custom decoders are checked too; allocations performed
+inside the supplied callback remain its responsibility.
+
+Internal construction for a local handler or integration runs under the invocation
+ledger and fails the invocation before that handoff if its charge cannot fit.
+Public typed recovery instead belongs to the caller adapter. Each Read gets a
+separate bounded construction allowance using the same configured per-value
+ceiling; it does not compete with the invocation's already committed output
+reservations. Its source snapshot remains reserved until conversion finishes.
+Output streams remain single-consumer, so this does not create unlimited parallel
+SDK conversions on one stream. Caller-requested export is likewise a separate
+bounded conversion; ordinary caller-owned results need no persistent reservation.
+
+Acceptance guarantees an available stable logical output, not successful decoding
+into every Go type. A type mismatch or construction-limit failure consumes that
+one logical output and returns no partial destination. It is a distinguishable
+local conversion error (with cause/stage available through Go error inspection),
+not a retroactive operation failure or retry trigger. Type mismatch keeps its
+existing classification; construction exhaustion uses ERR_RUNTIME as its cause.
+The caller may continue reading subsequent outputs and their eventual invocation
+terminal. This follows the existing typed-wrapper boundary, which already decodes
+after removing a logical output and may return a per-value type mismatch. It
+does not require destination types to be registered with bindings or transports.
+
+Arbitrary user codec/handler allocations, external-engine internals, Go runtime
+overhead and caller-retained results are not sandboxed by this ledger. Adapters
+apply their library's own resource and cancellation controls; SDK-controlled
+copies, returned logical values and retention still pass the limits above.
+Custom decoding receives private bounded encoded input, while its chosen private
+host allocation remains the callback's responsibility. No hard-preemption or
+process-wide heap claim follows from accepting an application callback.
+
+Admission uses the same policy regardless of container strategy. A codec-backed
+alternative can adopt it too. Qualification must cover a long stream with no
+early output, simultaneous blocked writers, Graph fan-out/root retention,
+duplicate-output expansion, exhaustion during capture, and draining accepted
+outputs after failure, slow public output consumers, padded Go destination types,
+and conversion failure followed by another logical output. A numeric default may
+be tuned using evidence; silent
+eviction of accepted replay data or a change in failure behavior is a contract
+change, not tuning.
 
 ### Compatibility decision
 
@@ -201,28 +340,37 @@ not. Document this in Changed/Removed entries and the migration matrix and
 activate it only in a permitted breaking version, never as a silent patch or
 provider upgrade. No parallel public legacy-ownership mode is introduced.
 
+The new finite value/retention/depth limits can reject work that previously grew
+without an aggregate bound. Document their defaults, overrides, resource error
+and accepted-output behavior in the same migration material.
+
 Already owned internal generic values still use direct container access and can
 be forwarded read-only. The removal of public aliasing has real copy costs,
 including small generic calls; report those against the current baseline rather
 than claiming the old zero-copy behavior survives unchanged.
 
-## Ownership review and remaining decision
+## Design review and current decision
 
-Six fresh readers assessed this ownership revision using the same grade anchors
-as the preceding assessment, without prior grades or feedback between panels.
-All regard the ownership and mutation contract as resolved. Overall grades were
-one A, two A- and three B+. Original reports and frozen inputs are recorded in
-the coordination workspace at `design/sdk-value-grading/candidate-2/RESULT.md`.
+The ownership revision received one A, two A- and three B+ overall from six
+fresh readers. All regarded the ownership contract as resolved; aggregate
+resource containment remained material. Six readers then assessed the first
+resource refinement, giving three A- and three B+. They identified destination
+storage expansion and pressure from independently drainable outputs.
 
-The remaining material concern is resource containment: existing queue and
-protocol-delivery limits do not bound accumulated replay history, simultaneous
-snapshot captures, or expansion when shared internal leaves become independent
-mutable output occurrences. Resolve invocation-owned accounting and exhaustion
-behavior before broad implementation. This policy remains an explicit open
-decision; neither the lifetime rules nor the favorable ownership review resolves
-it. Numerical limits require qualification. Smaller deductions concern eager
-container allocation, codec-parity maintenance and reusable unary-handler results.
-No comparative performance or production-readiness claim follows from the grades.
+The policy above incorporates one corrective refinement for those two findings.
+Three new readers assessed that final design together with frozen comparative
+evidence. All gave semantics A, Go callers A, boundaries A-, runtime A- and
+**overall A-**. None found a material unresolved contract. Remaining deductions
+concern projected container costs and maintaining codec-compatible construction.
+The review loop stops here rather than treating those tradeoffs as prose defects.
+
+All three find objective mechanism improvements on the tested typed/byte paths,
+while leaving overall superiority over stronger A+ and B unresolved. They
+support bounded integration, not broad implementation. Evaluator completion or
+selection is not a gate; applications supply an adapter through the SDK hook.
+Original inputs, reports and grades are preserved in the coordination workspace
+at `design/sdk-value-grading/candidate-3/RESULT.md` and
+`design/sdk-value-grading/candidate-4/RESULT.md`.
 
 ## Evidence already collected
 
@@ -253,9 +401,38 @@ Its `RESULT.md` distinguishes findings, hypotheses and remaining qualification.
   client's runtime, before SDK streaming adaptation. Request-side repeated
   conversion is separately improvable under any candidate.
 
-No B/P implementation, comparative timing, allocation or retained-heap result
-is claimed. Experiments used pinned temporary assemblies and Go 1.27.1; this is
-not a project-wide cohort or declared-toolchain release qualification.
+The subsequent bounded comparison adds disposable A+/P/B value implementations,
+with source frozen before two serial timing runs. The current SDK's typed wrapper
+runs against a synchronous in-memory spy. Medians across the two runs were:
+
+| Mechanism | Current A | Owned codec A+ | Projected P | Native reader B |
+| --- | --- | --- | --- | --- |
+| Small typed capture/recovery | 7.37–7.39 µs | 7.40–7.62 µs | 3.42–3.43 µs | 4.16–4.23 µs |
+| Small generic capture/recovery | 0.54–0.55 µs | 4.49–4.53 µs | 3.85–3.87 µs | 4.51–4.60 µs |
+| Wide capture/narrow selection | 2.52–2.53 ms | 2.51–2.55 ms | 1.56 ms | 1.62 ms |
+| 1 MiB capture/move/recovery | 13.97–13.99 ms | 13.93–14.00 ms | 0.23 ms | 0.22–0.23 ms |
+
+The byte path allocates about 2.10 MB in P/B versus 13.83 MB in A/A+, including
+necessary ownership copies. P allocates about 895 KB for the wide fixture versus
+B's 639 KB; P has faster ordinary container access. Current A's generic identity
+path is much faster than owned capture, a genuine compatibility/performance cost.
+A+ can improve by fusing generic classification and snapshotting; its measured
+small generic disadvantage is not uniquely architectural.
+
+These are mechanism results, not full invocation results. Timed fixtures pass
+their semantic controls and race checks, but both native prototypes have known
+embedded-field and case-folding coverage failures outside those fixtures.
+No real schema, evaluator, protocol, retry/Graph lifecycle or final ledger is
+integrated into the timings. Resource models exercise selected reservation,
+destination-layout and pressure rules, not complete lifecycle enforcement.
+The earlier engine-specific probe is historical capability evidence only.
+
+The method, raw samples, source audit, counterexamples and final synthesis are
+recorded at `design/sdk-value-qualification/RESULT.md`. Experiments used one
+host, warmed plans, fixed ordering, pinned temporary assemblies and Go 1.27.1.
+There is no retained-heap measurement, project-wide cohort or declared-toolchain
+release qualification. The bounded mechanism stage is complete; the integrated
+comparison described next remains outstanding.
 
 ## Next: one bounded comparison before migration
 
@@ -263,11 +440,14 @@ Freeze exact revisions, payloads and measurement procedure using the ownership
 policy above before implementing or comparing candidates. Include a corrected A control
 with its actual proposed improvements, not a deliberately weak baseline.
 
-First qualify the finite byte/scalar contract with one real application-selected
-evaluator and actual schema handling. Test movement, logical string observations,
-undefined/error translation and durable output together. Current engine gaps are
-implementation gaps, not architectural verdicts. Do not implement a new engine
-to clear this gate or introduce an SDK default evaluator.
+Qualify the SDK's hook contract and actual schema handling: supported logical
+values, undefined/error translation, cancellation and result lifetime. Applications
+supply evaluator adapters; choosing or completing an engine is not a prerequisite
+for this architecture decision. Accommodate both adapters that materialize
+logical JSON values and adapters that preserve eligible native leaves. Count each
+selected adapter's actual work in invocation measurements. Engine-specific native
+optimizations require their own evidence, without becoming mandatory SDK features
+or a reason to bundle an evaluator.
 
 Then build a disposable P slice and a minimal B challenger through identical
 admission, validation, evaluation and typed delivery. Keep their ordinary host
@@ -283,6 +463,9 @@ domain and stable codec fallback the same. Exercise:
    output-field mutation, local handler mutation, retained Graph output and
    release after invocation ends, including a small leaf backed by a much larger
    allocation. Include failed/cancelled capture and custom-decoder controls.
+5. Resource exhaustion in captures, replay, Graph retention and duplicated
+   delivery, including preservation of already accepted outputs. Compare like
+   budgets and charge their accounting overhead separately from representation.
 
 The native client must expose a useful native response/request path in its own
 vocabulary. An SDK adapter cannot restore backing discarded below it. All
