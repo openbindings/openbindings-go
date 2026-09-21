@@ -3,6 +3,7 @@ package openbindings
 import (
 	"encoding/json"
 	"errors"
+	"github.com/openbindings/openbindings-go/internal/schemacompiler"
 	"strings"
 	"testing"
 
@@ -71,7 +72,7 @@ func TestSchemaRegexRefusalIsNotMismatch(t *testing.T) {
 	} {
 		compiler := exactCountCompiler()
 		compiler.UseRegexpEngine(func(expression string) (jsonschema.Regexp, error) {
-			re, err := schemaRegexpEngine(expression)
+			re, err := schemacompiler.RegexpEngine(expression)
 			return refusingSchemaRegexp{re}, err
 		})
 		if err := compiler.AddResource("urn:test:regex", entry.schema); err != nil {

@@ -33,11 +33,16 @@ func TestTypedGenericBridgePreservesNumbers(t *testing.T) {
 }
 
 func TestLocalGenericBridgePreservesNumbers(t *testing.T) {
-	v, ok := localGenericValue(struct {
+	inner := NewInvocationImpl[any, any](context.Background())
+	err := emitLocalOutput(inner, struct {
 		ID uint64 `json:"id"`
 	}{18446744073709551615})
-	if !ok {
+	if err != nil {
 		t.Fatal("rejected typed number")
+	}
+	v, err := inner.Outputs().Read(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
 	if v.(map[string]any)["id"] != json.Number("18446744073709551615") {
 		t.Fatalf("lost number: %#v", v)
@@ -57,8 +62,8 @@ func TestGenericBridgesRejectInvalidNumberCarriers(t *testing.T) {
 		if err := call.Write(ctx, input); err == nil {
 			t.Errorf("typed bridge accepted invalid carrier: %#v", input)
 		}
-		if value, ok := localGenericValue(input); ok {
-			t.Errorf("local bridge accepted invalid carrier: %#v -> %#v", input, value)
+		if err := emitLocalOutput(inner, input); err == nil {
+			t.Errorf("local bridge accepted invalid carrier: %#v", input)
 		}
 		cancel()
 	}

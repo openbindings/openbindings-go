@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
-	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // LocalPreflight optionally reports current prerequisites for one native
@@ -35,14 +34,14 @@ func WithLocalPreflight(preflight LocalPreflight) LocalImplementationOption {
 }
 
 // LocalUnary adapts the common exactly-one-input/one-output case. Generic
-// JSON-domain maps and slices remain the same Go references end to end.
+// Handler inputs and emitted outputs have independent mutable storage.
 func LocalUnary[I, O any](
 	handler func(context.Context, I) (O, error),
 	opts ...LocalImplementationOption,
 ) LocalBindingImplementation {
 	implementation := LocalBindingImplementation{
 		handler: func(ctx context.Context, handle BindingHandle[any, any], _ *BindingInvocationArgs) {
-			input, err := handle.ReadInput(ctx)
+			typed, err := readLocalInput[I](ctx, handle)
 			if err == io.EOF {
 				handle.FireError(NewInvocationError(ErrCodeMissingInput))
 				return
@@ -59,22 +58,12 @@ func LocalUnary[I, O any](
 				handle.FireError(AsInvocationError(err))
 				return
 			}
-			typed, ok := localTypedValue[I](input)
-			if !ok {
-				handle.FireError(NewInvocationError(ErrCodeTypeMismatch))
-				return
-			}
 			output, err := handler(ctx, typed)
 			if err != nil {
 				handle.FireError(NewInvocationError(ErrCodeExecutionFailed))
 				return
 			}
-			generic, ok := localGenericValue(output)
-			if !ok {
-				handle.FireError(NewInvocationError(ErrCodeTypeMismatch))
-				return
-			}
-			if err := handle.EmitOutput(generic); err == nil {
+			if err := emitLocalOutput(handle, output); err == nil {
 				handle.CloseOutput()
 			}
 		},
@@ -102,21 +91,19 @@ func LocalStream[I, O any](
 	return implementation
 }
 
-type typedLocalBindingHandle[I, O any] struct{ inner BindingHandle[any, any] }
+type typedLocalBindingHandle[I, O any] struct {
+	inner     BindingHandle[any, any]
+	readGuard streamReadGuard
+}
 
 func (h *typedLocalBindingHandle[I, O]) ReadInput(ctx context.Context) (I, error) {
-	var zero I
-	value, err := h.inner.ReadInput(ctx)
-	if err != nil {
-		return zero, err
+	h.readGuard.begin()
+	defer h.readGuard.end()
+	out, err := readLocalInput[I](ctx, h.inner)
+	if err != nil && err != io.EOF {
+		h.inner.FireError(AsInvocationError(err))
 	}
-	typed, ok := localTypedValue[I](value)
-	if !ok {
-		err := NewInvocationError(ErrCodeTypeMismatch)
-		h.inner.FireError(err)
-		return zero, err
-	}
-	return typed, nil
+	return out, err
 }
 
 func (h *typedLocalBindingHandle[I, O]) CloseInput() error { return h.inner.CloseInput() }
@@ -126,45 +113,7 @@ func (h *typedLocalBindingHandle[I, O]) FireError(err *InvocationError) {
 }
 func (h *typedLocalBindingHandle[I, O]) Done() <-chan struct{} { return h.inner.Done() }
 func (h *typedLocalBindingHandle[I, O]) EmitOutput(output O) error {
-	value, ok := localGenericValue(output)
-	if !ok {
-		err := NewInvocationError(ErrCodeTypeMismatch)
-		h.inner.FireError(err)
-		return err
-	}
-	return h.inner.EmitOutput(value)
-}
-
-func localTypedValue[T any](value any) (T, bool) {
-	if typed, ok := value.(T); ok {
-		return typed, true
-	}
-	var typed T
-	data, err := jsonvalue.Marshal(value)
-	if err != nil || jsonvalue.Unmarshal(data, &typed) != nil {
-		return typed, false
-	}
-	return typed, true
-}
-
-func localGenericValue[T any](value T) (any, bool) {
-	raw := any(value)
-	state := classifyNativeJSONValue(raw, nil, 0)
-	if state == invalidNumberJSON {
-		return nil, false
-	}
-	if state == nativeJSON {
-		return raw, true
-	}
-	data, err := jsonvalue.Marshal(value)
-	if err != nil {
-		return nil, false
-	}
-	var generic any
-	if jsonvalue.Unmarshal(data, &generic) != nil {
-		return nil, false
-	}
-	return generic, true
+	return emitLocalOutput(h.inner, output)
 }
 
 type localBindingInvoker struct {
@@ -210,7 +159,12 @@ func (i *localBindingInvoker) PrepareBinding(ctx context.Context, args *BindingI
 type compiledLocalBinding struct{ implementation LocalBindingImplementation }
 
 func (b *compiledLocalBinding) InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any] {
-	invocation := NewInvocationImpl[any, any](ctx)
+	invocation := NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-invocation.Done():
+		return invocation
+	default:
+	}
 	copyArgs := *args
 	go func() {
 		defer func() {
@@ -271,6 +225,7 @@ func (r *localProviderRuntime) Close() error {
 
 // PrepareLocalProviderOptions maps exact OBI binding keys to native code.
 type PrepareLocalProviderOptions struct {
+	ValueLimits       ValueLimits
 	Key               string
 	Label             string
 	Interface         *openbindings.PreparedInterface
@@ -282,6 +237,9 @@ type PrepareLocalProviderOptions struct {
 // interface, policy, validation, transform, and invocation substrate as every
 // protocol-backed provider.
 func PrepareLocalProvider(options PrepareLocalProviderOptions) (*PreparedProvider, error) {
+	if err := options.ValueLimits.Validate(); err != nil {
+		return nil, err
+	}
 	if options.Interface == nil {
 		return nil, fmt.Errorf("openbindings: prepared local provider interface is required")
 	}
@@ -322,6 +280,7 @@ func PrepareLocalProvider(options PrepareLocalProviderOptions) (*PreparedProvide
 		invoker:     NewOperationInvoker(invokers...),
 		implemented: implemented,
 	}
+	runtime.invoker.ValueLimits = options.ValueLimits
 	return PrepareProvider(PreparedProviderOptions{
 		Key:               options.Key,
 		Label:             options.Label,

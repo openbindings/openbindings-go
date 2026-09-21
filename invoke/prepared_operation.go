@@ -3,6 +3,7 @@ package invoke
 import (
 	"context"
 	"fmt"
+	"github.com/openbindings/openbindings-go/internal/valueio"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -58,7 +59,14 @@ func (b *compiledOperationBehavior) Invoke(ctx context.Context, opts ...InvokeOp
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	caller := NewInvocationImpl[any, any](ctx)
+	ctx = valueio.RootContext(ctx)
+	caller := NewInvocationImpl[any, any](ctx, WithInvocationValueLimits(mergeValueLimits(b.invoker.ValueLimits, cfg.valueLimits)))
+	select {
+	case <-caller.Done():
+		return caller
+	default:
+	}
+	ctx = valueio.WithScope(ctx, caller.scope)
 	if b.inputValidator != nil {
 		caller.validateInput = func(input any) *InvocationError {
 			if err := b.inputValidator.Validate(input); err != nil {

@@ -90,7 +90,7 @@ func TestCompiledRealizationPinsPreparedWork(t *testing.T) {
 	}
 }
 
-func TestTypedInvocationPreservesNativeJSONReference(t *testing.T) {
+func TestTypedInvocationSnapshotsNativeJSONInput(t *testing.T) {
 	inner := NewInvocationImpl[any, any](shortCtx(t))
 	typed := NewTypedInvocation[map[string]any, any](inner)
 	input := map[string]any{"nested": []any{"value"}}
@@ -106,8 +106,8 @@ func TestTypedInvocationPreservesNativeJSONReference(t *testing.T) {
 		t.Fatalf("received %T", received)
 	}
 	receivedMap["identity"] = true
-	if input["identity"] != true {
-		t.Fatal("native JSON input was cloned")
+	if input["identity"] != nil {
+		t.Fatal("handler input aliases caller storage")
 	}
 	inner.Cancel()
 }

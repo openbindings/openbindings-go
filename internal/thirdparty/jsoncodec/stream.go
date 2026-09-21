@@ -20,8 +20,9 @@ type Decoder struct {
 	scan    scanner
 	err     error
 
-	tokenState int
-	tokenStack []int
+	completeBuffer bool // private bounded-value decoder: no refill or buffer growth
+	tokenState     int
+	tokenStack     []int
 }
 
 // NewDecoder returns a new decoder that reads from r.
@@ -128,7 +129,7 @@ Input:
 				if dec.scan.step(&dec.scan, ' ') == scanEnd {
 					break Input
 				}
-				if nonSpace(dec.buf) {
+				if nonSpace(dec.buf[dec.scanp:]) {
 					err = io.ErrUnexpectedEOF
 				}
 			}
@@ -144,6 +145,9 @@ Input:
 }
 
 func (dec *Decoder) refill() error {
+	if dec.completeBuffer {
+		return io.EOF
+	}
 	// Make room to read more into the buffer.
 	// First slide down data already consumed.
 	if dec.scanp > 0 {

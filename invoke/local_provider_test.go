@@ -82,8 +82,8 @@ func TestLocalProviderUsesVerifiedRouteAndPreservesNativeValues(t *testing.T) {
 		t.Fatalf("output=%#v err=%v", output, err)
 	}
 	received["same-reference"] = true
-	if input["same-reference"] != true {
-		t.Fatal("local input reference was cloned")
+	if input["same-reference"] != nil {
+		t.Fatal("local input aliases caller storage")
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatal(err)

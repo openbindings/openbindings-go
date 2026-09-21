@@ -2,6 +2,7 @@ package invoke
 
 import (
 	"context"
+	"github.com/openbindings/openbindings-go/internal/valueio"
 
 	openbindings "github.com/openbindings/openbindings-go"
 )
@@ -50,6 +51,7 @@ type InvokeOption func(*invokeConfig)
 
 // invokeConfig is the resolved set of per-call options applied to one Invoke.
 type invokeConfig struct {
+	valueLimits ValueLimits
 	context     map[string]any
 	bindingKey  string
 	hooks       hookSlots
@@ -136,7 +138,14 @@ func Invoke[I, O any](
 		return fail(ierr)
 	}
 
-	caller := NewInvocationImpl[any, any](ctx)
+	ctx = valueio.RootContext(ctx)
+	caller := NewInvocationImpl[any, any](ctx, WithInvocationValueLimits(mergeValueLimits(invoker.ValueLimits, cfg.valueLimits)))
+	select {
+	case <-caller.Done():
+		return NewTypedInvocation[I, O](caller)
+	default:
+	}
+	ctx = valueio.WithScope(ctx, caller.scope)
 	caller.validateInput = makeInputValidator(op, obi, binding.Operation, bindingKey, cfg.diagnostics)
 
 	go func() {

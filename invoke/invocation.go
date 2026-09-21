@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/openbindings/openbindings-go/internal/valueio"
 	"io"
-	"math"
 	"reflect"
 	"runtime"
 	"strings"
@@ -459,15 +459,23 @@ const (
 // terminal error. (Closing a data channel on terminal is a real
 // send-on-closed-channel panic, not a theoretical one.)
 type InvocationImpl[I, O any] struct {
-	mu          sync.Mutex
-	state       invocationState
-	terminalErr *InvocationError
+	invocationValueAccess
+	scope                     *valueio.Scope
+	publicDrain               bool
+	inputPermit, outputPermit chan struct{}
+	inputDeliveryReaders      atomic.Int32
+	stopped                   bool
+	mu                        sync.Mutex
+	state                     invocationState
+	terminalErr               *InvocationError
+	terminalData              *valueio.Packet
+	errorCapture              sync.Mutex
 
-	inputCh       chan I
+	inputCh       chan *valueio.Packet
 	inputClosedCh chan struct{}
 	inputClosed   bool
 
-	outputCh chan O
+	outputCh chan *valueio.Packet
 
 	done chan struct{}
 
@@ -497,12 +505,37 @@ var (
 // NewInvocationImpl constructs an inert invocation session. ctx is the
 // invocation's lifetime: its cancellation converges with Cancel() on one
 // ErrCodeCancelled terminal. No goroutine is spawned and no I/O performed.
-func NewInvocationImpl[I, O any](ctx context.Context) *InvocationImpl[I, O] {
+func NewInvocationImpl[I, O any](ctx context.Context, opts ...InvocationOption) *InvocationImpl[I, O] {
+	var cfg invocationOptions
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	scope := valueio.TakeScope(ctx)
+	publicDrain := scope == nil
+	configErr := cfg.limits.Validate()
+	if scope == nil && configErr == nil {
+		scope, configErr = valueio.NewScope(cfg.limits.internal())
+	}
+	if scope == nil {
+		scope, _ = valueio.NewScope(valueio.Limits{})
+	}
+
 	i := &InvocationImpl[I, O]{
-		inputCh:       make(chan I, inputBufferCapacity),
+		inputCh:       make(chan *valueio.Packet, inputBufferCapacity),
 		inputClosedCh: make(chan struct{}),
-		outputCh:      make(chan O, outputBufferCapacity),
+		outputCh:      make(chan *valueio.Packet, outputBufferCapacity),
 		done:          make(chan struct{}),
+	}
+	i.scope, i.publicDrain = scope, publicDrain
+	i.inputPermit, i.outputPermit = make(chan struct{}, 1), make(chan struct{}, 1)
+	i.invocationValueAccess = valueio.NewAccess(i, &valueio.Endpoint{
+		Scope: scope, CaptureInput: i.captureInput, SendInput: i.writePacket, ReadInput: i.readInputPacket,
+		CaptureOutput: i.captureOutput, SendOutput: i.emitPacket, ClaimOutput: i.claimOutput,
+		ReadOutput: i.readOutputPacket, Stop: i.stopOutputs, FailValue: func(err error) { ie := valueError(err, "internal value"); ie.Code = ErrCodeRuntime; i.FireError(ie) },
+	})
+	if configErr != nil {
+		i.FireError(&InvocationError{Code: ErrCodeRuntime})
+		return i
 	}
 	if ctx != nil {
 		if ctx.Err() != nil {
@@ -530,11 +563,47 @@ func NewInvocationImpl[I, O any](ctx context.Context) *InvocationImpl[I, O] {
 // ----- Caller-facing -----
 
 func (i *InvocationImpl[I, O]) Write(ctx context.Context, input I) error {
+	return i.captureInput(ctx, input)
+}
+
+func (i *InvocationImpl[I, O]) writePacket(ctx context.Context, input *valueio.Packet) error {
+	var transferErr error
+	input, transferErr = valueio.Transfer(ctx, i.done, i.scope, input)
+	if transferErr != nil {
+		ie := valueError(transferErr, "input transfer")
+		if resourceFailure(transferErr) {
+			i.FireError(ie)
+		}
+		return ie
+	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			input.Release()
+		}
+		i.discardTerminalInputs()
+	}()
 	if err := i.writableErr(); err != nil {
 		return err
 	}
 	if i.validateInput != nil {
-		if verr := i.validateInput(input); verr != nil {
+		logical, release, err := input.View(ctx, false)
+		if err != nil {
+			ie := valueError(err, "input validation")
+			i.FireError(ie)
+			return ie
+		}
+		defer release()
+		typed, ok := logical.(I)
+		if !ok {
+			typed, err = valueio.Construct[I](ctx, input, true)
+			if err != nil {
+				ie := valueError(err, "input validation")
+				i.FireError(ie)
+				return ie
+			}
+		}
+		if verr := i.validateInput(typed); verr != nil {
 			// Input-validation dual signal: terminal AND the offending write rejects
 			// with the same error. The binding never sees the message.
 			i.FireError(verr)
@@ -546,12 +615,13 @@ func (i *InvocationImpl[I, O]) Write(ctx context.Context, input I) error {
 	}
 	select {
 	case i.inputCh <- input:
+		accepted = true
 		return nil
 	case <-i.inputClosedCh:
 		// A terminal transition also closes the input side; prefer the
 		// terminal error over ERR_INPUT_CLOSED when both raced this select.
 		i.mu.Lock()
-		state, terr := i.state, i.terminalErr
+		state, terr := i.state, i.terminalCopyLocked()
 		i.mu.Unlock()
 		switch {
 		case state == stateErrored:
@@ -573,7 +643,7 @@ func (i *InvocationImpl[I, O]) writableErr() error {
 	defer i.mu.Unlock()
 	if i.state != stateOpen {
 		if i.terminalErr != nil {
-			return i.terminalErr
+			return i.terminalCopyLocked()
 		}
 		return classifiedError(ErrCodeInvocationClosed)
 	}
@@ -587,7 +657,7 @@ func (i *InvocationImpl[I, O]) terminalOrClosedErr() *InvocationError {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.terminalErr != nil {
-		return i.terminalErr
+		return i.terminalCopyLocked()
 	}
 	return classifiedError(ErrCodeInvocationClosed)
 }
@@ -612,20 +682,24 @@ func (i *InvocationImpl[I, O]) Cancel() {
 // PANICS with ErrCodeAlreadyConsumed — eager, at the call site, symmetric to
 // the TS SDK throwing at the second iterator acquisition. A stray second
 // consumer would otherwise silently split outputs.
-func (i *InvocationImpl[I, O]) Outputs() OutputStream[O] {
+func (i *InvocationImpl[I, O]) claimOutput() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.outputsClaimed {
 		panic(fmt.Sprintf("openbindings: %s: outputs already consumed", ErrCodeAlreadyConsumed))
 	}
 	i.outputsClaimed = true
+}
+
+func (i *InvocationImpl[I, O]) Outputs() OutputStream[O] {
+	i.claimOutput()
 	return &outputStream[I, O]{impl: i}
 }
 
 // ----- Binding-facing -----
 
-func (i *InvocationImpl[I, O]) ReadInput(ctx context.Context) (I, error) {
-	var zero I
+func (i *InvocationImpl[I, O]) readInputPacket(ctx context.Context) (*valueio.Packet, error) {
+	var zero *valueio.Packet
 
 	if n := i.inputReaders.Add(1); n > 1 {
 		i.inputReaders.Add(-1)
@@ -678,7 +752,7 @@ func (i *InvocationImpl[I, O]) erroredErr() error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.state == stateErrored {
-		return i.terminalErr
+		return i.terminalCopyLocked()
 	}
 	return nil
 }
@@ -700,10 +774,37 @@ func (i *InvocationImpl[I, O]) closeInputLocked() {
 	close(i.inputClosedCh)
 }
 
-func (i *InvocationImpl[I, O]) EmitOutput(output O) error {
+func (i *InvocationImpl[I, O]) EmitOutput(output O) error { return i.captureOutput(output) }
+
+func (i *InvocationImpl[I, O]) emitPacket(output *valueio.Packet) error {
+	var transferErr error
+	output, transferErr = valueio.Transfer(context.Background(), i.done, i.scope, output)
+	if transferErr != nil {
+		ie := valueError(transferErr, "output transfer")
+		if resourceFailure(transferErr) {
+			i.FireError(ie)
+		}
+		return ie
+	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			output.Release()
+		}
+	}()
+	if i.publicDrain {
+		if err := output.ReserveDelivery(context.Background(), i.done); err != nil {
+			ie := valueError(err, "output acceptance")
+			if resourceFailure(err) {
+				i.FireError(ie)
+			}
+			return ie
+		}
+	}
+
 	i.mu.Lock()
-	if i.state != stateOpen {
-		err := i.terminalErr
+	if i.state != stateOpen || i.stopped {
+		err := i.terminalCopyLocked()
 		i.mu.Unlock()
 		if err != nil {
 			return err
@@ -717,13 +818,17 @@ func (i *InvocationImpl[I, O]) EmitOutput(output O) error {
 	// the mutex, and close(done) is the reader's synchronization point).
 	i.pendingEmits.Add(1)
 	i.mu.Unlock()
-	defer i.pendingEmits.Add(-1)
+	defer func() { i.pendingEmits.Add(-1); i.discardStoppedOutputs() }()
 
 	// The bounded buffered channel IS the backpressure: a full-channel send
 	// parks; `done` wakes a parked producer on terminal so it returns the
 	// terminal error instead of stranding (decision 13c).
 	select {
 	case i.outputCh <- output:
+		accepted = true
+		if i.publicDrain {
+			output.MarkDrainable()
+		}
 		return nil
 	case <-i.done:
 		return i.terminalOrClosedErr()
@@ -731,6 +836,7 @@ func (i *InvocationImpl[I, O]) EmitOutput(output O) error {
 }
 
 func (i *InvocationImpl[I, O]) CloseOutput() {
+	defer i.discardTerminalInputs()
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.state != stateOpen {
@@ -745,29 +851,60 @@ func (i *InvocationImpl[I, O]) CloseOutput() {
 }
 
 func (i *InvocationImpl[I, O]) FireError(err *InvocationError) {
-	if err == nil || err.Code == "" {
-		err = &InvocationError{Code: ErrCodeRuntime}
-	} else if err.HasData() {
-		normalized, ok := normalizeInvocationData(err.Data)
-		if !ok {
-			err = &InvocationError{Code: ErrCodeRuntime}
-		} else {
-			err = &InvocationError{Code: err.Code, Data: normalized, dataPresent: true}
+	defer i.discardTerminalInputs()
+	// Code-only cancellation can win while an application codec is running.
+	var record *valueio.Packet
+	code := ErrCodeRuntime
+	var cause error
+	if err != nil && err.Code != "" {
+		code, cause = err.Code, err.cause
+	}
+	if err != nil && err.HasData() {
+		i.errorCapture.Lock()
+		defer i.errorCapture.Unlock()
+		i.mu.Lock()
+		closed := i.state != stateOpen
+		i.mu.Unlock()
+		if closed {
+			return
+		}
+		var captureErr error
+		record, captureErr = valueio.CaptureTerminal(context.Background(), i.scope, err.Data)
+		if captureErr != nil || !validInvocationValue(reflect.ValueOf(err.Data), map[visit]bool{}) {
+			if captureErr != nil {
+				cause = valueError(captureErr, "terminal capture").cause
+			}
+			record.Release()
+			record = nil
+			code = ErrCodeRuntime
 		}
 	}
-	if err.Code == ErrCodeContextRequired {
-		details, ok := contextRequiredData(err.Data)
-		if !err.HasData() || !ok || !ValidContextRequiredDetails(details) {
-			err = &InvocationError{Code: ErrCodeRuntime}
+	if code == ErrCodeContextRequired {
+		valid := false
+		if record != nil {
+			data, conversionErr := valueio.Construct[any](context.Background(), record, false)
+			details, ok := contextRequiredData(data)
+			valid = conversionErr == nil && ok && ValidContextRequiredDetails(details)
+		}
+		if !valid {
+			record.Release()
+			record = nil
+			code = ErrCodeRuntime
 		}
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.state != stateOpen {
+		record.Release()
 		return
 	}
+	if i.stopped {
+		record.Release()
+		record = nil
+	}
 	i.state = stateErrored
-	i.terminalErr = err
+	i.terminalErr = &InvocationError{Code: code, cause: cause, dataPresent: record != nil}
+	i.terminalData = record
 	i.closeInputLocked()
 	close(i.done)
 	if i.stopWatch != nil {
@@ -775,16 +912,35 @@ func (i *InvocationImpl[I, O]) FireError(err *InvocationError) {
 	}
 }
 
+// terminalCopyLocked serializes bounded construction into the delivery capacity
+// reserved with the retained error. Public readers never share a mutable error.
+func (i *InvocationImpl[I, O]) terminalCopyLocked() *InvocationError {
+	if i.terminalErr == nil {
+		return nil
+	}
+	e := *i.terminalErr
+	if i.terminalData != nil {
+		data, err := valueio.Construct[any](context.Background(), i.terminalData, false)
+		if err != nil {
+			return &InvocationError{Code: ErrCodeRuntime}
+		}
+		e.Data = data
+	}
+	return &e
+}
+
 func (i *InvocationImpl[I, O]) Done() <-chan struct{} { return i.done }
 
 // ----- Output stream -----
 
 type outputStream[I, O any] struct {
-	impl *InvocationImpl[I, O]
+	impl    *InvocationImpl[I, O]
+	readers atomic.Int32
 }
 
-func (s *outputStream[I, O]) Read(ctx context.Context) (O, error) {
-	var zero O
+func (i *InvocationImpl[I, O]) readOutputPacket(ctx context.Context) (*valueio.Packet, error) {
+	s := &outputStream[I, O]{impl: i}
+	var zero *valueio.Packet
 
 	if n := s.impl.outputReaders.Add(1); n > 1 {
 		s.impl.outputReaders.Add(-1)
@@ -844,7 +1000,7 @@ func (s *outputStream[I, O]) Read(ctx context.Context) (O, error) {
 	}
 }
 
-func (s *outputStream[I, O]) Stop() { s.impl.Cancel() }
+func (s *outputStream[I, O]) Stop() { s.impl.stopOutputs() }
 
 // ---------------------------------------------------------------------------
 // The one blessed terminal: Single
@@ -868,9 +1024,9 @@ func Single[O any](ctx context.Context, out OutputStream[O]) (O, error) {
 		if errors.Is(err, io.EOF) {
 			return zero, classifiedError(ErrCodeExpectedSingle)
 		}
-		// Errors pass through without Stop: a terminal already ended the
-		// invocation (Stop would be a no-op), and a per-call ctx error
-		// leaves the live invocation to the caller's discretion.
+		// Errors pass through without Stop: a conversion or per-call context
+		// error can leave later outputs usable. The caller owns abandonment
+		// and any retained terminal data through out.Stop().
 		return zero, err
 	}
 	if _, err := out.Read(ctx); err == nil {
@@ -887,135 +1043,50 @@ func Single[O any](ctx context.Context, out OutputStream[O]) (O, error) {
 // Typed adapter (codegen boundary)
 // ---------------------------------------------------------------------------
 
-// TypedInvocation wraps an untyped Invocation[any, any] with concrete input
-// and output types. Codegen emits one TypedInvocation-returning method per
-// OBI operation. Each raw output is decoded into O at the typed boundary: a
-// direct type assertion first (zero-cost when the binding emitted a concrete
-// O), then a JSON round-trip (the schema-validated outputs of the operation
-// layer are generic maps). On a decode failure Read returns a zero O and a
-// terminal ERR_TYPE_MISMATCH; it never panics — so the `O` a typed invoker
-// hands out is a guarantee backed by output validation (OBI-T-16) plus a checked decode, not an IOU.
+// TypedInvocation constructs owned inputs and fresh checked typed outputs over
+// an ordinary invocation. SDK snapshots preserve native leaves internally.
+// A failed output construction consumes that output and returns a zero O with
+// ValueConversionError; it does not change the invocation's terminal status.
 type TypedInvocation[I, O any] struct {
+	invocationValueAccess
 	inner Invocation[any, any]
+	scope *valueio.Scope
 }
 
 // NewTypedInvocation wraps an untyped invocation with concrete I/O types.
-func NewTypedInvocation[I, O any](inner Invocation[any, any]) *TypedInvocation[I, O] {
-	return &TypedInvocation[I, O]{inner: inner}
+func NewTypedInvocation[I, O any](inner Invocation[any, any], opts ...InvocationOption) *TypedInvocation[I, O] {
+	var cfg invocationOptions
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	scope, err := valueio.NewScope(cfg.limits.internal())
+	if err != nil {
+		inner = NewErroredInvocation[any, any](&InvocationError{Code: ErrCodeRuntime})
+		scope, _ = valueio.NewScope(valueio.Limits{})
+	}
+	t := &TypedInvocation[I, O]{inner: inner, scope: scope}
+	if ep := valueio.From(inner); ep != nil {
+		copy := *ep
+		t.scope = ep.Scope
+		t.invocationValueAccess = valueio.NewAccess(t, &copy)
+	}
+	return t
 }
 
 func (t *TypedInvocation[I, O]) Write(ctx context.Context, input I) error {
-	// The generic JSON-domain lane is already the operation layer's native
-	// representation. Validate it without cloning so in-process providers keep
-	// map/slice reference identity and pay no JSON serialization cost.
-	raw := any(input)
-	state := classifyNativeJSONValue(raw, nil, 0)
-	if state == invalidNumberJSON {
-		return classifiedError(ErrCodeTypeMismatch)
+	if ep := valueio.From(t); ep != nil {
+		return ep.CaptureInput(ctx, input)
 	}
-	if state == nativeJSON {
-		return t.inner.Write(ctx, raw)
-	}
-	// Encode at the typed boundary, symmetric with the output decode:
-	// Input validation and format invokers operate on generic JSON values
-	// (maps/slices/primitives), not Go structs. For the untyped flavor (I = any)
-	// this normalizes the value through JSON (e.g. int -> json.Number), so a caller
-	// driving an [any, any] handle must hand it generic-JSON-shaped input; a
-	// non-JSON-encodable value is rejected here rather than reaching the binding.
-	b, err := jsonvalue.Marshal(input)
+	p, err := valueio.Capture(ctx, nil, t.scope, input)
 	if err != nil {
-		return classifiedError(ErrCodeTypeMismatch)
+		return valueError(err, "input capture")
 	}
-	var generic any
-	if err := jsonvalue.Unmarshal(b, &generic); err != nil {
-		return classifiedError(ErrCodeTypeMismatch)
+	defer p.Release()
+	raw, err := valueio.Construct[any](ctx, p, true)
+	if err != nil {
+		return valueError(err, "input delivery")
 	}
-	return t.inner.Write(ctx, generic)
-}
-
-type nativeJSONVisit struct {
-	kind reflect.Kind
-	ptr  uintptr
-}
-
-func isNativeJSONValue(value any, seen map[nativeJSONVisit]bool, depth int) bool {
-	return classifyNativeJSONValue(value, seen, depth) == nativeJSON
-}
-
-type nativeJSONState uint8
-
-const (
-	typedJSON nativeJSONState = iota // encoding/json owns this host-type conversion
-	nativeJSON
-	invalidNumberJSON
-)
-
-// Keep an invalid numeric carrier distinct from a typed Go value requiring
-// encoding. In particular, encoding/json marshals json.Number("") as 0;
-// that fallback must not repair a malformed generic JSON input silently.
-// Typed structs/custom encoders retain their explicit encoding/json contract.
-func classifyNativeJSONValue(value any, seen map[nativeJSONVisit]bool, depth int) nativeJSONState {
-	if depth > 512 {
-		return typedJSON
-	}
-	switch value := value.(type) {
-	case nil, bool, string:
-		return nativeJSON
-	case float64:
-		if !math.IsNaN(value) && !math.IsInf(value, 0) {
-			return nativeJSON
-		}
-		return typedJSON
-	case json.Number:
-		if jsonvalue.IsNumber(value) {
-			return nativeJSON
-		}
-		return invalidNumberJSON
-	case []any:
-		if seen == nil {
-			seen = make(map[nativeJSONVisit]bool)
-		}
-		visit := nativeJSONVisit{kind: reflect.Slice, ptr: reflect.ValueOf(value).Pointer()}
-		if seen[visit] {
-			return typedJSON
-		}
-		seen[visit] = true
-		defer delete(seen, visit)
-		state := nativeJSON
-		for _, member := range value {
-			s := classifyNativeJSONValue(member, seen, depth+1)
-			if s == invalidNumberJSON {
-				return s
-			}
-			if s == typedJSON {
-				state = typedJSON
-			}
-		}
-		return state
-	case map[string]any:
-		if seen == nil {
-			seen = make(map[nativeJSONVisit]bool)
-		}
-		visit := nativeJSONVisit{kind: reflect.Map, ptr: reflect.ValueOf(value).Pointer()}
-		if seen[visit] {
-			return typedJSON
-		}
-		seen[visit] = true
-		defer delete(seen, visit)
-		state := nativeJSON
-		for _, member := range value {
-			s := classifyNativeJSONValue(member, seen, depth+1)
-			if s == invalidNumberJSON {
-				return s
-			}
-			if s == typedJSON {
-				state = typedJSON
-			}
-		}
-		return state
-	default:
-		return typedJSON
-	}
+	return t.inner.Write(ctx, raw)
 }
 
 func (t *TypedInvocation[I, O]) Close() error { return t.inner.Close() }
@@ -1024,36 +1095,56 @@ func (t *TypedInvocation[I, O]) Cancel()      { t.inner.Cancel() }
 func (t *TypedInvocation[I, O]) InputClosed() <-chan struct{} { return t.inner.InputClosed() }
 
 func (t *TypedInvocation[I, O]) Outputs() OutputStream[O] {
-	return &typedOutputStream[O]{inner: t.inner.Outputs()}
+	if ep := valueio.From(t); ep != nil {
+		ep.ClaimOutput()
+		return &typedOutputStream[O]{endpoint: ep, scope: t.scope}
+	}
+	return &typedOutputStream[O]{inner: t.inner.Outputs(), scope: t.scope}
 }
 
 var _ Invocation[any, any] = (*TypedInvocation[any, any])(nil)
 
 type typedOutputStream[O any] struct {
-	inner OutputStream[any]
+	streamReadGuard
+	inner    OutputStream[any]
+	endpoint *valueio.Endpoint
+	scope    *valueio.Scope
 }
 
-func (s *typedOutputStream[O]) Stop() { s.inner.Stop() }
-
+func (s *typedOutputStream[O]) Stop() {
+	if s.endpoint != nil {
+		s.endpoint.Stop()
+	} else {
+		s.inner.Stop()
+	}
+}
 func (s *typedOutputStream[O]) Read(ctx context.Context) (O, error) {
 	var zero O
-	raw, err := s.inner.Read(ctx)
+	s.begin()
+	defer s.end()
+	var p *valueio.Packet
+	var err error
+	if s.endpoint != nil {
+		p, err = s.endpoint.ReadOutput(ctx)
+	} else {
+		var raw any
+		raw, err = s.inner.Read(ctx)
+		if err == nil {
+			p, err = valueio.Capture(ctx, nil, s.scope, raw)
+			if err != nil {
+				return zero, &ValueConversionError{Stage: "foreign delivery", Cause: valueError(err, "foreign delivery")}
+			}
+		}
+	}
 	if err != nil {
 		return zero, err
 	}
-	if typed, ok := raw.(O); ok {
-		return typed, nil
+	defer p.Release()
+	out, err := valueio.Construct[O](ctx, p, false)
+	if err != nil {
+		return zero, &ValueConversionError{Stage: "typed delivery", Cause: valueError(err, "typed delivery")}
 	}
-	// Decode at the typed boundary: the operation layer emits generic JSON
-	// values (maps/slices); round-trip them into the concrete O.
-	b, merr := jsonvalue.Marshal(raw)
-	if merr == nil {
-		var typed O
-		if uerr := jsonvalue.Unmarshal(b, &typed); uerr == nil {
-			return typed, nil
-		}
-	}
-	return zero, classifiedError(ErrCodeTypeMismatch)
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

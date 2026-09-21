@@ -24,6 +24,7 @@ type BindingProvider interface {
 // RuntimeOptions configures an instance-scoped SDK runtime. No binding package
 // or global default registry is installed implicitly.
 type RuntimeOptions struct {
+	ValueLimits          invoke.ValueLimits
 	Providers            []BindingProvider
 	HTTPClient           *http.Client
 	BindingSelector      invoke.BindingSelector
@@ -49,6 +50,9 @@ type Runtime struct {
 // listed by its providers. CheckBindingSpecs remains authoritative for dynamic
 // support that a provider does not advertise.
 func New(options RuntimeOptions) (*Runtime, error) {
+	if err := options.ValueLimits.Validate(); err != nil {
+		return nil, err
+	}
 	if err := rejectDuplicateRegistrations(options.Providers); err != nil {
 		return nil, err
 	}
@@ -60,6 +64,7 @@ func New(options RuntimeOptions) (*Runtime, error) {
 	}
 	op := invoke.NewOperationInvoker(invokers...)
 	op.BindingSelector = options.BindingSelector
+	op.ValueLimits = options.ValueLimits
 	op.TransformEvaluator = options.TransformEvaluator
 	op.ContextResolver = options.ContextResolver
 	op.OutputDecoder = options.OutputDecoder

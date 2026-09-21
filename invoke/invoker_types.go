@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/internal/value"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
@@ -106,7 +107,8 @@ type InvocationSource struct {
 // terminates with CONTEXT_REQUIRED before any side effect, and resolution
 // happens above the binding (see OperationInvoker.ContextResolver).
 type BindingInvocationArgs struct {
-	Source InvocationSource `json:"source"`
+	ValueLimits ValueLimits      `json:"-"`
+	Source      InvocationSource `json:"source"`
 	// Selector is the format-specific pointer into the source artifact.
 	// Empty when the format doesn't use selectors.
 	Selector string `json:"selector"`
@@ -173,6 +175,7 @@ type InvocationError struct {
 	Data any    `json:"-"`
 
 	dataPresent bool
+	cause       error
 }
 
 // NewInvocationError constructs a code-only unsuccessful completion.
@@ -210,18 +213,13 @@ func ValidInvocationData(data any) bool {
 }
 
 func normalizeInvocationData(data any) (any, bool) {
-	if !validInvocationValue(reflect.ValueOf(data), map[visit]bool{}) {
+	// Admission bounds recursive work before the portable error-domain check.
+	snap, err := value.Capture(context.Background(), data, value.Options{})
+	if err != nil || !validInvocationValue(reflect.ValueOf(data), map[visit]bool{}) {
 		return nil, false
 	}
-	raw, err := jsonvalue.Marshal(data)
-	if err != nil || !json.Valid(raw) {
-		return nil, false
-	}
-	var normalized any
-	if err := jsonvalue.Unmarshal(raw, &normalized); err != nil {
-		return nil, false
-	}
-	return normalized, true
+	normalized, err := value.Construct[any](context.Background(), snap, value.Options{})
+	return normalized, err == nil
 }
 
 type visit struct {
@@ -780,3 +778,6 @@ func elideDefaultPort(scheme, host string) string {
 		return host
 	}
 }
+
+// Unwrap exposes local resource evidence without changing the portable envelope.
+func (e *InvocationError) Unwrap() error { return e.cause }

@@ -433,8 +433,8 @@ func TestWriteAfterTerminalReturnsTerminal(t *testing.T) {
 	inv.FireError(term)
 	err := inv.Write(bg(), "x")
 	var ie *InvocationError
-	if !errors.As(err, &ie) || ie != term {
-		t.Fatalf("expected the terminal error itself, got %v", err)
+	if !errors.As(err, &ie) || ie.Code != term.Code || ie == term {
+		t.Fatalf("expected a detached terminal error, got %v", err)
 	}
 }
 

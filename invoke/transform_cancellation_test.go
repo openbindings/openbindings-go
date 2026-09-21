@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/openbindings/openbindings-go/internal/valueio"
 	"sync"
 	"testing"
 	"time"
@@ -195,7 +196,13 @@ func TestCancellationRetiredTransformPreservesRawInput(t *testing.T) {
 	binding := iface.Bindings["echo.transformed"]
 	pending := &pendingTransformInput{}
 	var recorded []any
-	record := func(v any) { recorded = append(recorded, v) }
+	record := func(p *valueio.Packet) error {
+		v, err := valueio.Construct[any](ctx, p, false)
+		if err == nil {
+			recorded = append(recorded, v)
+		}
+		return err
+	}
 	go func() {
 		defer close(stopped)
 		op.pumpInputs(attempt, ctx, caller, first, &binding, "echo.transformed", iface, nil, record, pending)
