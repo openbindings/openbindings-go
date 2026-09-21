@@ -1,6 +1,6 @@
 # Value architecture: destination and qualification plan
 
-Status: three comparative review rounds complete, 20 September 2026.
+Status: ownership refined and cold review complete, 20 September 2026.
 **Projected containers with retained native leaves (P) are the leading
 destination to qualify.** No runtime migration is selected for activation.
 This is a design judgment, not measured proof of performance superiority.
@@ -46,21 +46,22 @@ the choice is an operational decision, not a verdict that A is ideal.
 
 1. An application supplies ordinary Go input or a binding produces a value in
    its governing correspondence. Protocol decoding remains with that protocol.
-2. Admission establishes one logical meaning. Reuse compatible generic
-   containers where safe; project eligible typed objects/arrays into generic
-   shells without producing JSON text. Recognize codec-defined types before
-   ordinary reflection and produce one stable codec-defined snapshot instead.
+2. Admission establishes one logical meaning in SDK-owned storage. Snapshot
+   caller-owned mutable containers and leaves; reuse already admitted SDK-owned
+   data internally. Project eligible typed objects/arrays into generic shells
+   without JSON text. Recognize codec-defined types before ordinary reflection
+   and produce one stable codec-defined snapshot instead.
 3. Validation, transforms and other consumers observe those containers and one
    finite scalar contract. Eligible bytes can remain bytes with canonical Base64
    string meaning. Consumer-specific guesses about the carrier are forbidden.
-4. Construct ordinary typed outputs directly with checked assignments. Honor
-   custom output decoders through faithful fallback. An existing generic caller's
-   promised string representation may require compatibility materialization;
-   count that work explicitly rather than silently returning a wrapper.
+4. Construct detached ordinary typed outputs directly with checked assignments.
+   Honor custom output decoders through faithful fallback. An existing generic
+   caller's promised string representation may require compatibility
+   materialization; count that work rather than silently returning a wrapper.
 5. Encode JSON for explicit export or a real protocol/storage need. Returned
    values remain usable for the promised lifetime after invocation termination.
 
-Projection allocates shells and can visit branches later discarded. Complete
+Snapshots and projection allocate storage and can visit branches later discarded. Complete
 admission may require B to visit those branches too, but without shell allocation.
 Compare that difference with repeated field access, reflection plans, caches,
 typed construction and retained storage. Neither fewer codec calls nor a
@@ -106,14 +107,122 @@ modules. A transform-free invocation requires no evaluator.
 - Preserve input validation before input transforms and output validation after
   output transforms. Preserve outcome classification, replay of accepted
   post-transform inputs, retry eligibility, backpressure and accepted delivery.
-- Copied shells do not detach leaves. Define borrowing or ownership transfer,
-  required copies, producer-buffer reuse, post-completion access and release.
-  Measure small slices retaining large backing arrays and selected children
-  retaining whole parents. Do not claim heap bounds from logical size alone.
+- Apply the ownership policy below to mutable containers and leaves together.
+  Measure its necessary copies and retained backing, including selected children
+  and small slices. Logical size alone is not a heap bound.
 
 The [codec maintenance record](internal/thirdparty/jsoncodec/MAINTENANCE.md)
 governs the adopted codec. Preserve its semantics; do not replace it with
 `encoding/json` based on stale experimental wording in a helper README.
+
+## Ownership and mutation policy
+
+Ordinary operation values cross public handoffs as stable snapshots. Inside
+an invocation, admitted values are read-only and may share storage. This single
+default applies to typed and generic operation values, local calls and protocol
+calls, including published error-data snapshots under their existing admission
+rules. It does not clone contexts, transports, configuration handles or unrelated
+application resources. No public borrowing mode, lease, reference counter or
+ownership-selection flag is added.
+
+| Handoff | Contract | Responsible layer |
+| --- | --- | --- |
+| Caller `Write` | Capture the complete logical value into owned storage before enqueue acceptance. The caller keeps it stable while `Write` runs and may reuse or mutate it after the method returns, on success or failure. No snapshot reader continues accessing caller storage afterward. Success still means acceptance, not delivery or operation success. | `invoke`, using value-support snapshot/projection helpers. |
+| Internal validation, transforms, Graph and replay | Read admitted values without mutation. Construct new containers for changed structure; share immutable admitted leaves where their logical interpretation agrees. Replay retains the accepted post-transform snapshot, without re-running its transform or custom input encoder. | Invocation/Graph lifecycle and common value helpers. |
+| Binding `EmitOutput` | Secure stable data before queue acceptance. The producer keeps its value stable during the call and may reuse its buffers after it returns, including on failure. An admitted internal snapshot can be forwarded without another copy. | Binding-facing invocation handoff; adapters detach protocol-owned storage when necessary. |
+| Evaluator or native-client integration | Borrow admitted input read-only for the documented call or attempt lifetime. If the library mutates or retains input beyond that interval, its adapter supplies a detached copy. Before returning a result, the adapter detaches reusable/expiring storage or hands over independently valid owned data. References to existing immutable SDK leaves may survive in results. | The integration adapter, preserving its library's independent API. |
+| Ordinary local application handler | Give the handler its own mutable input value. A unary return supplies independently valid result storage without producer-retained writable aliases; a handler keeping reusable source storage returns a detached copy. Stream emission follows `EmitOutput` capture-before-return. Mutating handler arguments cannot alter a retry log or another Graph branch. | The local-provider adapter and the handler's return contract, using ordinary construction and snapshot helpers. |
+| Public output `Read` | Deliver an independently usable mutable result, detached from invocation state, producer storage and other delivered results. It remains valid after completion, cancellation and later outputs. Ordinary callers require no release call. | Public/typed delivery, using checked construction and detachment. |
+
+These are operation-data guarantees, not a new synchronous validation API.
+Keep schema checks, transforms and their failure ordering at their existing
+stages. Capture or construction failures use the owning handoff's failure
+channel and never publish a partial value. Cancellation does not permit a
+background copier or callback to keep reading a caller buffer after the handoff
+returns. It also does not imply hard preemption of arbitrary codec or engine
+callbacks; the adapter must quiesce access before completing the handoff.
+
+### Aliasing and custom codecs
+
+For ordinary Go construction, public results are logical value trees: mutable
+maps, slices, pointers and byte leaves are independent between delivered values
+and between repeated field occurrences within one result. If a transform puts
+one image into two fields, mutating either returned byte slice does not alter
+the other. Internal immutable storage can remain shared until delivery. Immutable
+strings and scalar values can be shared freely. Exact buffer identity is not
+promised at public handoffs.
+
+Custom input codecs determine one logical snapshot; their original host object
+need not be cloned. A custom output decoder receives a fresh destination and
+private encoded input under the maintained codec's rules. Its chosen host
+representation and any deliberate private sharing remain that codec's contract.
+The SDK does not reflectively clone the resulting private object or promise to
+isolate arbitrary global state managed by user callbacks. It never supplies
+those callbacks with writable internal snapshot storage. Callback implementations
+remain responsible for their own concurrent activity and retained references.
+
+SDK read-only sharing is an implementation contract, not a claim that Go maps
+and slices are immutable types. Only already admitted SDK-owned values qualify
+for internal reuse. A raw Go type assertion or an unknown buffer's apparent
+uniqueness is insufficient. Adapters must isolate mutating libraries. Internal
+exclusive ownership may avoid a copy at a handoff only when the same mutation,
+lifetime, compactness and no-alias guarantees remain true; otherwise copy.
+
+### Retention and release
+
+At public capture and delivery, copy only visible slice elements and byte ranges
+into fresh storage; do not retain a caller's oversized capacity or an integration
+arena through a tiny result. Unknown backing ownership or extent requires
+detachment. Before a derived subrange enters a replay log, Graph buffer or output
+queue, compact it if it would otherwise retain an oversized backing allocation
+for unrelated content. Whole, compact SDK-owned leaves can be shared internally.
+Necessary copies establish ownership directly; they require neither JSON text
+nor Base64 materialization.
+
+Each queue, replay log and Graph state releases its references when its logical
+retention ends. Retirement waits for readers that still use a snapshot; closing
+the retry window releases its log, while accepted queued outputs stay valid
+until drained or explicitly abandoned. Invocation shutdown drops only internal
+references, never caller-owned outputs. Go-owned results follow ordinary garbage
+collection. Adapters release native handles/leases after detachment or the last
+permitted internal use; no integration-owned lease escapes in an ordinary result.
+This is a storage-lifetime policy, not a numerical heap guarantee. Existing flow
+limits still apply; comparisons charge copies, temporary peaks and retained heap.
+
+### Compatibility decision
+
+The destination applies the snapshot default to generic maps/slices as well as
+typed values. It intentionally replaces current end-to-end mutable reference
+identity, including the documented generic `LocalUnary` fast path. Input mutation
+after `Write`, and handler/result mutation, no longer communicate through shared
+caller storage. Logical values, custom codec meanings, invocation signatures and
+outcome ordering remain the compatibility targets; shared mutable identity does
+not. Document this in Changed/Removed entries and the migration matrix and
+activate it only in a permitted breaking version, never as a silent patch or
+provider upgrade. No parallel public legacy-ownership mode is introduced.
+
+Already owned internal generic values still use direct container access and can
+be forwarded read-only. The removal of public aliasing has real copy costs,
+including small generic calls; report those against the current baseline rather
+than claiming the old zero-copy behavior survives unchanged.
+
+## Ownership review and remaining decision
+
+Six fresh readers assessed this ownership revision using the same grade anchors
+as the preceding assessment, without prior grades or feedback between panels.
+All regard the ownership and mutation contract as resolved. Overall grades were
+one A, two A- and three B+. Original reports and frozen inputs are recorded in
+the coordination workspace at `design/sdk-value-grading/candidate-2/RESULT.md`.
+
+The remaining material concern is resource containment: existing queue and
+protocol-delivery limits do not bound accumulated replay history, simultaneous
+snapshot captures, or expansion when shared internal leaves become independent
+mutable output occurrences. Resolve invocation-owned accounting and exhaustion
+behavior before broad implementation. This policy remains an explicit open
+decision; neither the lifetime rules nor the favorable ownership review resolves
+it. Numerical limits require qualification. Smaller deductions concern eager
+container allocation, codec-parity maintenance and reusable unary-handler results.
+No comparative performance or production-readiness claim follows from the grades.
 
 ## Evidence already collected
 
@@ -150,8 +259,8 @@ not a project-wide cohort or declared-toolchain release qualification.
 
 ## Next: one bounded comparison before migration
 
-Freeze exact revisions, payloads, ownership policy and measurement procedure
-before implementing or comparing candidates. Include a corrected A control
+Freeze exact revisions, payloads and measurement procedure using the ownership
+policy above before implementing or comparing candidates. Include a corrected A control
 with its actual proposed improvements, not a deliberately weak baseline.
 
 First qualify the finite byte/scalar contract with one real application-selected
@@ -170,13 +279,21 @@ domain and stable codec fallback the same. Exercise:
    typed byte recovery, explicit export and reverse raw request.
 3. A business codec whose meaning differs from its fields, exact numbers,
    nil/empty/missing controls, and hidden invalid descendants without a schema.
-4. One retained Graph/producer-reuse case and release after invocation ends,
-   including a small leaf backed by a much larger allocation.
+4. Input mutation after submission, producer reuse after emission, duplicate
+   output-field mutation, local handler mutation, retained Graph output and
+   release after invocation ends, including a small leaf backed by a much larger
+   allocation. Include failed/cancelled capture and custom-decoder controls.
 
 The native client must expose a useful native response/request path in its own
 vocabulary. An SDK adapter cannot restore backing discarded below it. All
 governing schema keywords in the fixture must really run; stubs cannot qualify
 an architecture. Preserve ordinary caller code and record any recovery burden.
+
+Compare P and B under the same snapshot/aliasing promises. Keep today's A as a
+compatibility/performance baseline and distinguish its generic reference behavior;
+also charge any snapshots needed for an A variant offering the new guarantees.
+Do not infer representation superiority by giving candidates different ownership
+obligations or by treating a necessary ownership copy as serialization waste.
 
 Measure total latency/CPU, allocations, peak/retained memory, traversals,
 materializations, codec fallback and necessary copies. Enumerate lasting consumer
