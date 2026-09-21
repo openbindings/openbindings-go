@@ -2,6 +2,7 @@ package operationgraph
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -72,9 +73,8 @@ func TestNewInvokerWithClient(t *testing.T) {
 	if requestCount != 1 {
 		t.Errorf("expected custom transport to be called exactly once, got %d", requestCount)
 	}
-	// The engine passes the written value through as-is (no JSON round-trip),
-	// so the int survives.
-	if m, ok := out.(map[string]any); !ok || m["n"] != 1 {
+	// The admitted logical tree preserves the exact numeric value.
+	if m, ok := out.(map[string]any); !ok || m["n"] != json.Number("1") {
 		t.Errorf("unexpected pass-through output: %#v", out)
 	}
 }

@@ -2,12 +2,15 @@ package operationgraph
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
-	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/openbindings/openbindings-go/internal/schemacompiler"
+	"github.com/openbindings/openbindings-go/internal/thirdparty/jsonschema"
+	"github.com/openbindings/openbindings-go/internal/valueio"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // msToDuration converts milliseconds to time.Duration.
@@ -59,14 +62,19 @@ func mergeMaxInto(dst map[string]int, src map[string]int) {
 // batch is one merge-node emission (a buffer flush's array or a combine
 // snapshot's object) plus the merged lineage and root of its contributors.
 type batch struct {
-	data    any
-	lineage map[string]int
-	root    int
+	owners   []*event
+	assembly *valueio.Reservation
+	data     any
+	lineage  map[string]int
+	root     int
 }
 
 // bufferState tracks accumulated events for a buffer node: one accumulator
 // instance per graph invocation, accumulating across lineages.
 type bufferState struct {
+	engine  *engine
+	owners  []*event
+	failure error
 	mu      sync.Mutex
 	node    *Node
 	schemas *schemaCache
@@ -91,17 +99,26 @@ func (bs *bufferState) add(ev *event) *batch {
 	limitHit := bs.node.Limit != nil && len(bs.acc)+1 >= *bs.node.Limit
 	switch {
 	case limitHit:
-		bs.retain(ev)
+		if !bs.retain(ev) {
+			return nil
+		}
 		return bs.takeBatch()
 	case bs.node.Until != nil && bs.matches(bs.node.Until, ev.data):
 		if len(bs.acc) == 0 {
 			return nil
 		}
 		return bs.takeBatch()
+	case bs.failure != nil:
+		return nil
 	case bs.node.Through != nil && bs.matches(bs.node.Through, ev.data):
-		bs.retain(ev)
+		if !bs.retain(ev) {
+			return nil
+		}
 		return bs.takeBatch()
 	default:
+		if bs.failure != nil {
+			return nil
+		}
 		bs.retain(ev)
 		return nil
 	}
@@ -118,14 +135,24 @@ func (bs *bufferState) flush() *batch {
 	return bs.takeBatch()
 }
 
-func (bs *bufferState) retain(ev *event) {
+func (bs *bufferState) retain(ev *event) bool {
+	if bs.engine != nil {
+		owned := bs.engine.retainEvent(ev)
+		if owned == nil {
+			return false
+		}
+		ev = owned
+		bs.owners = append(bs.owners, owned)
+	}
 	bs.acc = append(bs.acc, ev.data)
 	mergeMaxInto(bs.lineage, ev.lineage)
 	bs.roots.add(ev.root)
+	return true
 }
 
 func (bs *bufferState) takeBatch() *batch {
-	b := &batch{data: bs.acc, lineage: bs.lineage, root: bs.roots.merged()}
+	b := &batch{data: bs.acc, lineage: bs.lineage, root: bs.roots.merged(), owners: bs.owners}
+	bs.owners = nil
 	bs.acc = nil
 	bs.lineage = map[string]int{}
 	bs.roots = rootTracker{}
@@ -133,7 +160,13 @@ func (bs *bufferState) takeBatch() *batch {
 }
 
 func (bs *bufferState) matches(schema *json.RawMessage, data any) bool {
-	ok, _ := bs.schemas.match(schema, data)
+	ok, err := bs.schemas.match(schema, data)
+	if err != nil {
+		bs.failure = err
+		if bs.engine != nil {
+			bs.engine.failValue(err)
+		}
+	}
 	return ok
 }
 
@@ -143,6 +176,8 @@ func (bs *bufferState) matches(schema *json.RawMessage, data any) bool {
 // event from a still-active source. A source that completed without
 // producing contributes null. One instance per graph invocation.
 type combineState struct {
+	engine    *engine
+	owners    map[string]*event
 	mu        sync.Mutex
 	sources   []string
 	latest    map[string]any
@@ -156,6 +191,7 @@ type combineState struct {
 func newCombineState(sources []string) *combineState {
 	return &combineState{
 		sources:   sources,
+		owners:    make(map[string]*event),
 		latest:    make(map[string]any),
 		lineages:  make(map[string]map[string]int),
 		roots:     make(map[string]int),
@@ -169,6 +205,15 @@ func newCombineState(sources []string) *combineState {
 func (cs *combineState) add(ev *event) *batch {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+	if cs.engine != nil {
+		owned := cs.engine.retainEvent(ev)
+		if owned == nil {
+			return nil
+		}
+		cs.owners[ev.source].release()
+		cs.owners[ev.source] = owned
+		ev = owned
+	}
 	cs.latest[ev.source] = ev.data
 	cs.lineages[ev.source] = ev.lineage
 	cs.roots[ev.source] = ev.root
@@ -207,6 +252,21 @@ func (cs *combineState) refreshReady() {
 }
 
 func (cs *combineState) snapshot() *batch {
+	var assembly *valueio.Reservation
+	if cs.engine != nil {
+		units := int64(128)
+		for _, source := range cs.sources {
+			units += int64(128 + len(source))
+			for key := range cs.lineages[source] {
+				units += int64(64 + len(key))
+			}
+		}
+		assembly = cs.engine.scope.NewReservation()
+		if err := assembly.Adjust(cs.engine.ctx, nil, units); err != nil {
+			cs.engine.failValue(err)
+			return nil
+		}
+	}
 	obj := make(map[string]any, len(cs.sources))
 	lineage := map[string]int{}
 	roots := rootTracker{}
@@ -219,7 +279,7 @@ func (cs *combineState) snapshot() *batch {
 			obj[s] = nil
 		}
 	}
-	return &batch{data: obj, lineage: lineage, root: roots.merged()}
+	return &batch{data: obj, lineage: lineage, root: roots.merged(), assembly: assembly}
 }
 
 // schemaCache is a per-Invoker cache of compiled JSON schemas shared by
@@ -244,11 +304,10 @@ func (sc *schemaCache) match(schema *json.RawMessage, data any) (bool, error) {
 
 	if !ok {
 		var schemaDoc any
-		if err := json.Unmarshal(*schema, &schemaDoc); err != nil {
+		if err := jsonvalue.Unmarshal(*schema, &schemaDoc); err != nil {
 			return false, fmt.Errorf("compile embedded schema: %w", err)
 		}
-		compiler := jsonschema.NewCompiler()
-		compiler.UseRegexpEngine(openbindings.ECMARegexpEngine)
+		compiler := schemacompiler.New()
 		if err := compiler.AddResource("embedded.json", schemaDoc); err != nil {
 			return false, fmt.Errorf("compile embedded schema: %w", err)
 		}
@@ -263,7 +322,35 @@ func (sc *schemaCache) match(schema *json.RawMessage, data any) (bool, error) {
 	}
 
 	if err := compiled.Validate(data); err != nil {
-		return false, nil // validation failure = the event does not match
+		var mismatch *jsonschema.ValidationError
+		if errors.As(err, &mismatch) {
+			return false, nil
+		}
+		return false, err
 	}
 	return true, nil
+}
+
+func (b *batch) release() {
+	for _, owner := range b.owners {
+		owner.release()
+	}
+	if b.assembly != nil {
+		b.assembly.Release()
+	}
+}
+func (bs *bufferState) release() {
+	for _, owner := range bs.owners {
+		owner.release()
+	}
+	bs.owners = nil
+	bs.acc = nil
+}
+func (cs *combineState) release() {
+	for _, owner := range cs.owners {
+		owner.release()
+	}
+	cs.owners = nil
+	cs.latest = nil
+	cs.lineages = nil
 }

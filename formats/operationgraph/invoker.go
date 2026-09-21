@@ -102,7 +102,12 @@ func operationGraphBindingSpecInfos() []openbindings.BindingSpecInfo {
 // returns synchronously and the document load (a potential network fetch)
 // happens on the driving goroutine, per the core invocation contract.
 func (e *Invoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
-	inv := invoke.NewInvocationImpl[any, any](ctx)
+	inv := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+	select {
+	case <-inv.Done():
+		return inv
+	default:
+	}
 	// Cross-graph nesting bound (spec: Security considerations). A
 	// graph-bound operation can invoke operations bound to further graphs,
 	// including mutually recursive ones; per-graph budgets reset at each
