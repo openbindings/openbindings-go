@@ -1,4 +1,4 @@
-package openbindings
+package location
 
 import "testing"
 

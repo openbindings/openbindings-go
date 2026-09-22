@@ -12,7 +12,7 @@ import (
 	"time"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	openbindings "github.com/openbindings/openbindings-go"
+	locationutil "github.com/openbindings/openbindings-go/internal/location"
 )
 
 // defaultIdleTimeout is how long a session stays alive after its last active
@@ -176,7 +176,7 @@ func (p *sessionPool) acquire(ctx context.Context, clientVersion string, url str
 
 // createSession establishes a new MCP session with a demuxing progress handler.
 func (p *sessionPool) createSession(ctx context.Context, clientVersion string, url string, headers map[string]string, key string) (*mcpSession, error) {
-	if !openbindings.IsHTTPURL(url) {
+	if !locationutil.IsHTTPURL(url) {
 		return nil, fmt.Errorf("MCP source location must be an HTTP or HTTPS URL, got %q", url)
 	}
 

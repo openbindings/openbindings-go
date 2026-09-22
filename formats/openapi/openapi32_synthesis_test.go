@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -13,7 +13,7 @@ func TestOpenAPI32RequestSurfaceSynthesisEmitsContractsAndEditionSelectors(t *te
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpecOpenAPI32,
-			Content: openbindings.TextContent(`{
+			Content: jsonvalue.TextContent(`{
   "openapi":"3.2.0",
   "info":{"title":"request synthesis","version":"1"},
   "servers":[{"url":"https://api.example"}],
@@ -61,7 +61,7 @@ func TestOpenAPI32SynthesisEmitsTargetlessInboundDependencies(t *testing.T) {
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpecOpenAPI32,
-			Content: openbindings.TextContent(`{
+			Content: jsonvalue.TextContent(`{
   "openapi":"3.2.0",
   "info":{"title":"dependencies","version":"1"},
   "servers":[{"url":"https://api.example"}],
@@ -136,7 +136,7 @@ func TestOpenAPI32SequentialResponseSynthesisPublishesPerItemContract(t *testing
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpecOpenAPI32,
-			Content: openbindings.TextContent(`{
+			Content: jsonvalue.TextContent(`{
   "openapi":"3.2.0",
   "info":{"title":"sequential response synthesis","version":"1"},
   "servers":[{"url":"https://api.example"}],
@@ -165,7 +165,7 @@ func TestOpenAPI32ResponseIdentityConfinementReportsAlternativeCoverage(t *testi
 	result, err := NewSynthesizer().SynthesizeInterfaceWithCoverage(context.Background(), &synthesize.SynthesizeInput{
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpecOpenAPI32,
-			Content: openbindings.TextContent(`
+			Content: jsonvalue.TextContent(`
 openapi: 3.2.0
 info: {title: response identity coverage, version: "1"}
 servers: [{url: https://api.example}]

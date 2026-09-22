@@ -16,7 +16,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	locationutil "github.com/openbindings/openbindings-go/internal/location"
 	"github.com/openbindings/openbindings-go/invoke"
 )
 
@@ -45,7 +45,7 @@ func configOrSourceError(err error, serverURL, sourceLocation string) *invoke.In
 			target = cr.hostHint
 		}
 		if target == "" && sourceLocation != "" {
-			if canonical, canonErr := openbindings.CanonicalizeLocation(sourceLocation); canonErr == nil {
+			if canonical, canonErr := locationutil.CanonicalizeLocation(sourceLocation); canonErr == nil {
 				target = canonical
 			} else {
 				target = sourceLocation

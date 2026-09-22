@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 // RealizationSelector elects one binding key from an already ordered set of
@@ -98,7 +99,7 @@ type PreparedProvider struct {
 	mu          sync.RWMutex
 	runtime     ProviderRuntime
 	snapshot    *openbindings.Interface
-	specs       []openbindings.BindingSpecInfo
+	specs       []bindingsupport.BindingSpecInfo
 	descriptors map[string]ProviderRealizationDescriptor
 	byOperation map[string][]ProviderRealizationDescriptor
 	closures    map[string]*realizationClosure
@@ -134,7 +135,7 @@ func PrepareProvider(options PreparedProviderOptions) (*PreparedProvider, error)
 	if snapshot == nil {
 		return nil, fmt.Errorf("openbindings: prepared provider snapshot is unavailable")
 	}
-	specs := append([]openbindings.BindingSpecInfo(nil), options.Runtime.BindingSpecs()...)
+	specs := append([]bindingsupport.BindingSpecInfo(nil), options.Runtime.BindingSpecs()...)
 	supportedSpecs := make(map[string]bool, len(specs))
 	for _, info := range specs {
 		supportedSpecs[info.BindingSpec] = true
@@ -197,10 +198,10 @@ func (p *PreparedProvider) RealizationSelector() RealizationSelector {
 }
 
 // BindingSpecs returns a private copy of installed capability metadata.
-func (p *PreparedProvider) BindingSpecs() []openbindings.BindingSpecInfo {
+func (p *PreparedProvider) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return append([]openbindings.BindingSpecInfo(nil), p.specs...)
+	return append([]bindingsupport.BindingSpecInfo(nil), p.specs...)
 }
 
 // Disposed reports whether Close ended the provider lifetime.

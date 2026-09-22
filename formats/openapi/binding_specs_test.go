@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -76,7 +76,7 @@ func TestBindingInvokerRequiresAnExactFamilyToken(t *testing.T) {
 	}
 
 	args := &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{Content: openbindings.TextContent("not an OpenAPI artifact")},
+		Source:   invoke.InvocationSource{Content: jsonvalue.TextContent("not an OpenAPI artifact")},
 		Selector: "#/paths/~1x/get",
 	}
 	_, invocationErr := driveSingle(t, NewInvoker().InvokeBinding(context.Background(), args), nil)
@@ -105,7 +105,7 @@ func TestOpenAPIFamilyTokenMustMatchArtifactEdition(t *testing.T) {
 				testCase.edition,
 			)
 			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: openbindings.TextContent(artifact)},
+				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: jsonvalue.TextContent(artifact)},
 				Selector: "#/paths/~1x/get",
 			})
 			_, invocationErr := driveSingle(t, call, nil)
@@ -114,14 +114,14 @@ func TestOpenAPIFamilyTokenMustMatchArtifactEdition(t *testing.T) {
 			}
 
 			_, synthesisErr := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-				Sources: []synthesize.SynthesizeSource{{BindingSpec: testCase.token, Content: openbindings.TextContent(artifact)}},
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: testCase.token, Content: jsonvalue.TextContent(artifact)}},
 			})
 			if synthesisErr == nil || !strings.Contains(synthesisErr.Error(), "not admitted") {
 				t.Fatalf("synthesis error = %v, want token/edition refusal", synthesisErr)
 			}
 
 			preflightDetails, preflightErr := NewInvoker().PreflightBinding(context.Background(), &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: openbindings.TextContent(artifact)},
+				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: jsonvalue.TextContent(artifact)},
 				Selector: "#/paths/~1x/get",
 			})
 			var preflightInvocationErr *invoke.InvocationError
@@ -142,7 +142,7 @@ func TestRequestBodyMethodDispositionIsFamilySpecific(t *testing.T) {
 			testCase.edition,
 		)
 		iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-			Sources: []synthesize.SynthesizeSource{{BindingSpec: testCase.token, Content: openbindings.TextContent(artifact)}},
+			Sources: []synthesize.SynthesizeSource{{BindingSpec: testCase.token, Content: jsonvalue.TextContent(artifact)}},
 		})
 		if err != nil {
 			t.Fatalf("synthesize %s: %v", testCase.token, err)
@@ -169,7 +169,7 @@ func TestDuplicateEffectiveParameterIdentityRefusesTheOperation(t *testing.T) {
 				testCase.edition,
 			)
 			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: openbindings.TextContent(artifact)},
+				Source:   invoke.InvocationSource{BindingSpec: testCase.token, Content: jsonvalue.TextContent(artifact)},
 				Selector: "#/paths/~1x/get",
 			})
 			_, invocationErr := driveSingle(t, call, nil)
@@ -178,7 +178,7 @@ func TestDuplicateEffectiveParameterIdentityRefusesTheOperation(t *testing.T) {
 			}
 
 			_, synthesisErr := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-				Sources: []synthesize.SynthesizeSource{{BindingSpec: testCase.token, Content: openbindings.TextContent(artifact)}},
+				Sources: []synthesize.SynthesizeSource{{BindingSpec: testCase.token, Content: jsonvalue.TextContent(artifact)}},
 			})
 			if synthesisErr == nil || !strings.Contains(synthesisErr.Error(), "declared more than once") {
 				t.Fatalf("synthesis error = %v, want duplicate-identity exclusion", synthesisErr)

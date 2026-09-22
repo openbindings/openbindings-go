@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 func benchmarkInterface(operationCount int, dependency bool) *openbindings.Interface {
@@ -139,14 +140,14 @@ func BenchmarkWarmDependencyResolution(b *testing.B) {
 // writes the same thing for its own specification identifier.
 func benchmarkEchoRuntime(document *openbindings.PreparedInterface) *compositionTestRuntime {
 	seen := map[string]struct{}{}
-	var specs []openbindings.BindingSpecInfo
+	var specs []bindingsupport.BindingSpecInfo
 	for _, key := range document.BindingKeys() {
 		descriptor, _ := document.Binding(key)
 		if _, ok := seen[descriptor.BindingSpec]; ok {
 			continue
 		}
 		seen[descriptor.BindingSpec] = struct{}{}
-		specs = append(specs, openbindings.BindingSpecInfo{BindingSpec: descriptor.BindingSpec})
+		specs = append(specs, bindingsupport.BindingSpecInfo{BindingSpec: descriptor.BindingSpec})
 	}
 	return &compositionTestRuntime{specs: specs}
 }

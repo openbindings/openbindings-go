@@ -24,11 +24,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openbindings/openbindings-go/invoke"
-
-	"github.com/recolabs/gnata"
-
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
+	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/recolabs/gnata"
 )
 
 // ---------------------------------------------------------------------------
@@ -127,12 +126,12 @@ type mockBindingInvoker struct {
 	ops map[string]*mockOp
 }
 
-func (m *mockBindingInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: mockFormat}}
+func (m *mockBindingInvoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: mockFormat}}
 }
 
-func (m *mockBindingInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, m.BindingSpecs())
+func (m *mockBindingInvoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, m.BindingSpecs())
 }
 
 func (m *mockBindingInvoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {

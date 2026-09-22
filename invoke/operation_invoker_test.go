@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 // ---------------------------------------------------------------------------
@@ -61,16 +62,16 @@ func (m *mockBindingInvoker) lastBindingKey() string {
 	return m.lastSite.BindingKey
 }
 
-func (m *mockBindingInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
+func (m *mockBindingInvoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	tok := m.opts.token
 	if tok == "" {
 		tok = "mock@1.0"
 	}
-	return []openbindings.BindingSpecInfo{{BindingSpec: tok}}
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: tok}}
 }
 
-func (m *mockBindingInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, m.BindingSpecs())
+func (m *mockBindingInvoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, m.BindingSpecs())
 }
 
 func (m *mockBindingInvoker) snapshot() (attempts, prepares int, reads [][]any, contexts []map[string]any) {

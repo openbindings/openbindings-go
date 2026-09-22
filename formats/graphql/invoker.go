@@ -19,7 +19,9 @@ import (
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -79,16 +81,16 @@ func NewInvokerWithClient(client *http.Client) *Invoker {
 }
 
 // Formats returns the source formats supported by the GraphQL invoker.
-func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+func (e *Invoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return graphQLBindingSpecInfos()
 }
 
-func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, graphQLBindingSpecInfos())
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, graphQLBindingSpecInfos())
 }
 
-func graphQLBindingSpecInfos() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "GraphQL query and mutation application values"}}
+func graphQLBindingSpecInfos() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "GraphQL query and mutation application values"}}
 }
 
 // cachedIntrospect returns a cached introspection result or performs a fresh
@@ -330,12 +332,12 @@ var (
 )
 
 // Formats returns the source formats supported by the GraphQL synthesizer.
-func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+func (c *Synthesizer) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return graphQLBindingSpecInfos()
 }
 
-func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, graphQLBindingSpecInfos())
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, graphQLBindingSpecInfos())
 }
 
 // SynthesizeInterface introspects a GraphQL endpoint and converts to an OpenBindings interface.
@@ -539,8 +541,8 @@ func introspectionCacheKey(endpoint string, headerSets ...map[string]string) str
 // introspection execution result. Revision 1 accepts only one successful
 // result object with no errors member and object data.__schema.
 func parseIntrospectionContent(content json.RawMessage) (*introspectionSchema, error) {
-	if openbindings.ContentKind(content) != "object" {
-		return nil, fmt.Errorf("content must be an introspection execution-result object, got %s", openbindings.ContentKind(content))
+	if jsonvalue.ContentKind(content) != "object" {
+		return nil, fmt.Errorf("content must be an introspection execution-result object, got %s", jsonvalue.ContentKind(content))
 	}
 	var value any
 	if err := json.Unmarshal(content, &value); err != nil {

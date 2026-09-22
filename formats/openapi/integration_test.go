@@ -17,6 +17,7 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -202,7 +203,7 @@ func TestIntegration_MultipartFormData(t *testing.T) {
 
 	call := binv.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Selector: "#/paths/~1upload/post",
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(specBytes))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(string(specBytes))},
 	})
 	// OAPI-P-04: a binary-signaled part's bytes come from the caller's
 	// STRING value, Base64-decoded (3.0.x signals binary via format: binary
@@ -555,7 +556,7 @@ func TestIntegration_MissingRequiredInput_NoDispatch(t *testing.T) {
 	srv, requests := countingServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 	})
-	source := invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv.URL))}
+	source := invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(widgetSpec(srv.URL))}
 	binv := NewInvoker()
 
 	cases := []struct {
@@ -602,7 +603,7 @@ func TestIntegration_BareCloseDispatchesWhenArtifactPermits(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	call := binv.InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv.URL))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(widgetSpec(srv.URL))},
 		Selector: "#/paths/~1session/get",
 		Binding:  &openbindings.BindingEntry{Operation: "getSession", Source: "api", Selector: "#/paths/~1session/get"},
 		// InputSchema nil — the document makes no claim at this boundary.
@@ -660,7 +661,7 @@ func TestIntegration_OAuth2CredentialsApplied(t *testing.T) {
 
 	binv := NewInvoker()
 	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(withDeclaredJSONResponses(t, string(specBytes)))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(withDeclaredJSONResponses(t, string(specBytes)))},
 		Selector: "#/paths/~1me/get",
 		Context:  map[string]any{"accessToken": "at-123"},
 	})
@@ -710,7 +711,7 @@ func TestIntegration_TwoANDedAPIKeysDistinguishedByName(t *testing.T) {
 	specBytes, _ := json.Marshal(spec)
 
 	binv := NewInvoker()
-	source := invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(withDeclaredJSONResponses(t, string(specBytes)))}
+	source := invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(withDeclaredJSONResponses(t, string(specBytes)))}
 
 	// Preflight: the AND'd alternative challenges, each requirement carrying
 	// its own securitySchemes key as Name (R2.a ruling).
@@ -765,7 +766,7 @@ func TestIntegration_ContextRequired_ZeroIO(t *testing.T) {
 
 	binv := NewInvoker()
 	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(spec))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(string(spec))},
 		Selector: "#/paths/~1items/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
@@ -822,7 +823,7 @@ func sseSpec(serverURL string) string {
 func sseCall(srv *httptest.Server) invoke.Invocation[any, any] {
 	return NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Selector: "#/paths/~1events/get",
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(sseSpec(srv.URL))},
 	})
 }
 
@@ -875,7 +876,7 @@ func TestIntegration_SSEResponse_MidStreamDeadlineIsCancelled(t *testing.T) {
 	defer cancelLife()
 	call := NewInvoker().InvokeBinding(lifeCtx, &invoke.BindingInvocationArgs{
 		Selector: "#/paths/~1events/get",
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(sseSpec(srv.URL))},
 	})
 	_ = call.Close()
 
@@ -1007,7 +1008,7 @@ func TestNewInvokerWithClient(t *testing.T) {
 
 	call := invoker.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
 		Selector: "#/paths/~1events/get",
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec("http://example.test"))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(sseSpec("http://example.test"))},
 	})
 	out, ierr := driveSingle(t, call, nil)
 	if ierr != nil {
@@ -1049,7 +1050,7 @@ func TestIntegration_SSEResponse_Cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	call := NewInvoker().InvokeBinding(ctx, &invoke.BindingInvocationArgs{
 		Selector: "#/paths/~1events/get",
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(sseSpec(srv.URL))},
 	})
 	_ = call.Close()
 
@@ -1106,7 +1107,7 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	iface, err := NewSynthesizer().SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: openbindings.TextContent(strings.ReplaceAll(spec, "PLACEHOLDER", srv.URL))}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(strings.ReplaceAll(spec, "PLACEHOLDER", srv.URL))}},
 	})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
@@ -1133,7 +1134,7 @@ func TestSynthesizeInterface_RefRequestBodyRoundTrip(t *testing.T) {
 
 	// The flat contract is carried in the public envelope's body member.
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(strings.ReplaceAll(spec, `"paths"`, `"servers": [{"url": "`+srv.URL+`"}], "paths"`))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(strings.ReplaceAll(spec, `"paths"`, `"servers": [{"url": "`+srv.URL+`"}], "paths"`))},
 		Selector: "#/paths/~1pets/post",
 		Context:  nil,
 	})
@@ -1195,7 +1196,7 @@ func TestIntegration_RefParametersRouteCorrectly(t *testing.T) {
 	call := NewInvokerWithOptions(InvokerOptions{ParameterConversion: func(value any) (string, error) {
 		return fmt.Sprint(value), nil
 	}}).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(spec)},
 		Selector: "#/paths/~1users~1{id}/get",
 	})
 	if _, ierr := driveSingle(t, call, map[string]any{"parameters": map[string]any{"id": "u1", "verbose": true}}); ierr != nil {
@@ -1226,7 +1227,7 @@ func TestPreflightBinding_LocationOnlyDoesNotReuseEmbeddedContent(t *testing.T) 
 	binv := NewInvoker()
 	// Content+location invocation uses the authoritative embedded content.
 	call := binv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: location, Content: openbindings.TextContent(string(spec))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Location: location, Content: jsonvalue.TextContent(string(spec))},
 		Selector: "#/paths/~1items/get",
 	})
 	_, ierr := driveOutputs(context.Background(), call, nil)
@@ -1375,7 +1376,7 @@ func TestIntegration_CollisionRefusesBeforeDispatch(t *testing.T) {
 
 	inv := NewInvoker()
 	call := inv.InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(spec)},
 		Selector: "#/paths/~1users~1{id}/put",
 	})
 	if err := call.Write(context.Background(), map[string]any{"id": "u1", "name": "Ada"}); err != nil {
@@ -1426,7 +1427,7 @@ func TestConformance_G1_AbsentInputIsNotNoInput(t *testing.T) {
 	// createWidget declares `requestBody: {required: true}`. The OBI omits
 	// `input`: no portable contract, no cardinality claim.
 	call := NewInvoker().InvokeBinding(ctx, &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(widgetSpec(srv.URL))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(widgetSpec(srv.URL))},
 		Selector: "#/paths/~1widgets/post",
 		Binding:  &openbindings.BindingEntry{Operation: "createWidget", Source: "api", Selector: "#/paths/~1widgets/post"},
 		// InputSchema nil — the document makes no claim at this boundary.

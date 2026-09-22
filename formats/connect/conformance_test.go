@@ -19,14 +19,12 @@ import (
 	"testing"
 
 	"github.com/openbindings/openbindings-go/invoke"
-
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/durationpb"
-
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 // ---------------------------------------------------------------------------
@@ -131,7 +129,7 @@ service Clock { rpc Wait(WaitRequest) returns (WaitReply); }
 // String content: single-file .proto source text whose imports are limited
 // to google/protobuf/*, resolved from this processor's bundled copies.
 func TestConformance_D01_ProtoText_GoogleProtobufImportsResolve(t *testing.T) {
-	disc, err := discoverFromContent(context.Background(), openbindings.TextContent(wktProto))
+	disc, err := discoverFromContent(context.Background(), jsonvalue.TextContent(wktProto))
 	if err != nil {
 		t.Fatalf("google/protobuf/* imports must resolve from bundled copies (openbindings.grpc@1 §3, via CONN-D-01): %v", err)
 	}
@@ -147,7 +145,7 @@ import "corp/shared.proto";
 service S { rpc Do(Req) returns (Req); }
 message Req { string id = 1; }
 `
-	_, err := discoverFromContent(context.Background(), openbindings.TextContent(proto))
+	_, err := discoverFromContent(context.Background(), jsonvalue.TextContent(proto))
 	if err == nil {
 		t.Fatal("a non-google/protobuf import must refuse loudly at load (openbindings.grpc@1 §3, via CONN-D-01)")
 	}
@@ -161,7 +159,7 @@ message Req { string id = 1; }
 // protoFDP compiles proto source text and returns its FileDescriptorProto.
 func protoFDP(t *testing.T, protoText string) *descriptorpb.FileDescriptorProto {
 	t.Helper()
-	disc, err := discoverFromContent(context.Background(), openbindings.TextContent(protoText))
+	disc, err := discoverFromContent(context.Background(), jsonvalue.TextContent(protoText))
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

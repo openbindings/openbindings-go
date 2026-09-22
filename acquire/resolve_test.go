@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/httpdiscovery"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -207,12 +208,12 @@ func TestResolve_SynthesizedResultRetainsCoverage(t *testing.T) {
 
 type failingSynthesizer struct{}
 
-func (failingSynthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: "fake@1.0"}}
+func (failingSynthesizer) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: "fake@1.0"}}
 }
 
-func (s failingSynthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
+func (s failingSynthesizer) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
 }
 
 func (failingSynthesizer) SynthesizeInterface(context.Context, *synthesize.SynthesizeInput) (*openbindings.Interface, error) {
@@ -221,12 +222,12 @@ func (failingSynthesizer) SynthesizeInterface(context.Context, *synthesize.Synth
 
 type coverageFetchSynthesizer struct{}
 
-func (coverageFetchSynthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: "fake.coverage@1"}}
+func (coverageFetchSynthesizer) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: "fake.coverage@1"}}
 }
 
-func (s coverageFetchSynthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
+func (s coverageFetchSynthesizer) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, s.BindingSpecs())
 }
 
 func (coverageFetchSynthesizer) SynthesizeInterface(ctx context.Context, input *synthesize.SynthesizeInput) (*openbindings.Interface, error) {

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 // A configuration requirement names the SAME context scope a credential
@@ -50,7 +50,7 @@ func TestContextRequiredConfigurationCarriesTheServerTarget(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-				Source:   invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI30, Content: openbindings.TextContent(testCase.spec)},
+				Source:   invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI30, Content: jsonvalue.TextContent(testCase.spec)},
 				Selector: testCase.selector,
 			})
 			_, invocationErr := driveSingle(t, call, map[string]any{"body": map[string]any{"file": "QUJD", "ids": []any{float64(1)}}})

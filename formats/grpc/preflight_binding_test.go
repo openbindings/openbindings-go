@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 const preflightBindingProto = `syntax = "proto3";
@@ -46,7 +46,7 @@ func untouchableListener(t *testing.T) (string, *atomic.Bool) {
 func preflightBindingArgs(target string, content bool, selector string, bindCtx map[string]any) *invoke.BindingInvocationArgs {
 	source := invoke.InvocationSource{BindingSpec: BindingSpec, Location: target}
 	if content {
-		source.Content = openbindings.TextContent(preflightBindingProto)
+		source.Content = jsonvalue.TextContent(preflightBindingProto)
 	}
 	return &invoke.BindingInvocationArgs{Source: source, Selector: selector, Context: bindCtx}
 }

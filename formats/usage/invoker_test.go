@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -24,7 +25,7 @@ func TestBindingSpecs(t *testing.T) {
 	}
 
 	input := []string{BindingSpec, "openbindings.usage", BindingSpec, BindingSpec + "0"}
-	want := []openbindings.BindingSpecVerdict{
+	want := []bindingsupport.BindingSpecVerdict{
 		{BindingSpec: BindingSpec, Supported: true},
 		{BindingSpec: "openbindings.usage", Supported: false},
 		{BindingSpec: BindingSpec + "0", Supported: false},

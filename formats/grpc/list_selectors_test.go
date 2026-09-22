@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 func TestInspectSource_BasicSelectors(t *testing.T) {
@@ -23,7 +24,7 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(protoContent),
+		Content: jsonvalue.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +54,7 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(protoContent),
+		Content: jsonvalue.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +107,7 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(protoContent),
+		Content: jsonvalue.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +139,7 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(protoContent),
+		Content: jsonvalue.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +171,7 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(protoContent),
+		Content: jsonvalue.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +210,7 @@ service TestService {
 
 	synthesizer := NewSynthesizer()
 	result, err := synthesizer.InspectSource(context.Background(), &openbindings.Source{
-		Content: openbindings.TextContent(protoContent),
+		Content: jsonvalue.TextContent(protoContent),
 	})
 	if err != nil {
 		t.Fatal(err)

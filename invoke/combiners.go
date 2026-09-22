@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 // CombineInvokers returns a single BindingInvoker that routes to the
@@ -23,7 +23,7 @@ func CombineInvokers(invokers ...BindingInvoker) BindingInvoker {
 type combinedInvoker struct {
 	invokers []BindingInvoker
 	bySpec   map[string]BindingInvoker // exact listed identifier -> invoker
-	specs    []openbindings.BindingSpecInfo
+	specs    []bindingsupport.BindingSpecInfo
 }
 
 func (c *combinedInvoker) add(iv BindingInvoker) {
@@ -40,14 +40,14 @@ func (c *combinedInvoker) add(iv BindingInvoker) {
 	}
 }
 
-func (c *combinedInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
-	cp := make([]openbindings.BindingSpecInfo, len(c.specs))
+func (c *combinedInvoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	cp := make([]bindingsupport.BindingSpecInfo, len(c.specs))
 	copy(cp, c.specs)
 	return cp
 }
 
-func (c *combinedInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	verdicts := openbindings.CheckBindingSpecs(bindingSpecs, nil)
+func (c *combinedInvoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	verdicts := bindingsupport.CheckBindingSpecs(bindingSpecs, nil)
 	unique := make([]string, len(verdicts))
 	index := make(map[string]int, len(verdicts))
 	for i, verdict := range verdicts {

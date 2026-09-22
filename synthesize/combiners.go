@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 // CombineSynthesizers returns a single InterfaceSynthesizer that routes to
@@ -37,17 +38,17 @@ var _ CoverageSynthesizer = (*combinedSynthesizer)(nil)
 type combinedSynthesizer struct {
 	synthesizers []InterfaceSynthesizer
 	bySpec       map[string]InterfaceSynthesizer // exact listed identifier -> synthesizer
-	specs        []openbindings.BindingSpecInfo
+	specs        []bindingsupport.BindingSpecInfo
 }
 
-func (c *combinedSynthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
-	cp := make([]openbindings.BindingSpecInfo, len(c.specs))
+func (c *combinedSynthesizer) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	cp := make([]bindingsupport.BindingSpecInfo, len(c.specs))
 	copy(cp, c.specs)
 	return cp
 }
 
-func (c *combinedSynthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	verdicts := openbindings.CheckBindingSpecs(bindingSpecs, nil)
+func (c *combinedSynthesizer) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	verdicts := bindingsupport.CheckBindingSpecs(bindingSpecs, nil)
 	unique := make([]string, len(verdicts))
 	index := make(map[string]int, len(verdicts))
 	for i, verdict := range verdicts {

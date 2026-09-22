@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 func TestAdapterErrorBoundary_NetworkFailureIsCodeOnly(t *testing.T) {
@@ -19,7 +19,7 @@ func TestAdapterErrorBoundary_NetworkFailureIsCodeOnly(t *testing.T) {
 	})}
 	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://example.test"}],"paths":{"/x":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":{}}}}}}}}`
 	call := NewInvokerWithClient(client).InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: openbindings.TextContent(spec)},
+		Source:   invoke.InvocationSource{BindingSpec: bindingSpecForTestDocument(spec), Content: jsonvalue.TextContent(spec)},
 		Selector: "#/paths/~1x/get",
 	})
 	_, ierr := driveSingle(t, call, nil)
@@ -66,7 +66,7 @@ func TestDeliveryUnitBound_UnaryOverflowRefused(t *testing.T) {
 	specBytes, _ := json.Marshal(spec)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:               invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(string(specBytes))},
+		Source:               invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(string(specBytes))},
 		Selector:             "#/paths/~1big/get",
 		MaxDeliveryUnitBytes: 1024,
 	})
@@ -98,7 +98,7 @@ func TestDeliveryUnitBound_SSEIsOneCumulativeUnit(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Source:   invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(sseSpec(srv.URL))},
 		Selector: "#/paths/~1events/get",
 	})
 	vals, ierr := driveOutputs(context.Background(), call, nil)
@@ -121,7 +121,7 @@ func TestDeliveryUnitBound_SSETinyBoundRefusesLoudly(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	call := NewInvoker().InvokeBinding(context.Background(), &invoke.BindingInvocationArgs{
-		Source:               invoke.InvocationSource{BindingSpec: BindingSpec, Content: openbindings.TextContent(sseSpec(srv.URL))},
+		Source:               invoke.InvocationSource{BindingSpec: BindingSpec, Content: jsonvalue.TextContent(sseSpec(srv.URL))},
 		Selector:             "#/paths/~1events/get",
 		MaxDeliveryUnitBytes: 1024,
 	})

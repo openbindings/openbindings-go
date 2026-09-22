@@ -13,7 +13,9 @@ import (
 	"unicode/utf8"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -137,7 +139,7 @@ func artifactText(ctx context.Context, location string, content json.RawMessage,
 	if content != nil {
 		var text string
 		if err := json.Unmarshal(content, &text); err != nil {
-			return "", fmt.Errorf("usage source content must be the artifact text (a JSON string), got %s", openbindings.ContentKind(content))
+			return "", fmt.Errorf("usage source content must be the artifact text (a JSON string), got %s", jsonvalue.ContentKind(content))
 		}
 		return validArtifactText(text, "embedded usage artifact")
 	}
@@ -292,16 +294,16 @@ func ParseExecAddress(location string) ([]string, error) {
 }
 
 // BindingSpecs returns the binding-spec identifiers supported by the usage invoker.
-func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+func (e *Invoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return usageBindingSpecInfos()
 }
 
-func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, usageBindingSpecInfos())
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, usageBindingSpecInfos())
 }
 
-func usageBindingSpecInfos() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "CLI tools described by jdx usage specs"}}
+func usageBindingSpecInfos() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "CLI tools described by jdx usage specs"}}
 }
 
 // InvokeBinding runs a CLI command for a usage-spec binding and returns the
@@ -351,12 +353,12 @@ func NewSynthesizer() *Synthesizer {
 
 // BindingSpecs returns the binding-spec identifiers supported by the usage synthesizer:
 // bare jdx usage-spec artifacts.
-func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+func (c *Synthesizer) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return usageBindingSpecInfos()
 }
 
-func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, usageBindingSpecInfos())
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, usageBindingSpecInfos())
 }
 
 // SynthesizeInterface converts a bare jdx usage source to an OpenBindings
@@ -443,14 +445,14 @@ func (c *Synthesizer) synthesizeObserved(ctx context.Context, in *synthesize.Syn
 			sourceEntry.Location = location
 		}
 	} else if src.Embed {
-		sourceEntry.Content = openbindings.TextContent(text)
+		sourceEntry.Content = jsonvalue.TextContent(text)
 		if emittableAsLocation(location) {
 			sourceEntry.Location = location
 		}
 	} else if emittableAsLocation(location) {
 		sourceEntry.Location = location
 	} else {
-		sourceEntry.Content = openbindings.TextContent(text)
+		sourceEntry.Content = jsonvalue.TextContent(text)
 	}
 
 	iface, err := buildInterfaceFromSpec(spec, sourceEntry)

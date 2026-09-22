@@ -13,6 +13,7 @@ import (
 
 	asyncapiclient "github.com/openbindings/asyncapi-client/go"
 	openbindings "github.com/openbindings/openbindings-go"
+	locationutil "github.com/openbindings/openbindings-go/internal/location"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
 
@@ -246,7 +247,7 @@ func sourceToBytes(ctx context.Context, client *http.Client, location string, co
 	if err := validateDocumentAddress(location); err != nil {
 		return nil, err
 	}
-	if openbindings.IsHTTPURL(location) {
+	if locationutil.IsHTTPURL(location) {
 		req, err := http.NewRequestWithContext(ctx, "GET", location, nil)
 		if err != nil {
 			return nil, fmt.Errorf("fetch %q: %w", location, err)

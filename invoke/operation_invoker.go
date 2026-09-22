@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/internal/value"
 	"github.com/openbindings/openbindings-go/internal/valueio"
 )
@@ -156,13 +157,13 @@ func (e *OperationInvoker) WithRuntime(resolver ContextResolver) *OperationInvok
 // registered binding invokers; the openbindings.operation-invoker interface
 // itself carries no listBindingSpecs operation (its reach is dynamic, e.g.
 // via delegates).
-func (e *OperationInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
+func (e *OperationInvoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return e.invoker.BindingSpecs()
 }
 
 // CheckBindingSpecs authoritatively checks exact binding-specification
 // identifiers against the registered binding invokers.
-func (e *OperationInvoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
+func (e *OperationInvoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
 	return e.invoker.CheckBindingSpecs(bindingSpecs)
 }
 

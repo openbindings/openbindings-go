@@ -8,9 +8,8 @@ import (
 	"io"
 	"strings"
 
-	openbindings "github.com/openbindings/openbindings-go"
-
 	"github.com/bufbuild/protocompile"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -45,7 +44,7 @@ func discoverFromContent(ctx context.Context, content json.RawMessage) (*discove
 		return discoverFromDescriptorSet(set)
 	}
 	return nil, fmt.Errorf(
-		"connect content must be single-file .proto source text (string) or a google.protobuf.FileDescriptorSet in canonical JSON (object), got %s (openbindings.connect@1 CONN-D-01)", openbindings.ContentKind(content))
+		"connect content must be single-file .proto source text (string) or a google.protobuf.FileDescriptorSet in canonical JSON (object), got %s (openbindings.connect@1 CONN-D-01)", jsonvalue.ContentKind(content))
 }
 
 // compileProtoText compiles embedded single-file .proto source text (the

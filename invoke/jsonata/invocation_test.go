@@ -9,17 +9,18 @@ import (
 	"time"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
 	jsonataevaluator "github.com/openbindings/openbindings-go/invoke/jsonata"
 )
 
 type echoBinding struct{ received atomic.Int32 }
 
-func (*echoBinding) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: "test.jsonata@1"}}
+func (*echoBinding) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: "test.jsonata@1"}}
 }
-func (b *echoBinding) CheckBindingSpecs(names []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(names, b.BindingSpecs())
+func (b *echoBinding) CheckBindingSpecs(names []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(names, b.BindingSpecs())
 }
 func (b *echoBinding) InvokeBinding(ctx context.Context, _ *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
 	handle := invoke.NewInvocationImpl[any, any](ctx)

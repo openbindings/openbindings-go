@@ -1,8 +1,21 @@
 package grpc
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"strings"
+
 	"github.com/bufbuild/protocompile"
 	"github.com/jhump/protoreflect/v2/grpcreflect"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -14,19 +27,6 @@ import (
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
-
-	"bytes"
-	"context"
-	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/json"
-	"fmt"
-	openbindings "github.com/openbindings/openbindings-go"
-	"io"
-	"net"
-	"os"
-	"strings"
 )
 
 type discovery struct {
@@ -404,7 +404,7 @@ func discoverFromContent(ctx context.Context, content json.RawMessage) (*discove
 		return discoverFromDescriptorSet(set)
 	}
 	return nil, fmt.Errorf(
-		"grpc content must be single-file .proto source text (string) or a google.protobuf.FileDescriptorSet in canonical JSON (object), got %s (openbindings.grpc@1 GRPC-D-01)", openbindings.ContentKind(content))
+		"grpc content must be single-file .proto source text (string) or a google.protobuf.FileDescriptorSet in canonical JSON (object), got %s (openbindings.grpc@1 GRPC-D-01)", jsonvalue.ContentKind(content))
 }
 
 // compileProtoText compiles embedded single-file .proto source text (§3

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 // CompiledRealizationBehavior is executable behavior for one exact
@@ -20,7 +21,7 @@ type CompiledRealizationBehavior interface {
 // capability discovery; CompileRealization receives the exact immutable OBI
 // identity and may not replace it with runtime-authored metadata.
 type ProviderRuntime interface {
-	BindingSpecs() []openbindings.BindingSpecInfo
+	BindingSpecs() []bindingsupport.BindingSpecInfo
 	CompileRealization(context.Context, *openbindings.PreparedInterface, openbindings.PreparedBindingDescriptor) (CompiledRealizationBehavior, error)
 }
 

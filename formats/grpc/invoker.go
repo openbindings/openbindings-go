@@ -17,15 +17,14 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jhump/protoreflect/v2/grpcdynamic"
+	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
-
-	"github.com/jhump/protoreflect/v2/grpcdynamic"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/reflect/protoreflect"
-
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 const BindingSpec = "openbindings.grpc@1"
@@ -115,16 +114,16 @@ func (e *Invoker) Close() error {
 }
 
 // BindingSpecs returns the binding-spec identifiers supported by the gRPC invoker.
-func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+func (e *Invoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return grpcBindingSpecInfos()
 }
 
-func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, grpcBindingSpecInfos())
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, grpcBindingSpecInfos())
 }
 
-func grpcBindingSpecInfos() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "gRPC via server reflection or .proto files"}}
+func grpcBindingSpecInfos() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "gRPC via server reflection or .proto files"}}
 }
 
 // InvokeBinding invokes a gRPC binding, returning the invocation handle
@@ -397,12 +396,12 @@ func NewSynthesizer(opts ...SynthesizerOption) *Synthesizer {
 }
 
 // BindingSpecs returns the binding-spec identifiers supported by the gRPC synthesizer.
-func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+func (c *Synthesizer) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return grpcBindingSpecInfos()
 }
 
-func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, grpcBindingSpecInfos())
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, grpcBindingSpecInfos())
 }
 
 // SynthesizeInterface discovers gRPC services and converts to an OpenBindings interface.

@@ -329,11 +329,11 @@ an invoker implementing a specification for a source.
 ```go
 type inProcessInvoker struct{ handlers map[string]func(context.Context, any) (any, error) }
 
-func (i *inProcessInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
-    return []openbindings.BindingSpecInfo{{BindingSpec: "com.example.tasks.native@1"}}
+func (i *inProcessInvoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
+    return []bindingsupport.BindingSpecInfo{{BindingSpec: "com.example.tasks.native@1"}}
 }
-func (i *inProcessInvoker) CheckBindingSpecs(specs []string) []openbindings.BindingSpecVerdict {
-    return openbindings.CheckBindingSpecs(specs, i.BindingSpecs())
+func (i *inProcessInvoker) CheckBindingSpecs(specs []string) []bindingsupport.BindingSpecVerdict {
+    return bindingsupport.CheckBindingSpecs(specs, i.BindingSpecs())
 }
 func (i *inProcessInvoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
     call := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())

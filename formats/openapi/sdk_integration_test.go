@@ -9,6 +9,7 @@ import (
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	obsdk "github.com/openbindings/openbindings-go/sdk"
 	"github.com/openbindings/openbindings-go/synthesize"
 )
@@ -31,7 +32,7 @@ func TestAdapterProvidesOneSDKRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document := openbindings.TextContent(`{
+	document := jsonvalue.TextContent(`{
 		"openapi":"3.1.0",
 		"info":{"title":"Adapter proof","version":"1"},
 		"servers":[{"url":"https://api.example.test"}],

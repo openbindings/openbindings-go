@@ -26,12 +26,11 @@ import (
 	"net/http"
 	"strings"
 
+	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/synthesize"
-
 	"google.golang.org/protobuf/reflect/protoreflect"
-
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 const BindingSpec = "openbindings.connect@1"
@@ -91,16 +90,16 @@ func (e *Invoker) WithFullDuplexTransport(enabled bool) *Invoker {
 
 // BindingSpecs returns the binding specifications supported by the
 // Connect invoker.
-func (e *Invoker) BindingSpecs() []openbindings.BindingSpecInfo {
+func (e *Invoker) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return connectBindingSpecInfos()
 }
 
-func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, connectBindingSpecInfos())
+func (e *Invoker) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, connectBindingSpecInfos())
 }
 
-func connectBindingSpecInfos() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Connect (Buf) via HTTP"}}
+func connectBindingSpecInfos() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: BindingSpec, Description: "Connect (Buf) via HTTP"}}
 }
 
 var _ invoke.BindingInvoker = (*Invoker)(nil)
@@ -396,12 +395,12 @@ func NewSynthesizer() *Synthesizer { return &Synthesizer{} }
 
 // BindingSpecs returns the binding specifications supported by the
 // Connect synthesizer.
-func (c *Synthesizer) BindingSpecs() []openbindings.BindingSpecInfo {
+func (c *Synthesizer) BindingSpecs() []bindingsupport.BindingSpecInfo {
 	return connectBindingSpecInfos()
 }
 
-func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, connectBindingSpecInfos())
+func (c *Synthesizer) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, connectBindingSpecInfos())
 }
 
 // SynthesizeInterface parses a .proto file or inline content and converts to an

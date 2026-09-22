@@ -3,7 +3,7 @@ package invoke
 import (
 	"context"
 
-	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 // BindingInvoker invokes bindings whose sources are governed by specific
@@ -23,8 +23,8 @@ import (
 // A concrete invoker may also implement InterfaceSynthesizer, SourceInspector,
 // or BindingPreflighter; check via type assertion.
 type BindingInvoker interface {
-	BindingSpecs() []openbindings.BindingSpecInfo
-	CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict
+	BindingSpecs() []bindingsupport.BindingSpecInfo
+	CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict
 	InvokeBinding(ctx context.Context, args *BindingInvocationArgs) Invocation[any, any]
 }
 

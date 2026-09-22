@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 	"github.com/openbindings/openbindings-go/compare"
 )
 
@@ -77,12 +78,12 @@ type operationRequirementBinding struct {
 	invocations  int
 }
 
-func (b *operationRequirementBinding) BindingSpecs() []openbindings.BindingSpecInfo {
-	return []openbindings.BindingSpecInfo{{BindingSpec: b.bindingSpec}}
+func (b *operationRequirementBinding) BindingSpecs() []bindingsupport.BindingSpecInfo {
+	return []bindingsupport.BindingSpecInfo{{BindingSpec: b.bindingSpec}}
 }
 
-func (b *operationRequirementBinding) CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict {
-	return openbindings.CheckBindingSpecs(bindingSpecs, b.BindingSpecs())
+func (b *operationRequirementBinding) CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict {
+	return bindingsupport.CheckBindingSpecs(bindingSpecs, b.BindingSpecs())
 }
 
 func (b *operationRequirementBinding) PreflightBinding(context.Context, *BindingInvocationArgs) (*ContextRequiredDetails, error) {

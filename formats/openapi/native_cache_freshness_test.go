@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	openapiclient "github.com/openbindings/openapi-client/go"
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
+	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
 func TestNativeCacheRetrievesChangingDocumentClosure(t *testing.T) {
@@ -29,7 +29,7 @@ func TestNativeCacheRetrievesChangingDocumentClosure(t *testing.T) {
 			defer server.Close()
 			args := &invoke.BindingInvocationArgs{Source: invoke.InvocationSource{BindingSpec: BindingSpecOpenAPI31, Location: server.URL}, Selector: "#/paths/~1ping/get"}
 			if external {
-				args.Source.Content = openbindings.TextContent(fmt.Sprintf(`{"openapi":"3.1.2","info":{"title":"cache","version":"1"},"paths":{"/ping":{"$ref":%q}}}`, server.URL+"/path.json"))
+				args.Source.Content = jsonvalue.TextContent(fmt.Sprintf(`{"openapi":"3.1.2","info":{"title":"cache","version":"1"},"paths":{"/ping":{"$ref":%q}}}`, server.URL+"/path.json"))
 			}
 			invoker := NewInvoker()
 			for n := 1; n <= 2; n++ {

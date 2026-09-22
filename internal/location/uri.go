@@ -1,4 +1,4 @@
-package openbindings
+package location
 
 import (
 	"errors"
@@ -21,8 +21,8 @@ var defaultPorts = map[string]string{
 
 // CanonicalizeLocation produces a normalized form of a URI suitable for
 // caching and deduplicating fetched documents. Comparing URIs for identity
-// is a tool concern: the spec (v0.2.0 §10, Reference resolution) defines no
-// canonical URI equality. This SDK's convention applies RFC 3986 §6.2
+// is a tool concern: the spec (§7, Reference resolution) defines no
+// canonical URI equality. This utility's convention applies RFC 3986 §6.2
 // syntax-based normalization so that trivially equivalent spellings of the
 // same location compare equal; distinct normalized forms may still address
 // the same resource.
@@ -40,7 +40,7 @@ var defaultPorts = map[string]string{
 //
 // Path and query case, query strings, userinfo, scheme (http vs https),
 // and trailing slashes on non-empty paths remain significant. The URI
-// normalized is the declared URI (or caller-supplied base); per spec §10 a
+// normalized is the declared URI (or caller-supplied base); per spec §7 a
 // redirect encountered while fetching does not change the base URI unless
 // the loader explicitly adopts the redirected URI.
 //

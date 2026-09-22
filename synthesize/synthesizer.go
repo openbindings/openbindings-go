@@ -4,6 +4,7 @@ import (
 	"context"
 
 	openbindings "github.com/openbindings/openbindings-go"
+	"github.com/openbindings/openbindings-go/bindingsupport"
 )
 
 // InterfaceSynthesizer synthesizes OpenBindings interfaces from sources
@@ -12,8 +13,8 @@ import (
 // Synthesizers load sources fresh on every call; parsed-artifact caching belongs
 // to invokers (authoring wants freshness).
 type InterfaceSynthesizer interface {
-	BindingSpecs() []openbindings.BindingSpecInfo
-	CheckBindingSpecs(bindingSpecs []string) []openbindings.BindingSpecVerdict
+	BindingSpecs() []bindingsupport.BindingSpecInfo
+	CheckBindingSpecs(bindingSpecs []string) []bindingsupport.BindingSpecVerdict
 	SynthesizeInterface(ctx context.Context, in *SynthesizeInput) (*openbindings.Interface, error)
 }
 
@@ -29,6 +30,6 @@ type CoverageSynthesizer interface {
 // SourceInspector inspects sources and returns bindable targets that
 // tooling can frame as OpenBindings operations.
 type SourceInspector interface {
-	BindingSpecs() []openbindings.BindingSpecInfo
+	BindingSpecs() []bindingsupport.BindingSpecInfo
 	InspectSource(ctx context.Context, source *openbindings.Source) (*SourceInspection, error)
 }

@@ -16,7 +16,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/invoke"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
@@ -395,7 +394,7 @@ func applyUsageConfiguration(cmd *Command, inherited []Flag, input any, bindCtx 
 	inputMap := map[string]any{}
 	if input != nil {
 		var ok bool
-		inputMap, ok = openbindings.ToStringAnyMap(input)
+		inputMap, ok = jsonvalue.ToStringAnyMap(input)
 		if !ok {
 			return nil, &invoke.InvocationError{Code: invoke.ErrCodeValidationFailed}
 		}
@@ -817,7 +816,7 @@ func buildDirectArgsFromSelector(selector string, input any) ([]string, error) {
 		return args, nil
 	}
 
-	inputMap, ok := openbindings.ToStringAnyMap(input)
+	inputMap, ok := jsonvalue.ToStringAnyMap(input)
 	if !ok {
 		// A present non-object input is out of contract on the direct lane
 		// too (§9.1 / USAGE-P-04): refuse loudly rather than run the bare
@@ -939,7 +938,7 @@ func buildCLIArgs(cmdPath []string, cmd *Command, inheritedGlobals []Flag, input
 		return args, nil
 	}
 
-	inputMap, ok := openbindings.ToStringAnyMap(input)
+	inputMap, ok := jsonvalue.ToStringAnyMap(input)
 	if !ok {
 		return nil, fmt.Errorf("input must be an object with field names matching the command's flags and args")
 	}

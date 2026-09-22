@@ -4,13 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/openbindings/openbindings-go/jsonvalue"
 	"github.com/openbindings/openbindings-go/synthesize"
-
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
-
-	openbindings "github.com/openbindings/openbindings-go"
 )
 
 func protoSchemaVariant(t *testing.T, value any, schemaType string) map[string]any {
@@ -43,7 +41,7 @@ func protoSchemaVariant(t *testing.T, value any, schemaType string) map[string]a
 }
 
 func TestConvertToInterface_CreatesOperations(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
+	disc, err := discoverFromProto(context.Background(), "", jsonvalue.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -76,7 +74,7 @@ service TestService {
 }
 
 func TestConvertToInterface_CreatesBindingsWithSelectors(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
+	disc, err := discoverFromProto(context.Background(), "", jsonvalue.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -110,7 +108,7 @@ service TestService {
 }
 
 func TestConvertToInterface_IncludesClientStreaming(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
+	disc, err := discoverFromProto(context.Background(), "", jsonvalue.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -143,7 +141,7 @@ service TestService {
 }
 
 func TestConvertToInterface_SourceEntry(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
+	disc, err := discoverFromProto(context.Background(), "", jsonvalue.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -183,7 +181,7 @@ func TestConvertToInterface_NilDiscovery(t *testing.T) {
 }
 
 func TestConvertToInterface_InputOutputSchemas(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
+	disc, err := discoverFromProto(context.Background(), "", jsonvalue.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -382,7 +380,7 @@ func TestConvertToInterface_WellKnownTimestampField(t *testing.T) {
 // int64-family fields must emit {"type":"integer","format":"int64"}, matching
 // grpc — not the bare {"type":"string"} connect previously emitted.
 func TestConvertToInterface_Int64Field(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
+	disc, err := discoverFromProto(context.Background(), "", jsonvalue.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -416,7 +414,7 @@ service TestService {
 }
 
 func TestConvertToInterface_OneofSingleGroupProjectsOptionalMembers(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
+	disc, err := discoverFromProto(context.Background(), "", jsonvalue.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -461,7 +459,7 @@ service TestService {
 // independent optional properties and a warning surfaces the loss, exactly
 // as formats/grpc does.
 func TestConvertToInterface_OneofMultipleGroupsFallsBackToProperties(t *testing.T) {
-	disc, err := discoverFromProto(context.Background(), "", openbindings.TextContent(`
+	disc, err := discoverFromProto(context.Background(), "", jsonvalue.TextContent(`
 syntax = "proto3";
 package testpkg;
 
@@ -542,7 +540,7 @@ service TestService {
 	var warnings []synthesize.SynthesizerWarning
 	c := NewSynthesizer()
 	_, err := c.SynthesizeInterface(context.Background(), &synthesize.SynthesizeInput{
-		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: "https://connect.example.test", Content: openbindings.TextContent(proto)}},
+		Sources: []synthesize.SynthesizeSource{{BindingSpec: BindingSpec, Location: "https://connect.example.test", Content: jsonvalue.TextContent(proto)}},
 		OnWarning: func(w synthesize.SynthesizerWarning) {
 			warnings = append(warnings, w)
 		},
@@ -569,7 +567,7 @@ service TestService {
 		Sources: []synthesize.SynthesizeSource{{
 			BindingSpec: BindingSpec,
 			Location:    "https://connect.example.test",
-			Content:     openbindings.TextContent(proto),
+			Content:     jsonvalue.TextContent(proto),
 		}},
 	})
 	if err != nil {
