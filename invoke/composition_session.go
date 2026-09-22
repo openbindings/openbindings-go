@@ -528,14 +528,15 @@ func (s *CompositionSession) evaluateRegistrations(
 			if err != nil {
 				return nil, nil, err
 			}
-			if evidence.Verdict != ContractCompatible {
-				code := "contract_incompatible"
-				if evidence.Verdict == ContractIndeterminate {
-					code = "contract_indeterminate"
-				}
+			// A name or alias correspondence is the provider's compatibility
+			// claim. The profile can only contradict it, never confirm it
+			// beyond its keyword reach: a proven incompatibility sets the
+			// candidate aside; an undecidable keyword leaves the claim
+			// standing, with the evidence carried on the route.
+			if evidence.Verdict == ContractIncompatible {
 				copyEvidence := evidence
 				assessments = append(assessments, CompositionAssessment{
-					Code: code, ProviderKey: provider.Key(), OperationKey: correspondence.Provider.CanonicalKey, Evidence: &copyEvidence,
+					Code: "contract_incompatible", ProviderKey: provider.Key(), OperationKey: correspondence.Provider.CanonicalKey, Evidence: &copyEvidence,
 				})
 				continue
 			}

@@ -1,46 +1,43 @@
 package schemaprofile
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 )
 
-// InputCompatible implements profile v0.1 input rules (interface schema <=
+// InputCompatible implements the profile's input rules (interface schema <=
 // candidate schema). Both schemas MUST already be normalized (see
 // Normalizer.Normalize): $refs are not resolved here. Callers comparing
 // schemas from two documents normalize each side against its own root and
 // then call this — the same shape the TypeScript SDK's free
 // inputCompatible/outputCompatible functions have. Tell-tale non-normalized
-// shapes (a scalar type, an unresolved $ref, an unflattened allOf) are
-// refused with a NotNormalizedError rather than risking a silently
-// divergent verdict.
+// shapes (a scalar type, an unresolved $ref, an allOf the normalizer would
+// have merged) are refused with a NotNormalizedError rather than risking a
+// silently divergent verdict.
+//
+// At every position the identity rule runs first (rule 0): structurally
+// identical sub-schemas are compatible whatever keywords they carry. A
+// non-identical position marked outside the profile on either side is
+// indeterminate, returned as an *OutsideProfileError (rule 0a). Only then
+// do the directional rules run.
 func InputCompatible(tgt, cand map[string]any) (bool, string, error) {
 	if err := assertNormalizedPair(tgt, cand); err != nil {
 		return false, "", err
 	}
-	// Trivial schema: {} is Top.
-	if len(cand) == 0 {
-		return true, "", nil
-	}
-	return compat(tgt, cand, true)
+	return compat(tgt, cand, true, "")
 }
 
-// OutputCompatible implements profile v0.1 output/payload rules (candidate
+// OutputCompatible implements the profile's output/payload rules (candidate
 // schema <= interface schema). Both schemas MUST already be normalized (see
-// Normalizer.Normalize); see InputCompatible, including the loud
+// Normalizer.Normalize); see InputCompatible, including the identity rule,
+// the comparison-time outside-profile refusal, and the loud
 // NotNormalizedError refusal of tell-tale non-normalized shapes.
 func OutputCompatible(tgt, cand map[string]any) (bool, string, error) {
 	if err := assertNormalizedPair(tgt, cand); err != nil {
 		return false, "", err
 	}
-	// Trivial schema: {} is Top; allowed only if interface is also Top.
-	if len(cand) == 0 {
-		if len(tgt) == 0 {
-			return true, "", nil
-		}
-		return false, "candidate is unconstrained but target is not", nil
-	}
-	return compat(tgt, cand, false)
+	return compat(tgt, cand, false, "")
 }
 
 // assertNormalizedPair guards the pre-normalization contract of the two
@@ -54,19 +51,22 @@ func assertNormalizedPair(tgt, cand map[string]any) error {
 }
 
 // assertNormalized refuses the cheap, unambiguous shapes the Normalizer can
-// never emit: an unresolved $ref (always inlined), an unflattened allOf
-// (always merged away), and a non-array type (always canonicalized to a
-// sorted array). These are exactly the shapes that would otherwise decide
+// never emit: an unresolved $ref (always inlined), an allOf the normalizer
+// would have merged (one whose subtree carries no outside-profile keyword;
+// a retained allOf is accepted only when the position is marked outside
+// the profile), and a non-array type (always canonicalized to a sorted
+// array). These are exactly the shapes that would otherwise decide
 // verdicts silently — most notably a raw scalar type, which the two
 // reference SDKs historically read differently. This is NOT a full
 // normalized-form validator; anything subtler stays the caller's contract.
-// Nested walks visit properties (sorted), additionalProperties, items, then
-// oneOf/anyOf variants — mirrored in the TypeScript SDK's assertNormalized.
+// Nested walks visit properties (sorted), additionalProperties, items,
+// oneOf/anyOf variants, then retained allOf branches — mirrored in the
+// TypeScript SDK's assertNormalized.
 func assertNormalized(schema map[string]any, path string) error {
 	if _, ok := schema["$ref"]; ok {
 		return &NotNormalizedError{Path: path, Keyword: "$ref", Requirement: "resolved"}
 	}
-	if _, ok := schema["allOf"]; ok {
+	if _, ok := schema["allOf"]; ok && !containsOutsideProfile(schema) {
 		return &NotNormalizedError{Path: path, Keyword: "allOf", Requirement: "flattened"}
 	}
 	if v, ok := schema["type"]; ok {
@@ -93,7 +93,7 @@ func assertNormalized(schema map[string]any, path string) error {
 			return err
 		}
 	}
-	for _, key := range []string{"oneOf", "anyOf"} {
+	for _, key := range []string{"oneOf", "anyOf", "allOf"} {
 		arr, ok := asSlice(schema[key])
 		if !ok {
 			continue
@@ -109,7 +109,48 @@ func assertNormalized(schema map[string]any, path string) error {
 	return nil
 }
 
-func compat(tgt, cand map[string]any, isInput bool) (bool, string, error) {
+// nestedError prefixes an error raised by a nested position with that
+// position's reason-string prefix. An *OutsideProfileError is passed
+// through untouched: it already names its position in the normalizer's
+// path spelling, exactly as the former normalization-time refusal did.
+func nestedError(prefix string, err error) error {
+	var ope *OutsideProfileError
+	if errors.As(err, &ope) {
+		return err
+	}
+	return fmt.Errorf("%s: %w", prefix, err)
+}
+
+// compat decides one position. path is the position in the normalizer's
+// spelling, used only by the outside-profile refusal.
+//
+// Rule 0 (identity): structurally identical normalized sub-schemas are
+// compatible in both directions, whatever keywords they carry — a schema
+// stands in for itself — and the walk does not descend. Rule 0a (outside
+// the profile): a non-identical position marked outside the profile on
+// either side is indeterminate (*OutsideProfileError) and no further rule
+// runs there. Every other position runs the directional rules unchanged.
+func compat(tgt, cand map[string]any, isInput bool, path string) (bool, string, error) {
+	same, err := EqualNormalizedSchemas(tgt, cand)
+	if err != nil {
+		return false, "", err
+	}
+	if same {
+		return true, "", nil
+	}
+	for _, side := range []map[string]any{tgt, cand} {
+		if !markedOutsideProfile(side) {
+			continue
+		}
+		p, keyword, found := firstOutsideProfile(side, path)
+		if !found {
+			// A retained allOf whose mark was stripped by a caller: the
+			// position is still not mergeable, so it is not decidable.
+			p, keyword = pathOrRoot(path), "allOf"
+		}
+		return false, "", &OutsideProfileError{Path: p, Keyword: keyword}
+	}
+
 	// If either side is Top, handle per direction.
 	if len(tgt) == 0 {
 		// Empty target ({}) is Top — "could send/receive anything".
@@ -160,7 +201,7 @@ func compat(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 
 	// Object rules if type includes object.
 	if hasType(tgt, "object") || hasType(cand, "object") {
-		ok, reason, err := compatObject(tgt, cand, isInput)
+		ok, reason, err := compatObject(tgt, cand, isInput, path)
 		if err != nil || !ok {
 			return false, reason, err
 		}
@@ -168,7 +209,7 @@ func compat(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 
 	// Array rules if type includes array.
 	if hasType(tgt, "array") || hasType(cand, "array") {
-		ok, reason, err := compatArray(tgt, cand, isInput)
+		ok, reason, err := compatArray(tgt, cand, isInput, path)
 		if err != nil || !ok {
 			return false, reason, err
 		}
@@ -200,7 +241,7 @@ func compat(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 
 	// Union rules.
 	if hasUnion(tgt) || hasUnion(cand) {
-		ok, reason, err := compatUnion(tgt, cand, isInput)
+		ok, reason, err := compatUnion(tgt, cand, isInput, path)
 		if err != nil || !ok {
 			return false, reason, err
 		}
@@ -341,7 +382,7 @@ func hasUnion(schema map[string]any) bool {
 // same JCS rendering values get — so names carrying quotes, backslashes, or
 // control characters escape identically across the reference SDKs (plain
 // names render exactly as a bare quoted spelling).
-func compatObject(tgt, cand map[string]any, isInput bool) (bool, string, error) {
+func compatObject(tgt, cand map[string]any, isInput bool, path string) (bool, string, error) {
 	tgtReq := stringSet(tgt["required"])
 	candReq := stringSet(cand["required"])
 
@@ -366,9 +407,9 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string, error) 
 				if !ok {
 					continue
 				}
-				ok2, reason, err := compat(tvm, cvm, true)
+				ok2, reason, err := compat(tvm, cvm, true, ptrJoin(path, fmt.Sprintf("properties[%q]", p)))
 				if err != nil {
-					return false, "", fmt.Errorf("properties[%s]: %w", canonicalKey(p), err)
+					return false, "", nestedError(fmt.Sprintf("properties[%s]", canonicalKey(p)), err)
 				}
 				if !ok2 {
 					return false, fmt.Sprintf("properties[%s]: %s", canonicalKey(p), reason), nil
@@ -409,9 +450,9 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string, error) 
 			if !ok {
 				continue
 			}
-			ok2, reason, err := compat(tvm, cvm, false)
+			ok2, reason, err := compat(tvm, cvm, false, ptrJoin(path, fmt.Sprintf("properties[%q]", p)))
 			if err != nil {
-				return false, "", fmt.Errorf("properties[%s]: %w", canonicalKey(p), err)
+				return false, "", nestedError(fmt.Sprintf("properties[%s]", canonicalKey(p)), err)
 			}
 			if !ok2 {
 				return false, fmt.Sprintf("properties[%s]: %s", canonicalKey(p), reason), nil
@@ -434,9 +475,9 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string, error) 
 		}
 	case map[string]any:
 		if apCand, ok := cand["additionalProperties"].(map[string]any); ok {
-			ok2, reason, err := compat(apTgt, apCand, false)
+			ok2, reason, err := compat(apTgt, apCand, false, ptrJoin(path, "additionalProperties"))
 			if err != nil {
-				return false, "", fmt.Errorf("additionalProperties: %w", err)
+				return false, "", nestedError("additionalProperties", err)
 			}
 			if !ok2 {
 				return false, fmt.Sprintf("additionalProperties: %s", reason), nil
@@ -453,7 +494,7 @@ func compatObject(tgt, cand map[string]any, isInput bool) (bool, string, error) 
 	return true, "", nil
 }
 
-func compatArray(tgt, cand map[string]any, isInput bool) (bool, string, error) {
+func compatArray(tgt, cand map[string]any, isInput bool, path string) (bool, string, error) {
 	tv, okTgt := asMap(tgt["items"])
 	cv, okCand := asMap(cand["items"])
 	if !okTgt || !okCand {
@@ -465,9 +506,9 @@ func compatArray(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 			cv = map[string]any{}
 		}
 	}
-	ok, reason, err := compat(tv, cv, isInput)
+	ok, reason, err := compat(tv, cv, isInput, ptrJoin(path, "items"))
 	if err != nil {
-		return false, "", fmt.Errorf("items: %w", err)
+		return false, "", nestedError("items", err)
 	}
 	if !ok {
 		return false, fmt.Sprintf("items: %s", reason), nil
@@ -475,7 +516,11 @@ func compatArray(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 	return true, "", nil
 }
 
-func compatUnion(tgt, cand map[string]any, isInput bool) (bool, string, error) {
+// compatUnion compares union variants pairwise. A pair that is not
+// identical and is marked outside the profile fails closed for the whole
+// position; the refusal names the marked side's own variant index (target
+// first), under the target's union key.
+func compatUnion(tgt, cand map[string]any, isInput bool, path string) (bool, string, error) {
 	tgtVars, okTgt := unionVariants(tgt)
 	candVars, okCand := unionVariants(cand)
 	if !okTgt || !okCand {
@@ -491,14 +536,21 @@ func compatUnion(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 		unionKey = "anyOf"
 	}
 
+	variantPath := func(v map[string]any, i int, w map[string]any, j int) string {
+		if !markedOutsideProfile(v) && markedOutsideProfile(w) {
+			return ptrJoin(path, fmt.Sprintf("%s[%d]", unionKey, j))
+		}
+		return ptrJoin(path, fmt.Sprintf("%s[%d]", unionKey, i))
+	}
+
 	if isInput {
 		// For every v in tgt, exists w in cand such that InputCompatible(v,w).
 		for i, v := range tgtVars {
 			found := false
-			for _, w := range candVars {
-				ok, _, err := compat(v, w, true)
+			for j, w := range candVars {
+				ok, _, err := compat(v, w, true, variantPath(v, i, w, j))
 				if err != nil {
-					return false, "", fmt.Errorf("%s: %w", unionKey, err)
+					return false, "", nestedError(unionKey, err)
 				}
 				if ok {
 					found = true
@@ -516,10 +568,10 @@ func compatUnion(tgt, cand map[string]any, isInput bool) (bool, string, error) {
 	// For every w in cand, exists v in tgt such that OutputCompatible(v,w).
 	for i, w := range candVars {
 		found := false
-		for _, v := range tgtVars {
-			ok, _, err := compat(v, w, false)
+		for j, v := range tgtVars {
+			ok, _, err := compat(v, w, false, variantPath(v, j, w, i))
 			if err != nil {
-				return false, "", fmt.Errorf("%s: %w", unionKey, err)
+				return false, "", nestedError(unionKey, err)
 			}
 			if ok {
 				found = true

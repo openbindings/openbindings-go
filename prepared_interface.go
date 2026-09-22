@@ -1,16 +1,13 @@
 package openbindings
 
 import (
-	"crypto/sha256"
 	"fmt"
 	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 	"reflect"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 
-	"github.com/openbindings/openbindings-go/canonicaljson"
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
@@ -44,30 +41,6 @@ type PreparedBindingDescriptor struct {
 	HasTransforms bool
 }
 
-// PreparedBoundaryContract is an exact authored boundary-graph identity.
-// Complete is false when a reachable schema resource is not embedded in the
-// OBI; preparation never fetches ambient resources.
-type PreparedBoundaryContract struct {
-	graph                 map[string]any
-	memo                  *boundaryComparisonMemo
-	complete              bool
-	Complete              bool
-	UnavailableReferences []string
-}
-
-// Pairwise evidence belongs to immutable private contract owners. It is not a
-// document hash, provider identity or policy decision. Only successful exact
-// comparisons are cached, and retained counterpart tokens are bounded.
-type boundaryComparisonMemo struct {
-	sync.Mutex
-	token   *boundaryComparisonToken
-	results map[*boundaryComparisonToken]string
-}
-
-// A non-zero-sized, reference-free identity token cannot retain a foreign
-// memo's own comparisons (or an arbitrarily long chain of them).
-type boundaryComparisonToken struct{ marker byte }
-
 type preparedInterfaceState struct {
 	snapshot     Interface
 	snapshotID   string
@@ -76,9 +49,8 @@ type preparedInterfaceState struct {
 	dependencies map[string]PreparedDependencyDescriptor
 	bindings     map[string]PreparedBindingDescriptor
 
-	mu                sync.Mutex
-	validators        map[string]*CompiledSchema
-	boundaryContracts map[string]PreparedBoundaryContract
+	mu         sync.Mutex
+	validators map[string]*CompiledSchema
 }
 
 // PreparedInterface is a validated, immutable, privately owned semantic
@@ -163,14 +135,13 @@ func PrepareInterface(iface *Interface, opts ...ValidateOption) (*PreparedInterf
 	}
 
 	return &PreparedInterface{state: &preparedInterfaceState{
-		snapshot:          snapshot,
-		snapshotID:        fmt.Sprintf("snapshot:%d", nextSnapshotID.Add(1)),
-		operations:        operations,
-		identifiers:       identifiers,
-		dependencies:      dependencies,
-		bindings:          bindings,
-		validators:        make(map[string]*CompiledSchema),
-		boundaryContracts: make(map[string]PreparedBoundaryContract),
+		snapshot:     snapshot,
+		snapshotID:   fmt.Sprintf("snapshot:%d", nextSnapshotID.Add(1)),
+		operations:   operations,
+		identifiers:  identifiers,
+		dependencies: dependencies,
+		bindings:     bindings,
+		validators:   make(map[string]*CompiledSchema),
 	}}, nil
 }
 
@@ -362,77 +333,17 @@ func clonePreparedEncodedJSON(value any) any {
 // prepared value never snapshots or validates itself again.
 func (p *PreparedInterface) Prepared() *PreparedInterface { return p }
 
-// SnapshotID is local correlation, never equality or persistent identity.
+// SnapshotID is a process-local handle identity: it distinguishes one
+// prepared snapshot from another within this process so runtime records
+// (routes, provider descriptors) can say which handle they were built from.
+// It is not document identity — two preparations of byte-identical
+// documents get different IDs — and never equality, a content revision, or
+// a persistent identifier.
 func (p *PreparedInterface) SnapshotID() string {
 	if p == nil || p.state == nil {
 		return ""
 	}
 	return p.state.snapshotID
-}
-
-type JCSExport struct {
-	Canonical []byte
-	Revision  string
-}
-
-// ExportJCS is explicitly fallible. Failure does not invalidate the owner.
-func (p *PreparedInterface) ExportJCS() (JCSExport, error) {
-	if p == nil || p.state == nil {
-		return JCSExport{}, fmt.Errorf("openbindings: prepared interface is required")
-	}
-	canonical, err := canonicaljson.Marshal(&p.state.snapshot)
-	if err != nil {
-		return JCSExport{}, err
-	}
-	var candidate any
-	if err := jsonvalue.Unmarshal(canonical, &candidate); err != nil {
-		return JCSExport{}, err
-	}
-	equal, err := jsonvalue.Equal(&p.state.snapshot, candidate)
-	if err != nil {
-		return JCSExport{}, err
-	}
-	if !equal {
-		return JCSExport{}, fmt.Errorf("openbindings: JCS export would change a carried JSON value")
-	}
-	digest := sha256.Sum256(canonical)
-	return JCSExport{Canonical: canonical, Revision: fmt.Sprintf("sha256:%x", digest)}, nil
-}
-
-// CompareBoundaryContracts returns authored identity, not compatibility.
-// Unavailable closure is not equal even when the missing URLs match.
-func CompareBoundaryContracts(a, b PreparedBoundaryContract) (string, error) {
-	if a.graph == nil || b.graph == nil || !a.complete || !b.complete {
-		return "unavailable", nil
-	}
-	if a.memo != nil && b.memo != nil {
-		a.memo.Lock()
-		cached, found := a.memo.results[b.memo.token]
-		a.memo.Unlock()
-		if found {
-			return cached, nil
-		}
-	}
-	same, err := jsonvalue.Equal(a.graph, b.graph)
-	if err != nil {
-		return "", err
-	}
-	result := "different"
-	if same {
-		result = "equal"
-	}
-	if a.memo != nil && b.memo != nil {
-		a.memo.Lock()
-		if a.memo.results == nil {
-			a.memo.results = make(map[*boundaryComparisonToken]string)
-		}
-		if len(a.memo.results) >= 64 {
-			clear(a.memo.results)
-		}
-		a.memo.results[b.memo.token] = result
-		a.memo.Unlock()
-	}
-	return result, nil
 }
 
 // InterfaceSnapshot returns a private deep copy of the validated OBI snapshot.
@@ -557,37 +468,10 @@ func (p *PreparedInterface) SchemaValidator(operationIdentifier, position string
 	return validator, true, nil
 }
 
-// BoundaryContract computes and memoizes one exact authored boundary graph.
-func (p *PreparedInterface) BoundaryContract(operationIdentifier string) (PreparedBoundaryContract, bool, error) {
-	if p == nil || p.state == nil {
-		return PreparedBoundaryContract{}, false, fmt.Errorf("openbindings: prepared interface is required")
-	}
-	key, ok := p.state.identifiers[operationIdentifier]
-	if !ok {
-		return PreparedBoundaryContract{}, false, nil
-	}
-	p.state.mu.Lock()
-	defer p.state.mu.Unlock()
-	if contract, ok := p.state.boundaryContracts[key]; ok {
-		return copyBoundaryContract(contract), true, nil
-	}
-	contract, err := prepareBoundaryContract(&p.state.snapshot, key)
-	if err != nil {
-		return PreparedBoundaryContract{}, false, err
-	}
-	p.state.boundaryContracts[key] = contract
-	return copyBoundaryContract(contract), true, nil
-}
-
 func copyPreparedOperation(value PreparedOperationDescriptor) PreparedOperationDescriptor {
 	value.Identifiers = append([]string(nil), value.Identifiers...)
 	value.BindingKeys = append([]string(nil), value.BindingKeys...)
 	value.DependencyKeys = append([]string(nil), value.DependencyKeys...)
-	return value
-}
-
-func copyBoundaryContract(value PreparedBoundaryContract) PreparedBoundaryContract {
-	value.UnavailableReferences = append([]string(nil), value.UnavailableReferences...)
 	return value
 }
 
@@ -616,209 +500,4 @@ func sortedBindingKeys(values map[string]BindingEntry) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func prepareBoundaryContract(iface *Interface, operationKey string) (PreparedBoundaryContract, error) {
-	data, err := json.Marshal(iface)
-	if err != nil {
-		return PreparedBoundaryContract{}, err
-	}
-	var document any
-	if err := jsonvalue.Unmarshal(data, &document); err != nil {
-		return PreparedBoundaryContract{}, err
-	}
-	op := iface.Operations[operationKey]
-	anchors := collectSchemaAnchors(iface)
-	resources := make(map[string]any)
-	unavailableSet := make(map[string]struct{})
-	visitedRefs := make(map[string]struct{})
-
-	var visit func(any)
-	visit = func(value any) {
-		switch node := value.(type) {
-		case []any:
-			for _, child := range node {
-				visit(child)
-			}
-		case map[string]any:
-			for _, keyword := range []string{"$ref", "$dynamicRef"} {
-				reference, ok := node[keyword].(string)
-				if !ok {
-					continue
-				}
-				if _, seen := visitedRefs[reference]; seen {
-					continue
-				}
-				visitedRefs[reference] = struct{}{}
-				target, ok := resolvePreparedReference(document, reference, anchors)
-				if !ok {
-					unavailableSet[reference] = struct{}{}
-				} else {
-					resources[reference] = target
-					visit(target)
-				}
-			}
-			visitPreparedSchemaChildren(node, visit)
-		}
-	}
-	inputPresent := op.InputPresent || op.Input != nil
-	outputPresent := op.OutputPresent || op.Output != nil
-	if inputPresent {
-		visit(op.Input)
-	}
-	if outputPresent {
-		visit(op.Output)
-	}
-	unavailable := make([]string, 0, len(unavailableSet))
-	for reference := range unavailableSet {
-		unavailable = append(unavailable, reference)
-	}
-	sort.Strings(unavailable)
-	input := map[string]any{"present": inputPresent}
-	if inputPresent {
-		input["schema"] = op.Input
-	}
-	output := map[string]any{"present": outputPresent}
-	if outputPresent {
-		output["schema"] = op.Output
-	}
-	graph := map[string]any{
-		"input":                 input,
-		"output":                output,
-		"resources":             resources,
-		"unavailableReferences": unavailable,
-	}
-	return PreparedBoundaryContract{
-		graph:                 graph,
-		memo:                  &boundaryComparisonMemo{token: &boundaryComparisonToken{}},
-		complete:              len(unavailable) == 0,
-		Complete:              len(unavailable) == 0,
-		UnavailableReferences: unavailable,
-	}, nil
-}
-
-func visitPreparedSchemaChildren(node map[string]any, visit func(any)) {
-	for key, value := range node {
-		switch {
-		case schemaMapKeywords[key]:
-			if members, ok := value.(map[string]any); ok {
-				for _, member := range members {
-					visit(member)
-				}
-			}
-		case arraySchemaKeywords[key]:
-			if members, ok := value.([]any); ok {
-				for _, member := range members {
-					visit(member)
-				}
-			}
-		case singleSchemaKeywords[key]:
-			visit(value)
-		}
-	}
-}
-
-func collectSchemaAnchors(iface *Interface) map[string]any {
-	anchors := make(map[string]any)
-	var visit func(any)
-	visit = func(value any) {
-		switch node := value.(type) {
-		case []any:
-			for _, child := range node {
-				visit(child)
-			}
-		case map[string]any:
-			if id, ok := node["$id"].(string); ok {
-				if _, exists := anchors[id]; !exists {
-					anchors[id] = node
-				}
-			}
-			for _, keyword := range []string{"$anchor", "$dynamicAnchor"} {
-				if name, ok := node[keyword].(string); ok {
-					key := "#" + name
-					if _, exists := anchors[key]; !exists {
-						anchors[key] = node
-					}
-				}
-			}
-			visitPreparedSchemaChildren(node, visit)
-		}
-	}
-	for _, schema := range iface.Schemas {
-		visit(schema)
-	}
-	for _, operation := range iface.Operations {
-		visit(operation.Input)
-		visit(operation.Output)
-	}
-	return anchors
-}
-
-func resolvePreparedReference(document any, reference string, anchors map[string]any) (any, bool) {
-	if reference == "#" {
-		return document, true
-	}
-	if strings.HasPrefix(reference, "#/") {
-		return resolvePreparedPointer(document, strings.TrimPrefix(reference, "#"))
-	}
-	if value, ok := anchors[reference]; ok {
-		return value, true
-	}
-	if hash := strings.IndexByte(reference, '#'); hash >= 0 {
-		resource, ok := anchors[reference[:hash]]
-		if !ok {
-			return nil, false
-		}
-		fragment := reference[hash+1:]
-		if fragment == "" {
-			return resource, true
-		}
-		if strings.HasPrefix(fragment, "/") {
-			return resolvePreparedPointer(resource, fragment)
-		}
-		return findPreparedAnchor(resource, fragment)
-	}
-	return nil, false
-}
-
-func resolvePreparedPointer(root any, pointer string) (any, bool) {
-	value := root
-	for _, token := range strings.Split(pointer, "/")[1:] {
-		key := strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
-		object, ok := value.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		value, ok = object[key]
-		if !ok {
-			return nil, false
-		}
-	}
-	return value, true
-}
-
-func findPreparedAnchor(root any, name string) (any, bool) {
-	switch node := root.(type) {
-	case []any:
-		for _, child := range node {
-			if value, ok := findPreparedAnchor(child, name); ok {
-				return value, true
-			}
-		}
-	case map[string]any:
-		if node["$anchor"] == name || node["$dynamicAnchor"] == name {
-			return node, true
-		}
-		var found any
-		var present bool
-		visitPreparedSchemaChildren(node, func(child any) {
-			if !present {
-				found, present = findPreparedAnchor(child, name)
-			}
-		})
-		if present {
-			return found, true
-		}
-	}
-	return nil, false
 }

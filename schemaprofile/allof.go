@@ -6,63 +6,99 @@ import (
 	"sort"
 )
 
-// flattenAllOf merges all branches of an allOf into a single schema.
+// flattenAllOf merges all branches of an allOf into a single schema, or
+// retains the allOf when the profile cannot merge it.
 //
 // Each branch is normalized in full BEFORE merging (profile normalization
-// step 5): a $ref branch is resolved and profile-checked exactly as step 3
-// requires, a nested allOf inside a branch flattens recursively, and
-// out-of-profile keywords anywhere in a branch fail closed. The schema's
-// own sibling keywords merge as one additional branch, first — the order is
-// observable because enum intersection preserves the first branch's value
-// order. oneOf/anyOf in a normalized branch fails closed, whether written
-// inline, carried by a resolved $ref, or among the sibling keywords.
-func (n *Normalizer) flattenAllOf(allOf any, siblings map[string]any, path string) (map[string]any, error) {
+// step 5): a $ref branch is resolved exactly as step 3 requires, a nested
+// allOf inside a branch flattens recursively, and nullable is applied. The
+// schema's own sibling keywords normalize as one additional branch and
+// merge first — the order is observable because enum intersection
+// preserves the first branch's value order.
+//
+// Retention (profile normalization step 2): when the normalized siblings or
+// any normalized branch carry an outside-profile keyword anywhere in their
+// subtree, the branches are NOT merged. The result is the normalized
+// siblings plus the allOf array of individually normalized branches in
+// authored order; retained is true and the result is already fully
+// normalized. That form is the outside-profile mark of the position:
+// identity remains decidable and any non-identical comparison there fails
+// closed (see compat).
+//
+// oneOf/anyOf in a merged branch still fails closed at normalization,
+// whether written inline, carried by a resolved $ref, or among the sibling
+// keywords: a union cannot be merged conjunctively by this profile.
+func (n *Normalizer) flattenAllOf(allOf any, siblings map[string]any, path string) (map[string]any, bool, error) {
 	arr, ok := asSlice(allOf)
 	if !ok {
-		return nil, fmt.Errorf("%s.allOf: must be array", pathOrRoot(path))
+		return nil, false, fmt.Errorf("%s.allOf: must be array", pathOrRoot(path))
+	}
+
+	var normalizedSiblings map[string]any
+	if len(siblings) > 0 {
+		nb, err := n.normalizeAt(siblings, path)
+		if err != nil {
+			return nil, false, err
+		}
+		normalizedSiblings = nb
+	}
+
+	branches := make([]map[string]any, 0, len(arr))
+	for idx, item := range arr {
+		branch, ok := asMap(item)
+		if !ok {
+			return nil, false, fmt.Errorf("%s.allOf[%d]: must be object", pathOrRoot(path), idx)
+		}
+		nb, err := n.normalizeAt(branch, ptrJoin(path, fmt.Sprintf("allOf[%d]", idx)))
+		if err != nil {
+			return nil, false, err
+		}
+		branches = append(branches, nb)
+	}
+
+	retain := normalizedSiblings != nil && containsOutsideProfile(normalizedSiblings)
+	for _, branch := range branches {
+		if retain {
+			break
+		}
+		retain = containsOutsideProfile(branch)
+	}
+	if retain {
+		out := cloneMap(normalizedSiblings)
+		if out == nil {
+			out = map[string]any{}
+		}
+		retained := make([]any, 0, len(branches))
+		for _, branch := range branches {
+			retained = append(retained, branch)
+		}
+		out["allOf"] = retained
+		return out, true, nil
 	}
 
 	merged := map[string]any{}
 
-	if len(siblings) > 0 {
-		nb, err := n.normalizeAt(siblings, path)
-		if err != nil {
-			return nil, err
+	if normalizedSiblings != nil {
+		if _, ok := normalizedSiblings["oneOf"]; ok {
+			return nil, false, &OutsideProfileError{Path: path, Keyword: "oneOf alongside allOf"}
 		}
-		if _, ok := nb["oneOf"]; ok {
-			return nil, &OutsideProfileError{Path: path, Keyword: "oneOf alongside allOf"}
+		if _, ok := normalizedSiblings["anyOf"]; ok {
+			return nil, false, &OutsideProfileError{Path: path, Keyword: "anyOf alongside allOf"}
 		}
-		if _, ok := nb["anyOf"]; ok {
-			return nil, &OutsideProfileError{Path: path, Keyword: "anyOf alongside allOf"}
-		}
-		if err := mergeAllOfBranch(merged, nb, path); err != nil {
-			return nil, err
+		if err := mergeAllOfBranch(merged, normalizedSiblings, path); err != nil {
+			return nil, false, err
 		}
 	}
 
-	for idx, item := range arr {
-		branch, ok := asMap(item)
-		if !ok {
-			return nil, fmt.Errorf("%s.allOf[%d]: must be object", pathOrRoot(path), idx)
-		}
-
-		branchPath := ptrJoin(path, fmt.Sprintf("allOf[%d]", idx))
-
-		// Normalize the branch in full before merging: resolves $ref (and
-		// profile-checks the resolved target), flattens nested allOf, and
-		// applies nullable. The union refusal lives in mergeAllOfBranch, so
-		// ref-carried oneOf/anyOf are refused exactly like inline spellings.
-		nb, err := n.normalizeAt(branch, branchPath)
-		if err != nil {
-			return nil, err
-		}
-
-		if err := mergeAllOfBranch(merged, nb, branchPath); err != nil {
-			return nil, err
+	for idx, nb := range branches {
+		// The union refusal lives in mergeAllOfBranch, so ref-carried
+		// oneOf/anyOf are refused exactly like inline spellings.
+		if err := mergeAllOfBranch(merged, nb, ptrJoin(path, fmt.Sprintf("allOf[%d]", idx))); err != nil {
+			return nil, false, err
 		}
 	}
 
-	return merged, nil
+	return merged, false, nil
 }
 
 // mergeAllOfBranch merges a single allOf branch into the accumulator.
@@ -81,8 +117,9 @@ func mergeAllOfBranch(acc, branch map[string]any, path string) error {
 	// reaching an allOf merge — a branch's top level or either side of an
 	// overlapping-key merge — fails closed. Branches are normalized before
 	// merging ($ref inlined, nested allOf flattened, $defs/annotations
-	// stripped, out-of-profile keywords refused), so together with this guard
-	// the arms below cover every keyword a normalized schema can carry.
+	// stripped) and an allOf carrying an outside-profile keyword is retained
+	// rather than merged, so together with this guard the arms below cover
+	// every keyword a merged branch can carry.
 	for _, k := range []string{"oneOf", "anyOf"} {
 		if _, ok := branch[k]; ok {
 			return &OutsideProfileError{Path: path, Keyword: k + " inside allOf"}

@@ -117,7 +117,7 @@ draft-only `replace` directives to an application intended for release.
   dependencies, bindings, sources, transforms, and schemas
 - **Lossless JSON** round-tripping that preserves unknown fields and `x-*` extensions for forward compatibility
 - **Validation** with shape-level checks, strict mode for unknown fields, and exact binding-specification identifier validation
-- **Schema compatibility** checking under the OpenBindings Schema Compatibility Profile v0.1 (covariant outputs, contravariant inputs) with diagnostic reasons
+- **Schema compatibility** checking under the OpenBindings Schema Comparison Profile `OB-2020-12` (covariant outputs, contravariant inputs) with diagnostic reasons
 - **`FetchInterface`** for resolving OBIs from URLs: well-known discovery, then synthesis from raw OpenAPI / AsyncAPI / etc. via supplied synthesizers
 - **Exhaustiveness-qualified synthesis accounting** through `CoverageSynthesizer`, pairing a creation-time-sound OBI with durable dispositions and an explicit claim about whether the upstream interaction inventory is complete
 - **`OperationInvoker`** that dispatches operations to binding-spec implementations and applies transforms
@@ -223,21 +223,19 @@ prepares a document; `PrepareProviderSnapshot` accepts an already prepared
 snapshot without reparsing it. Both use the runtime's cohesive provider
 registry—binding identifiers remain exact opaque capability tokens.
 
-**Value-identity architecture:** preparation owns one detached, exact JSON snapshot independently of optional
-JCS export. Schema/realization caches belong to that immutable owner; any
-cross-snapshot reuse or exact boundary match must verify exact material, not
-merely equal lossy fingerprints. Authored boundary graphs preserve schema
-structure, array order, presence and reachable resource content; they are not
-the comparison profile's normalized schema identity.
+**Value-identity architecture:** preparation owns one detached, exact JSON
+snapshot. Schema/realization caches belong to that immutable owner; any
+cross-snapshot reuse must verify exact material, not merely equal lossy
+fingerprints.
 
-`SnapshotID()` is local correlation, not content equality. `ExportJCS()` returns
-an explicit canonical export and content revision, or an error if that export
-would change a retained value; the working snapshot remains usable. Use
-`CompareBoundaryContracts` for exact authored-boundary evidence. Successful
-comparisons between immutable owners may be reused internally. These SDK
-commitments are separate from Core/binding conformance and the
-optional schema-comparison profile; they do not change invocation/context
-patterns, mandate third-party fidelity, or qualify JSONata or persistent pins.
+`SnapshotID()` is a process-local handle identity, not document identity or
+content equality. Contract identity and compatibility are the comparison
+profile's job: the composition policy assesses every correspondence through
+`compare.CheckOperationCompatibility`, whose identity rule makes identical
+contracts compatible whatever keywords they carry. These SDK commitments are
+separate from Core/binding conformance and the optional schema-comparison
+profile; they do not change invocation/context patterns, mandate third-party
+fidelity, or qualify JSONata or persistent pins.
 
 For an interactive host that needs to explain
 `ERR_OPERATION_VALIDATION_FAILED`, create an `invoke.DiagnosticCollector` with
@@ -679,7 +677,7 @@ for the full model.
 
 ## Schema compatibility profile
 
-The `schemaprofile` subpackage implements the OpenBindings Schema Compatibility Profile v0.1 for deterministic schema comparison:
+The `schemaprofile` subpackage implements the OpenBindings Schema Comparison Profile `OB-2020-12` for deterministic schema comparison:
 
 ```go
 import "github.com/openbindings/openbindings-go/schemaprofile"
@@ -695,14 +693,14 @@ if !ok {
 }
 ```
 
-The profile handles: type sets, const/enum, object properties and required fields, additionalProperties, array items, numeric bounds, string/array length bounds, oneOf/anyOf unions, and allOf flattening.
+The profile handles: type sets, const/enum, object properties and required fields, additionalProperties, array items, numeric bounds, string/array length bounds, oneOf/anyOf unions, and allOf flattening. Keywords outside that subset fail closed at comparison time: at every position the identity rule runs first, so structurally identical schemas are compatible whatever keywords they carry, and only a differing position that carries an outside-profile keyword is indeterminate (`*schemaprofile.OutsideProfileError`).
 
 ## Subpackages
 
 | Package | Purpose |
 |---------|---------|
 | `canonicaljson` | RFC 8785 (JCS) deterministic JSON serialization |
-| `schemaprofile` | Schema Compatibility Profile v0.1 — normalization and directional comparison |
+| `schemaprofile` | Schema Comparison Profile `OB-2020-12` — normalization, structural identity, and directional comparison |
 
 ## License
 

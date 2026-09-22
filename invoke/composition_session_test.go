@@ -303,8 +303,22 @@ func TestCompositionSessionIndeterminateAndSerializableDiagnostics(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inspection.Assessments) != 1 || inspection.Assessments[0].Code != "contract_indeterminate" {
+	// An undecidable keyword does not set the candidate aside: the name
+	// correspondence is the provider's compatibility claim and only a proven
+	// contradiction breaks it. The evidence stays inspectable on the route.
+	if len(inspection.Assessments) != 0 {
 		t.Fatalf("assessments = %#v", inspection.Assessments)
+	}
+	result, err := ResolveDependency(shortCtx(t), session, NewDynamicDependencySignature("delivery"))
+	if err != nil || result.Status != DependencyAvailable {
+		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+	if result.Route == nil {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(inspection.Providers) != 1 || len(inspection.Providers[0].Realizations) != 1 ||
+		inspection.Providers[0].Realizations[0].Evidence.Verdict != ContractIndeterminate {
+		t.Fatalf("inspected evidence = %#v", inspection.Providers)
 	}
 	data, err := json.Marshal(inspection)
 	if err != nil || len(data) == 0 {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 
 	openbindings "github.com/openbindings/openbindings-go"
 	"github.com/openbindings/openbindings-go/compare"
@@ -15,7 +14,11 @@ import (
 // reference policy.
 const ReferenceCompositionPolicyID = "openbindings.reference-composition@1"
 
-// ContractVerdict is three-valued compatibility evidence.
+// ContractVerdict is the profile's three-valued evidence about a provider's
+// correspondence claim. Only ContractIncompatible changes a composition
+// decision: it is a proven contradiction of the claim on a keyword the
+// profile reads. ContractIndeterminate means the profile could not read a
+// differing keyword; the claim made by the name or alias stands.
 type ContractVerdict string
 
 const (
@@ -32,7 +35,10 @@ type OperationCorrespondence struct {
 	Provider   openbindings.PreparedOperationDescriptor
 }
 
-// ContractEvidence explains an exact or directional compatibility decision.
+// ContractEvidence explains a directional compatibility decision made under
+// the schema-comparison profile. Method is "directional-profile"; identical
+// contracts are compatible through the profile's own identity rule, so no
+// separate exact-identity step (and no "exact" method) exists.
 type ContractEvidence struct {
 	Verdict ContractVerdict              `json:"verdict"`
 	Method  string                       `json:"method"`
@@ -145,24 +151,6 @@ func (referenceCompositionPolicy) AssessContract(
 	if err := ctx.Err(); err != nil {
 		return ContractEvidence{}, err
 	}
-	requiredContract, found, err := required.BoundaryContract(correspondence.Required.CanonicalKey)
-	if err != nil || !found {
-		return ContractEvidence{}, fmt.Errorf("openbindings: required boundary contract: %w", err)
-	}
-	providerContract, found, err := provider.BoundaryContract(correspondence.Provider.CanonicalKey)
-	if err != nil || !found {
-		return ContractEvidence{}, fmt.Errorf("openbindings: provider boundary contract: %w", err)
-	}
-	identity, err := openbindings.CompareBoundaryContracts(requiredContract, providerContract)
-	if err != nil {
-		return ContractEvidence{}, err
-	}
-	if identity == "equal" {
-		return ContractEvidence{Verdict: ContractCompatible, Method: "exact", Issues: []compare.CompatibilityIssue{}}, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return ContractEvidence{}, err
-	}
 	issues, err := compare.CheckOperationCompatibility(
 		required.InterfaceSnapshot(),
 		correspondence.Identifier,
@@ -172,7 +160,7 @@ func (referenceCompositionPolicy) AssessContract(
 		return ContractEvidence{}, err
 	}
 	for _, issue := range issues {
-		if strings.Contains(issue.Detail, "schema check failed:") {
+		if issue.Undecidable {
 			return ContractEvidence{
 				Verdict: ContractIndeterminate,
 				Method:  "directional-profile",

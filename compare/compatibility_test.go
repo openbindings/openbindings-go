@@ -1,6 +1,7 @@
 package compare
 
 import (
+	"strings"
 	"testing"
 
 	openbindings "github.com/openbindings/openbindings-go"
@@ -678,5 +679,70 @@ func TestCheckInterfaceCompatibility_BooleanFalseSchemas(t *testing.T) {
 	issues := CheckInterfaceCompatibility(iface(openbindings.Operation{Output: false}), iface(openbindings.Operation{Output: map[string]any{"type": []any{"string"}}}))
 	if len(issues) != 1 || issues[0].Kind != CompatibilityOutputIncompatible {
 		t.Fatalf("output false vs object: expected one output_incompatible issue, got %+v", issues)
+	}
+}
+
+// Every issue is classified: a proven contradiction (missing operation, a
+// keyword the profile reads and finds incompatible) is not undecidable; a
+// position the profile cannot read (a differing outside-profile keyword, an
+// unfetched external $ref, a schema that is not an object or boolean) is
+// undecidable and keeps its "schema check failed:" detail.
+func TestCheckInterfaceCompatibility_UndecidableClassification(t *testing.T) {
+	object := func(id map[string]any) map[string]any {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"id": id},
+			"required":   []any{"id"},
+		}
+	}
+	required := &openbindings.Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]openbindings.Operation{
+			"absent":      {Output: object(map[string]any{"type": "string"})},
+			"contradicts": {Output: object(map[string]any{"type": "string"})},
+			"pattern":     {Output: object(map[string]any{"type": "string"})},
+			"external":    {Output: object(map[string]any{"type": "string"})},
+			"malformed":   {Output: object(map[string]any{"type": "string"}), Input: map[string]any{"type": "object"}},
+		},
+	}
+	provided := &openbindings.Interface{
+		OpenBindings: "0.2.0",
+		Operations: map[string]openbindings.Operation{
+			"contradicts": {Output: object(map[string]any{"type": "number"})},
+			"pattern":     {Output: object(map[string]any{"type": "string", "pattern": "^t"})},
+			"external":    {Output: object(map[string]any{"$ref": "https://example.com/id.json"})},
+			"malformed":   {Output: object(map[string]any{"type": "string"}), Input: "not a schema"},
+		},
+	}
+
+	issues := CheckInterfaceCompatibility(required, provided)
+	got := make(map[string]CompatibilityIssue, len(issues))
+	for _, issue := range issues {
+		if _, dup := got[issue.Operation]; dup {
+			t.Fatalf("two issues for %s: %+v", issue.Operation, issues)
+		}
+		got[issue.Operation] = issue
+	}
+	want := map[string]struct {
+		kind        CompatibilityIssueKind
+		undecidable bool
+	}{
+		"absent":      {CompatibilityMissing, false},
+		"contradicts": {CompatibilityOutputIncompatible, false},
+		"pattern":     {CompatibilityOutputIncompatible, true},
+		"external":    {CompatibilityOutputIncompatible, true},
+		"malformed":   {CompatibilityInputIncompatible, true},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("issues = %+v", issues)
+	}
+	for operation, expect := range want {
+		issue, ok := got[operation]
+		if !ok || issue.Kind != expect.kind || issue.Undecidable != expect.undecidable {
+			t.Fatalf("%s: issue = %+v, want kind %s undecidable %v", operation, issue, expect.kind, expect.undecidable)
+		}
+		if issue.Undecidable != strings.Contains(issue.Detail, "schema check failed:") {
+			t.Fatalf("%s: classification and detail disagree: %+v", operation, issue)
+		}
 	}
 }

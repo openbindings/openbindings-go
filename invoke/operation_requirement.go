@@ -54,27 +54,39 @@ type OperationImplementation struct {
 }
 
 // OperationImplementationAssessment explains why one concrete interface did
-// not become an invocable match.
+// not become an invocable match. Issues carries the comparison profile's
+// complete findings for the operation when a proven contradiction excluded
+// the candidate; Reason states the exclusion in prose.
 type OperationImplementationAssessment struct {
 	Implementation OperationImplementation
 	Issues         []compare.CompatibilityIssue
 	Reason         string
 }
 
-// OperationMatch is a compatible, invocable realization of one requirement.
+// OperationMatch is an invocable realization of one requirement whose
+// correspondence claim the comparison profile did not contradict.
+//
+// Issues carries the profile's undecidable findings for the operation
+// (compare.CompatibilityIssue with Undecidable set): positions it could not
+// read and therefore neither confirms nor contradicts. They are evidence,
+// not a defect; the provider's name or alias correspondence is its
+// compatibility claim and stands. Nil when the profile decided every
+// position.
 //
 // KnownContextRequirements is the result of the binding's preflight. It is
 // advisory: it may omit requirements, and nil means none reported, not a
-// guarantee that live invocation cannot raise CONTEXT_REQUIRED.
+// guarantee that live invocation cannot raise CONTEXT_REQUIRED. A preflight
+// that could not answer predicts nothing and also leaves it nil.
 type OperationMatch[I, O any] struct {
 	Requirement              OperationRequirement[I, O]
 	Implementation           OperationImplementation
 	CanonicalOperation       string
+	Issues                   []compare.CompatibilityIssue
 	KnownContextRequirements *ContextRequiredDetails
 }
 
-// OperationRequirementMatches contains every compatible, invocable match plus
-// every rejected candidate assessment. Matches are ordered by caller-owned
+// OperationRequirementMatches contains every uncontradicted, invocable match
+// plus every rejected candidate assessment. Matches are ordered by caller-owned
 // preference (higher first), preserving input order across ties.
 type OperationRequirementMatches[I, O any] struct {
 	Matches     []*OperationMatch[I, O]
@@ -105,18 +117,18 @@ func (m *OperationMatch[I, O]) Preflight(ctx context.Context, opts ...InvokeOpti
 	)
 }
 
-// OperationRequirementStatus is the conservative outcome of resolving one
-// operation requirement.
+// OperationRequirementStatus is the outcome of resolving one operation
+// requirement.
 type OperationRequirementStatus string
 
 const (
 	// OperationRequirementAvailable means one uniquely highest-preference
-	// compatible and invocable implementation exists.
+	// uncontradicted and invocable implementation exists.
 	OperationRequirementAvailable OperationRequirementStatus = "available"
 	// OperationRequirementAmbiguous means equally preferred matches remain
 	// and the application must choose.
 	OperationRequirementAmbiguous OperationRequirementStatus = "ambiguous"
-	// OperationRequirementUnavailable means no compatible, invocable
+	// OperationRequirementUnavailable means no uncontradicted, invocable
 	// implementation exists.
 	OperationRequirementUnavailable OperationRequirementStatus = "unavailable"
 )
@@ -136,14 +148,21 @@ type preferredOperationMatch[I, O any] struct {
 	match      *OperationMatch[I, O]
 }
 
-// MatchOperationRequirement finds every compatible, invocable match for one
-// operation requirement.
+// MatchOperationRequirement finds every invocable match for one operation
+// requirement.
 //
-// Matching is deliberately conservative:
+// A name or alias correspondence is the provider's compatibility claim. The
+// SDK proceeds on the claim and looks for a contradiction:
 //  1. the required identifier must correspond by key or alias;
-//  2. its schemas must satisfy the reference comparison profile;
-//  3. the supplied operation invoker must resolve a concrete binding and its
-//     preflight must return without error.
+//  2. the reference comparison profile must not prove the schemas
+//     incompatible. Positions it cannot decide leave the claim standing and
+//     ride the match as OperationMatch.Issues;
+//  3. the supplied operation invoker must resolve a concrete binding. Its
+//     preflight is asked for known context requirements; a preflight that
+//     cannot answer predicts nothing and does not exclude the candidate,
+//     unless it reports a resolution fact (ERR_OPERATION_NOT_FOUND,
+//     ERR_BINDING_NOT_FOUND, ERR_BINDING_SELECTION_REQUIRED,
+//     ERR_UNKNOWN_SOURCE), which proves the binding is not invocable.
 //
 // The returned matches are ordered by caller-owned preference, but this
 // function selects nothing. Applications whose operation semantics aggregate,
@@ -205,10 +224,20 @@ func MatchOperationRequirement[I, O any](
 		if err != nil {
 			return nil, err
 		}
-		if len(issues) > 0 {
+		var undecidable []compare.CompatibilityIssue
+		contradicted := false
+		for _, issue := range issues {
+			if issue.Undecidable {
+				undecidable = append(undecidable, issue)
+			} else {
+				contradicted = true
+			}
+		}
+		if contradicted {
 			assessments = append(assessments, OperationImplementationAssessment{
 				Implementation: implementation,
 				Issues:         issues,
+				Reason:         "the provided operation contract contradicts the required contract",
 			})
 			continue
 		}
@@ -231,11 +260,20 @@ func MatchOperationRequirement[I, O any](
 			requirement.Signature.Key(),
 		)
 		if err != nil {
-			assessments = append(assessments, OperationImplementationAssessment{
-				Implementation: implementation,
-				Reason:         err.Error(),
-			})
-			continue
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			if isResolutionError(err) {
+				assessments = append(assessments, OperationImplementationAssessment{
+					Implementation: implementation,
+					Reason:         err.Error(),
+				})
+				continue
+			}
+			// The binding could not answer; an unsuccessful preflight
+			// carries no prediction, so the match stands with nothing
+			// known.
+			knownRequirements = nil
 		}
 
 		matches = append(matches, preferredOperationMatch[I, O]{
@@ -244,6 +282,7 @@ func MatchOperationRequirement[I, O any](
 				Requirement:              requirement,
 				Implementation:           implementation,
 				CanonicalOperation:       canonicalOperation,
+				Issues:                   undecidable,
 				KnownContextRequirements: knownRequirements,
 			},
 		})
@@ -260,6 +299,19 @@ func MatchOperationRequirement[I, O any](
 		Matches:     ordered,
 		Assessments: assessments,
 	}, nil
+}
+
+// isResolutionError reports whether err is an operation-invoker resolution
+// fact: the operation, binding, or source could not be resolved, or a
+// binding choice is still required. These prove the candidate is not
+// invocable. Any other preflight error means the binding could not answer
+// and predicts nothing.
+func isResolutionError(err error) bool {
+	switch wireError(err).Code {
+	case ErrCodeOperationNotFound, ErrCodeBindingNotFound, ErrCodeBindingSelectionRequired, ErrCodeUnknownSource:
+		return true
+	}
+	return false
 }
 
 // ResolveOperationRequirement resolves one operation requirement for

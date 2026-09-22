@@ -107,13 +107,6 @@ func TestComparisonProfile_ExactValues(t *testing.T) {
 				}
 				return
 			}
-			if c.Expected.Verdict == "indeterminate" {
-				var oe *OutsideProfileError
-				if !errors.As(err, &oe) {
-					t.Fatalf("wanted outside-profile result, got %v", err)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("unmet exact comparison capability: %v", err)
 			}
@@ -136,6 +129,15 @@ func TestComparisonProfile_ExactValues(t *testing.T) {
 				compatible, reason, err = InputCompatible(a, b)
 			} else {
 				compatible, reason, err = OutputCompatible(a, b)
+			}
+			if c.Expected.Verdict == "indeterminate" {
+				// The outside-profile refusal is decided at comparison time,
+				// after the identity rule; normalization retains the keyword.
+				var oe *OutsideProfileError
+				if !errors.As(err, &oe) {
+					t.Fatalf("wanted outside-profile result, got %v", err)
+				}
+				return
 			}
 			if err != nil {
 				t.Fatalf("unmet exact comparison capability: %v", err)

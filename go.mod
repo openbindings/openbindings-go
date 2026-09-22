@@ -4,10 +4,7 @@ go 1.25.12
 
 toolchain go1.25.13
 
-require (
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	golang.org/x/net v0.56.0
-)
+require golang.org/x/net v0.56.0
 
 require golang.org/x/text v0.39.0
 
@@ -19,7 +16,6 @@ require (
 )
 
 require (
-	github.com/dlclark/regexp2 v1.12.0
 	github.com/dlclark/regexp2/v2 v2.7.1
 	github.com/openbindings/jsonata/go v0.0.0-20260910174534-e2a5e518e6b5
 )

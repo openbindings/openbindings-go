@@ -127,47 +127,6 @@ func CanonicalizeLocation(uri string) (string, error) {
 	return b.String(), nil
 }
 
-// ResolveRef resolves a relative URI reference against a base URI per
-// RFC 3986 §5 Reference Resolution. This is the spec §10 (Reference
-// resolution) operation: it converts a sources[*].location value or a
-// schema $ref into a fully-qualified URI suitable for fetching or
-// comparison.
-//
-// Resolution is directory-relative: the merge step strips everything
-// after the last "/" in the base URI's path before appending the
-// reference (RFC 3986 §5.2.3).
-//
-// An absolute reference is returned unchanged. A relative reference
-// requires a non-empty absolute base; otherwise ResolveRef returns an
-// error. Callers loading documents without a canonical retrieval URI
-// (e.g., from stdin or memory) may pass any caller-supplied absolute
-// base. JSON Pointer fragments (RFC 6901) are preserved by url.URL's
-// reference-resolution semantics without further handling.
-func ResolveRef(base, ref string) (string, error) {
-	if ref == "" {
-		return "", errors.New("openbindings: cannot resolve empty reference")
-	}
-	refURL, err := url.Parse(ref)
-	if err != nil {
-		return "", fmt.Errorf("openbindings: parse reference %q: %w", ref, err)
-	}
-	if refURL.IsAbs() {
-		return ref, nil
-	}
-	if base == "" {
-		return "", fmt.Errorf("openbindings: cannot resolve relative reference %q without a base URI", ref)
-	}
-	baseURL, err := url.Parse(base)
-	if err != nil {
-		return "", fmt.Errorf("openbindings: parse base %q: %w", base, err)
-	}
-	if !baseURL.IsAbs() {
-		return "", fmt.Errorf("openbindings: base %q is not absolute", base)
-	}
-	resolved := baseURL.ResolveReference(refURL)
-	return resolved.String(), nil
-}
-
 // removeDotSegments implements RFC 3986 §5.2.4 to remove "." and ".."
 // segments from a URI path component. Returns the cleaned path.
 func removeDotSegments(input string) string {

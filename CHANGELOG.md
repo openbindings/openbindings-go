@@ -51,6 +51,50 @@
 
 ### Changed
 
+- **A name or alias correspondence is the provider's compatibility claim;
+  composition only sets a candidate aside on a proven contradiction.** The
+  reference composition policy treats a profile verdict of `indeterminate`
+  (a differing keyword the comparison profile cannot read) as the claim
+  standing: the provider stays eligible, ranks with compatible candidates,
+  and its evidence rides the resolved route. `contract_indeterminate` is no
+  longer an assessment code; `contract_incompatible` remains one. The
+  composition corpus case `SCOMP-F04-indeterminate-keyword` now expects
+  `available`. Undecidable compatibility issues are classified explicitly:
+  `compare.CompatibilityIssue.Undecidable` is set for the profile's
+  outside-profile finding, an external `$ref` the SDK declines to fetch, and
+  a schema that does not normalize (detail text unchanged), and consumers
+  decide on the field rather than on the `schema check failed:` prefix. The
+  deprecated `MatchOperationRequirement` family carries undecidable issues
+  on `OperationMatch.Issues` as evidence instead of excluding the candidate;
+  only a proven contradiction, or a preflight that reports a resolution
+  fact (`ERR_OPERATION_NOT_FOUND`, `ERR_BINDING_NOT_FOUND`,
+  `ERR_BINDING_SELECTION_REQUIRED`, `ERR_UNKNOWN_SOURCE`), excludes, and
+  any other preflight error leaves the match with no known context
+  requirements. A preflight error no longer stops ordinary invocation: the
+  binding could not answer and predicts nothing, so the one attempt runs as
+  if preflight had reported nothing and the outcome is the attempt's
+  (`ERR_BINDING_NOT_FOUND` and cancellation still end the invocation).
+
+- **The schema-comparison profile decides identity first and fails closed
+  at comparison time** (Schema Comparison Profile `OB-2020-12`, amended
+  2026-09-22). `schemaprofile.Normalizer.Normalize` no longer refuses a
+  keyword outside the profile: it is retained verbatim and marks its
+  position, and an `allOf` whose siblings or branches carry one is retained
+  unmerged (branches normalized individually, authored order kept) instead
+  of refused. `InputCompatible`/`OutputCompatible` now run the identity rule
+  at every position before any other rule: structurally identical
+  normalized sub-schemas (`EqualNormalizedSchemas`, which now compares a
+  retained `allOf` branch by branch) are compatible in both directions
+  whatever keywords they carry, and the walk does not descend. Only a
+  differing position marked outside the profile on either side is
+  indeterminate, reported as the same `*OutsideProfileError` (path and
+  keyword) the normalization-time refusal produced; every other position
+  runs the existing rules unchanged, with byte-identical reasons. Identical
+  mode compares retained keywords as ordinary values, so a difference at
+  one is incompatible, never indeterminate. `compare.CheckInterfaceCompatibility`
+  and `CheckOperationCompatibility` inherit this: identical contracts using
+  `pattern` or any other outside-profile keyword report no issue.
+
 - **The operation is named preflight and its documented contract is the
   signal contract** (the preflight signal contract proposal, 2026-09-21).
   `invoke.BindingPreparer` is `invoke.BindingPreflighter`;
@@ -544,6 +588,24 @@
 - **`ErrCodeExecutionFailed` retains its name** with a new comment explaining the deliberate retention: error codes name runtime outcomes (the call was *executed* and the service returned an error), not the SDK type or method that produced them, so the rename did not propagate to the error code.
 
 ### Removed
+
+- **Root-package comparison and dead helpers** (breaking, pre-1.0).
+  `CompareBoundaryContracts`, `PreparedBoundaryContract`, and
+  `PreparedInterface.BoundaryContract` are gone: the composition policy's
+  exact-identity step is removed and `AssessContract` goes straight to
+  `compare.CheckOperationCompatibility`, where the profile's identity rule
+  makes identical contracts compatible; `ContractEvidence.Method` is always
+  `"directional-profile"` (the `"exact"` value no longer exists).
+  `PreparedInterface.ExportJCS` and `JCSExport` (unused) are gone;
+  `SnapshotID` stays as a process-local handle identity. `ResolveRef`
+  (unused; the SDK never resolves relative references, per OBI-D-05) and
+  `ECMARegexpEngine` (dead; the engine lives in `internal/schemacompiler`)
+  are gone, and the root module no longer depends on
+  `github.com/santhosh-tekuri/jsonschema/v6` or
+  `github.com/dlclark/regexp2` v1. `WellKnownPath` moved from the root
+  package to `synthesize` (same value; documented against the HTTP
+  Discovery companion specification). ob re-exports `WellKnownPath` and
+  follows separately.
 
 - **The `security` surface, per spec 0.2.0**: the OBI `security` section
   (`Interface.Security`), `BindingEntry.Security`, `SecurityMethod`,

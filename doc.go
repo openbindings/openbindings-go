@@ -65,5 +65,5 @@
 //     interface discovery (FetchInterface)
 //   - compare: interface and operation compatibility checking
 //   - canonicaljson: RFC 8785 (JCS) deterministic JSON serialization
-//   - schemaprofile: OpenBindings Schema Compatibility Profile v0.1
+//   - schemaprofile: the OpenBindings Schema Comparison Profile (OB-2020-12)
 package openbindings

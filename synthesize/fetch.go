@@ -13,6 +13,13 @@ import (
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
+// WellKnownPath is the well-known URI path at which an origin publishes its
+// OpenBindings interface document, per the OpenBindings HTTP Discovery
+// companion specification (spec repository, http-discovery.md), which
+// registers the `openbindings` well-known URI suffix and defines the
+// endpoint it names. FetchInterface probes it after a direct fetch fails.
+const WellKnownPath = "/.well-known/openbindings"
+
 // maxFetchBytes caps how much of a fetched interface document is read
 // (1 MiB — matched byte-for-byte by the TS SDK). Exceeding it is a loud
 // error, never a truncation.
@@ -83,12 +90,12 @@ func FetchInterface(ctx context.Context, target string, opts ...FetchOption) (*F
 		trail = append(trail, "direct fetch: "+fetchStepResult(iface, err))
 
 		if !shouldSkipWellKnownDiscovery(target) {
-			wellKnown := strings.TrimRight(target, "/") + openbindings.WellKnownPath
+			wellKnown := strings.TrimRight(target, "/") + WellKnownPath
 			iface, err := tryFetchOBI(ctx, o.client, wellKnown)
 			if err == nil && iface != nil {
 				return &FetchedInterface{Interface: iface}, nil
 			}
-			trail = append(trail, openbindings.WellKnownPath+": "+fetchStepResult(iface, err))
+			trail = append(trail, WellKnownPath+": "+fetchStepResult(iface, err))
 		}
 	}
 
@@ -217,5 +224,5 @@ func shouldSkipWellKnownDiscovery(target string) bool {
 		strings.Contains(path, "/openapi") ||
 		strings.Contains(path, "/swagger") ||
 		strings.Contains(path, "/asyncapi") ||
-		strings.HasSuffix(path, openbindings.WellKnownPath)
+		strings.HasSuffix(path, WellKnownPath)
 }

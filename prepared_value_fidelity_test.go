@@ -49,48 +49,6 @@ func TestOfficialSDKQualification_ExactSnapshots(t *testing.T) {
 				}
 			}
 		})
-		// Exercise the current fast-path evidence seam, not profile-normalized
-		// equality. The implementation migration must replace this adapter too.
-		identities := map[string]bool{
-			"structural-wide-difference":     false,
-			"structural-equivalent-spelling": true,
-			"union-permutation":              false, // authored array order matters
-			"object-member-order":            true,
-		}
-		if want, selected := identities[c.ID]; selected {
-			t.Run("authored-identity/"+c.ID, func(t *testing.T) {
-				boundary := func(raw string) PreparedBoundaryContract {
-					var iface Interface
-					if err := jsonvalue.Unmarshal([]byte(raw), &iface); err != nil {
-						t.Fatal(err)
-					}
-					p, err := PrepareInterface(&iface)
-					if err != nil {
-						t.Fatal(err)
-					}
-					before, _, err := p.SchemaValidator("test", c.Direction)
-					if err != nil {
-						t.Fatal(err)
-					}
-					b, found, err := p.BoundaryContract("test")
-					if err != nil || !found || !b.Complete {
-						t.Fatalf("complete boundary unavailable: %v", err)
-					}
-					if after, _, err := p.SchemaValidator("test", c.Direction); err != nil || before != after {
-						t.Fatalf("identity inspection invalidated owner-local compiler cache: %v", err)
-					}
-					return b
-				}
-				a, b := boundary(c.LeftJSON), boundary(c.RightJSON)
-				identity, err := CompareBoundaryContracts(a, b)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got := identity == "equal"; got != want {
-					t.Errorf("authored boundary identity: got %v want %v", got, want)
-				}
-			})
-		}
 		if c.Witness == nil {
 			continue
 		}

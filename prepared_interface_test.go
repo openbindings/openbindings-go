@@ -65,19 +65,6 @@ func TestPreparedInterfaceContentSnapshotAndIndexes(t *testing.T) {
 	if got, _ := prepared.Operation("deliver"); got.CanonicalKey != "deliver" {
 		t.Fatalf("prepared operation drifted: %#v", got)
 	}
-	export, err := prepared.ExportJCS()
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonical := export.Canonical
-	canonical[0] = 'x'
-	secondExport, err := prepared.ExportJCS()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(canonical, secondExport.Canonical) {
-		t.Fatal("ExportJCS exposed internal bytes")
-	}
 }
 
 func TestPreparedInterfaceDoesNotRetainNamedJSONContainers(t *testing.T) {
@@ -119,64 +106,6 @@ func TestPreparedInterfaceDoesNotRetainNamedJSONContainers(t *testing.T) {
 	secondProperties := secondInput["properties"].(map[string]any)
 	if got := secondProperties["id"].(map[string]any)["type"]; got != "string" {
 		t.Fatalf("InterfaceSnapshot exposed prepared storage: %#v", got)
-	}
-}
-
-func TestPreparedInterfaceBoundaryContractReachability(t *testing.T) {
-	base := preparedFixture()
-	prepared, err := PrepareInterface(&base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	contract, ok, err := prepared.BoundaryContract("deliver")
-	if err != nil || !ok || !contract.Complete {
-		t.Fatalf("contract = %#v, %v, %v", contract, ok, err)
-	}
-
-	irrelevant := preparedFixture()
-	irrelevant.Schemas["Unused"] = map[string]any{"type": "integer"}
-	irrelevantPrepared, err := PrepareInterface(&irrelevant)
-	if err != nil {
-		t.Fatal(err)
-	}
-	irrelevantContract, _, err := irrelevantPrepared.BoundaryContract("deliver")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if identity, err := CompareBoundaryContracts(irrelevantContract, contract); err != nil || identity != "equal" {
-		t.Fatal("unreachable schema changed boundary identity")
-	}
-
-	relevant := preparedFixture()
-	relevant.Schemas["Item"] = map[string]any{"type": "string"}
-	relevantPrepared, err := PrepareInterface(&relevant)
-	if err != nil {
-		t.Fatal(err)
-	}
-	relevantContract, _, err := relevantPrepared.BoundaryContract("deliver")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if identity, err := CompareBoundaryContracts(relevantContract, contract); err != nil || identity != "different" {
-		t.Fatal("reachable schema did not change boundary identity")
-	}
-}
-
-func TestPreparedInterfaceExternalClosureIsExplicit(t *testing.T) {
-	iface := preparedFixture()
-	op := iface.Operations["deliver"]
-	op.Input = map[string]any{"$ref": "https://schemas.example/Item"}
-	iface.Operations["deliver"] = op
-	prepared, err := PrepareInterface(&iface)
-	if err != nil {
-		t.Fatal(err)
-	}
-	contract, _, err := prepared.BoundaryContract("deliver")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if contract.Complete || len(contract.UnavailableReferences) != 1 {
-		t.Fatalf("contract = %#v", contract)
 	}
 }
 
