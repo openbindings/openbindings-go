@@ -51,6 +51,16 @@
 
 ### Changed
 
+- **A name or alias correspondence is the provider's compatibility claim;
+  composition only sets a candidate aside on a proven contradiction.** The
+  reference composition policy treats a profile verdict of `indeterminate`
+  (a differing keyword the comparison profile cannot read) as the claim
+  standing: the provider stays eligible, ranks with compatible candidates,
+  and its evidence rides the resolved route. `contract_indeterminate` is no
+  longer an assessment code; `contract_incompatible` remains one. The
+  composition corpus case `SCOMP-F04-indeterminate-keyword` now expects
+  `available`.
+
 - **The schema-comparison profile decides identity first and fails closed
   at comparison time** (Schema Comparison Profile `OB-2020-12`, amended
   2026-09-22). `schemaprofile.Normalizer.Normalize` no longer refuses a

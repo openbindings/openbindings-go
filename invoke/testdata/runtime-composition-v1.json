@@ -8,14 +8,21 @@
         "openbindings": "0.2.0",
         "operations": {
           "deliver": {
-            "input": { "type": "string", "pattern": "^[a-z]+$" },
-            "output": { "type": "string" }
+            "input": {
+              "type": "string",
+              "pattern": "^[a-z]+$"
+            },
+            "output": {
+              "type": "string"
+            }
           }
         },
         "dependencies": {
           "delivery": {
             "operation": "deliver",
-            "bindingSpecs": ["example.local@1"]
+            "bindingSpecs": [
+              "example.local@1"
+            ]
           }
         }
       },
@@ -23,20 +30,31 @@
         {
           "key": "primary",
           "preference": 0,
-          "runtimeBindingSpecs": ["example.local@1"],
+          "runtimeBindingSpecs": [
+            "example.local@1"
+          ],
           "interface": {
             "openbindings": "0.2.0",
             "operations": {
               "send": {
-                "aliases": ["deliver"],
-                "input": { "pattern": "^[a-z]+$", "type": "string" },
-                "output": { "type": "string" }
+                "aliases": [
+                  "deliver"
+                ],
+                "input": {
+                  "pattern": "^[a-z]+$",
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                }
               }
             },
             "sources": {
               "local": {
                 "bindingSpec": "example.local@1",
-                "content": { "handler": "send" }
+                "content": {
+                  "handler": "send"
+                }
               }
             },
             "bindings": {
@@ -50,7 +68,10 @@
         }
       ],
       "dependency": "delivery",
-      "invocation": { "input": "hello", "output": "hello" },
+      "invocation": {
+        "input": "hello",
+        "output": "hello"
+      },
       "expected": {
         "status": "available",
         "providerKey": "primary",
@@ -64,58 +85,86 @@
         "openbindings": "0.2.0",
         "operations": {
           "deliver": {
-            "input": { "type": "string" },
-            "output": { "type": "string" }
+            "input": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            }
           }
         },
         "dependencies": {
-          "delivery": { "operation": "deliver" }
+          "delivery": {
+            "operation": "deliver"
+          }
         }
       },
       "providers": [
         {
           "key": "alpha",
           "preference": 0,
-          "runtimeBindingSpecs": ["example.local@1"],
+          "runtimeBindingSpecs": [
+            "example.local@1"
+          ],
           "interface": {
             "openbindings": "0.2.0",
             "operations": {
               "deliver": {
-                "input": { "type": "string" },
-                "output": { "type": "string" }
+                "input": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                }
               }
             },
             "sources": {
               "local": {
                 "bindingSpec": "example.local@1",
-                "content": { "handler": "deliver" }
+                "content": {
+                  "handler": "deliver"
+                }
               }
             },
             "bindings": {
-              "deliver.local": { "operation": "deliver", "source": "local" }
+              "deliver.local": {
+                "operation": "deliver",
+                "source": "local"
+              }
             }
           }
         },
         {
           "key": "beta",
           "preference": 0,
-          "runtimeBindingSpecs": ["example.local@1"],
+          "runtimeBindingSpecs": [
+            "example.local@1"
+          ],
           "interface": {
             "openbindings": "0.2.0",
             "operations": {
               "deliver": {
-                "input": { "type": "string" },
-                "output": { "type": "string" }
+                "input": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                }
               }
             },
             "sources": {
               "local": {
                 "bindingSpec": "example.local@1",
-                "content": { "handler": "deliver" }
+                "content": {
+                  "handler": "deliver"
+                }
               }
             },
             "bindings": {
-              "deliver.local": { "operation": "deliver", "source": "local" }
+              "deliver.local": {
+                "operation": "deliver",
+                "source": "local"
+              }
             }
           }
         }
@@ -133,36 +182,58 @@
         "openbindings": "0.2.0",
         "operations": {
           "deliver": {
-            "input": { "type": "string" },
-            "output": { "type": "string" }
+            "input": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            }
           }
         },
         "dependencies": {
-          "delivery": { "operation": "deliver" }
+          "delivery": {
+            "operation": "deliver"
+          }
         }
       },
       "providers": [
         {
           "key": "multiple",
           "preference": 0,
-          "runtimeBindingSpecs": ["example.local@1"],
+          "runtimeBindingSpecs": [
+            "example.local@1"
+          ],
           "interface": {
             "openbindings": "0.2.0",
             "operations": {
               "deliver": {
-                "input": { "type": "string" },
-                "output": { "type": "string" }
+                "input": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                }
               }
             },
             "sources": {
               "local": {
                 "bindingSpec": "example.local@1",
-                "content": { "handler": "deliver" }
+                "content": {
+                  "handler": "deliver"
+                }
               }
             },
             "bindings": {
-              "deliver.a": { "operation": "deliver", "source": "local", "selector": "a" },
-              "deliver.b": { "operation": "deliver", "source": "local", "selector": "b" }
+              "deliver.a": {
+                "operation": "deliver",
+                "source": "local",
+                "selector": "a"
+              },
+              "deliver.b": {
+                "operation": "deliver",
+                "source": "local",
+                "selector": "b"
+              }
             }
           }
         }
@@ -180,43 +251,64 @@
         "openbindings": "0.2.0",
         "operations": {
           "deliver": {
-            "input": { "type": "string", "pattern": "^[a-z]+$" },
-            "output": { "type": "string" }
+            "input": {
+              "type": "string",
+              "pattern": "^[a-z]+$"
+            },
+            "output": {
+              "type": "string"
+            }
           }
         },
         "dependencies": {
-          "delivery": { "operation": "deliver" }
+          "delivery": {
+            "operation": "deliver"
+          }
         }
       },
       "providers": [
         {
           "key": "pattern",
           "preference": 0,
-          "runtimeBindingSpecs": ["example.local@1"],
+          "runtimeBindingSpecs": [
+            "example.local@1"
+          ],
           "interface": {
             "openbindings": "0.2.0",
             "operations": {
               "deliver": {
-                "input": { "type": "string", "pattern": "^[A-Z]+$" },
-                "output": { "type": "string" }
+                "input": {
+                  "type": "string",
+                  "pattern": "^[A-Z]+$"
+                },
+                "output": {
+                  "type": "string"
+                }
               }
             },
             "sources": {
               "local": {
                 "bindingSpec": "example.local@1",
-                "content": { "handler": "deliver" }
+                "content": {
+                  "handler": "deliver"
+                }
               }
             },
             "bindings": {
-              "deliver.local": { "operation": "deliver", "source": "local" }
+              "deliver.local": {
+                "operation": "deliver",
+                "source": "local"
+              }
             }
           }
         }
       ],
       "dependency": "delivery",
       "expected": {
-        "status": "unavailable",
-        "assessmentCodes": ["contract_indeterminate"]
+        "status": "available",
+        "providerKey": "pattern",
+        "bindingKey": "deliver.local",
+        "assessmentCodes": []
       }
     },
     {
@@ -225,35 +317,52 @@
         "openbindings": "0.2.0",
         "operations": {
           "deliver": {
-            "input": { "type": "string" },
-            "output": { "type": "string" }
+            "input": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            }
           }
         },
         "dependencies": {
-          "delivery": { "operation": "deliver" }
+          "delivery": {
+            "operation": "deliver"
+          }
         }
       },
       "providers": [
         {
           "key": "number",
           "preference": 0,
-          "runtimeBindingSpecs": ["example.local@1"],
+          "runtimeBindingSpecs": [
+            "example.local@1"
+          ],
           "interface": {
             "openbindings": "0.2.0",
             "operations": {
               "deliver": {
-                "input": { "type": "number" },
-                "output": { "type": "string" }
+                "input": {
+                  "type": "number"
+                },
+                "output": {
+                  "type": "string"
+                }
               }
             },
             "sources": {
               "local": {
                 "bindingSpec": "example.local@1",
-                "content": { "handler": "deliver" }
+                "content": {
+                  "handler": "deliver"
+                }
               }
             },
             "bindings": {
-              "deliver.local": { "operation": "deliver", "source": "local" }
+              "deliver.local": {
+                "operation": "deliver",
+                "source": "local"
+              }
             }
           }
         }
@@ -261,7 +370,9 @@
       "dependency": "delivery",
       "expected": {
         "status": "unavailable",
-        "assessmentCodes": ["contract_incompatible"]
+        "assessmentCodes": [
+          "contract_incompatible"
+        ]
       }
     },
     {
@@ -270,14 +381,20 @@
         "openbindings": "0.2.0",
         "operations": {
           "deliver": {
-            "input": { "type": "string" },
-            "output": { "type": "string" }
+            "input": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            }
           }
         },
         "dependencies": {
           "delivery": {
             "operation": "deliver",
-            "bindingSpecs": ["example.allowed@1"]
+            "bindingSpecs": [
+              "example.allowed@1"
+            ]
           }
         }
       },
@@ -285,23 +402,34 @@
         {
           "key": "other",
           "preference": 0,
-          "runtimeBindingSpecs": ["example.other@1"],
+          "runtimeBindingSpecs": [
+            "example.other@1"
+          ],
           "interface": {
             "openbindings": "0.2.0",
             "operations": {
               "deliver": {
-                "input": { "type": "string" },
-                "output": { "type": "string" }
+                "input": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                }
               }
             },
             "sources": {
               "other": {
                 "bindingSpec": "example.other@1",
-                "content": { "handler": "deliver" }
+                "content": {
+                  "handler": "deliver"
+                }
               }
             },
             "bindings": {
-              "deliver.other": { "operation": "deliver", "source": "other" }
+              "deliver.other": {
+                "operation": "deliver",
+                "source": "other"
+              }
             }
           }
         }
@@ -309,7 +437,9 @@
       "dependency": "delivery",
       "expected": {
         "status": "unavailable",
-        "assessmentCodes": ["binding_spec_disallowed"]
+        "assessmentCodes": [
+          "binding_spec_disallowed"
+        ]
       }
     },
     {
@@ -318,64 +448,95 @@
         "openbindings": "0.2.0",
         "operations": {
           "deliver": {
-            "input": { "type": "string" },
-            "output": { "type": "string" }
+            "input": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            }
           }
         },
         "dependencies": {
-          "delivery": { "operation": "deliver" }
+          "delivery": {
+            "operation": "deliver"
+          }
         }
       },
       "providers": [
         {
           "key": "low",
           "preference": 0,
-          "runtimeBindingSpecs": ["example.local@1"],
+          "runtimeBindingSpecs": [
+            "example.local@1"
+          ],
           "interface": {
             "openbindings": "0.2.0",
             "operations": {
               "deliver": {
-                "input": { "type": "string" },
-                "output": { "type": "string" }
+                "input": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                }
               }
             },
             "sources": {
               "local": {
                 "bindingSpec": "example.local@1",
-                "content": { "handler": "deliver" }
+                "content": {
+                  "handler": "deliver"
+                }
               }
             },
             "bindings": {
-              "deliver.local": { "operation": "deliver", "source": "local" }
+              "deliver.local": {
+                "operation": "deliver",
+                "source": "local"
+              }
             }
           }
         },
         {
           "key": "high",
           "preference": 10,
-          "runtimeBindingSpecs": ["example.local@1"],
+          "runtimeBindingSpecs": [
+            "example.local@1"
+          ],
           "interface": {
             "openbindings": "0.2.0",
             "operations": {
               "deliver": {
-                "input": { "type": "string" },
-                "output": { "type": "string" }
+                "input": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                }
               }
             },
             "sources": {
               "local": {
                 "bindingSpec": "example.local@1",
-                "content": { "handler": "deliver" }
+                "content": {
+                  "handler": "deliver"
+                }
               }
             },
             "bindings": {
-              "deliver.local": { "operation": "deliver", "source": "local" }
+              "deliver.local": {
+                "operation": "deliver",
+                "source": "local"
+              }
             }
           }
         }
       ],
       "dependency": "delivery",
-      "invocation": { "input": "preferred", "output": "preferred" },
+      "invocation": {
+        "input": "preferred",
+        "output": "preferred"
+      },
       "expected": {
         "status": "available",
         "providerKey": "high",

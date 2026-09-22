@@ -15,7 +15,11 @@ import (
 // reference policy.
 const ReferenceCompositionPolicyID = "openbindings.reference-composition@1"
 
-// ContractVerdict is three-valued compatibility evidence.
+// ContractVerdict is the profile's three-valued evidence about a provider's
+// correspondence claim. Only ContractIncompatible changes a composition
+// decision: it is a proven contradiction of the claim on a keyword the
+// profile reads. ContractIndeterminate means the profile could not read a
+// differing keyword; the claim made by the name or alias stands.
 type ContractVerdict string
 
 const (
