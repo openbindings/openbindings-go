@@ -34,10 +34,10 @@ type requiredOperationEntry struct {
 // CheckInterfaceCompatibility checks whether a provided interface is
 // compatible with a required interface. This is a tooling convention, not a
 // spec requirement: the spec leaves matching, comparison, and
-// selection to tools (see openbindings.md §2 Scope principle and the
-// schemaprofile package docstring). The algorithm below is the openbindings
-// reference tooling's matching convention; third-party tools may use
-// different strategies.
+// selection to tools (see openbindings.md §1.3, Authority and deferral, and
+// the schemaprofile package docstring). The algorithm below is the
+// openbindings reference tooling's matching convention; third-party tools
+// may use different strategies.
 //
 // For each operation the required interface declares by key, the provided
 // interface is searched by that name against its flat key+aliases namespace
@@ -230,8 +230,9 @@ func schemaObjectForms(a, b openbindings.JSONSchema) (ma, mb map[string]any, ok 
 
 // normalizedCompatible normalizes each schema against its own side's rooted
 // normalizer, then runs the directional check on the results (the TypeScript
-// SDK's checkInterfaceCompatibility dance). Normalization errors surface as
-// the check's error.
+// SDK's checkInterfaceCompatibility dance). Normalization errors and the
+// profile's comparison-time outside-profile refusal both surface as the
+// check's error.
 func normalizedCompatible(reqNorm, provNorm *schemaprofile.Normalizer, req, prov map[string]any, isInput bool) (bool, string, error) {
 	reqN, err := reqNorm.Normalize(req)
 	if err != nil {

@@ -15,8 +15,9 @@ type Fetcher interface {
 	Fetch(u *url.URL) ([]byte, error)
 }
 
-// Normalizer normalizes schemas deterministically per the OpenBindings Schema Compatibility Profile (v0.1).
-// It also provides directional compatibility checks (InputCompatible / OutputCompatible).
+// Normalizer normalizes schemas deterministically per the OpenBindings Schema
+// Comparison Profile (OB-2020-12). It also provides directional
+// compatibility checks (InputCompatible / OutputCompatible).
 //
 // A Normalizer is not safe for concurrent use. Create a separate instance for each goroutine,
 // or protect access with external synchronization.
@@ -37,7 +38,10 @@ type Normalizer struct {
 	refStack map[string]bool
 }
 
-// Normalize returns a normalized copy of schema per the v0.1 profile.
+// Normalize returns a normalized copy of schema per the profile. Keywords
+// outside the profile are retained verbatim and mark their position; they
+// never make normalization fail (the refusal belongs to comparison, after
+// the identity rule).
 func (n *Normalizer) Normalize(schema map[string]any) (map[string]any, error) {
 	if n == nil {
 		return nil, errors.New("schemaprofile: nil normalizer")
@@ -96,7 +100,13 @@ func CanonicalString(v any) (string, error) {
 	return string(b), nil
 }
 
-// OutsideProfileError indicates the schema uses a keyword outside the v0.1 profile.
+// OutsideProfileError is the profile's indeterminate outcome: a compared
+// position that is not structurally identical on both sides carries a
+// keyword outside the profile (rule 0a), so the profile cannot decide it.
+// Path names the position in the normalizer's spelling ("<root>",
+// properties["name"], allOf[0], ...) and Keyword the outside-profile
+// keyword found there. Normalization itself never raises it for a retained
+// keyword; only the union-inside-allOf merge refusal still does.
 type OutsideProfileError struct {
 	Path    string
 	Keyword string
@@ -168,7 +178,7 @@ func (e *SchemaError) Error() string {
 }
 
 var (
-	// supported keywords (profile v0.1)
+	// supported keywords (the profile's in-scope subset)
 	inScopeKeywords = map[string]struct{}{
 		"$ref":                 {},
 		"$defs":                {},
@@ -220,14 +230,15 @@ func (n *Normalizer) normalizeAt(schema map[string]any, path string) (map[string
 		return map[string]any{}, nil
 	}
 
-	// Convert OpenAPI 3.0 "nullable: true" to a type union before the
-	// profile keyword check. This is structural (affects compatibility)
-	// so it must happen before annotations are stripped.
+	// Convert OpenAPI 3.0 "nullable: true" to a type union first. This is
+	// structural (affects compatibility) so it must happen before
+	// annotations are stripped.
 	schema = applyNullable(schema)
 
-	if err := assertProfileKeywords(schema, path); err != nil {
-		return nil, err
-	}
+	// Profile keyword marking (normalization step 2): keywords outside the
+	// profile are NOT refused here. They are retained verbatim below and
+	// mark the position; the refusal is decided at comparison time, after
+	// the identity rule (see compat).
 
 	// Inline $ref for comparison.
 	if ref, ok := schema["$ref"].(string); ok && strings.TrimSpace(ref) != "" {
@@ -242,10 +253,25 @@ func (n *Normalizer) normalizeAt(schema map[string]any, path string) (map[string
 			return nil, &RefError{Path: path, Ref: ref, Err: errors.New("resolved $ref is not an object")}
 		}
 		// The profile defines evaluation equivalent to inlining. We normalize the resolved schema.
-		return n.normalizeAt(rm, path)
+		inlined, err := n.normalizeAt(rm, path)
+		if err != nil {
+			return nil, err
+		}
+		// Outside-profile keywords written beside the $ref keep marking this
+		// position: they are retained verbatim on the inlined result (the
+		// position's own spelling wins over a same-named keyword carried by
+		// the target). In-scope siblings of a $ref are ignored, as before.
+		if keys := outsideProfileKeys(schema); len(keys) > 0 {
+			inlined = cloneMap(inlined)
+			for _, k := range keys {
+				inlined[k] = schema[k]
+			}
+		}
+		return inlined, nil
 	}
 
-	// Strip annotation-only keywords, $defs, and x- extensions from the output.
+	// Strip annotation-only keywords, $defs, and x- extensions from the
+	// output. Outside-profile keywords survive this loop verbatim.
 	out := make(map[string]any, len(schema))
 	for k, v := range schema {
 		if _, isAnnotation := annotationKeywords[k]; isAnnotation {
@@ -263,7 +289,9 @@ func (n *Normalizer) normalizeAt(schema map[string]any, path string) (map[string
 	// Flatten allOf before anything else. The schema's own sibling keywords
 	// (everything beside allOf that survives stripping) are constraints that
 	// apply conjunctively with the branches, so they merge as one additional
-	// branch (profile normalization step 5).
+	// branch (profile normalization step 5). When the siblings or any branch
+	// carry an outside-profile keyword the allOf is retained instead of
+	// merged (step 2); the retained form is already fully normalized.
 	if allOf, ok := out["allOf"]; ok {
 		siblings := make(map[string]any, len(out)-1)
 		for k, v := range out {
@@ -272,9 +300,12 @@ func (n *Normalizer) normalizeAt(schema map[string]any, path string) (map[string
 			}
 			siblings[k] = v
 		}
-		merged, err := n.flattenAllOf(allOf, siblings, path)
+		merged, retained, err := n.flattenAllOf(allOf, siblings, path)
 		if err != nil {
 			return nil, err
+		}
+		if retained {
+			return merged, nil
 		}
 		// Replace out with the merged result and re-normalize.
 		return n.normalizeAt(merged, path)

@@ -120,7 +120,7 @@ func TestFetchInterface_FailureCarriesResolutionTrail(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected failure")
 	}
-	for _, want := range []string{"direct fetch:", openbindings.WellKnownPath, "synthesize as fake@1.0:", "pass the spec document's own URL"} {
+	for _, want := range []string{"direct fetch:", WellKnownPath, "synthesize as fake@1.0:", "pass the spec document's own URL"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("trail should contain %q, got:\n%v", want, err)
 		}

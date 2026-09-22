@@ -32,7 +32,10 @@ type OperationCorrespondence struct {
 	Provider   openbindings.PreparedOperationDescriptor
 }
 
-// ContractEvidence explains an exact or directional compatibility decision.
+// ContractEvidence explains a directional compatibility decision made under
+// the schema-comparison profile. Method is "directional-profile"; identical
+// contracts are compatible through the profile's own identity rule, so no
+// separate exact-identity step (and no "exact" method) exists.
 type ContractEvidence struct {
 	Verdict ContractVerdict              `json:"verdict"`
 	Method  string                       `json:"method"`
@@ -142,24 +145,6 @@ func (referenceCompositionPolicy) AssessContract(
 	correspondence OperationCorrespondence,
 	provider *openbindings.PreparedInterface,
 ) (ContractEvidence, error) {
-	if err := ctx.Err(); err != nil {
-		return ContractEvidence{}, err
-	}
-	requiredContract, found, err := required.BoundaryContract(correspondence.Required.CanonicalKey)
-	if err != nil || !found {
-		return ContractEvidence{}, fmt.Errorf("openbindings: required boundary contract: %w", err)
-	}
-	providerContract, found, err := provider.BoundaryContract(correspondence.Provider.CanonicalKey)
-	if err != nil || !found {
-		return ContractEvidence{}, fmt.Errorf("openbindings: provider boundary contract: %w", err)
-	}
-	identity, err := openbindings.CompareBoundaryContracts(requiredContract, providerContract)
-	if err != nil {
-		return ContractEvidence{}, err
-	}
-	if identity == "equal" {
-		return ContractEvidence{Verdict: ContractCompatible, Method: "exact", Issues: []compare.CompatibilityIssue{}}, nil
-	}
 	if err := ctx.Err(); err != nil {
 		return ContractEvidence{}, err
 	}

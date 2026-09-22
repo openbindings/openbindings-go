@@ -2,8 +2,13 @@ package schemaprofile
 
 import "github.com/openbindings/openbindings-go/jsonvalue"
 
-// EqualNormalizedSchemas compares normalized structure. Unordered matching
-// applies only at schema union positions, never inside const/enum JSON data.
+// EqualNormalizedSchemas compares normalized structure: the profile's
+// structural identity (rule 0, and the corpus's identical mode). Unordered
+// matching applies only at schema union positions, never inside const/enum
+// JSON data. A retained allOf compares branch by branch in authored order.
+// Retained outside-profile keywords compare as ordinary values, so identity
+// is decidable for any keyword and a difference at one is a difference,
+// never an indeterminate outcome.
 func EqualNormalizedSchemas(a, b map[string]any) (bool, error) {
 	if len(a) != len(b) {
 		return false, nil
@@ -45,6 +50,27 @@ func EqualNormalizedSchemas(a, b map[string]any) (bool, error) {
 					}
 					if !found {
 						return false, nil
+					}
+				}
+				continue
+			}
+		}
+		if k == "allOf" {
+			aa, ao := asSlice(av)
+			ba, bo := asSlice(bv)
+			if ao && bo {
+				if len(aa) != len(ba) {
+					return false, nil
+				}
+				for i := range aa {
+					x, xo := asMap(aa[i])
+					y, yo := asMap(ba[i])
+					if !xo || !yo {
+						return false, nil
+					}
+					same, err := EqualNormalizedSchemas(x, y)
+					if err != nil || !same {
+						return same, err
 					}
 				}
 				continue

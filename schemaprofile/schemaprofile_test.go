@@ -9,15 +9,118 @@ import (
 	"testing"
 )
 
-func TestNormalize_FailsClosedOnOutOfProfileKeyword(t *testing.T) {
+func TestNormalize_RetainsOutOfProfileKeyword(t *testing.T) {
+	// Normalization step 2: an outside-profile keyword is retained verbatim
+	// and marks the position; nothing is refused until comparison.
 	n := &Normalizer{Root: map[string]any{}}
-	_, err := n.Normalize(map[string]any{"type": "string", "pattern": "^[a-z]+$"})
+	out, err := n.Normalize(map[string]any{"type": "string", "pattern": "^[a-z]+$"})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	want := `{"pattern":"^[a-z]+$","type":["string"]}`
+	if got := mustCanonical(t, out); got != want {
+		t.Fatalf("normalized form mismatch:\n  got:  %s\n  want: %s", got, want)
+	}
+	if _, isMarker := out["allOf"]; isMarker || len(out) != 2 {
+		t.Fatalf("marking leaked into the normalized map: %#v", out)
+	}
+}
+
+func TestCompat_IdentityRuleBeforeOutsideProfile(t *testing.T) {
+	// Rule 0: identical positions are compatible in both directions whatever
+	// keywords they carry. Rule 0a: a non-identical position marked outside
+	// the profile is indeterminate with the same finding the former
+	// normalization-time refusal reported.
+	n := &Normalizer{Root: map[string]any{}}
+	withPattern := map[string]any{"type": "string", "pattern": "^[a-z]+$"}
+	for _, direction := range []string{"input", "output"} {
+		check := n.InputCompatible
+		if direction == "output" {
+			check = n.OutputCompatible
+		}
+		ok, reason, err := check(withPattern, map[string]any{"pattern": "^[a-z]+$", "type": "string"})
+		if err != nil || !ok || reason != "" {
+			t.Fatalf("%s identical: ok=%v reason=%q err=%v", direction, ok, reason, err)
+		}
+		_, _, err = check(withPattern, map[string]any{"type": "string"})
+		var ope *OutsideProfileError
+		if !errors.As(err, &ope) {
+			t.Fatalf("%s differing: expected OutsideProfileError, got %v", direction, err)
+		}
+		if got := err.Error(); got != `outside profile at <root>: keyword "pattern"` {
+			t.Fatalf("%s differing: error mismatch: %q", direction, got)
+		}
+		// Rule 0a precedes the Top rules: a Top candidate does not decide a
+		// marked, non-identical position.
+		_, _, err = check(withPattern, map[string]any{})
+		if !errors.As(err, &ope) {
+			t.Fatalf("%s vs Top: expected OutsideProfileError, got %v", direction, err)
+		}
+		// The candidate side is marked the same way.
+		_, _, err = check(map[string]any{"type": "string"}, withPattern)
+		if !errors.As(err, &ope) || ope.Keyword != "pattern" {
+			t.Fatalf("%s candidate marked: expected OutsideProfileError for pattern, got %v", direction, err)
+		}
+	}
+}
+
+func TestCompat_NestedIdentityDoesNotDescendOrMaskSiblings(t *testing.T) {
+	n := &Normalizer{Root: map[string]any{}}
+	object := func(codePattern string, size json.Number) map[string]any {
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"code": map[string]any{"type": "string", "pattern": codePattern},
+				"size": map[string]any{"type": "integer", "maximum": size},
+			},
+		}
+	}
+	// Identical nested position (code) plus a wider sibling: compatible.
+	ok, _, err := n.InputCompatible(object("^[A-Z]{3}$", "10"), object("^[A-Z]{3}$", "20"))
+	if err != nil || !ok {
+		t.Fatalf("identical nested position: ok=%v err=%v", ok, err)
+	}
+	// Identical nested position plus a narrower sibling: the profile decides.
+	ok, reason, err := n.InputCompatible(object("^[A-Z]{3}$", "10"), object("^[A-Z]{3}$", "5"))
+	if err != nil || ok {
+		t.Fatalf("narrower sibling: ok=%v err=%v", ok, err)
+	}
+	if want := `properties["size"]: maximum: candidate maximum 5 is less than target maximum 10`; reason != want {
+		t.Fatalf("reason mismatch:\n  got:  %q\n  want: %q", reason, want)
+	}
+	// Differing nested marked position: indeterminate, named at its path.
+	_, _, err = n.InputCompatible(object("^[A-Z]{3}$", "10"), object("^[A-Z]{2}$", "20"))
 	var ope *OutsideProfileError
-	if err == nil || !errors.As(err, &ope) {
+	if !errors.As(err, &ope) {
 		t.Fatalf("expected OutsideProfileError, got %v", err)
 	}
-	if ope.Keyword != "pattern" {
-		t.Fatalf("expected keyword pattern, got %q", ope.Keyword)
+	if want := `outside profile at properties["code"]: keyword "pattern"`; err.Error() != want {
+		t.Fatalf("error mismatch:\n  got:  %q\n  want: %q", err.Error(), want)
+	}
+}
+
+func TestIdentity_OutsideProfileKeywordsCompareAsValues(t *testing.T) {
+	// Identical mode: a difference at an outside-profile keyword is a
+	// difference (incompatible), never indeterminate; sameness is decidable
+	// for any keyword.
+	n := &Normalizer{Root: map[string]any{}}
+	a, err := n.Normalize(mustUnmarshal(t, `{"type":"string","pattern":"^[a-z]+$"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := n.Normalize(mustUnmarshal(t, `{"pattern":"^[a-z]+$","type":"string"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := n.Normalize(mustUnmarshal(t, `{"type":"string","pattern":"^[a-z]*$"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same, err := EqualNormalizedSchemas(a, b); err != nil || !same {
+		t.Fatalf("identical schemas with pattern: same=%v err=%v", same, err)
+	}
+	if same, err := EqualNormalizedSchemas(a, c); err != nil || same {
+		t.Fatalf("differing pattern: same=%v err=%v", same, err)
 	}
 }
 
@@ -690,19 +793,71 @@ func TestAllOf_RefCarriedUnionRefused(t *testing.T) {
 	}
 }
 
-func TestAllOf_RefCarriedOutOfProfileKeywordRefused(t *testing.T) {
+func TestAllOf_RefCarriedOutOfProfileKeywordRetained(t *testing.T) {
+	// A branch carrying an outside-profile keyword (here through a resolved
+	// $ref) is not merged: the branches are normalized individually and the
+	// allOf is retained in authored order, marking the position. Identity
+	// stays decidable; a non-identical comparison fails closed with the
+	// finding the former normalization-time refusal reported.
 	n := &Normalizer{Root: mustUnmarshal(t, `{"$defs":{"P":{"type":"string","pattern":"^a+$"}}}`)}
-	_, err := n.Normalize(mustUnmarshal(t, `{"allOf":[{"$ref":"#/$defs/P"}]}`))
-	if err == nil {
-		t.Fatal("expected OutsideProfileError for ref-carried pattern inside allOf")
+	out, err := n.Normalize(mustUnmarshal(t, `{"allOf":[{"$ref":"#/$defs/P"}]}`))
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
 	}
+	want := `{"allOf":[{"pattern":"^a+$","type":["string"]}]}`
+	if got := mustCanonical(t, out); got != want {
+		t.Fatalf("normalized form mismatch:\n  got:  %s\n  want: %s", got, want)
+	}
+
+	same, err := n.Normalize(mustUnmarshal(t, `{"allOf":[{"type":"string","pattern":"^a+$"}]}`))
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	ok, reason, err := InputCompatible(out, same)
+	if err != nil || !ok || reason != "" {
+		t.Fatalf("identical retained allOf: ok=%v reason=%q err=%v", ok, reason, err)
+	}
+
+	_, _, err = InputCompatible(out, mustUnmarshal(t, `{"type":["string"]}`))
 	var ope *OutsideProfileError
 	if !errors.As(err, &ope) {
 		t.Fatalf("expected OutsideProfileError, got %T: %v", err, err)
 	}
-	want := `outside profile at allOf[0]: keyword "pattern"`
-	if err.Error() != want {
-		t.Fatalf("error mismatch:\n  got:  %q\n  want: %q", err.Error(), want)
+	wantErr := `outside profile at allOf[0]: keyword "pattern"`
+	if err.Error() != wantErr {
+		t.Fatalf("error mismatch:\n  got:  %q\n  want: %q", err.Error(), wantErr)
+	}
+}
+
+func TestAllOf_SiblingOutOfProfileKeywordRetained(t *testing.T) {
+	// Sibling keywords carrying an outside-profile keyword retain the allOf
+	// too; the siblings are normalized and the branches kept in order. The
+	// merge path is untouched when nothing is outside the profile.
+	n := &Normalizer{Root: map[string]any{}}
+	out, err := n.Normalize(mustUnmarshal(t, `{"type":"string","pattern":"^a+$","allOf":[{"minLength":1},{"maxLength":3}]}`))
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	want := `{"allOf":[{"minLength":1},{"maxLength":3}],"pattern":"^a+$","type":["string"]}`
+	if got := mustCanonical(t, out); got != want {
+		t.Fatalf("normalized form mismatch:\n  got:  %s\n  want: %s", got, want)
+	}
+	merged, err := n.Normalize(mustUnmarshal(t, `{"type":"string","allOf":[{"minLength":1},{"maxLength":3}]}`))
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if got, want := mustCanonical(t, merged), `{"maxLength":3,"minLength":1,"type":["string"]}`; got != want {
+		t.Fatalf("merge path changed:\n  got:  %s\n  want: %s", got, want)
+	}
+	// An allOf the normalizer would have merged is still refused as not
+	// normalized; a retained one is accepted because its position is marked.
+	_, _, err = InputCompatible(out, out)
+	if err != nil {
+		t.Fatalf("retained allOf refused as not normalized: %v", err)
+	}
+	var nne *NotNormalizedError
+	if _, _, err = InputCompatible(mustUnmarshal(t, `{"allOf":[{"type":["string"]}]}`), out); !errors.As(err, &nne) {
+		t.Fatalf("expected NotNormalizedError for a mergeable allOf, got %v", err)
 	}
 }
 
