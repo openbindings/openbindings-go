@@ -89,55 +89,6 @@ func (s *outputStream[I, O]) Read(ctx context.Context) (O, error) {
 	return out, nil
 }
 
-// readLocalInput keeps native leaves through checked local-handler construction.
-func readLocalInput[T any](ctx context.Context, h BindingHandle[any, any]) (T, error) {
-	var zero T
-	if ep := valueio.From(h); ep != nil {
-		p, err := ep.ReadInput(ctx)
-		if err != nil {
-			return zero, err
-		}
-		x, err := valueio.Construct[T](ctx, p, ep.Limits)
-		if err != nil {
-			return zero, valueError(err, "local input")
-		}
-		return x, nil
-	}
-	raw, err := h.ReadInput(ctx)
-	if err != nil {
-		return zero, err
-	}
-	limits := defaultValueLimits()
-	p, err := valueio.Capture(ctx, limits, raw)
-	if err != nil {
-		return zero, valueError(err, "local input")
-	}
-	x, err := valueio.Construct[T](ctx, p, limits)
-	if err != nil {
-		return zero, valueError(err, "local input")
-	}
-	return x, nil
-}
-func emitLocalOutput[T any](h BindingHandle[any, any], output T) error {
-	if ep := valueio.From(h); ep != nil {
-		return ep.CaptureOutput(output)
-	}
-	limits := defaultValueLimits()
-	p, err := valueio.Capture(context.Background(), limits, output)
-	if err != nil {
-		ie := valueError(err, "local output")
-		h.FireError(ie)
-		return ie
-	}
-	raw, err := valueio.Construct[any](context.Background(), p, limits)
-	if err != nil {
-		ie := valueError(err, "local output")
-		h.FireError(ie)
-		return ie
-	}
-	return h.EmitOutput(raw)
-}
-
 // streamReadGuard covers conversion as well as dequeue on a typed adapter.
 type streamReadGuard struct{ reading atomic.Int32 }
 

@@ -25,7 +25,7 @@ func benchmarkOwnedRoundTrip[T any](b *testing.B, input T) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	provider, err := PrepareLocalProvider(PrepareLocalProviderOptions{Key: "local", Interface: document, Implementations: map[string]LocalBindingImplementation{"run": LocalUnary(func(_ context.Context, x T) (T, error) { return x, nil })}})
+	provider, err := PrepareProvider(PreparedProviderOptions{Key: "local", Interface: document, Runtime: benchmarkEchoRuntime(document)})
 	if err != nil {
 		b.Fatal(err)
 	}

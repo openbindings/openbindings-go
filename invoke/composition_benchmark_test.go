@@ -56,14 +56,10 @@ func benchmarkLocalRoute(b *testing.B) (*CompositionSession, *PreparedDependency
 	if err != nil {
 		b.Fatal(err)
 	}
-	provider, err := PrepareLocalProvider(PrepareLocalProviderOptions{
+	provider, err := PrepareProvider(PreparedProviderOptions{
 		Key:       "local",
 		Interface: providerDocument,
-		Implementations: map[string]LocalBindingImplementation{
-			"operation.00000": LocalUnary(func(_ context.Context, input map[string]any) (map[string]any, error) {
-				return input, nil
-			}),
-		},
+		Runtime:   benchmarkEchoRuntime(providerDocument),
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -134,4 +130,23 @@ func BenchmarkWarmDependencyResolution(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// benchmarkEchoRuntime is an application-authored in-process runtime: it
+// warrants exactly the binding specifications the document declares and
+// echoes each input as the output. It stands in for the removed local
+// provider in benchmarks; an application realizing operations in process
+// writes the same thing for its own specification identifier.
+func benchmarkEchoRuntime(document *openbindings.PreparedInterface) *compositionTestRuntime {
+	seen := map[string]struct{}{}
+	var specs []openbindings.BindingSpecInfo
+	for _, key := range document.BindingKeys() {
+		descriptor, _ := document.Binding(key)
+		if _, ok := seen[descriptor.BindingSpec]; ok {
+			continue
+		}
+		seen[descriptor.BindingSpec] = struct{}{}
+		specs = append(specs, openbindings.BindingSpecInfo{BindingSpec: descriptor.BindingSpec})
+	}
+	return &compositionTestRuntime{specs: specs}
 }

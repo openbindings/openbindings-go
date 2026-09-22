@@ -204,8 +204,7 @@
   `DependencySignatures`, and opaque retained routes separate static closure
   from live preflight and invocation. The versioned reference policy reports
   provider and realization ambiguity separately and preserves exact or
-  tri-state compatibility evidence. `PrepareLocalProvider`, `LocalUnary`, and
-  `LocalStream` use the same verified route; generic JSON-domain values use native container shapes with snapshot ownership. The older operation-requirement family is transitional.
+  tri-state compatibility evidence. Generic JSON-domain values use native container shapes with snapshot ownership. The older operation-requirement family is transitional.
 
 - **config.value requirements carry an engine-asserted `schema` instead of
   `choices`** (breaking; the 2026-08-20 working-draft amendment of the
@@ -598,6 +597,17 @@
 - **`ErrCodeExecutionFailed` retains its name** with a new comment explaining the deliberate retention: error codes name runtime outcomes (the call was *executed* and the service returned an error), not the SDK type or method that produced them, so the rename did not propagate to the error code.
 
 ### Removed
+
+- **The local provider is gone: `PrepareLocalProvider`, `PrepareLocalProviderOptions`,
+  `LocalBindingImplementation`, `LocalImplementationOption`, `LocalUnary`,
+  `LocalStream`, `LocalPreflight`, `WithLocalPreflight`** (breaking, pre-1.0).
+  It keyed handlers by binding key while warranting support for whatever
+  binding specification the OBI's source declared, a conformance warrant for
+  rules it did not implement. An application that realizes operations in
+  process writes a `BindingInvoker` for its own application-private
+  specification identifier, exactly like every other realization; the README
+  shows one. No consumer outside the SDK's tests used the removed surface.
+  TypeScript removal is a tracked parity item.
 
 - **Root-package comparison and dead helpers** (breaking, pre-1.0).
   `CompareBoundaryContracts`, `PreparedBoundaryContract`, and
