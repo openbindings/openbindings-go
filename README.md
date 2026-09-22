@@ -315,25 +315,42 @@ stops after the first eligible tier; `InspectDependency` remains the deliberate
 exhaustive diagnostics path. Custom policies make that staging explicit with
 `ProviderInspectionGroups`.
 
-Native implementations use the same verified route and operation substrate,
-addressed only by exact OBI binding key. Generic JSON-domain maps and slices
-are snapshotted at public handoffs without a JSON text round trip. Handlers and
-callers own detached mutable values. See [invocation values](INVOCATION_VALUES.md)
-for byte recovery, limits, conversion failures and explicit export:
+An application that realizes operations in process writes a binding invoker
+for its own binding specification, exactly as the OpenAPI or gRPC modules do
+for theirs. Its OBI declares a source under that identifier (application
+private identifiers are ordinary; nothing registers them), the invoker warrants
+that identifier and nothing else, and selection and composition treat it like
+any other realization. There is no separate "local" path: every realization is
+an invoker implementing a specification for a source.
 
 ```go
-local, err := invoke.PrepareLocalProvider(invoke.PrepareLocalProviderOptions{
-    Key:       "local-tasks",
-    Interface: providerInterface,
-    Implementations: map[string]invoke.LocalBindingImplementation{
-        "create.local": invoke.LocalUnary(
-            func(ctx context.Context, input map[string]any) (map[string]any, error) {
-                return repository.Create(ctx, input)
-            },
-        ),
-    },
-})
+type inProcessInvoker struct{ handlers map[string]func(context.Context, any) (any, error) }
+
+func (i *inProcessInvoker) BindingSpecs() []openbindings.BindingSpecInfo {
+    return []openbindings.BindingSpecInfo{{BindingSpec: "com.example.tasks.native@1"}}
+}
+func (i *inProcessInvoker) CheckBindingSpecs(specs []string) []openbindings.BindingSpecVerdict {
+    return openbindings.CheckBindingSpecs(specs, i.BindingSpecs())
+}
+func (i *inProcessInvoker) InvokeBinding(ctx context.Context, args *invoke.BindingInvocationArgs) invoke.Invocation[any, any] {
+    call := invoke.NewInvocationImpl[any, any](ctx, args.InvocationValueOption())
+    handler := i.handlers[args.Selector] // the source's content names the handler
+    go func() {
+        input, err := call.ReadInput(ctx)
+        if err != nil { call.FireError(invoke.AsInvocationError(err)); return }
+        _ = call.CloseInput()
+        out, err := handler(ctx, input)
+        if err != nil { call.FireError(invoke.NewInvocationError(invoke.ErrCodeExecutionFailed)); return }
+        if call.EmitOutput(out) == nil { call.CloseOutput() }
+    }()
+    return call
+}
 ```
+
+Generic JSON-domain maps and slices are snapshotted at public handoffs without
+a JSON text round trip; handlers and callers own detached mutable values. See
+[invocation values](INVOCATION_VALUES.md) for byte recovery, limits, conversion
+failures and explicit export.
 
 The older `OperationRequirement` family remains as a transitional compatibility
 surface while downstream callers migrate; new 0.2 wiring should use prepared

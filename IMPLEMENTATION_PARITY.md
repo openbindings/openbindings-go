@@ -29,7 +29,7 @@ claim that the revised behavior has already been implemented there.
 | prepared provider catalog | `PrepareProvider(...)` | `prepareProvider(...)` |
 | application-scoped composition | `NewCompositionSession(...)` | `new CompositionSession(...)` |
 | typed dependency route | `ResolveDependency(...)` | `session.resolve(...)` |
-| native local provider | `PrepareLocalProvider(...)` | `prepareLocalProvider(...)` |
+| native local provider | removed 2026-09-22 (application-authored invoker instead) | `prepareLocalProvider(...)` (removal pending) |
 | transitional consumed-operation wrapper | `NewOperationRequirement(...)` | `operationRequirement(...)` |
 | per-operation compatibility check | `CheckOperationCompatibility(...)` | `checkOperationCompatibility(...)` |
 | all compatible, invocable matches | `MatchOperationRequirement(...)` | `matchOperationRequirement(...)` |

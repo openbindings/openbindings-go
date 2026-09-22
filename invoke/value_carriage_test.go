@@ -32,9 +32,9 @@ func TestTypedGenericBridgePreservesNumbers(t *testing.T) {
 	}
 }
 
-func TestLocalGenericBridgePreservesNumbers(t *testing.T) {
+func TestEmitOutputPreservesTypedNumbers(t *testing.T) {
 	inner := NewInvocationImpl[any, any](context.Background())
-	err := emitLocalOutput(inner, struct {
+	err := inner.EmitOutput(struct {
 		ID uint64 `json:"id"`
 	}{18446744073709551615})
 	if err != nil {
@@ -62,8 +62,8 @@ func TestGenericBridgesRejectInvalidNumberCarriers(t *testing.T) {
 		if err := call.Write(ctx, input); err == nil {
 			t.Errorf("typed bridge accepted invalid carrier: %#v", input)
 		}
-		if err := emitLocalOutput(inner, input); err == nil {
-			t.Errorf("local bridge accepted invalid carrier: %#v", input)
+		if err := inner.EmitOutput(input); err == nil {
+			t.Errorf("output capture accepted invalid carrier: %#v", input)
 		}
 		cancel()
 	}
