@@ -18,14 +18,22 @@ its environment, independently of protocol. See the
 > the released package path; they do not install this branch today. Use the
 > source-workspace instructions to evaluate 0.2 before release.
 
-**Conformance:** `ParseDocument(data)` rejects malformed JSON and duplicate
-object keys (OBI-D-01), then `Interface.Validate()` enforces OBI-D-02 through
-OBI-D-12 and OBI-D-16 through OBI-D-19, plus the OBI-T-04 version-refusal
-rule. OBI-D-13 and the binding-specification-defined address cases of OBI-D-05
-require knowledge of the exact governing binding specification; a core-only
-validator leaves those conclusions unverified rather than claiming conformity
-or non-conformity, per
-[§10.5](https://github.com/openbindings/spec/blob/main/openbindings.md#105-verification-conclusions).
+**Conformance:** `ValidateDocument(data)` validates a document's exact bytes
+and returns a `ValidationReport` in the vocabulary of
+[§10.5](https://github.com/openbindings/spec/blob/release/0.2/openbindings.md#105-conformance-conclusions):
+evidence for every document rule, located findings, OBI-T-02 diagnostics, and a
+conclusion of conformant, non-conformant, or conformance-undetermined.
+OBI-D-13 and the binding-specification-defined address cases of OBI-D-05
+require knowledge of the exact governing binding specification, so a
+core-only validator records them as inconclusive rather than passing or
+failing them. A document with bindings is therefore conformance-undetermined
+here until something that implements its binding specifications adds that
+evidence. `Interface.Validate()` does the same for a document already in
+memory, where OBI-D-01 is inconclusive because a host object no longer
+carries the exact input bytes. Both return a `*ValidationError` beside the
+report exactly when a violation is established, so the error is the gate
+before acting on a document; a nil error is not a conformance claim.
+A version outside the supported set is refused, not concluded (OBI-T-04).
 OBI-D-14 and OBI-D-15 are retired identifiers. OBI-D-02, OBI-D-11, and
 OBI-D-17 use [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema);
 the core schema and locally required JSON Schema 2020-12 meta-schemas are
@@ -118,7 +126,7 @@ draft-only `replace` directives to an application intended for release.
 - **Core types** for the OpenBindings interface document: operations,
   dependencies, bindings, sources, transforms, and schemas
 - **Lossless JSON** round-tripping that preserves unknown fields and `x-*` extensions for forward compatibility
-- **Validation** with shape-level checks, strict mode for unknown fields, and exact binding-specification identifier validation
+- **Validation** reporting per-rule evidence and a §10.5 conformance conclusion, unknown fields surfaced as diagnostics rather than rejected, and a violation gate for acting on documents
 - **Schema compatibility** checking under the OpenBindings Schema Comparison Profile `OB-2020-12` (covariant outputs, contravariant inputs) with diagnostic reasons
 - **`httpdiscovery.Discover`** for retrieving an existing OBI from an origin's well-known endpoint without requiring synthesis
 - **`acquire.Resolve`** for an optional direct-fetch, discovery, then synthesis sequence using supplied synthesizers

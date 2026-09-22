@@ -6,8 +6,8 @@ import "strings"
 // Schema 2020-12 dialect an OBI schema position requires (core OBI-D-06,
 // OBI-D-17). Every accepted AsyncAPI edition's default Schema Object is a
 // superset of JSON Schema Draft 07, so a verbatim copy is faithful only where
-// the two dialects agree; where they diverge, copying either produces an
-// invalid OBI (tuple `items`, Draft-07 `$id` forms, `$schema`) or — worse —
+// the two dialects agree; where they diverge, copying either produces a
+// non-conformant OBI (tuple `items`, Draft-07 `$id` forms, `$schema`) or — worse —
 // a valid schema that silently means something the author did not write
 // (`dependencies` and `additionalItems` become inert annotations; assertion
 // keywords beside `$ref` become active). The binding specification names this

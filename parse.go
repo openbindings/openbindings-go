@@ -2,6 +2,7 @@ package openbindings
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	json "github.com/openbindings/openbindings-go/internal/thirdparty/jsoncodec"
 	"io"
@@ -11,24 +12,17 @@ import (
 	"github.com/openbindings/openbindings-go/jsonvalue"
 )
 
-// ParseDocument validates raw JSON bytes against the OBI schema, then unmarshals into an Interface.
+// ParseDocument decodes a document for use: it checks the exact input bytes
+// (OBI-D-01) and the embedded document schema (OBI-D-02), refuses an
+// unsupported version (OBI-T-04), and unmarshals into an Interface. It is not
+// a conformance check; ValidateDocument reports every document rule.
 func ParseDocument(data []byte) (*Interface, error) {
-	// OBI-D-01: an OBI document is UTF-8 encoded JSON. encoding/json
-	// tolerates invalid byte sequences (replacing them with U+FFFD), so
-	// check encoding validity explicitly.
-	if !utf8.Valid(data) {
-		return nil, fmt.Errorf("parse document: invalid JSON: input is not valid UTF-8 (OBI-D-01)")
+	// OBI-D-01: the exact input is UTF-8 JSON with no duplicate object keys
+	// and no byte-order mark.
+	raw, err := decodeDocumentBytes(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse document: invalid JSON: %w (OBI-D-01)", err)
 	}
-
-	if err := rejectDuplicateObjectKeys(data); err != nil {
-		return nil, fmt.Errorf("parse document: invalid JSON: %w", err)
-	}
-
-	var raw any
-	if err := jsonvalue.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parse document: invalid JSON: %w", err)
-	}
-
 	if verr := compiledOBISchema.Validate(raw); verr != nil {
 		lines := splitSchemaError(verr)
 		return nil, &ValidationError{
@@ -41,28 +35,14 @@ func ParseDocument(data []byte) (*Interface, error) {
 		return nil, fmt.Errorf("parse document: %w", err)
 	}
 
-	// OBI-T-04 (spec §11.1): refuse to PARSE a document declaring a higher
-	// major version (pre-1.0: higher minor) than this SDK's MaxTested. This
-	// must hold on every entry point (ParseDocument, ValidateDocument,
-	// acquisition), not only Interface.Validate. The schema pattern above
-	// already rejects a malformed-version string, so a bad version surfaces as
-	// a schema error first; here the value is well-formed SemVer. The error is
-	// emitted identically to Interface.Validate so the diagnostic is the same
-	// regardless of entry point. Because ParseDocument fails first, callers
-	// that go on to Interface.Validate never double-report.
-	// The higher/lower/prerelease refusal (below MinSupported and pre-1.0
-	// lower minor as well as the upward direction, plus unsupported
-	// prereleases) is the same ordered decision Interface.Validate and
-	// IsSupportedVersion make, via the shared versionRefusal predicate, with
-	// identical messages.
-	if msg, refused, err := versionRefusal(iface.OpenBindings); err != nil {
-		return nil, &ValidationError{
-			Problems: []string{fmt.Sprintf("openbindings: %v (OBI-T-04)", err)},
-		}
-	} else if refused {
-		return nil, &ValidationError{
-			Problems: []string{fmt.Sprintf("openbindings: %s (OBI-T-04)", msg)},
-		}
+	// OBI-T-04: a document declaring a well-formed version outside this SDK's
+	// supported set is refused rather than interpreted, on every entry point.
+	// The schema pattern above already rejects a malformed version string, so
+	// the value here is well-formed SemVer. The refusal is the same
+	// *VersionRefusalError Interface.Validate and ValidateDocument return, so
+	// the diagnostic does not depend on the entry point.
+	if refusal := versionRefusalOf(iface.OpenBindings); refusal != nil {
+		return nil, refusal
 	}
 
 	return &iface, nil
@@ -74,18 +54,6 @@ func prefixLines(prefix string, lines []string) []string {
 		out[i] = fmt.Sprintf("%s: %s", prefix, l)
 	}
 	return out
-}
-
-// ValidateDocument is a convenience that calls ParseDocument followed by Validate.
-func ValidateDocument(data []byte) (*Interface, error) {
-	iface, err := ParseDocument(data)
-	if err != nil {
-		return nil, err
-	}
-	if err := iface.Validate(); err != nil {
-		return iface, err
-	}
-	return iface, nil
 }
 
 // FormatValidationErrors returns a human-readable multi-line string from a ValidationError.
@@ -107,6 +75,25 @@ func asValidationError(err error, target **ValidationError) bool {
 		return true
 	}
 	return false
+}
+
+// decodeDocumentBytes applies OBI-D-01 to the exact input bytes: valid UTF-8,
+// no duplicate object keys in any object, and JSON with no leading
+// byte-order mark. It returns the generic JSON view of the document.
+func decodeDocumentBytes(data []byte) (any, error) {
+	// encoding/json tolerates invalid byte sequences (replacing them with
+	// U+FFFD), so check encoding validity explicitly.
+	if !utf8.Valid(data) {
+		return nil, errors.New("input is not valid UTF-8")
+	}
+	if err := rejectDuplicateObjectKeys(data); err != nil {
+		return nil, err
+	}
+	var raw any
+	if err := jsonvalue.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func rejectDuplicateObjectKeys(data []byte) error {

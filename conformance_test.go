@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -145,7 +146,7 @@ func runConformanceDir(t *testing.T, dir string) {
 				iface, parseErr := ParseDocument(documentBytes)
 				var validateErr error
 				if parseErr == nil {
-					validateErr = iface.Validate()
+					_, validateErr = iface.Validate()
 				}
 				actualValid := parseErr == nil && validateErr == nil
 
@@ -160,6 +161,7 @@ func runConformanceDir(t *testing.T, dir string) {
 						t.Errorf("expected invalid, but SDK accepted the document")
 					}
 				}
+				assertReportAgreesWithFixture(t, documentBytes, tt)
 			})
 		}
 	}
@@ -225,8 +227,8 @@ func runCoreToolScenarioDir(t *testing.T, dir string) {
 					testSchemaCycleScenario(t, raw)
 				case "validate-operation-values":
 					testValidateValuesScenario(t, raw)
-				case "conclude-verification":
-					testConcludeVerificationScenario(t, raw)
+				case "conclude-conformance":
+					testConcludeConformanceScenario(t, raw)
 				default:
 					t.Fatalf("unsupported scenario action %q", header.Action)
 				}
@@ -251,7 +253,7 @@ func testResolveOperationScenario(t *testing.T, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
-	iface, err := ValidateDocument(scenario.Given.Document)
+	iface, _, err := ValidateDocument(scenario.Given.Document)
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
@@ -295,7 +297,7 @@ func testSchemaCycleScenario(t *testing.T, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
-	iface, err := ValidateDocument(scenario.Given.Document)
+	iface, _, err := ValidateDocument(scenario.Given.Document)
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
@@ -354,7 +356,7 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
-	iface, err := ValidateDocument(scenario.Given.Document)
+	iface, _, err := ValidateDocument(scenario.Given.Document)
 	if err != nil {
 		t.Fatalf("scenario document: %v", err)
 	}
@@ -393,30 +395,30 @@ func testValidateValuesScenario(t *testing.T, raw json.RawMessage) {
 	}
 }
 
-func testConcludeVerificationScenario(t *testing.T, raw json.RawMessage) {
+func testConcludeConformanceScenario(t *testing.T, raw json.RawMessage) {
 	t.Helper()
 	var scenario struct {
 		Given struct {
 			Evidence map[string]RuleEvidenceStatus `json:"evidence"`
 		} `json:"given"`
 		Expected struct {
-			Conclusion string   `json:"conclusion"`
-			Violated   []string `json:"violated"`
-			Unverified []string `json:"unverified"`
+			Conclusion   string   `json:"conclusion"`
+			Violated     []string `json:"violated"`
+			Inconclusive []string `json:"inconclusive"`
 		} `json:"expected"`
 	}
 	if err := json.Unmarshal(raw, &scenario); err != nil {
 		t.Fatal(err)
 	}
-	report := ConcludeVerification(scenario.Given.Evidence)
+	report := ConcludeConformance(scenario.Given.Evidence)
 	expectedViolated := append([]string(nil), scenario.Expected.Violated...)
-	expectedUnverified := append([]string(nil), scenario.Expected.Unverified...)
+	expectedInconclusive := append([]string(nil), scenario.Expected.Inconclusive...)
 	sort.Strings(expectedViolated)
-	sort.Strings(expectedUnverified)
+	sort.Strings(expectedInconclusive)
 	if string(report.Conclusion) != scenario.Expected.Conclusion ||
 		!slices.Equal(report.Violated, expectedViolated) ||
-		!slices.Equal(report.Unverified, expectedUnverified) {
-		t.Fatalf("report %#v; expected conclusion=%q violated=%v unverified=%v", report, scenario.Expected.Conclusion, expectedViolated, expectedUnverified)
+		!slices.Equal(report.Inconclusive, expectedInconclusive) {
+		t.Fatalf("report %#v; expected conclusion=%q violated=%v inconclusive=%v", report, scenario.Expected.Conclusion, expectedViolated, expectedInconclusive)
 	}
 }
 
@@ -496,4 +498,47 @@ func TestConformanceRequiresSupportsGate(t *testing.T) {
 		t.Fatalf("writing synthetic fixture: %v", err)
 	}
 	runConformanceDir(t, dir)
+}
+
+// assertReportAgreesWithFixture holds ValidateDocument's report to the
+// same fixture the gate is held to. A conforming case establishes no
+// violation (it may still be undetermined: inconclusive is not non-conformant).
+// A violating case is either refused (OBI-T-04) or non-conformant, with every
+// document rule the fixture names recorded as violated.
+func assertReportAgreesWithFixture(t *testing.T, documentBytes []byte, tt conformanceTest) {
+	t.Helper()
+	_, report, err := ValidateDocument(documentBytes)
+	var refusal *VersionRefusalError
+	refused := errors.As(err, &refusal)
+	var violation *ValidationError
+	if err != nil && !refused && !errors.As(err, &violation) {
+		t.Errorf("ValidateDocument: unexpected error %v", err)
+		return
+	}
+	if (violation != nil) != (report.Conclusion == ConclusionNonConformant) {
+		t.Errorf("ValidateDocument error %v disagrees with its report's conclusion %s", err, report.Conclusion)
+	}
+	if tt.Valid {
+		if refused {
+			t.Errorf("ValidateDocument refused a conforming case: %v", err)
+		} else if report.Conclusion == ConclusionNonConformant {
+			t.Errorf("ValidateDocument established violations %v for a conforming case: %+v", report.Violated, report.Violations())
+		}
+		return
+	}
+	if !refused && report.Conclusion != ConclusionNonConformant {
+		t.Errorf("ValidateDocument concluded %s for a violating case; findings %+v", report.Conclusion, report.Findings)
+	}
+	for _, rule := range tt.Violates {
+		switch {
+		case rule == "OBI-T-04":
+			if !refused {
+				t.Errorf("expected an OBI-T-04 version refusal; report concluded %s", report.Conclusion)
+			}
+		case strings.HasPrefix(rule, "OBI-D-") && !refused:
+			if report.Evidence[rule] != EvidenceViolated {
+				t.Errorf("expected %s violated; its evidence is %q and the violations are %+v", rule, report.Evidence[rule], report.Violations())
+			}
+		}
+	}
 }

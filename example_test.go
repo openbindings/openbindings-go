@@ -51,18 +51,38 @@ func ExampleInterface_Validate() {
 		log.Fatal(err)
 	}
 
-	if err := iface.Validate(); err != nil {
-		fmt.Println("invalid:", err)
-	} else {
-		fmt.Println("valid")
+	// The error lists every violation established, so it gates on them.
+	if _, err := iface.Validate(); err != nil {
+		fmt.Println("violation established:", err)
+		return
 	}
-	// Output: valid
+	fmt.Println("no violation established")
+	// Output: no violation established
 }
 
-func ExampleInterface_Validate_strict() {
+func ExampleValidateDocument() {
 	data := []byte(`{
 		"openbindings": "0.2.0",
-		"unknownField": "should fail in strict mode",
+		"operations": {
+			"getUser": {"description": "Get a user by ID"}
+		}
+	}`)
+
+	// ValidateDocument decides every document rule on the exact input bytes
+	// and reports the §10.5 conclusion.
+	_, report, err := openbindings.ValidateDocument(data)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(report.Conclusion)
+	// Output: conformant
+}
+
+func ExampleInterface_Validate_unknownFields() {
+	data := []byte(`{
+		"openbindings": "0.2.0",
+		"unknownFeild": "a typo, or a field from a later version",
 		"operations": {
 			"getUser": {"description": "Get a user"}
 		}
@@ -71,16 +91,17 @@ func ExampleInterface_Validate_strict() {
 	var iface openbindings.Interface
 	_ = json.Unmarshal(data, &iface)
 
-	// Default: unknown fields are allowed (forward-compat)
-	err := iface.Validate()
-	fmt.Println("default:", err == nil)
+	// Unknown fields are ignored, never rejected (OBI-T-02)...
+	report, err := iface.Validate()
+	fmt.Println("violation established:", err != nil)
 
-	// Strict: unknown fields are rejected
-	err = iface.Validate(openbindings.WithRejectUnknownTypedFields())
-	fmt.Println("strict:", err != nil)
+	// ...but the report surfaces them as diagnostics so a typo is not silent.
+	for _, diagnostic := range report.Diagnostics {
+		fmt.Println(diagnostic.Rule, diagnostic.Message)
+	}
 	// Output:
-	// default: true
-	// strict: true
+	// violation established: false
+	// OBI-T-02 unknown field ignored: unknownFeild; extensions use the x- prefix
 }
 
 func ExampleInterface_lossless() {

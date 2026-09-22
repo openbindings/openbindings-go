@@ -433,7 +433,7 @@ func TestSynthesizeInterface_FilePathEmitsEmbeddedContent(t *testing.T) {
 			if err := json.Unmarshal(src.Content, &got); err != nil || got != emissionTestKDL {
 				t.Errorf("emitted content must be the pristine artifact text, got %s", src.Content)
 			}
-			if err := iface.Validate(); err != nil {
+			if _, err := iface.Validate(); err != nil {
 				t.Errorf("synthesized document must pass Interface.Validate: %v", err)
 			}
 		})
@@ -472,7 +472,7 @@ func TestSynthesizeInterface_SpacelessExecLocatorEmitsLocation(t *testing.T) {
 	if src.Content != nil {
 		t.Errorf("a URI-valid exec: locator emits by reference, got embedded content %v", src.Content)
 	}
-	if err := iface.Validate(); err != nil {
+	if _, err := iface.Validate(); err != nil {
 		t.Errorf("synthesized document must pass Interface.Validate: %v", err)
 	}
 }
@@ -498,7 +498,7 @@ func TestSynthesizeInterface_SpacedExecLocatorEmitsLocation(t *testing.T) {
 	if src.Content != nil {
 		t.Errorf("an exec address emits by reference, got embedded content %v", src.Content)
 	}
-	if err := iface.Validate(); err != nil {
+	if _, err := iface.Validate(); err != nil {
 		t.Errorf("synthesized document must pass Interface.Validate: %v", err)
 	}
 }
@@ -651,7 +651,7 @@ cmd "source" {
 			t.Errorf("operation %q carries CLI shorthand as satisfaction aliases: %v", key, op.Aliases)
 		}
 	}
-	if err := iface.Validate(); err != nil {
+	if _, err := iface.Validate(); err != nil {
 		t.Errorf("synthesize output must validate: %v", err)
 	}
 }
